@@ -4,7 +4,7 @@ Python code for stitching and image enhancement of Light Sheet data
 Version 4, peaced together by Keivan Moradi on July, 2021
 
 # Usage:
-* Install TeraStitcher >=1.11.
+* Install TeraStitcher portable >=1.11.
 * On Linux also make sure Java server (e.g., openjdk), Nvidia drivers and CUDA >10.1 are installed.
 * Install Imaris Viewer (on Linux use wine) and set the path (ImarisConverterPath) in the python file.
 * Install anaconda python distribution: https://www.anaconda.com/products/individual
@@ -23,16 +23,22 @@ Version 4, peaced together by Keivan Moradi on July, 2021
 
 # Configurations
 
+* Set the terastitcher path. The default path on Windows is `C:\TeraStitcher` folder, but you may edit the python file and change the `TeraStitcherPath` variable to any path you like. For example,
+
+`TeraStitcherPath = r"C:\TeraStitcher"` (Windows)
+
+`TeraStitcherPath = r"/path/to/terastitcher"` (Linux)
+
+* Set up Imaris Viewer path:
+
+`ImarisConverterPath = pathlib.Path(r"C:\Program Files\Bitplane\ImarisViewer x64 9.7.2")` (Windows)
+
+`os.environ["HOME"] = r"/home/username"`, then `ImarisConverterPath = pathlib.Path(f"{os.environ['HOME']}/.wine/drive_c/Program Files/Bitplane/ImarisViewer x64 9.7.2/")` (Linux)
+
 * to enable GPU acceleration set `os.environ["USECUDA_X_NCC"] = "1"` (Linux Only). For more information about GPU accelerated stitching go to https://github.com/abria/TeraStitcher/wiki/Multi-GPU-parallelization-using-CUDA.
 * need to set libjvm.so path:
 
    `os.environ["LD_LIBRARY_PATH"] = "/usr/lib/jvm/java-11-openjdk-amd64/lib/server/"` (Linux)
-
-* need to set path to terastitcher 1.11:
-
-`os.environ["PATH"] = f"{os.environ['PATH']}:/path/to/terastitcher"` (Linux)
-
-`os.environ["PATH"] = f"{os.environ['PATH']};C:\\path\\to\\terastitcher"` (Windows)
 
 * need to set path for CUDA Libraries: (Linux Only)
 
