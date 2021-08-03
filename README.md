@@ -16,7 +16,7 @@ Python code for stitching and image enhancement of Light Sheet data
 * install PyStripe: `pip install https://github.com/chunglabmit/pystripe/archive/master.zip`
 * Make sure the location of packages are set correctly in the python script.
 
-# Configurations
+# User Specific Configurations:
 
 * Set the terastitcher path. The default path on Windows is `C:\TeraStitcher` folder, but you may edit the python file and change the `TeraStitcherPath` variable to any path you like. For example,
 
