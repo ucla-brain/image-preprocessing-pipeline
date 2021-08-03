@@ -6,11 +6,13 @@ Python code for stitching and image enhancement of Light Sheet data
 * On Linux also make sure Java server (e.g., [openjdk](https://openjdk.java.net/install/)), [Nvidia drivers and CUDA >10.1](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/index.html#ubuntu-installation) are installed.
 * Install [Imaris Viewer](https://viewer.imaris.com/download/ImarisViewer9_7_2w64.exe) (on Linux use [wine](https://vitux.com/how-to-install-wine-on-ubuntu/)).
 * Install [anaconda python distribution](https://www.anaconda.com/products/individual):
-* make a dedicated python environment for stitching:
+   make a dedicated python environment for stitching:
 
    `conda create -n stitching -c conda-forge python=3.8 psutil mpi4py`
    
    On windows, the conda version of mpi4py is not functional. Instead, install the latest [Microsoft MPI from GitHub](https://github.com/microsoft/Microsoft-MPI). Then, install mpi4py with `pip install mpi4py` command.
+   
+   **Note:** If installing anacaonda as user did not work on Windows, you may test installing it as the system python.
 * install PyStripe: `pip install https://github.com/chunglabmit/pystripe/archive/master.zip`
 * Make sure the location of packages are set correctly in the python script.
 
