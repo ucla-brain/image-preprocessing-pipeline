@@ -1,8 +1,6 @@
 # Image Preprocessing Pipeline
 Python code for stitching and image enhancement of Light Sheet data
 
-Version 4, peaced together by Keivan Moradi on July, 2021
-
 # Usage:
 * Install TeraStitcher portable >=1.11.
 * On Linux also make sure Java server (e.g., openjdk), Nvidia drivers and CUDA >10.1 are installed.
