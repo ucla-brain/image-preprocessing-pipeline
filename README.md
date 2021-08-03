@@ -1,7 +1,7 @@
 # Image Preprocessing Pipeline
 Python code for stitching and image enhancement of Light Sheet data
 
-# Usage:
+# Installation:
 * Install TeraStitcher portable >=1.11.
 * On Linux also make sure Java server (e.g., openjdk), Nvidia drivers and CUDA >10.1 are installed.
 * Install [Imaris Viewer](https://viewer.imaris.com/download/ImarisViewer9_7_2w64.exe) (on Linux use [wine](https://vitux.com/how-to-install-wine-on-ubuntu/)).
@@ -14,10 +14,6 @@ Python code for stitching and image enhancement of Light Sheet data
 * activate stitching environment in anaconda: `conda activate stitching`
 * install PyStripe: `pip install https://github.com/chunglabmit/pystripe/archive/master.zip`
 * Make sure the location of packages are set correctly in the python script.
-* Copy the python file to the root folder of data.
-* run it in the root folder of data: `python stitching_v4.py`
-* select the resolution, most informative channel, and scratch folder and  wait for the results.
-
 
 # Configurations
 
@@ -58,6 +54,10 @@ Python code for stitching and image enhancement of Light Sheet data
 
    Please change them as needed.
 
+# Usage:
+* Copy the python file to the root folder of data.
+* run it in the root folder of data: `python stitching_v4.py`
+* select the resolution, most informative channel, and scratch folder and  wait for the results.
 
 # Functions and steps:
 * Step 1: convert RAW 2D tiles => 2D TIFF tiles with PyStripe and remove stripes.
