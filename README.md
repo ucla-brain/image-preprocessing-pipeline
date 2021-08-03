@@ -42,6 +42,19 @@ Version 4, peaced together by Keivan Moradi on July, 2021
 
 `os.environ["CUDA_VISIBLE_DEVICES"] = "1"`
 
+* default channel folder names and voxel dimentions are set up like this:
+
+`AllChannels = ["Ex_488_Em_0", "Ex_561_Em_1", "Ex_642_Em_2"]`
+
+`VoxelSizeX_4x, VoxelSizeY_4x, VoxelSizeZ_4x = 1.835, 1.835, 4.0`
+
+`VoxelSizeX_10x, VoxelSizeY_10x, VoxelSizeZ_10x = 0.661, 0.661, 2.0`
+
+`VoxelSizeX_15x, VoxelSizeY_15x, VoxelSizeZ_15x = 0.422, 0.422, 2.0`
+
+ Please change them as needed.
+
+
 # Functions and steps:
 * Step 1: convert RAW 2D tiles => 2D TIFF tiles with PyStripe and remove stripes.
 * Step 2: Import de-striped TIFF file and align the most informative channel with Parastitcher.
