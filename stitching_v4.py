@@ -74,7 +74,7 @@ from tifffile import imread
 
 # experiment setup: user needs to set them right
 # ChanelColor =
-AllChannels = ["Ex_488_Em_0", "Ex_642_Em_2", "Ex_561_Em_1"]  # the order determines color ["R", "G", "B"]
+AllChannels = ["Ex_488_Em_0", "Ex_561_Em_1", "Ex_642_Em_2"]  # the order determines color ["R", "G", "B"]
 VoxelSizeX_4x, VoxelSizeY_4x, VoxelSizeZ_4x = 1.835, 1.835, 4.0
 VoxelSizeX_10x, VoxelSizeY_10x, VoxelSizeZ_10x = 0.661, 0.661, 2.0
 VoxelSizeX_15x, VoxelSizeY_15x, VoxelSizeZ_15x = 0.422, 0.422, 2.0
