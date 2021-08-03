@@ -1,62 +1,8 @@
 # ::::::::::::::::::::::: For Stitching Light Sheet data:::::::::::::
-# Version 4, designed by Keivan Moradi on July, 2021
-# Usage:
-# Install TeraStitcher >=1.11.
-# On Linux also make sure Java server (e.g., openjdk) and Nvidia drivers and CUDA >10.1 are install
-# Install Imaris Viewer (on Linux use wine) and set the path (ImarisConverterPath) in this python file.
-# Install anaconda python distribution: https://www.anaconda.com/products/individual
-# make a dedicated python environment for stitching:
-#   `conda create -n stitching -c conda-forge python=3.8 psutil mpi4py`
-#   On windows conda version mpi4py is not functional.
-#   Instead, install the latest Microsoft MPI from GitHub: https://github.com/microsoft/Microsoft-MPI
-#   install mpi4py with `pip install mpi4py` command.
-# activate stitching environment in anaconda: `conda activate stitching`
-# install PyStripe: `pip install https://github.com/chunglabmit/pystripe/archive/master.zip`
-# Make sure the location of packages are set correctly in this .py script.
-# Copy this .py file to the root folder of data.
-# run it: `python stitching_v4.py`
-# select the resolution, most informative channel, and scratch folder
-# wait for the results
-# ::::::::::::::::::::::::::Configuration::::::::::::::::::::::::::::
-# https://github.com/abria/TeraStitcher/wiki/Multi-GPU-parallelization-using-CUDA
-# to enable GPU acceleration set os.environ["USECUDA_X_NCC"] = "1" (Linux Only)
-# need to set libjvm.so path:
-#   os.environ["LD_LIBRARY_PATH"] = "/usr/lib/jvm/java-11-openjdk-amd64/lib/server/" (Linux)
-# need to set path to terastitcher 1.11:
-#   os.environ["PATH"] = f"{os.environ['PATH']}:/path/to/terastitcher" (Linux)
-#   os.environ["PATH"] = f"{os.environ['PATH']};C:\\path\\to\\terastitcher" (Windows)
-# need to set path for CUDA Libraries: (Linux Only)
-#   os.environ["CUDA_ROOT_DIR"] = "/usr/local/cuda-11.4/"
-# need to set visible GPU device on a multiGPU machine, which starts from zero.
-#   os.environ["CUDA_VISIBLE_DEVICES"] = "1"
-# ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
-# Functions and steps:
-# Step 1: convert RAW 2D tiles => 2D TIFF tiles with PyStripe and remove stripes.
-# Step 2: Import de-striped TIFF file and align the most informative channel with Parastitcher.
-# Step 3: Stitch 3 channel data to multichannel 3D TIFF with Parastitcher
-# Step 4: convert multichannel 3D TIFF to IMS using ImarisConvertiv.exe.
-# :::::::::::::::::::::::terastitcher steps:::::::::::::::::::::::::::
-# Step 1: import a volume into TeraStitcher and prepare it for processing.
-# Step 2: compute pairwise stacks displacements.
-# Step 3: project existing displacements along Z axis for each stack by selecting the most reliable one.
-# Step 4: threshold displacements using the given reliability threshold.
-# Step 5: places tiles in the image space using a globally optimal tiles placement algorithm.
-# Step 6: merges tiles at different resolutions.
-# :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
-# Features:
-# (1) Work for different objective.
-# (2) Work for both TIF or RAW data.
-# (3) VoxelSizeX can be different from VoxelSizeY.
-# (4) [key] Can stitch multi channels data to a single IMS.
-# (5) [key] Support cache/scratch drives to speed up data reading/writing.
-# (6) Can manually choose resolution
-# (7) Log information
-# (8) multi-process stitching
-# (9) GPU acceleration in Linux
-# (10) isometric voxels
-# Future functions: shows true color & correct bit depth & color sequence, ROI stitching
+# Version 4 by Keivan Moradi on July, 2021
+# Please read the readme file for more information:
+# https://github.com/ucla-brain/image-preprocessing-pipeline/blob/main/README.md
 # :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
-
 
 import logging as log
 import pathlib
