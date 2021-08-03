@@ -58,7 +58,7 @@ Version 4, peaced together by Keivan Moradi on July, 2021
 
    `VoxelSizeX_15x, VoxelSizeY_15x, VoxelSizeZ_15x = 0.422, 0.422, 2.0`
 
- Please change them as needed.
+   Please change them as needed.
 
 
 # Functions and steps:
@@ -87,3 +87,4 @@ Version 4, peaced together by Keivan Moradi on July, 2021
 9. GPU acceleration in Linux.
 10. isometric voxels.
 11. 16-bit to 8-bit conversion (in development).
+12. Deconvolution (still researching).
