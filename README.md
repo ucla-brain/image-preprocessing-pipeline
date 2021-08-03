@@ -6,7 +6,7 @@ Version 4, peaced together by Keivan Moradi on July, 2021
 # Usage:
 * Install TeraStitcher portable >=1.11.
 * On Linux also make sure Java server (e.g., openjdk), Nvidia drivers and CUDA >10.1 are installed.
-* Install Imaris Viewer (on Linux use wine) and set the path (ImarisConverterPath) in the python file.
+* Install Imaris Viewer (on Linux use wine).
 * Install anaconda python distribution: https://www.anaconda.com/products/individual
 * make a dedicated python environment for stitching:
 
