@@ -85,9 +85,10 @@ Python code for stitching and image enhancement of Light Sheet data
 7. Log information.
 8. multi-process stitching.
 9. GPU acceleration in Linux.
-10. isometric voxels.
-11. 16-bit to 8-bit conversion (in development).
-12. Deconvolution (still researching).
+10. Flat image subtraction and proper DeStripe settings as suggested in www.biorxiv.org/content/10.1101/576595
+11. isometric voxels.
+12. 16-bit to 8-bit conversion (in development).
+13. Deconvolution (still researching).
 
 # Compiling terasticher (optional)
 For CUDA 11.4 and newer GPUs, in addition to [original compilation documentation instructions](https://github.com/abria/TeraStitcher/wiki/Get-and-build-source-code) do the following:
