@@ -88,7 +88,7 @@ Python code for stitching and image enhancement of Light Sheet data
 10. Flat image subtraction and proper DeStripe settings as suggested in www.biorxiv.org/content/10.1101/576595
 11. Isometric voxels (in testing).
 12. 16-bit to 8-bit conversion (in testing).
-13. generate flat.tif file for each channel computationally (in development).
+13. Generate flat.tif file for each channel computationally (in development).
 14. Deconvolution (still researching).
 
 # Compiling terasticher (optional)
