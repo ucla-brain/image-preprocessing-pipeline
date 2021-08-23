@@ -26,7 +26,7 @@ cpu_physical_core_count = psutil.cpu_count(logical=False)
 cpu_logical_core_count = psutil.cpu_count(logical=True)
 
 if sys.platform == "win32":
-    CacheDriveExample = "C:"
+    CacheDriveExample = "C:\\"
     if pathlib.Path(r"C:\TeraStitcher").exists():
         TeraStitcherPath = pathlib.Path(r"C:\TeraStitcher")
     elif pathlib.Path(r"C:\Programs\TeraStitcher").exists():
@@ -231,7 +231,7 @@ def main(source_folder):
     log.FileHandler(str(log_file), mode="w")  # rewrite the file instead of appending
     # ::::::::::::::::::::: Ask questions :::::::::::::::::::::
     de_striped_posix, what_for = "", ""
-    need_flat_image_subtraction, image_classes_training_data_path, img_flat = False, None, None
+    need_flat_image_subtraction, img_flat = False, None
     need_raw_to_tiff_conversion = False
     need_destriping = ask_true_false_question("Do you need to remove stripes from images?")
     if need_destriping:
@@ -244,20 +244,6 @@ def main(source_folder):
             de_striped_posix += "_tif"
             what_for += "tif "
     if need_flat_image_subtraction:
-        image_classes_training_data_path = source_folder / FlatNonFlatTrainingData
-        if not image_classes_training_data_path.exists():
-            print(
-                f'Looked for flat vs not-flat training data in {image_classes_training_data_path} and it was missing!')
-            use_default_flat_classification_data = ask_true_false_question(
-                "Do you want to use classification data that comes with this package? \n"
-                "(It might not be compatible with your microscopes.)"
-            )
-            if use_default_flat_classification_data:
-                image_classes_training_data_path = pathlib.Path(__file__).parent / "image_classes.csv"
-                print(f"default classification data path is {image_classes_training_data_path.absolute()}")
-            else:
-                print("You need classification data for flat image generation!")
-                raise RuntimeError
         de_striped_posix += "_flat_subtracted"
 
     de_striped_dir = source_folder.parent / (source_folder.name + de_striped_posix)
@@ -293,9 +279,9 @@ def main(source_folder):
     log.info(f"Total physical memory: {psutil.virtual_memory().total // 1024 ** 3} GB")
     log.info(f"Physical CPU core count: {cpu_physical_core_count}")
     log.info(f"Logical CPU core count: {cpu_logical_core_count}")
-    p_log(f"Source folder path = {source_folder}")
-    p_log(f"Destriped or tif files path = {de_striped_dir}")
-    p_log(f"Stitched Folder = {dir_stitched}")
+    p_log(f"Source folder path:\n{source_folder}")
+    p_log(f"Destriped or tif files path:\n{de_striped_dir}")
+    p_log(f"Stitched folder path:\n{dir_stitched}")
     # ::::::::::::::::: RUN PyStripe  ::::::::::::::::
     start_time = time()
     if need_destriping or need_raw_to_tiff_conversion:
@@ -306,8 +292,25 @@ def main(source_folder):
                     flat_img_created_already = source_folder.joinpath(Channel+'_flat.tif')
                     if flat_img_created_already.exists():
                         img_flat = pystripe.imread(str(flat_img_created_already))
-                        p_log(f"{datetime.now()}: {Channel}: using the existing flat image {flat_img_created_already}.")
+                        p_log(f"{datetime.now()}: {Channel}: using the existing flat image:\n"
+                              f"{flat_img_created_already}.")
                     else:
+                        image_classes_training_data_path = source_folder / FlatNonFlatTrainingData
+                        if not image_classes_training_data_path.exists():
+                            print(
+                                f'Looked for flat vs not-flat training data in {image_classes_training_data_path} '
+                                f'and it was missing!')
+                            use_default_flat_classification_data = ask_true_false_question(
+                                "Do you want to use classification data that comes with this package? \n"
+                                "(It might not be compatible with your microscopes.)"
+                            )
+                            if use_default_flat_classification_data:
+                                image_classes_training_data_path = pathlib.Path(__file__).parent / "image_classes.csv"
+                                print(f"default classification data path is:\n"
+                                      f"{image_classes_training_data_path.absolute()}")
+                            else:
+                                print("You need classification data for flat image generation!")
+                                raise RuntimeError
                         p_log(f"{datetime.now()}: {Channel}: creating a new flat image.")
                         img_flat = create_flat_img(
                             source_channel_folder,
@@ -334,7 +337,7 @@ def main(source_folder):
                     # threshold=-1,
                     compression=('ZLIB', 1),  # ('ZLIB', 1) ('ZSTD', 1) conda install imagecodecs
                     flat=img_flat,
-                    dark=255.0,  # 100.0
+                    dark=100.0,  # 100.0
                     # z_step=voxel_size_z,  # z-step in micron. Only used for DCIMG files.
                     # rotate=False,
                     # lightsheet=True if need_destriping else False,  # default to False
