@@ -320,7 +320,7 @@ def main(source_folder):
                             sigma_spatial=1,  # the de-noising parameter
                             save_as_tiff=True
                         )
-                p_log(f"{datetime.now()}: {Channel}: ... DeStripe program started")
+                p_log(f"\n{datetime.now()}: {Channel}: ... DeStripe program started")
                 pystripe.batch_filter(
                     source_channel_folder,
                     de_striped_dir / Channel,
