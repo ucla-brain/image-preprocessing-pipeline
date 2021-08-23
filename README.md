@@ -8,7 +8,7 @@ Python code for stitching and image enhancement of Light Sheet data
 * Install [anaconda python distribution](https://www.anaconda.com/products/individual):
    make a dedicated python environment for stitching:
 
-   `conda create -n stitching -c conda-forge python=3.8 psutil mpi4py`
+   `conda create -n stitching -c conda-forge python=3.8 psutil tqdm tifffile numpy scipy scikit-image scikit-learn matplotlib pyqt pandas mpi4py`
    
    On windows, the conda version of mpi4py is not functional. Instead, install the latest [Microsoft MPI from GitHub](https://github.com/microsoft/Microsoft-MPI). Then, install mpi4py with `pip install mpi4py` command.
    
