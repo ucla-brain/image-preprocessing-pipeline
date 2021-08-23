@@ -72,12 +72,12 @@ Python code for stitching and image enhancement of Light Sheet data
 # Usage:
 * activate stitching environment in anaconda: `conda activate stitching`.
 * run: `python process.py /path/to/image/folder`
-* Answer the questions wait for the results.
+* answer the questions wait for the results.
 
 # Functions and steps:
 * Step 1: convert RAW/TIFF 2D tiles => de-striped, flat image corrected, 8-bit, and compressed 2D TIFF tiles.
-* Step 2: Import resulting TIFF file and align z-stacks using the most informative channel with Parastitcher.
-* Step 3: Stitch 3 channel data to multichannel 3D TIFF with Parastitcher
+* Step 2: Import resulting TIFF file and align z-stacks using the most informative channel with ParaStitcher.
+* Step 3: Stitch 3 channel data to multichannel 3D TIFF with ParaStitcher
 * Step 4: convert multichannel 3D TIFF to IMS using ImarisConvertiv.exe.
 
 ## terastitcher steps:
