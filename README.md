@@ -23,13 +23,13 @@ Python code for stitching and image enhancement of Light Sheet data
 
 * clone image processing pipeline:
 
-   `git clone https://github.com/ucla-brain/image-preprocessing-pipeline.git`
+  `git clone https://github.com/ucla-brain/image-preprocessing-pipeline.git`
 
   `cd image-preprocessing-pipeline`
 
-* Make sure the location of packages are set correctly in the python script `process.py`.
+* Make sure the location of packages are set correctly in the python script `process.py`:
 
-# User Specific Configurations:
+## User and Microscope Specific Configurations:
 
 * Set the terastitcher path. The default path on Windows is `C:\TeraStitcher` folder, but you may edit the python file and change the `TeraStitcherPath` variable to any path you like. For example,
 
@@ -43,7 +43,8 @@ Python code for stitching and image enhancement of Light Sheet data
 
    `os.environ["HOME"] = r"/home/username"`, then `ImarisConverterPath = pathlib.Path(f"{os.environ['HOME']}/.wine/drive_c/Program Files/Bitplane/ImarisViewer x64 9.7.2/")` (Linux)
 
-* to enable GPU acceleration set `os.environ["USECUDA_X_NCC"] = "1"` (Linux Only). For more information about GPU accelerated stitching go to https://github.com/abria/TeraStitcher/wiki/Multi-GPU-parallelization-using-CUDA.
+* To enable GPU acceleration set `os.environ["USECUDA_X_NCC"] = "1"` (Linux Only). For more information about GPU accelerated stitching go to https://github.com/abria/TeraStitcher/wiki/Multi-GPU-parallelization-using-CUDA.
+
 * need to set libjvm.so path:
 
    `os.environ["LD_LIBRARY_PATH"] = "/usr/lib/jvm/java-11-openjdk-amd64/lib/server/"` (Linux)
@@ -70,13 +71,12 @@ Python code for stitching and image enhancement of Light Sheet data
 
 # Usage:
 * activate stitching environment in anaconda: `conda activate stitching`.
-* Copy the python file to the root folder of data.
-* run it in the root folder of data: `python stitching_v4.py`
-* select the resolution, most informative channel, and scratch folder and  wait for the results.
+* run: `python process.py /path/to/image/folder`
+* Answer the questions wait for the results.
 
 # Functions and steps:
-* Step 1: convert RAW 2D tiles => 2D TIFF tiles with PyStripe and remove stripes.
-* Step 2: Import de-striped TIFF file and align the most informative channel with Parastitcher.
+* Step 1: convert RAW/TIFF 2D tiles => de-striped, flat image corrected, 8-bit, and compressed 2D TIFF tiles.
+* Step 2: Import resulting TIFF file and align z-stacks using the most informative channel with Parastitcher.
 * Step 3: Stitch 3 channel data to multichannel 3D TIFF with Parastitcher
 * Step 4: convert multichannel 3D TIFF to IMS using ImarisConvertiv.exe.
 
@@ -101,8 +101,10 @@ Python code for stitching and image enhancement of Light Sheet data
 10. Flat image subtraction and proper DeStripe settings as suggested in www.biorxiv.org/content/10.1101/576595
 11. Isometric voxels (in testing).
 12. 16-bit to 8-bit conversion (in testing).
-13. Generate flat.tif file for each channel computationally (in development).
-14. Deconvolution (still researching).
+13. Generate training data for flat non-flat images.
+14. Use machine learning to find flat images with 98.5% accuracy.
+15. Generate flat images for each channel computationally.
+16. Deconvolution (still researching).
 
 # Compiling terasticher (optional)
 For CUDA 11.4 and newer GPUs, in addition to [original compilation documentation instructions](https://github.com/abria/TeraStitcher/wiki/Get-and-build-source-code) do the following:
