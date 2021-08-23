@@ -3,31 +3,27 @@
 # Please read the readme file for more information:
 # https://github.com/ucla-brain/image-preprocessing-pipeline/blob/main/README.md
 # :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
-
-import logging as log
-import pathlib
-import platform
-import psutil
-import subprocess
 import os
 import sys
-import pystripe
-from skimage.transform import resize
+import psutil
+import pathlib
+import platform
+import subprocess
+import logging as log
+import pystripe_forked as pystripe
+from multiprocessing import freeze_support
+from flat import create_flat_img
 from datetime import datetime
 from time import time
-from tifffile import imread
-
 
 # experiment setup: user needs to set them right
-# ChanelColor =
-AllChannels = ["Ex_488_Em_0", "Ex_561_Em_1", "Ex_642_Em_2"]  # the order determines color ["R", "G", "B"]
+AllChannels = ["Ex_488_Em_0", "Ex_561_Em_1", "Ex_642_Em_2"]  # the order determines color ["R", "G", "B"]?
 VoxelSizeX_4x, VoxelSizeY_4x, VoxelSizeZ_4x = 1.835, 1.835, 4.0
-VoxelSizeX_10x, VoxelSizeY_10x, VoxelSizeZ_10x = 0.661, 0.661, 2.0
-VoxelSizeX_15x, VoxelSizeY_15x, VoxelSizeZ_15x = 0.422, 0.422, 2.0
-LogFileName = "StitchingLog.txt"
+VoxelSizeX_10x, VoxelSizeY_10x, VoxelSizeZ_10x = 0.661, 0.661, 1.0
+VoxelSizeX_15x, VoxelSizeY_15x, VoxelSizeZ_15x = 0.422, 0.422, 1.0
+FlatNonFlatTrainingData = "image_classes.csv"
 cpu_physical_core_count = psutil.cpu_count(logical=False)
 cpu_logical_core_count = psutil.cpu_count(logical=True)
-
 
 if sys.platform == "win32":
     CacheDriveExample = "C:"
@@ -48,7 +44,8 @@ if sys.platform == "win32":
 elif sys.platform == 'linux':
     CacheDriveExample = "/mnt/scratch"
     os.environ["HOME"] = r"/home/kmoradi"
-    TeraStitcherPath = pathlib.Path(f"{os.environ['HOME']}/apps/ExM-Studio/stitching/bin")
+    # TeraStitcherPath = pathlib.Path(f"{os.environ['HOME']}/apps/ExM-Studio/stitching/bin")
+    TeraStitcherPath = pathlib.Path(f"{os.environ['HOME']}/apps/ExM-Studio/stitching_native/bin")
     os.environ["PATH"] = f"{os.environ['PATH']}:{TeraStitcherPath.as_posix()}"
     os.environ["PATH"] = f"{os.environ['PATH']}:{TeraStitcherPath.joinpath('pyscripts').as_posix()}"
     terastitcher = "terastitcher"
@@ -102,23 +99,18 @@ if not imaris_converter.exists():
     raise RuntimeError
 
 
-def get_data_format():
-    data_format = ""
-    while data_format not in {"1", "2"}:
-        data_format = input(
+def ask_true_false_question(message):
+    answer = ''
+    while answer not in {"1", "2"}:
+        answer = input(
             '\n'
-            'What is the input data format?\n'
-            '1 = RAW\n'
-            '2 = TIF\n')
-    if data_format == "1":
-        data_format = "RAW"
-    elif data_format == "2":
-        data_format = "TIF"
+            f'{message}\n'
+            '1 = Yes\n'
+            '2 = No\n')
+    if answer == "1":
+        return True
     else:
-        print("Error: unsupported data format")
-        log.error("Error: unsupported data format")
-        raise RuntimeError
-    return data_format
+        return False
 
 
 def get_most_informative_channel():
@@ -175,28 +167,50 @@ def get_voxel_sizes():
     return objective, voxel_size_x, voxel_size_y, voxel_size_z, tile_size
 
 
-def get_cache_drive(file_type='tif', posix='', disabled_path=pathlib.Path('')):
-    drive = input(
+def get_destination_path(folder_name_prefix, what_for='tif', posix='', default_path=pathlib.Path('')):
+    input_path = input(
         f"\n"
-        f"Enter cache drive path for {file_type} files.\n"
+        f"Enter destination path for {what_for}.\n"
         f"for example: {CacheDriveExample}\n"
-        f"If nothing entered, the feature will be disable.\n")
-    cache_drive = pathlib.Path(drive)
-    while not cache_drive.exists():
-        drive = input(
+        f"If nothing entered, {default_path.absolute()} will be used.\n")
+    drive_path = pathlib.Path(input_path)
+    while not drive_path.exists():
+        input_path = input(
             f"\n"
-            f"Enter a valid cache drives path for {file_type} files. "
+            f"Enter a valid destination path for {what_for}. "
             f"for example: {CacheDriveExample}\n"
-            f"Disable the feature if nothing entered.\n")
-        cache_drive = pathlib.Path(drive)
-    if cache_drive.name == '':
-        print(f"\nCache drive for {file_type} files is disabled.\n")
-        cache_drive = disabled_path
+            f"If nothing entered, {default_path.absolute()} will be used.\n")
+        drive_path = pathlib.Path(input_path)
+    if input_path == '':
+        destination_path = default_path
     else:
-        print(f"\nCache drive for {file_type} files = {cache_drive}\n")
-        cache_drive = cache_drive.joinpath("Cache").joinpath(CaseName + posix)
-    cache_drive.mkdir(exist_ok=True, parents=True)
-    return cache_drive
+        destination_path = drive_path / (folder_name_prefix + posix)
+    continue_process = False
+    if destination_path.exists():
+        is_ok_to_overwrite = ask_true_false_question(
+            f"The path {destination_path.absolute()} exists already. \n"
+            f"Do you want to put the processed images in this path?")
+        if is_ok_to_overwrite:
+            continue_process = ask_true_false_question(
+                "If processed images already exist in the path, do you want to process the remaining images?\n"
+                "Yes means process the remaining images. \n"
+                "No means start over from the beginning and overwrite files.\n")
+        else:
+            i = 0
+            while destination_path.exists():
+                i += 1
+                destination_path = destination_path.parent / (destination_path.name + '_' + str(i))
+    print(f"\nDestination path for {what_for} is:\n{destination_path.absolute()}\n")
+    try:
+        destination_path.mkdir(exist_ok=True, parents=True)
+    except PermissionError:
+        print("No permission to create the destination folder.")
+        raise RuntimeError
+    except Exception as e:
+        print("An unexpected error happened!")
+        print(e)
+        raise RuntimeError
+    return destination_path, continue_process
 
 
 def correct_path_for_cmd(filepath):
@@ -206,196 +220,133 @@ def correct_path_for_cmd(filepath):
         return str(filepath).replace(" ", r"\ ").replace("(", r"\(").replace(")", r"\)")
 
 
-def main():
+def main(source_folder):
+    log_file = source_folder / "log.txt"
+    log.basicConfig(filename=str(log_file), level=log.INFO)
+    log.FileHandler(str(log_file), mode="w")  # rewrite the file instead of appending
+    # ::::::::::::::::::::: Ask questions :::::::::::::::::::::
+    de_striped_posix, what_for = "", ""
+    need_flat_image_subtraction, image_classes_training_data_path, img_flat = False, None, None
+    need_raw_to_tiff_conversion = False
+    need_destriping = ask_true_false_question("Do you need to remove stripes from images?")
+    if need_destriping:
+        need_flat_image_subtraction = ask_true_false_question("Do you need flat image subtraction?")
+        de_striped_posix += "_destriped"
+        what_for += "destriped "
+    else:
+        need_raw_to_tiff_conversion = ask_true_false_question("Are images in raw format?")
+        if need_raw_to_tiff_conversion:
+            de_striped_posix += "_tif"
+            what_for += "tif "
+    if need_flat_image_subtraction:
+        image_classes_training_data_path = source_folder / FlatNonFlatTrainingData
+        if not image_classes_training_data_path.exists():
+            print(f'Looked for flat vs not-flat training data in {image_classes_training_data_path} and it was missing!')
+            raise RuntimeError
+        de_striped_posix += "_flat_subtracted"
 
-    # ::::::::::::::::: RUN PyStripe to convert RAW to TIFF ::::::::::::::::
+    de_striped_dir = source_folder.parent / (source_folder.name + de_striped_posix)
+    continue_process_pystripe = False
+    dir_stitched = source_folder.parent / (source_folder.name + "_stitched_v4")
+    img_16bit_to_8bit, right_bit_shift = False, 8
+    if need_destriping or need_raw_to_tiff_conversion:
+        img_16bit_to_8bit = ask_true_false_question("Do you need to convert 16-bit images to 8 bit before stitching?")
+        if img_16bit_to_8bit:
+            right_bit_shift = int(input(
+                "Enter right bit shift [0 to 8] for 8-bit conversion. \n"
+                "Values smaller than 8 will increase the pixel brightness. \n"
+                "We suggest a value between 3 to 6. \n"
+                "The smaller the value the brighter the pixels.\n"))
+        de_striped_dir, continue_process_pystripe = get_destination_path(
+            source_folder.name,
+            what_for=what_for+"files",
+            posix=de_striped_posix,
+            default_path=de_striped_dir)
+    else:
+        de_striped_dir = source_folder
+    dir_stitched, continue_process_terastitcher = get_destination_path(
+        source_folder.name, what_for="stitched files", posix="_stitched_v4", default_path=dir_stitched)
+    # print(dir_stitched)
 
+    most_informative_channel = get_most_informative_channel()
+    objective, voxel_size_x, voxel_size_y, voxel_size_z, tile_size = get_voxel_sizes()
+
+    # ::::::::::::::::::::::::::::::::::::: Start :::::::::::::::::::::::::::::::::::
+
+    log.info(f"{datetime.now()} ... stitching started")
+    log.info(f"Run on Computer: {platform.node()}")
+    log.info(f"Total physical memory: {psutil.virtual_memory().total // 1024 ** 3} GB")
+    log.info(f"Physical CPU core count: {cpu_physical_core_count}")
+    log.info(f"Logical CPU core count: {cpu_logical_core_count}")
+    print(f"Source folder path = {source_folder}")
+    log.info(f"Source folder path: {source_folder}")
+    print(f"Destriped or tif files path = {de_striped_dir}")
+    log.info(f"Destriped or tif files path: {de_striped_dir}")
+    print(f"Stitched Folder = {dir_stitched}")
+    log.info(f"Stitched Folder: {dir_stitched}")
+    # ::::::::::::::::: RUN PyStripe  ::::::::::::::::
     start_time = time()
-    if DataFormat == "RAW":
-        print(f"{datetime.now()} ... converting RAW to TIFF started")
-        log.info(f"{datetime.now()} ... converting RAW to TIFF started")
-        # DirTif.mkdir(exist_ok=True)
+    if need_destriping or need_raw_to_tiff_conversion:
         for Channel in AllChannels:
-            source_channel_folder = SourceFolder / Channel
+            source_channel_folder = source_folder / Channel
             if source_channel_folder.exists():
+                if need_flat_image_subtraction:
+                    flat_img_created_already = source_folder.joinpath(Channel+'_flat.tif')
+                    if flat_img_created_already.exists():
+                        img_flat = pystripe.imread(str(flat_img_created_already))
+                        print(f"{datetime.now()}: {Channel}: using the existing flat image {flat_img_created_already}.")
+                        log.info(f"{datetime.now()}: {Channel}: using the existing flat image {flat_img_created_already}.")
+                    else:
+                        print(f"{datetime.now()}: {Channel}: creating a new flat image.")
+                        log.info(f"{datetime.now()}: {Channel}: creating a new flat image.")
+                        img_flat = create_flat_img(
+                            source_channel_folder,
+                            image_classes_training_data_path,
+                            cpu_physical_core_count=cpu_physical_core_count,
+                            cpu_logical_core_count=cpu_logical_core_count,
+                            max_images=1024,  # the number of flat images averaged
+                            patience_before_skipping=10,  # the number of non-flat images found successively before skipping
+                            skips=100,  # the number of images should be skipped before testing again
+                            sigma_spatial=1,  # the de-noising parameter
+                            save_as_tiff=True
+                        )
+                print(f"{datetime.now()}: {Channel}: ... DeStripe program started")
+                log.info(f"{datetime.now()}: {Channel}: ... DeStripe program started")
                 pystripe.batch_filter(
                     source_channel_folder,
-                    DirTif / Channel,
-                    workers=cpu_logical_core_count,
+                    de_striped_dir / Channel,
+                    workers=cpu_logical_core_count,  # if need_destriping else cpu_physical_core_count
                     chunks=1,
                     # sigma=[foreground, background] Default is [0, 0], indicating no de-striping.
-                    sigma=[32, 32] if Objective == "4x" else [256, 256],
+                    sigma=((32, 32) if objective == "4x" else (256, 256)) if need_destriping else (0, 0),
                     # level=0,
                     wavelet="db10",
                     crossover=10,
                     # threshold=-1,
-                    # compression=3,  # not working yet. It should be like ('zstd', 3)
-                    flat=resize(imread(SourceFolder / "flat.tif"), TileSize),
-                    dark=100.0,
-                    # zstep=VoxelSizeZ,  # Z-step in micron. Only used for DCIMG files.
+                    compression=('ZLIB', 1),  # ('ZLIB', 1) ('ZSTD', 1) conda install imagecodecs
+                    flat=img_flat,
+                    dark=255.0,  # 100.0
+                    # z_step=voxel_size_z,  # z-step in micron. Only used for DCIMG files.
                     # rotate=False,
-                    # lightsheet=True,  # default to False
+                    # lightsheet=True if need_destriping else False,  # default to False
                     # artifact_length=150,
                     # percentile=0.25,
-                    # dont_convert_16bit=True  # defaults to False
+                    # dont_convert_16bit=True,  # defaults to False
+                    convert_to_8bit=img_16bit_to_8bit,
+                    bit_shift_to_right=right_bit_shift,
+                    continue_process=continue_process_pystripe
                 )
-        # subprocess.run(["pystripe", "-i", SourceFolder, "-o", DirTif])
-        print(f"{datetime.now()}: Done converting RAW to TIFF.")
-        log.info(f"{datetime.now()}: Done converting RAW to TIFF.")
+                print(f"{datetime.now()}: {Channel}: DeStripe program is done.")
+                log.info(f"{datetime.now()}: {Channel}: DeStripe program is done.")
 
     # ::::::::::::::::: Stitching ::::::::::::::::
-
-    log.info(f"{datetime.now()}: stitching to 3D TIFF started ...")
-    # DirStitched.mkdir(exist_ok=True)
-    print("running terastitcher ... ")
-
-    """"
-    # ::::::::::::::::::: Stitching V2: RUN TeraConverter to Stitching Tiffs & Convert To IMS ::::::::::::::::::::::::::
-
-    # print("Light Sheet Data Stitching (Version 2) is Running ...")
-    # for Channel in AllChannels:
-    #     channel_dir = DirTif.joinpath(Channel)
-    #     if channel_dir.exists():
-    #         log.info(f"{datetime.now()}: {channel_dir} folder exists importing for stitching...")
-    #         command = [
-    #             f"{terastitcher}",
-    #             "-1",
-    #             "--ref1=H",
-    #             "--ref2=V",
-    #             "--ref3=D",
-    #             f"--vxl1={VoxelSizeY}",
-    #             f"--vxl2={VoxelSizeX}",
-    #             f"--vxl3={VoxelSizeZ}",
-    #             "--sparse_data",
-    #             "--threshold=0.5",
-    #             "--libtiff_bigtiff",
-    #             f"--volin={channel_dir}",
-    #             f"--volout={DirStitched.joinpath(Channel + '_stitched.tiff')}",
-    #             f"--projout={DirStitched.joinpath(Channel + '_xml_import.xml')}"]
-    #         log.info("import command: " + " ".join(command))
-    #         subprocess.run(command)
-    #     else:
-    #         log.warning(f"{datetime.now()}: {channel_dir} folder did not exist and not imported for stitching...")
-    #
-    # log.info(f"{datetime.now()}: importing all channels ...")
-    # command = [
-    #     f"{terastitcher}",
-    #     "-1",
-    #     "--ref1=H",
-    #     "--ref2=V",
-    #     "--ref3=D",
-    #     f"--vxl1={VoxelSizeY}",
-    #     f"--vxl2={VoxelSizeX}",
-    #     f"--vxl3={VoxelSizeZ}",
-    #     "--sparse_data",
-    #     "--volin_plugin=MultiVolume",
-    #     f"--volin={DirStitched}",
-    #     f"--projout={DirStitched.joinpath('Vol_xml_import.xml')}"]
-    # log.info("import command: " + " ".join(command))
-    # subprocess.run(command)
-    #
-    # print(f"{datetime.now()}: running teraconverter ... ")
-    # command = [
-    #     f"{teraconverter}",
-    #     "--sfmt=TIFF (unstitched, 3D)",
-    #     "--dfmt=HDF5 (Imaris IMS)",
-    #     "--mdata_fname=null",
-    #     "--sparse_data",
-    #     f"--resolutions={Resolution}",
-    #     f"--imout_plugin=IMS_HDF5",
-    #     "--imout_plugin_params=Max=65535, HistogramMax=65535, img_bytes_x_chan=2",
-    #     "-f=graylevel",
-    #     f"-s={DirStitched.joinpath('Vol_xml_import.xml')}",
-    #     f"-d={DirStitched.joinpath(CaseName + '_R' + Resolution + '_V2.ims')}"]
-    # log.info("stitching command" + " ".join(command))
-    # subprocess.run(command)
-
-    # ::::::::::::::::: Stitching V1: RUN terastitcher first then convert To IMS with teraconverter ::::::::::::::::::::
-
-    # print("Light Sheet Data Stitching (Version 1) is Running ...")
-    # for Channel, Color in zip(AllChannels, ChanelColor):
-    #     channel_dir = DirTif.joinpath(Channel)
-    #     # DirStitchedChannel = DirStitched.joinpath(Channel)
-    #     log.info(f"{datetime.now()} to check if {channel_dir} exist before stitching...")
-    #     if channel_dir.exists():
-    #         # print(f"{DirStitchedChannel}")
-    #         # DirStitchedChannel.mkdir(exist_ok=True)
-    #         for step in range(1, 6):  # steps 1 to 5
-    #             print(f"step = {step}")
-    #             subprocess.run([
-    #                 f"{terastitcher}",
-    #                 f"-{step}",
-    #                 f"--volin={channel_dir}" if step == 1 else f"--projin={DirStitched.joinpath(Channel + '_step_' + str(step-1) + '.xml')}",  # "--volin_plugin=TiledXY|3Dseries",
-    #                 "--ref1=H",  "--ref2=V", "--ref3=D", f"--vxl1={VoxelSizeY}", f"--vxl2={VoxelSizeX}", f"--vxl3={VoxelSizeZ}", "--sparse_data",  # -1
-    #                 "--subvoldim=600", "--sV=50", "--sH=50", "--sD=0",  # -2
-    #                 "--threshold=0.5",  # -4
-    #                 "--volout_plugin=TiledXY|3Dseries", "--slicewidth=100000", "--sliceheight=150000",  # -6 TiledXY|2Dseries
-    #                 f"--imin_channel={Color}",
-    #                 "--libtiff_bigtiff",
-    #                 f"--volout={DirStitched}",
-    #                 f"--projout={DirStitched.joinpath(Channel + '_step_' + str(step) + '.xml')}"])
-    #
-    #         for step in range(1, 5):
-    #             DirStitched.joinpath(Channel + '_step_' + str(step) + '.xml').unlink()
-    #
-    # subprocess.run([
-    #     f"{terastitcher}",
-    #     "-1",
-    #     "--ref1=H",
-    #     "--ref2=V",
-    #     "--ref3=D",
-    #     f"--vxl1={VoxelSizeY}",
-    #     f"--vxl2={VoxelSizeX}",
-    #     f"--vxl3={VoxelSizeZ}",
-    #     f"--volin={DirStitched}", "--volin_plugin=MultiVolume",
-    #     f"--projout={DirStitched.joinpath('Vol_xml_import.xml')}"])
-    #
-    # print("running teraconverter ... ")
-    # subprocess.run([
-    #     f"{teraconverter}",
-    #     "--sfmt=TIFF (unstitched, 3D)",
-    #     "--dfmt=HDF5 (Imaris IMS)",
-    #     "--mdata_fname=null",
-    #     "--sparse_data",
-    #     f"--resolutions={Resolution}",
-    #     "--imout_plugin=IMS_HDF5",
-    #     # "--imout_plugin_params=Max=65535, HistogramMax=65535, img_bytes_x_chan=2",
-    #     "-f=graylevel",
-    #     f"-s={DirStitched.joinpath('Vol_xml_import.xml')}",
-    #     f"-d={DirStitched.joinpath(CaseName + '_R' + Resolution + '_V2.ims')}"])
-
-    # ::::::::::::::::::::: V3 Keivan :::::::::::::::::::::::::::::::::::
-    # generates separate stitched tiff files for each channel
-    
-    # print("Light Sheet Data Stitching (Version 3) is Running ...")
-    # for Channel, Color in zip(AllChannels, ChanelColor):
-    #     channel_dir = DirTif.joinpath(Channel)
-    #     DirStitchedChannel = DirStitched.joinpath(Channel)
-    #     log.info(f"{datetime.now()} to check if {channel_dir} exist before stitching...")
-    #     if channel_dir.exists():
-    #         print(f"{DirStitchedChannel}")
-    #         DirStitchedChannel.mkdir(exist_ok=True)
-    #         subprocess.run([
-    #             f"{terastitcher}",
-    #             f"-S",
-    #             f"--volin={channel_dir}",
-    #             # "--volin_plugin=TiledXY|3Dseries",
-    #             "--ref1=H", "--ref2=V", "--ref3=D", f"--vxl1={VoxelSizeY}", f"--vxl2={VoxelSizeX}",
-    #             f"--vxl3={VoxelSizeZ}", "--sparse_data",  # -1
-    #             "--subvoldim=600", "--sV=50", "--sH=50", "--sD=0",  # -2
-    #             "--threshold=0.5",  # -4
-    #             "--volout_plugin=TiledXY|3Dseries", "--slicewidth=100000", "--sliceheight=150000",  # -6 TiledXY|2Dseries
-    #             # f"--imin_channel={Color}",
-    #             "--libtiff_bigtiff",
-    #             f"--volout={DirStitchedChannel}",
-    #             f"--projout={DirStitched.joinpath(Channel + '_step_1_to_6.xml')}"])
-    """
-    # ::::::::::::::::::::: V4 Keivan :::::::::::::::::::::::::::::::::::
     # generates one multichannel tiff file: GPU accelerated & parallel
 
+    log.info(f"{datetime.now()}: stitching to 3D TIFF started ...")
+    print("running terastitcher ... ")
     print("Light Sheet Data Stitching (Version 4) is Running ...")
     for Channel in AllChannels:
-        channel_dir = DirTif / Channel
+        channel_dir = de_striped_dir / Channel
         if channel_dir.exists():
             log.info(f"{datetime.now()}: {channel_dir} folder exists importing for stitching...")
             command = [
@@ -404,30 +355,33 @@ def main():
                 "--ref1=H",
                 "--ref2=V",
                 "--ref3=D",
-                f"--vxl1={VoxelSizeY}",
-                f"--vxl2={VoxelSizeX}",
-                f"--vxl3={VoxelSizeZ}",
+                f"--vxl1={voxel_size_y}",
+                f"--vxl2={voxel_size_x}",
+                f"--vxl3={voxel_size_z}",
                 "--sparse_data",
                 f"--volin={channel_dir}",
-                f"--projout={DirStitched.joinpath(Channel + '_xml_import_step_1.xml')}",
+                f"--projout={dir_stitched.joinpath(Channel + '_xml_import_step_1.xml')}",
                 "--noprogressbar"
             ]
             log.info("import command:\n" + " ".join(command))
-            subprocess.run(command)
-            if Channel == MostInformativeChannel:
+            subprocess.run(command, check=True)
+            if Channel == most_informative_channel:
                 for step in [2, 3, 4, 5]:
                     log.info(f"{datetime.now()}: starting step {step} of stitching for most informative channel ...")
-                    command = [
-                        f"mpiexec -np {cpu_physical_core_count} python -m mpi4py {parastitcher}" if step == 2 else f"{terastitcher}",
+                    if step == 2:
+                        command = [f"mpiexec -np {cpu_physical_core_count} python -m mpi4py {parastitcher}"]
+                    else:
+                        command = [f"{terastitcher}"]
+                    command += [
                         f"-{step}",
                         "--threshold=0.5",
                         "--isotropic",
-                        f"--projin={DirStitched.joinpath(Channel + '_xml_import_step_' + str(step - 1) + '.xml')}",
-                        f"--projout={DirStitched.joinpath(Channel + '_xml_import_step_' + str(step) + '.xml')}",
+                        f"--projin={dir_stitched.joinpath(Channel + '_xml_import_step_' + str(step - 1) + '.xml')}",
+                        f"--projout={dir_stitched.joinpath(Channel + '_xml_import_step_' + str(step) + '.xml')}",
                     ]
                     log.info("stitching command:\n" + " ".join(command))
                     subprocess.call(" ".join(command), shell=True)  # subprocess.run(command)
-                    DirStitched.joinpath(Channel + '_xml_import_step_' + str(step - 1) + '.xml').unlink()
+                    dir_stitched.joinpath(Channel + '_xml_import_step_' + str(step - 1) + '.xml').unlink()
         else:
             log.warning(f"{datetime.now()}: {channel_dir} did not exist and not imported ...")
 
@@ -438,13 +392,13 @@ def main():
         "--ref1=H",
         "--ref2=V",
         "--ref3=D",
-        f"--vxl1={VoxelSizeY}",
-        f"--vxl2={VoxelSizeX}",
-        f"--vxl3={VoxelSizeZ}",
+        f"--vxl1={voxel_size_y}",
+        f"--vxl2={voxel_size_x}",
+        f"--vxl3={voxel_size_z}",
         "--sparse_data",
         "--volin_plugin=MultiVolume",
-        f"--volin={DirStitched}",
-        f"--projout={DirStitched.joinpath('vol_xml_import.xml')}",
+        f"--volin={dir_stitched}",
+        f"--projout={dir_stitched.joinpath('vol_xml_import.xml')}",
         "--imin_channel=all",
         "--noprogressbar",
         "--isotropic"
@@ -458,31 +412,33 @@ def main():
         "python -m mpi4py",
         f"{parastitcher}",
         "-6",
-        f"--projin={DirStitched.joinpath('vol_xml_import.xml')}",
-        f"--volout={DirStitched}",
+        f"--projin={dir_stitched.joinpath('vol_xml_import.xml')}",
+        f"--volout={dir_stitched}",
         "--volout_plugin=\"TiledXY|3Dseries\"",
+        # "--volout_plugin=\"HDF5 (Imaris IMS)\"",
         "--slicewidth=100000",
         "--sliceheight=150000",
         "--slicedepth=50000",
         "--isotropic"
     ]
-    log.info("stiching command:\n" + " ".join(command))
+    log.info("stitching command:\n" + " ".join(command))
     subprocess.call(" ".join(command), shell=True)
 
-    p = DirStitched.rglob("*.tif")
+    p = dir_stitched.rglob("*.tif")
     files = [x for x in p if x.is_file()]
     del p
     for file in files:
         file = file.rename(
-            DirStitched / (CaseName + ('_' + file.name if len(files) > 1 else '') + '_V4.tif'))  # move tiff files
+            dir_stitched / (source_folder.name + (
+                '_' + file.name if len(files) > 1 else '') + '_V4.tif'))  # move tiff files
         if imaris_converter.exists():
             print(f"found Imaris View: converting {file.name} to ims ... ")
             command = [
                 f"wine" if not sys.platform == "win32" else "",
                 f"{correct_path_for_cmd(imaris_converter)}",
                 f"--input {correct_path_for_cmd(file)}",
-                f"--output {DirStitched.joinpath(CaseName + ('_' + file.name if len(files) > 1 else '') + '_V4.ims')}",
-                f"--log {LogFile}",
+                f"--output {dir_stitched.joinpath(source_folder.name + ('_' + file.name if len(files) > 1 else '') + '_V4.ims')}",
+                f"--log {log_file}",
                 f"--nthreads {cpu_logical_core_count}",
                 f"--compression 1",
             ]
@@ -499,67 +455,13 @@ def main():
 
 
 if __name__ == '__main__':
-
-    # :::::::::::::::::::::::path setting for processing:::::::::::::::::::::::::
-
-    DataFormat = get_data_format()
-    SourceFolder = pathlib.Path(__file__).parent.absolute()
-    DirTif = pathlib.Path(str(SourceFolder) + "_Tiffs")
-    DirStitched = pathlib.Path(str(SourceFolder) + "_Stitched_V4")
-    if DataFormat == "TIF":
-        DirTif = SourceFolder
-    CaseName = SourceFolder.name
-    LogFile = SourceFolder.joinpath(LogFileName)
-    log.basicConfig(filename=str(LogFile), level=log.INFO)
-    log.FileHandler(str(LogFile), mode="w")  # rewrite the file instead of appending
-    if DataFormat != "TIF":
-        print("raw files should be converted to tiff and stored in the cache drive.")
-        DirTif = get_cache_drive(file_type="tif", posix="_Tiffs", disabled_path=DirTif)
-        print(DirTif)
-    DirStitched = get_cache_drive(file_type="stitched", posix="_Stitched_V4", disabled_path=DirStitched)
-    print(DirStitched)
-
-    MostInformativeChannel = get_most_informative_channel()
-    Objective, VoxelSizeX, VoxelSizeY, VoxelSizeZ, TileSize = get_voxel_sizes()
-
-    # Resolution = None
-    # while Resolution not in {"1", "2", "3", "4", "5", "6"}:
-    #     Resolution = input(
-    #         '\nChoose IMS Format Resolution levels: \n'
-    #         '1 = ~16 Layers/max Proj, \n'
-    #         '2 = ~1000 Layers/ROI, \n'
-    #         '3 = ~2000 Layers/4X imaging, \n'
-    #         '4 = ~4000 Layers/15X imaging, \n'
-    #         '5  = 5, \n'
-    #         '6  = 6: \n')
-    # if Resolution == "1":
-    #     Resolution = "01"
-    # elif Resolution == "2":
-    #     Resolution = "012"
-    # elif Resolution == "3":
-    #     Resolution = "0123"
-    # elif Resolution == "4":
-    #     Resolution = "01234"
-    # elif Resolution == "5":
-    #     Resolution = "012345"
-    # elif Resolution == "6":
-    #     Resolution = "0123456"
-    # else:
-    #     print("unsupported resolution")
-
-    # ::::::::::::::::::::::::::::::::::::: Start :::::::::::::::::::::::::::::::::::
-
-    log.info(f"{datetime.now()} ... stitching started")
-    log.info(f"Run on Computer: {platform.node()}")
-    log.info(f"Total physical memory: {psutil.virtual_memory().total // 1024 ** 3} GB")
-    log.info(f"Physical CPU core count: {cpu_physical_core_count}")
-    print(f"CaseName = {CaseName}")
-    log.info(f"CaseName: {CaseName}")
-    print(f"Source Folder = {SourceFolder}")
-    log.info(f"Source Folder: {SourceFolder}")
-    print(f"TIff folder = {DirTif}")
-    log.info(f"TIff folder: {DirTif}")
-    print(f"Stitched Folder = {DirStitched}")
-    log.info(f"Stitched Folder: {DirStitched}")
-
-    main()
+    freeze_support()
+    if len(sys.argv) == 1:
+        main(source_folder=pathlib.Path(__file__).parent.absolute())
+    elif len(sys.argv) == 2:
+        if pathlib.Path(sys.argv[1]).exists():
+            main(source_folder=pathlib.Path(sys.argv[1]).absolute())
+        else:
+            print("The entered path does not exists")
+    else:
+        print("More than one argument is entered. This program accepts only path as argument.")
