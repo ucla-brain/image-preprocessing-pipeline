@@ -8,7 +8,7 @@ Python code for stitching and image enhancement of Light Sheet data
 * Install [anaconda python distribution](https://www.anaconda.com/products/individual):
    make a dedicated python environment for stitching:
 
-   `conda create -n stitching -c conda-forge python=3.8 psutil tqdm tifffile numpy scipy scikit-image scikit-learn matplotlib pyqt pandas imagecodecs mpi4py`
+   `conda create -n stitching -c conda-forge python=3.8 psutil tqdm tifffile numpy scipy scikit-image scikit-learn matplotlib pyqt pandas imagecodecs git mpi4py`
    
    `conda activate stitching`
     
