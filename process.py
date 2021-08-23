@@ -220,6 +220,11 @@ def correct_path_for_cmd(filepath):
         return str(filepath).replace(" ", r"\ ").replace("(", r"\(").replace(")", r"\)")
 
 
+def p_log(txt):
+    print(txt)
+    log.info(txt)
+
+
 def main(source_folder):
     log_file = source_folder / "log.txt"
     log.basicConfig(filename=str(log_file), level=log.INFO)
@@ -241,8 +246,18 @@ def main(source_folder):
     if need_flat_image_subtraction:
         image_classes_training_data_path = source_folder / FlatNonFlatTrainingData
         if not image_classes_training_data_path.exists():
-            print(f'Looked for flat vs not-flat training data in {image_classes_training_data_path} and it was missing!')
-            raise RuntimeError
+            print(
+                f'Looked for flat vs not-flat training data in {image_classes_training_data_path} and it was missing!')
+            use_default_flat_classification_data = ask_true_false_question(
+                "Do you want to use classification data that comes with this package? \n"
+                "(It might not be compatible with your microscopes.)"
+            )
+            if use_default_flat_classification_data:
+                image_classes_training_data_path = pathlib.Path(__file__).parent / "image_classes.csv"
+                print(f"default classification data path is {image_classes_training_data_path.absolute()}")
+            else:
+                print("You need classification data for flat image generation!")
+                raise RuntimeError
         de_striped_posix += "_flat_subtracted"
 
     de_striped_dir = source_folder.parent / (source_folder.name + de_striped_posix)
@@ -278,12 +293,9 @@ def main(source_folder):
     log.info(f"Total physical memory: {psutil.virtual_memory().total // 1024 ** 3} GB")
     log.info(f"Physical CPU core count: {cpu_physical_core_count}")
     log.info(f"Logical CPU core count: {cpu_logical_core_count}")
-    print(f"Source folder path = {source_folder}")
-    log.info(f"Source folder path: {source_folder}")
-    print(f"Destriped or tif files path = {de_striped_dir}")
-    log.info(f"Destriped or tif files path: {de_striped_dir}")
-    print(f"Stitched Folder = {dir_stitched}")
-    log.info(f"Stitched Folder: {dir_stitched}")
+    p_log(f"Source folder path = {source_folder}")
+    p_log(f"Destriped or tif files path = {de_striped_dir}")
+    p_log(f"Stitched Folder = {dir_stitched}")
     # ::::::::::::::::: RUN PyStripe  ::::::::::::::::
     start_time = time()
     if need_destriping or need_raw_to_tiff_conversion:
@@ -294,24 +306,21 @@ def main(source_folder):
                     flat_img_created_already = source_folder.joinpath(Channel+'_flat.tif')
                     if flat_img_created_already.exists():
                         img_flat = pystripe.imread(str(flat_img_created_already))
-                        print(f"{datetime.now()}: {Channel}: using the existing flat image {flat_img_created_already}.")
-                        log.info(f"{datetime.now()}: {Channel}: using the existing flat image {flat_img_created_already}.")
+                        p_log(f"{datetime.now()}: {Channel}: using the existing flat image {flat_img_created_already}.")
                     else:
-                        print(f"{datetime.now()}: {Channel}: creating a new flat image.")
-                        log.info(f"{datetime.now()}: {Channel}: creating a new flat image.")
+                        p_log(f"{datetime.now()}: {Channel}: creating a new flat image.")
                         img_flat = create_flat_img(
                             source_channel_folder,
                             image_classes_training_data_path,
                             cpu_physical_core_count=cpu_physical_core_count,
                             cpu_logical_core_count=cpu_logical_core_count,
                             max_images=1024,  # the number of flat images averaged
-                            patience_before_skipping=10,  # the number of non-flat images found successively before skipping
+                            patience_before_skipping=10,  # the # of non-flat images found successively before skipping
                             skips=100,  # the number of images should be skipped before testing again
                             sigma_spatial=1,  # the de-noising parameter
                             save_as_tiff=True
                         )
-                print(f"{datetime.now()}: {Channel}: ... DeStripe program started")
-                log.info(f"{datetime.now()}: {Channel}: ... DeStripe program started")
+                p_log(f"{datetime.now()}: {Channel}: ... DeStripe program started")
                 pystripe.batch_filter(
                     source_channel_folder,
                     de_striped_dir / Channel,
@@ -336,8 +345,7 @@ def main(source_folder):
                     bit_shift_to_right=right_bit_shift,
                     continue_process=continue_process_pystripe
                 )
-                print(f"{datetime.now()}: {Channel}: DeStripe program is done.")
-                log.info(f"{datetime.now()}: {Channel}: DeStripe program is done.")
+                p_log(f"{datetime.now()}: {Channel}: DeStripe program is done.")
 
     # ::::::::::::::::: Stitching ::::::::::::::::
     # generates one multichannel tiff file: GPU accelerated & parallel
@@ -437,7 +445,7 @@ def main(source_folder):
                 f"wine" if not sys.platform == "win32" else "",
                 f"{correct_path_for_cmd(imaris_converter)}",
                 f"--input {correct_path_for_cmd(file)}",
-                f"--output {dir_stitched.joinpath(source_folder.name + ('_' + file.name if len(files) > 1 else '') + '_V4.ims')}",
+                f"--output {dir_stitched / (source_folder.name+('_'+file.name if len(files) > 1 else '')+'_v4.ims')}",
                 f"--log {log_file}",
                 f"--nthreads {cpu_logical_core_count}",
                 f"--compression 1",
@@ -449,9 +457,8 @@ def main(source_folder):
 
     # ::::::::::::::::::::::::::::: Done ::::::::::::::::::::::::::::::
 
-    print(f"done at {datetime.now()}")
-    log.info(f"done at {datetime.now()}")
-    print(f"Time elapsed: {time() - start_time}")
+    p_log(f"done at {datetime.now()}")
+    p_log(f"Time elapsed: {time() - start_time}")
 
 
 if __name__ == '__main__':
