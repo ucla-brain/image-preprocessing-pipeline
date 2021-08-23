@@ -22,7 +22,7 @@ Python code for stitching and image enhancement of Light Sheet data
    **Note:** If installing anacaonda as user did not work on Windows, you may test installing it as the system python.
 * clone image provessing pipeline:
 
-`git clone https://github.com/ucla-brain/image-preprocessing-pipeline.git`
+   `git clone https://github.com/ucla-brain/image-preprocessing-pipeline.git`
 
 * Make sure the location of packages are set correctly in the python script.
 
