@@ -3,7 +3,7 @@ Python code for stitching and image enhancement of Light Sheet data
 
 # Installation:
 * Install [TeraStitcher portable >=1.11](https://github.com/abria/TeraStitcher/wiki/Binary-packages).
-* On Linux also make sure Java server (e.g., [openjdk](https://openjdk.java.net/install/)), [Nvidia drivers and CUDA >10.1](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/index.html#ubuntu-installation) are installed.
+* On Linux also make sure Java server (e.g., [openjdk](https://openjdk.java.net/install/)), and [Nvidia drivers and CUDA >10.1](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/index.html#ubuntu-installation) are installed.
 * Install [Imaris Viewer](https://viewer.imaris.com/download/ImarisViewer9_7_2w64.exe) (on Linux use [wine](https://vitux.com/how-to-install-wine-on-ubuntu/)).
 * Install [anaconda python distribution](https://www.anaconda.com/products/individual):
    make a dedicated python environment for stitching:
@@ -29,11 +29,11 @@ Python code for stitching and image enhancement of Light Sheet data
 
 * Make sure the location of packages are set correctly in the python script `process.py`:
 
-## User and Microscope Specific Configurations:
+## Computer and Microscope Specific Configurations:
 
 * Set the terastitcher path. The default path on Windows is `C:\TeraStitcher` folder, but you may edit the python file and change the `TeraStitcherPath` variable to any path you like. For example,
 
-   `TeraStitcherPath = r"C:\TeraStitcher"` (Windows)
+   `TeraStitcherPath = r"C:\path\to\TeraStitcher"` (Windows)
 
    `TeraStitcherPath = r"/path/to/terastitcher"` (Linux)
 
@@ -57,7 +57,7 @@ Python code for stitching and image enhancement of Light Sheet data
 
    `os.environ["CUDA_VISIBLE_DEVICES"] = "1"`
 
-* default channel folder names and voxel dimentions are set up like this:
+* default channel folder names and voxel dimensions are set up like this:
 
    `AllChannels = ["Ex_488_Em_0", "Ex_561_Em_1", "Ex_642_Em_2"]`
 
@@ -71,7 +71,7 @@ Python code for stitching and image enhancement of Light Sheet data
 
 # Usage:
 * activate stitching environment in anaconda: `conda activate stitching`.
-* run: `python process.py /path/to/image/folder`
+* From inside the `image-preprocessing-pipeline` folder run: `python process.py /path/to/image/folder`
 * answer the questions wait for the results.
 
 # Functions and steps:
