@@ -811,8 +811,9 @@ def batch_filter(
         }
         args.append(arg_dict)
     print('Pystripe batch processing progress:')
-    with multiprocessing.Pool(workers) as pool:
-        list(tqdm.tqdm(pool.imap(_read_filter_save, args, chunksize=chunks), total=len(args), ascii=True))
+    if len(args) > 0:
+        with multiprocessing.Pool(workers) as pool:
+            list(tqdm.tqdm(pool.imap(_read_filter_save, args, chunksize=chunks), total=len(args), ascii=True))
     print('Done!')
 
 

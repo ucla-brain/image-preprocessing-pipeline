@@ -232,6 +232,7 @@ def main(source_folder):
     # ::::::::::::::::::::: Ask questions :::::::::::::::::::::
     de_striped_posix, what_for = "", ""
     need_flat_image_subtraction, img_flat = False, None
+    image_classes_training_data_path = source_folder / FlatNonFlatTrainingData
     need_raw_to_tiff_conversion = False
     need_destriping = ask_true_false_question("Do you need to remove stripes from images?")
     if need_destriping:
@@ -245,6 +246,26 @@ def main(source_folder):
             what_for += "tif "
     if need_flat_image_subtraction:
         de_striped_posix += "_flat_subtracted"
+        flat_img_not_exist = []
+        for Channel in AllChannels:
+            flat_img_created_already = source_folder.joinpath(Channel + '_flat.tif')
+            flat_img_not_exist.append(not flat_img_created_already.exists())
+        if any(flat_img_not_exist):
+            if not image_classes_training_data_path.exists():
+                print(
+                    f'Looked for flat vs not-flat training data in {image_classes_training_data_path} '
+                    f'and it was missing!')
+                use_default_flat_classification_data = ask_true_false_question(
+                    "Do you want to use classification data that comes with this package? \n"
+                    "(It might not be compatible with your microscopes.)"
+                )
+                if use_default_flat_classification_data:
+                    image_classes_training_data_path = pathlib.Path(__file__).parent / "image_classes.csv"
+                    print(f"default classification data path is:\n"
+                          f"{image_classes_training_data_path.absolute()}")
+                else:
+                    print("You need classification data for flat image generation!")
+                    raise RuntimeError
 
     de_striped_dir = source_folder.parent / (source_folder.name + de_striped_posix)
     continue_process_pystripe = False
@@ -285,7 +306,6 @@ def main(source_folder):
     # ::::::::::::::::: RUN PyStripe  ::::::::::::::::
     start_time = time()
     if need_destriping or need_raw_to_tiff_conversion:
-        use_default_flat_classification_data = None
         for Channel in AllChannels:
             source_channel_folder = source_folder / Channel
             if source_channel_folder.exists():
@@ -294,25 +314,8 @@ def main(source_folder):
                     if flat_img_created_already.exists():
                         img_flat = pystripe.imread(str(flat_img_created_already))
                         p_log(f"{datetime.now()}: {Channel}: using the existing flat image:\n"
-                              f"{flat_img_created_already}.")
+                              f"{flat_img_created_already.absolute()}.")
                     else:
-                        image_classes_training_data_path = source_folder / FlatNonFlatTrainingData
-                        if not image_classes_training_data_path.exists():
-                            print(
-                                f'Looked for flat vs not-flat training data in {image_classes_training_data_path} '
-                                f'and it was missing!')
-                            if use_default_flat_classification_data is None:
-                                use_default_flat_classification_data = ask_true_false_question(
-                                    "Do you want to use classification data that comes with this package? \n"
-                                    "(It might not be compatible with your microscopes.)"
-                                )
-                            if use_default_flat_classification_data:
-                                image_classes_training_data_path = pathlib.Path(__file__).parent / "image_classes.csv"
-                                print(f"default classification data path is:\n"
-                                      f"{image_classes_training_data_path.absolute()}")
-                            else:
-                                print("You need classification data for flat image generation!")
-                                raise RuntimeError
                         p_log(f"{datetime.now()}: {Channel}: creating a new flat image.")
                         img_flat = create_flat_img(
                             source_channel_folder,
