@@ -285,6 +285,7 @@ def main(source_folder):
     # ::::::::::::::::: RUN PyStripe  ::::::::::::::::
     start_time = time()
     if need_destriping or need_raw_to_tiff_conversion:
+        use_default_flat_classification_data = None
         for Channel in AllChannels:
             source_channel_folder = source_folder / Channel
             if source_channel_folder.exists():
@@ -300,10 +301,11 @@ def main(source_folder):
                             print(
                                 f'Looked for flat vs not-flat training data in {image_classes_training_data_path} '
                                 f'and it was missing!')
-                            use_default_flat_classification_data = ask_true_false_question(
-                                "Do you want to use classification data that comes with this package? \n"
-                                "(It might not be compatible with your microscopes.)"
-                            )
+                            if use_default_flat_classification_data is None:
+                                use_default_flat_classification_data = ask_true_false_question(
+                                    "Do you want to use classification data that comes with this package? \n"
+                                    "(It might not be compatible with your microscopes.)"
+                                )
                             if use_default_flat_classification_data:
                                 image_classes_training_data_path = pathlib.Path(__file__).parent / "image_classes.csv"
                                 print(f"default classification data path is:\n"
