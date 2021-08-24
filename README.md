@@ -27,7 +27,7 @@ Python code for stitching and image enhancement of Light Sheet data
 
   `cd image-preprocessing-pipeline`
 
-* Make sure the location of packages are set correctly in the python script `process.py`:
+* Make sure the location of packages are set correctly in the python script `process_images.py`:
 
 ## Computer and Microscope Specific Configurations:
 
@@ -71,7 +71,7 @@ Python code for stitching and image enhancement of Light Sheet data
 
 # Usage:
 * activate stitching environment in anaconda: `conda activate stitching`.
-* From inside the `image-preprocessing-pipeline` folder run: `python process.py /path/to/image/folder`
+* From inside the `image-preprocessing-pipeline` folder run: `python process_images.py /path/to/image/folder`
 * answer the questions wait for the results.
 
 # Functions and steps:
@@ -80,7 +80,7 @@ Python code for stitching and image enhancement of Light Sheet data
 * Step 3: Stitch 3 channel data to multichannel 3D TIFF with ParaStitcher
 * Step 4: convert multichannel 3D TIFF to IMS using ImarisConvertiv.exe.
 
-## terastitcher steps:
+## TeraStitcher steps:
 * Step 1: import a volume into TeraStitcher and prepare it for processing.
 * Step 2: compute pairwise stacks displacements.
 * Step 3: project existing displacements along Z axis for each stack by selecting the most reliable one.
