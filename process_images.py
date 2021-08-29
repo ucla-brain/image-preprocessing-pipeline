@@ -26,6 +26,7 @@ cpu_physical_core_count = psutil.cpu_count(logical=False)
 cpu_logical_core_count = psutil.cpu_count(logical=True)
 
 if sys.platform == "win32":
+    psutil.Process().nice(psutil.IDLE_PRIORITY_CLASS)
     CacheDriveExample = "C:\\"
     if pathlib.Path(r"C:\TeraStitcher").exists():
         TeraStitcherPath = pathlib.Path(r"C:\TeraStitcher")
@@ -42,6 +43,7 @@ if sys.platform == "win32":
     teraconverter = "teraconverter.exe"
     ImarisConverterPath = pathlib.Path(r"C:\Program Files\Bitplane\ImarisViewer x64 9.7.2")
 elif sys.platform == 'linux':
+    psutil.Process().nice(value=19)
     CacheDriveExample = "/mnt/scratch"
     os.environ["HOME"] = r"/home/kmoradi"
     # TeraStitcherPath = pathlib.Path(f"{os.environ['HOME']}/apps/ExM-Studio/stitching/bin")
@@ -277,7 +279,7 @@ def main(source_folder):
             right_bit_shift = int(input(
                 "Enter right bit shift [0 to 8] for 8-bit conversion. \n"
                 "Values smaller than 8 will increase the pixel brightness. \n"
-                "We suggest a value between 3 to 6. \n"
+                "We suggest a value between 4 to 6. \n"
                 "The smaller the value the brighter the pixels.\n"))
         de_striped_dir, continue_process_pystripe = get_destination_path(
             source_folder.name,
@@ -342,7 +344,7 @@ def main(source_folder):
                     # threshold=-1,
                     compression=('ZLIB', 1),  # ('ZLIB', 1) ('ZSTD', 1) conda install imagecodecs
                     flat=img_flat,
-                    dark=100.0,  # 100.0
+                    dark=150.0,  # 100.0
                     # z_step=voxel_size_z,  # z-step in micron. Only used for DCIMG files.
                     # rotate=False,
                     # lightsheet=True if need_destriping else False,  # default to False
