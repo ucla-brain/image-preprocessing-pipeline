@@ -344,7 +344,7 @@ def main(source_folder):
                     # threshold=-1,
                     compression=('ZLIB', 1),  # ('ZLIB', 1) ('ZSTD', 1) conda install imagecodecs
                     flat=img_flat,
-                    dark=150.0,  # 100.0
+                    dark=255,  # 100.0
                     # z_step=voxel_size_z,  # z-step in micron. Only used for DCIMG files.
                     # rotate=False,
                     # lightsheet=True if need_destriping else False,  # default to False
