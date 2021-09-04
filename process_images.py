@@ -279,7 +279,7 @@ def main(source_folder):
             right_bit_shift = int(input(
                 "Enter right bit shift [0 to 8] for 8-bit conversion. \n"
                 "Values smaller than 8 will increase the pixel brightness. \n"
-                "We suggest a value between 4 to 6. \n"
+                "We suggest a value between 3 to 6. \n"
                 "The smaller the value the brighter the pixels.\n"))
         de_striped_dir, continue_process_pystripe = get_destination_path(
             source_folder.name,
@@ -392,7 +392,7 @@ def main(source_folder):
                         command = [f"{terastitcher}"]
                     command += [
                         f"-{step}",
-                        "--threshold=0.5",
+                        "--threshold=0.7",
                         "--isotropic",
                         f"--projin={dir_stitched.joinpath(Channel + '_xml_import_step_' + str(step - 1) + '.xml')}",
                         f"--projout={dir_stitched.joinpath(Channel + '_xml_import_step_' + str(step) + '.xml')}",
@@ -456,7 +456,7 @@ def main(source_folder):
                 f"{correct_path_for_cmd(imaris_converter)}",
                 f"--input {correct_path_for_cmd(file)}",
                 f"--output {dir_stitched / (source_folder.name+('_'+file.name if len(files) > 1 else '')+'_v4.ims')}",
-                f"--log {log_file}",
+                f"--log {log_file}" if sys.platform == "win32" else "",
                 f"--nthreads {cpu_logical_core_count}",
                 f"--compression 1",
             ]
