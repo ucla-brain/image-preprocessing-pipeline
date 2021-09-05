@@ -14,6 +14,7 @@ from skimage.filters import threshold_otsu
 from dcimg import DCIMGFile
 from pystripe_forked import raw
 from .lightsheet_correct import correct_lightsheet
+# from numba import njit
 warnings.filterwarnings("ignore")
 supported_extensions = ['.tif', '.tiff', '.raw', '.dcimg']
 nb_retry = 10
@@ -365,6 +366,7 @@ def max_level(min_len, wavelet):
     return pywt.dwt_max_level(min_len, w.dec_len)
 
 
+# @njit
 def sigmoid(x):
     return 1 / (1 + np.exp(-x))
 
@@ -407,6 +409,7 @@ def filter_subband(img, sigma, level, wavelet):
     return np.exp(img_log_filtered)-1
 
 
+# @njit
 def apply_flat(img, flat):
     return (img / flat).astype(img.dtype)
 
@@ -607,7 +610,8 @@ def read_filter_save(
         )
     else:
         fimg = correct_lightsheet(
-            img.reshape(img.shape[0], img.shape[1], 1),
+            # img.reshape(img.shape[0], img.shape[1], 1),
+            img.reshape(img.shape[0], img.shape[1]),
             percentile=percentile,
             lightsheet=dict(selem=(1, artifact_length, 1)),
             background=dict(

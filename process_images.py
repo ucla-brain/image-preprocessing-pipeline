@@ -15,6 +15,7 @@ from multiprocessing import freeze_support
 from flat import create_flat_img
 from datetime import datetime
 from time import time
+import mpi4py
 
 # experiment setup: user needs to set them right
 AllChannels = ["Ex_488_Em_0", "Ex_561_Em_1", "Ex_642_Em_2"]  # the order determines color ["R", "G", "B"]?
@@ -238,7 +239,7 @@ def main(source_folder):
     need_raw_to_tiff_conversion = False
     need_destriping = ask_true_false_question("Do you need to remove stripes from images?")
     if need_destriping:
-        need_flat_image_subtraction = ask_true_false_question("Do you need flat image subtraction?")
+        need_flat_image_subtraction = ask_true_false_question("Do you need to apply a flat image?")
         de_striped_posix += "_destriped"
         what_for += "destriped "
     else:
@@ -452,7 +453,7 @@ def main(source_folder):
         if imaris_converter.exists():
             print(f"found Imaris View: converting {file.name} to ims ... ")
             command = [
-                f"wine" if not sys.platform == "win32" else "",
+                f"" if sys.platform == "win32" else "wine",
                 f"{correct_path_for_cmd(imaris_converter)}",
                 f"--input {correct_path_for_cmd(file)}",
                 f"--output {dir_stitched / (source_folder.name+('_'+file.name if len(files) > 1 else '')+'_v4.ims')}",
