@@ -109,9 +109,9 @@ Python code for stitching and image enhancement of Light Sheet data
 # Compiling terasticher (optional)
 For CUDA 11.4 and newer GPUs, in addition to [original compilation documentation instructions](https://github.com/abria/TeraStitcher/wiki/Get-and-build-source-code) do the following:
 
-* `export HDF5_DIR=/home/kmoradi/mcp3d/src/3rd_party/hdf5`
+* `export HDF5_DIR=/path/to/mcp3d/src/3rd_party/hdf5`
 
-* edit `/home/kmoradi/TeraStitcher/src/crossmips/CMakeLists.txt` and change `-arch sm30` to `sm60`
+* edit `/path/to/TeraStitcher/src/crossmips/CMakeLists.txt` and change `-arch sm30` to `sm60`
 
 * configure in command line:
 
