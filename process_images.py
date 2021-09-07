@@ -3,6 +3,7 @@
 # Please read the readme file for more information:
 # https://github.com/ucla-brain/image-preprocessing-pipeline/blob/main/README.md
 # :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+import re
 import os
 import sys
 import psutil
@@ -15,6 +16,7 @@ from multiprocessing import freeze_support
 from flat import create_flat_img
 from datetime import datetime
 from time import time
+from platform import uname
 import mpi4py
 
 # experiment setup: user needs to set them right
@@ -27,6 +29,7 @@ cpu_physical_core_count = psutil.cpu_count(logical=False)
 cpu_logical_core_count = psutil.cpu_count(logical=True)
 
 if sys.platform == "win32":
+    print("Windows is detected.")
     psutil.Process().nice(psutil.IDLE_PRIORITY_CLASS)
     CacheDriveExample = "C:\\"
     if pathlib.Path(r"C:\TeraStitcher").exists():
@@ -43,7 +46,8 @@ if sys.platform == "win32":
     terastitcher = "terastitcher.exe"
     teraconverter = "teraconverter.exe"
     ImarisConverterPath = pathlib.Path(r"C:\Program Files\Bitplane\ImarisViewer x64 9.7.2")
-elif sys.platform == 'linux':
+elif sys.platform == 'linux' and not uname().release.endswith('Microsoft'):
+    print("Linux is detected.")
     psutil.Process().nice(value=19)
     CacheDriveExample = "/mnt/scratch"
     os.environ["HOME"] = r"/home/kmoradi"
@@ -64,10 +68,10 @@ elif sys.platform == 'linux':
     os.environ["TERM"] = "xterm"
     os.environ["USECUDA_X_NCC"] = "1"  # set to 0 to stop GPU acceleration
     if os.environ["USECUDA_X_NCC"] != "0":
-        if pathlib.Path("/usr/local/cuda-10.1/").exists() and pathlib.Path("/usr/local/cuda-10.1/bin").exists():
-            os.environ["CUDA_ROOT_DIR"] = "/usr/local/cuda-10.1/"
-        elif pathlib.Path("/usr/local/cuda-11.4/").exists() and pathlib.Path("/usr/local/cuda-11.4/bin").exists():
+        if pathlib.Path("/usr/local/cuda-11.4/").exists() and pathlib.Path("/usr/local/cuda-11.4/bin").exists():
             os.environ["CUDA_ROOT_DIR"] = "/usr/local/cuda-11.4/"
+        elif pathlib.Path("/usr/local/cuda-10.1/").exists() and pathlib.Path("/usr/local/cuda-10.1/bin").exists():
+            os.environ["CUDA_ROOT_DIR"] = "/usr/local/cuda-10.1/"
         else:
             log.error("Error: CUDA path not found")
             raise RuntimeError
@@ -77,6 +81,40 @@ elif sys.platform == 'linux':
 
     ImarisConverterPath = pathlib.Path(
         f"{os.environ['HOME']}/.wine/drive_c/Program Files/Bitplane/ImarisViewer x64 9.7.2/")
+elif sys.platform == 'linux' and uname().release.endswith('Microsoft'):
+    print("Windows subsystem for Linux is detected.")
+    psutil.Process().nice(value=19)
+    CacheDriveExample = "/mnt/d/"
+    os.environ["HOME"] = r"/home/brain"
+    TeraStitcherPath = pathlib.Path(f"{os.environ['HOME']}/TeraStitcher/build/bin")
+    os.environ["PATH"] = f"{os.environ['PATH']}:{TeraStitcherPath.as_posix()}"
+    os.environ["PATH"] = f"{os.environ['PATH']}:{TeraStitcherPath.joinpath('pyscripts').as_posix()}"
+    terastitcher = "terastitcher"
+    teraconverter = "teraconverter"
+    if not TeraStitcherPath.exists():
+        log.error("Error: TeraStitcher path not found")
+        raise RuntimeError
+    if pathlib.Path("/usr/lib/jvm/java-11-openjdk-amd64/lib/server").exists():
+        os.environ["LD_LIBRARY_PATH"] = "/usr/lib/jvm/java-11-openjdk-amd64/lib/server"
+    else:
+        log.error("Error: JAVA path not found")
+        raise RuntimeError
+    os.environ["TERM"] = "xterm"
+    os.environ["USECUDA_X_NCC"] = "0"  # set to 0 to stop GPU acceleration
+    if os.environ["USECUDA_X_NCC"] != "0":
+        if pathlib.Path("/usr/local/cuda-11.4/").exists() and pathlib.Path("/usr/local/cuda-11.4/bin").exists():
+            os.environ["CUDA_ROOT_DIR"] = "/usr/local/cuda-11.4/"
+        elif pathlib.Path("/usr/local/cuda-10.1/").exists() and pathlib.Path("/usr/local/cuda-10.1/bin").exists():
+            os.environ["CUDA_ROOT_DIR"] = "/usr/local/cuda-10.1/"
+        else:
+            log.error("Error: CUDA path not found")
+            raise RuntimeError
+        os.environ["PATH"] = f"{os.environ['PATH']}:{os.environ['CUDA_ROOT_DIR']}/bin"
+        os.environ["LD_LIBRARY_PATH"] = f"{os.environ['LD_LIBRARY_PATH']}:{os.environ['CUDA_ROOT_DIR']}/lib64"
+        os.environ["CUDA_VISIBLE_DEVICES"] = "1"  # to train on a specific GPU on a multi-gpu machine
+
+    ImarisConverterPath = pathlib.Path(
+        f"/mnt/c/Program Files/Bitplane/ImarisViewer x64 9.7.2/")
 else:
     log.error("yet unsupported OS")
     raise RuntimeError
@@ -223,6 +261,13 @@ def correct_path_for_cmd(filepath):
         return str(filepath).replace(" ", r"\ ").replace("(", r"\(").replace(")", r"\)")
 
 
+def correct_path_for_wsl(filepath):
+    p = re.compile(r"/mnt/(.)/")
+    new_path = p.sub(r'\1:\\\\', str(filepath))
+    new_path = new_path.replace(" ", r"\ ").replace("(", r"\(").replace(")", r"\)").replace("/", "\\\\")
+    return new_path
+
+
 def p_log(txt):
     print(txt)
     log.info(txt)
@@ -284,7 +329,7 @@ def main(source_folder):
                 "The smaller the value the brighter the pixels.\n"))
         de_striped_dir, continue_process_pystripe = get_destination_path(
             source_folder.name,
-            what_for=what_for+"files",
+            what_for=what_for + "files",
             posix=de_striped_posix,
             default_path=de_striped_dir)
     else:
@@ -313,7 +358,7 @@ def main(source_folder):
             source_channel_folder = source_folder / Channel
             if source_channel_folder.exists():
                 if need_flat_image_subtraction:
-                    flat_img_created_already = source_folder.joinpath(Channel+'_flat.tif')
+                    flat_img_created_already = source_folder.joinpath(Channel + '_flat.tif')
                     if flat_img_created_already.exists():
                         img_flat = pystripe.imread(str(flat_img_created_already))
                         p_log(f"{datetime.now()}: {Channel}: using the existing flat image:\n"
@@ -323,6 +368,7 @@ def main(source_folder):
                         img_flat = create_flat_img(
                             source_channel_folder,
                             image_classes_training_data_path,
+                            tile_size,
                             cpu_physical_core_count=cpu_physical_core_count,
                             cpu_logical_core_count=cpu_logical_core_count,
                             max_images=1024,  # the number of flat images averaged
@@ -434,7 +480,6 @@ def main(source_folder):
         f"--projin={dir_stitched.joinpath('vol_xml_import.xml')}",
         f"--volout={dir_stitched}",
         "--volout_plugin=\"TiledXY|3Dseries\"",
-        # "--volout_plugin=\"HDF5 (Imaris IMS)\"",
         "--slicewidth=100000",
         "--sliceheight=150000",
         "--slicedepth=50000",
@@ -456,11 +501,19 @@ def main(source_folder):
                 f"" if sys.platform == "win32" else "wine",
                 f"{correct_path_for_cmd(imaris_converter)}",
                 f"--input {correct_path_for_cmd(file)}",
-                f"--output {dir_stitched / (source_folder.name+('_'+file.name if len(files) > 1 else '')+'_v4.ims')}",
+                f"--output {dir_stitched / (source_folder.name + ('_' + file.name if len(files) > 1 else '') + '_v4.ims')}",
                 f"--log {log_file}" if sys.platform == "win32" else "",
                 f"--nthreads {cpu_logical_core_count}",
                 f"--compression 1",
             ]
+            if sys.platform == "linux" and uname().release.endswith('Microsoft'):
+                command = [
+                    f'{correct_path_for_cmd(imaris_converter)}',
+                    f'--input {correct_path_for_wsl(file)}',
+                    f"--output {correct_path_for_wsl(dir_stitched / (source_folder.name + ('_' + file.name if len(files) > 1 else '') + '_v4.ims'))}",
+                    f"--nthreads {cpu_logical_core_count}",
+                    f"--compression 1",
+                ]
             log.info("tiff to ims conversion command:\n" + " ".join(command))
             subprocess.call(" ".join(command), shell=True)
         else:

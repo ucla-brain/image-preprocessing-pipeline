@@ -411,7 +411,10 @@ def filter_subband(img, sigma, level, wavelet):
 
 # @njit
 def apply_flat(img, flat):
-    return (img / flat).astype(img.dtype)
+    if img.shape == flat.shape:
+        return (img / flat).astype(img.dtype)
+    else:
+        return img
 
 
 def filter_streaks(img, sigma, level=0, wavelet='db3', crossover=10, threshold=-1, flat=None, dark=0):
@@ -763,8 +766,6 @@ def batch_filter(
     """
     if sigma is None:
         sigma = [0, 0]
-    if sigma is None:
-        sigma = [0, 0]
     if workers == 0:
         workers = multiprocessing.cpu_count()
     if isinstance(flat, (np.ndarray, np.generic)):
@@ -777,7 +778,6 @@ def batch_filter(
     print('Looking for images in {}...'.format(input_path))
     img_paths = _find_all_images(input_path, z_step)
     print('Found {} compatible images'.format(len(img_paths)))
-    print('Setting up {} workers...'.format(workers))
     args = []
     for p in img_paths:
         if isinstance(p, tuple):  # DCIMG found
@@ -789,7 +789,7 @@ def batch_filter(
         o = output_path.joinpath(rel_path)
         if not o.parent.exists():
             o.parent.mkdir(parents=True)
-        if continue_process and o.parent.joinpath(o.name[0:-3]+'tif').exists():
+        if continue_process and ((o.parent/(o.name[0:-3]+'tif')).exists() or (o.parent/(o.name[0:-4]+'tiff')).exists()):
             continue
         arg_dict = {
             'input_path': p,
@@ -814,8 +814,10 @@ def batch_filter(
             'bit_shift_to_right': bit_shift_to_right
         }
         args.append(arg_dict)
-    print('Pystripe batch processing progress:')
+    print(f'{len(args)} images need processing.\n'
+          f'Pystripe batch processing progress:')
     if len(args) > 0:
+        print('Setting up {} workers...'.format(workers))
         with multiprocessing.Pool(workers) as pool:
             list(tqdm.tqdm(pool.imap(_read_filter_save, args, chunksize=chunks), total=len(args), ascii=True))
     print('Done!')

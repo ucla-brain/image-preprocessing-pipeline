@@ -70,11 +70,12 @@ def get_img_stats(img_mem_map):
 
 
 class MultiProcessImageProcessing(Process):
-    def __init__(self, queue, classifier_model, img_path, sigma_spatial=1):
+    def __init__(self, queue, classifier_model, img_path, tile_size, sigma_spatial=1):
         Process.__init__(self)
         self.queue = queue
         self.classifier_model = classifier_model
         self.img_path = img_path
+        self.tile_size = tile_size
         self.sigma_spatial = sigma_spatial
 
     def run(self):
@@ -82,7 +83,7 @@ class MultiProcessImageProcessing(Process):
         img_mem_map_denoised = None
         try:
             img_mem_map = img_read(self.img_path)
-            if img_mem_map is not None:
+            if img_mem_map is not None and img_mem_map.shape == self.tile_size:
                 # ['mean', 'min', 'max', 'cv', 'variance', 'std', 'skewness', 'kurtosis', 'n']
                 img_stats = get_img_stats(img_mem_map)
                 is_flat = self.classifier_model.predict([img_stats[0:-1]])
@@ -96,10 +97,14 @@ class MultiProcessImageProcessing(Process):
         self.queue.put([img_mem_map_denoised, time() - t])
 
 
-def create_flat_img(img_source_path, flat_training_data_path,
+def create_flat_img(img_source_path, flat_training_data_path, tile_size,
                     cpu_physical_core_count=psutil.cpu_count(logical=False),
                     cpu_logical_core_count=psutil.cpu_count(logical=True),
-                    max_images=1024, patience_before_skipping=10, skips=100, sigma_spatial=1, save_as_tiff=True):
+                    max_images=1024,
+                    patience_before_skipping=10,
+                    skips=100,
+                    sigma_spatial=1,
+                    save_as_tiff=True):
     print()
     img_path_gen = iter(img_path_generator(img_source_path))
     img_flat_count = 0
@@ -108,7 +113,7 @@ def create_flat_img(img_source_path, flat_training_data_path,
     running_processes = 0
     sleep_durations = 1.0  # seconds
     print_time = 0
-    img_flat_sum = np.zeros((1850, 1850), dtype='float64')
+    img_flat_sum = np.zeros(tile_size, dtype='float64')
     classifier_model = get_flat_classifier(flat_training_data_path)
 
     there_is_img_to_process = True
@@ -118,7 +123,7 @@ def create_flat_img(img_source_path, flat_training_data_path,
             if img_path is None:
                 there_is_img_to_process = False
                 break
-            MultiProcessImageProcessing(queue, classifier_model, img_path, sigma_spatial=sigma_spatial).start()
+            MultiProcessImageProcessing(queue, classifier_model, img_path, tile_size, sigma_spatial=sigma_spatial).start()
             running_processes += 1
 
         sleep(sleep_durations / cpu_physical_core_count)
