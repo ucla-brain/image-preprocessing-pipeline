@@ -353,138 +353,152 @@ def main(source_folder):
     p_log(f"Stitched folder path:\n{dir_stitched}")
     # ::::::::::::::::: RUN PyStripe  ::::::::::::::::
     start_time = time()
-    if need_destriping or need_raw_to_tiff_conversion:
-        for Channel in AllChannels:
-            source_channel_folder = source_folder / Channel
-            if source_channel_folder.exists():
-                if need_flat_image_subtraction:
-                    flat_img_created_already = source_folder.joinpath(Channel + '_flat.tif')
-                    if flat_img_created_already.exists():
-                        img_flat = pystripe.imread(str(flat_img_created_already))
-                        p_log(f"{datetime.now()}: {Channel}: using the existing flat image:\n"
-                              f"{flat_img_created_already.absolute()}.")
-                    else:
-                        p_log(f"{datetime.now()}: {Channel}: creating a new flat image.")
-                        img_flat = create_flat_img(
-                            source_channel_folder,
-                            image_classes_training_data_path,
-                            tile_size,
-                            cpu_physical_core_count=cpu_physical_core_count,
-                            cpu_logical_core_count=cpu_logical_core_count,
-                            max_images=1024,  # the number of flat images averaged
-                            patience_before_skipping=10,  # the # of non-flat images found successively before skipping
-                            skips=100,  # the number of images should be skipped before testing again
-                            sigma_spatial=1,  # the de-noising parameter
-                            save_as_tiff=True
-                        )
-                p_log(f"\n{datetime.now()}: {Channel}: DeStripe program started.")
-                pystripe.batch_filter(
-                    source_channel_folder,
-                    de_striped_dir / Channel,
-                    workers=cpu_logical_core_count,  # if need_destriping else cpu_physical_core_count
-                    chunks=4,
-                    # sigma=[foreground, background] Default is [0, 0], indicating no de-striping.
-                    sigma=((32, 32) if objective == "4x" else (256, 256)) if need_destriping else (0, 0),
-                    # level=0,
-                    wavelet="db10",
-                    crossover=10,
-                    # threshold=-1,
-                    compression=('ZLIB', 1),  # ('ZLIB', 1) ('ZSTD', 1) conda install imagecodecs
-                    flat=img_flat,
-                    dark=255,  # 100.0
-                    # z_step=voxel_size_z,  # z-step in micron. Only used for DCIMG files.
-                    # rotate=False,
-                    # lightsheet=True if need_destriping else False,  # default to False
-                    # artifact_length=150,
-                    # percentile=0.25,
-                    # dont_convert_16bit=True,  # defaults to False
-                    convert_to_8bit=img_16bit_to_8bit,
-                    bit_shift_to_right=right_bit_shift,
-                    continue_process=continue_process_pystripe
-                )
-                p_log(f"{datetime.now()}: {Channel}: DeStripe program is done.")
+    # if need_destriping or need_raw_to_tiff_conversion:
+    #     for Channel in AllChannels:
+    #         source_channel_folder = source_folder / Channel
+    #         if source_channel_folder.exists():
+    #             if need_flat_image_subtraction:
+    #                 flat_img_created_already = source_folder.joinpath(Channel + '_flat.tif')
+    #                 if flat_img_created_already.exists():
+    #                     img_flat = pystripe.imread(str(flat_img_created_already))
+    #                     p_log(f"{datetime.now()}: {Channel}: using the existing flat image:\n"
+    #                           f"{flat_img_created_already.absolute()}.")
+    #                 else:
+    #                     p_log(f"{datetime.now()}: {Channel}: creating a new flat image.")
+    #                     img_flat = create_flat_img(
+    #                         source_channel_folder,
+    #                         image_classes_training_data_path,
+    #                         tile_size,
+    #                         cpu_physical_core_count=cpu_physical_core_count,
+    #                         cpu_logical_core_count=cpu_logical_core_count,
+    #                         max_images=1024,  # the number of flat images averaged
+    #                         patience_before_skipping=10,  # the # of non-flat images found successively before skipping
+    #                         skips=100,  # the number of images should be skipped before testing again
+    #                         sigma_spatial=1,  # the de-noising parameter
+    #                         save_as_tiff=True
+    #                     )
+    #             p_log(f"\n{datetime.now()}: {Channel}: DeStripe program started.")
+    #             pystripe.batch_filter(
+    #                 source_channel_folder,
+    #                 de_striped_dir / Channel,
+    #                 workers=cpu_logical_core_count,  # if need_destriping else cpu_physical_core_count
+    #                 chunks=4,
+    #                 # sigma=[foreground, background] Default is [0, 0], indicating no de-striping.
+    #                 sigma=((32, 32) if objective == "4x" else (256, 256)) if need_destriping else (0, 0),
+    #                 # level=0,
+    #                 wavelet="db10",
+    #                 crossover=10,
+    #                 # threshold=-1,
+    #                 compression=('ZLIB', 1),  # ('ZLIB', 1) ('ZSTD', 1) conda install imagecodecs
+    #                 flat=img_flat,
+    #                 dark=255,  # 100.0
+    #                 # z_step=voxel_size_z,  # z-step in micron. Only used for DCIMG files.
+    #                 # rotate=False,
+    #                 # lightsheet=True if need_destriping else False,  # default to False
+    #                 # artifact_length=150,
+    #                 # percentile=0.25,
+    #                 # dont_convert_16bit=True,  # defaults to False
+    #                 convert_to_8bit=img_16bit_to_8bit,
+    #                 bit_shift_to_right=right_bit_shift,
+    #                 continue_process=continue_process_pystripe
+    #             )
+    #             p_log(f"{datetime.now()}: {Channel}: DeStripe program is done.")
+    #
+    # # ::::::::::::::::: Stitching ::::::::::::::::
+    # # generates one multichannel tiff file: GPU accelerated & parallel
+    #
+    # log.info(f"{datetime.now()}: stitching to 3D TIFF started ...")
+    # print("running terastitcher ... ")
+    # print("Light Sheet Data Stitching (Version 4) is Running ...")
+    # for Channel in AllChannels:
+    #     channel_dir = de_striped_dir / Channel
+    #     if channel_dir.exists():
+    #         log.info(f"{datetime.now()}: {channel_dir} folder exists importing for stitching...")
+    #         command = [
+    #             f"{terastitcher}",
+    #             "-1",
+    #             "--ref1=H",
+    #             "--ref2=V",
+    #             "--ref3=D",
+    #             f"--vxl1={voxel_size_y}",
+    #             f"--vxl2={voxel_size_x}",
+    #             f"--vxl3={voxel_size_z}",
+    #             "--sparse_data",
+    #             f"--volin={channel_dir}",
+    #             f"--projout={dir_stitched.joinpath(Channel + '_xml_import_step_1.xml')}",
+    #             "--noprogressbar"
+    #         ]
+    #         log.info("import command:\n" + " ".join(command))
+    #         subprocess.run(command, check=True)
+    #         if Channel == most_informative_channel:
+    #             for step in [2, 3, 4, 5]:
+    #                 log.info(f"{datetime.now()}: starting step {step} of stitching for most informative channel ...")
+    #                 if step == 2:
+    #                     command = [f"mpiexec -np {cpu_logical_core_count} python -m mpi4py {parastitcher}"]
+    #                 else:
+    #                     command = [f"{terastitcher}"]
+    #                 command += [
+    #                     f"-{step}",
+    #                     "--threshold=0.7",
+    #                     "--isotropic",
+    #                     f"--projin={dir_stitched.joinpath(Channel + '_xml_import_step_' + str(step - 1) + '.xml')}",
+    #                     f"--projout={dir_stitched.joinpath(Channel + '_xml_import_step_' + str(step) + '.xml')}",
+    #                 ]
+    #                 log.info("stitching command:\n" + " ".join(command))
+    #                 subprocess.call(" ".join(command), shell=True)  # subprocess.run(command)
+    #                 dir_stitched.joinpath(Channel + '_xml_import_step_' + str(step - 1) + '.xml').unlink()
+    #     else:
+    #         log.warning(f"{datetime.now()}: {channel_dir} did not exist and not imported ...")
+    #
+    # log.info(f"{datetime.now()}: importing all channels ...")
+    # command = [
+    #     f"{terastitcher}",
+    #     "-1",
+    #     "--ref1=H",
+    #     "--ref2=V",
+    #     "--ref3=D",
+    #     f"--vxl1={voxel_size_y}",
+    #     f"--vxl2={voxel_size_x}",
+    #     f"--vxl3={voxel_size_z}",
+    #     "--sparse_data",
+    #     "--volin_plugin=MultiVolume",
+    #     f"--volin={dir_stitched}",
+    #     f"--projout={dir_stitched.joinpath('vol_xml_import.xml')}",
+    #     "--imin_channel=all",
+    #     "--noprogressbar",
+    #     "--isotropic"
+    # ]
+    # log.info("import command:\n" + " ".join(command))
+    # subprocess.run(command)
 
-    # ::::::::::::::::: Stitching ::::::::::::::::
-    # generates one multichannel tiff file: GPU accelerated & parallel
-
-    log.info(f"{datetime.now()}: stitching to 3D TIFF started ...")
-    print("running terastitcher ... ")
-    print("Light Sheet Data Stitching (Version 4) is Running ...")
-    for Channel in AllChannels:
-        channel_dir = de_striped_dir / Channel
-        if channel_dir.exists():
-            log.info(f"{datetime.now()}: {channel_dir} folder exists importing for stitching...")
-            command = [
-                f"{terastitcher}",
-                "-1",
-                "--ref1=H",
-                "--ref2=V",
-                "--ref3=D",
-                f"--vxl1={voxel_size_y}",
-                f"--vxl2={voxel_size_x}",
-                f"--vxl3={voxel_size_z}",
-                "--sparse_data",
-                f"--volin={channel_dir}",
-                f"--projout={dir_stitched.joinpath(Channel + '_xml_import_step_1.xml')}",
-                "--noprogressbar"
-            ]
-            log.info("import command:\n" + " ".join(command))
-            subprocess.run(command, check=True)
-            if Channel == most_informative_channel:
-                for step in [2, 3, 4, 5]:
-                    log.info(f"{datetime.now()}: starting step {step} of stitching for most informative channel ...")
-                    if step == 2:
-                        command = [f"mpiexec -np {cpu_physical_core_count} python -m mpi4py {parastitcher}"]
-                    else:
-                        command = [f"{terastitcher}"]
-                    command += [
-                        f"-{step}",
-                        "--threshold=0.7",
-                        "--isotropic",
-                        f"--projin={dir_stitched.joinpath(Channel + '_xml_import_step_' + str(step - 1) + '.xml')}",
-                        f"--projout={dir_stitched.joinpath(Channel + '_xml_import_step_' + str(step) + '.xml')}",
-                    ]
-                    log.info("stitching command:\n" + " ".join(command))
-                    subprocess.call(" ".join(command), shell=True)  # subprocess.run(command)
-                    dir_stitched.joinpath(Channel + '_xml_import_step_' + str(step - 1) + '.xml').unlink()
-        else:
-            log.warning(f"{datetime.now()}: {channel_dir} did not exist and not imported ...")
-
-    log.info(f"{datetime.now()}: importing all channels ...")
+    log.info(f"{datetime.now()}: running parastitcher on {cpu_logical_core_count} physical cores ... ")
     command = [
-        f"{terastitcher}",
-        "-1",
-        "--ref1=H",
-        "--ref2=V",
-        "--ref3=D",
-        f"--vxl1={voxel_size_y}",
-        f"--vxl2={voxel_size_x}",
-        f"--vxl3={voxel_size_z}",
-        "--sparse_data",
-        "--volin_plugin=MultiVolume",
-        f"--volin={dir_stitched}",
-        f"--projout={dir_stitched.joinpath('vol_xml_import.xml')}",
-        "--imin_channel=all",
-        "--noprogressbar",
-        "--isotropic"
-    ]
-    log.info("import command:\n" + " ".join(command))
-    subprocess.run(command)
-
-    log.info(f"{datetime.now()}: running parastitcher on {cpu_physical_core_count} physical cores ... ")
-    command = [
-        f"mpiexec -np {cpu_physical_core_count + 1}",
-        "python -m mpi4py",
-        f"{parastitcher}",
+        f"mpiexec -np {cpu_logical_core_count} python -m mpi4py {parastitcher}",
         "-6",
         f"--projin={dir_stitched.joinpath('vol_xml_import.xml')}",
         f"--volout={dir_stitched}",
         "--volout_plugin=\"TiledXY|3Dseries\"",
         "--slicewidth=100000",
-        "--sliceheight=150000",
-        "--slicedepth=50000",
-        "--isotropic"
+        "--sliceheight=100000",
+        "--slicedepth=100000",
+        "--isotropic",
+        "--halve=max"
     ]
+    # command = [
+    #     f"mpiexec -np {cpu_logical_core_count} python -m mpi4py",
+    #     r"C:\TeraStitcher\pyscripts\paraconverter.py",
+    #     "--sfmt=\"TIFF (unstitched, 3D)\"",
+    #     "--dfmt=\"TIFF (tiled, 3D)\"",
+    #     f"-s={dir_stitched.joinpath('vol_xml_import.xml')}",
+    #     f"-d={dir_stitched}",
+    #     f"--width=100000",
+    #     f"--height=100000",
+    #     f"--depth=100000",
+    #     "--isotropic",
+    #     "--halve=max",
+    #     "--noprogressbar",
+    #     "--sparse_data",
+    # ]
     log.info("stitching command:\n" + " ".join(command))
     subprocess.call(" ".join(command), shell=True)
 
