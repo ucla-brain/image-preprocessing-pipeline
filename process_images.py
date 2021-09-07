@@ -7,6 +7,7 @@ import re
 import os
 import sys
 import psutil
+import shutil
 import pathlib
 import platform
 import subprocess
@@ -32,34 +33,47 @@ if sys.platform == "win32":
     # print("Windows is detected.")
     psutil.Process().nice(psutil.IDLE_PRIORITY_CLASS)
     CacheDriveExample = "C:\\"
-    if pathlib.Path(r"C:\TeraStitcher").exists():
-        TeraStitcherPath = pathlib.Path(r"C:\TeraStitcher")
-    elif pathlib.Path(r"C:\Programs\TeraStitcher").exists():
-        TeraStitcherPath = pathlib.Path(r"C:\Programs\TeraStitcher")
-    elif pathlib.Path(r"C:\Program Files\TeraStitcher-Qt5-standalone 1.10.18\bin").exists():
-        TeraStitcherPath = pathlib.Path(r"C:\Program Files\TeraStitcher-Qt5-standalone 1.10.18\bin")
-    else:
-        log.error("Error: TeraStitcher path not found")
-        raise RuntimeError
+    TeraStitcherPath = pathlib.Path(r"./TeraStitcher_windows")
     os.environ["PATH"] = f"{os.environ['PATH']};{TeraStitcherPath.as_posix()}"
     os.environ["PATH"] = f"{os.environ['PATH']};{TeraStitcherPath.joinpath('pyscripts').as_posix()}"
     terastitcher = "terastitcher.exe"
     teraconverter = "teraconverter.exe"
-    ImarisConverterPath = pathlib.Path(r"C:\Program Files\Bitplane\ImarisViewer x64 9.7.2")
 elif sys.platform == 'linux' and not uname().release.endswith('Microsoft'):
     print("Linux is detected.")
     psutil.Process().nice(value=19)
     CacheDriveExample = "/mnt/scratch"
-    os.environ["HOME"] = r"/home/kmoradi"
-    # TeraStitcherPath = pathlib.Path(f"{os.environ['HOME']}/apps/ExM-Studio/stitching/bin")
-    TeraStitcherPath = pathlib.Path(f"{os.environ['HOME']}/apps/ExM-Studio/stitching_native/bin")
+    TeraStitcherPath = pathlib.Path(r"./TeraStitcher_linux")
     os.environ["PATH"] = f"{os.environ['PATH']}:{TeraStitcherPath.as_posix()}"
     os.environ["PATH"] = f"{os.environ['PATH']}:{TeraStitcherPath.joinpath('pyscripts').as_posix()}"
     terastitcher = "terastitcher"
     teraconverter = "teraconverter"
-    if not TeraStitcherPath.exists():
-        log.error("Error: TeraStitcher path not found")
+    if pathlib.Path("/usr/lib/jvm/java-11-openjdk-amd64/lib/server").exists():
+        os.environ["LD_LIBRARY_PATH"] = "/usr/lib/jvm/java-11-openjdk-amd64/lib/server"
+    else:
+        log.error("Error: JAVA path not found")
         raise RuntimeError
+    os.environ["TERM"] = "xterm"
+    os.environ["USECUDA_X_NCC"] = "1"  # set to 0 to stop GPU acceleration
+    if os.environ["USECUDA_X_NCC"] != "0":
+        if pathlib.Path("/usr/local/cuda-11.4/").exists() and pathlib.Path("/usr/local/cuda-11.4/bin").exists():
+            os.environ["CUDA_ROOT_DIR"] = "/usr/local/cuda-11.4/"
+        elif pathlib.Path("/usr/local/cuda-10.1/").exists() and pathlib.Path("/usr/local/cuda-10.1/bin").exists():
+            os.environ["CUDA_ROOT_DIR"] = "/usr/local/cuda-10.1/"
+        else:
+            log.error("Error: CUDA path not found")
+            raise RuntimeError
+        os.environ["PATH"] = f"{os.environ['PATH']}:{os.environ['CUDA_ROOT_DIR']}/bin"
+        os.environ["LD_LIBRARY_PATH"] = f"{os.environ['LD_LIBRARY_PATH']}:{os.environ['CUDA_ROOT_DIR']}/lib64"
+        # os.environ["CUDA_VISIBLE_DEVICES"] = "1"  # to train on a specific GPU on a multi-gpu machine
+elif sys.platform == 'linux' and uname().release.endswith('Microsoft'):
+    print("Windows subsystem for Linux is detected.")
+    psutil.Process().nice(value=19)
+    CacheDriveExample = "/mnt/d/"
+    TeraStitcherPath = pathlib.Path(r"./TeraStitcher_linux")
+    os.environ["PATH"] = f"{os.environ['PATH']}:{TeraStitcherPath.as_posix()}"
+    os.environ["PATH"] = f"{os.environ['PATH']}:{TeraStitcherPath.joinpath('pyscripts').as_posix()}"
+    terastitcher = "terastitcher"
+    teraconverter = "teraconverter"
     if pathlib.Path("/usr/lib/jvm/java-11-openjdk-amd64/lib/server").exists():
         os.environ["LD_LIBRARY_PATH"] = "/usr/lib/jvm/java-11-openjdk-amd64/lib/server"
     else:
@@ -78,43 +92,6 @@ elif sys.platform == 'linux' and not uname().release.endswith('Microsoft'):
         os.environ["PATH"] = f"{os.environ['PATH']}:{os.environ['CUDA_ROOT_DIR']}/bin"
         os.environ["LD_LIBRARY_PATH"] = f"{os.environ['LD_LIBRARY_PATH']}:{os.environ['CUDA_ROOT_DIR']}/lib64"
         os.environ["CUDA_VISIBLE_DEVICES"] = "1"  # to train on a specific GPU on a multi-gpu machine
-
-    ImarisConverterPath = pathlib.Path(
-        f"{os.environ['HOME']}/.wine/drive_c/Program Files/Bitplane/ImarisViewer x64 9.7.2/")
-elif sys.platform == 'linux' and uname().release.endswith('Microsoft'):
-    print("Windows subsystem for Linux is detected.")
-    psutil.Process().nice(value=19)
-    CacheDriveExample = "/mnt/d/"
-    os.environ["HOME"] = r"/home/brain"
-    TeraStitcherPath = pathlib.Path(f"{os.environ['HOME']}/TeraStitcher/build/bin")
-    os.environ["PATH"] = f"{os.environ['PATH']}:{TeraStitcherPath.as_posix()}"
-    os.environ["PATH"] = f"{os.environ['PATH']}:{TeraStitcherPath.joinpath('pyscripts').as_posix()}"
-    terastitcher = "terastitcher"
-    teraconverter = "teraconverter"
-    if not TeraStitcherPath.exists():
-        log.error("Error: TeraStitcher path not found")
-        raise RuntimeError
-    if pathlib.Path("/usr/lib/jvm/java-11-openjdk-amd64/lib/server").exists():
-        os.environ["LD_LIBRARY_PATH"] = "/usr/lib/jvm/java-11-openjdk-amd64/lib/server"
-    else:
-        log.error("Error: JAVA path not found")
-        raise RuntimeError
-    os.environ["TERM"] = "xterm"
-    os.environ["USECUDA_X_NCC"] = "0"  # set to 0 to stop GPU acceleration
-    if os.environ["USECUDA_X_NCC"] != "0":
-        if pathlib.Path("/usr/local/cuda-11.4/").exists() and pathlib.Path("/usr/local/cuda-11.4/bin").exists():
-            os.environ["CUDA_ROOT_DIR"] = "/usr/local/cuda-11.4/"
-        elif pathlib.Path("/usr/local/cuda-10.1/").exists() and pathlib.Path("/usr/local/cuda-10.1/bin").exists():
-            os.environ["CUDA_ROOT_DIR"] = "/usr/local/cuda-10.1/"
-        else:
-            log.error("Error: CUDA path not found")
-            raise RuntimeError
-        os.environ["PATH"] = f"{os.environ['PATH']}:{os.environ['CUDA_ROOT_DIR']}/bin"
-        os.environ["LD_LIBRARY_PATH"] = f"{os.environ['LD_LIBRARY_PATH']}:{os.environ['CUDA_ROOT_DIR']}/lib64"
-        os.environ["CUDA_VISIBLE_DEVICES"] = "1"  # to train on a specific GPU on a multi-gpu machine
-
-    ImarisConverterPath = pathlib.Path(
-        f"/mnt/c/Program Files/Bitplane/ImarisViewer x64 9.7.2/")
 else:
     log.error("yet unsupported OS")
     raise RuntimeError
@@ -134,7 +111,7 @@ if not parastitcher.exists():
     log.error("Error: ParaStitcher not found")
     raise RuntimeError
 
-imaris_converter = ImarisConverterPath / "ImarisConvertiv.exe"
+imaris_converter = pathlib.Path(r"./imaris") / "ImarisConvertiv.exe"
 if not imaris_converter.exists():
     log.error("Error: ImarisConvertiv.exe not found")
     raise RuntimeError
@@ -336,7 +313,6 @@ def main(source_folder):
         de_striped_dir = source_folder
     dir_stitched, continue_process_terastitcher = get_destination_path(
         source_folder.name, what_for="stitched files", posix="_stitched_v4", default_path=dir_stitched)
-    # print(dir_stitched)
 
     most_informative_channel = get_most_informative_channel()
     objective, voxel_size_x, voxel_size_y, voxel_size_z, tile_size = get_voxel_sizes()
@@ -344,7 +320,7 @@ def main(source_folder):
     # ::::::::::::::::::::::::::::::::::::: Start :::::::::::::::::::::::::::::::::::
 
     log.info(f"{datetime.now()} ... stitching started")
-    log.info(f"Run on Computer: {platform.node()}")
+    log.info(f"Run on computer: {platform.node()}")
     log.info(f"Total physical memory: {psutil.virtual_memory().total // 1024 ** 3} GB")
     log.info(f"Physical CPU core count: {cpu_physical_core_count}")
     log.info(f"Logical CPU core count: {cpu_logical_core_count}")
@@ -446,11 +422,18 @@ def main(source_folder):
                     ]
                     log.info("stitching command:\n" + " ".join(command))
                     subprocess.call(" ".join(command), shell=True)  # subprocess.run(command)
-                    dir_stitched.joinpath(Channel + '_xml_import_step_' + str(step - 1) + '.xml').unlink()
+                    dir_stitched.joinpath(Channel + '_xml_import_step_' + str(step-1) + '.xml').unlink(missing_ok=True)
         else:
             log.warning(f"{datetime.now()}: {channel_dir} did not exist and not imported ...")
 
     log.info(f"{datetime.now()}: importing all channels ...")
+
+    p = dir_stitched.rglob("*")
+    for x in p:
+        if x.is_dir():
+            shutil.rmtree(x)
+    vol_xml_import_path = dir_stitched / 'vol_xml_import.xml'
+    vol_xml_import_path.unlink(missing_ok=True)
     command = [
         f"{terastitcher}",
         "-1",
@@ -463,7 +446,7 @@ def main(source_folder):
         "--sparse_data",
         "--volin_plugin=MultiVolume",
         f"--volin={dir_stitched}",
-        f"--projout={dir_stitched.joinpath('vol_xml_import.xml')}",
+        f"--projout={vol_xml_import_path}",
         "--imin_channel=all",
         "--noprogressbar",
         "--isotropic"
@@ -475,9 +458,10 @@ def main(source_folder):
     command = [
         f"mpiexec -np {cpu_logical_core_count} python -m mpi4py {parastitcher}",
         "-6",
-        f"--projin={dir_stitched.joinpath('vol_xml_import.xml')}",
+        f"--projin={vol_xml_import_path}",
         f"--volout={dir_stitched}",
         "--volout_plugin=\"TiledXY|3Dseries\"",
+        # "--volout_plugin=\"TiledXY|2Dseries\"",
         "--slicewidth=100000",
         "--sliceheight=100000",
         "--slicedepth=100000",
@@ -489,6 +473,8 @@ def main(source_folder):
     #     r"C:\TeraStitcher\pyscripts\paraconverter.py",
     #     "--sfmt=\"TIFF (unstitched, 3D)\"",
     #     "--dfmt=\"TIFF (tiled, 3D)\"",
+    #     # "--dfmt=\"TIFF (tiled, 2D)\"",
+    #     # "--dfmt=\"Vaa3D raw (tiled, 3D)\"",
     #     f"-s={dir_stitched.joinpath('vol_xml_import.xml')}",
     #     f"-d={dir_stitched}",
     #     f"--width=100000",
@@ -496,6 +482,7 @@ def main(source_folder):
     #     f"--depth=100000",
     #     "--isotropic",
     #     "--halve=max",
+    #     "--dsfactor=2,  # Down sampling factor to be used to read the source volume (only for series of 2D slices).
     #     "--noprogressbar",
     #     "--sparse_data",
     # ]
@@ -511,11 +498,12 @@ def main(source_folder):
                 '_' + file.name if len(files) > 1 else '') + '_V4.tif'))  # move tiff files
         if imaris_converter.exists():
             print(f"found Imaris View: converting {file.name} to ims ... ")
+            ims_file_path = dir_stitched / (source_folder.name + ('_' + file.name if len(files) > 1 else '')+'_v4.ims')
             command = [
                 f"" if sys.platform == "win32" else "wine",
                 f"{correct_path_for_cmd(imaris_converter)}",
                 f"--input {correct_path_for_cmd(file)}",
-                f"--output {dir_stitched / (source_folder.name + ('_' + file.name if len(files) > 1 else '') + '_v4.ims')}",
+                f"--output {ims_file_path}",
                 f"--log {log_file}" if sys.platform == "win32" else "",
                 f"--nthreads {cpu_logical_core_count}",
                 f"--compression 1",
@@ -524,7 +512,7 @@ def main(source_folder):
                 command = [
                     f'{correct_path_for_cmd(imaris_converter)}',
                     f'--input {correct_path_for_wsl(file)}',
-                    f"--output {correct_path_for_wsl(dir_stitched / (source_folder.name + ('_' + file.name if len(files) > 1 else '') + '_v4.ims'))}",
+                    f"--output {correct_path_for_wsl(ims_file_path)}",
                     f"--nthreads {cpu_logical_core_count}",
                     f"--compression 1",
                 ]
