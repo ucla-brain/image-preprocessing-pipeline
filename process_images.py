@@ -29,7 +29,7 @@ cpu_physical_core_count = psutil.cpu_count(logical=False)
 cpu_logical_core_count = psutil.cpu_count(logical=True)
 
 if sys.platform == "win32":
-    print("Windows is detected.")
+    # print("Windows is detected.")
     psutil.Process().nice(psutil.IDLE_PRIORITY_CLASS)
     CacheDriveExample = "C:\\"
     if pathlib.Path(r"C:\TeraStitcher").exists():
@@ -325,7 +325,7 @@ def main(source_folder):
             right_bit_shift = int(input(
                 "Enter right bit shift [0 to 8] for 8-bit conversion. \n"
                 "Values smaller than 8 will increase the pixel brightness. \n"
-                "We suggest a value between 3 to 6. \n"
+                "We suggest a value between 3 to 6 for 3D images and 8 for max projection. \n"
                 "The smaller the value the brighter the pixels.\n"))
         de_striped_dir, continue_process_pystripe = get_destination_path(
             source_folder.name,
@@ -377,12 +377,12 @@ def main(source_folder):
                             sigma_spatial=1,  # the de-noising parameter
                             save_as_tiff=True
                         )
-                p_log(f"\n{datetime.now()}: {Channel}: ... DeStripe program started")
+                p_log(f"\n{datetime.now()}: {Channel}: DeStripe program started.")
                 pystripe.batch_filter(
                     source_channel_folder,
                     de_striped_dir / Channel,
                     workers=cpu_logical_core_count,  # if need_destriping else cpu_physical_core_count
-                    chunks=1,
+                    chunks=4,
                     # sigma=[foreground, background] Default is [0, 0], indicating no de-striping.
                     sigma=((32, 32) if objective == "4x" else (256, 256)) if need_destriping else (0, 0),
                     # level=0,
