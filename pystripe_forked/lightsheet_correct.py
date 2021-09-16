@@ -15,25 +15,40 @@ Cell 165.7 (2016): 1789-1802.
 https://doi.org/10.1016/j.cell.2016.05.007
 """
 
-
 import numpy as np
 import scipy.ndimage as ndi
 
 
 ###############################################################################
-### Lightsheet correction
+# Lightsheet correction
 ###############################################################################
 
-def correct_lightsheet(source, percentile=0.25, max_bin=2 ** 12, mask=None,
-                       lightsheet=dict(selem=(150, 1, 1)),
-                       background=dict(selem=(200, 200, 1),
-                       spacing=(25, 25, 1),
-                       interpolate=1,
-                       dtype=float,
-                       step=(2, 2, 1)),
-                       lightsheet_vs_background=2,
-                       return_lightsheet=False, return_background=False):
+def correct_lightsheet(
+        source,
+        percentile=0.25,
+        mask=None,
+        lightsheet=dict(selem=(150, 1, 1)),
+        background=dict(selem=(200, 200, 1),
+                        spacing=(25, 25, 1),
+                        interpolate=1,
+                        dtype=float,
+                        step=(2, 2, 1)),
+        lightsheet_vs_background=2,
+        return_lightsheet=False,
+        return_background=False
+):
     """Removes lightsheet artifacts.
+
+    The routine implements a fast but efficient way to remove lightsheet artifacts.
+    Effectively the percentile in an elongated structural element along the
+    lightsheet direction centered around each pixel is calculated and then
+    compared to the percentile in a symmetrical box like structural element
+    at the same pixel. The former is an estimate of the lightsheet artifact
+    the latter of the background. The background is multiplied by the factor
+    lightsheet_vs_background and then the minimum of both results is subtracted
+    from the source.
+    Adding an overall background estimate helps to not accidentally remove
+    vessel like structures along the light-sheet direction.
 
     Arguments
     ---------
@@ -58,35 +73,18 @@ def correct_lightsheet(source, percentile=0.25, max_bin=2 ** 12, mask=None,
 
     Returns
     -------
-    corrected : array
+    corrected : ndarray
       Lightsheet artifact corrected image.
-    lightsheet : array
-      The lightsheet artifact estimate.
-    background : array
-      The background estimate.
-
-    Note
-    ----
-    The routine implements a fast but efftice way to remove lightsheet artifacts.
-    Effectively the percentile in an eleoganted structural element along the
-    lightsheet direction centered around each pixel is calculated and then
-    compared to the percentile in a symmetrical box like structural element
-    at the same pixel. The former is an estimate of the lightsheet artifact
-    the latter of the backgrond. The background is multiplied by the factor
-    lightsheet_vs_background and then the minimum of both results is subtracted
-    from the source.
-    Adding an overall background estimate helps to not accidentally remove
-    vessesl like structures along the light-sheet direction.
     """
 
     # lightsheet artifact estimate
     l = local_percentile(source, percentile=percentile, mask=mask, **lightsheet)
     # background estimate
-    b = local_percentile(source, percentile=percentile, mask=mask, **background);
+    b = local_percentile(source, percentile=percentile, mask=mask, **background)
     # combined estimate
-    lb = np.minimum(l, lightsheet_vs_background * b);
+    lb = np.minimum(l, lightsheet_vs_background * b)
     # corrected image
-    c = source - np.minimum(source, lb);
+    c = source - np.minimum(source, lb)
 
     result = (c,)
     if return_lightsheet:
@@ -108,7 +106,7 @@ def apply_local_function(source, function, selem=(50, 50), spacing=None, step=No
 
     Arguments
     ---------
-    source : array
+    source : ndarray
       The source to process.
     function : function
       Function to apply to the linear array of the local source data.
@@ -133,20 +131,20 @@ def apply_local_function(source, function, selem=(50, 50), spacing=None, step=No
     dtype : dtype or None
       Optional data type for the result.
     return_centers : bool
-      If True, additionaly return the centers of the sampling.
+      If True, additionally return the centers of the sampling.
 
     Returns
     -------
     local : array
-      The reuslt of applying the function to the local samples.
-    cetners : array
-      Optional cttners of the sampling.
+      The result of applying the function to the local samples.
+    centers : array
+      Optional centers of the sampling.
     """
 
     if spacing is None:
-        spacing = selem;
-    shape = source.shape;
-    ndim = len(shape);
+        spacing = selem
+    shape = source.shape
+    ndim = len(shape)
 
     if step is None:
         step = (None,) * ndim
@@ -156,21 +154,21 @@ def apply_local_function(source, function, selem=(50, 50), spacing=None, step=No
 
         # histogram centers
     n_centers = tuple(s // h for s, h in zip(shape, spacing))
-    left = tuple((s - (n - 1) * h) // 2 for s, n, h in zip(shape, n_centers, spacing));
+    left = tuple((s - (n - 1) * h) // 2 for s, n, h in zip(shape, n_centers, spacing))
 
     # center points
-    centers = np.array(np.meshgrid(*[range(l, s, h) for l, s, h in zip(left, shape, spacing)], indexing='ij'));
-    # centers = np.reshape(np.moveaxis(centers, 0, -1),(-1,len(shape)));
+    centers = np.array(np.meshgrid(*[range(l, s, h) for l, s, h in zip(left, shape, spacing)], indexing='ij'))
+    # centers = np.reshape(np.moveaxis(centers, 0, -1),(-1,len(shape)))
     centers = np.moveaxis(centers, 0, -1)
 
     # create result
-    rshape = (1,) if fshape is None else fshape;
-    rdtype = source.dtype if dtype is None else dtype;
-    results = np.zeros(n_centers + rshape, dtype=rdtype);
+    rshape = (1,) if fshape is None else fshape
+    rdtype = source.dtype if dtype is None else dtype
+    results = np.zeros(n_centers + rshape, dtype=rdtype)
 
     # calculate function
-    centers_flat = np.reshape(centers, (-1, ndim));
-    results_flat = np.reshape(results, (-1,) + rshape);
+    centers_flat = np.reshape(centers, (-1, ndim))
+    results_flat = np.reshape(results, (-1,) + rshape)
 
     # structuring element
     if isinstance(selem, np.ndarray):
@@ -179,22 +177,22 @@ def apply_local_function(source, function, selem=(50, 50), spacing=None, step=No
         selem_shape = selem;
         selem = None
 
-    hshape_left = tuple(h // 2 for h in selem_shape);
-    hshape_right = tuple(h - l for h, l in zip(selem_shape, hshape_left));
+    hshape_left = tuple(h // 2 for h in selem_shape)
+    hshape_right = tuple(h - l for h, l in zip(selem_shape, hshape_left))
 
     for result, center in zip(results_flat, centers_flat):
         sl = tuple(slice(max(0, c - l), min(c + r, s), d) for c, l, r, s, d in
-                   zip(center, hshape_left, hshape_right, shape, step));
+                   zip(center, hshape_left, hshape_right, shape, step))
         if selem is None:
             if mask is not None:
-                data = source[sl][mask[sl]];
+                data = source[sl][mask[sl]]
             else:
-                data = source[sl].flatten();
+                data = source[sl].flatten()
         else:
             slm = tuple(
                 slice(None if c - l >= 0 else min(l - c, m), None if c + r <= s else min(m - (c + r - s), m), d) for
-                c, l, r, s, d, m in zip(center, hshape_left, hshape_right, shape, step, selem_shape));
-            data = source[sl];
+                c, l, r, s, d, m in zip(center, hshape_left, hshape_right, shape, step, selem_shape))
+            data = source[sl]
             if mask is not None:
                 data = data[np.logical_and(mask[sl], selem[slm])]
             else:
@@ -226,8 +224,17 @@ def apply_local_function(source, function, selem=(50, 50), spacing=None, step=No
         return results
 
 
-def local_percentile(source, percentile, selem=(50, 50), spacing=None, step=None, interpolate=1, mask=None, dtype=None,
-                     return_centers=False):
+def local_percentile(
+        source,
+        percentile,
+        selem=(50, 50),
+        spacing=None,
+        step=None,
+        interpolate=1,
+        mask=None,
+        dtype=None,
+        return_centers=False
+):
     """Calculate local percentile.
 
     Arguments
@@ -250,8 +257,9 @@ def local_percentile(source, percentile, selem=(50, 50), spacing=None, step=None
       order of interpolation. If None, return the results on the sub-grid.
     mask : array or None
       Optional mask to use.
+    dtype : None,
     return_centers : bool
-      If True, additionaly return the centers of the sampling.
+      If True, additionally return the centers of the sampling.
 
     Returns
     -------
@@ -278,8 +286,14 @@ def local_percentile(source, percentile, selem=(50, 50), spacing=None, step=None
                 return 0
             return np.percentile(data, percentile, axis=None)
 
-    return apply_local_function(source, selem=selem, spacing=spacing, step=step, interpolate=interpolate, mask=mask,
-                                dtype=dtype, return_centers=return_centers,
-                                function=_percentile, fshape=fshape)
-
-
+    return apply_local_function(
+        source,
+        selem=selem,
+        spacing=spacing,
+        step=step,
+        interpolate=interpolate,
+        mask=mask,
+        dtype=dtype,
+        return_centers=return_centers,
+        function=_percentile,
+        fshape=fshape)

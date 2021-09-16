@@ -84,9 +84,12 @@ class MultiProcessImageProcessing(Process):
         try:
             img_mem_map = img_read(self.img_path)
             if img_mem_map is not None and img_mem_map.shape == self.tile_size:
-                # ['mean', 'min', 'max', 'cv', 'variance', 'std', 'skewness', 'kurtosis', 'n']
-                img_stats = get_img_stats(img_mem_map)
-                is_flat = self.classifier_model.predict([img_stats[0:-1]])
+                if self.classifier_model is None:
+                    is_flat = True
+                else:
+                    # ['mean', 'min', 'max', 'cv', 'variance', 'std', 'skewness', 'kurtosis', 'n']
+                    img_stats = get_img_stats(img_mem_map)
+                    is_flat = self.classifier_model.predict([img_stats[0:-1]])
                 if is_flat:
                     img_mem_map_denoised = denoise_bilateral(img_mem_map, sigma_spatial=self.sigma_spatial)
         except Exception as inst:
@@ -97,14 +100,15 @@ class MultiProcessImageProcessing(Process):
         self.queue.put([img_mem_map_denoised, time() - t])
 
 
-def create_flat_img(img_source_path, flat_training_data_path, tile_size,
-                    cpu_physical_core_count=psutil.cpu_count(logical=False),
-                    cpu_logical_core_count=psutil.cpu_count(logical=True),
-                    max_images=1024,
-                    patience_before_skipping=10,
-                    skips=100,
-                    sigma_spatial=1,
-                    save_as_tiff=True):
+def create_flat_img(
+        img_source_path, flat_training_data_path, tile_size,
+        cpu_physical_core_count=psutil.cpu_count(logical=False),
+        cpu_logical_core_count=psutil.cpu_count(logical=True),
+        max_images=1024,
+        patience_before_skipping=10,
+        skips=100,
+        sigma_spatial=1,
+        save_as_tiff=True):
     print()
     img_path_gen = iter(img_path_generator(img_source_path))
     img_flat_count = 0
@@ -114,7 +118,10 @@ def create_flat_img(img_source_path, flat_training_data_path, tile_size,
     sleep_durations = 1.0  # seconds
     print_time = 0
     img_flat_sum = np.zeros(tile_size, dtype='float64')
-    classifier_model = get_flat_classifier(flat_training_data_path)
+    if flat_training_data_path is None:
+        classifier_model = None
+    else:
+        classifier_model = get_flat_classifier(flat_training_data_path)
 
     there_is_img_to_process = True
     while img_flat_count < max_images and there_is_img_to_process:
@@ -123,14 +130,21 @@ def create_flat_img(img_source_path, flat_training_data_path, tile_size,
             if img_path is None:
                 there_is_img_to_process = False
                 break
-            MultiProcessImageProcessing(queue, classifier_model, img_path, tile_size, sigma_spatial=sigma_spatial).start()
+            MultiProcessImageProcessing(
+                queue,
+                classifier_model,
+                img_path,
+                tile_size,
+                sigma_spatial=sigma_spatial
+            ).start()
             running_processes += 1
 
         sleep(sleep_durations / cpu_physical_core_count)
         somethings_could_be_in_queue = True
         while somethings_could_be_in_queue:
             try:  # check the queue for the optimization results then show result
-                [img_mem_map_denoised, sleep_durations] = queue.get(block=False)
+                [img_mem_map_denoised, process_time] = queue.get(block=False)
+                sleep_durations = 0.9 * sleep_durations + 0.1 * process_time
                 if running_processes > 0:
                     running_processes -= 1
                 if img_mem_map_denoised is not None:
@@ -185,9 +199,11 @@ def create_flat_img(img_source_path, flat_training_data_path, tile_size,
 
 if __name__ == '__main__':
     freeze_support()
-    AllChannels = ["Ex_488_Em_0", "Ex_561_Em_1", "Ex_642_Em_2"]  #
-    SourceFolder = pathlib.Path("/media/kmoradi/Elements/20210729_16_18_40_SW210318-07_R-HPC_15x_Zstep1um_50p_4ms")
+    AllChannels = ["Ex_488_Em_525", "Ex_561_Em_600", "Ex_642_Em_680"]
+    SourceFolder = pathlib.Path(
+        r"C:\Users\kmoradi\Flat\20210830_17_34_41_R_Laser_FlatImage_LS_15x_1000z_Compressed")
     # SourceFolder = pathlib.Path(__file__).parent
-    for Folder in AllChannels:
-        create_flat_img(SourceFolder/Folder, SourceFolder/"image_classes.csv")
+    for Channel in AllChannels:
+        # create_flat_img(SourceFolder / Channel, SourceFolder / "image_classes.csv")
+        create_flat_img(SourceFolder / Channel, None, (1850, 1850), max_images=2400,)
     print()

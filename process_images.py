@@ -21,8 +21,9 @@ from platform import uname
 import mpi4py
 
 # experiment setup: user needs to set them right
-AllChannels = ["Ex_488_Em_0", "Ex_561_Em_1", "Ex_642_Em_2"]  # the order determines color ["R", "G", "B"]?
-VoxelSizeX_4x, VoxelSizeY_4x, VoxelSizeZ_4x = 1.835, 1.835, 4.0
+AllChannels = ["Ex_642_Em_680", "Ex_561_Em_600", "Ex_488_Em_525"]  # the order determines color ["R", "G", "B"]?
+ChannelsNeedReconstruction = ["Ex_642_Em_680"]
+VoxelSizeX_4x, VoxelSizeY_4x, VoxelSizeZ_4x = 1.835, 1.835, 1.0
 VoxelSizeX_10x, VoxelSizeY_10x, VoxelSizeZ_10x = 0.661, 0.661, 1.0
 VoxelSizeX_15x, VoxelSizeY_15x, VoxelSizeZ_15x = 0.422, 0.422, 1.0
 FlatNonFlatTrainingData = "image_classes.csv"
@@ -33,12 +34,12 @@ if sys.platform == "win32":
     # print("Windows is detected.")
     psutil.Process().nice(psutil.IDLE_PRIORITY_CLASS)
     CacheDriveExample = "C:\\"
-    TeraStitcherPath = pathlib.Path(r"./TeraStitcher_windows")
+    TeraStitcherPath = pathlib.Path(r"./TeraStitcher_windows_avx512")
     os.environ["PATH"] = f"{os.environ['PATH']};{TeraStitcherPath.as_posix()}"
     os.environ["PATH"] = f"{os.environ['PATH']};{TeraStitcherPath.joinpath('pyscripts').as_posix()}"
     terastitcher = "terastitcher.exe"
     teraconverter = "teraconverter.exe"
-elif sys.platform == 'linux' and not uname().release.endswith('Microsoft'):
+elif sys.platform == 'linux' and 'microsoft' not in uname().release.lower():
     print("Linux is detected.")
     psutil.Process().nice(value=19)
     CacheDriveExample = "/mnt/scratch"
@@ -47,14 +48,14 @@ elif sys.platform == 'linux' and not uname().release.endswith('Microsoft'):
     os.environ["PATH"] = f"{os.environ['PATH']}:{TeraStitcherPath.joinpath('pyscripts').as_posix()}"
     terastitcher = "terastitcher"
     teraconverter = "teraconverter"
-    if pathlib.Path("/usr/lib/jvm/java-11-openjdk-amd64/lib/server").exists():
-        os.environ["LD_LIBRARY_PATH"] = "/usr/lib/jvm/java-11-openjdk-amd64/lib/server"
-    else:
-        log.error("Error: JAVA path not found")
-        raise RuntimeError
     os.environ["TERM"] = "xterm"
     os.environ["USECUDA_X_NCC"] = "1"  # set to 0 to stop GPU acceleration
-    if os.environ["USECUDA_X_NCC"] != "0":
+    if os.environ["USECUDA_X_NCC"] == "1":
+        if pathlib.Path("/usr/lib/jvm/java-11-openjdk-amd64/lib/server").exists():
+            os.environ["LD_LIBRARY_PATH"] = "/usr/lib/jvm/java-11-openjdk-amd64/lib/server"
+        else:
+            log.error("Error: JAVA path not found")
+            raise RuntimeError
         if pathlib.Path("/usr/local/cuda-11.4/").exists() and pathlib.Path("/usr/local/cuda-11.4/bin").exists():
             os.environ["CUDA_ROOT_DIR"] = "/usr/local/cuda-11.4/"
         elif pathlib.Path("/usr/local/cuda-10.1/").exists() and pathlib.Path("/usr/local/cuda-10.1/bin").exists():
@@ -65,7 +66,7 @@ elif sys.platform == 'linux' and not uname().release.endswith('Microsoft'):
         os.environ["PATH"] = f"{os.environ['PATH']}:{os.environ['CUDA_ROOT_DIR']}/bin"
         os.environ["LD_LIBRARY_PATH"] = f"{os.environ['LD_LIBRARY_PATH']}:{os.environ['CUDA_ROOT_DIR']}/lib64"
         # os.environ["CUDA_VISIBLE_DEVICES"] = "1"  # to train on a specific GPU on a multi-gpu machine
-elif sys.platform == 'linux' and uname().release.endswith('Microsoft'):
+elif sys.platform == 'linux' and 'microsoft' in uname().release.lower():
     print("Windows subsystem for Linux is detected.")
     psutil.Process().nice(value=19)
     CacheDriveExample = "/mnt/d/"
@@ -74,14 +75,14 @@ elif sys.platform == 'linux' and uname().release.endswith('Microsoft'):
     os.environ["PATH"] = f"{os.environ['PATH']}:{TeraStitcherPath.joinpath('pyscripts').as_posix()}"
     terastitcher = "terastitcher"
     teraconverter = "teraconverter"
-    if pathlib.Path("/usr/lib/jvm/java-11-openjdk-amd64/lib/server").exists():
-        os.environ["LD_LIBRARY_PATH"] = "/usr/lib/jvm/java-11-openjdk-amd64/lib/server"
-    else:
-        log.error("Error: JAVA path not found")
-        raise RuntimeError
     os.environ["TERM"] = "xterm"
-    os.environ["USECUDA_X_NCC"] = "1"  # set to 0 to stop GPU acceleration
-    if os.environ["USECUDA_X_NCC"] != "0":
+    os.environ["USECUDA_X_NCC"] = "0"  # set to 0 to stop GPU acceleration
+    if os.environ["USECUDA_X_NCC"] == "1":
+        if pathlib.Path("/usr/lib/jvm/java-11-openjdk-amd64/lib/server").exists():
+            os.environ["LD_LIBRARY_PATH"] = "/usr/lib/jvm/java-11-openjdk-amd64/lib/server"
+        else:
+            log.error("Error: JAVA path not found")
+            raise RuntimeError
         if pathlib.Path("/usr/local/cuda-11.4/").exists() and pathlib.Path("/usr/local/cuda-11.4/bin").exists():
             os.environ["CUDA_ROOT_DIR"] = "/usr/local/cuda-11.4/"
         elif pathlib.Path("/usr/local/cuda-10.1/").exists() and pathlib.Path("/usr/local/cuda-10.1/bin").exists():
@@ -160,24 +161,25 @@ def get_voxel_sizes():
         objective = "4x"
         voxel_size_x = VoxelSizeX_4x
         voxel_size_y = VoxelSizeY_4x
-        voxel_size_z = VoxelSizeZ_4x
-        tile_size = (2000, 1600)
+        # voxel_size_z = VoxelSizeZ_4x
+        tile_size = (1600, 2000)  # y, x
     elif objective == "2":
         objective = "10x"
         voxel_size_x = VoxelSizeX_10x
         voxel_size_y = VoxelSizeY_10x
-        voxel_size_z = VoxelSizeZ_10x
+        # voxel_size_z = VoxelSizeZ_10x
         tile_size = (1850, 1850)
     elif objective == "3":
         objective = "15x"
         voxel_size_x = VoxelSizeX_15x
         voxel_size_y = VoxelSizeY_15x
-        voxel_size_z = VoxelSizeZ_15x
+        # voxel_size_z = VoxelSizeZ_15x
         tile_size = (1850, 1850)
     else:
         print("Error: unsupported objective")
         log.error("Error: unsupported objective")
         raise RuntimeError
+    voxel_size_z = float(input("what is the z-step size in µm?\n"))
     print(
         f"Objective is {objective} so voxel sizes are x = {voxel_size_x}, y = {voxel_size_y}, and z = {voxel_size_z}")
     log.info(
@@ -255,22 +257,18 @@ def main(source_folder):
     log.basicConfig(filename=str(log_file), level=log.INFO)
     log.FileHandler(str(log_file), mode="w")  # rewrite the file instead of appending
     # ::::::::::::::::::::: Ask questions :::::::::::::::::::::
+    objective, voxel_size_x, voxel_size_y, voxel_size_z, tile_size = get_voxel_sizes()
+    most_informative_channel = get_most_informative_channel()
     de_striped_posix, what_for = "", ""
-    need_flat_image_subtraction, img_flat = False, None
+    img_flat = None
     image_classes_training_data_path = source_folder / FlatNonFlatTrainingData
-    need_raw_to_tiff_conversion = False
     need_destriping = ask_true_false_question("Do you need to remove stripes from images?")
     if need_destriping:
-        need_flat_image_subtraction = ask_true_false_question("Do you need to apply a flat image?")
         de_striped_posix += "_destriped"
         what_for += "destriped "
-    else:
-        need_raw_to_tiff_conversion = ask_true_false_question("Are images in raw format?")
-        if need_raw_to_tiff_conversion:
-            de_striped_posix += "_tif"
-            what_for += "tif "
-    if need_flat_image_subtraction:
-        de_striped_posix += "_flat_subtracted"
+    need_flat_image_application = ask_true_false_question("Do you need to apply a flat image?")
+    if need_flat_image_application:
+        de_striped_posix += "_flat_applied"
         flat_img_not_exist = []
         for Channel in AllChannels:
             flat_img_created_already = source_folder.joinpath(Channel + '_flat.tif')
@@ -291,19 +289,50 @@ def main(source_folder):
                 else:
                     print("You need classification data for flat image generation!")
                     raise RuntimeError
+    need_raw_to_tiff_conversion = ask_true_false_question("Are images in raw format?")
+    if need_raw_to_tiff_conversion:
+        de_striped_posix += "_tif"
+        what_for += "tif "
+    need_16bit_to_8bit_conversion = ask_true_false_question(
+        "Do you need to convert 16-bit images to 8-bit before stitching?")
+    right_bit_shift = 8
+    if need_16bit_to_8bit_conversion:
+        right_bit_shift_str = ""
+        while right_bit_shift_str not in ["0", "1", "2", "3", "4", "5", "6", "7", "8"]:
+            right_bit_shift_str = input(
+                "Enter right bit shift [0 to 8] for 8-bit conversion. \n"
+                "Values smaller than 8 will increase the pixel brightness. \n"
+                "We suggest a value between 3 to 6 for 3D images and 8 for max projection. \n"
+                "The smaller the value the brighter the pixels.\n"
+            )
+        right_bit_shift = int(right_bit_shift_str)
+        de_striped_posix += f"_8b_{right_bit_shift_str}bsh"
+
+    down_sampling_factor = (int(voxel_size_z // voxel_size_y), int(voxel_size_z // voxel_size_x))
+    need_down_sampling, new_tile_size = False, None
+    if down_sampling_factor < (1, 1):
+        down_sampling_factor = None
+        print("Down-sampling makes sense if x and y axis voxel sizes were smaller than z axis voxel size.\n"
+              "Down-sampling is disabled.")
+    else:
+        need_down_sampling = ask_true_false_question(
+            "Do you need to down-sample images for isotropic voxel generation before stitching?")
+        if not need_down_sampling:
+            down_sampling_factor = None
+        else:
+            de_striped_posix += "_ds"
+            what_for += "down-sampling "
+            new_tile_size = (
+                int(round(tile_size[1] * voxel_size_x / voxel_size_z, 0)),
+                int(round(tile_size[0] * voxel_size_y / voxel_size_z, 0))
+            )
+            voxel_size_x, voxel_size_y = 1.0, 1.0
 
     de_striped_dir = source_folder.parent / (source_folder.name + de_striped_posix)
     continue_process_pystripe = False
     dir_stitched = source_folder.parent / (source_folder.name + "_stitched_v4")
-    img_16bit_to_8bit, right_bit_shift = False, 8
-    if need_destriping or need_raw_to_tiff_conversion:
-        img_16bit_to_8bit = ask_true_false_question("Do you need to convert 16-bit images to 8 bit before stitching?")
-        if img_16bit_to_8bit:
-            right_bit_shift = int(input(
-                "Enter right bit shift [0 to 8] for 8-bit conversion. \n"
-                "Values smaller than 8 will increase the pixel brightness. \n"
-                "We suggest a value between 3 to 6 for 3D images and 8 for max projection. \n"
-                "The smaller the value the brighter the pixels.\n"))
+    if need_destriping or need_flat_image_application or need_raw_to_tiff_conversion or need_16bit_to_8bit_conversion \
+            or need_down_sampling:
         de_striped_dir, continue_process_pystripe = get_destination_path(
             source_folder.name,
             what_for=what_for + "files",
@@ -313,10 +342,6 @@ def main(source_folder):
         de_striped_dir = source_folder
     dir_stitched, continue_process_terastitcher = get_destination_path(
         source_folder.name, what_for="stitched files", posix="_stitched_v4", default_path=dir_stitched)
-
-    most_informative_channel = get_most_informative_channel()
-    objective, voxel_size_x, voxel_size_y, voxel_size_z, tile_size = get_voxel_sizes()
-
     # ::::::::::::::::::::::::::::::::::::: Start :::::::::::::::::::::::::::::::::::
 
     log.info(f"{datetime.now()} ... stitching started")
@@ -329,11 +354,12 @@ def main(source_folder):
     p_log(f"Stitched folder path:\n{dir_stitched}")
     # ::::::::::::::::: RUN PyStripe  ::::::::::::::::
     start_time = time()
-    if need_destriping or need_raw_to_tiff_conversion:
+    if need_destriping or need_flat_image_application or need_raw_to_tiff_conversion or need_16bit_to_8bit_conversion \
+            or need_down_sampling:
         for Channel in AllChannels:
             source_channel_folder = source_folder / Channel
             if source_channel_folder.exists():
-                if need_flat_image_subtraction:
+                if need_flat_image_application:
                     flat_img_created_already = source_folder.joinpath(Channel + '_flat.tif')
                     if flat_img_created_already.exists():
                         img_flat = pystripe.imread(str(flat_img_created_already))
@@ -367,16 +393,18 @@ def main(source_folder):
                     # threshold=-1,
                     compression=('ZLIB', 1),  # ('ZLIB', 1) ('ZSTD', 1) conda install imagecodecs
                     flat=img_flat,
-                    dark=255,  # 100.0
+                    dark=120 if Channel in ChannelsNeedReconstruction else 511,
                     # z_step=voxel_size_z,  # z-step in micron. Only used for DCIMG files.
                     # rotate=False,
-                    # lightsheet=True if need_destriping else False,  # default to False
-                    # artifact_length=150,
+                    lightsheet=True if Channel in ChannelsNeedReconstruction else False,
+                    artifact_length=int(150 / (voxel_size_z // voxel_size_x + voxel_size_z // voxel_size_y) * 2),
                     # percentile=0.25,
                     # dont_convert_16bit=True,  # defaults to False
-                    convert_to_8bit=img_16bit_to_8bit,
+                    convert_to_8bit=need_16bit_to_8bit_conversion,
                     bit_shift_to_right=right_bit_shift,
-                    continue_process=continue_process_pystripe
+                    continue_process=continue_process_pystripe,
+                    down_sample=down_sampling_factor,
+                    new_size=new_tile_size
                 )
                 p_log(f"{datetime.now()}: {Channel}: DeStripe program is done.")
 
@@ -432,6 +460,7 @@ def main(source_folder):
     for x in p:
         if x.is_dir():
             shutil.rmtree(x)
+    del p, x
     vol_xml_import_path = dir_stitched / 'vol_xml_import.xml'
     vol_xml_import_path.unlink(missing_ok=True)
     command = [
@@ -507,8 +536,9 @@ def main(source_folder):
                 f"--log {log_file}" if sys.platform == "win32" else "",
                 f"--nthreads {cpu_logical_core_count}",
                 f"--compression 1",
+                f"--defaultcolorlist #BBRRGG"
             ]
-            if sys.platform == "linux" and uname().release.endswith('Microsoft'):
+            if sys.platform == "linux" and 'microsoft' in uname().release.lower():
                 command = [
                     f'{correct_path_for_cmd(imaris_converter)}',
                     f'--input {correct_path_for_wsl(file)}',

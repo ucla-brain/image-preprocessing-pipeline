@@ -11,6 +11,8 @@ from argparse import RawDescriptionHelpFormatter
 from pathlib import Path
 from scipy import fftpack, ndimage
 from skimage.filters import threshold_otsu
+from skimage.measure import block_reduce
+from skimage.transform import resize
 from dcimg import DCIMGFile
 from pystripe_forked import raw
 from .lightsheet_correct import correct_lightsheet
@@ -417,7 +419,7 @@ def apply_flat(img, flat):
         return img
 
 
-def filter_streaks(img, sigma, level=0, wavelet='db3', crossover=10, threshold=-1, flat=None, dark=0):
+def filter_streaks(img, sigma, level=0, wavelet='db3', crossover=10, threshold=-1):
     """Filter horizontal streaks using wavelet-FFT filter
 
     Parameters
@@ -434,10 +436,6 @@ def filter_streaks(img, sigma, level=0, wavelet='db3', crossover=10, threshold=-
         intensity range to switch between filtered background and unfiltered foreground
     threshold : float
         intensity value to separate background from foreground. Default is Otsu
-    flat : ndarray
-        reference image for illumination correction. Must be same shape as input images. Default is None
-    dark : float
-        Intensity to subtract from the images for dark offset. Default is 0.
 
     Returns
     -------
@@ -496,14 +494,6 @@ def filter_streaks(img, sigma, level=0, wavelet='db3', crossover=10, threshold=-
     # scaled_fimg = hist_match(f_img, img)
     # np.clip(scaled_fimg, np.iinfo(img.dtype).min, np.iinfo(img.dtype).max, out=scaled_fimg)
 
-    # Subtract the dark offset fiirst
-    if dark > 0:
-        f_img = f_img - dark
-
-    # Divide by the flat
-    if flat is not None:
-        f_img = apply_flat(f_img, flat)
-
     # Convert to 16 bit image
     np.clip(f_img, 0, 2**16 - 1, out=f_img)  # Clip to 16-bit unsigned range
     f_img = f_img.astype('uint16')
@@ -535,7 +525,9 @@ def read_filter_save(
         lightsheet_vs_background=2.0,
         dont_convert_16bit=False,
         convert_to_8bit=True,
-        bit_shift_to_right=8
+        bit_shift_to_right=8,
+        down_sample=(2, 2),
+        new_size=None
 ):
 
     """Convenience wrapper around filter streaks. Takes in a path to an image rather than an image array
@@ -586,6 +578,10 @@ def read_filter_save(
     bit_shift_to_right : int [0 to 8]
         It works when converting to 8-bit. Correct 8 bit conversion needs 8 bit shift.
         Bit shifts smaller than 8 bit, enhances the signal brightness.
+    down_sample : tuple (int, int)
+        Sets down sample factor. Down_sample (3, 2) means 3 pixels in y axis, and 2 pixels in x-axis merges into 1.
+    new_size : tuple (int, int) or None
+        resize the image after down-sampling
     """
     if z_idx is None:
         # Path must be TIFF or RAW
@@ -598,23 +594,19 @@ def read_filter_save(
         assert str(input_path).endswith('.dcimg')
         img = imread_dcimg(str(input_path), z_idx)
         dtype = np.uint16
+    if flat is not None:
+        img = apply_flat(img, flat)
+    if down_sample is not None:
+        img = block_reduce(img, block_size=down_sample, func=np.max)
+    if new_size:
+        img = resize(img, new_size, preserve_range=True, anti_aliasing=True)
+    if dark > 0:
+        img = np.where(img > dark, img - dark, 0)  # Subtract the dark offset
     if rotate:
         img = np.rot90(img)
-    if not lightsheet:
-        fimg = filter_streaks(
-            img,
-            sigma,
-            level=level,
-            wavelet=wavelet,
-            crossover=crossover,
-            threshold=threshold,
-            flat=flat,
-            dark=dark
-        )
-    else:
-        fimg = correct_lightsheet(
-            # img.reshape(img.shape[0], img.shape[1], 1),
-            img.reshape(img.shape[0], img.shape[1]),
+    if lightsheet:
+        img = correct_lightsheet(
+            img.reshape(img.shape[0], img.shape[1], 1),
             percentile=percentile,
             lightsheet=dict(selem=(1, artifact_length, 1)),
             background=dict(
@@ -624,15 +616,23 @@ def read_filter_save(
                 dtype=np.float32,
                 step=(2, 2, 1)),
             lightsheet_vs_background=lightsheet_vs_background
-            ).reshape(img.shape[0], img.shape[1])
-        if flat is not None:
-            fimg = apply_flat(fimg, flat)
+        ).reshape(img.shape[0], img.shape[1])
+    else:
+        img = filter_streaks(
+            img,
+            sigma,
+            level=level,
+            wavelet=wavelet,
+            crossover=crossover,
+            threshold=threshold
+        )
+
     # Save image, retry if OSError for NAS
     for _ in range(nb_retry):
         try:
             imsave(
                 str(output_path),
-                fimg.astype(dtype),
+                img.astype(dtype),
                 compression=compression,
                 convert_to_8bit=convert_to_8bit,
                 bit_shift_to_right=bit_shift_to_right
@@ -712,7 +712,9 @@ def batch_filter(
         dont_convert_16bit=False,
         convert_to_8bit=False,
         bit_shift_to_right=8,
-        continue_process=False
+        continue_process=False,
+        down_sample=(2, 2),
+        new_size=None
 ):
     """Applies `streak_filter` to all images in `input_path` and write the results to `output_path`.
 
@@ -763,6 +765,10 @@ def batch_filter(
         Bit shifts smaller than 8 bit, enhances the signal brightness.
     continue_process : bool
         True means only process the remaining images.
+    down_sample : tuple (int, int) or None
+        Sets down sample factor. Down_sample (3, 2) means 3 pixels in y axis, and 2 pixels in x-axis merges into 1.
+    new_size : tuple (int, int) or None
+        resize the image after down-sampling
     """
     if sigma is None:
         sigma = [0, 0]
@@ -775,9 +781,9 @@ def batch_filter(
     elif flat is not None:
         print('flat argument should be a numpy array or a path to a flat.tif file')
         raise RuntimeError
-    print('Looking for images in {}...'.format(input_path))
+    print(f'Looking for images in {input_path}:')
     img_paths = _find_all_images(input_path, z_step)
-    print('Found {} compatible images'.format(len(img_paths)))
+    print(f'{len(img_paths)} compatible images are found.')
     args = []
     for p in img_paths:
         if isinstance(p, tuple):  # DCIMG found
@@ -811,13 +817,15 @@ def batch_filter(
             'lightsheet_vs_background': lightsheet_vs_background,
             'dont_convert_16bit': dont_convert_16bit,
             'convert_to_8bit': convert_to_8bit,
-            'bit_shift_to_right': bit_shift_to_right
+            'bit_shift_to_right': bit_shift_to_right,
+            'down_sample': down_sample,
+            'new_size': new_size
         }
         args.append(arg_dict)
     print(f'{len(args)} images need processing.\n'
           f'Pystripe batch processing progress:')
     if len(args) > 0:
-        print('Setting up {} workers...'.format(workers))
+        print(f'Setting up {workers} workers...')
         with multiprocessing.Pool(workers) as pool:
             list(tqdm.tqdm(pool.imap(_read_filter_save, args, chunksize=chunks), total=len(args), ascii=True))
     print('Done!')
