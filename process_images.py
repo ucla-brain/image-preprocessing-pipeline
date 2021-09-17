@@ -326,7 +326,7 @@ def main(source_folder):
                 int(round(tile_size[1] * voxel_size_x / voxel_size_z, 0)),
                 int(round(tile_size[0] * voxel_size_y / voxel_size_z, 0))
             )
-            voxel_size_x, voxel_size_y = 1.0, 1.0
+            voxel_size_x = voxel_size_y = voxel_size_z
 
     de_striped_dir = source_folder.parent / (source_folder.name + de_striped_posix)
     continue_process_pystripe = False
