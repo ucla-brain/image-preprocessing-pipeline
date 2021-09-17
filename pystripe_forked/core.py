@@ -792,7 +792,7 @@ def batch_filter(
         else:  # TIFF or RAW found
             z_idx = None
             rel_path = p.relative_to(input_path)
-        o = output_path.joinpath(rel_path)
+        o = output_path / rel_path
         if not o.parent.exists():
             o.parent.mkdir(parents=True)
         if continue_process and ((o.parent/(o.name[0:-3]+'tif')).exists() or (o.parent/(o.name[0:-4]+'tiff')).exists()):
