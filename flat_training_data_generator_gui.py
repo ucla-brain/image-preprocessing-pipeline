@@ -2,15 +2,19 @@ import os
 import sys
 import psutil
 import pathlib
+import numpy as np
 from PyQt5 import QtCore, QtWidgets
-from PyQt5.QtWidgets import QSizePolicy, QWidget, QVBoxLayout, QMainWindow, QApplication
+from PyQt5.QtWidgets import QSizePolicy, QWidget, QVBoxLayout, QMainWindow, QApplication, QMessageBox
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import (
     FigureCanvasQTAgg as FigureCanvas,
     NavigationToolbar2QT as NavigationToolbar)
 from flat import img_read, save_csv, get_img_stats
-from multiprocessing import freeze_support, Process, Queue
 from queue import Empty
+from multiprocessing import freeze_support, Process, Queue
+from skimage.restoration import denoise_bilateral
+from pystripe_forked import imsave
+psutil.Process().nice(psutil.REALTIME_PRIORITY_CLASS)
 
 
 def img_path_generator():
@@ -26,24 +30,26 @@ def img_path_generator():
 
 
 class MultiProcessImageProcessing(Process):
-    def __init__(self, queue, img_path):
+    def __init__(self, queue, img_path, sigma_spatial=1):
         Process.__init__(self)
         self.queue = queue
         self.img_path = img_path
+        self.sigma_spatial = sigma_spatial
 
     def run(self):
-        img_mem_map = None
+        img = None
         img_stats = None
         try:
             img_mem_map = img_read(self.img_path)
             if img_mem_map is not None:
                 img_stats = get_img_stats(img_mem_map)
+                img = denoise_bilateral(img_mem_map, sigma_spatial=self.sigma_spatial)
         except Exception as inst:
             print(f'Process failed for {self.img_path}.')
             print(type(inst))    # the exception instance
             print(inst.args)     # arguments stored in .args
             print(inst)
-        self.queue.put((img_mem_map, img_stats))
+        self.queue.put((img, img_stats))
 
 
 class MplCanvas(FigureCanvas):
@@ -55,9 +61,7 @@ class MplCanvas(FigureCanvas):
         # initialization of the canvas
         FigureCanvas.__init__(self, self.fig)
         # we define the widget as expandable
-        FigureCanvas.setSizePolicy(self,
-                                   QSizePolicy.Expanding,
-                                   QSizePolicy.Expanding)
+        FigureCanvas.setSizePolicy(self, QSizePolicy.Expanding, QSizePolicy.Expanding)
         # notify the system of updated policy
         FigureCanvas.updateGeometry(self)
 
@@ -90,7 +94,7 @@ class UiMplMainWindow(object):
         self.gridLayout = None
         self.buttonYes = None
         self.buttonNo = None
-        self.buttonJump = None
+        self.buttonSkip = None
         self.buttonSave = None
         self.menubar = None
         self.statusbar = None
@@ -126,10 +130,10 @@ class UiMplMainWindow(object):
         self.buttonNo.setObjectName("buttonNo")
         self.gridLayout.addWidget(self.buttonNo, 1, 0, 1, 1)
 
-        self.buttonJump = QtWidgets.QPushButton(self.groupBox)
-        self.buttonJump.setMaximumSize(QtCore.QSize(75, 16777215))
-        self.buttonJump.setObjectName("buttonJump")
-        self.gridLayout.addWidget(self.buttonJump, 3, 0, 1, 1)
+        self.buttonSkip = QtWidgets.QPushButton(self.groupBox)
+        self.buttonSkip.setMaximumSize(QtCore.QSize(75, 16777215))
+        self.buttonSkip.setObjectName("buttonSkip")
+        self.gridLayout.addWidget(self.buttonSkip, 3, 0, 1, 1)
 
         self.buttonSave = QtWidgets.QPushButton(self.groupBox)
         self.buttonSave.setMaximumSize(QtCore.QSize(75, 16777215))
@@ -157,7 +161,7 @@ class UiMplMainWindow(object):
         self.groupBox.setTitle(translate("MplMainWindow", "Is Flat?"))
         self.buttonYes.setText(translate("MplMainWindow", "Yes"))
         self.buttonNo.setText(translate("MplMainWindow", "No"))
-        self.buttonJump.setText(translate("MplMainWindow", "Jump 100"))
+        self.buttonSkip.setText(translate("MplMainWindow", "Skip 100"))
         self.buttonSave.setText(translate("MplMainWindow", "Save"))
 
 
@@ -168,10 +172,11 @@ class DesignerMainWindow(QMainWindow, UiMplMainWindow):
         # connect the signals with the slots
         self.buttonYes.clicked.connect(self.save_yes)
         self.buttonNo.clicked.connect(self.save_no)
-        self.buttonJump.clicked.connect(self.jump)
+        self.buttonSkip.clicked.connect(self.skip)
         self.buttonSave.clicked.connect(self.save_to_csv)
         self.img_stats_list = [['channel'] + get_img_stats(None) + ['path'] + ['flat']]
         self.img_mem_map = None
+        self.img_flat_sum = None
         self.img_stats = None
         self.yes_counter = 0
         self.no_counter = 0
@@ -179,68 +184,150 @@ class DesignerMainWindow(QMainWindow, UiMplMainWindow):
         self.img_path = None
         self.img_path_generator = img_path_generator()
         self.queue = Queue()
-        for _ in range(psutil.cpu_count(logical=True)):
-            self.folder, self.img_path = next(self.img_path_generator)
-            MultiProcessImageProcessing(self.queue, self.img_path).start()
+        self.num_items_in_queue = 0
+        self.max_queue_size = psutil.cpu_count(logical=True)
+        self.process_new_imgs()
         self.img_show_next()
+        if self.img_mem_map is not None:
+            self.img_flat_sum = np.zeros_like(self.img_mem_map, dtype='float64')
+
+    def next(self):
+        current_folder = self.folder
+        try:
+            self.folder, self.img_path = next(self.img_path_generator)
+            if current_folder != self.folder:
+                self.yes_counter = self.no_counter = 0
+                if self.img_flat_sum is not None:
+                    self.img_flat_sum = np.zeros_like(self.img_flat_sum, dtype='float64')
+                self.img_stats_list = [['channel'] + get_img_stats(None) + ['path'] + ['flat']]
+        except StopIteration:
+            self.img_path = None
+
+    def process_new_imgs(self):
+        for _ in range(self.max_queue_size - self.num_items_in_queue):
+            self.next()
+            if self.img_path is not None:
+                MultiProcessImageProcessing(self.queue, self.img_path).start()
+                self.num_items_in_queue += 1
+            else:
+                break
 
     def save_yes(self):
         self.update_stats_class("yes")
         self.yes_counter += 1
+        self.print_status()
+        self.img_flat_sum += self.img_mem_map
+        self.do_we_have_enough_samples()
         self.img_show_next()
 
     def save_no(self):
         self.update_stats_class("no")
         self.no_counter += 1
+        self.print_status()
+        self.do_we_have_enough_samples()
         self.img_show_next()
 
-    def img_show_next(self):
-        # if self.yes_counter > MinRequiredSamplePerClass and self.no_counter > MinRequiredSamplePerClass:
-        #
-        # else:
-        could_not_get_something = True
-        while could_not_get_something:
+    def print_status(self):
+        print(
+            f"folder: {self.folder}, yes: {self.yes_counter}, No: {self.no_counter}"
+            # f", in queue: {self.num_items_in_queue}"
+        )
+
+    def get_img_from_queue(self):
+        could_not_get_img = True
+        while could_not_get_img and self.num_items_in_queue > 0:
             try:
                 self.img_mem_map, self.img_stats = self.queue.get(block=False)
+                self.num_items_in_queue -= 1
                 if self.img_mem_map is not None:
-                    could_not_get_something = False
-                self.folder, self.img_path = next(self.img_path_generator)
-                MultiProcessImageProcessing(self.queue, self.img_path).start()
+                    could_not_get_img = False
             except Empty:
                 pass
-        self.img_erase()
-        self.mpl.canvas.ax.imshow(self.img_mem_map)
-        self.mpl.canvas.ax.relim()
-        self.mpl.canvas.ax.autoscale(True)
-        self.mpl.ntb.update()  # <-- add this
-        # self.mpl.ntb.push_current()      #     and possibly this(?)
-        self.mpl.canvas.draw()
 
-    def jump(self):
+    def change_folder(self):
+        current_folder = self.folder
+        while current_folder == self.folder and self.img_path is not None:
+            self.next()
+
+    def do_we_have_enough_samples(self):
+        if self.yes_counter > MinRequiredSamplePerClass and self.no_counter > MinRequiredSamplePerClass:
+            print('samples for this channel are enough.')
+            self.save_to_csv()
+            self.empty_queue()
+            self.change_folder()
+            self.process_new_imgs()
+        if self.num_items_in_queue <= 0 and self.img_path is None:
+            self.save_to_csv()
+            print("You checked all images!")
+            msg = QMessageBox()
+            msg.setIcon(QMessageBox.Information)
+            msg.setText("You checked all images!")
+            msg.exec_()
+
+    def img_show_next(self):
+        self.get_img_from_queue()
+        if self.img_mem_map is not None:
+            self.img_erase()
+            self.mpl.canvas.ax.imshow(self.img_mem_map)
+            self.mpl.canvas.ax.relim()
+            self.mpl.canvas.ax.autoscale(True)
+            self.mpl.ntb.update()
+            self.mpl.canvas.draw()
+        self.process_new_imgs()
+
+    def empty_queue(self):
+        while self.num_items_in_queue > 0:
+            self.get_img_from_queue()
+
+    def skip(self):
+        print("skipping started ...")
+        self.empty_queue()
         for _ in range(100):
-            next(self.img_path_generator)
+            self.next()
+        self.process_new_imgs()
         self.img_show_next()
+        print("skipped 100 images.")
 
     def img_erase(self):
         self.mpl.canvas.ax.clear()
-        self.mpl.ntb.update()  # <-- add this
-        # self.mpl.ntb.push_current()      #     and possibly this(?)
+        self.mpl.ntb.update()
         self.mpl.canvas.draw()
 
     def update_stats_class(self, img_class):
         self.img_stats_list += [[self.folder] + self.img_stats + [self.img_path] + [img_class]]
 
     def save_to_csv(self):
-        save_csv(SourceFolder / (self.folder + '_image_stats_classes.csv'), self.img_stats_list)
+        save_csv(
+            SourceFolder / (self.folder + '_image_stats_classes.csv'),
+            self.img_stats_list
+        )
+        if self.yes_counter > 0:
+            img_flat_average = self.img_flat_sum / self.yes_counter
+            img_flat_average = denoise_bilateral(img_flat_average, sigma_spatial=1)
+            img_flat = img_flat_average / np.max(img_flat_average)
+            imsave(
+                str(SourceFolder / (self.folder + '_flat.tif')),
+                img_flat,
+                convert_to_8bit=False
+            )
+        print("saved")
+
+    def closeEvent(self, event):
+        self.empty_queue()
 
 
 if __name__ == '__main__':
     freeze_support()
-    AllChannels = ["Ex_561_Em_600", "Ex_488_Em_525", "Ex_642_Em_680", ]  #
-    SourceFolder = pathlib.Path(r"F:\20210907_16_56_41_SM210705_01_LS_4X_4000z_Compressed")
+    AllChannels = ["Ex_488_Em_525",  "Ex_561_Em_600", "Ex_642_Em_680", ]
+    if len(sys.argv) == 2 and pathlib.Path(sys.argv[1]).exists():
+        SourceFolder = pathlib.Path(sys.argv[1]).absolute()
+    else:
+        SourceFolder = pathlib.Path(
+            r"C:\Users\kmoradi\Downloads\20210917_14_13_44_With_FlatImage_During_Acquisition_15x_Compressed"
+        )
+        # SourceFolder = pathlib.Path(r"F:\test")
     MinRequiredSamplePerClass = 1000
     app = QApplication(sys.argv)
     dmw = DesignerMainWindow()
-    # show it
     dmw.show()
     sys.exit(app.exec_())
