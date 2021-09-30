@@ -8,32 +8,13 @@ import pandas as pd
 import pystripe_forked as pystripe
 from pystripe_forked.raw import raw_imread
 from scipy import stats
-from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import train_test_split
 from skimage.restoration import denoise_bilateral
-from multiprocessing import freeze_support, Process, Queue
+from multiprocessing import freeze_support, Process, Queue, Manager
 from queue import Empty
-from time import time, sleep
 
-
-def get_flat_classifier(training_data_path):
-    df = pd.read_csv(training_data_path)
-    x = df[["mean", "min", "max", "cv", "variance", "std", "skewness", "kurtosis"]]
-    x = x.to_numpy()
-    y = np.where(df['flat'].isin(['yes']), True, False)
-    model = LogisticRegression(max_iter=10000)
-    log_reg = model.fit(x, y)
-    print("Training set score: {:.3f}".format(log_reg.score(x, y)))
-    return model
-
-
-def img_path_generator(path):
-    if path.exists():
-        for root, dirs, files in os.walk(path):
-            for name in files:
-                name_l = name.lower()
-                if name_l.endswith(".raw") or name_l.endswith(".tif") or name_l.endswith(".tiff"):
-                    img_path = os.path.join(root, name)
-                    yield img_path
+# https://stackoverflow.com/questions/50306632/multiprocessing-not-achieving-full-cpu-usage-on-dual-processor-windows-machine
+os.environ["OPENBLAS_MAIN_FREE"] = "1"
 
 
 def img_read(path):
@@ -43,20 +24,6 @@ def img_read(path):
     elif path.lower().endswith(".raw"):
         img_mem_map = raw_imread(path)
     return img_mem_map
-
-
-def update_progress(percent, prefix='progress', posix=''):
-    percent = int(percent)
-    hash_count = percent//10
-    space_count = 10 - hash_count
-    sys.stdout.write(f"\r{prefix}: [{'#' * hash_count}{' ' * space_count}] {percent}% {posix}")
-    sys.stdout.flush()
-
-
-def save_csv(path, list_2d):
-    with open(path, 'w') as file:
-        write = csv.writer(file)
-        write.writerows(list_2d)
 
 
 def get_img_stats(img_mem_map):
@@ -69,54 +36,125 @@ def get_img_stats(img_mem_map):
     return [img_mean, img_min, img_max, img_cv, img_variance, img_std, img_skewness, img_kurtosis, img_nobs]
 
 
-class MultiProcessImageProcessing(Process):
-    def __init__(self, queue, classifier_model, img_path, tile_size, sigma_spatial=1):
+class MultiProcessGetImgStats(Process):
+    def __init__(self, queue, img_path, tile_size):
         Process.__init__(self)
+        self.daemon = True
         self.queue = queue
-        self.classifier_model = classifier_model
         self.img_path = img_path
         self.tile_size = tile_size
-        self.sigma_spatial = sigma_spatial
 
     def run(self):
-        t = time()
-        img_mem_map_denoised = None
+        img_mem_map, img_stats = None, None
         try:
             img_mem_map = img_read(self.img_path)
             if img_mem_map is not None and img_mem_map.shape == self.tile_size:
-                if self.classifier_model is None:
-                    is_flat = True
-                else:
-                    # ['mean', 'min', 'max', 'cv', 'variance', 'std', 'skewness', 'kurtosis', 'n']
-                    img_stats = get_img_stats(img_mem_map)
-                    is_flat = self.classifier_model.predict([img_stats[0:-1]])
-                if is_flat:
-                    img_mem_map_denoised = denoise_bilateral(img_mem_map, sigma_spatial=self.sigma_spatial)
+                # ['mean', 'min', 'max', 'cv', 'variance', 'std', 'skewness', 'kurtosis', 'n']
+                img_stats = get_img_stats(img_mem_map)
+                img_stats = np.array(img_stats[0:-1], dtype=np.float)
+                # is_flat = self.classifier_model.predict([img_stats[0:-1]])
         except Exception as inst:
             print(f'Process failed for {self.img_path}.')
             print(type(inst))    # the exception instance
             print(inst.args)     # arguments stored in .args
             print(inst)
-        self.queue.put([img_mem_map_denoised, time() - t])
+        self.queue.put([img_mem_map, img_stats])
+
+
+class MultiProcessDenoiseImg(Process):
+    def __init__(self, queue, img_list, img_idx, sigma_spatial=1):
+        Process.__init__(self)
+        self.daemon = True
+        self.queue = queue
+        self.img_list = img_list
+        self.img_idx = img_idx
+        self.sigma_spatial = sigma_spatial
+
+    def run(self):
+        img_denoised = None
+        try:
+            img_denoised = denoise_bilateral(self.img_list[self.img_idx], sigma_spatial=self.sigma_spatial)
+        except Exception as inst:
+            print(f'Denoise process failed.')
+            print(type(inst))    # the exception instance
+            print(inst.args)     # arguments stored in .args
+            print(inst)
+        self.queue.put(img_denoised)
+
+
+def img_path_generator(path):
+    if path.exists():
+        for root, dirs, files in os.walk(path):
+            for name in files:
+                name_l = name.lower()
+                if name_l.endswith(".raw") or name_l.endswith(".tif") or name_l.endswith(".tiff"):
+                    img_path = os.path.join(root, name)
+                    yield img_path
+
+
+def update_progress(percent, prefix='progress', posix=''):
+    percent = int(percent)
+    hash_count = percent // 10
+    space_count = 10 - hash_count
+    sys.stdout.write(f"\r{prefix}: [{'#' * hash_count}{' ' * space_count}] {percent}% {posix}")
+    sys.stdout.flush()
+
+
+def save_csv(path, list_2d):
+    with open(path, 'w') as file:
+        write = csv.writer(file)
+        write.writerows(list_2d)
+
+
+def get_flat_classifier(training_data_path, train_test=False):
+    # from sklearn.linear_model import LogisticRegression
+    # model = LogisticRegression(max_iter=10000)
+    from sklearn.ensemble import RandomForestClassifier
+    model = RandomForestClassifier(
+        n_estimators=10,
+        # criterion="entropy",
+        min_samples_split=100,
+        n_jobs=psutil.cpu_count(logical=True)
+    )
+    # from sklearn.ensemble import AdaBoostClassifier
+    # model = AdaBoostClassifier(n_estimators=60)
+    # from sklearn.tree import DecisionTreeClassifier
+    # model = DecisionTreeClassifier(
+    #     max_depth=10,
+    #     min_samples_split=100
+    # )
+    # from sklearn.neighbors import KNeighborsClassifier
+    # model = KNeighborsClassifier(n_neighbors=9)
+    df = pd.read_csv(training_data_path)
+    x = df[["mean", "min", "max", "cv", "variance", "std", "skewness", "kurtosis"]]
+    x = x.to_numpy()
+    y = np.where(df['flat'].isin(['yes']), True, False)
+    if train_test:
+        x_train, x_test, y_train, y_test = train_test_split(x, y)
+        log_reg = model.fit(x_train, y_train)
+        print(f"Training set score: {log_reg.score(x_train, y_train) * 100:.1f}%")
+        print(f"Testing  set score: {log_reg.score(x_test, y_test) * 100:.1f}%")
+    else:
+        log_reg = model.fit(x, y)
+        print(f"Training set score: {log_reg.score(x, y) * 100:.1f}%")
+    return model
 
 
 def create_flat_img(
         img_source_path, flat_training_data_path, tile_size,
-        cpu_physical_core_count=psutil.cpu_count(logical=False),
-        cpu_logical_core_count=psutil.cpu_count(logical=True),
-        max_images=1024,
-        patience_before_skipping=10,
-        skips=100,
+        max_images=256,
+        batch_size=256,
+        patience_before_skipping=200,
+        skips=256,
         sigma_spatial=1,
         save_as_tiff=True):
     print()
     img_path_gen = iter(img_path_generator(img_source_path))
     img_flat_count = 0
-    img_non_flat_count = 0
-    queue = Queue()
+    queue_stats = Queue()
+    queue_denoise = Queue()
+    manager = Manager()
     running_processes = 0
-    sleep_durations = 1.0  # seconds
-    print_time = 0
     img_flat_sum = np.zeros(tile_size, dtype='float64')
     if flat_training_data_path is None:
         classifier_model = None
@@ -125,59 +163,77 @@ def create_flat_img(
 
     there_is_img_to_process = True
     while img_flat_count < max_images and there_is_img_to_process:
-        for run in range(cpu_logical_core_count - running_processes):
+        for run in range(batch_size):
             img_path = next(img_path_gen, None)
             if img_path is None:
                 there_is_img_to_process = False
                 break
-            MultiProcessImageProcessing(
-                queue,
-                classifier_model,
-                img_path,
-                tile_size,
-                sigma_spatial=sigma_spatial
-            ).start()
+            MultiProcessGetImgStats(queue_stats, img_path, tile_size).start()
             running_processes += 1
 
-        sleep(sleep_durations / cpu_physical_core_count)
-        somethings_could_be_in_queue = True
-        while somethings_could_be_in_queue:
+        update_progress(
+            img_flat_count / max_images * 100,
+            prefix=img_source_path.name,
+            posix=f'flat: {img_flat_count}, started reading {running_processes} images.'
+        )
+
+        img_mem_map_list = manager.list()  # a shared list to avoid copying images to processes
+        img_stats_list = []
+        while running_processes > 0:
             try:  # check the queue for the optimization results then show result
-                [img_mem_map_denoised, process_time] = queue.get(block=False)
-                sleep_durations = 0.9 * sleep_durations + 0.1 * process_time
-                if running_processes > 0:
-                    running_processes -= 1
-                if img_mem_map_denoised is not None:
-                    img_flat_sum += img_mem_map_denoised
-                    img_flat_count += 1
-                    if img_non_flat_count > 0:
-                        img_non_flat_count -= 1
+                [img_mem_map, img_stats] = queue_stats.get(block=False)
+                running_processes -= 1
+                update_progress(
+                    img_flat_count / max_images * 100,
+                    prefix=img_source_path.name,
+                    posix=f'flat: {img_flat_count}, images in the queue: {running_processes}'
+                )
+                if img_mem_map is not None:
+                    img_mem_map_list += [img_mem_map]
+                    img_stats_list += [img_stats]
+            except Empty:
+                pass
+
+        img_non_flat_count = 0
+        if len(img_stats_list) > 0:
+            is_flat_list = classifier_model.predict(img_stats_list)
+            for img_idx, is_flat in enumerate(is_flat_list, start=0):
+                if is_flat:
+                    MultiProcessDenoiseImg(
+                        queue_denoise, img_mem_map_list, img_idx, sigma_spatial=sigma_spatial
+                    ).start()
+                    running_processes += 1
+
                 else:
                     img_non_flat_count += 1
-                    if img_non_flat_count > patience_before_skipping:
-                        img_non_flat_count = 0
-                        for skip in range(skips):
-                            next(img_path_gen, None)
-            except Empty:
-                somethings_could_be_in_queue = False
 
-        if time() - print_time > 2:
-            progress = img_flat_count / max_images * 100
             update_progress(
-                progress,
+                img_flat_count / max_images * 100,
                 prefix=img_source_path.name,
-                posix=f'found: {img_flat_count}, time: {sleep_durations:.1f}s/thread')
-            print_time = time()
+                posix=f'flat: {img_flat_count}, non-flat: {img_non_flat_count}/{batch_size}'
+            )
 
-    while running_processes > 0:
-        try:  # check the queue for the optimization results then show result
-            img_mem_map_denoised = queue.get(block=False)[0]
-            running_processes -= 1
-            if img_mem_map_denoised is not None:
-                img_flat_sum += img_mem_map_denoised
+            if img_non_flat_count > patience_before_skipping:
+                print(f"\nskipping {skips} files because non-flat images were more than {patience_before_skipping}.\n")
+                for skip in range(skips):
+                    next(img_path_gen, None)
+        else:
+            print("\ncould not read any images in this batch.\n")
+
+        while running_processes > 0:
+            try:  # check the queue for the optimization results then show result
+                img_mem_map_denoised = queue_denoise.get(block=False)
+                running_processes -= 1
                 img_flat_count += 1
-        except Empty:
-            pass
+                if img_mem_map_denoised is not None:
+                    img_flat_sum += img_mem_map_denoised
+                update_progress(
+                    img_flat_count / max_images * 100,
+                    prefix=img_source_path.name,
+                    posix=f'flat: {img_flat_count}, non-flat: {img_non_flat_count}/{batch_size}'
+                )
+            except Empty:
+                pass
 
     if img_flat_count > 0:
         img_flat_average = img_flat_sum / img_flat_count
@@ -190,7 +246,7 @@ def create_flat_img(
                 convert_to_8bit=False
             )
         update_progress(
-            100, prefix=img_source_path.name, posix=f'found: {img_flat_count}, time: {sleep_durations:.1f}s/thread')
+            100, prefix=img_source_path.name, posix=f'found: {img_flat_count}')
         return img_flat
     else:
         print("no flat image found!")
@@ -201,9 +257,13 @@ if __name__ == '__main__':
     freeze_support()
     AllChannels = ["Ex_488_Em_525", "Ex_561_Em_600", "Ex_642_Em_680"]
     SourceFolder = pathlib.Path(
-        r"C:\Users\kmoradi\Flat\20210830_17_34_41_R_Laser_FlatImage_LS_15x_1000z_Compressed")
+        r"C:\Users\kmoradi\Downloads\20210917_16_13_09_Without_FlatImage_During_Acquisition_15x_HalfSampling_Compressed"
+        # r"/mnt/f/20210907_16_56_41_SM210705_01_LS_4X_4000z"
+    )
+
     # SourceFolder = pathlib.Path(__file__).parent
     for Channel in AllChannels:
         # create_flat_img(SourceFolder / Channel, SourceFolder / "image_classes.csv")
-        create_flat_img(SourceFolder / Channel, None, (1850, 1850), max_images=2400,)
+        # create_flat_img(SourceFolder / Channel, None, (1850, 1850), max_images=1000,)
+        create_flat_img(SourceFolder / Channel, r'F:\flat_data\image_classes.csv', (925, 925))
     print()
