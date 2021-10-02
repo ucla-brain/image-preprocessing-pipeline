@@ -21,11 +21,11 @@ from platform import uname
 import mpi4py
 
 # experiment setup: user needs to set them right
-AllChannels = ["Ex_642_Em_680", "Ex_561_Em_600", "Ex_488_Em_525"]  # the order determines color ["R", "G", "B"]?
+AllChannels = ["Ex_488_Em_525", "Ex_561_Em_600", "Ex_642_Em_680"]  # the order determines color ["R", "G", "B"]?
 ChannelsNeedReconstruction = ["Ex_642_Em_680"]
-VoxelSizeX_4x, VoxelSizeY_4x, VoxelSizeZ_4x = 1.835, 1.835, 1.0
-VoxelSizeX_10x, VoxelSizeY_10x, VoxelSizeZ_10x = 0.661, 0.661, 1.0
-VoxelSizeX_15x, VoxelSizeY_15x, VoxelSizeZ_15x = 0.422, 0.422, 1.0
+VoxelSizeX_4x, VoxelSizeY_4x = 1.835, 1.835
+VoxelSizeX_10x, VoxelSizeY_10x = 0.661, 0.661
+VoxelSizeX_15x, VoxelSizeY_15x = 0.422, 0.422
 FlatNonFlatTrainingData = "image_classes.csv"
 cpu_physical_core_count = psutil.cpu_count(logical=False)
 cpu_logical_core_count = psutil.cpu_count(logical=True)
@@ -149,31 +149,40 @@ def get_most_informative_channel():
 
 def get_voxel_sizes():
     objective = ""
-    while objective not in {"1", "2", "3"}:
+    while objective not in {"1", "2", "3", "4", "5"}:
         objective = input(
-            '\n'
-            'What is the Objective?\n'
-            '1 = 4x\n'
-            '2 = 10x\n'
-            '3 = 15x\n')
+            f'\nWhat is the Objective?\n'
+            f'1 = 4x: Voxel Size X = {VoxelSizeX_4x}, Y = {VoxelSizeY_4x}, tile_size = 1600 x 2000\n'
+            f'2 = 10x: Voxel Size X = {VoxelSizeX_10x}, Y = {VoxelSizeY_10x}, tile_size = 1850 x 1850\n'
+            f'3 = 15x: Voxel Size X = {VoxelSizeX_15x}, Y = {VoxelSizeY_15x}, tile_size = 1850 x 1850\n'
+            f'4 = 15x 1/2 sample: Voxel Size X = {VoxelSizeX_15x*2}, Y = {VoxelSizeY_15x*2}, tile_size = 925 x 925\n'
+            f'5 = other: allows entering custom voxel sizes for tile_size = 1850 x 1850\n'
+        )
 
     if objective == "1":
         objective = "4x"
         voxel_size_x = VoxelSizeX_4x
         voxel_size_y = VoxelSizeY_4x
-        # voxel_size_z = VoxelSizeZ_4x
         tile_size = (1600, 2000)  # y, x
     elif objective == "2":
         objective = "10x"
         voxel_size_x = VoxelSizeX_10x
         voxel_size_y = VoxelSizeY_10x
-        # voxel_size_z = VoxelSizeZ_10x
         tile_size = (1850, 1850)
     elif objective == "3":
         objective = "15x"
         voxel_size_x = VoxelSizeX_15x
         voxel_size_y = VoxelSizeY_15x
-        # voxel_size_z = VoxelSizeZ_15x
+        tile_size = (1850, 1850)
+    elif objective == "4":
+        objective = "15x"
+        voxel_size_x = VoxelSizeX_15x * 2
+        voxel_size_y = VoxelSizeY_15x * 2
+        tile_size = (925, 925)
+    elif objective == "5":
+        objective = ""
+        voxel_size_x = float(input("what is the x voxel size in µm?\n"))
+        voxel_size_y = float(input("what is the y voxel size in µm?\n"))
         tile_size = (1850, 1850)
     else:
         print("Error: unsupported objective")
@@ -371,11 +380,10 @@ def main(source_folder):
                             source_channel_folder,
                             image_classes_training_data_path,
                             tile_size,
-                            cpu_physical_core_count=cpu_physical_core_count,
-                            cpu_logical_core_count=cpu_logical_core_count,
                             max_images=1024,  # the number of flat images averaged
-                            patience_before_skipping=10,  # the # of non-flat images found successively before skipping
-                            skips=100,  # the number of images should be skipped before testing again
+                            batch_size=128,
+                            patience_before_skipping=100,  # the # of non-flat images found successively before skipping
+                            skips=256,  # the number of images should be skipped before testing again
                             sigma_spatial=1,  # the de-noising parameter
                             save_as_tiff=True
                         )
@@ -457,10 +465,11 @@ def main(source_folder):
     log.info(f"{datetime.now()}: importing all channels ...")
 
     p = dir_stitched.rglob("*")
-    for x in p:
-        if x.is_dir():
-            shutil.rmtree(x)
-    del p, x
+    if p:
+        for x in p:
+            if x.is_dir():
+                shutil.rmtree(x)
+        del p, x
     vol_xml_import_path = dir_stitched / 'vol_xml_import.xml'
     vol_xml_import_path.unlink(missing_ok=True)
     command = [
@@ -526,7 +535,7 @@ def main(source_folder):
             dir_stitched / (source_folder.name + (
                 '_' + file.name if len(files) > 1 else '') + '_V4.tif'))  # move tiff files
         if imaris_converter.exists():
-            print(f"found Imaris View: converting {file.name} to ims ... ")
+            p_log(f"{datetime.now()}: found Imaris View: converting {file.name} to ims ... ")
             ims_file_path = dir_stitched / (source_folder.name + ('_' + file.name if len(files) > 1 else '')+'_v4.ims')
             command = [
                 f"" if sys.platform == "win32" else "wine",
@@ -546,7 +555,7 @@ def main(source_folder):
                     f"--nthreads {cpu_logical_core_count}",
                     f"--compression 1",
                 ]
-            log.info("tiff to ims conversion command:\n" + " ".join(command))
+            p_log("tiff to ims conversion command:\n" + " ".join(command))
             subprocess.call(" ".join(command), shell=True)
         else:
             log.warning("not found Imaris View: not converting tiff to ims ... ")
