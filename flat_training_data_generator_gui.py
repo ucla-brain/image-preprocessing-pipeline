@@ -14,7 +14,13 @@ from queue import Empty
 from multiprocessing import freeze_support, Process, Queue
 from skimage.restoration import denoise_bilateral
 from pystripe_forked import imsave
-psutil.Process().nice(psutil.REALTIME_PRIORITY_CLASS)
+try:
+    psutil.Process().nice(psutil.REALTIME_PRIORITY_CLASS)
+except AttributeError:
+    try:
+        psutil.Process().nice(-19)
+    except PermissionError:
+        pass
 
 
 def img_path_generator():
@@ -323,7 +329,7 @@ if __name__ == '__main__':
         SourceFolder = pathlib.Path(sys.argv[1]).absolute()
     else:
         SourceFolder = pathlib.Path(
-            r"C:\Users\kmoradi\Downloads\20210917_14_13_44_With_FlatImage_During_Acquisition_15x_Compressed"
+            r"C:\Users\kmoradi\Downloads\20210917_14_29_44_With_FlatImage_During_Acquisition_15x_HalfSampling_Compressed"
         )
         # SourceFolder = pathlib.Path(r"F:\test")
     MinRequiredSamplePerClass = 1000
