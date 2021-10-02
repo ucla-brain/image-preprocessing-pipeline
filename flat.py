@@ -174,7 +174,7 @@ def create_flat_img(
         update_progress(
             img_flat_count / max_images * 100,
             prefix=img_source_path.name,
-            posix=f'flat: {img_flat_count}, started reading {running_processes} images.'
+            posix=f'flat: {img_flat_count}, reading {running_processes} images.'
         )
 
         img_mem_map_list = manager.list()  # a shared list to avoid copying images to processes
@@ -257,7 +257,7 @@ if __name__ == '__main__':
     freeze_support()
     AllChannels = ["Ex_488_Em_525", "Ex_561_Em_600", "Ex_642_Em_680"]
     SourceFolder = pathlib.Path(
-        r"C:\Users\kmoradi\Downloads\20210917_16_13_09_Without_FlatImage_During_Acquisition_15x_HalfSampling_Compressed"
+        r"C:\Users\kmoradi\Downloads\20210917_14_29_44_With_FlatImage_During_Acquisition_15x_HalfSampling_Compressed"
         # r"/mnt/f/20210907_16_56_41_SM210705_01_LS_4X_4000z"
     )
 
