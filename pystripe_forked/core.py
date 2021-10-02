@@ -583,64 +583,79 @@ def read_filter_save(
     new_size : tuple (int, int) or None
         resize the image after down-sampling
     """
-    if z_idx is None:
-        # Path must be TIFF or RAW
-        img = imread(str(input_path))
-        dtype = img.dtype
-        if not dont_convert_16bit:
+    try:
+        if z_idx is None:
+            # Path must be TIFF or RAW
+            img = imread(str(input_path))
+            dtype = img.dtype
+            if not dont_convert_16bit:
+                dtype = np.uint16
+        else:
+            # Path must be to DCIMG file
+            assert str(input_path).endswith('.dcimg')
+            img = imread_dcimg(str(input_path), z_idx)
             dtype = np.uint16
-    else:
-        # Path must be to DCIMG file
-        assert str(input_path).endswith('.dcimg')
-        img = imread_dcimg(str(input_path), z_idx)
-        dtype = np.uint16
-    if flat is not None:
-        img = apply_flat(img, flat)
-    if down_sample is not None:
-        img = block_reduce(img, block_size=down_sample, func=np.max)
-    if new_size:
-        img = resize(img, new_size, preserve_range=True, anti_aliasing=True)
-    if dark > 0:
-        img = np.where(img > dark, img - dark, 0)  # Subtract the dark offset
-    if rotate:
-        img = np.rot90(img)
-    if lightsheet:
-        img = correct_lightsheet(
-            img.reshape(img.shape[0], img.shape[1], 1),
-            percentile=percentile,
-            lightsheet=dict(selem=(1, artifact_length, 1)),
-            background=dict(
-                selem=(background_window_size, background_window_size, 1),
-                spacing=(25, 25, 1),
-                interpolate=1,
-                dtype=np.float32,
-                step=(2, 2, 1)),
-            lightsheet_vs_background=lightsheet_vs_background
-        ).reshape(img.shape[0], img.shape[1])
-    else:
-        img = filter_streaks(
-            img,
-            sigma,
-            level=level,
-            wavelet=wavelet,
-            crossover=crossover,
-            threshold=threshold
-        )
+        if img is not None:
+            if flat is not None:
+                img = apply_flat(img, flat)
+            if down_sample is not None:
+                img = block_reduce(img, block_size=down_sample, func=np.max)
+            if new_size:
+                img = resize(img, new_size, preserve_range=True, anti_aliasing=True)
+            if dark > 0:
+                img = np.where(img > dark, img - dark, 0)  # Subtract the dark offset
+            if rotate:
+                img = np.rot90(img)
+            if lightsheet:
+                img = correct_lightsheet(
+                    img.reshape(img.shape[0], img.shape[1], 1),
+                    percentile=percentile,
+                    lightsheet=dict(selem=(1, artifact_length, 1)),
+                    background=dict(
+                        selem=(background_window_size, background_window_size, 1),
+                        spacing=(25, 25, 1),
+                        interpolate=1,
+                        dtype=np.float32,
+                        step=(2, 2, 1)),
+                    lightsheet_vs_background=lightsheet_vs_background
+                ).reshape(img.shape[0], img.shape[1])
+            else:
+                img = filter_streaks(
+                    img,
+                    sigma,
+                    level=level,
+                    wavelet=wavelet,
+                    crossover=crossover,
+                    threshold=threshold
+                )
 
-    # Save image, retry if OSError for NAS
-    for _ in range(nb_retry):
-        try:
-            imsave(
-                str(output_path),
-                img.astype(dtype),
-                compression=compression,
-                convert_to_8bit=convert_to_8bit,
-                bit_shift_to_right=bit_shift_to_right
-            )
-        except OSError:
-            print('Retrying...')
-            continue
-        break
+            # Save image, retry if OSError for NAS
+            for _ in range(nb_retry):
+                try:
+                    imsave(
+                        str(output_path),
+                        img.astype(dtype),
+                        compression=compression,
+                        convert_to_8bit=convert_to_8bit,
+                        bit_shift_to_right=bit_shift_to_right
+                    )
+                except OSError:
+                    print('Retrying...')
+                    continue
+                break
+            else:
+                print(f"Possible damaged input file: {input_path}")
+                print("imread returned None")
+    except OSError as inst:
+        print(f"Possible damaged input file: {input_path}")
+        print(type(inst))  # the exception instance
+        print(inst.args)  # arguments stored in .args
+        print(inst)
+    except IndexError as inst:
+        print(f"Possible damaged input file: {input_path}")
+        print(type(inst))  # the exception instance
+        print(inst.args)  # arguments stored in .args
+        print(inst)
 
 
 def _read_filter_save(input_dict):
