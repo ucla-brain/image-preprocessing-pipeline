@@ -9,6 +9,8 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import (
     FigureCanvasQTAgg as FigureCanvas,
     NavigationToolbar2QT as NavigationToolbar)
+from psutil import AccessDenied
+
 from flat import img_read, save_csv, get_img_stats
 from queue import Empty
 from multiprocessing import freeze_support, Process, Queue
@@ -19,8 +21,8 @@ try:
 except AttributeError:
     try:
         psutil.Process().nice(-19)
-    except PermissionError:
-        pass
+    except Exception or PermissionError:
+        print("no permission to change niceness!")
 
 
 def img_path_generator():
@@ -329,7 +331,8 @@ if __name__ == '__main__':
         SourceFolder = pathlib.Path(sys.argv[1]).absolute()
     else:
         SourceFolder = pathlib.Path(
-            r"C:\Users\kmoradi\Downloads\20210917_14_29_44_With_FlatImage_During_Acquisition_15x_HalfSampling_Compressed"
+            # r"C:\Users\kmoradi\Downloads\20210917_14_29_44_With_FlatImage_During_Acquisition_15x_HalfSampling_Compressed"
+            r"/mnt/md0/20210729_16_18_40_SW210318-07_R-HPC_15x_Zstep1um_50p_4ms_destriped_flat_subtracted"
         )
         # SourceFolder = pathlib.Path(r"F:\test")
     MinRequiredSamplePerClass = 1000
