@@ -224,14 +224,14 @@ def create_flat_img(
             try:  # check the queue for the optimization results then show result
                 img_mem_map_denoised = queue_denoise.get(block=False)
                 running_processes -= 1
-                img_flat_count += 1
                 if img_mem_map_denoised is not None:
                     img_flat_sum += img_mem_map_denoised
-                update_progress(
-                    img_flat_count / max_images * 100,
-                    prefix=img_source_path.name,
-                    posix=f'flat: {img_flat_count}, non-flat: {img_non_flat_count}/{batch_size}'
-                )
+                    img_flat_count += 1
+                    update_progress(
+                        img_flat_count / max_images * 100,
+                        prefix=img_source_path.name,
+                        posix=f'flat: {img_flat_count}, non-flat: {img_non_flat_count}/{batch_size}'
+                    )
             except Empty:
                 pass
 
