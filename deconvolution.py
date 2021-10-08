@@ -7,6 +7,8 @@ import numpy as np
 import subprocess
 import math
 import cmath
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
 
 def complex_quadrature(func, a, b, **kwargs):
@@ -39,10 +41,12 @@ def psf_eq(x, y, z, numerical_aperture, refractive_index, lambda_val):
     return 4 * abs(integral[0])**2
 
 
-def ls_psf_eq(x, y, z, numerical_aperture_obj, n, lambda_ex, lambda_em, numerical_aperture_ls):
+def ls_psf_eq(x, y, z, numerical_aperture_obj, refractive_index, lambda_ex, lambda_em, numerical_aperture_ls):
     """calculates PSF at point (x,y,z)
     """
-    return psf_eq(z, 0, x, numerical_aperture_ls, n, lambda_ex) * psf_eq(x, y, z, numerical_aperture_obj, n, lambda_em)
+    psf_ls = psf_eq(z, 0, x, numerical_aperture_ls, refractive_index, lambda_ex)
+    psf_obj = psf_eq(x, y, z, numerical_aperture_obj, refractive_index, lambda_em)
+    return psf_ls * psf_obj
 
 
 def generate_psf(
@@ -52,7 +56,7 @@ def generate_psf(
         dxy=422.0,
         dz=1000.0,
         refractive_index=1.52,  # 1.45 of the lens
-        f_cylinder_lens=240,
+        f_cylinder_lens=240.0,  # 240
         slit_width=12.0,
 ):
     """generate point spread function matrix
@@ -85,7 +89,7 @@ def generate_psf(
     """
 
     resolution_xy = 0.61 * lambda_em / numerical_aperture  # the minimum distance of two distinguishable objects
-    resolution_z = 2.0 * lambda_em * refractive_index / numerical_aperture ** 2
+    resolution_z = 2.0 * lambda_ex * refractive_index / numerical_aperture ** 2
     print(f"Two objects are distinguishable in xy-plane if they are {resolution_xy:.0f} nm apart. "
           f"The camera pixel size is {dxy:.0f} nm.\n"
           f"Two objects are distinguishable in z-axis if they are {resolution_z:.0f} nm apart. "
@@ -93,25 +97,26 @@ def generate_psf(
 
     dxy_psf = min(dxy, resolution_xy / 3)  # the voxel size of PSF should be smaller than the diffraction-limited
 
-    # psf, nxy, nz, full_half_with_maxima_xy, full_half_with_maxima_z = make_light_sheet_psf(
-    #     dxy_psf, dz, numerical_aperture, refractive_index, lambda_ex, lambda_em, f_cylinder_lens, slit_width)
-
     nxy, nz, full_half_with_maxima_xy, full_half_with_maxima_z = determine_psf_size(
-        dxy_psf, dz, numerical_aperture, refractive_index, lambda_ex, lambda_em, f_cylinder_lens, slit_width)
+        dxy_psf, dz, numerical_aperture, refractive_index, lambda_ex, lambda_em, f_cylinder_lens, slit_width,
+        resolution_xy, resolution_z
+    )
 
-    numerical_aperture_light_sheet = math.sin(math.atan(slit_width / (2.0 * f_cylinder_lens)))
+    numerical_aperture_ls = math.sin(math.atan(slit_width / (2.0 * f_cylinder_lens)))
 
     psf = sample_psf(dxy_psf, dz, nxy, nz, numerical_aperture, refractive_index, lambda_ex, lambda_em,
-                     numerical_aperture_light_sheet)
+                     numerical_aperture_ls)
 
     print(f"full width half maxima of xy-plane is {full_half_with_maxima_xy:.1f} nm.\n"
           f"full width half maxima of z-axis is {full_half_with_maxima_z:.1f} nm.")
 
-    return psf, dxy_psf
+    return psf, dxy_psf, full_half_with_maxima_xy, full_half_with_maxima_z
 
 
 def determine_psf_size(
-        dxy_psf, dz, numerical_aperture, refractive_index, lambda_ex, lambda_em, f_cylinder_lens, slit_width):
+        dxy_psf, dz, numerical_aperture, refractive_index, lambda_ex, lambda_em, f_cylinder_lens, slit_width,
+        resolution_xy, resolution_z
+):
 
     grid_size_xy = 2
     grid_size_z = 2
@@ -129,8 +134,8 @@ def determine_psf_size(
         return ls_psf_eq(
             0, 0, x, numerical_aperture, refractive_index, lambda_ex, lambda_em, numerical_aperture_ls) - half_max
 
-    full_half_with_maxima_xy = 2 * abs(fsolve(fxy, np.array([100]))[0])
-    full_half_with_maxima_z = 2 * abs(fsolve(fz, np.array([100]))[0])
+    full_half_with_maxima_xy = 2 * abs(fsolve(fxy, np.array([resolution_xy/2], dtype='single'))[0])
+    full_half_with_maxima_z = 2 * abs(fsolve(fz, np.array([resolution_z/2], dtype='single'))[0])
 
     nxy = math.ceil(grid_size_xy * full_half_with_maxima_xy / dxy_psf)
     nz = math.ceil(grid_size_z * full_half_with_maxima_z / dz)
@@ -199,54 +204,59 @@ def flip_3d(data, x, y, z):
     return result
 
 
-def deconvolution(psf, dxy_psf):
+def deconvolution():
+    psf, dxy_psf, full_half_with_maxima_xy, full_half_with_maxima_z = generate_psf(
+        dxy=422.0,
+        f_cylinder_lens=240.0,
+        slit_width=12.0,
+    )
     result = decon(
-        '/mnt/md0/hpc_ex642_em680_04_04.tif',
-        psf,  # '/mnt/md0/psf_ex642_em680.tif',
+        '/mnt/md0/hpc_ex642_em680_04_04_1.tif',
+        psf,  # '/mnt/md0/psf_ex642_em680.tif',  #
+        n_iters=9,  # int: Number of iterations, by default 10
         # fpattern='*.tif',  # str: used to filter files in a directory, by default "*.tif"
-        # dzdata=1,  # float: Z-step size of data, by default 0.5 um
-        # dxdata=0.422,  # float: XY pixel size of data, by default 0.1 um
-        # dzpsf=1.0,  # float: Z-step size of the OTF, by default 0.1 um
-        # dxpsf=dxy_psf,  # float: XY pixel size of the OTF, by default 0.1 um
-        # deskew=0.0,
-        # # float: Deskew angle. If not 0.0 then deskewing will be performed before deconvolution, by default 0
+        dzdata=1000.0/1000.0,  # float: Z-step size of data, by default 0.5 um
+        dxdata=422.0/1000.0,  # float: XY pixel size of data, by default 0.1 um
+        dzpsf=1000.0/1000.0,  # float: Z-step size of the OTF, by default 0.1 um
+        dxpsf=dxy_psf/1000.0,  # float: XY pixel size of the OTF, by default 0.1 um
+        background=115,  # int or 'auto': User-supplied background to subtract.
+                         # If 'auto', the median value of the last Z plane will be used as background. by default 80
         # rotate=0.0,
         # # float: Rotation angle; if not 0.0 then rotation will be performed around Y axis after deconvolution, by default 0
+        # deskew=0.0,
+        # # float: Deskew angle. If not 0.0 then deskewing will be performed before deconvolution, by default 0
         # width=0,  # int: If deskewed, the output image's width, by default 0 (do not crop)
-        # background=115,  # int or 'auto': User-supplied background to subtract.
-        # # If 'auto', the median value of the last Z plane will be used as background. by default 80
-        # n_iters=9,  # int: Number of iterations, by default 10
         # shift=0,  # int: If deskewed, the output image's extra shift in X (positive->left), by default 0
-        # save_deskewed=False,  # bool: Save deskewed raw data as well as deconvolution result, by default False
-        # napodize=15,  # int: Number of pixels to soften edge with, by default 15
-        # nz_blend=0,  # int: Number of top and bottom sections to blend in to reduce axial ringing, by default 0
         # pad_val=0.0,  # float: Value with which to pad image when deskewing, by default 0.0
-        # dup_rev_z=False,  # bool: Duplicate reversed stack prior to decon to reduce axial ringing, by default False
+        # save_deskewed=False,  # bool: Save deskewed raw data as well as deconvolution result, by default False
+        napodize=8,  # int: Number of pixels to soften edge with, by default 15
+        # nz_blend=27,  # int: Number of top and bottom sections to blend in to reduce axial ringing, by default 0
+        # dup_rev_z=True,  # bool: Duplicate reversed stack prior to decon to reduce axial ringing, by default False
 
-        # wavelength=642,  # int: Emission wavelength in nm (default: {520})
-        # na=0.4,  # float: Numerical Aperture (default: {1.25})
-        # nimm=1.52,  # float: Refractive index of immersion medium (default: {1.3})
+        wavelength=642,  # int: Emission wavelength in nm (default: {520})
+        na=0.4,  # float: Numerical Aperture (default: {1.25})
+        nimm=1.52,  # float: Refractive index of immersion medium (default: {1.3})
         # otf_bgrd=None,  # int, None: Background to subtract. "None" = autodetect. (default: {None})
         # krmax=0,
         # # int: Pixels outside this limit will be zeroed (overwriting estimated value from NA and NIMM) (default: {0})
-        # fixorigin=10,
+        # fixorigin=8,
         # # int: for all kz, extrapolate using pixels kr=1 to this pixel to get value for kr=0 (default: {10})
-        # cleanup_otf=False,  # bool: Clean-up outside OTF support (default: {False})
+        # cleanup_otf=True,  # bool: Clean-up outside OTF support (default: {False})
         # max_otf_size=60000,  # int: Make sure OTF is smaller than this many bytes.
         # # Deconvolution may fail if the OTF is larger than 60KB (default: 60000)
     )
-    imwrite('/mnt/md0/hpc_ex642_em680_04_04_deconvolved.tif', result)
+    imwrite('/mnt/md0/hpc_ex642_em680_04_04_1_deconvolved.tif', result)
     subprocess.call(
         r"wine "
         r"./imaris/ImarisConvertiv.exe "
-        r"-i /mnt/md0/hpc_ex642_em680_04_04_deconvolved.tif "
-        r"-o /nafs/dong/kmoradi/hpc_ex642_em680_04_04_deconvolved_new.ims",
+        r"-i /mnt/md0/hpc_ex642_em680_04_04_1_deconvolved.tif "
+        r"-o /nafs/dong/kmoradi/hpc_ex642_em680_04_04_1_deconvolved.ims",
         shell=True
     )
 
 
 if __name__ == "__main__":
-    # PSF, dxy_psf_ = generate_psf()
+    # PSF,  = generate_psf()
     # PSF = sample_psf()
     # from tifffile import imread
     # psf = imread('/mnt/md0/psf_ex642_em680.tif')
@@ -256,4 +266,4 @@ if __name__ == "__main__":
     # psf = psf.flatten()
     # for elem in zip(PSF, psf):
     #     print(f"{elem[0]:.4f}, {elem[1]:.4f}")
-    deconvolution(*generate_psf())
+    deconvolution()
