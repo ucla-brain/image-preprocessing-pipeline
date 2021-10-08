@@ -13,6 +13,8 @@ def convert_32bit_to_16bit(img, right_shift=16):
         img = (img >> right_shift)
         img[img > 4294967295] = 4294967295
         img = img.astype('uint16')
+    else:
+        print(f"\nWarning: the original image was not 32 bit. 16 bit conversion is disabled.\n")
     return img
 
 
@@ -25,12 +27,12 @@ def convert_16bit_to_8bit_fun(img, right_shift=8):
             img[img > 255] = 255
             img = img.astype('uint8')
         elif right_shift < 0 or right_shift > 8:
-            print("right shift should be btween 0 and 8")
+            print("right shift should be between 0 and 8")
             raise RuntimeError
         else:
             img = (img >> 8).astype('uint8')
     else:
-        print(f"\nWarning: The original image was not 16 bit. 8 bit conversion disabled.\n")
+        print(f"\nWarning: the original image was not 16 bit. 8 bit conversion is disabled.\n")
     return img
 
 
