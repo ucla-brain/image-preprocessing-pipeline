@@ -177,8 +177,9 @@ def create_flat_img(
             posix=f'flat: {img_flat_count}, reading {running_processes} images.'
         )
 
-        img_mem_map_list = manager.list()  # a shared list to avoid copying images to processes
+        img_mem_map_list = manager.list()  # a shared list to avoid copying images to the worker
         img_stats_list = []
+        img_non_flat_count = 0
         while running_processes > 0:
             try:  # check the queue for the optimization results then show result
                 [img_mem_map, img_stats] = queue_stats.get(block=False)
@@ -186,15 +187,16 @@ def create_flat_img(
                 update_progress(
                     img_flat_count / max_images * 100,
                     prefix=img_source_path.name,
-                    posix=f'flat: {img_flat_count}, images in the queue: {running_processes}'
+                    posix=f'flat: {img_flat_count}, images in the queue: {running_processes}                           '
                 )
-                if img_mem_map is not None:
+                if img_mem_map is not None and img_stats is not None and all(img_stats) is True:
                     img_mem_map_list += [img_mem_map]
                     img_stats_list += [img_stats]
+                else:
+                    img_non_flat_count += 1
             except Empty:
                 pass
 
-        img_non_flat_count = 0
         if len(img_stats_list) > 0:
             is_flat_list = classifier_model.predict(img_stats_list)
             for img_idx, is_flat in enumerate(is_flat_list, start=0):
@@ -203,14 +205,13 @@ def create_flat_img(
                         queue_denoise, img_mem_map_list, img_idx, sigma_spatial=sigma_spatial
                     ).start()
                     running_processes += 1
-
                 else:
                     img_non_flat_count += 1
 
             update_progress(
                 img_flat_count / max_images * 100,
                 prefix=img_source_path.name,
-                posix=f'flat: {img_flat_count}, non-flat: {img_non_flat_count}/{batch_size}'
+                posix=f'flat: {img_flat_count}, non-flat: {img_non_flat_count}/{batch_size}                            '
             )
 
             if img_non_flat_count > patience_before_skipping:
@@ -230,7 +231,7 @@ def create_flat_img(
                     update_progress(
                         img_flat_count / max_images * 100,
                         prefix=img_source_path.name,
-                        posix=f'flat: {img_flat_count}, non-flat: {img_non_flat_count}/{batch_size}'
+                        posix=f'flat: {img_flat_count}, non-flat: {img_non_flat_count}/{batch_size}                    '
                     )
             except Empty:
                 pass
@@ -246,7 +247,7 @@ def create_flat_img(
                 convert_to_8bit=False
             )
         update_progress(
-            100, prefix=img_source_path.name, posix=f'found: {img_flat_count}')
+            100, prefix=img_source_path.name, posix=f'found: {img_flat_count}                                         ')
         return img_flat
     else:
         print("no flat image found!")
