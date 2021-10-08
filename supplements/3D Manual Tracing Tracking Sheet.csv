@@ -1,0 +1,2 @@
+File Name,Channel (0 indexed: the 1st channel in the file is entered as channel 0),File Location,ROI_xmin,ROI_xmax,ROI_ymin,ROI_ymax,ROI_zmin,ROI_zmax,ROI location,Assigned To,Completed
+sw201217-03-Slide2-section7-30X-ZStep1um-Stem_2021-02-04_1_FusionStitcher.ims,0,/mnt/md0,7302,23334,3094,11353,10,630,,,
