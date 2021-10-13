@@ -11,7 +11,7 @@ from PIL import Image
 def convert_32bit_to_16bit(img, right_shift=16):
     if img.dtype == 'uint32':
         img = (img >> right_shift)
-        img[img > 4294967295] = 4294967295
+        img[img > 65535] = 65535
         img = img.astype('uint16')
     else:
         print(f"\nWarning: the original image was not 32 bit. 16 bit conversion is disabled.\n")
@@ -82,10 +82,11 @@ def read_ims(ims_path, zyx_offsets, zyx_extents=(-1, -1, -1), channel=0, resolut
             x_stop - x_start > channel_dataset.shape[2]:
         raise ValueError('extent values out of range')
     # skipping range checking and assume 16bit. quick script
-    img = np.zeros(shape=(z_stop - z_start, y_stop - y_start, x_stop - x_start), dtype=np.uint32)
+    img = np.zeros(shape=(z_stop - z_start, y_stop - y_start, x_stop - x_start), dtype=np.uint16)
     channel_dataset.read_direct(img, source_sel=(np.s_[z_start: z_stop, y_start: y_stop, x_start: x_stop]))
     ims.close()
-    return convert_32bit_to_16bit(img)
+    # img = convert_32bit_to_16bit(img)
+    return img
 
 
 def get_imaris_path(df, i):
