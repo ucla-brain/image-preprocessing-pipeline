@@ -12,6 +12,7 @@ from sklearn.model_selection import train_test_split
 from skimage.restoration import denoise_bilateral
 from multiprocessing import freeze_support, Process, Queue, Manager
 from queue import Empty
+from math import isnan
 
 # https://stackoverflow.com/questions/50306632/multiprocessing-not-achieving-full-cpu-usage-on-dual-processor-windows-machine
 os.environ["OPENBLAS_MAIN_FREE"] = "1"
@@ -51,7 +52,9 @@ class MultiProcessGetImgStats(Process):
             if img_mem_map is not None and img_mem_map.shape == self.tile_size:
                 # ['mean', 'min', 'max', 'cv', 'variance', 'std', 'skewness', 'kurtosis', 'n']
                 img_stats = get_img_stats(img_mem_map)
-                img_stats = np.array(img_stats[0:-1], dtype=np.float)
+                img_stats = img_stats[0:-1]
+                img_stats = [0 if isnan(x) else x for x in img_stats]
+                img_stats = np.array(img_stats, dtype=np.float)
                 # is_flat = self.classifier_model.predict([img_stats[0:-1]])
         except Exception as inst:
             print(f'Process failed for {self.img_path}.')
@@ -142,9 +145,9 @@ def get_flat_classifier(training_data_path, train_test=False):
 
 def create_flat_img(
         img_source_path, flat_training_data_path, tile_size,
-        max_images=256,
-        batch_size=256,
-        patience_before_skipping=200,
+        max_images=1024,
+        batch_size=psutil.cpu_count(),
+        patience_before_skipping=None,
         skips=256,
         sigma_spatial=1,
         save_as_tiff=True):
@@ -189,7 +192,7 @@ def create_flat_img(
                     prefix=img_source_path.name,
                     posix=f'flat: {img_flat_count}, images in the queue: {running_processes}                           '
                 )
-                if img_mem_map is not None and img_stats is not None and all(img_stats) is True:
+                if img_mem_map is not None and img_stats is not None:
                     img_mem_map_list += [img_mem_map]
                     img_stats_list += [img_stats]
                 else:
@@ -214,7 +217,7 @@ def create_flat_img(
                 posix=f'flat: {img_flat_count}, non-flat: {img_non_flat_count}/{batch_size}                            '
             )
 
-            if img_non_flat_count > patience_before_skipping:
+            if patience_before_skipping and patience_before_skipping < img_non_flat_count:
                 print(f"\nskipping {skips} files because non-flat images were more than {patience_before_skipping}.\n")
                 for skip in range(skips):
                     next(img_path_gen, None)
@@ -258,13 +261,13 @@ if __name__ == '__main__':
     freeze_support()
     AllChannels = ["Ex_488_Em_525", "Ex_561_Em_600", "Ex_642_Em_680"]
     SourceFolder = pathlib.Path(
-        r"C:\Users\kmoradi\Downloads\20210917_14_29_44_With_FlatImage_During_Acquisition_15x_HalfSampling_Compressed"
+        # r"C:\Users\kmoradi\Downloads\20210917_14_29_44_With_FlatImage_During_Acquisition_15x_HalfSampling_Compressed"
+        r"G:\20211012_13_28_35_15x_Flatimage_0_offest_Compressed"
         # r"/mnt/f/20210907_16_56_41_SM210705_01_LS_4X_4000z"
     )
 
     # SourceFolder = pathlib.Path(__file__).parent
     for Channel in AllChannels:
-        # create_flat_img(SourceFolder / Channel, SourceFolder / "image_classes.csv")
-        # create_flat_img(SourceFolder / Channel, None, (1850, 1850), max_images=1000,)
-        create_flat_img(SourceFolder / Channel, r'F:\flat_data\image_classes.csv', (925, 925))
+        if SourceFolder.joinpath(Channel).exists():
+            create_flat_img(SourceFolder / Channel, r'./image_classes.csv', (1850, 1850))
     print()

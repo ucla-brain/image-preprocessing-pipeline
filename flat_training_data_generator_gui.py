@@ -9,8 +9,7 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import (
     FigureCanvasQTAgg as FigureCanvas,
     NavigationToolbar2QT as NavigationToolbar)
-from psutil import AccessDenied
-
+from math import isnan
 from flat import img_read, save_csv, get_img_stats
 from queue import Empty
 from multiprocessing import freeze_support, Process, Queue
@@ -51,6 +50,7 @@ class MultiProcessImageProcessing(Process):
             img_mem_map = img_read(self.img_path)
             if img_mem_map is not None:
                 img_stats = get_img_stats(img_mem_map)
+                img_stats = [0 if isnan(x) else x for x in img_stats]
                 img = denoise_bilateral(img_mem_map, sigma_spatial=self.sigma_spatial)
         except Exception as inst:
             print(f'Process failed for {self.img_path}.')
