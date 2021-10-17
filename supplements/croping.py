@@ -5,7 +5,9 @@ import shutil
 import h5py
 import numpy as np
 import pandas as pd
+import traceback
 from PIL import Image
+from tifffile import imwrite
 
 
 def convert_32bit_to_16bit(img, right_shift=16):
@@ -18,33 +20,34 @@ def convert_32bit_to_16bit(img, right_shift=16):
     return img
 
 
-def convert_16bit_to_8bit_fun(img, right_shift=8):
+def convert_16bit_to_8bit_fun(img, right_shift=3):
+    if img.dtype == 'uint32':
+        img = convert_32bit_to_16bit(img)
+
     if img.dtype == 'uint16':
         # bit shift then change the type to avoid floating point operations
         # img >> 8 is equivalent to img / 256
-        if 0 < right_shift < 8:
+        if 0 <= right_shift <= 8:
             img = (img >> right_shift)
             img[img > 255] = 255
             img = img.astype('uint8')
-        elif right_shift < 0 or right_shift > 8:
+        else:
             print("right shift should be between 0 and 8")
             raise RuntimeError
-        else:
-            img = (img >> 8).astype('uint8')
     else:
         print(f"\nWarning: the original image was not 16 bit. 8 bit conversion is disabled.\n")
     return img
 
 
-def imwrite_lzw(path, data, convert_16bit_to_8bit=True, right_shift=8):
-    im_list = []
+def imwrite_lzw(path, data, convert_16bit_to_8bit=True, right_shift=3):
+    img_list = []
     if convert_16bit_to_8bit:
         data = convert_16bit_to_8bit_fun(data, right_shift=right_shift)
-    for im in data:
-        image = Image.fromarray(im)
-        im_list.append(image)
+    for img in data:
+        image = Image.fromarray(img)
+        img_list.append(image)
 
-    im_list[0].save(path, compression="tiff_lzw", save_all=True, append_images=im_list[1:])
+    img_list[0].save(path, compression="tiff_lzw", save_all=True, append_images=img_list[1:])
 
 
 def read_ims(ims_path, zyx_offsets, zyx_extents=(-1, -1, -1), channel=0, resolution_level=0):
@@ -94,7 +97,9 @@ def get_imaris_path(df, i):
 
 
 def get_roi_str(df, i):
-    return '{}_{}_{}_{}_{}_{}'.format(df.loc[i, 'ROI_zmin'], df.loc[i, 'ROI_zmax'], df.loc[i, 'ROI_ymin'], df.loc[i, 'ROI_ymax'], df.loc[i, 'ROI_xmin'], df.loc[i, 'ROI_xmax'])
+    return f"{df.loc[i, 'ROI_zmin']}_{df.loc[i, 'ROI_zmax']}_" \
+           f"{df.loc[i, 'ROI_ymin']}_{df.loc[i, 'ROI_ymax']}_" \
+           f"{df.loc[i, 'ROI_xmin']}_{df.loc[i, 'ROI_xmax']}"
 
 
 def get_zyx_offsets(df, i):
@@ -110,9 +115,9 @@ def get_tiff_dir(df, i):
     return os.path.join(df.loc[i, 'File Location'], 'mr')
 
 
-def get_tiff_path(df, i):
+def get_tiff_path(df, i, posix=''):
     ims_name, _ = os.path.splitext(df.loc[i, 'File Name'])
-    return os.path.join(get_tiff_dir(df, i), '{}_{}.tif'.format(ims_name, get_roi_str(df, i)))
+    return os.path.join(get_tiff_dir(df, i), f'{ims_name}_{get_roi_str(df, i)}_{posix}.tif')
 
 
 def crop_imaris():
@@ -130,15 +135,29 @@ def crop_imaris():
         if os.path.isfile(get_tiff_path(df, i)):
             continue    # crop already exists
         try:
-            data = read_ims(get_imaris_path(df, i), get_zyx_offsets(df, i), zyx_extents=get_zyx_extents(df, i),
-                            channel=df.loc[i, 'Channel (0 indexed: the 1st channel in the file is entered as channel 0)'])
+            data = read_ims(
+                get_imaris_path(df, i), get_zyx_offsets(df, i), zyx_extents=get_zyx_extents(df, i),
+                channel=df.loc[i, 'Channel (0 indexed: the 1st channel in the file is entered as channel 0)'])
+            print('image is cropped.')
             os.makedirs(get_tiff_dir(df, i), exist_ok=True)
-            imwrite_lzw(get_tiff_path(df, i), data)
-            assert os.path.isfile(get_tiff_path(df, i))
+            print('made a new directory.')
+            imwrite(get_tiff_path(df, i, posix='16bit'), data)
+            print('16 bit image saved.')
+            try:
+                imwrite_lzw(get_tiff_path(df, i, posix='lzw_8bit'), data, convert_16bit_to_8bit=True, right_shift=3)
+                print('8 bit image saved with lzw compression.')
+            except Exception as e:
+                print('LZW compression failed for 8-bit image. saving without compression.')
+                print(e.args)
+                traceback.print_exc()
+                imwrite(get_tiff_path(df, i, posix='8bit'), convert_16bit_to_8bit_fun(data, right_shift=3))
+                print('8 bit image saved.')
+            # assert os.path.isfile(get_tiff_path(df, i))
             # update tiff crop location
-            df.loc[i, 'ROI location'] = get_tiff_path(df, i)
-            print('cropped {}: roi {}'.format(df.loc[i, 'File Name'], get_roi_str(df, i)))
+            # df.loc[i, 'ROI location'] = get_tiff_path(df, i)
+            print(f"cropped {df.loc[i, 'File Name']}: roi {get_roi_str(df, i)}")
         except Exception as e:
+            traceback.print_exc()
             print(e.args)
             print('error making crops for {} roi {}'.format(df.loc[i, 'File Name'], get_roi_str(df, i)))
             if os.path.isfile(get_tiff_path(df, i)):
