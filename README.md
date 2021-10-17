@@ -106,7 +106,7 @@ Python code for stitching and image enhancement of Light Sheet data
 15. Generate flat images for each channel computationally.
 16. Deconvolution (still researching).
 
-# Compiling terasticher (optional)
+# Compiling terastitcher (optional)
 For CUDA 11.4 and newer GPUs, in addition to [original compilation documentation instructions](https://github.com/abria/TeraStitcher/wiki/Get-and-build-source-code) do the following:
 
 * `export HDF5_DIR=/path/to/mcp3d/src/3rd_party/hdf5`
