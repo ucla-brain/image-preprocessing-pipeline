@@ -14,12 +14,12 @@ Python code for stitching and image enhancement of Light Sheet data
     
    `pip install dcimg`
    
-   On windows, the conda version of mpi4py is not functional. Instead, install the latest [Microsoft MPI from GitHub](https://github.com/microsoft/Microsoft-MPI). 
-   Then, install install mpi4py with pip command:
+   On Windows, the conda version of mpi4py is not functional. Instead, install the latest [Microsoft MPI from GitHub](https://github.com/microsoft/Microsoft-MPI). 
+   Then, install mpi4py with pip command:
    
    `pip install mpi4py`
    
-   **Note:** If installing anacaonda as user did not work on Windows, you may test installing it as the system python.
+   **Note:** If installing anaconda as user did not work on Windows, you may test installing it as the system python.
 
 * clone image processing pipeline:
 
