@@ -4,7 +4,7 @@ Python code for stitching and image enhancement of Light Sheet data
 # Installation:
 * Install [TeraStitcher portable >=1.11](https://github.com/abria/TeraStitcher/wiki/Binary-packages).
 * On Linux also make sure Java server (e.g., [openjdk](https://openjdk.java.net/install/)), and [Nvidia drivers and CUDA >10.1](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/index.html#ubuntu-installation) are installed.
-* Install [Imaris Viewer](https://viewer.imaris.com/download/ImarisViewer9_7_2w64.exe) (on Linux use [wine](https://vitux.com/how-to-install-wine-on-ubuntu/)).
+* Install [Imaris Viewer](https://viewer.imaris.com/download/ImarisViewer9_8_0w64.exe) (on Linux use [wine](https://vitux.com/how-to-install-wine-on-ubuntu/)).
 * Install [anaconda python distribution](https://www.anaconda.com/products/individual):
    make a dedicated python environment for stitching:
 
