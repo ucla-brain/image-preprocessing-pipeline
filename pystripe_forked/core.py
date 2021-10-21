@@ -926,6 +926,7 @@ def main():
     args = _parse_args()
     sigma = (args.sigma1, args.sigma2)
     input_path = Path(args.input)
+    new_size = (args.size_y, args.size_x) if args.size_y is not None and args.size_x is not None else None
 
     flat = None
     if args.flat is not None:
@@ -968,7 +969,7 @@ def main():
             convert_to_8bit=args.convert_to_8bit,
             bit_shift_to_right=args.bit_shift_to_right,
             down_sample=args.down_sample,
-            new_size=(args.size_y, args.size_x) if args.size_y is not None and args.size_x is not None else None
+            new_size=new_size
         )
     elif input_path.is_dir():  # batch processing
         if args.output == '':
@@ -1000,7 +1001,7 @@ def main():
             convert_to_8bit=args.convert_to_8bit,
             bit_shift_to_right=args.bit_shift_to_right,
             down_sample=args.down_sample,
-            new_size=(args.size_y, args.size_x) if args.size_y is not None and args.size_x is not None else None
+            new_size=new_size
         )
     else:
         print('Cannot find input file or directory. Exiting...')
