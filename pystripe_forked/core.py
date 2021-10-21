@@ -596,14 +596,14 @@ def read_filter_save(
             img = imread_dcimg(str(input_path), z_idx)
             dtype = np.uint16
         if img is not None:
+            if dark > 0:
+                img = np.where(img > dark, img - dark, 0)  # Subtract the dark offset
             if flat is not None:
                 img = apply_flat(img, flat)
             if down_sample is not None:
                 img = block_reduce(img, block_size=down_sample, func=np.max)
             if new_size:
                 img = resize(img, new_size, preserve_range=True, anti_aliasing=True)
-            if dark > 0:
-                img = np.where(img > dark, img - dark, 0)  # Subtract the dark offset
             if rotate:
                 img = np.rot90(img)
             if lightsheet:
@@ -853,36 +853,71 @@ def normalize_flat(flat):
 
 def _parse_args():
     parser = argparse.ArgumentParser(
-        description="Pystripe (version 0.2.0)\n\n"
+        description="Pystripe (version 0.3.0)\n\n"
         "If only sigma1 is specified, only foreground of the images will be filtered.\n"
         "If sigma2 is specified and sigma1 = 0, only the background of the images will be filtered.\n"
         "If sigma1 == sigma2 > 0, input images will not be split before filtering.\n"
         "If sigma1 != sigma2, foreground and backgrounds will be filtered separately.\n"
         "The crossover parameter defines the width of the transition between the filtered foreground and background",
         formatter_class=RawDescriptionHelpFormatter,
-        epilog='Developed 2018 by Justin Swaney, Kwanghun Chung Lab\n'
-               'Massachusetts Institute of Technology\n')
-    parser.add_argument("--input", "-i", help="Path to input image or path", type=str, required=True)
-    parser.add_argument("--output", "-o", help="Path to output image or path (Default: x_destriped)", type=str, default='')
-    parser.add_argument("--sigma1", "-s1", help="Foreground bandwidth [pixels], larger = more filtering", type=float, default=0)
-    parser.add_argument("--sigma2", "-s2", help="Background bandwidth [pixels] (Default: 0, off)", type=float, default=0)
-    parser.add_argument("--level", "-l", help="Number of decomposition levels (Default: max possible)", type=int, default=0)
-    parser.add_argument("--wavelet", "-w", help="Name of the mother wavelet (Default: Daubechies 3 tap)", type=str, default='db3')
-    parser.add_argument("--threshold", "-t", help="Global threshold value (Default: -1, Otsu)", type=float, default=-1)
-    parser.add_argument("--crossover", "-x", help="Intensity range to switch between foreground and background (Default: 10)", type=float, default=10)
-    parser.add_argument("--workers", "-n", help="Number of workers for batch processing (Default: # CPU cores)", type=int, default=0)
-    parser.add_argument("--chunks", help="Chunk size for batch processing (Default: 1)", type=int, default=1)
-    parser.add_argument("--compression", "-c", help="Compression level for written tiffs (Default: 1)", type=int, default=1)
-    parser.add_argument("--flat", "-f", help="Flat reference TIFF image of illumination pattern used for correction", type=str, default=None)
-    parser.add_argument("--dark", "-d", help="Intensity of dark offset in flat-field correction", type=float, default=0)
-    parser.add_argument("--zstep", "-z", help="Z-step in micron. Only used for DCIMG files.", type=float, default=None)
-    parser.add_argument("--rotate", "-r", help="Rotate output images 90 degrees counter-clockwise", action='store_true')
-    parser.add_argument("--lightsheet", help="Use the lightsheet method", action="store_true")
-    parser.add_argument("--artifact-length", help="Look for minimum in lightsheet direction over this length", default=150, type=int)
-    parser.add_argument("--background-window-size", help="Size of window in x and y for background estimation", default=200, type=int)
-    parser.add_argument("--percentile", help="The percentile at which to measure the background", type=float, default=.25)
-    parser.add_argument("--lightsheet-vs-background", help="The background is multiplied by this weight when comparing lightsheet against background", type=float, default=2.0)
-    parser.add_argument("--dont-convert-16bit", help="Is the output converted to 16-bit .tiff or not", action="store_true")
+        epilog='Developed 2018 by Justin Swaney, Kwanghun Chung Lab             at MIT\n'
+               'Updated   2021 by Keivan Moradi, Hongwei Dong   Lab (B.R.A.I.N) at UCLA\n'
+    )
+    parser.add_argument("--input", "-i", type=str, required=True,
+                        help="Path to input image or path")
+    parser.add_argument("--output", "-o", type=str, default='',
+                        help="Path to output image or path (Default: x_destriped)")
+    parser.add_argument("--sigma1", "-s1", type=float, default=0,
+                        help="Foreground bandwidth [pixels], larger = more filtering")
+    parser.add_argument("--sigma2", "-s2", type=float, default=0,
+                        help="Background bandwidth [pixels] (Default: 0, off)")
+    parser.add_argument("--level", "-l", type=int, default=0,
+                        help="Number of decomposition levels (Default: max possible)")
+    parser.add_argument("--wavelet", "-w", type=str, default='db3',
+                        help="Name of the mother wavelet (Default: Daubechies 3 tap)")
+    parser.add_argument("--threshold", "-t", type=float, default=-1,
+                        help="Global threshold value (Default: -1, Otsu)")
+    parser.add_argument("--crossover", "-x", type=float, default=10,
+                        help="Intensity range to switch between foreground and background (Default: 10)")
+    parser.add_argument("--workers", "-n", type=int, default=8,
+                        help="Number of workers for batch processing (Default: # CPU cores)")
+    parser.add_argument("--chunks", type=int, default=4,
+                        help="Chunk size for parallel processing (Default: 1)")
+    parser.add_argument("--compression_method", "-cm", type=str, default='ZLIB',
+                        help="Compression method for written tiffs (Default: ZLIB)")
+    parser.add_argument("--compression_level", "-cl", type=int, default=1,
+                        help="Compression level for written tiffs (Default: 1)")
+    parser.add_argument("--flat", "-f", type=str, default=None,
+                        help="Flat reference TIFF image of illumination pattern used for correction")
+    parser.add_argument("--dark", "-d", type=float, default=0,
+                        help="Intensity of dark offset in flat-field correction")
+    parser.add_argument("--zstep", "-z", type=float, default=None,
+                        help="Z-step in micron. Only used for DCIMG files.")
+    parser.add_argument("--rotate", "-r", action='store_true',
+                        help="Rotate output images 90 degrees counter-clockwise")
+    parser.add_argument("--lightsheet", action="store_true",
+                        help="Use the lightsheet method")
+    parser.add_argument("--artifact-length", default=150, type=int,
+                        help="Look for minimum in lightsheet direction over this length")
+    parser.add_argument("--background-window-size", default=200, type=int,
+                        help="Size of window in x and y for background estimation")
+    parser.add_argument("--percentile", type=float, default=.25,
+                        help="The percentile at which to measure the background")
+    parser.add_argument("--lightsheet-vs-background", type=float, default=2.0,
+                        help="The background is multiplied by this weight when comparing lightsheet against background")
+    parser.add_argument("--dont-convert-16bit", action="store_true",
+                        help="If convert the input to 16-bit or not")
+    parser.add_argument("--convert_to_8bit", action="store_false",
+                        help="If convert the output to 8-bit or not")
+    parser.add_argument("--bit_shift_to_right", "-bsh", type=int, default=8,
+                        help="Right bit shift with max thresholding. Bit shift smaller than 8 increases the image "
+                             "brightness of the output 8-bit image. (Default: 8)")
+    parser.add_argument("--down_sample", "-ds", type=int, default=None,
+                        help="Image down-sampling factor using max function.")
+    parser.add_argument("--size_x", "-sx", type=int, default=None,
+                        help="New image size in X axis.")
+    parser.add_argument("--size_y", "-sy", type=int, default=None,
+                        help="New image size in Y axis.")
     args = parser.parse_args()
     return args
 
@@ -891,6 +926,7 @@ def main():
     args = _parse_args()
     sigma = (args.sigma1, args.sigma2)
     input_path = Path(args.input)
+    new_size = (args.size_y, args.size_x) if args.size_y is not None and args.size_x is not None else None
 
     flat = None
     if args.flat is not None:
@@ -920,7 +956,7 @@ def main():
             wavelet=args.wavelet,
             crossover=args.crossover,
             threshold=args.threshold,
-            compression=args.compression,
+            compression=(args.compression_method, args.compression_level),
             flat=flat,
             dark=args.dark,
             rotate=args.rotate,  # Does not work on DCIMG files
@@ -929,7 +965,11 @@ def main():
             background_window_size=args.background_window_size,
             percentile=args.percentile,
             lightsheet_vs_background=args.lightsheet_vs_background,
-            dont_convert_16bit=args.dont_convert_16bit
+            dont_convert_16bit=args.dont_convert_16bit,
+            convert_to_8bit=args.convert_to_8bit,
+            bit_shift_to_right=args.bit_shift_to_right,
+            down_sample=args.down_sample,
+            new_size=new_size
         )
     elif input_path.is_dir():  # batch processing
         if args.output == '':
@@ -947,7 +987,7 @@ def main():
             wavelet=args.wavelet,
             crossover=args.crossover,
             threshold=args.threshold,
-            compression=args.compression,
+            compression=(args.compression_method, args.compression_level),
             flat=flat,
             dark=args.dark,
             z_step=zstep,
@@ -957,7 +997,11 @@ def main():
             background_window_size=args.background_window_size,
             percentile=args.percentile,
             lightsheet_vs_background=args.lightsheet_vs_background,
-            dont_convert_16bit=args.dont_convert_16bit
+            dont_convert_16bit=args.dont_convert_16bit,
+            convert_to_8bit=args.convert_to_8bit,
+            bit_shift_to_right=args.bit_shift_to_right,
+            down_sample=args.down_sample,
+            new_size=new_size
         )
     else:
         print('Cannot find input file or directory. Exiting...')

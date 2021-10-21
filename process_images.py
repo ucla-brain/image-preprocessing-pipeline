@@ -156,7 +156,7 @@ def get_voxel_sizes():
             f'2 = 10x: Voxel Size X = {VoxelSizeX_10x}, Y = {VoxelSizeY_10x}, tile_size = 1850 x 1850\n'
             f'3 = 15x: Voxel Size X = {VoxelSizeX_15x}, Y = {VoxelSizeY_15x}, tile_size = 1850 x 1850\n'
             f'4 = 15x 1/2 sample: Voxel Size X = {VoxelSizeX_15x*2}, Y = {VoxelSizeY_15x*2}, tile_size = 925 x 925\n'
-            f'5 = other: allows entering custom voxel sizes for tile_size = 1850 x 1850\n'
+            f'5 = other: allows entering custom voxel sizes for custom tile_size\n'
         )
 
     if objective == "1":
@@ -183,7 +183,9 @@ def get_voxel_sizes():
         objective = ""
         voxel_size_x = float(input("what is the x voxel size in µm?\n"))
         voxel_size_y = float(input("what is the y voxel size in µm?\n"))
-        tile_size = (1850, 1850)
+        tile_size_x = int(input("what is the tile size on x axis in pixels?\n"))
+        tile_size_y = int(input("what is the tile size on y axis in pixels?\n"))
+        tile_size = (tile_size_y, tile_size_x)
     else:
         print("Error: unsupported objective")
         log.error("Error: unsupported objective")

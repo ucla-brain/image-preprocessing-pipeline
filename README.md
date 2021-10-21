@@ -4,7 +4,7 @@ Python code for stitching and image enhancement of Light Sheet data
 # Installation:
 * Install [TeraStitcher portable >=1.11](https://github.com/abria/TeraStitcher/wiki/Binary-packages).
 * On Linux also make sure Java server (e.g., [openjdk](https://openjdk.java.net/install/)), and [Nvidia drivers and CUDA >10.1](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/index.html#ubuntu-installation) are installed.
-* Install [Imaris Viewer](https://viewer.imaris.com/download/ImarisViewer9_7_2w64.exe) (on Linux use [wine](https://vitux.com/how-to-install-wine-on-ubuntu/)).
+* Install [Imaris Viewer](https://viewer.imaris.com/download/ImarisViewer9_8_0w64.exe) (on Linux use [wine](https://vitux.com/how-to-install-wine-on-ubuntu/)).
 * Install [anaconda python distribution](https://www.anaconda.com/products/individual):
    make a dedicated python environment for stitching:
 
@@ -14,12 +14,12 @@ Python code for stitching and image enhancement of Light Sheet data
     
    `pip install dcimg`
    
-   On windows, the conda version of mpi4py is not functional. Instead, install the latest [Microsoft MPI from GitHub](https://github.com/microsoft/Microsoft-MPI). 
-   Then, install install mpi4py with pip command:
+   On Windows, the conda version of mpi4py is not functional. Instead, install the latest [Microsoft MPI from GitHub](https://github.com/microsoft/Microsoft-MPI). 
+   Then, install mpi4py with pip command:
    
    `pip install mpi4py`
    
-   **Note:** If installing anacaonda as user did not work on Windows, you may test installing it as the system python.
+   **Note:** If installing anaconda as user did not work on Windows, you may test installing it as the system python.
 
 * clone image processing pipeline:
 
@@ -106,7 +106,7 @@ Python code for stitching and image enhancement of Light Sheet data
 15. Generate flat images for each channel computationally.
 16. Deconvolution (still researching).
 
-# Compiling terasticher (optional)
+# Compiling terastitcher (optional)
 For CUDA 11.4 and newer GPUs, in addition to [original compilation documentation instructions](https://github.com/abria/TeraStitcher/wiki/Get-and-build-source-code) do the following:
 
 * `export HDF5_DIR=/path/to/mcp3d/src/3rd_party/hdf5`
