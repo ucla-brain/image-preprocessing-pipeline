@@ -1,8 +1,8 @@
-/Ex_561_Em_1/
+/Ex_561_Em_600/
 /Ex_642_Em_2/
-/Ex_488_Em_0/
-/Ex_488_Em_0_flat.tif
-/Ex_561_Em_1_flat.tif
+/Ex_488_Em_525/
+/Ex_488_Em_525_flat.tif
+/Ex_561_Em_600_flat.tif
 /Ex_642_Em_2_flat.tif
 /log.txt
 /tsv/
@@ -13,3 +13,4 @@
 /Ex_488_Em_525/
 /Ex_561_Em_600/
 /Ex_642_Em_680/
+/cudaDecon/
