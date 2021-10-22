@@ -14,6 +14,9 @@ from multiprocessing import freeze_support, Process, Queue, Manager
 from queue import Empty
 from math import isnan
 
+# How to generate flat images
+# https://calm.ucsf.edu/how-acquire-flat-field-correction-images
+
 # https://stackoverflow.com/questions/50306632/multiprocessing-not-achieving-full-cpu-usage-on-dual-processor-windows-machine
 os.environ["OPENBLAS_MAIN_FREE"] = "1"
 
