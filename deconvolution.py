@@ -1,5 +1,5 @@
 from pycudadecon import decon
-from tifffile import imwrite
+from tifffile import imwrite, imread
 from scipy.optimize import fsolve
 import scipy.special as sp
 from scipy.integrate import quad
@@ -210,8 +210,9 @@ def deconvolution():
         f_cylinder_lens=240.0,
         slit_width=12.0,
     )
+    vol = imread('/mnt/md0/hpc_ex642_em680_04_04_1.tif')
     result = decon(
-        '/mnt/md0/hpc_ex642_em680_04_04_1.tif',
+        vol,
         psf,  # '/mnt/md0/psf_ex642_em680.tif',  #
         n_iters=9,  # int: Number of iterations, by default 10
         # fpattern='*.tif',  # str: used to filter files in a directory, by default "*.tif"
@@ -250,13 +251,40 @@ def deconvolution():
         r"wine "
         r"./imaris/ImarisConvertiv.exe "
         r"-i /mnt/md0/hpc_ex642_em680_04_04_1_deconvolved.tif "
-        r"-o /nafs/dong/kmoradi/hpc_ex642_em680_04_04_1_deconvolved.ims",
+        r"-o /mnt/md0/hpc_ex642_em680_04_04_1_deconvolved.ims",
         shell=True
     )
 
+    # from pydecon.decon import richardson_lucy
+    # import cupy as cp
+    # psf = cp.asarray(psf)
+    # result = richardson_lucy(vol, psf, iterations=9)
+
+    # import tensorflow as tf
+    # from flowdec import restoration as tfd_restoration
+    # from flowdec import data as fd_data
+    # algo = tfd_restoration.RichardsonLucyDeconvolver(n_dims=3).initialize()
+    # result = algo.run(
+    #     fd_data.Acquisition(data=vol, kernel=psf),
+    #     niter=9,
+    #     #session_config=tf.ConfigProto(device_count={'GPU': 0})
+    # )
+
 
 if __name__ == "__main__":
-    # PSF,  = generate_psf()
+    # My_PSF = generate_psf(
+    #     lambda_em=488,
+    #     lambda_ex=525
+    # )[0]
+    # print(My_PSF.flatten())
+    # imwrite('/home/kmoradi/my_psf_ex642_em680.tif', My_PSF)
+    # subprocess.call(
+    #     r"wine "
+    #     r"./imaris/ImarisConvertiv.exe "
+    #     r"-i /home/kmoradi/my_psf_ex642_em680.tif "
+    #     r"-o /home/kmoradi/my_psf_ex642_em680.ims",
+    #     shell=True
+    # )
     # PSF = sample_psf()
     # from tifffile import imread
     # psf = imread('/mnt/md0/psf_ex642_em680.tif')
