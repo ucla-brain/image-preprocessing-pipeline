@@ -151,6 +151,7 @@ def create_flat_img(
         skips=256,
         sigma_spatial=1,
         save_as_tiff=True):
+
     print()
     img_path_gen = iter(img_path_generator(img_source_path))
     img_flat_count = 0
@@ -205,7 +206,7 @@ def create_flat_img(
             for img_idx, is_flat in enumerate(is_flat_list, start=0):
                 if is_flat:
                     MultiProcessDenoiseImg(
-                        queue_denoise, img_mem_map_list, img_idx, sigma_spatial=sigma_spatial
+                        queue_denoise, img_mem_map_list, img_idx, sigma_spatial=sigma_spatial,
                     ).start()
                     running_processes += 1
                 else:
@@ -261,13 +262,16 @@ if __name__ == '__main__':
     freeze_support()
     AllChannels = ["Ex_488_Em_525", "Ex_561_Em_600", "Ex_642_Em_680"]
     SourceFolder = pathlib.Path(
-        # r"C:\Users\kmoradi\Downloads\20210917_14_29_44_With_FlatImage_During_Acquisition_15x_HalfSampling_Compressed"
-        r"G:\20211012_13_28_35_15x_Flatimage_0_offest_Compressed"
+        r"Y:\SmartSPIM_Data\2021_10_20\20211020_09_37_56_4x_FlatImage_0_offsets_Compressed"
         # r"/mnt/f/20210907_16_56_41_SM210705_01_LS_4X_4000z"
     )
 
     # SourceFolder = pathlib.Path(__file__).parent
     for Channel in AllChannels:
         if SourceFolder.joinpath(Channel).exists():
-            create_flat_img(SourceFolder / Channel, r'./image_classes.csv', (1850, 1850))
+            create_flat_img(
+                SourceFolder / Channel,
+                r'./image_classes.csv',
+                (1600, 2000)  # (1850, 1850)
+            )
     print()
