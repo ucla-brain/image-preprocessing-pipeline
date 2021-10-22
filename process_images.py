@@ -19,6 +19,8 @@ from datetime import datetime
 from time import time
 from platform import uname
 import mpi4py
+import tsv
+from tsv.convert import convert_to_2D_tif
 
 # experiment setup: user needs to set them right
 AllChannels = ["Ex_488_Em_525", "Ex_561_Em_600", "Ex_642_Em_680"]  # the order determines color ["R", "G", "B"]?
@@ -370,15 +372,18 @@ def main(source_folder):
         for Channel in AllChannels:
             source_channel_folder = source_folder / Channel
             if source_channel_folder.exists():
+                dark = 120 if Channel in ChannelsNeedReconstruction else 511
                 if need_flat_image_application:
                     flat_img_created_already = source_folder.joinpath(Channel + '_flat.tif')
                     if flat_img_created_already.exists():
                         img_flat = pystripe.imread(str(flat_img_created_already))
+                        with open(source_folder.joinpath(Channel + '_dark.txt'), "r") as f:
+                            dark = int(f.read())
                         p_log(f"{datetime.now()}: {Channel}: using the existing flat image:\n"
                               f"{flat_img_created_already.absolute()}.")
                     else:
                         p_log(f"{datetime.now()}: {Channel}: creating a new flat image.")
-                        img_flat = create_flat_img(
+                        img_flat, dark = create_flat_img(
                             source_channel_folder,
                             image_classes_training_data_path,
                             tile_size,
@@ -389,6 +394,7 @@ def main(source_folder):
                             sigma_spatial=1,  # the de-noising parameter
                             save_as_tiff=True
                         )
+                p_log(f"\nBackground dark level is {dark} for {Channel} channel.")
                 p_log(f"\n{datetime.now()}: {Channel}: DeStripe program started.")
                 pystripe.batch_filter(
                     source_channel_folder,
@@ -403,7 +409,7 @@ def main(source_folder):
                     # threshold=-1,
                     compression=('ZLIB', 1),  # ('ZLIB', 1) ('ZSTD', 1) conda install imagecodecs
                     flat=img_flat,
-                    dark=120 if Channel in ChannelsNeedReconstruction else 511,
+                    dark=dark,
                     # z_step=voxel_size_z,  # z-step in micron. Only used for DCIMG files.
                     # rotate=False,
                     lightsheet=True if Channel in ChannelsNeedReconstruction else False,
@@ -500,8 +506,8 @@ def main(source_folder):
         "-6",
         f"--projin={vol_xml_import_path}",
         f"--volout={dir_stitched}",
-        "--volout_plugin=\"TiledXY|3Dseries\"",
-        # "--volout_plugin=\"TiledXY|2Dseries\"",
+        # "--volout_plugin=\"TiledXY|3Dseries\"",
+        "--volout_plugin=\"TiledXY|2Dseries\"",
         "--slicewidth=100000",
         "--sliceheight=100000",
         "--slicedepth=100000",
@@ -557,6 +563,7 @@ def main(source_folder):
                     f"--nthreads {cpu_logical_core_count}",
                     f"--compression 1",
                 ]
+            # .\imaris\ImarisConvertiv.exe --input C:\Users\kmoradi\Desktop\2D\img_00000.tif --inputformat TiffSeries --output C:\Users\kmoradi\Desktop\2d_to_3d.ims --logprogress --nthreads 24 --compression 1
             p_log("tiff to ims conversion command:\n" + " ".join(command))
             subprocess.call(" ".join(command), shell=True)
         else:

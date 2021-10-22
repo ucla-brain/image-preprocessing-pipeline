@@ -162,15 +162,15 @@ def create_flat_img(
     queue_denoise = Queue()
     manager = Manager()
     running_processes = 0
-    img_flat_sum = np.zeros(tile_size, dtype='float64')
+    img_flat_list, img_mean_list = [], []
     if flat_training_data_path is None:
         classifier_model = None
     else:
         classifier_model = get_flat_classifier(flat_training_data_path)
 
-    there_is_img_to_process = True
-    while img_flat_count < max_images and there_is_img_to_process:
-        for run in range(batch_size):
+    there_is_img_to_process, first_run = True, True
+    while img_flat_count < max_images and (there_is_img_to_process or running_processes > 0):
+        for run in range(batch_size - running_processes):
             img_path = next(img_path_gen, None)
             if img_path is None:
                 there_is_img_to_process = False
@@ -187,6 +187,7 @@ def create_flat_img(
         img_mem_map_list = manager.list()  # a shared list to avoid copying images to the worker
         img_stats_list = []
         img_non_flat_count = 0
+        future_running_processes = 0
         while running_processes > 0:
             try:  # check the queue for the optimization results then show result
                 [img_mem_map, img_stats] = queue_stats.get(block=False)
@@ -201,17 +202,25 @@ def create_flat_img(
                     img_stats_list += [img_stats]
                 else:
                     img_non_flat_count += 1
+
+                img_path = next(img_path_gen, None)
+                if img_path is None:
+                    there_is_img_to_process = False
+                else:
+                    MultiProcessGetImgStats(queue_stats, img_path, tile_size).start()
+                    future_running_processes += 1
             except Empty:
                 pass
 
         if len(img_stats_list) > 0:
             is_flat_list = classifier_model.predict(img_stats_list)
-            for img_idx, is_flat in enumerate(is_flat_list, start=0):
+            for img_idx, (is_flat, img_stats) in enumerate(zip(is_flat_list, img_stats_list), start=0):
                 if is_flat:
                     MultiProcessDenoiseImg(
                         queue_denoise, img_mem_map_list, img_idx, sigma_spatial=sigma_spatial,
                     ).start()
                     running_processes += 1
+                    img_mean_list += [img_stats[0]]
                 else:
                     img_non_flat_count += 1
 
@@ -233,7 +242,7 @@ def create_flat_img(
                 img_mem_map_denoised = queue_denoise.get(block=False)
                 running_processes -= 1
                 if img_mem_map_denoised is not None:
-                    img_flat_sum += img_mem_map_denoised
+                    img_flat_list += [img_mem_map_denoised]
                     img_flat_count += 1
                     update_progress(
                         img_flat_count / max_images * 100,
@@ -242,20 +251,25 @@ def create_flat_img(
                     )
             except Empty:
                 pass
+        running_processes = future_running_processes
 
     if img_flat_count > 0:
-        img_flat_average = img_flat_sum / img_flat_count
-        img_flat_average = denoise_bilateral(img_flat_average, sigma_spatial=sigma_spatial)
-        img_flat = img_flat_average / np.max(img_flat_average)
+        dark = int(round(float(np.median(img_mean_list)), 0))
+        img_flat_median = np.median(img_flat_list, axis=0)
+        img_flat_denoised = denoise_bilateral(img_flat_median, sigma_spatial=sigma_spatial)
+        img_flat_denoised = np.where(img_flat_denoised > dark, img_flat_denoised - dark, 0)
+        img_flat = img_flat_denoised / np.max(img_flat_denoised)
         if save_as_tiff:
             pystripe.imsave(
                 str(img_source_path.parent / (img_source_path.name + '_flat.tif')),
                 img_flat,
                 convert_to_8bit=False
             )
+            with open(img_source_path.parent / (img_source_path.name + '_dark.txt'), "w") as f:
+                f.write(str(dark))
         update_progress(
             100, prefix=img_source_path.name, posix=f'found: {img_flat_count}                                         ')
-        return img_flat
+        return img_flat, dark
     else:
         print("no flat image found!")
         raise RuntimeError
@@ -272,9 +286,16 @@ if __name__ == '__main__':
     # SourceFolder = pathlib.Path(__file__).parent
     for Channel in AllChannels:
         if SourceFolder.joinpath(Channel).exists():
-            create_flat_img(
+            img_flat_, img_dark_ = create_flat_img(
                 SourceFolder / Channel,
                 r'./image_classes.csv',
-                (1600, 2000)  # (1850, 1850)
+                (1600, 2000),  # (1850, 1850)
+                max_images=128,
+                batch_size=psutil.cpu_count(),
+                patience_before_skipping=None,
+                skips=256,
+                sigma_spatial=1,
+                save_as_tiff=True
             )
+            print(img_dark_)
     print()
