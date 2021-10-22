@@ -602,7 +602,7 @@ def read_filter_save(
                 img = apply_flat(img, flat)
             if down_sample is not None:
                 img = block_reduce(img, block_size=down_sample, func=np.max)
-            if new_size:
+            if new_size is not None:
                 img = resize(img, new_size, preserve_range=True, anti_aliasing=True)
             if rotate:
                 img = np.rot90(img)
