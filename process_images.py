@@ -19,8 +19,8 @@ from datetime import datetime
 from time import time
 from platform import uname
 import mpi4py
-import tsv
-from tsv.convert import convert_to_2D_tif
+# import tsv
+# from tsv.convert import convert_to_2D_tif
 
 # experiment setup: user needs to set them right
 AllChannels = ["Ex_488_Em_525", "Ex_561_Em_600", "Ex_642_Em_680"]  # the order determines color ["R", "G", "B"]?
@@ -114,6 +114,11 @@ if not parastitcher.exists():
     log.error("Error: ParaStitcher not found")
     raise RuntimeError
 
+parasconverter = TeraStitcherPath / "pyscripts" / "paraconverter.py"
+if not parastitcher.exists():
+    log.error("Error: ParaStitcher not found")
+    raise RuntimeError
+
 imaris_converter = pathlib.Path(r"./imaris") / "ImarisConvertiv.exe"
 if not imaris_converter.exists():
     log.error("Error: ImarisConvertiv.exe not found")
@@ -183,10 +188,10 @@ def get_voxel_sizes():
         tile_size = (925, 925)
     elif objective == "5":
         objective = ""
-        voxel_size_x = float(input("what is the x voxel size in µm?\n"))
-        voxel_size_y = float(input("what is the y voxel size in µm?\n"))
         tile_size_x = int(input("what is the tile size on x axis in pixels?\n"))
         tile_size_y = int(input("what is the tile size on y axis in pixels?\n"))
+        voxel_size_x = float(input("what is the x voxel size in µm?\n"))
+        voxel_size_y = float(input("what is the y voxel size in µm?\n"))
         tile_size = (tile_size_y, tile_size_x)
     else:
         print("Error: unsupported objective")
@@ -388,8 +393,9 @@ def main(source_folder):
                             image_classes_training_data_path,
                             tile_size,
                             max_images=1024,  # the number of flat images averaged
-                            batch_size=128,
-                            patience_before_skipping=100,  # the # of non-flat images found successively before skipping
+                            batch_size=cpu_logical_core_count,
+                            patience_before_skipping=cpu_logical_core_count-1,
+                            # the number of non-flat images found successively before skipping
                             skips=256,  # the number of images should be skipped before testing again
                             sigma_spatial=1,  # the de-noising parameter
                             save_as_tiff=True
@@ -514,9 +520,9 @@ def main(source_folder):
         "--isotropic",
         "--halve=max"
     ]
+
     # command = [
-    #     f"mpiexec -np {cpu_logical_core_count} python -m mpi4py",
-    #     r"C:\TeraStitcher\pyscripts\paraconverter.py",
+    #     f"mpiexec -np {cpu_logical_core_count} python -m mpi4py {parasconverter}",
     #     "--sfmt=\"TIFF (unstitched, 3D)\"",
     #     "--dfmt=\"TIFF (tiled, 3D)\"",
     #     # "--dfmt=\"TIFF (tiled, 2D)\"",
@@ -535,39 +541,68 @@ def main(source_folder):
     log.info("stitching command:\n" + " ".join(command))
     subprocess.call(" ".join(command), shell=True)
 
+    # ::::::::::::::::: File Conversion  ::::::::::::::::
+
     p = dir_stitched.rglob("*.tif")
     files = [x for x in p if x.is_file()]
+    dir_tif = files[0].parent.rename(dir_stitched / 'tif')
+    p = dir_tif.rglob("*.tif")
+    files = sorted([x for x in p if x.is_file()])
     del p
-    for file in files:
-        file = file.rename(
-            dir_stitched / (source_folder.name + (
-                '_' + file.name if len(files) > 1 else '') + '_V4.tif'))  # move tiff files
-        if imaris_converter.exists():
-            p_log(f"{datetime.now()}: found Imaris View: converting {file.name} to ims ... ")
-            ims_file_path = dir_stitched / (source_folder.name + ('_' + file.name if len(files) > 1 else '')+'_v4.ims')
+
+    file = files[0]
+
+    if imaris_converter.exists() and len(files) > 0:
+        p_log(f"{datetime.now()}: found Imaris View: converting {file.name} to ims ... ")
+        ims_file_path = dir_stitched / (source_folder.name + '.ims')
+        command = [
+            f"" if sys.platform == "win32" else "wine",
+            f"{correct_path_for_cmd(imaris_converter)}",
+            f"--input {correct_path_for_cmd(file)}",
+            f"--output {ims_file_path}",
+            f"--log {log_file}" if sys.platform == "win32" else "",
+        ]
+        if sys.platform == "linux" and 'microsoft' in uname().release.lower():
             command = [
-                f"" if sys.platform == "win32" else "wine",
-                f"{correct_path_for_cmd(imaris_converter)}",
-                f"--input {correct_path_for_cmd(file)}",
-                f"--output {ims_file_path}",
-                f"--log {log_file}" if sys.platform == "win32" else "",
-                f"--nthreads {cpu_logical_core_count}",
-                f"--compression 1",
-                f"--defaultcolorlist #BBRRGG"
+                f'{correct_path_for_cmd(imaris_converter)}',
+                f'--input {correct_path_for_wsl(file)}',
+                f"--output {correct_path_for_wsl(ims_file_path)}",
             ]
-            if sys.platform == "linux" and 'microsoft' in uname().release.lower():
-                command = [
-                    f'{correct_path_for_cmd(imaris_converter)}',
-                    f'--input {correct_path_for_wsl(file)}',
-                    f"--output {correct_path_for_wsl(ims_file_path)}",
-                    f"--nthreads {cpu_logical_core_count}",
-                    f"--compression 1",
-                ]
-            # .\imaris\ImarisConvertiv.exe --input C:\Users\kmoradi\Desktop\2D\img_00000.tif --inputformat TiffSeries --output C:\Users\kmoradi\Desktop\2d_to_3d.ims --logprogress --nthreads 24 --compression 1
-            p_log("tiff to ims conversion command:\n" + " ".join(command))
-            subprocess.call(" ".join(command), shell=True)
-        else:
+        if len(files) > 1:
+            # .\imaris\ImarisConvertiv.exe --input input\path\img_00000.tif --inputformat TiffSeries
+            # --output output\path\2d_to_3d.ims --logprogress --nthreads 24 --compression 1
+            command += ["--inputformat TiffSeries"]
+
+        command += [
+            f"--nthreads {cpu_logical_core_count}",
+            f"--compression 1",
+            f"--defaultcolorlist #BBRRGG"
+        ]
+        p_log("tiff to ims conversion command:\n" + " ".join(command))
+        subprocess.call(" ".join(command), shell=True)
+
+    else:
+        if len(files) > 0:
             log.warning("not found Imaris View: not converting tiff to ims ... ")
+        else:
+            log.warning("no tif file found to convert to ims!")
+
+    dir_tera_fly = dir_stitched / 'TeraFly'
+    dir_tera_fly.mkdir(exist_ok=True)
+
+    command = [
+        f"mpiexec -np {cpu_logical_core_count} python -m mpi4py {parasconverter}",
+        "--sfmt=\"TIFF (series, 2D)\"",
+        "--dfmt=\"TIFF (tiled, 3D)\"",
+        "--resolutions=\"012345\"",
+        "--halve=max",
+        "--noprogressbar",
+        "--sparse_data",
+        f"-s={dir_tif}",
+        f"-d={dir_tera_fly}",
+    ]
+    log.info("stitching command:\n" + " ".join(command))
+    subprocess.call(" ".join(command), shell=True)
 
     # ::::::::::::::::::::::::::::: Done ::::::::::::::::::::::::::::::
 
@@ -583,6 +618,6 @@ if __name__ == '__main__':
         if pathlib.Path(sys.argv[1]).exists():
             main(source_folder=pathlib.Path(sys.argv[1]).absolute())
         else:
-            print("The entered path does not exists")
+            print("The entered path does not exist!")
     else:
         print("More than one argument is entered. This program accepts only path as argument.")
