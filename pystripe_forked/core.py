@@ -526,7 +526,7 @@ def read_filter_save(
         dont_convert_16bit=False,
         convert_to_8bit=True,
         bit_shift_to_right=8,
-        down_sample=(2, 2),
+        down_sample=None,  # (2, 2),
         new_size=None
 ):
 
@@ -596,10 +596,10 @@ def read_filter_save(
             img = imread_dcimg(str(input_path), z_idx)
             dtype = np.uint16
         if img is not None:
-            if dark > 0:
-                img = np.where(img > dark, img - dark, 0)  # Subtract the dark offset
             if flat is not None:
                 img = apply_flat(img, flat)
+            if dark > 0:
+                img = np.where(img > dark, img - dark, 0)  # Subtract the dark offset
             if down_sample is not None:
                 img = block_reduce(img, block_size=down_sample, func=np.max)
             if new_size is not None:
@@ -728,7 +728,7 @@ def batch_filter(
         convert_to_8bit=False,
         bit_shift_to_right=8,
         continue_process=False,
-        down_sample=(2, 2),
+        down_sample=None,  # (2, 2)
         new_size=None
 ):
     """Applies `streak_filter` to all images in `input_path` and write the results to `output_path`.
