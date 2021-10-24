@@ -202,6 +202,7 @@ def create_flat_img(
                     img_stats_list += [img_stats]
                 else:
                     img_non_flat_count += 1
+                    print('an image could not be loaded or its stats could not be calculated.')
 
                 img_path = next(img_path_gen, None)
                 if img_path is None:
@@ -213,7 +214,10 @@ def create_flat_img(
                 pass
 
         if len(img_stats_list) > 0:
-            is_flat_list = classifier_model.predict(img_stats_list)
+            if classifier_model is not None:
+                is_flat_list = classifier_model.predict(img_stats_list)
+            else:
+                is_flat_list = [True] * len(img_stats_list)
             for img_idx, (is_flat, img_stats) in enumerate(zip(is_flat_list, img_stats_list), start=0):
                 if is_flat:
                     MultiProcessDenoiseImg(
@@ -254,11 +258,10 @@ def create_flat_img(
         running_processes = future_running_processes
 
     if img_flat_count > 0:
-        dark = int(round(float(np.median(img_mean_list)), 0))
         img_flat_median = np.median(img_flat_list, axis=0)
         img_flat_denoised = denoise_bilateral(img_flat_median, sigma_spatial=sigma_spatial)
-        img_flat_denoised = np.where(img_flat_denoised > dark, img_flat_denoised - dark, 0)
         img_flat = img_flat_denoised / np.max(img_flat_denoised)
+        dark = int(round(float(np.median(img_mean_list)/np.median(img_flat)), 0))
         if save_as_tiff:
             pystripe.imsave(
                 str(img_source_path.parent / (img_source_path.name + '_flat.tif')),
@@ -288,10 +291,10 @@ if __name__ == '__main__':
         if SourceFolder.joinpath(Channel).exists():
             img_flat_, img_dark_ = create_flat_img(
                 SourceFolder / Channel,
-                r'./image_classes.csv',
+                None,  # r'./image_classes.csv',
                 (1600, 2000),  # (1850, 1850)
-                max_images=128,
-                batch_size=psutil.cpu_count(),
+                max_images=999,
+                batch_size=psutil.cpu_count(logical=False),
                 patience_before_skipping=None,
                 skips=256,
                 sigma_spatial=1,
