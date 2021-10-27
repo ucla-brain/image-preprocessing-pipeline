@@ -598,7 +598,7 @@ def read_filter_save(
         if img is not None:
             if flat is not None:
                 img = apply_flat(img, flat)
-            if dark > 0:
+            if dark is not None and dark > 0:
                 img = np.where(img > dark, img - dark, 0)  # Subtract the dark offset
             if down_sample is not None:
                 img = block_reduce(img, block_size=down_sample, func=np.max)
