@@ -267,7 +267,10 @@ def correct_path_for_wsl(filepath):
 
 def p_log(txt):
     print(txt)
-    log.info(txt)
+    try:
+        log.info(txt)
+    except PermissionError:
+        pass
 
 
 def main(source_folder):
@@ -377,7 +380,7 @@ def main(source_folder):
         for Channel in AllChannels:
             source_channel_folder = source_folder / Channel
             if source_channel_folder.exists():
-                dark = 120 if Channel in ChannelsNeedReconstruction else 511
+                dark = (120 if Channel in ChannelsNeedReconstruction else 511) if need_flat_image_application else 0
                 if need_flat_image_application:
                     flat_img_created_already = source_folder.joinpath(Channel + '_flat.tif')
                     if flat_img_created_already.exists():
@@ -466,7 +469,6 @@ def main(source_folder):
                     command += [
                         f"-{step}",
                         "--threshold=0.7",
-                        "--isotropic",
                         f"--projin={dir_stitched.joinpath(Channel + '_xml_import_step_' + str(step - 1) + '.xml')}",
                         f"--projout={dir_stitched.joinpath(Channel + '_xml_import_step_' + str(step) + '.xml')}",
                     ]
@@ -501,7 +503,6 @@ def main(source_folder):
         f"--projout={vol_xml_import_path}",
         "--imin_channel=all",
         "--noprogressbar",
-        "--isotropic"
     ]
     log.info("import command:\n" + " ".join(command))
     subprocess.run(command)
