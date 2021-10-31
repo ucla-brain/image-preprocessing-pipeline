@@ -59,6 +59,10 @@ class MultiProcessGetImgStats(Process):
                 img_stats = [0 if isnan(x) else x for x in img_stats]
                 img_stats = np.array(img_stats, dtype=np.float)
                 # is_flat = self.classifier_model.predict([img_stats[0:-1]])
+            elif img_mem_map.shape != self.tile_size:
+                print(f"tile size mismatch for file:\n{self.img_path}")
+            else:
+                print(f"problem reading file:\n{self.img_path}")
         except Exception as inst:
             print(f'Process failed for {self.img_path}.')
             print(type(inst))    # the exception instance
@@ -202,7 +206,10 @@ def create_flat_img(
                     img_stats_list += [img_stats]
                 else:
                     img_non_flat_count += 1
-                    print('an image could not be loaded or its stats could not be calculated.')
+                    if img_mem_map is None:
+                        print('an image could not be loaded.')
+                    else:
+                        print('image stats could not be calculated for one of the images.')
 
                 img_path = next(img_path_gen, None)
                 if img_path is None:
@@ -282,7 +289,7 @@ if __name__ == '__main__':
     freeze_support()
     AllChannels = ["Ex_488_Em_525", "Ex_561_Em_600", "Ex_642_Em_680"]
     SourceFolder = pathlib.Path(
-        r"Y:\SmartSPIM_Data\2021_10_20\20211020_09_37_56_4x_FlatImage_0_offsets_Compressed"
+        r"Y:\SmartSPIM_Data\2021_10_21\20211021_11_14_46_15x_FlatImage_0_Offset_Compressed"
         # r"/mnt/f/20210907_16_56_41_SM210705_01_LS_4X_4000z"
     )
 
@@ -292,9 +299,9 @@ if __name__ == '__main__':
             img_flat_, img_dark_ = create_flat_img(
                 SourceFolder / Channel,
                 None,  # r'./image_classes.csv',
-                (1600, 2000),  # (1850, 1850)
+                (1850, 1850),  # (1850, 1850) (1600, 2000)
                 max_images=999,
-                batch_size=psutil.cpu_count(logical=False),
+                batch_size=psutil.cpu_count(logical=True),
                 patience_before_skipping=None,
                 skips=256,
                 sigma_spatial=1,
