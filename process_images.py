@@ -348,7 +348,8 @@ def main(source_folder):
                 int(round(tile_size[0] * voxel_size_y / voxel_size_z, 0))
             )
             voxel_size_x = voxel_size_y = voxel_size_z
-
+    need_compression = ask_true_false_question(
+        "Do you need to compress temporary tif files?")
     de_striped_dir = source_folder.parent / (source_folder.name + de_striped_posix)
     continue_process_pystripe = False
     dir_stitched = source_folder.parent / (source_folder.name + "_stitched_v4")
@@ -408,7 +409,7 @@ def main(source_folder):
                 pystripe.batch_filter(
                     source_channel_folder,
                     de_striped_dir / Channel,
-                    workers=cpu_logical_core_count,  # if need_destriping else cpu_physical_core_count
+                    workers=cpu_logical_core_count if cpu_logical_core_count < 61 else 61,
                     chunks=4,
                     # sigma=[foreground, background] Default is [0, 0], indicating no de-striping.
                     sigma=((32, 32) if objective == "4x" else (256, 256)) if need_destriping else (0, 0),
@@ -416,7 +417,7 @@ def main(source_folder):
                     wavelet="db10",
                     crossover=10,
                     # threshold=-1,
-                    compression=('ZLIB', 1),  # ('ZLIB', 1) ('ZSTD', 1) conda install imagecodecs
+                    compression=('ZLIB', 1 if need_compression else 0),  # ('ZSTD', 1) conda install imagecodecs
                     flat=img_flat,
                     dark=dark,
                     # z_step=voxel_size_z,  # z-step in micron. Only used for DCIMG files.
