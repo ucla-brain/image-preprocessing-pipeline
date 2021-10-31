@@ -214,11 +214,12 @@
 #         compression=None
 #     )
 
-from pystripe_forked.core import read_filter_save
+# from pystripe_forked.core import read_filter_save
+#
+#
+# read_filter_save(
+#     r"D:\20211020_11_21_05_SM210705_02_4x_2000z_Compressed_stitched_v4\RES(8740x7355x3900)\090500\090500_098010\090500_098010_028000.tif",
+#     r"D:\090500_098010_028000.tif",
+#     (256, 256)
+# )
 
-
-read_filter_save(
-    r"D:\20211020_11_21_05_SM210705_02_4x_2000z_Compressed_stitched_v4\RES(8740x7355x3900)\090500\090500_098010\090500_098010_028000.tif",
-    r"D:\090500_098010_028000.tif",
-    (256, 256)
-)
