@@ -7,6 +7,10 @@ import tifffile
 import warnings
 import numpy as np
 import multiprocessing
+import psutil
+from queue import Empty
+from time import sleep
+# import dask.multiprocessing as multiprocessing
 from argparse import RawDescriptionHelpFormatter
 from pathlib import Path
 from scipy import fftpack, ndimage
@@ -16,10 +20,14 @@ from skimage.transform import resize
 from dcimg import DCIMGFile
 from pystripe_forked import raw
 from .lightsheet_correct import correct_lightsheet
+# from dask.distributed import Client, progress
 # from numba import njit
 warnings.filterwarnings("ignore")
 supported_extensions = ['.tif', '.tiff', '.raw', '.dcimg']
 nb_retry = 10
+os.environ['MKL_NUM_THREADS'] = '1'
+os.environ['NUMEXPR_NUM_THREADS'] = '1'
+os.environ['OMP_NUM_THREADS'] = '1'
 
 
 def _get_extension(path):
@@ -640,7 +648,7 @@ def read_filter_save(
                         bit_shift_to_right=bit_shift_to_right
                     )
                 except OSError:
-                    print('Retrying...')
+                    print('\nRetrying...')
                     continue
                 break
             else:
@@ -705,9 +713,30 @@ def _find_all_images(input_path, zstep=None):
     return img_paths
 
 
+class MultiProcess(multiprocessing.Process):
+    def __init__(self, queue, shared_list, idx):
+        multiprocessing.Process.__init__(self)
+        self.daemon = True
+        self.queue = queue
+        self.shared_list = shared_list
+        self.idx = idx
+
+    def run(self):
+        success = False
+        try:
+            read_filter_save(**self.shared_list[self.idx])
+            success = True
+        except Exception as inst:
+            print(f'Process failed for {self.shared_list[self.idx]}.')
+            print(type(inst))  # the exception instance
+            print(inst.args)  # arguments stored in .args
+            print(inst)
+        self.queue.put(success)
+
+
 def batch_filter(
         input_path, output_path,
-        workers=multiprocessing.cpu_count(),
+        workers=os.cpu_count(),
         chunks=1,
         sigma=(0, 0),
         level=0,
@@ -799,7 +828,9 @@ def batch_filter(
     print(f'Looking for images in {input_path}:')
     img_paths = _find_all_images(input_path, z_step)
     print(f'{len(img_paths)} compatible images are found.')
-    args = []
+    manager = multiprocessing.Manager()
+    args_list = manager.list()
+    # args_list = []
     for p in img_paths:
         if isinstance(p, tuple):  # DCIMG found
             p, z_idx, z = p
@@ -836,13 +867,44 @@ def batch_filter(
             'down_sample': down_sample,
             'new_size': new_size
         }
-        args.append(arg_dict)
-    print(f'{len(args)} images need processing.\n'
+        args_list.append(arg_dict)
+    num_images_need_processing = len(args_list)
+    print(f'{num_images_need_processing} images need processing.\n'
           f'Pystripe batch processing progress:')
-    if len(args) > 0:
+    if num_images_need_processing > 0 and workers < 62:
         print(f'Setting up {workers} workers...')
         with multiprocessing.Pool(workers) as pool:
-            list(tqdm.tqdm(pool.imap(_read_filter_save, args, chunksize=chunks), total=len(args), ascii=True))
+            list(
+                tqdm.tqdm(
+                    pool.imap_unordered(_read_filter_save, args_list, chunksize=chunks),
+                    total=num_images_need_processing,
+                    ascii=True)
+            )
+    else:
+        running_processes, completed = 0, 0
+        queue = multiprocessing.Queue()
+        progress_bar = tqdm.tqdm(total=num_images_need_processing, ascii=True)
+        while completed < num_images_need_processing:
+            if workers - running_processes > chunks and num_images_need_processing - completed > chunks:
+                batch_size = chunks
+            else:
+                batch_size = 1
+            if psutil.cpu_percent() > 85:
+                sleep(1.0)
+            for _ in range(batch_size):
+                MultiProcess(queue, args_list, completed + running_processes).start()
+                running_processes += 1
+            try:
+                queue.get()
+                completed += 1
+                running_processes -= 1
+                if completed % workers == 0:
+                    progress_bar.update(workers)
+            except Empty:
+                if running_processes > workers - chunks:
+                    sleep(0.1)
+        progress_bar.close()
+
     print('Done!')
 
 
