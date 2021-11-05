@@ -283,6 +283,7 @@ def main(source_folder):
     de_striped_posix, what_for = "", ""
     img_flat = None
     image_classes_training_data_path = source_folder / FlatNonFlatTrainingData
+    need_lightsheet_cleaning = ask_true_false_question("Do you need to computationally clean images?")
     need_destriping = ask_true_false_question("Do you need to remove stripes from images?")
     if need_destriping:
         de_striped_posix += "_destriped"
@@ -422,7 +423,7 @@ def main(source_folder):
                     dark=dark,
                     # z_step=voxel_size_z,  # z-step in micron. Only used for DCIMG files.
                     # rotate=False,
-                    lightsheet=True if Channel in ChannelsNeedReconstruction else False,
+                    lightsheet=True if Channel in ChannelsNeedReconstruction and need_lightsheet_cleaning else False,
                     artifact_length=int(150 / (voxel_size_z // voxel_size_x + voxel_size_z // voxel_size_y) * 2),
                     # percentile=0.25,
                     # dont_convert_16bit=True,  # defaults to False
@@ -620,6 +621,4 @@ if __name__ == '__main__':
         if pathlib.Path(sys.argv[1]).exists():
             main(source_folder=pathlib.Path(sys.argv[1]).absolute())
         else:
-            print("The entered path does not exist!")
-    else:
-        print("More than one argument is entered. This program accepts only path as argument.")
+            print("The entered path is not valid")
