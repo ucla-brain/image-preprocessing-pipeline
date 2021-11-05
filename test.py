@@ -223,3 +223,16 @@
 #     (256, 256)
 # )
 
+from distributed import Client, progress
+from multiprocessing import freeze_support
+
+def inc(x):
+    return x + 1
+
+
+if __name__ == '__main__':
+    freeze_support()
+    client = Client()
+    L = client.map(inc, range(10000))
+    # total = client.submit(sum, L)
+    print(progress(L))
