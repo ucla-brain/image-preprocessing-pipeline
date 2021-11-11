@@ -62,11 +62,18 @@ def imread(path):
 
     """
     img = None
-    extension = _get_extension(path)
-    if extension == '.raw':
-        img = raw.raw_imread(path)
-    elif extension == '.tif' or extension == '.tiff':
-        img = tifffile.imread(path)
+    # for NAS
+    for _ in range(nb_retry):
+        try:
+            extension = _get_extension(path)
+            if extension == '.raw':
+                img = raw.raw_imread(path)
+            elif extension == '.tif' or extension == '.tiff':
+                img = tifffile.imread(path)
+        except OSError:
+            print('\nRetrying reading file...')
+            continue
+        break
     return img
 
 
@@ -173,13 +180,20 @@ def imsave(path, img, compression=('ZLIB', 1), convert_to_8bit=False, bit_shift_
     else:
         img_to_save = img
 
-    extension = _get_extension(path)
-    if extension == '.raw':
-        # TODO: get raw writing to work
-        # raw.raw_imsave(path, img)
-        tifffile.imsave(os.path.splitext(path)[0]+'.tif', img_to_save, compression=compression)
-    elif extension == '.tif' or extension == '.tiff':
-        tifffile.imsave(path, img_to_save, compression=compression)
+    # for NAS
+    for _ in range(nb_retry):
+        try:
+            extension = _get_extension(path)
+            if extension == '.raw':
+                # TODO: get raw writing to work
+                # raw.raw_imsave(path, img)
+                tifffile.imsave(os.path.splitext(path)[0] + '.tif', img_to_save, compression=compression)
+            elif extension == '.tif' or extension == '.tiff':
+                tifffile.imsave(path, img_to_save, compression=compression)
+        except OSError:
+            print('\nRetrying saving file...')
+            continue
+        break
 
 
 def wavedec(img, wavelet, level=None):
@@ -637,33 +651,27 @@ def read_filter_save(
                     threshold=threshold
                 )
 
-            # Save image, retry if OSError for NAS
-            for _ in range(nb_retry):
-                try:
-                    imsave(
-                        str(output_path),
-                        img.astype(dtype),
-                        compression=compression,
-                        convert_to_8bit=convert_to_8bit,
-                        bit_shift_to_right=bit_shift_to_right
-                    )
-                except OSError:
-                    print('\nRetrying...')
-                    continue
-                break
-            else:
-                print(f"Possible damaged input file: {input_path}")
-                print("imread returned None")
+            imsave(
+                str(output_path),
+                img.astype(dtype),
+                compression=compression,
+                convert_to_8bit=convert_to_8bit,
+                bit_shift_to_right=bit_shift_to_right
+            )
+
+        else:
+            print(f"\nimread function returned None."
+                  f"\nPossible damaged input file: {input_path}.")
     except OSError as inst:
-        print(f"Possible damaged input file: {input_path}")
-        print(type(inst))  # the exception instance
-        print(inst.args)  # arguments stored in .args
-        print(inst)
+        print(f"\n{type(inst)}"  # the exception instance
+              f"\n{inst.args}"  # arguments stored in .args
+              f"\n{inst}"
+              f"\nPossible damaged input file: {input_path}")
     except IndexError as inst:
-        print(f"Possible damaged input file: {input_path}")
-        print(type(inst))  # the exception instance
-        print(inst.args)  # arguments stored in .args
-        print(inst)
+        print(f"\n{type(inst)}"  # the exception instance
+              f"\n{inst.args}"  # arguments stored in .args
+              f"\n{inst}"
+              f"\nPossible damaged input file: {input_path}")
 
 
 def _read_filter_save(input_dict):
