@@ -412,32 +412,32 @@ def main(source_folder):
                         )
                 p_log(f"\nBackground dark level is {dark} for {Channel} channel.")
                 p_log(f"\n{datetime.now()}: {Channel}: DeStripe program started.")
-                # pystripe.batch_filter(
-                #     source_channel_folder,
-                #     de_striped_dir / Channel,
-                #     workers=cpu_logical_core_count if cpu_logical_core_count < 61 else 61,
-                #     chunks=4,
-                #     # sigma=[foreground, background] Default is [0, 0], indicating no de-striping.
-                #     sigma=((32, 32) if objective == "4x" else (256, 256)) if need_destriping else (0, 0),
-                #     # level=0,
-                #     wavelet="db10",
-                #     crossover=10,
-                #     # threshold=-1,
-                #     compression=('ZLIB', 1 if need_compression else 0),  # ('ZSTD', 1) conda install imagecodecs
-                #     flat=img_flat,
-                #     dark=dark,
-                #     # z_step=voxel_size_z,  # z-step in micron. Only used for DCIMG files.
-                #     # rotate=False,
-                #     lightsheet=True if Channel in ChannelsNeedReconstruction and need_lightsheet_cleaning else False,
-                #     artifact_length=int(150 / (voxel_size_z // voxel_size_x + voxel_size_z // voxel_size_y) * 2),
-                #     # percentile=0.25,
-                #     # dont_convert_16bit=True,  # defaults to False
-                #     convert_to_8bit=need_16bit_to_8bit_conversion,
-                #     bit_shift_to_right=right_bit_shift,
-                #     continue_process=continue_process_pystripe,
-                #     down_sample=down_sampling_factor,
-                #     new_size=new_tile_size
-                # )
+                pystripe.batch_filter(
+                    source_channel_folder,
+                    de_striped_dir / Channel,
+                    workers=cpu_logical_core_count if cpu_logical_core_count < 61 else 61,
+                    chunks=4,
+                    # sigma=[foreground, background] Default is [0, 0], indicating no de-striping.
+                    sigma=((32, 32) if objective == "4x" else (256, 256)) if need_destriping else (0, 0),
+                    # level=0,
+                    wavelet="db10",
+                    crossover=10,
+                    # threshold=-1,
+                    compression=('ZLIB', 1 if need_compression else 0),  # ('ZSTD', 1) conda install imagecodecs
+                    flat=img_flat,
+                    dark=dark,
+                    # z_step=voxel_size_z,  # z-step in micron. Only used for DCIMG files.
+                    # rotate=False,
+                    lightsheet=True if Channel in ChannelsNeedReconstruction and need_lightsheet_cleaning else False,
+                    artifact_length=int(150 / (voxel_size_z // voxel_size_x + voxel_size_z // voxel_size_y) * 2),
+                    # percentile=0.25,
+                    # dont_convert_16bit=True,  # defaults to False
+                    convert_to_8bit=need_16bit_to_8bit_conversion,
+                    bit_shift_to_right=right_bit_shift,
+                    continue_process=continue_process_pystripe,
+                    down_sample=down_sampling_factor,
+                    new_size=new_tile_size
+                )
                 p_log(f"{datetime.now()}: {Channel}: DeStripe program is done.")
 
     # ::::::::::::::::: Stitching ::::::::::::::::
