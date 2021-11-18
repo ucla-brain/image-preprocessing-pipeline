@@ -24,7 +24,7 @@ from .lightsheet_correct import correct_lightsheet
 # from numba import njit
 warnings.filterwarnings("ignore")
 supported_extensions = ['.tif', '.tiff', '.raw', '.dcimg']
-nb_retry = 10
+nb_retry = 30
 os.environ['MKL_NUM_THREADS'] = '1'
 os.environ['NUMEXPR_NUM_THREADS'] = '1'
 os.environ['OMP_NUM_THREADS'] = '1'
@@ -70,8 +70,9 @@ def imread(path):
                 img = raw.raw_imread(path)
             elif extension == '.tif' or extension == '.tiff':
                 img = tifffile.imread(path)
-        except OSError:
-            print('\nRetrying reading file...')
+        except OSError or TypeError or PermissionError:
+            # print('\nRetrying reading file...')
+            sleep(0.1)
             continue
         break
     return img
@@ -190,8 +191,9 @@ def imsave(path, img, compression=('ZLIB', 1), convert_to_8bit=False, bit_shift_
                 tifffile.imsave(os.path.splitext(path)[0] + '.tif', img_to_save, compression=compression)
             elif extension == '.tif' or extension == '.tiff':
                 tifffile.imsave(path, img_to_save, compression=compression)
-        except OSError:
-            print('\nRetrying saving file...')
+        except OSError or TypeError or PermissionError:
+            # print('\nRetrying saving file...')
+            sleep(0.1)
             continue
         break
 
