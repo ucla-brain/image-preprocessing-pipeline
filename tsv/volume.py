@@ -187,7 +187,7 @@ class VExtent(VExtentBase):
 class TSVStackBase(VExtentBase):
     def __init__(self):
         super().__init__()
-        self.paths = None
+        # self.paths = None
         self._height = None
         self._width = None
         self.__x1 = None
@@ -673,10 +673,11 @@ class TSVVolume(TSVVolumeBase):
                               offset.y - min_y,
                               offset.z - min_z)
             self.offsets[row][column] = offset
-            self.stacks[row][column] = TSVStack(selems[row][column],
-                                                offset,
-                                                self.stacks_dir,
-                                                input_plugin=self.input_plugin)
+            self.stacks[row][column] = TSVStack(
+                selems[row][column],
+                offset,
+                self.stacks_dir,
+                input_plugin=self.input_plugin)
 
     @property
     def dtype(self):
