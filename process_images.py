@@ -13,14 +13,14 @@ import platform
 import subprocess
 import logging as log
 import pystripe_forked as pystripe
-from multiprocessing import freeze_support
+from multiprocessing import freeze_support, Pool
 from flat import create_flat_img
 from datetime import datetime
 from time import time
 from platform import uname
 import mpi4py
-# import tsv
-# from tsv.convert import convert_to_2D_tif
+import tsv
+from tsv.convert import convert_to_2D_tif
 
 # experiment setup: user needs to set them right
 AllChannels = ["Ex_488_Em_525", "Ex_561_Em_600", "Ex_642_Em_680"]  # the order determines color ["R", "G", "B"]?
@@ -35,7 +35,7 @@ cpu_logical_core_count = psutil.cpu_count(logical=True)
 if sys.platform == "win32":
     # print("Windows is detected.")
     psutil.Process().nice(psutil.IDLE_PRIORITY_CLASS)
-    CacheDriveExample = "C:\\"
+    CacheDriveExample = "X:\\3D_stitched\\"
     TeraStitcherPath = pathlib.Path(r"./TeraStitcher_windows_avx512")
     os.environ["PATH"] = f"{os.environ['PATH']};{TeraStitcherPath.as_posix()}"
     os.environ["PATH"] = f"{os.environ['PATH']};{TeraStitcherPath.joinpath('pyscripts').as_posix()}"
@@ -267,10 +267,16 @@ def correct_path_for_wsl(filepath):
 
 def p_log(txt):
     print(txt)
-    try:
-        log.info(txt)
-    except PermissionError:
-        pass
+    for _ in range(10):
+        try:
+            log.info(txt)
+        except PermissionError or OSError:
+            continue
+        break
+
+
+def worker(x):
+    return subprocess.call(x, shell=True)
 
 
 def main(source_folder):
@@ -283,12 +289,12 @@ def main(source_folder):
     de_striped_posix, what_for = "", ""
     img_flat = None
     image_classes_training_data_path = source_folder / FlatNonFlatTrainingData
-    need_lightsheet_cleaning = ask_true_false_question("Do you need to computationally clean images?")
-    need_destriping = ask_true_false_question("Do you need to remove stripes from images?")
+    need_lightsheet_cleaning = True  # ask_true_false_question("Do you need to computationally clean images?")
+    need_destriping = False  # ask_true_false_question("Do you need to remove stripes from images?")
     if need_destriping:
         de_striped_posix += "_destriped"
         what_for += "destriped "
-    need_flat_image_application = ask_true_false_question("Do you need to apply a flat image?")
+    need_flat_image_application = False  # ask_true_false_question("Do you need to apply a flat image?")
     if need_flat_image_application:
         de_striped_posix += "_flat_applied"
         flat_img_not_exist = []
@@ -311,12 +317,12 @@ def main(source_folder):
                 else:
                     print("You need classification data for flat image generation!")
                     raise RuntimeError
-    need_raw_to_tiff_conversion = ask_true_false_question("Are images in raw format?")
+    need_raw_to_tiff_conversion = False  # ask_true_false_question("Are images in raw format?")
     if need_raw_to_tiff_conversion:
         de_striped_posix += "_tif"
         what_for += "tif "
-    need_16bit_to_8bit_conversion = ask_true_false_question(
-        "Do you need to convert 16-bit images to 8-bit before stitching?")
+    need_16bit_to_8bit_conversion = True
+    # ask_true_false_question("Do you need to convert 16-bit images to 8-bit before stitching?")
     right_bit_shift = 8
     if need_16bit_to_8bit_conversion:
         right_bit_shift_str = ""
@@ -349,8 +355,7 @@ def main(source_folder):
                 int(round(tile_size[0] * voxel_size_y / voxel_size_z, 0))
             )
             voxel_size_x = voxel_size_y = voxel_size_z
-    need_compression = ask_true_false_question(
-        "Do you need to compress temporary tif files?")
+    need_compression = False  # ask_true_false_question("Do you need to compress temporary tif files?")
     de_striped_dir = source_folder.parent / (source_folder.name + de_striped_posix)
     continue_process_pystripe = False
     dir_stitched = source_folder.parent / (source_folder.name + "_stitched_v4")
@@ -407,32 +412,32 @@ def main(source_folder):
                         )
                 p_log(f"\nBackground dark level is {dark} for {Channel} channel.")
                 p_log(f"\n{datetime.now()}: {Channel}: DeStripe program started.")
-                pystripe.batch_filter(
-                    source_channel_folder,
-                    de_striped_dir / Channel,
-                    workers=cpu_logical_core_count if cpu_logical_core_count < 61 else 61,
-                    chunks=4,
-                    # sigma=[foreground, background] Default is [0, 0], indicating no de-striping.
-                    sigma=((32, 32) if objective == "4x" else (256, 256)) if need_destriping else (0, 0),
-                    # level=0,
-                    wavelet="db10",
-                    crossover=10,
-                    # threshold=-1,
-                    compression=('ZLIB', 1 if need_compression else 0),  # ('ZSTD', 1) conda install imagecodecs
-                    flat=img_flat,
-                    dark=dark,
-                    # z_step=voxel_size_z,  # z-step in micron. Only used for DCIMG files.
-                    # rotate=False,
-                    lightsheet=True if Channel in ChannelsNeedReconstruction and need_lightsheet_cleaning else False,
-                    artifact_length=int(150 / (voxel_size_z // voxel_size_x + voxel_size_z // voxel_size_y) * 2),
-                    # percentile=0.25,
-                    # dont_convert_16bit=True,  # defaults to False
-                    convert_to_8bit=need_16bit_to_8bit_conversion,
-                    bit_shift_to_right=right_bit_shift,
-                    continue_process=continue_process_pystripe,
-                    down_sample=down_sampling_factor,
-                    new_size=new_tile_size
-                )
+                # pystripe.batch_filter(
+                #     source_channel_folder,
+                #     de_striped_dir / Channel,
+                #     workers=cpu_logical_core_count if cpu_logical_core_count < 61 else 61,
+                #     chunks=4,
+                #     # sigma=[foreground, background] Default is [0, 0], indicating no de-striping.
+                #     sigma=((32, 32) if objective == "4x" else (256, 256)) if need_destriping else (0, 0),
+                #     # level=0,
+                #     wavelet="db10",
+                #     crossover=10,
+                #     # threshold=-1,
+                #     compression=('ZLIB', 1 if need_compression else 0),  # ('ZSTD', 1) conda install imagecodecs
+                #     flat=img_flat,
+                #     dark=dark,
+                #     # z_step=voxel_size_z,  # z-step in micron. Only used for DCIMG files.
+                #     # rotate=False,
+                #     lightsheet=True if Channel in ChannelsNeedReconstruction and need_lightsheet_cleaning else False,
+                #     artifact_length=int(150 / (voxel_size_z // voxel_size_x + voxel_size_z // voxel_size_y) * 2),
+                #     # percentile=0.25,
+                #     # dont_convert_16bit=True,  # defaults to False
+                #     convert_to_8bit=need_16bit_to_8bit_conversion,
+                #     bit_shift_to_right=right_bit_shift,
+                #     continue_process=continue_process_pystripe,
+                #     down_sample=down_sampling_factor,
+                #     new_size=new_tile_size
+                # )
                 p_log(f"{datetime.now()}: {Channel}: DeStripe program is done.")
 
     # ::::::::::::::::: Stitching ::::::::::::::::
@@ -441,9 +446,11 @@ def main(source_folder):
     log.info(f"{datetime.now()}: stitching to 3D TIFF started ...")
     print("running terastitcher ... ")
     print("Light Sheet Data Stitching (Version 4) is Running ...")
+    existing_channels = []
     for Channel in AllChannels:
         channel_dir = de_striped_dir / Channel
         if channel_dir.exists():
+            existing_channels += [Channel]
             log.info(f"{datetime.now()}: {channel_dir} folder exists importing for stitching...")
             command = [
                 f"{terastitcher}",
@@ -461,7 +468,8 @@ def main(source_folder):
             ]
             log.info("import command:\n" + " ".join(command))
             subprocess.run(command, check=True)
-            if Channel == most_informative_channel:
+            if Channel == most_informative_channel and \
+                    not dir_stitched.joinpath(Channel + '_xml_import_step_' + str(5) + '.xml').exists():
                 for step in [2, 3, 4, 5]:
                     log.info(f"{datetime.now()}: starting step {step} of stitching for most informative channel ...")
                     if step == 2:
@@ -490,59 +498,71 @@ def main(source_folder):
         del p, x
     vol_xml_import_path = dir_stitched / 'vol_xml_import.xml'
     vol_xml_import_path.unlink(missing_ok=True)
-    command = [
-        f"{terastitcher}",
-        "-1",
-        "--ref1=H",
-        "--ref2=V",
-        "--ref3=D",
-        f"--vxl1={voxel_size_y}",
-        f"--vxl2={voxel_size_x}",
-        f"--vxl3={voxel_size_z}",
-        "--sparse_data",
-        "--volin_plugin=MultiVolume",
-        f"--volin={dir_stitched}",
-        f"--projout={vol_xml_import_path}",
-        "--imin_channel=all",
-        "--noprogressbar",
-    ]
-    log.info("import command:\n" + " ".join(command))
-    subprocess.run(command)
+    if len(existing_channels) > 1:
+        command = [
+            f"{terastitcher}",
+            "-1",
+            "--ref1=H",
+            "--ref2=V",
+            "--ref3=D",
+            f"--vxl1={voxel_size_y}",
+            f"--vxl2={voxel_size_x}",
+            f"--vxl3={voxel_size_z}",
+            "--sparse_data",
+            "--volin_plugin=MultiVolume",
+            f"--volin={dir_stitched}",
+            f"--projout={vol_xml_import_path}",
+            "--imin_channel=all",
+            "--noprogressbar",
+        ]
+        log.info("import command:\n" + " ".join(command))
+        subprocess.run(command)
 
-    log.info(f"{datetime.now()}: running parastitcher on {cpu_logical_core_count} physical cores ... ")
-    command = [
-        f"mpiexec -np {cpu_logical_core_count} python -m mpi4py {parastitcher}",
-        "-6",
-        f"--projin={vol_xml_import_path}",
-        f"--volout={dir_stitched}",
-        # "--volout_plugin=\"TiledXY|3Dseries\"",
-        "--volout_plugin=\"TiledXY|2Dseries\"",
-        "--slicewidth=100000",
-        "--sliceheight=100000",
-        "--slicedepth=100000",
-        "--isotropic",
-        "--halve=max"
-    ]
+        log.info(f"{datetime.now()}: running parastitcher on {cpu_logical_core_count} physical cores ... ")
+        command = [
+            f"mpiexec -np {cpu_logical_core_count} python -m mpi4py {parastitcher}",
+            "-6",
+            f"--projin={vol_xml_import_path}",
+            f"--volout={dir_stitched}",
+            # "--volout_plugin=\"TiledXY|3Dseries\"",
+            "--volout_plugin=\"TiledXY|2Dseries\"",
+            "--slicewidth=100000",
+            "--sliceheight=100000",
+            "--slicedepth=100000",
+            "--isotropic",
+            "--halve=max"
+        ]
 
-    # command = [
-    #     f"mpiexec -np {cpu_logical_core_count} python -m mpi4py {parasconverter}",
-    #     "--sfmt=\"TIFF (unstitched, 3D)\"",
-    #     "--dfmt=\"TIFF (tiled, 3D)\"",
-    #     # "--dfmt=\"TIFF (tiled, 2D)\"",
-    #     # "--dfmt=\"Vaa3D raw (tiled, 3D)\"",
-    #     f"-s={dir_stitched.joinpath('vol_xml_import.xml')}",
-    #     f"-d={dir_stitched}",
-    #     f"--width=100000",
-    #     f"--height=100000",
-    #     f"--depth=100000",
-    #     "--isotropic",
-    #     "--halve=max",
-    #     "--dsfactor=2,  # Down sampling factor to be used to read the source volume (only for series of 2D slices).
-    #     "--noprogressbar",
-    #     "--sparse_data",
-    # ]
-    log.info("stitching command:\n" + " ".join(command))
-    subprocess.call(" ".join(command), shell=True)
+        # command = [
+        #     f"mpiexec -np {cpu_logical_core_count} python -m mpi4py {parasconverter}",
+        #     "--sfmt=\"TIFF (unstitched, 3D)\"",
+        #     "--dfmt=\"TIFF (tiled, 3D)\"",
+        #     # "--dfmt=\"TIFF (tiled, 2D)\"",
+        #     # "--dfmt=\"Vaa3D raw (tiled, 3D)\"",
+        #     f"-s={dir_stitched.joinpath('vol_xml_import.xml')}",
+        #     f"-d={dir_stitched}",
+        #     f"--width=100000",
+        #     f"--height=100000",
+        #     f"--depth=100000",
+        #     "--isotropic",
+        #     "--halve=max",
+        #     "--dsfactor=2,  # Down sampling factor to be used to read the source volume (only for series of 2D slices)
+        #     "--noprogressbar",
+        #     "--sparse_data",
+        # ]
+        log.info("stitching command:\n" + " ".join(command))
+        subprocess.call(" ".join(command), shell=True)
+    else:
+        dir_tif = dir_stitched / 'tif'
+        dir_tif.mkdir(exist_ok=True)
+        vol_xml_import_path = dir_stitched.joinpath(existing_channels[0] + '_xml_import_step_5.xml')
+        volume = tsv.volume.TSVVolume.load(vol_xml_import_path)
+        convert_to_2D_tif(
+            volume,
+            str(dir_tif/"img_{z:06d}.tif"),
+            compression=("ZLIB", 1),
+            cores=cpu_logical_core_count if cpu_logical_core_count < 61 else 61
+        )
 
     # ::::::::::::::::: File Conversion  ::::::::::::::::
 
@@ -554,7 +574,7 @@ def main(source_folder):
     del p
 
     file = files[0]
-
+    work = []
     if imaris_converter.exists() and len(files) > 0:
         p_log(f"{datetime.now()}: found Imaris View: converting {file.name} to ims ... ")
         ims_file_path = dir_stitched / (source_folder.name + '.ims')
@@ -582,8 +602,9 @@ def main(source_folder):
             f"--defaultcolorlist #BBRRGG"
         ]
         p_log("tiff to ims conversion command:\n" + " ".join(command))
-        subprocess.call(" ".join(command), shell=True)
 
+        # subprocess.call(" ".join(command), shell=True)
+        work += [" ".join(command)]
     else:
         if len(files) > 0:
             log.warning("not found Imaris View: not converting tiff to ims ... ")
@@ -605,7 +626,11 @@ def main(source_folder):
         f"-d={dir_tera_fly}",
     ]
     log.info("stitching command:\n" + " ".join(command))
-    subprocess.call(" ".join(command), shell=True)
+    # subprocess.call(" ".join(command), shell=True)
+    work += [" ".join(command)]
+
+    with Pool(processes=2) as pool:
+        pool.map(worker, work)
 
     # ::::::::::::::::::::::::::::: Done ::::::::::::::::::::::::::::::
 
