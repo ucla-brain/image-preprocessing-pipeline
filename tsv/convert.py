@@ -78,7 +78,13 @@ def convert_one_plane(v, compression, decimation, dtype,
         plane = np.rot90(plane, 2)
     elif rotation == 270:
         plane = np.rot90(plane, 3)
-    tifffile.imsave(path, plane, compress=compression)
+
+    for _ in range(10):
+        try:
+            tifffile.imsave(path, plane, compress=compression)
+        except OSError:
+            continue
+        break
 
 
 V: TSVVolume = None
