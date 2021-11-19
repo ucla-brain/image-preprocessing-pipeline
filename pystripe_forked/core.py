@@ -72,7 +72,7 @@ def imread(path):
                 img = tifffile.imread(path)
         except OSError or TypeError or PermissionError:
             # print('\nRetrying reading file...')
-            sleep(0.1)
+            sleep(1)
             continue
         break
     return img
@@ -193,7 +193,7 @@ def imsave(path, img, compression=('ZLIB', 1), convert_to_8bit=False, bit_shift_
                 tifffile.imsave(path, img_to_save, compression=compression)
         except OSError or TypeError or PermissionError:
             # print('\nRetrying saving file...')
-            sleep(0.1)
+            sleep(1)
             continue
         break
 
