@@ -36,7 +36,7 @@ if sys.platform == "win32":
     # print("Windows is detected.")
     psutil.Process().nice(psutil.IDLE_PRIORITY_CLASS)
     CacheDriveExample = "X:\\3D_stitched\\"
-    TeraStitcherPath = pathlib.Path(r"./TeraStitcher_windows_avx512")
+    TeraStitcherPath = pathlib.Path(r"./TeraStitcher_windows_avx2")
     os.environ["PATH"] = f"{os.environ['PATH']};{TeraStitcherPath.as_posix()}"
     os.environ["PATH"] = f"{os.environ['PATH']};{TeraStitcherPath.joinpath('pyscripts').as_posix()}"
     terastitcher = "terastitcher.exe"
@@ -416,7 +416,7 @@ def main(source_folder):
                     source_channel_folder,
                     de_striped_dir / Channel,
                     workers=cpu_logical_core_count if cpu_logical_core_count < 61 else 61,
-                    chunks=4,
+                    chunks=1024,
                     # sigma=[foreground, background] Default is [0, 0], indicating no de-striping.
                     sigma=((32, 32) if objective == "4x" else (256, 256)) if need_destriping else (0, 0),
                     # level=0,
@@ -583,7 +583,7 @@ def main(source_folder):
             f"{correct_path_for_cmd(imaris_converter)}",
             f"--input {correct_path_for_cmd(file)}",
             f"--output {ims_file_path}",
-            f"--log {log_file}" if sys.platform == "win32" else "",
+            # f"--log {log_file}" if sys.platform == "win32" else "",
         ]
         if sys.platform == "linux" and 'microsoft' in uname().release.lower():
             command = [
