@@ -1,33 +1,36 @@
 import os
+import re
 import pywt
 import tqdm
-import pathlib
 import argparse
 import tifffile
 import warnings
 import numpy as np
-import multiprocessing
-import psutil
+from psutil import cpu_percent
+from multiprocessing import Process, Pool, cpu_count, Manager, Queue
 from queue import Empty
 from time import sleep
-# import dask.multiprocessing as multiprocessing
 from argparse import RawDescriptionHelpFormatter
 from pathlib import Path
+from itertools import repeat
 from scipy import fftpack, ndimage
 from skimage.filters import threshold_otsu
 from skimage.measure import block_reduce
 from skimage.transform import resize
 from dcimg import DCIMGFile
+from typing import Tuple
+from operator import iconcat
+from functools import reduce
+# from numba import njit
 from pystripe_forked import raw
 from .lightsheet_correct import correct_lightsheet
-# from dask.distributed import Client, progress
-# from numba import njit
+
 warnings.filterwarnings("ignore")
 supported_extensions = ['.tif', '.tiff', '.raw', '.dcimg']
 nb_retry = 30
-os.environ['MKL_NUM_THREADS'] = '1'
-os.environ['NUMEXPR_NUM_THREADS'] = '1'
-os.environ['OMP_NUM_THREADS'] = '1'
+# os.environ['MKL_NUM_THREADS'] = '1'
+# os.environ['NUMEXPR_NUM_THREADS'] = '1'
+# os.environ['OMP_NUM_THREADS'] = '1'
 
 
 def _get_extension(path):
@@ -71,8 +74,8 @@ def imread(path):
             elif extension == '.tif' or extension == '.tiff':
                 img = tifffile.imread(path)
         except OSError or TypeError or PermissionError:
-            # print('\nRetrying reading file...')
-            sleep(1)
+            # print(f'\nRetrying reading file:\n{path}')
+            # sleep(0.1)
             continue
         break
     return img
@@ -192,8 +195,8 @@ def imsave(path, img, compression=('ZLIB', 1), convert_to_8bit=False, bit_shift_
             elif extension == '.tif' or extension == '.tiff':
                 tifffile.imsave(path, img_to_save, compression=compression)
         except OSError or TypeError or PermissionError:
-            # print('\nRetrying saving file...')
-            sleep(1)
+            # print(f'\nRetrying saving file:\n{path}')
+            # sleep(0.1)
             continue
         break
 
@@ -396,6 +399,7 @@ def max_level(min_len, wavelet):
 def sigmoid(x):
     return 1 / (1 + np.exp(-x))
 
+
 # def sigmoid(x):
 #     if x >= 0:
 #         z = np.exp(-x)
@@ -406,7 +410,7 @@ def sigmoid(x):
 
 
 def foreground_fraction(img, center, crossover, smoothing):
-    z = (img-center)/crossover
+    z = (img - center) / crossover
     f = sigmoid(z)
     return ndimage.gaussian_filter(f, sigma=smoothing)
 
@@ -432,7 +436,7 @@ def filter_subband(img, sigma, level, wavelet):
         coeffs_filt.append((ch_filt, cv, cd))
 
     img_log_filtered = waverec(coeffs_filt, wavelet)
-    return np.exp(img_log_filtered)-1
+    return np.exp(img_log_filtered) - 1
 
 
 # @njit
@@ -519,7 +523,7 @@ def filter_streaks(img, sigma, level=0, wavelet='db3', crossover=10, threshold=-
     # np.clip(scaled_fimg, np.iinfo(img.dtype).min, np.iinfo(img.dtype).max, out=scaled_fimg)
 
     # Convert to 16 bit image
-    np.clip(f_img, 0, 2**16 - 1, out=f_img)  # Clip to 16-bit unsigned range
+    np.clip(f_img, 0, 2 ** 16 - 1, out=f_img)  # Clip to 16-bit unsigned range
     f_img = f_img.astype('uint16')
 
     if pad_x > 0:
@@ -530,30 +534,30 @@ def filter_streaks(img, sigma, level=0, wavelet='db3', crossover=10, threshold=-
 
 
 def read_filter_save(
-        input_path,
-        output_path,
-        sigma,
-        level=0,
-        wavelet='db3',
-        crossover=10,
-        threshold=-1,
-        compression=('ZLIB', 1),
-        flat=None,
-        dark=0,
-        z_idx=None,
-        rotate=False,
-        lightsheet=False,
-        artifact_length=150,
-        background_window_size=200,
-        percentile=.25,
-        lightsheet_vs_background=2.0,
-        dont_convert_16bit=False,
-        convert_to_8bit=True,
-        bit_shift_to_right=8,
-        down_sample=None,  # (2, 2),
-        new_size=None
+        input_path: Path,
+        output_path: Path,
+        sigma: tuple,
+        level: int = 0,
+        wavelet: str = 'db3',
+        crossover: float = 10,
+        threshold: float = -1,
+        compression: Tuple[str, int] = ('ZLIB', 1),
+        flat: np.ndarray = None,
+        dark: float = 0,
+        z_idx: int = None,
+        rotate: bool = False,
+        lightsheet: bool = False,
+        artifact_length: int = 150,
+        background_window_size: int = 200,
+        percentile: float = 0.25,
+        lightsheet_vs_background: float = 2.0,
+        dont_convert_16bit: bool = True,
+        convert_to_8bit: bool = True,
+        bit_shift_to_right: int = 8,
+        continue_process: bool = False,
+        down_sample: Tuple[int, int] = None,  # (2, 2),
+        new_size: Tuple[int, int] = None
 ):
-
     """Convenience wrapper around filter streaks. Takes in a path to an image rather than an image array
 
     Note that the directory being written to must already exist before calling this function
@@ -602,23 +606,29 @@ def read_filter_save(
     bit_shift_to_right : int [0 to 8]
         It works when converting to 8-bit. Correct 8 bit conversion needs 8 bit shift.
         Bit shifts smaller than 8 bit, enhances the signal brightness.
+    continue_process: bool
+        If true do not process images if the output file is already exist
     down_sample : tuple (int, int)
         Sets down sample factor. Down_sample (3, 2) means 3 pixels in y axis, and 2 pixels in x-axis merges into 1.
     new_size : tuple (int, int) or None
         resize the image after down-sampling
     """
     try:
+        if continue_process and (
+                (output_path.parent / (output_path.name[0:-3] + 'tif')).exists() or (
+                output_path.parent / (output_path.name[0:-4] + 'tiff')).exists()):
+            return
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        dtype = np.uint16
         if z_idx is None:
             # Path must be TIFF or RAW
             img = imread(str(input_path))
-            dtype = img.dtype
-            if not dont_convert_16bit:
-                dtype = np.uint16
+            if dont_convert_16bit:
+                dtype = img.dtype
         else:
             # Path must be to DCIMG file
             assert str(input_path).endswith('.dcimg')
             img = imread_dcimg(str(input_path), z_idx)
-            dtype = np.uint16
         if img is not None:
             if flat is not None:
                 img = apply_flat(img, flat)
@@ -687,45 +697,77 @@ def _read_filter_save(input_dict):
     read_filter_save(**input_dict)
 
 
-def _find_all_images(input_path, zstep=None):
+def glob_re(pattern: str, path: Path):
+    regexp = re.compile(pattern, re.IGNORECASE)
+    for p in os.scandir(path):
+        if p.is_file() and regexp.search(p.name):
+            yield Path(p.path)
+        elif p.is_dir(follow_symlinks=False):
+            yield from glob_re(pattern, p.path)
+
+
+def process_tif_raw_imgs(input_file: Path, input_path: Path, output_path: Path, args_dict_template: dict):
     """Find all images with a supported file extension within a directory and all its subdirectories
 
     Parameters
     ----------
+    input_file: Path
+        tif, tiff, or raw file
     input_path : path-like
-        root directory to start image search
-    zstep : int
-        step-size for DCIMG stacks in tenths of micron
+        root directory of input images
+    output_path: path-like
+        root directory of out_put images
+    args_dict_template: Dict
+        common arguments of the read_filter_save function
 
     Returns
     -------
-    img_paths : list
-        a list of Path objects for all found images
-
+    img_paths : dict
+        all arguments of the read_filter_save function including input_path and output_path
     """
-    input_path = Path(input_path)
-    assert input_path.is_dir()
-    img_paths = []
-    for p in input_path.iterdir():
-        if p.is_file():
-            if p.suffix in supported_extensions:
-                if p.suffix == '.dcimg':
-                    if zstep is None:
-                        raise ValueError('Unknown zstep for DCIMG slice positions')
-                    shape = check_dcimg_shape(str(p))
-                    start = check_dcimg_start(str(p))
-                    substack = [(p, i, start + i * zstep) for i in range(shape[0])]
-                    img_paths += substack
-                else:
-                    img_paths.append(p)
-        elif p.is_dir():
-            img_paths.extend(_find_all_images(p, zstep))
-    return img_paths
+
+    output_file = output_path / input_file.relative_to(input_path)
+    args_dict_template.update({'input_path': input_file, 'output_path': output_file})
+    return args_dict_template
 
 
-class MultiProcess(multiprocessing.Process):
+def process_dc_imgs(input_file: Path, input_path: Path, output_path: Path, args_dict_template: dict, z_step: float):
+    """Find all images with a supported file extension within a directory and all its subdirectories
+
+        Parameters
+        ----------
+        input_file: Path
+            tif, tiff, or raw file
+        input_path : path-like
+            root directory of input images
+        output_path: path-like
+            root directory of out_put images
+        args_dict_template: Dict
+            common arguments of the read_filter_save function
+        z_step : float
+            step-size for DCIMG stacks in tenths of micron
+
+        Returns
+        -------
+        img_paths : dict
+            all arguments of the read_filter_save function including input_path and output_path
+    """
+    shape = check_dcimg_shape(str(input_file))
+    start = check_dcimg_start(str(input_file))
+    sub_stack = []
+    for i in range(shape[0]):
+        args_dict_template.update({
+            'input_path': input_file,
+            'output_path': output_path / input_file.relative_to(input_path).parent / f'{start + i * z_step:08.1f}.tif',
+            'z_idx': i
+        })
+        sub_stack += [args_dict_template]
+    return sub_stack
+
+
+class MultiProcess(Process):
     def __init__(self, queue, shared_list, idx):
-        multiprocessing.Process.__init__(self)
+        Process.__init__(self)
         self.daemon = True
         self.queue = queue
         self.shared_list = shared_list
@@ -763,7 +805,7 @@ def batch_filter(
         background_window_size=200,
         percentile=.25,
         lightsheet_vs_background=2.0,
-        dont_convert_16bit=False,
+        dont_convert_16bit=True,
         convert_to_8bit=False,
         bit_shift_to_right=8,
         continue_process=False,
@@ -824,82 +866,95 @@ def batch_filter(
     new_size : tuple (int, int) or None
         resize the image after down-sampling
     """
+    input_path = Path(input_path)
+    output_path = Path(output_path)
+    assert input_path.is_dir()
+    if output_path.is_file():
+        print("{output_path} is a file not a directory!")
+        raise RuntimeError
+    output_path.mkdir(parents=True, exist_ok=True)
     if sigma is None:
         sigma = [0, 0]
     if workers == 0:
-        workers = multiprocessing.cpu_count()
+        workers = cpu_count()
     if isinstance(flat, (np.ndarray, np.generic)):
         flat = normalize_flat(flat)
-    elif isinstance(flat, (pathlib.Path, str)):
+    elif isinstance(flat, (Path, str)):
         flat = normalize_flat(imread(flat))
     elif flat is not None:
         print('flat argument should be a numpy array or a path to a flat.tif file')
         raise RuntimeError
+
+    arg_dict_template = {
+        'sigma': sigma,
+        'level': level,
+        'wavelet': wavelet,
+        'crossover': crossover,
+        'threshold': threshold,
+        'compression': compression,
+        'flat': flat,
+        'dark': dark,
+        'z_idx': None,
+        'rotate': rotate,
+        'lightsheet': lightsheet,
+        'artifact_length': artifact_length,
+        'background_window_size': background_window_size,
+        'percentile': percentile,
+        'lightsheet_vs_background': lightsheet_vs_background,
+        'dont_convert_16bit': dont_convert_16bit,
+        'convert_to_8bit': convert_to_8bit,
+        'bit_shift_to_right': bit_shift_to_right,
+        'continue_process': continue_process,
+        'down_sample': down_sample,
+        'new_size': new_size
+    }
+
     print(f'Looking for images in {input_path}:')
-    img_paths = _find_all_images(input_path, z_step)
-    print(f'{len(img_paths)} compatible images are found.')
-    manager = multiprocessing.Manager()
-    args_list = manager.list()
-    # args_list = []
-    for p in img_paths:
-        if isinstance(p, tuple):  # DCIMG found
-            p, z_idx, z = p
-            rel_path = p.relative_to(input_path).parent.joinpath('{:04d}.tif'.format(z))
-        else:  # TIFF or RAW found
-            z_idx = None
-            rel_path = p.relative_to(input_path)
-        o = output_path / rel_path
-        if not o.parent.exists():
-            o.parent.mkdir(parents=True)
-        if continue_process and ((o.parent/(o.name[0:-3]+'tif')).exists() or (o.parent/(o.name[0:-4]+'tiff')).exists()):
-            continue
-        arg_dict = {
-            'input_path': p,
-            'output_path': o,
-            'sigma': sigma,
-            'level': level,
-            'wavelet': wavelet,
-            'crossover': crossover,
-            'threshold': threshold,
-            'compression': compression,
-            'flat': flat,
-            'dark': dark,
-            'z_idx': z_idx,
-            'rotate': rotate,
-            'lightsheet': lightsheet,
-            'artifact_length': artifact_length,
-            'background_window_size': background_window_size,
-            'percentile': percentile,
-            'lightsheet_vs_background': lightsheet_vs_background,
-            'dont_convert_16bit': dont_convert_16bit,
-            'convert_to_8bit': convert_to_8bit,
-            'bit_shift_to_right': bit_shift_to_right,
-            'down_sample': down_sample,
-            'new_size': new_size
-        }
-        args_list.append(arg_dict)
-    num_images_need_processing = len(args_list)
-    print(f'{num_images_need_processing} images need processing.\n'
-          f'Pystripe batch processing progress:')
-    if num_images_need_processing > 0 and workers < 62:
-        print(f'Setting up {workers} workers...')
-        with multiprocessing.Pool(workers) as pool:
-            list(
-                tqdm.tqdm(
-                    pool.imap_unordered(_read_filter_save, args_list, chunksize=chunks),
-                    total=num_images_need_processing,
-                    ascii=True)
+    with Pool(processes=workers if workers < 62 else 61) as pool:
+        if z_step is None:
+            args_list = pool.starmap(
+                process_tif_raw_imgs,
+                zip(glob_re(r"\.(?:tiff?|raw)$", input_path),  # find files
+                    repeat(input_path),
+                    repeat(output_path),
+                    repeat(arg_dict_template)),
+                chunksize=chunks
             )
+        else:
+            args_list = pool.starmap(
+                process_dc_imgs,
+                zip(glob_re(r"\.(?:dcimg)$", input_path),
+                    repeat(input_path),
+                    repeat(output_path),
+                    repeat(arg_dict_template),
+                    repeat(z_step)),
+                chunksize=chunks
+            )
+            args_list = reduce(iconcat, args_list, [])  # unravel the list of list the fastest way possible
+    manager = Manager()
+    args_list = manager.list(args_list)
+    num_images_need_processing = len(args_list)
+    while num_images_need_processing//chunks < workers:
+        chunks //= 2
+    print(f'{num_images_need_processing} images need processing.\n'
+          f'Setting up {workers} workers.\n'
+          f'Progress:')
+    if num_images_need_processing > 0 and workers < 62:
+        with Pool(processes=workers) as pool:
+            list(tqdm.tqdm(
+                pool.imap_unordered(_read_filter_save, args_list, chunksize=chunks),
+                total=num_images_need_processing,
+                ascii=True))
     else:
         running_processes, completed = 0, 0
-        queue = multiprocessing.Queue()
+        queue = Queue()
         progress_bar = tqdm.tqdm(total=num_images_need_processing, ascii=True)
         while completed < num_images_need_processing:
             if workers - running_processes > chunks and num_images_need_processing - completed > chunks:
                 batch_size = chunks
             else:
                 batch_size = 1
-            if psutil.cpu_percent() > 85:
+            if cpu_percent() > 85:
                 sleep(1.0)
             for _ in range(batch_size):
                 MultiProcess(queue, args_list, completed + running_processes).start()
@@ -926,11 +981,12 @@ def normalize_flat(flat):
 def _parse_args():
     parser = argparse.ArgumentParser(
         description="Pystripe (version 0.3.0)\n\n"
-        "If only sigma1 is specified, only foreground of the images will be filtered.\n"
-        "If sigma2 is specified and sigma1 = 0, only the background of the images will be filtered.\n"
-        "If sigma1 == sigma2 > 0, input images will not be split before filtering.\n"
-        "If sigma1 != sigma2, foreground and backgrounds will be filtered separately.\n"
-        "The crossover parameter defines the width of the transition between the filtered foreground and background",
+                    "If only sigma1 is specified, only foreground of the images will be filtered.\n"
+                    "If sigma2 is specified and sigma1 = 0, only the background of the images will be filtered.\n"
+                    "If sigma1 == sigma2 > 0, input images will not be split before filtering.\n"
+                    "If sigma1 != sigma2, foreground and backgrounds will be filtered separately.\n"
+                    "The crossover parameter defines the width of the transition "
+                    "between the filtered foreground and background",
         formatter_class=RawDescriptionHelpFormatter,
         epilog='Developed 2018 by Justin Swaney, Kwanghun Chung Lab             at MIT\n'
                'Updated   2021 by Keivan Moradi, Hongwei Dong   Lab (B.R.A.I.N) at UCLA\n'
@@ -1016,7 +1072,7 @@ def main():
             print('Input file was found but is not supported. Exiting...')
             return
         if args.output == '':
-            output_path = Path(input_path.parent).joinpath(input_path.stem+'_destriped'+input_path.suffix)
+            output_path = Path(input_path.parent).joinpath(input_path.stem + '_destriped' + input_path.suffix)
         else:
             output_path = Path(args.output)
             assert output_path.suffix in supported_extensions
@@ -1045,7 +1101,7 @@ def main():
         )
     elif input_path.is_dir():  # batch processing
         if args.output == '':
-            output_path = Path(input_path.parent).joinpath(str(input_path)+'_destriped')
+            output_path = Path(input_path.parent).joinpath(str(input_path) + '_destriped')
         else:
             output_path = Path(args.output)
             assert output_path.suffix == ''

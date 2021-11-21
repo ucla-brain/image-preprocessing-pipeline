@@ -207,10 +207,10 @@
 # if __name__ == '__main__':
 #     freeze_support()
 #     volume = tsv.volume.TSVVolume.load(
-#         r"D:\20210928_16_23_37_SM210705_01_BS_LS_15X_1000z_Compressed_flat_applied_8b_2bsh_ds_stitched_v4\Ex_642_Em_680_xml_import_step_5.xml")
+#         r"X:\3D_stitched\20211104_13_31_02_SM211018_02_OL_LS_15X_1000z_stitched_v4\Ex_488_Em_525_xml_import_step_5.xml")
 #     convert_to_2D_tif(
 #         volume,
-#         r"C:\Users\kmoradi\Desktop\2D\img_{z:05d}.tif",
+#         r"X:\3D_stitched\20211104_13_31_02_SM211018_02_OL_LS_15X_1000z_stitched_v4\tif\img_{z:05d}.tif",
 #         compression=None
 #     )
 
@@ -223,16 +223,88 @@
 #     (256, 256)
 # )
 
-from distributed import Client, progress
-from multiprocessing import freeze_support
+# from distributed import Client, progress
+# from multiprocessing import freeze_support, Pool, cpu_count
+# from subprocess import call, run
+#
+#
+# def worker(x):
+#     return call(x, shell=True)
+#
+#
+# if __name__ == '__main__':
+#     freeze_support()
+#     # run(args="echo 'hi'", shell=True)
+#     # run(args="echo 'goodbye'", shell=True)
+#     cmd = "echo 'hi'"
+#     work = [cmd]
+#     cmd = "echo 'goodbye'"
+#     work += [cmd]
+#     # print(work)
+#     with Pool(processes=2) as pool:
+#         pool.map(worker, work)
+#     # p.wait()
+#     # client = Client()
+#     # L = client.map(inc, range(10000))
+#     # # total = client.submit(sum, L)
+#     # print(progress(L))
 
-def inc(x):
-    return x + 1
-
-
-if __name__ == '__main__':
-    freeze_support()
-    client = Client()
-    L = client.map(inc, range(10000))
-    # total = client.submit(sum, L)
-    print(progress(L))
+# from pathlib import Path
+# from itertools import chain, repeat
+# from multiprocessing import freeze_support, Pool, cpu_count, Manager
+# from timeit import default_timer
+# from numba import jit
+# import os
+# import re
+#
+#
+# def worker(p: Path, arg_dict: dict):
+#     arg_dict.update({'i': p})
+#     return arg_dict
+#
+#
+# def glob_re(pattern: str, path: Path):
+#     regexp = re.compile(pattern, re.IGNORECASE)
+#
+#     for p in os.scandir(path):  # path.rglob("*.*")
+#         if p.is_file() and regexp.search(p.name):
+#             yield Path(p.path)
+#         elif p.is_dir(follow_symlinks=False):
+#             yield from glob_re(pattern, p.path)
+#
+#     # for p in path.iterdir():  # path.rglob("*.*")
+#     #     if p.is_file() and regexp.search(p.suffix):
+#     #         yield p
+#     #     elif p.is_dir():
+#     #         yield from glob_re(pattern, p)
+#
+#     # for p in path.rglob("*.*"):
+#     #     if p.is_file() and regexp.search(p.suffix):
+#     #         yield p
+#
+#     # walk = os.walk(path)
+#     # return chain.from_iterable(
+#     #     (Path(os.path.join(root, file)) for file in files if regexp.search(file)) for root, dirs, files in walk)
+#
+#
+# if __name__ == '__main__':
+#     freeze_support()
+#     num_images_need_processing = 1024
+#     workers = 61
+#     chuncks = 512
+#     while num_images_need_processing//chuncks < workers:
+#         chuncks //= 2
+#     print(chuncks)
+#     # input_path = Path(r"x:\Keivan")
+#     input_path = Path(r"X:\SmartSPIM_Data\2021_11_03_(Garbage)\20211103_12_08_00_SM211008_02_LS_4X_2000z")
+#     arg_dict_template = {}
+#     start = default_timer()
+#     with Pool(processes=workers) as pool:
+#         files = pool.starmap(
+#             worker,
+#             zip(glob_re(r"\.(?:tiff?|raw)$", input_path),
+#                 repeat(arg_dict_template)),
+#             chunksize=512
+#         )
+#     print(default_timer() - start)
+#     print(len(files))
