@@ -36,7 +36,7 @@ if sys.platform == "win32":
     # print("Windows is detected.")
     psutil.Process().nice(psutil.IDLE_PRIORITY_CLASS)
     CacheDriveExample = "X:\\3D_stitched\\"
-    TeraStitcherPath = pathlib.Path(r"./TeraStitcher_windows_avx2")
+    TeraStitcherPath = pathlib.Path(r"./TeraStitcher_windows_avx512")
     os.environ["PATH"] = f"{os.environ['PATH']};{TeraStitcherPath.as_posix()}"
     os.environ["PATH"] = f"{os.environ['PATH']};{TeraStitcherPath.joinpath('pyscripts').as_posix()}"
     terastitcher = "terastitcher.exe"
@@ -490,12 +490,12 @@ def main(source_folder):
 
     log.info(f"{datetime.now()}: importing all channels ...")
 
-    p = dir_stitched.rglob("*")
-    if p:
-        for x in p:
-            if x.is_dir():
-                shutil.rmtree(x)
-        del p, x
+    # p = dir_stitched.rglob("*")
+    # if p:
+    #     for x in p:
+    #         if x.is_dir():
+    #             shutil.rmtree(x)
+    #     del p, x
     vol_xml_import_path = dir_stitched / 'vol_xml_import.xml'
     vol_xml_import_path.unlink(missing_ok=True)
     if len(existing_channels) > 1:

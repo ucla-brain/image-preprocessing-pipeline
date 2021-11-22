@@ -7,7 +7,7 @@ import tifffile
 import warnings
 import numpy as np
 from psutil import cpu_percent
-from multiprocessing import Process, Pool, cpu_count, Manager, Queue
+from multiprocessing import Process, Pool, Manager, Queue, cpu_count
 from queue import Empty
 from time import sleep
 from argparse import RawDescriptionHelpFormatter
@@ -28,9 +28,9 @@ from .lightsheet_correct import correct_lightsheet
 warnings.filterwarnings("ignore")
 supported_extensions = ['.tif', '.tiff', '.raw', '.dcimg']
 nb_retry = 30
-# os.environ['MKL_NUM_THREADS'] = '1'
-# os.environ['NUMEXPR_NUM_THREADS'] = '1'
-# os.environ['OMP_NUM_THREADS'] = '1'
+os.environ['MKL_NUM_THREADS'] = '1'
+os.environ['NUMEXPR_NUM_THREADS'] = '1'
+os.environ['OMP_NUM_THREADS'] = '1'
 
 
 def _get_extension(path):

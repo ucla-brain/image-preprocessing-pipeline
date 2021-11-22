@@ -249,62 +249,56 @@
 #     # # total = client.submit(sum, L)
 #     # print(progress(L))
 
-# from pathlib import Path
-# from itertools import chain, repeat
-# from multiprocessing import freeze_support, Pool, cpu_count, Manager
-# from timeit import default_timer
-# from numba import jit
-# import os
-# import re
-#
-#
-# def worker(p: Path, arg_dict: dict):
-#     arg_dict.update({'i': p})
-#     return arg_dict
-#
-#
-# def glob_re(pattern: str, path: Path):
-#     regexp = re.compile(pattern, re.IGNORECASE)
-#
-#     for p in os.scandir(path):  # path.rglob("*.*")
-#         if p.is_file() and regexp.search(p.name):
-#             yield Path(p.path)
-#         elif p.is_dir(follow_symlinks=False):
-#             yield from glob_re(pattern, p.path)
-#
-#     # for p in path.iterdir():  # path.rglob("*.*")
-#     #     if p.is_file() and regexp.search(p.suffix):
-#     #         yield p
-#     #     elif p.is_dir():
-#     #         yield from glob_re(pattern, p)
-#
-#     # for p in path.rglob("*.*"):
-#     #     if p.is_file() and regexp.search(p.suffix):
-#     #         yield p
-#
-#     # walk = os.walk(path)
-#     # return chain.from_iterable(
-#     #     (Path(os.path.join(root, file)) for file in files if regexp.search(file)) for root, dirs, files in walk)
-#
-#
-# if __name__ == '__main__':
-#     freeze_support()
-#     num_images_need_processing = 1024
-#     workers = 61
-#     chuncks = 512
-#     while num_images_need_processing//chuncks < workers:
-#         chuncks //= 2
-#     print(chuncks)
-#     # input_path = Path(r"x:\Keivan")
-#     input_path = Path(r"X:\SmartSPIM_Data\2021_11_03_(Garbage)\20211103_12_08_00_SM211008_02_LS_4X_2000z")
-#     arg_dict_template = {}
-#     start = default_timer()
-#     with Pool(processes=workers) as pool:
-#         files = pool.starmap(
-#             worker,
-#             zip(glob_re(r"\.(?:tiff?|raw)$", input_path),
-#                 repeat(arg_dict_template)),
-#             chunksize=512
-#         )
-#     print(default_timer() - start)
-#     print(len(files))
+from pathlib import Path
+from itertools import chain, repeat
+from multiprocessing import freeze_support, Pool, cpu_count, Manager
+from timeit import default_timer
+from numba import jit
+import os
+import re
+
+
+def worker(p: Path, arg_dict: dict):
+    arg_dict.update({'i': p})
+    return arg_dict
+
+
+def glob_re(pattern: str, path: Path):
+    regexp = re.compile(pattern, re.IGNORECASE)
+
+    for p in os.scandir(path):  # path.rglob("*.*")
+        if p.is_file() and regexp.search(p.name):
+            yield Path(p.path)
+        elif p.is_dir(follow_symlinks=False):
+            yield from glob_re(pattern, p.path)
+
+    # for p in path.iterdir():  # path.rglob("*.*")
+    #     if p.is_file() and regexp.search(p.suffix):
+    #         yield p
+    #     elif p.is_dir():
+    #         yield from glob_re(pattern, p)
+
+    # for p in path.rglob("*.*"):
+    #     if p.is_file() and regexp.search(p.suffix):
+    #         yield p
+
+    # walk = os.walk(path)
+    # return chain.from_iterable(
+    #     (Path(os.path.join(root, file)) for file in files if regexp.search(file)) for root, dirs, files in walk)
+
+
+if __name__ == '__main__':
+    freeze_support()
+    # input_path = Path(r"x:\Keivan")
+    input_path = Path(r"X:\SmartSPIM_Data\2021_11_03_(Garbage)\20211103_12_08_00_SM211008_02_LS_4X_2000z")
+    arg_dict_template = {}
+    start = default_timer()
+    with Pool(processes=61) as pool:
+        files = pool.starmap(
+            worker,
+            zip(glob_re(r"\.(?:tiff?|raw)$", input_path),
+                repeat(arg_dict_template)),
+            chunksize=512
+        )
+    print(default_timer() - start)
+    print(len(files))
