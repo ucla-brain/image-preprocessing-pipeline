@@ -19,28 +19,47 @@ try:
 except:
     blockfs_present = False
 
+os.environ['MKL_NUM_THREADS'] = '1'
+os.environ['NUMEXPR_NUM_THREADS'] = '1'
+os.environ['OMP_NUM_THREADS'] = '1'
 
-def convert_to_2D_tif(v, output_pattern,
-                      mipmap_level=None,
-                      volume=None,
-                      dtype=None,
-                      compression=4,
-                      cores=multiprocessing.cpu_count(),
-                      rotation=0):
+
+def worker(args):
+    fun = convert_one_plane
+    fun(*args)
+
+
+def convert_to_2D_tif(
+        v,
+        output_pattern,
+        mipmap_level=None,
+        volume=None,
+        dtype=None,
+        compression=('ZLIB', 1),
+        cores=multiprocessing.cpu_count(),
+        chunks=1024,
+        rotation=0):
     """Convert a terastitched volume to TIF
 
-    :param v: the volume to convert
-    :param output_pattern: File naming pattern. output_pattern.format(z=z) is
-         called to get the path names for each TIF plane. The directory must
-         already exist.
-    :param mipmap_level: mipmap decimation level, e.g. "2" to output files
-         at 1/4 resolution.
-    :param volume: an optional VExtent giving the volume to output
-    :param dtype: an optional numpy dtype, defaults to the dtype indicated
-                  by the bit depth
-    :param compression: between 0 and 9
-    :param cores: # of processes to run simultaneously
-    :param rotation: Rotate image by 0, 90, 180, or 270 degrees
+    v: the volume to convert
+    output_pattern:
+        File naming pattern. output_pattern.format(z=z) is
+        called to get the path names for each TIF plane. The directory must
+        already exist.
+    mipmap_level:
+        mipmap decimation level, e.g. "2" to output files
+        at 1/4 resolution.
+    volume:
+        an optional VExtent giving the volume to output
+    dtype:
+        an optional numpy dtype, defaults to the dtype indicated by the bit depth
+    compression:
+        between 0 and 9
+    cores:
+        # of processes to run simultaneously
+    chunks: int
+        chunk size of multiprocessing pool
+    rotation: Rotate image by 0, 90, 180, or 270 degrees
     """
     if volume is None:
         volume = v.volume
@@ -50,19 +69,37 @@ def convert_to_2D_tif(v, output_pattern,
         decimation = 2 ** mipmap_level
     else:
         decimation = 1
-    futures = []
-    with multiprocessing.Pool(cores) as pool:
-        for z in range(volume.z0, volume.z1, decimation):
-            futures.append(pool.apply_async(
-                convert_one_plane,
-                (v, compression, decimation, dtype, output_pattern,
-                 volume, z, rotation)))
-        for future in tqdm.tqdm(futures):
-            future.get()
+
+    # futures = []
+    # with multiprocessing.Pool(cores) as pool:
+    #     for z in range(volume.z0, volume.z1, decimation):
+    #         futures.append(pool.apply_async(
+    #             convert_one_plane,
+    #             (v, compression, decimation, dtype, output_pattern, volume, z, rotation)))
+    #     for future in tqdm.tqdm(futures):
+    #         future.get()
+
+    arg_list = []
+    for z in range(volume.z0, volume.z1, decimation):
+        arg_list.append((v, compression, decimation, dtype, output_pattern, volume, z, rotation))
+    num_images_need_processing = len(arg_list)
+    while num_images_need_processing//chunks < cores:
+        chunks //= 2
+    print(f"tsv is converting {num_images_need_processing} images using {cores} cores and {chunks} chunks")
+
+    with multiprocessing.Pool(processes=cores) as pool:
+        worker.fun = convert_one_plane
+        list(tqdm.tqdm(
+            pool.imap_unordered(
+                worker,
+                arg_list,
+                chunksize=chunks),
+            total=num_images_need_processing,
+            ascii=True
+        ))
 
 
-def convert_one_plane(v, compression, decimation, dtype,
-                      output_pattern, volume, z, rotation):
+def convert_one_plane(v, compression, decimation, dtype, output_pattern, volume, z, rotation):
     mini_volume = VExtent(
         volume.x0, volume.x1, volume.y0, volume.y1, z, z + 1)
     plane = v.imread(mini_volume, dtype)[0]
