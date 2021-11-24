@@ -3,13 +3,14 @@ import re
 import pywt
 import tqdm
 import argparse
-import tifffile
 import warnings
 import numpy as np
+from sys import platform
 from psutil import cpu_percent
 from multiprocessing import Process, Pool, Manager, Queue, cpu_count
 from queue import Empty
 from time import sleep
+from datetime import datetime
 from argparse import RawDescriptionHelpFormatter
 from pathlib import Path
 from itertools import repeat
@@ -17,12 +18,12 @@ from scipy import fftpack, ndimage
 from skimage.filters import threshold_otsu
 from skimage.measure import block_reduce
 from skimage.transform import resize
+from tifffile import imread, imsave
 from dcimg import DCIMGFile
 from typing import Tuple
 from operator import iconcat
 from functools import reduce
-# from numba import njit
-from pystripe_forked import raw
+from pystripe_forked.raw import raw_imread
 from .lightsheet_correct import correct_lightsheet
 
 warnings.filterwarnings("ignore")
@@ -33,24 +34,7 @@ os.environ['NUMEXPR_NUM_THREADS'] = '1'
 os.environ['OMP_NUM_THREADS'] = '1'
 
 
-def _get_extension(path):
-    """Extract the file extension from the provided path
-
-    Parameters
-    ----------
-    path : str
-        path with a file extension
-
-    Returns
-    -------
-    ext : str
-        file extension of provided path
-
-    """
-    return Path(path).suffix
-
-
-def imread(path):
+def imread_tif_raw(path: Path):
     """Load a tiff or raw image
 
     Parameters
@@ -68,11 +52,11 @@ def imread(path):
     # for NAS
     for _ in range(nb_retry):
         try:
-            extension = _get_extension(path)
+            extension = path.suffix
             if extension == '.raw':
-                img = raw.raw_imread(path)
+                img = raw_imread(path)
             elif extension == '.tif' or extension == '.tiff':
-                img = tifffile.imread(path)
+                img = imread(path)
         except OSError or TypeError or PermissionError:
             # print(f'\nRetrying reading file:\n{path}')
             # sleep(0.1)
@@ -81,12 +65,12 @@ def imread(path):
     return img
 
 
-def imread_dcimg(path, z):
+def imread_dcimg(path: Path, z: int):
     """Load a slice from a DCIMG file
 
     Parameters
     ------------
-    path : str
+    path : Path
         path to DCIMG file
     z : int
         z slice index to load
@@ -141,72 +125,55 @@ def check_dcimg_start(path):
     return int(os.path.basename(path).split('.')[0])
 
 
-def convert_to_8bit_fun(img, bit_shift_to_right=3):
-    if img.dtype == 'uint16':
-        # bit shift then change the type to avoid floating point operations
-        # img >> 8 is equivalent to img / 256
-        if 0 < bit_shift_to_right < 8:
-            img = (img >> bit_shift_to_right)
-            img[img > 255] = 255
-            img = img.astype('uint8')
-        elif bit_shift_to_right < 0 or bit_shift_to_right > 8:
-            print("right shift should be btween 0 and 8")
-            raise RuntimeError
-        else:
-            img = (img >> 8).astype('uint8')
+def convert_to_8bit_fun(img: np.ndarray, bit_shift_to_right: int = 3):
+    if img.dtype == 'uint8':
+        return img
+    # bit shift then change the type to avoid floating point operations
+    # img >> 8 is equivalent to img / 256
+    if 0 < bit_shift_to_right < 9:
+        img = (img >> bit_shift_to_right)
+        img[img > 255] = 255
     else:
-        print(f"\nWarning: The original image was not 16 bit. 8 bit conversion disabled.\n")
-    return img
+        print("right shift should be between 0 and 8")
+        raise RuntimeError
+    return img.astype('uint8')
 
 
-def imsave(path, img, compression=('ZLIB', 1), convert_to_8bit=False, bit_shift_to_right=8):
+def imsave_tif(
+        path: Path,
+        img: np.ndarray,
+        compression: Tuple[str, int] = ('ZLIB', 1),
+):
     """Save an array as a tiff or raw image
 
     The file format will be inferred from the file extension in `path`
 
     Parameters
     ----------
-    path : str
+    path : Path
         path to tiff or raw image
     img : ndarray
         image as a numpy array
-    compression : tuple (str, int)
+    compression : Tuple[str, int]
         The 1st argument is compression method the 2nd compression level for tiff files
         For example, ('ZSTD', 1) or ('ZLIB', 1).
-    convert_to_8bit : bool
-        Save the output as an 8-bit image
-    bit_shift_to_right : int [0 to 8]
-        It works when converting to 8-bit. Correct 8 bit conversion needs 8 bit shift.
-        Bit shifts smaller than 8 bit, enhances the signal brightness.
     """
-    if convert_to_8bit:
-        img_to_save = convert_to_8bit_fun(img, bit_shift_to_right=bit_shift_to_right)
-    else:
-        img_to_save = img
 
     # for NAS
     for _ in range(nb_retry):
         try:
-            extension = _get_extension(path)
-            if extension == '.raw':
-                # TODO: get raw writing to work
-                # raw.raw_imsave(path, img)
-                tifffile.imsave(os.path.splitext(path)[0] + '.tif', img_to_save, compression=compression)
-            elif extension == '.tif' or extension == '.tiff':
-                tifffile.imsave(path, img_to_save, compression=compression)
+            imsave(path, img, compression=compression)
         except OSError or TypeError or PermissionError:
-            # print(f'\nRetrying saving file:\n{path}')
-            # sleep(0.1)
             continue
         break
 
 
-def wavedec(img, wavelet, level=None):
+def wavedec(img: np.ndarray, wavelet: str, level: int = None):
     """Decompose `img` using discrete (decimated) wavelet transform using `wavelet`
 
     Parameters
     ----------
-    img : ndarray
+    img : np.ndarray
         image to be decomposed into wavelet coefficients
     wavelet : str
         name of the mother wavelet
@@ -365,7 +332,7 @@ def hist_match(source, template):
 
     """
 
-    oldshape = source.shape
+    old_shape = source.shape
     source = source.ravel()
     template = template.ravel()
 
@@ -387,7 +354,7 @@ def hist_match(source, template):
     # that correspond most closely to the quantiles in the source image
     interp_t_values = np.interp(s_quantiles, t_quantiles, t_values)
 
-    return interp_t_values[bin_idx].reshape(oldshape)
+    return interp_t_values[bin_idx].reshape(old_shape)
 
 
 def max_level(min_len, wavelet):
@@ -398,15 +365,6 @@ def max_level(min_len, wavelet):
 # @njit
 def sigmoid(x):
     return 1 / (1 + np.exp(-x))
-
-
-# def sigmoid(x):
-#     if x >= 0:
-#         z = np.exp(-x)
-#         return 1 / (1 + z)
-#     else:
-#         z = np.exp(x)
-#         return z / (1 + z)
 
 
 def foreground_fraction(img, center, crossover, smoothing):
@@ -534,9 +492,9 @@ def filter_streaks(img, sigma, level=0, wavelet='db3', crossover=10, threshold=-
 
 
 def read_filter_save(
-        input_path: Path,
-        output_path: Path,
-        sigma: tuple,
+        input_file: Path = Path(''),
+        output_file: Path = Path(''),
+        sigma: Tuple[int, int] = (0, 0),
         level: int = 0,
         wavelet: str = 'db3',
         crossover: float = 10,
@@ -551,7 +509,7 @@ def read_filter_save(
         background_window_size: int = 200,
         percentile: float = 0.25,
         lightsheet_vs_background: float = 2.0,
-        dont_convert_16bit: bool = True,
+        convert_to_16bit: bool = False,
         convert_to_8bit: bool = True,
         bit_shift_to_right: int = 8,
         continue_process: bool = False,
@@ -564,9 +522,9 @@ def read_filter_save(
 
     Parameters
     ----------
-    input_path : Path
+    input_file : Path
         path to the image to filter
-    output_path : Path
+    output_file : Path
         path to write the result
     sigma : tuple
         bandwidth of the stripe filter
@@ -599,7 +557,7 @@ def read_filter_save(
         Take this percentile as background with lightsheet
     lightsheet_vs_background : float
         weighting factor to use background or lightsheet background
-    dont_convert_16bit : bool
+    convert_to_16bit : bool
         Flag for converting to 16-bit
     convert_to_8bit : bool
         Save the output as an 8-bit image
@@ -614,21 +572,17 @@ def read_filter_save(
         resize the image after down-sampling
     """
     try:
-        if continue_process and (
-                (output_path.parent / (output_path.name[0:-3] + 'tif')).exists() or (
-                output_path.parent / (output_path.name[0:-4] + 'tiff')).exists()):
+        if continue_process and output_file.exists():
             return
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        dtype = np.uint16
+        output_file.parent.mkdir(parents=True, exist_ok=True)
         if z_idx is None:
             # Path must be TIFF or RAW
-            img = imread(str(input_path))
-            if dont_convert_16bit:
-                dtype = img.dtype
+            img = imread_tif_raw(input_file)
         else:
             # Path must be to DCIMG file
-            assert str(input_path).endswith('.dcimg')
-            img = imread_dcimg(str(input_path), z_idx)
+            # assert str(input_path).endswith('.dcimg')
+            img = imread_dcimg(input_file, z_idx)
+        dtype = img.dtype
         if img is not None:
             if flat is not None:
                 img = apply_flat(img, flat)
@@ -663,27 +617,32 @@ def read_filter_save(
                     threshold=threshold
                 )
 
-            imsave(
-                str(output_path),
-                img.astype(dtype),
-                compression=compression,
-                convert_to_8bit=convert_to_8bit,
-                bit_shift_to_right=bit_shift_to_right
+            if convert_to_16bit and img.dtype != np.uint16:
+                img = img.astype(np.uint16)
+            elif convert_to_8bit and img.dtype != np.uint8:
+                img = convert_to_8bit_fun(img, bit_shift_to_right=bit_shift_to_right)
+            elif img.dtype != dtype:
+                img = img.astype(dtype)
+
+            imsave_tif(
+                output_file,
+                img,
+                compression=compression
             )
 
         else:
             print(f"\nimread function returned None."
-                  f"\nPossible damaged input file: {input_path}.")
+                  f"\nPossible damaged input file: {input_file}.")
     except OSError as inst:
         print(f"\n{type(inst)}"  # the exception instance
               f"\n{inst.args}"  # arguments stored in .args
               f"\n{inst}"
-              f"\nPossible damaged input file: {input_path}")
+              f"\nPossible damaged input file: {input_file}")
     except IndexError as inst:
         print(f"\n{type(inst)}"  # the exception instance
               f"\n{inst.args}"  # arguments stored in .args
               f"\n{inst}"
-              f"\nPossible damaged input file: {input_path}")
+              f"\nPossible damaged input file: {input_file}")
 
 
 def _read_filter_save(input_dict):
@@ -698,6 +657,12 @@ def _read_filter_save(input_dict):
 
 
 def glob_re(pattern: str, path: Path):
+    """Recursively find all files having a specific name
+        path: Path
+            Search path
+        pattern: str
+            regular expression to search the file name.
+    """
     regexp = re.compile(pattern, re.IGNORECASE)
     for p in os.scandir(path):
         if p.is_file() and regexp.search(p.name):
@@ -725,10 +690,13 @@ def process_tif_raw_imgs(input_file: Path, input_path: Path, output_path: Path, 
     img_paths : dict
         all arguments of the read_filter_save function including input_path and output_path
     """
-
     output_file = output_path / input_file.relative_to(input_path)
-    args_dict_template.update({'input_path': input_file, 'output_path': output_file})
-    return args_dict_template
+    output_file = output_file.parent / (output_file.name[0:-len(output_file.suffix)] + '.tif')
+    args_dict_template.update({
+        'input_file': input_file,
+        'output_file': output_file
+    })
+    return args_dict_template.copy()
 
 
 def process_dc_imgs(input_file: Path, input_path: Path, output_path: Path, args_dict_template: dict, z_step: float):
@@ -757,11 +725,11 @@ def process_dc_imgs(input_file: Path, input_path: Path, output_path: Path, args_
     sub_stack = []
     for i in range(shape[0]):
         args_dict_template.update({
-            'input_path': input_file,
-            'output_path': output_path / input_file.relative_to(input_path).parent / f'{start + i * z_step:08.1f}.tif',
+            'input_file': input_file,
+            'output_file': output_path / input_file.relative_to(input_path).parent / f'z{start + i * z_step:08.1f}.tif',
             'z_idx': i
         })
-        sub_stack += [args_dict_template]
+        sub_stack += [args_dict_template.copy()]
     return sub_stack
 
 
@@ -787,30 +755,31 @@ class MultiProcess(Process):
 
 
 def batch_filter(
-        input_path, output_path,
-        workers=os.cpu_count(),
-        chunks=1,
-        sigma=(0, 0),
+        input_path: Path,
+        output_path: Path,
+        workers: int = os.cpu_count(),
+        chunks: int = 8,
+        sigma: Tuple[int, int] = (0, 0),
         level=0,
-        wavelet='db10',
-        crossover=10,
-        threshold=-1,
-        compression=('ZLIB', 1),
+        wavelet: str = 'db10',
+        crossover: int = 10,
+        threshold: int = -1,
+        compression: Tuple[int, int] = ('ZLIB', 1),
         flat=None,
-        dark=0,
-        z_step=None,
-        rotate=False,
-        lightsheet=False,
-        artifact_length=150,
-        background_window_size=200,
-        percentile=.25,
-        lightsheet_vs_background=2.0,
-        dont_convert_16bit=True,
-        convert_to_8bit=False,
-        bit_shift_to_right=8,
-        continue_process=False,
-        down_sample=None,  # (2, 2)
-        new_size=None
+        dark: int = 0,
+        z_step: float = None,
+        rotate: bool = False,
+        lightsheet: bool = False,
+        artifact_length: int = 150,
+        background_window_size: int = 200,
+        percentile: float = .25,
+        lightsheet_vs_background: float = 2.0,
+        convert_to_16bit: bool = False,
+        convert_to_8bit: bool = False,
+        bit_shift_to_right: int = 8,
+        continue_process: bool = False,
+        down_sample: Tuple[int, int] = None,  # (2, 2)
+        new_size: Tuple[int, int] = None
 ):
     """Applies `streak_filter` to all images in `input_path` and write the results to `output_path`.
 
@@ -838,7 +807,7 @@ def batch_filter(
     compression : tuple (str, int)
         The 1st argument is compression method the 2nd compression level for tiff files
         For example, ('ZSTD', 1) or ('ZLIB', 1).
-    flat : ndarray
+    flat : np.ndarray
         reference image for illumination correction. Must be same shape as input images. Default is None
     dark : float
         Intensity to subtract from the images for dark offset. Default is 0.
@@ -852,7 +821,7 @@ def batch_filter(
     background_window_size : int
     percentile : float
     lightsheet_vs_background : float
-    dont_convert_16bit : bool
+    convert_to_16bit : bool
         Flag for converting to 16-bit
     convert_to_8bit : bool
         Save the output as an 8-bit image
@@ -867,11 +836,11 @@ def batch_filter(
         resize the image after down-sampling
     """
     input_path = Path(input_path)
-    output_path = Path(output_path)
     assert input_path.is_dir()
-    if output_path.is_file():
-        print("{output_path} is a file not a directory!")
+    if convert_to_16bit is True and convert_to_8bit is True:
+        print('Select 8 bit or 16 bit output format.')
         raise RuntimeError
+    output_path = Path(output_path)
     output_path.mkdir(parents=True, exist_ok=True)
     if sigma is None:
         sigma = [0, 0]
@@ -879,8 +848,10 @@ def batch_filter(
         workers = cpu_count()
     if isinstance(flat, (np.ndarray, np.generic)):
         flat = normalize_flat(flat)
-    elif isinstance(flat, (Path, str)):
-        flat = normalize_flat(imread(flat))
+    elif isinstance(flat, Path):
+        flat = normalize_flat(imread_tif_raw(flat))
+    elif isinstance(flat, str):
+        flat = normalize_flat(imread_tif_raw(Path(flat)))
     elif flat is not None:
         print('flat argument should be a numpy array or a path to a flat.tif file')
         raise RuntimeError
@@ -901,7 +872,7 @@ def batch_filter(
         'background_window_size': background_window_size,
         'percentile': percentile,
         'lightsheet_vs_background': lightsheet_vs_background,
-        'dont_convert_16bit': dont_convert_16bit,
+        'convert_to_16bit': convert_to_16bit,
         'convert_to_8bit': convert_to_8bit,
         'bit_shift_to_right': bit_shift_to_right,
         'continue_process': continue_process,
@@ -909,37 +880,42 @@ def batch_filter(
         'new_size': new_size
     }
 
-    print(f'Looking for images in {input_path}:')
+    print(f'{datetime.now()}: Looking for images in {input_path} ...')
+    args_list = []
     with Pool(processes=workers if workers < 62 else 61) as pool:
         if z_step is None:
-            args_list = pool.starmap(
-                process_tif_raw_imgs,
-                zip(glob_re(r"\.(?:tiff?|raw)$", input_path),  # find files
-                    repeat(input_path),
-                    repeat(output_path),
-                    repeat(arg_dict_template)),
-                chunksize=chunks
-            )
+            for input_file in glob_re(r"\.(?:tiff?|raw)$", input_path):
+                args_list += [process_tif_raw_imgs(input_file, input_path, output_path, arg_dict_template)]
+            # args_list = pool.starmap(
+            #     process_tif_raw_imgs,
+            #     zip(glob_re(r"\.(?:tiff?|raw)$", input_path),  # find files
+            #         repeat(input_path),
+            #         repeat(output_path),
+            #         repeat(arg_dict_template)),
+            #     chunksize=8196
+            # )
         else:
-            args_list = pool.starmap(
-                process_dc_imgs,
-                zip(glob_re(r"\.(?:dcimg)$", input_path),
-                    repeat(input_path),
-                    repeat(output_path),
-                    repeat(arg_dict_template),
-                    repeat(z_step)),
-                chunksize=chunks
-            )
+            for input_file in glob_re(r"\.(?:dcimg)$", input_path):
+                args_list += [process_dc_imgs(input_file, input_path, output_path, arg_dict_template, z_step)]
+            # args_list = pool.starmap(
+            #     process_dc_imgs,
+            #     zip(glob_re(r"\.(?:dcimg)$", input_path),
+            #         repeat(input_path),
+            #         repeat(output_path),
+            #         repeat(arg_dict_template),
+            #         repeat(z_step)),
+            #     chunksize=8196
+            # )
             args_list = reduce(iconcat, args_list, [])  # unravel the list of list the fastest way possible
     manager = Manager()
     args_list = manager.list(args_list)
     num_images_need_processing = len(args_list)
-    while num_images_need_processing//chunks < workers:
+    while num_images_need_processing // chunks < workers:
         chunks //= 2
-    print(f'{num_images_need_processing} images need processing.\n'
-          f'Setting up {workers} workers.\n'
+    print(f'{datetime.now()}: {num_images_need_processing} images need processing.\n'
+          f'Setting up {workers} workers. Each worker processes {chunks} images at a time.\n'
           f'Progress:')
-    if num_images_need_processing > 0 and workers < 62:
+    if platform == 'linux' or (num_images_need_processing > 0 and workers < 62):
         with Pool(processes=workers) as pool:
             list(tqdm.tqdm(
                 pool.imap_unordered(_read_filter_save, args_list, chunksize=chunks),
@@ -1033,7 +1009,7 @@ def _parse_args():
                         help="The percentile at which to measure the background")
     parser.add_argument("--lightsheet-vs-background", type=float, default=2.0,
                         help="The background is multiplied by this weight when comparing lightsheet against background")
-    parser.add_argument("--dont-convert-16bit", action="store_true",
+    parser.add_argument("--convert_to_16bit", action="store_false",
                         help="If convert the input to 16-bit or not")
     parser.add_argument("--convert_to_8bit", action="store_false",
                         help="If convert the output to 8-bit or not")
@@ -1058,7 +1034,7 @@ def main():
 
     flat = None
     if args.flat is not None:
-        flat = normalize_flat(imread(args.flat))
+        flat = normalize_flat(imread_tif_raw(Path(args.flat)))
 
     zstep = None
     if args.zstep is not None:
@@ -1093,7 +1069,7 @@ def main():
             background_window_size=args.background_window_size,
             percentile=args.percentile,
             lightsheet_vs_background=args.lightsheet_vs_background,
-            dont_convert_16bit=args.dont_convert_16bit,
+            convert_to_16bit=args.convert_to_16bit,
             convert_to_8bit=args.convert_to_8bit,
             bit_shift_to_right=args.bit_shift_to_right,
             down_sample=args.down_sample,
@@ -1125,7 +1101,7 @@ def main():
             background_window_size=args.background_window_size,
             percentile=args.percentile,
             lightsheet_vs_background=args.lightsheet_vs_background,
-            dont_convert_16bit=args.dont_convert_16bit,
+            convert_to_16bit=args.convert_to_16bit,
             convert_to_8bit=args.convert_to_8bit,
             bit_shift_to_right=args.bit_shift_to_right,
             down_sample=args.down_sample,
