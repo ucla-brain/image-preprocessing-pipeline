@@ -447,7 +447,7 @@ def main(source_folder):
                     lightsheet=True if Channel in channels_need_reconstruction and need_lightsheet_cleaning else False,
                     artifact_length=int(150 / (voxel_size_z // voxel_size_x + voxel_size_z // voxel_size_y) * 2),
                     # percentile=0.25,
-                    # dont_convert_16bit=True,  # defaults to False
+                    # convert_to_16bit=False,  # defaults to False
                     convert_to_8bit=need_16bit_to_8bit_conversion,
                     bit_shift_to_right=right_bit_shift,
                     continue_process=continue_process_pystripe,
