@@ -6,6 +6,7 @@
 import re
 import os
 import sys
+import numpy as np
 import psutil
 import shutil
 import pathlib
@@ -24,7 +25,6 @@ from tsv.convert import convert_to_2D_tif
 
 # experiment setup: user needs to set them right
 AllChannels = ["Ex_488_Em_525", "Ex_561_Em_600", "Ex_642_Em_680"]  # the order determines color ["R", "G", "B"]?
-ChannelsNeedReconstruction = ["Ex_642_Em_680"]
 VoxelSizeX_4x, VoxelSizeY_4x = 1.835, 1.835
 VoxelSizeX_10x, VoxelSizeY_10x = 0.661, 0.661
 VoxelSizeX_15x, VoxelSizeY_15x = 0.422, 0.422
@@ -132,23 +132,23 @@ def ask_true_false_question(message):
             '\n'
             f'{message}\n'
             '1 = Yes\n'
-            '2 = No\n')
+            '2 = No\n').strip()
     if answer == "1":
         return True
     else:
         return False
 
 
-def get_most_informative_channel():
-    num_channel = ""
-    while num_channel not in {"0", "1", "2"}:
+def select_one_channel(question: str):
+    num_channel = str()
+    while num_channel not in {"1", "2", "3"}:
         num_channel = input(
             f"\n"
-            f"Choose the most informative channel from the list of channels:\n"
-            f"0 = {AllChannels[0]}\n"
-            f"1 = {AllChannels[1]}\n"
-            f"2 = {AllChannels[2]}\n")
-    most_informative_channel = AllChannels[int(num_channel)]
+            f"{question}\n"
+            f"1 = {AllChannels[0]}\n"
+            f"2 = {AllChannels[1]}\n"
+            f"3 = {AllChannels[2]}\n").strip()
+    most_informative_channel = AllChannels[int(num_channel)-1]
     print(f"most informative channel is {most_informative_channel}")
     log.info(f"most informative channel is {most_informative_channel}")
     return most_informative_channel
@@ -164,7 +164,7 @@ def get_voxel_sizes():
             f'3 = 15x: Voxel Size X = {VoxelSizeX_15x}, Y = {VoxelSizeY_15x}, tile_size = 1850 x 1850\n'
             f'4 = 15x 1/2 sample: Voxel Size X = {VoxelSizeX_15x*2}, Y = {VoxelSizeY_15x*2}, tile_size = 925 x 925\n'
             f'5 = other: allows entering custom voxel sizes for custom tile_size\n'
-        )
+        ).strip()
 
     if objective == "1":
         objective = "4x"
@@ -188,16 +188,16 @@ def get_voxel_sizes():
         tile_size = (925, 925)
     elif objective == "5":
         objective = ""
-        tile_size_x = int(input("what is the tile size on x axis in pixels?\n"))
-        tile_size_y = int(input("what is the tile size on y axis in pixels?\n"))
-        voxel_size_x = float(input("what is the x voxel size in µm?\n"))
-        voxel_size_y = float(input("what is the y voxel size in µm?\n"))
+        tile_size_x = int(input("what is the tile size on x axis in pixels?\n").strip())
+        tile_size_y = int(input("what is the tile size on y axis in pixels?\n").strip())
+        voxel_size_x = float(input("what is the x voxel size in µm?\n").strip())
+        voxel_size_y = float(input("what is the y voxel size in µm?\n").strip())
         tile_size = (tile_size_y, tile_size_x)
     else:
         print("Error: unsupported objective")
         log.error("Error: unsupported objective")
         raise RuntimeError
-    voxel_size_z = float(input("what is the z-step size in µm?\n"))
+    voxel_size_z = float(input("what is the z-step size in µm?\n").strip())
     print(
         f"Objective is {objective} so voxel sizes are x = {voxel_size_x}, y = {voxel_size_y}, and z = {voxel_size_z}")
     log.info(
@@ -210,14 +210,14 @@ def get_destination_path(folder_name_prefix, what_for='tif', posix='', default_p
         f"\n"
         f"Enter destination path for {what_for}.\n"
         f"for example: {CacheDriveExample}\n"
-        f"If nothing entered, {default_path.absolute()} will be used.\n")
+        f"If nothing entered, {default_path.absolute()} will be used.\n").strip()
     drive_path = pathlib.Path(input_path)
     while not drive_path.exists():
         input_path = input(
             f"\n"
             f"Enter a valid destination path for {what_for}. "
             f"for example: {CacheDriveExample}\n"
-            f"If nothing entered, {default_path.absolute()} will be used.\n")
+            f"If nothing entered, {default_path.absolute()} will be used.\n").strip()
         drive_path = pathlib.Path(input_path)
     if input_path == '':
         destination_path = default_path
@@ -279,13 +279,29 @@ def worker(x):
     return subprocess.call(x, shell=True)
 
 
+def merge_channels(r: np.ndarray, g: np.ndarray, b: np.ndarray):
+    assert r.shape[0] == g.shape[0] == b.shape[0]
+    assert r.shape[1] == g.shape[1] == b.shape[1]
+    needed_multi_channel_img = np.zeros((a.shape[0], a.shape[1], 3))
+
+    """Add the channels to the needed image one by one"""
+    needed_multi_channel_img[:, :, 0] = r
+    needed_multi_channel_img[:, :, 1] = g
+    needed_multi_channel_img[:, :, 2] = b
+
+    return needed_multi_channel_img
+
+
 def main(source_folder):
     log_file = source_folder / "log.txt"
     log.basicConfig(filename=str(log_file), level=log.INFO)
     log.FileHandler(str(log_file), mode="w")  # rewrite the file instead of appending
     # ::::::::::::::::::::: Ask questions :::::::::::::::::::::
     objective, voxel_size_x, voxel_size_y, voxel_size_z, tile_size = get_voxel_sizes()
-    most_informative_channel = get_most_informative_channel()
+    most_informative_channel = select_one_channel(
+        "Choose the most informative channel for stitching alignment:")
+    channels_need_reconstruction = [select_one_channel(
+        "Choose channel contains dendrites to apply lightsheet cleaning:")]
     de_striped_posix, what_for = "", ""
     img_flat = None
     image_classes_training_data_path = source_folder / FlatNonFlatTrainingData
@@ -332,7 +348,7 @@ def main(source_folder):
                 "Values smaller than 8 will increase the pixel brightness. \n"
                 "We suggest a value between 3 to 6 for 3D images and 8 for max projection. \n"
                 "The smaller the value the brighter the pixels.\n"
-            )
+            ).strip()
         right_bit_shift = int(right_bit_shift_str)
         de_striped_posix += f"_8b_{right_bit_shift_str}bsh"
 
@@ -372,7 +388,7 @@ def main(source_folder):
         source_folder.name, what_for="stitched files", posix="_stitched_v4", default_path=dir_stitched)
     # ::::::::::::::::::::::::::::::::::::: Start :::::::::::::::::::::::::::::::::::
 
-    log.info(f"{datetime.now()} ... stitching started")
+    log.info(f"{datetime.now()}: stitching started")
     log.info(f"Run on computer: {platform.node()}")
     log.info(f"Total physical memory: {psutil.virtual_memory().total // 1024 ** 3} GB")
     log.info(f"Physical CPU core count: {cpu_physical_core_count}")
@@ -387,7 +403,7 @@ def main(source_folder):
         for Channel in AllChannels:
             source_channel_folder = source_folder / Channel
             if source_channel_folder.exists():
-                dark = (120 if Channel in ChannelsNeedReconstruction else 511) if need_flat_image_application else 0
+                dark = (110 if Channel in channels_need_reconstruction else 511) if need_flat_image_application else 0
                 if need_flat_image_application:
                     flat_img_created_already = source_folder.joinpath(Channel + '_flat.tif')
                     if flat_img_created_already.exists():
@@ -411,12 +427,12 @@ def main(source_folder):
                             save_as_tiff=True
                         )
                 p_log(f"\nBackground dark level is {dark} for {Channel} channel.")
-                p_log(f"\n{datetime.now()}: {Channel}: DeStripe program started.")
+                p_log(f"\n{datetime.now()}: DeStripe program started processing channel {Channel}.")
                 pystripe.batch_filter(
                     source_channel_folder,
                     de_striped_dir / Channel,
                     workers=cpu_logical_core_count if cpu_logical_core_count < 61 else 61,
-                    chunks=1024,
+                    chunks=16,
                     # sigma=[foreground, background] Default is [0, 0], indicating no de-striping.
                     sigma=((32, 32) if objective == "4x" else (256, 256)) if need_destriping else (0, 0),
                     # level=0,
@@ -428,7 +444,7 @@ def main(source_folder):
                     dark=dark,
                     # z_step=voxel_size_z,  # z-step in micron. Only used for DCIMG files.
                     # rotate=False,
-                    lightsheet=True if Channel in ChannelsNeedReconstruction and need_lightsheet_cleaning else False,
+                    lightsheet=True if Channel in channels_need_reconstruction and need_lightsheet_cleaning else False,
                     artifact_length=int(150 / (voxel_size_z // voxel_size_x + voxel_size_z // voxel_size_y) * 2),
                     # percentile=0.25,
                     # dont_convert_16bit=True,  # defaults to False
@@ -619,6 +635,7 @@ def main(source_folder):
         "--sfmt=\"TIFF (series, 2D)\"",
         "--dfmt=\"TIFF (tiled, 3D)\"",
         "--resolutions=\"012345\"",
+        f"--clist={len(existing_channels) - 1}",
         "--halve=max",
         "--noprogressbar",
         "--sparse_data",
