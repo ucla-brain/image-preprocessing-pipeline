@@ -35,7 +35,7 @@ cpu_logical_core_count = psutil.cpu_count(logical=True)
 if sys.platform == "win32":
     # print("Windows is detected.")
     psutil.Process().nice(psutil.IDLE_PRIORITY_CLASS)
-    CacheDriveExample = "X:\\3D_stitched\\"
+    CacheDriveExample = "W:\\3D_stitched\\"
     TeraStitcherPath = pathlib.Path(r"./TeraStitcher_windows_avx512")
     os.environ["PATH"] = f"{os.environ['PATH']};{TeraStitcherPath.as_posix()}"
     os.environ["PATH"] = f"{os.environ['PATH']};{TeraStitcherPath.joinpath('pyscripts').as_posix()}"
@@ -149,8 +149,6 @@ def select_one_channel(question: str):
             f"2 = {AllChannels[1]}\n"
             f"3 = {AllChannels[2]}\n").strip()
     most_informative_channel = AllChannels[int(num_channel)-1]
-    print(f"most informative channel is {most_informative_channel}")
-    log.info(f"most informative channel is {most_informative_channel}")
     return most_informative_channel
 
 
@@ -300,8 +298,10 @@ def main(source_folder):
     objective, voxel_size_x, voxel_size_y, voxel_size_z, tile_size = get_voxel_sizes()
     most_informative_channel = select_one_channel(
         "Choose the most informative channel for stitching alignment:")
+    p_log(f"most informative channel is {most_informative_channel}\n")
     channels_need_reconstruction = [select_one_channel(
         "Choose channel contains dendrites to apply lightsheet cleaning:")]
+    p_log(f"channels needs reconstruction is {channels_need_reconstruction}\n")
     de_striped_posix, what_for = "", ""
     img_flat = None
     image_classes_training_data_path = source_folder / FlatNonFlatTrainingData
@@ -432,7 +432,7 @@ def main(source_folder):
                     source_channel_folder,
                     de_striped_dir / Channel,
                     workers=cpu_logical_core_count if cpu_logical_core_count < 61 else 61,
-                    chunks=16,
+                    chunks=128,
                     # sigma=[foreground, background] Default is [0, 0], indicating no de-striping.
                     sigma=((32, 32) if objective == "4x" else (256, 256)) if need_destriping else (0, 0),
                     # level=0,
@@ -482,12 +482,12 @@ def main(source_folder):
                 f"--projout={dir_stitched.joinpath(Channel + '_xml_import_step_1.xml')}",
                 "--noprogressbar"
             ]
-            log.info("import command:\n" + " ".join(command))
+            p_log("import command:\n" + " ".join(command))
             subprocess.run(command, check=True)
             if Channel == most_informative_channel and \
                     not dir_stitched.joinpath(Channel + '_xml_import_step_' + str(5) + '.xml').exists():
                 for step in [2, 3, 4, 5]:
-                    log.info(f"{datetime.now()}: starting step {step} of stitching for most informative channel ...")
+                    p_log(f"{datetime.now()}: starting step {step} of stitching for most informative channel ...")
                     if step == 2:
                         command = [f"mpiexec -np {cpu_logical_core_count} python -m mpi4py {parastitcher}"]
                     else:
@@ -498,13 +498,13 @@ def main(source_folder):
                         f"--projin={dir_stitched.joinpath(Channel + '_xml_import_step_' + str(step - 1) + '.xml')}",
                         f"--projout={dir_stitched.joinpath(Channel + '_xml_import_step_' + str(step) + '.xml')}",
                     ]
-                    log.info("stitching command:\n" + " ".join(command))
+                    p_log("stitching command:\n" + " ".join(command))
                     subprocess.call(" ".join(command), shell=True)  # subprocess.run(command)
                     dir_stitched.joinpath(Channel + '_xml_import_step_' + str(step-1) + '.xml').unlink(missing_ok=True)
         else:
-            log.warning(f"{datetime.now()}: {channel_dir} did not exist and not imported ...")
+            p_log(f"{datetime.now()}: {channel_dir} did not exist and not imported ...")
 
-    log.info(f"{datetime.now()}: importing all channels ...")
+    p_log(f"{datetime.now()}: importing all channels ...")
 
     # p = dir_stitched.rglob("*")
     # if p:
@@ -531,10 +531,10 @@ def main(source_folder):
             "--imin_channel=all",
             "--noprogressbar",
         ]
-        log.info("import command:\n" + " ".join(command))
+        p_log("import command:\n" + " ".join(command))
         subprocess.run(command)
 
-        log.info(f"{datetime.now()}: running parastitcher on {cpu_logical_core_count} physical cores ... ")
+        p_log(f"{datetime.now()}: running parastitcher on {cpu_logical_core_count} physical cores ... ")
         command = [
             f"mpiexec -np {cpu_logical_core_count} python -m mpi4py {parastitcher}",
             "-6",
@@ -566,7 +566,7 @@ def main(source_folder):
         #     "--noprogressbar",
         #     "--sparse_data",
         # ]
-        log.info("stitching command:\n" + " ".join(command))
+        p_log("stitching command:\n" + " ".join(command))
         subprocess.call(" ".join(command), shell=True)
     else:
         dir_tif = dir_stitched / 'tif'
@@ -619,13 +619,13 @@ def main(source_folder):
         ]
         p_log("tiff to ims conversion command:\n" + " ".join(command))
 
-        # subprocess.call(" ".join(command), shell=True)
+        subprocess.call(" ".join(command), shell=True)
         work += [" ".join(command)]
     else:
         if len(files) > 0:
-            log.warning("not found Imaris View: not converting tiff to ims ... ")
+            p_log("not found Imaris View: not converting tiff to ims ... ")
         else:
-            log.warning("no tif file found to convert to ims!")
+            p_log("no tif file found to convert to ims!")
 
     dir_tera_fly = dir_stitched / 'TeraFly'
     dir_tera_fly.mkdir(exist_ok=True)
@@ -642,8 +642,8 @@ def main(source_folder):
         f"-s={dir_tif}",
         f"-d={dir_tera_fly}",
     ]
-    log.info("stitching command:\n" + " ".join(command))
-    # subprocess.call(" ".join(command), shell=True)
+    p_log("stitching command:\n" + " ".join(command))
+    subprocess.call(" ".join(command), shell=True)
     work += [" ".join(command)]
 
     with Pool(processes=2) as pool:
