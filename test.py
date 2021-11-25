@@ -249,13 +249,13 @@
 #     # # total = client.submit(sum, L)
 #     # print(progress(L))
 
-# from pathlib import Path
-# from itertools import chain, repeat
-# from multiprocessing import freeze_support, Pool, cpu_count, Manager
-# from timeit import default_timer
-# from numba import jit
-# import os
-# import re
+from pathlib import Path
+from itertools import chain, repeat
+from multiprocessing import freeze_support, Pool, cpu_count, Manager
+from timeit import default_timer
+from numba import jit
+import os
+import re
 
 
 # def worker(p: Path, arg_dict: dict):
@@ -263,28 +263,28 @@
 #     return arg_dict
 
 
-# def glob_re(pattern: str, path: Path):
-#     regexp = re.compile(pattern, re.IGNORECASE)
-#
-#     for p in os.scandir(path):  # path.rglob("*.*")
-#         if p.is_file() and regexp.search(p.name):
-#             yield Path(p.path)
-#         elif p.is_dir(follow_symlinks=False):
-#             yield from glob_re(pattern, p.path)
-#
-#     # for p in path.iterdir():  # path.rglob("*.*")
-#     #     if p.is_file() and regexp.search(p.suffix):
-#     #         yield p
-#     #     elif p.is_dir():
-#     #         yield from glob_re(pattern, p)
-#
-#     # for p in path.rglob("*.*"):
-#     #     if p.is_file() and regexp.search(p.suffix):
-#     #         yield p
-#
-#     # walk = os.walk(path)
-#     # return chain.from_iterable(
-#     #     (Path(os.path.join(root, file)) for file in files if regexp.search(file)) for root, dirs, files in walk)
+def glob_re(pattern: str, path: Path):
+    regexp = re.compile(pattern, re.IGNORECASE)
+
+    for p in os.scandir(path):
+        if p.is_file() and regexp.search(p.name):
+            yield Path(p.path)
+        elif p.is_dir(follow_symlinks=False):
+            yield from glob_re(pattern, p.path)
+
+    # for p in path.iterdir():
+    #     if p.is_file() and regexp.search(p.suffix):
+    #         yield p
+    #     elif p.is_dir():
+    #         yield from glob_re(pattern, p)
+
+    # for p in path.rglob("*.*"):
+    #     if p.is_file() and regexp.search(p.suffix):
+    #         yield p
+
+    # walk = os.walk(path)
+    # return chain.from_iterable(
+    #     (Path(os.path.join(root, file)) for file in files if regexp.search(file)) for root, dirs, files in walk)
 
 
 # if __name__ == '__main__':
@@ -304,12 +304,15 @@
 #     print(len(files))
 
 
-from numpy import rot90
-from tifffile import TiffWriter, memmap
+# from numpy import rot90
+# from tifffile import TiffWriter, memmap
+#
+# original_image = memmap('/mnt/md0/kmoradi/20210907_16_56_41_SM210705_01_LS_4X_4000z_sep_C0.tif')
+# rotated = rot90(original_image, axes=(0, 1))
+#
+# with TiffWriter('/mnt/md0/kmoradi/20210907_16_56_41_SM210705_01_LS_4X_4000z_sep_C0_rotated.tif', bigtiff=True) as tif:
+#     for i in range(rotated.shape[0]):
+#         tif.write(rotated[i], photometric='minisblack')
 
-original_image = memmap('/mnt/md0/kmoradi/20210907_16_56_41_SM210705_01_LS_4X_4000z_sep_C0.tif')
-rotated = rot90(original_image, axes=(0, 1))
-
-with TiffWriter('/mnt/md0/kmoradi/20210907_16_56_41_SM210705_01_LS_4X_4000z_sep_C0_rotated.tif', bigtiff=True) as tif:
-    for i in range(rotated.shape[0]):
-        tif.write(rotated[i], photometric='minisblack')
+for file in glob_re(r'\.tif$', Path(r'X:\3D_stitched\20211023_14_56_29_SM210705_02_R_PFC_LS_15x_1000z_8b_2bsh_ds\Ex_488_Em_525')):
+    file.unlink()
