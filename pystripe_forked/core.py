@@ -59,9 +59,11 @@ def imread_tif_raw(path: Path):
                 img = imread(path)
         except OSError or TypeError or PermissionError:
             # print(f'\nRetrying reading file:\n{path}')
-            # sleep(0.1)
+            sleep(0.1)
             continue
         break
+    if img is None:
+        print(f"after {nb_retry} attempts failed to read file:\n{path}")
     return img
 
 
@@ -128,11 +130,15 @@ def check_dcimg_start(path):
 def convert_to_8bit_fun(img: np.ndarray, bit_shift_to_right: int = 3):
     if img.dtype == 'uint8':
         return img
+    else:
+        img = img.astype(np.uint16)
     # bit shift then change the type to avoid floating point operations
     # img >> 8 is equivalent to img / 256
     if 0 < bit_shift_to_right < 9:
         img = (img >> bit_shift_to_right)
         img[img > 255] = 255
+    elif bit_shift_to_right is None:
+        img = (img >> 8)
     else:
         print("right shift should be between 0 and 8")
         raise RuntimeError
@@ -160,12 +166,46 @@ def imsave_tif(
     """
 
     # for NAS
-    for _ in range(nb_retry):
+    offset = None
+    byte_count = None
+    need_compression = True
+    if (isinstance(compression, tuple) and list(map(type, compression)) == [str, int]
+        and compression[1] == 0) or \
+            (isinstance(compression, int) and compression == 0) or \
+            compression is None:
+        need_compression = False
+
+    for attempt in range(nb_retry):
         try:
-            imsave(path, img, compression=compression)
-        except OSError or TypeError or PermissionError:
+            if need_compression:
+                imsave(path, img, compression=compression)  # return offset does not work when compression is enabled
+            else:
+                offset, byte_count = imsave(path, img, returnoffset=True)
+            # check file is saved
+            if not path.exists():
+                raise OSError
+            if byte_count is not None and offset is not None:
+                if byte_count != img.size * img.itemsize:
+                    raise OSError
+                saved_file_size = path.stat().st_size
+                if saved_file_size < offset:
+                    raise OSError
+                if saved_file_size != offset + byte_count:
+                    raise OSError
+            return
+        except OSError or TypeError or PermissionError as inst:
+            if attempt == nb_retry - 1:
+                print(
+                    f"After {nb_retry} attempts failed to save the file:\n"
+                    f"{path}\n"
+                    f"Data size={img.size * img.itemsize} should be equal to the saved file's byte_count={byte_count}?"
+                    f"\nThe file_size={path.stat().st_size} should be at least larger than tif header={offset} bytes\n"
+                    f"\n{type(inst)}\n"
+                    f"{inst.args}\n"
+                    f"{inst}\n")
+            else:
+                sleep(0.1)
             continue
-        break
 
 
 def wavedec(img: np.ndarray, wavelet: str, level: int = None):
@@ -572,16 +612,13 @@ def read_filter_save(
         resize the image after down-sampling
     """
     try:
-        if continue_process and output_file.exists():
+        if continue_process and output_file.exists() and output_file.stat().st_size > 272:  # 272 is header offset size
             return
         output_file.parent.mkdir(parents=True, exist_ok=True)
         if z_idx is None:
-            # Path must be TIFF or RAW
-            img = imread_tif_raw(input_file)
+            img = imread_tif_raw(input_file)  # file must be TIFF or RAW
         else:
-            # Path must be to DCIMG file
-            # assert str(input_path).endswith('.dcimg')
-            img = imread_dcimg(input_file, z_idx)
+            img = imread_dcimg(input_file, z_idx)  # file must be DCIMG
         dtype = img.dtype
         if img is not None:
             if flat is not None:
@@ -633,12 +670,7 @@ def read_filter_save(
         else:
             print(f"\nimread function returned None."
                   f"\nPossible damaged input file: {input_file}.")
-    except OSError as inst:
-        print(f"\n{type(inst)}"  # the exception instance
-              f"\n{inst.args}"  # arguments stored in .args
-              f"\n{inst}"
-              f"\nPossible damaged input file: {input_file}")
-    except IndexError as inst:
+    except OSError or IndexError as inst:
         print(f"\n{type(inst)}"  # the exception instance
               f"\n{inst.args}"  # arguments stored in .args
               f"\n{inst}"
@@ -881,31 +913,26 @@ def batch_filter(
     }
 
     print(f'{datetime.now()}: Looking for images in {input_path} ...')
-    args_list = []
     with Pool(processes=workers if workers < 62 else 61) as pool:
         if z_step is None:
-            for input_file in glob_re(r"\.(?:tiff?|raw)$", input_path):
-                args_list += [process_tif_raw_imgs(input_file, input_path, output_path, arg_dict_template)]
-            # args_list = pool.starmap(
-            #     process_tif_raw_imgs,
-            #     zip(glob_re(r"\.(?:tiff?|raw)$", input_path),  # find files
-            #         repeat(input_path),
-            #         repeat(output_path),
-            #         repeat(arg_dict_template)),
-            #     chunksize=8196
-            # )
+            args_list = pool.starmap(
+                process_tif_raw_imgs,
+                zip(glob_re(r"\.(?:tiff?|raw)$", input_path),  # find files
+                    repeat(input_path),
+                    repeat(output_path),
+                    repeat(arg_dict_template)),
+                chunksize=chunks
+            )
         else:
-            for input_file in glob_re(r"\.(?:dcimg)$", input_path):
-                args_list += [process_dc_imgs(input_file, input_path, output_path, arg_dict_template, z_step)]
-            # args_list = pool.starmap(
-            #     process_dc_imgs,
-            #     zip(glob_re(r"\.(?:dcimg)$", input_path),
-            #         repeat(input_path),
-            #         repeat(output_path),
-            #         repeat(arg_dict_template),
-            #         repeat(z_step)),
-            #     chunksize=8196
-            # )
+            args_list = pool.starmap(
+                process_dc_imgs,
+                zip(glob_re(r"\.(?:dcimg)$", input_path),
+                    repeat(input_path),
+                    repeat(output_path),
+                    repeat(arg_dict_template),
+                    repeat(z_step)),
+                chunksize=chunks
+            )
             args_list = reduce(iconcat, args_list, [])  # unravel the list of list the fastest way possible
     manager = Manager()
     args_list = manager.list(args_list)
@@ -915,7 +942,7 @@ def batch_filter(
     print(f'{datetime.now()}: {num_images_need_processing} images need processing.\n'
           f'Setting up {workers} workers. Each worker processes {chunks} images at a time.\n'
           f'Progress:')
-    if platform == 'linux' or (num_images_need_processing > 0 and workers < 62):
+    if platform == 'linux' or workers < 62:
         with Pool(processes=workers) as pool:
             list(tqdm.tqdm(
                 pool.imap_unordered(_read_filter_save, args_list, chunksize=chunks),
