@@ -19,6 +19,8 @@ from skimage.filters import threshold_otsu
 from skimage.measure import block_reduce
 from skimage.transform import resize
 from tifffile import imread, imsave
+from tifffile.tifffile import TiffFileError
+# from imagecodecs._deflate import DeflateError
 from dcimg import DCIMGFile
 from typing import Tuple
 from operator import iconcat
@@ -166,40 +168,41 @@ def imsave_tif(
     """
 
     # for NAS
-    offset = None
-    byte_count = None
-    need_compression = True
-    if (isinstance(compression, tuple) and list(map(type, compression)) == [str, int]
-        and compression[1] == 0) or \
-            (isinstance(compression, int) and compression == 0) or \
-            compression is None:
-        need_compression = False
+    # offset = None
+    # byte_count = None
+    # need_compression = True
+    # if (isinstance(compression, tuple) and list(map(type, compression)) == [str, int]
+    #     and compression[1] == 0) or \
+    #         (isinstance(compression, int) and compression == 0) or \
+    #         compression is None:
+    #     need_compression = False
 
-    for attempt in range(nb_retry):
+    for attempt in range(1, nb_retry):
         try:
-            if need_compression:
-                imsave(path, img, compression=compression)  # return offset does not work when compression is enabled
-            else:
-                offset, byte_count = imsave(path, img, returnoffset=True)
+            imsave(path, img, compression=compression)
+            # if need_compression:
+            #     imsave(path, img, compression=compression)  # return offset does not work when compression is enabled
+            # else:
+            #     offset, byte_count = imsave(path, img, returnoffset=True)
             # check file is saved
-            if not path.exists():
-                raise OSError
-            if byte_count is not None and offset is not None:
-                if byte_count != img.size * img.itemsize:
-                    raise OSError
-                saved_file_size = path.stat().st_size
-                if saved_file_size < offset:
-                    raise OSError
-                if saved_file_size != offset + byte_count:
-                    raise OSError
+            # if not path.exists():
+            #     raise OSError
+            # if byte_count is not None and offset is not None:
+            #     if byte_count != img.size * img.itemsize:
+            #         raise OSError
+            #     saved_file_size = path.stat().st_size
+            #     if saved_file_size < offset:
+            #         raise OSError
+            #     if saved_file_size != offset + byte_count:
+            #         raise OSError
             return
         except OSError or TypeError or PermissionError as inst:
-            if attempt == nb_retry - 1:
+            if attempt == nb_retry:
+                # f"Data size={img.size * img.itemsize} should be equal to the saved file's byte_count={byte_count}?"
+                # f"\nThe file_size={path.stat().st_size} should be at least larger than tif header={offset} bytes\n"
                 print(
                     f"After {nb_retry} attempts failed to save the file:\n"
                     f"{path}\n"
-                    f"Data size={img.size * img.itemsize} should be equal to the saved file's byte_count={byte_count}?"
-                    f"\nThe file_size={path.stat().st_size} should be at least larger than tif header={offset} bytes\n"
                     f"\n{type(inst)}\n"
                     f"{inst.args}\n"
                     f"{inst}\n")
@@ -614,63 +617,71 @@ def read_filter_save(
     try:
         if continue_process and output_file.exists() and output_file.stat().st_size > 272:  # 272 is header offset size
             return
-        output_file.parent.mkdir(parents=True, exist_ok=True)
+        # if not input_file.exists() or not input_file.is_file():
+        #     raise FileNotFoundError  # A Variant of OS error
+        # if input_file.stat().st_size < 272:
+        #     print(f"warning: very small input file\n"
+        #           f"{input_file}\n"
+        #           f"size = {input_file.stat().st_size} bytes")
+        # print(str(input_file))
         if z_idx is None:
             img = imread_tif_raw(input_file)  # file must be TIFF or RAW
         else:
             img = imread_dcimg(input_file, z_idx)  # file must be DCIMG
+        if img is None:
+            print(f"\nimread function returned None."
+                  f"\nPossible damaged input file: \n{input_file}.")
+            return
         dtype = img.dtype
-        if img is not None:
-            if flat is not None:
-                img = apply_flat(img, flat)
-            if dark is not None and dark > 0:
-                img = np.where(img > dark, img - dark, 0)  # Subtract the dark offset
-            if down_sample is not None:
-                img = block_reduce(img, block_size=down_sample, func=np.max)
-            if new_size is not None:
-                img = resize(img, new_size, preserve_range=True, anti_aliasing=True)
-            if rotate:
-                img = np.rot90(img)
-            if lightsheet:
-                img = correct_lightsheet(
-                    img.reshape(img.shape[0], img.shape[1], 1),
-                    percentile=percentile,
-                    lightsheet=dict(selem=(1, artifact_length, 1)),
-                    background=dict(
-                        selem=(background_window_size, background_window_size, 1),
-                        spacing=(25, 25, 1),
-                        interpolate=1,
-                        dtype=np.float32,
-                        step=(2, 2, 1)),
-                    lightsheet_vs_background=lightsheet_vs_background
-                ).reshape(img.shape[0], img.shape[1])
-            else:
-                img = filter_streaks(
-                    img,
-                    sigma,
-                    level=level,
-                    wavelet=wavelet,
-                    crossover=crossover,
-                    threshold=threshold
-                )
-
-            if convert_to_16bit and img.dtype != np.uint16:
-                img = img.astype(np.uint16)
-            elif convert_to_8bit and img.dtype != np.uint8:
-                img = convert_to_8bit_fun(img, bit_shift_to_right=bit_shift_to_right)
-            elif img.dtype != dtype:
-                img = img.astype(dtype)
-
-            imsave_tif(
-                output_file,
+        if not output_file.parent.exists():
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+        if flat is not None:
+            img = apply_flat(img, flat)
+        if dark is not None and dark > 0:
+            img = np.where(img > dark, img - dark, 0)  # Subtract the dark offset
+        if down_sample is not None:
+            img = block_reduce(img, block_size=down_sample, func=np.max)
+        if new_size is not None:
+            img = resize(img, new_size, preserve_range=True, anti_aliasing=True)
+        if rotate:
+            img = np.rot90(img)
+        if lightsheet:
+            img = correct_lightsheet(
+                img.reshape(img.shape[0], img.shape[1], 1),
+                percentile=percentile,
+                lightsheet=dict(selem=(1, artifact_length, 1)),
+                background=dict(
+                    selem=(background_window_size, background_window_size, 1),
+                    spacing=(25, 25, 1),
+                    interpolate=1,
+                    dtype=np.float32,
+                    step=(2, 2, 1)),
+                lightsheet_vs_background=lightsheet_vs_background
+            ).reshape(img.shape[0], img.shape[1])
+        else:
+            img = filter_streaks(
                 img,
-                compression=compression
+                sigma,
+                level=level,
+                wavelet=wavelet,
+                crossover=crossover,
+                threshold=threshold
             )
 
-        else:
-            print(f"\nimread function returned None."
-                  f"\nPossible damaged input file: {input_file}.")
-    except OSError or IndexError as inst:
+        if convert_to_16bit and img.dtype != np.uint16:
+            img = img.astype(np.uint16)
+        elif convert_to_8bit and img.dtype != np.uint8:
+            img = convert_to_8bit_fun(img, bit_shift_to_right=bit_shift_to_right)
+        elif img.dtype != dtype:
+            img = img.astype(dtype)
+
+        imsave_tif(
+            output_file,
+            img,
+            compression=compression
+        )
+
+    except (OSError, IndexError, TypeError, RuntimeError, TiffFileError) as inst:
         print(f"\n{type(inst)}"  # the exception instance
               f"\n{inst.args}"  # arguments stored in .args
               f"\n{inst}"
@@ -921,7 +932,7 @@ def batch_filter(
                     repeat(input_path),
                     repeat(output_path),
                     repeat(arg_dict_template)),
-                chunksize=chunks
+                chunksize=1024
             )
         else:
             args_list = pool.starmap(
@@ -931,7 +942,7 @@ def batch_filter(
                     repeat(output_path),
                     repeat(arg_dict_template),
                     repeat(z_step)),
-                chunksize=chunks
+                chunksize=1024
             )
             args_list = reduce(iconcat, args_list, [])  # unravel the list of list the fastest way possible
     manager = Manager()
