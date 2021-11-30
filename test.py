@@ -253,56 +253,59 @@ from pathlib import Path
 from itertools import chain, repeat
 from multiprocessing import freeze_support, Pool, cpu_count, Manager
 from timeit import default_timer
+
+import numpy as np
 from numba import jit
 import os
 import re
+from tifffile import imread, imwrite
 
 
-# def worker(p: Path, arg_dict: dict):
-#     arg_dict.update({'i': p})
-#     return arg_dict
+# def glob_re(pattern: str, path: Path):
+#     regexp = re.compile(pattern, re.IGNORECASE)
+#
+#     for p in os.scandir(path):
+#         if p.is_file() and regexp.search(p.name):
+#             yield Path(p.path)
+#         elif p.is_dir(follow_symlinks=False):
+#             yield from glob_re(pattern, p.path)
+#
+#     # for p in path.iterdir():
+#     #     if p.is_file() and regexp.search(p.suffix):
+#     #         yield p
+#     #     elif p.is_dir():
+#     #         yield from glob_re(pattern, p)
+#
+#     # for p in path.rglob("*.*"):
+#     #     if p.is_file() and regexp.search(p.suffix):
+#     #         yield p
+#
+#     # walk = os.walk(path)
+#     # return chain.from_iterable(
+#     #     (Path(os.path.join(root, file)) for file in files if regexp.search(file)) for root, dirs, files in walk)
 
 
-def glob_re(pattern: str, path: Path):
-    regexp = re.compile(pattern, re.IGNORECASE)
-
-    for p in os.scandir(path):
-        if p.is_file() and regexp.search(p.name):
-            yield Path(p.path)
-        elif p.is_dir(follow_symlinks=False):
-            yield from glob_re(pattern, p.path)
-
-    # for p in path.iterdir():
-    #     if p.is_file() and regexp.search(p.suffix):
-    #         yield p
-    #     elif p.is_dir():
-    #         yield from glob_re(pattern, p)
-
-    # for p in path.rglob("*.*"):
-    #     if p.is_file() and regexp.search(p.suffix):
-    #         yield p
-
-    # walk = os.walk(path)
-    # return chain.from_iterable(
-    #     (Path(os.path.join(root, file)) for file in files if regexp.search(file)) for root, dirs, files in walk)
-
-
+# def worker(p: Path):
+#     print(p.rename(p.parent / p.name[0:-1]))
+#
+#
 # if __name__ == '__main__':
 #     freeze_support()
 #     # input_path = Path(r"x:\Keivan")
-#     input_path = Path(r"X:\SmartSPIM_Data\2021_11_03_(Garbage)\20211103_12_08_00_SM211008_02_LS_4X_2000z")
-#     arg_dict_template = {}
+#     input_path = Path(r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z_8b_3bsh_ds")
 #     start = default_timer()
-#     with Pool(processes=61) as pool:
-#         files = pool.starmap(
-#             worker,
-#             zip(glob_re(r"\.(?:tiff?|raw)$", input_path),
-#                 repeat(arg_dict_template)),
-#             chunksize=512
-#         )
+#     # with Pool(processes=61) as pool:
+#     #     files = pool.imap_unordered(
+#     #         worker,
+#     #         glob_re(r"\.tiff$", input_path),
+#     #         chunksize=512
+#     #     )
+#     for p in input_path.rglob('*.tiff'):
+#         new_name = p.parent / p.name[0:-1]
+#         if new_name.exists() and new_name.is_file():
+#             new_name.unlink()
+#         p.rename(new_name)
 #     print(default_timer() - start)
-#     print(len(files))
-
 
 # from numpy import rot90
 # from tifffile import TiffWriter, memmap
@@ -314,5 +317,94 @@ def glob_re(pattern: str, path: Path):
 #     for i in range(rotated.shape[0]):
 #         tif.write(rotated[i], photometric='minisblack')
 
-for file in glob_re(r'\.tif$', Path(r'X:\3D_stitched\20211023_14_56_29_SM210705_02_R_PFC_LS_15x_1000z_8b_2bsh_ds\Ex_488_Em_525')):
-    file.unlink()
+for file in sorted([
+  r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_561_Em_600\092760\092760_125440\076460.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_561_Em_600\092760\092760_153400\076430.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_561_Em_600\099750\099750_146410\076440.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_561_Em_600\099750\099750_160390\076450.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_561_Em_600\099750\099750_160390\076460.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_561_Em_600\106740\106740_146410\076430.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_561_Em_600\113730\113730_125440\076480.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_561_Em_600\113730\113730_132430\076460.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_561_Em_600\113730\113730_146410\076430.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_561_Em_600\113730\113730_153400\076410.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_561_Em_600\113730\113730_174370\076350.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_561_Em_600\113730\113730_181360\076330.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_561_Em_600\120720\120720_139420\076440.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_561_Em_600\134700\134700_132430\076450.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_561_Em_600\148680\148680_146410\076430.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_561_Em_600\148680\148680_153400\076410.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_561_Em_600\148680\148680_160390\076390.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_561_Em_600\148680\148680_174370\076340.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_561_Em_600\148680\148680_174370\076350.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_561_Em_600\148680\148680_181360\076250.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_561_Em_600\155670\155670_132430\076230.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_561_Em_600\155670\155670_146410\076200.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_561_Em_600\155670\155670_153400\076170.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_561_Em_600\155670\155670_174370\076080.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_642_Em_680\092760\092760_132430\076240.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_642_Em_680\092760\092760_139420\076220.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_642_Em_680\092760\092760_146410\076190.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_642_Em_680\092760\092760_153400\076220.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_642_Em_680\092760\092760_160390\076210.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_642_Em_680\099750\099750_125440\076250.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_642_Em_680\099750\099750_132430\076230.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_642_Em_680\099750\099750_153400\076200.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_642_Em_680\099750\099750_153400\076210.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_642_Em_680\099750\099750_167380\076180.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_642_Em_680\099750\099750_174370\076100.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_642_Em_680\106740\106740_132430\076230.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_642_Em_680\106740\106740_139420\076200.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_642_Em_680\106740\106740_153400\076150.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_642_Em_680\120720\120720_125440\076240.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_642_Em_680\120720\120720_146410\076180.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_642_Em_680\120720\120720_167380\076130.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_642_Em_680\127710\127710_139420\076200.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_642_Em_680\127710\127710_146410\076170.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_642_Em_680\127710\127710_146410\076180.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_642_Em_680\134700\134700_132430\076190.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_642_Em_680\134700\134700_139420\076170.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_642_Em_680\134700\134700_139420\076180.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_642_Em_680\134700\134700_146410\076180.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_642_Em_680\134700\134700_153400\076160.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_642_Em_680\141690\141690_174370\076070.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_642_Em_680\141690\141690_174370\076080.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_642_Em_680\148680\148680_139420\076210.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_642_Em_680\148680\148680_167380\076140.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_642_Em_680\148680\148680_167380\076150.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_642_Em_680\148680\148680_174370\076090.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_642_Em_680\148680\148680_174370\076100.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_642_Em_680\155670\155670_125440\076250.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_642_Em_680\155670\155670_146410\076200.tiff"
+, r"Y:\SmartSPIM_Data\20211026_11_05_21_SM210705_02_L_HPF_LS_15x_1000z\Ex_642_Em_680\155670\155670_153400\076210.tiff"
+]):
+    # pass
+    # print(f", r\"{file}\"")
+    try:
+        if Path(file).exists():
+            imread(file)
+        else:
+            print(file)
+    except Exception:
+        imwrite(file, np.zeros(shape=(1850, 1850), dtype=np.uint16), compression=('ZLIB', 1))
+
+# parent = Path(r"Y:\SmartSPIM_Data\20211122_11_13_27_SA210705_02_L_HPF_LS_15X_1000z\Ex_561_Em_600\122370\122370_189330")
+# dummy_data = np.zeros(shape=(1850, 1850), dtype=np.uint16)
+# for i in range(0, 89990, 10):
+#     file = parent / f"{i:06}.tiff"
+#     if not file.exists():
+#         print(file)
+#         imwrite(file, dummy_data, compression=('ZLIB', 1))
+
+# def folder_iterator(path: Path):
+#     counter = 0
+#     for item in path.iterdir():
+#         if item.is_file():
+#             counter += 1
+#         elif item.is_dir():
+#             print(f"{counter}, {str(item)}")
+#             folder_iterator(item)
+#             counter = 0
+#
+#
+# folder_iterator(Path(r"Y:\SmartSPIM_Data\20211122_11_13_27_SA210705_02_L_HPF_LS_15X_1000z"))
