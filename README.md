@@ -2,10 +2,10 @@
 Python code for stitching and image enhancement of Light Sheet data
 
 # Installation:
-* On Linux make sure Java server (e.g., [openjdk](https://openjdk.java.net/install/)), and [Nvidia drivers and CUDA >10.1](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/index.html#ubuntu-installation) are installed.
 * Install [Imaris Viewer](https://viewer.imaris.com/download/ImarisViewer9_8_0w64.exe) (on Linux use [wine](https://vitux.com/how-to-install-wine-on-ubuntu/)).
+* On Linux make sure Java server (e.g., [openjdk](https://openjdk.java.net/install/)), and [Nvidia drivers and CUDA >10.1](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/index.html#ubuntu-installation) are installed.
 * Install [anaconda python distribution](https://www.anaconda.com/products/individual):
-   make a dedicated python environment for stitching:
+  make a dedicated python environment for stitching:
 
    `conda create -n stitching -c conda-forge python=3.8 psutil tqdm tifffile numpy scipy scikit-image scikit-learn matplotlib pyqt pandas imagecodecs git mpi4py`
    
@@ -13,10 +13,7 @@ Python code for stitching and image enhancement of Light Sheet data
     
    `pip install dcimg`
    
-   On Windows, the conda version of mpi4py is not functional. Instead, install the latest [Microsoft MPI from GitHub](https://github.com/microsoft/Microsoft-MPI). 
-   Then, install mpi4py with pip command:
-   
-   `pip install mpi4py`
+   **Note:** The last time I checked, Microsoft MPI installed fom conda-forge was functional. However, if mpi4py was not functional on Windows, try installing the latest [Microsoft MPI from GitHub](https://github.com/microsoft/Microsoft-MPI).
    
    **Note:** If installing anaconda as user did not work on Windows, you may test installing it as the system python.
 
