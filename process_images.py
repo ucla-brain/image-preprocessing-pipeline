@@ -377,6 +377,7 @@ def main(source_folder):
             )
             voxel_size_x = voxel_size_y = voxel_size_z
     need_compression = False  # ask_true_false_question("Do you need to compress temporary tif files?")
+    need_tera_fly_conversion = ask_true_false_question("Do you need to convert to teraFly format?")
     de_striped_dir = source_folder.parent / (source_folder.name + de_striped_posix)
     continue_process_pystripe = False
     dir_stitched = source_folder.parent / (source_folder.name + "_stitched_v4")
@@ -576,7 +577,7 @@ def main(source_folder):
     else:
         dir_tif = dir_stitched / 'tif'
         dir_tif.mkdir(exist_ok=True)
-        vol_xml_import_path = dir_stitched.joinpath(existing_channels[0] + '_xml_import_step_5.xml')
+        vol_xml_import_path = dir_stitched / f'{existing_channels[0]}_xml_import_step_5.xml'
         volume = tsv.volume.TSVVolume.load(vol_xml_import_path)
         convert_to_2D_tif(
             volume,
@@ -622,9 +623,8 @@ def main(source_folder):
             f"--compression 1",
             f"--defaultcolorlist #BBRRGG"
         ]
-        p_log("tiff to ims conversion command:\n" + " ".join(command))
-
-        subprocess.call(" ".join(command), shell=True)
+        p_log(f"tiff to ims conversion command:\n{' '.join(command)}\n")
+        # subprocess.call(" ".join(command), shell=True)
         work += [" ".join(command)]
     else:
         if len(files) > 0:
@@ -632,27 +632,28 @@ def main(source_folder):
         else:
             p_log("no tif file found to convert to ims!")
 
-    dir_tera_fly = dir_stitched / 'TeraFly'
-    dir_tera_fly.mkdir(exist_ok=True)
+    for channel in channels_need_reconstruction:
+        if need_tera_fly_conversion and channel in existing_channels:
+            dir_tera_fly = dir_stitched / f'TeraFly_{channel}'
+            dir_tera_fly.mkdir(exist_ok=True)
+            command = [
+                f"mpiexec -np {cpu_physical_core_count} python -m mpi4py {parasconverter}",
+                "--sfmt=\"TIFF (series, 2D)\"",
+                "--dfmt=\"TIFF (tiled, 3D)\"",
+                "--resolutions=\"012345\"",
+                f"--clist={existing_channels.index(channel)}",
+                "--halve=max",
+                "--noprogressbar",
+                "--sparse_data",
+                f"-s={dir_tif}",
+                f"-d={dir_tera_fly}",
+            ]
+            p_log(f"TeraFly conversion command:\n{' '.join(command)}\n")
+            # subprocess.call(" ".join(command), shell=True)
+            work += [" ".join(command)]
 
-    command = [
-        f"mpiexec -np {cpu_logical_core_count} python -m mpi4py {parasconverter}",
-        "--sfmt=\"TIFF (series, 2D)\"",
-        "--dfmt=\"TIFF (tiled, 3D)\"",
-        "--resolutions=\"012345\"",
-        f"--clist={len(existing_channels) - 1}",
-        "--halve=max",
-        "--noprogressbar",
-        "--sparse_data",
-        f"-s={dir_tif}",
-        f"-d={dir_tera_fly}",
-    ]
-    p_log("stitching command:\n" + " ".join(command))
-    subprocess.call(" ".join(command), shell=True)
-    work += [" ".join(command)]
-
-    with Pool(processes=2) as pool:
-        pool.map(worker, work)
+    with Pool(processes=cpu_physical_core_count) as pool:
+        pool.imap_unordered(worker, work)
 
     # ::::::::::::::::::::::::::::: Done ::::::::::::::::::::::::::::::
 
