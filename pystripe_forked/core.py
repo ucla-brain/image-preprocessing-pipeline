@@ -875,7 +875,7 @@ def batch_filter(
         True means only process the remaining images.
     down_sample : tuple (int, int) or None
         Sets down sample factor. Down_sample (3, 2) means 3 pixels in y axis, and 2 pixels in x-axis merges into 1.
-    new_size : tuple (int, int) or None
+    new_size : tuple (y: int, x: int) or None
         resize the image after down-sampling
     """
     input_path = Path(input_path)

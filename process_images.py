@@ -168,7 +168,7 @@ def get_voxel_sizes():
         objective = "4x"
         voxel_size_x = VoxelSizeX_4x
         voxel_size_y = VoxelSizeY_4x
-        tile_size = (1600, 2000)  # y, x
+        tile_size = (1600, 2000)  # y, x = tile_size
     elif objective == "2":
         objective = "10x"
         voxel_size_x = VoxelSizeX_10x
@@ -281,12 +281,16 @@ def worker(x):
 def merge_channels(r: np.ndarray, g: np.ndarray, b: np.ndarray):
     assert r.shape[0] == g.shape[0] == b.shape[0]
     assert r.shape[1] == g.shape[1] == b.shape[1]
-    needed_multi_channel_img = np.zeros((a.shape[0], a.shape[1], 3))
 
     """Add the channels to the needed image one by one"""
-    needed_multi_channel_img[:, :, 0] = r
-    needed_multi_channel_img[:, :, 1] = g
-    needed_multi_channel_img[:, :, 2] = b
+    # method 1
+    # needed_multi_channel_img = np.zeros((a.shape[0], a.shape[1], 3))
+    # needed_multi_channel_img[:, :, 0] = r
+    # needed_multi_channel_img[:, :, 1] = g
+    # needed_multi_channel_img[:, :, 2] = b
+
+    # method 2
+    needed_multi_channel_img = np.dstack((r, g, b))
 
     return needed_multi_channel_img
 
@@ -368,8 +372,8 @@ def main(source_folder):
             de_striped_posix += "_ds"
             what_for += "down-sampling "
             new_tile_size = (
-                int(round(tile_size[1] * voxel_size_x / voxel_size_z, 0)),
-                int(round(tile_size[0] * voxel_size_y / voxel_size_z, 0))
+                int(round(tile_size[0] * voxel_size_y / voxel_size_z, 0)),
+                int(round(tile_size[1] * voxel_size_x / voxel_size_z, 0))
             )
             voxel_size_x = voxel_size_y = voxel_size_z
     need_compression = False  # ask_true_false_question("Do you need to compress temporary tif files?")
