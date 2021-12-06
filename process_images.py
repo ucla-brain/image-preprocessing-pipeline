@@ -276,7 +276,7 @@ def p_log(txt):
 
 def worker(x):
     result = subprocess.call(x, shell=True)
-    p_log(f"\nfinished:\n{x}\nresult{result}")
+    p_log(f"\nfinished:\n{x}\nresult:\n{result}\n")
     return result
 
 
