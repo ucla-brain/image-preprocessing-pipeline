@@ -476,6 +476,7 @@ def main(source_folder):
         if channel_dir.exists():
             existing_channels += [Channel]
             log.info(f"{datetime.now()}: {channel_dir} folder exists importing for stitching...")
+            proj_out = dir_stitched / f'{Channel}_xml_import_step_1.xml'
             command = [
                 f"{terastitcher}",
                 "-1",
@@ -487,15 +488,18 @@ def main(source_folder):
                 f"--vxl3={voxel_size_z}",
                 "--sparse_data",
                 f"--volin={channel_dir}",
-                f"--projout={dir_stitched.joinpath(Channel + '_xml_import_step_1.xml')}",
+                f"--projout={proj_out}",
                 "--noprogressbar"
             ]
             p_log("import command:\n" + " ".join(command))
             subprocess.run(command, check=True)
+            assert proj_out.exists()
             if Channel == most_informative_channel and \
                     not dir_stitched.joinpath(Channel + '_xml_import_step_' + str(5) + '.xml').exists():
                 for step in [2, 3, 4, 5]:
                     p_log(f"{datetime.now()}: starting step {step} of stitching for most informative channel ...")
+                    proj_in = dir_stitched / f"{Channel}_xml_import_step_{step - 1}.xml"
+                    proj_out = dir_stitched / f"{Channel}_xml_import_step_{step}.xml"
                     if step == 2:
                         command = [f"mpiexec -np {cpu_logical_core_count} python -m mpi4py {parastitcher}"]
                     else:
@@ -503,12 +507,13 @@ def main(source_folder):
                     command += [
                         f"-{step}",
                         "--threshold=0.7",
-                        f"--projin={dir_stitched.joinpath(Channel + '_xml_import_step_' + str(step - 1) + '.xml')}",
-                        f"--projout={dir_stitched.joinpath(Channel + '_xml_import_step_' + str(step) + '.xml')}",
+                        f"--projin={proj_in}",
+                        f"--projout={proj_out}",
                     ]
                     p_log("stitching command:\n" + " ".join(command))
                     subprocess.call(" ".join(command), shell=True)  # subprocess.run(command)
-                    dir_stitched.joinpath(Channel + '_xml_import_step_' + str(step-1) + '.xml').unlink(missing_ok=True)
+                    assert proj_out.exists()
+                    proj_in.unlink(missing_ok=True)
         else:
             p_log(f"{datetime.now()}: {channel_dir} did not exist and not imported ...")
 
