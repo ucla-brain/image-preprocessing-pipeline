@@ -275,7 +275,9 @@ def p_log(txt):
 
 
 def worker(x):
-    return subprocess.call(x, shell=True)
+    result = subprocess.call(x, shell=True)
+    p_log(f"\nfinished:\n{x}\nresult{result}")
+    return result
 
 
 def merge_channels(r: np.ndarray, g: np.ndarray, b: np.ndarray):
