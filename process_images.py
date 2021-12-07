@@ -607,7 +607,7 @@ def main(source_folder):
     work = []
     if imaris_converter.exists() and len(files) > 0:
         p_log(f"{datetime.now()}: found Imaris View: converting {file.name} to ims ... ")
-        ims_file_path = dir_stitched / (source_folder.name + '.ims')
+        ims_file_path = dir_stitched / f'{source_folder.name}.ims'
         command = [
             f"" if sys.platform == "win32" else "wine",
             f"{correct_path_for_cmd(imaris_converter)}",
