@@ -629,7 +629,7 @@ def main(source_folder):
         command += [
             f"--nthreads {cpu_logical_core_count}",
             f"--compression 1",
-            f"--defaultcolorlist #BBRRGG"
+            # f"--defaultcolorlist #BBRRGG"
         ]
         p_log(f"tiff to ims conversion command:\n{' '.join(command)}\n")
         # subprocess.call(" ".join(command), shell=True)
