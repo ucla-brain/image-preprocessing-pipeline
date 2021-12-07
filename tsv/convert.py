@@ -4,7 +4,7 @@ import argparse
 import itertools
 import multiprocessing
 import numpy as np
-import tifffile
+from tifffile import imsave
 from .volume import VExtent, TSVVolume
 import sys
 import tqdm
@@ -100,15 +100,19 @@ def convert_to_2D_tif(
 
 
 def convert_one_plane(v, compression, decimation, dtype, output_pattern, volume, z, rotation):
+    path = output_pattern.format(z=z)
+    if os.path.exists(path):
+        return
+
+    dir_path = os.path.dirname(path)
+    if not os.path.exists(dir_path):
+        os.makedirs(dir_path, exist_ok=True)
+
     mini_volume = VExtent(
         volume.x0, volume.x1, volume.y0, volume.y1, z, z + 1)
     plane = v.imread(mini_volume, dtype)[0]
     if decimation > 1:
         plane = plane[::decimation, ::decimation]
-    path = output_pattern.format(z=z)
-    dir_path = os.path.dirname(path)
-    if not os.path.exists(dir_path):
-        os.makedirs(dir_path, exist_ok=True)
     if rotation == 90:
         plane = np.rot90(plane, 1)
     elif rotation == 180:
@@ -118,7 +122,7 @@ def convert_one_plane(v, compression, decimation, dtype, output_pattern, volume,
 
     for _ in range(10):
         try:
-            tifffile.imsave(path, plane, compress=compression)
+            imsave(path, plane, compress=compression)
         except OSError:
             continue
         break
@@ -140,7 +144,7 @@ if blockfs_present:
         dir_path = os.path.dirname(path)
         if not os.path.exists(dir_path):
             os.makedirs(dir_path, exist_ok=True)
-        tifffile.imsave(path, plane, compress=compression)
+        imsave(path, plane, compress=compression)
         with sm.txn() as memory:
             memory[z - z0] = plane
 
@@ -239,7 +243,7 @@ def make_diag_plane(v, compression, decimation, dtype, mipmap_level, output_patt
             list(plane.transpose(2, 0, 1)) +
             [np.zeros(plane.shape[:2], plane.dtype)] * (3 - plane.shape[2]))
     path = output_pattern.format(z=z)
-    tifffile.imsave(path, plane, compress=compression, photometric="rgb")
+    imsave(path, plane, compress=compression, photometric="rgb")
 
 
 def main(args=sys.argv[1:]):
