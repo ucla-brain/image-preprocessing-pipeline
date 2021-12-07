@@ -645,7 +645,7 @@ def main(source_folder):
             dir_tera_fly = dir_stitched / f'TeraFly_{channel}'
             dir_tera_fly.mkdir(exist_ok=True)
             command = [
-                f"mpiexec -np {cpu_physical_core_count} python -m mpi4py {parasconverter}",
+                f"mpiexec -np {4} python -m mpi4py {parasconverter}",
                 "--sfmt=\"TIFF (series, 2D)\"",
                 "--dfmt=\"TIFF (tiled, 3D)\"",
                 "--resolutions=\"012345\"",
