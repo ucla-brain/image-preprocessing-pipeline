@@ -580,7 +580,7 @@ def main(source_folder):
         #     "--noprogressbar",
         #     "--sparse_data",
         # ]
-        p_log("stitching command:\n" + " ".join(command))
+        p_log("merge command:\n" + " ".join(command))
         subprocess.call(" ".join(command), shell=True)
     else:
         dir_tif = dir_stitched / 'tif'
