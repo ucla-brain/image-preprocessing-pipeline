@@ -622,14 +622,12 @@ def main(source_folder):
                 f"--output {correct_path_for_wsl(ims_file_path)}",
             ]
         if len(files) > 1:
-            # .\imaris\ImarisConvertiv.exe --input input\path\img_00000.tif --inputformat TiffSeries
-            # --output output\path\2d_to_3d.ims --logprogress --nthreads 24 --compression 1
             command += ["--inputformat TiffSeries"]
 
         command += [
-            f"--nthreads {cpu_logical_core_count}",
+            f"--nthreads {cpu_physical_core_count}",
             f"--compression 1",
-            # f"--defaultcolorlist #BBRRGG"
+            # f"--defaultcolorlist BBRRGG"
         ]
         p_log(f"tiff to ims conversion command:\n{' '.join(command)}\n")
         # subprocess.call(" ".join(command), shell=True)
