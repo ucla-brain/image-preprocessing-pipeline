@@ -9,11 +9,11 @@ import sys
 import numpy as np
 import psutil
 import shutil
-import pathlib
 import platform
 import subprocess
 import logging as log
 import pystripe_forked as pystripe
+from pathlib import Path
 from multiprocessing import freeze_support, Pool
 from flat import create_flat_img
 from datetime import datetime
@@ -36,7 +36,7 @@ if sys.platform == "win32":
     # print("Windows is detected.")
     psutil.Process().nice(psutil.IDLE_PRIORITY_CLASS)
     CacheDriveExample = "W:\\3D_stitched\\"
-    TeraStitcherPath = pathlib.Path(r"./TeraStitcher_windows_avx2")
+    TeraStitcherPath = Path(r"./TeraStitcher_windows_avx2")
     os.environ["PATH"] = f"{os.environ['PATH']};{TeraStitcherPath.as_posix()}"
     os.environ["PATH"] = f"{os.environ['PATH']};{TeraStitcherPath.joinpath('pyscripts').as_posix()}"
     terastitcher = "terastitcher.exe"
@@ -45,7 +45,7 @@ elif sys.platform == 'linux' and 'microsoft' not in uname().release.lower():
     print("Linux is detected.")
     psutil.Process().nice(value=19)
     CacheDriveExample = "/mnt/scratch"
-    TeraStitcherPath = pathlib.Path(r"./TeraStitcher_linux")
+    TeraStitcherPath = Path(r"./TeraStitcher_linux")
     os.environ["PATH"] = f"{os.environ['PATH']}:{TeraStitcherPath.as_posix()}"
     os.environ["PATH"] = f"{os.environ['PATH']}:{TeraStitcherPath.joinpath('pyscripts').as_posix()}"
     terastitcher = "terastitcher"
@@ -53,14 +53,14 @@ elif sys.platform == 'linux' and 'microsoft' not in uname().release.lower():
     os.environ["TERM"] = "xterm"
     os.environ["USECUDA_X_NCC"] = "1"  # set to 0 to stop GPU acceleration
     if os.environ["USECUDA_X_NCC"] == "1":
-        if pathlib.Path("/usr/lib/jvm/java-11-openjdk-amd64/lib/server").exists():
+        if Path("/usr/lib/jvm/java-11-openjdk-amd64/lib/server").exists():
             os.environ["LD_LIBRARY_PATH"] = "/usr/lib/jvm/java-11-openjdk-amd64/lib/server"
         else:
             log.error("Error: JAVA path not found")
             raise RuntimeError
-        if pathlib.Path("/usr/local/cuda-11.4/").exists() and pathlib.Path("/usr/local/cuda-11.4/bin").exists():
+        if Path("/usr/local/cuda-11.4/").exists() and Path("/usr/local/cuda-11.4/bin").exists():
             os.environ["CUDA_ROOT_DIR"] = "/usr/local/cuda-11.4/"
-        elif pathlib.Path("/usr/local/cuda-10.1/").exists() and pathlib.Path("/usr/local/cuda-10.1/bin").exists():
+        elif Path("/usr/local/cuda-10.1/").exists() and Path("/usr/local/cuda-10.1/bin").exists():
             os.environ["CUDA_ROOT_DIR"] = "/usr/local/cuda-10.1/"
         else:
             log.error("Error: CUDA path not found")
@@ -72,7 +72,7 @@ elif sys.platform == 'linux' and 'microsoft' in uname().release.lower():
     print("Windows subsystem for Linux is detected.")
     psutil.Process().nice(value=19)
     CacheDriveExample = "/mnt/d/"
-    TeraStitcherPath = pathlib.Path(r"./TeraStitcher_linux")
+    TeraStitcherPath = Path(r"./TeraStitcher_linux")
     os.environ["PATH"] = f"{os.environ['PATH']}:{TeraStitcherPath.as_posix()}"
     os.environ["PATH"] = f"{os.environ['PATH']}:{TeraStitcherPath.joinpath('pyscripts').as_posix()}"
     terastitcher = "terastitcher"
@@ -80,14 +80,14 @@ elif sys.platform == 'linux' and 'microsoft' in uname().release.lower():
     os.environ["TERM"] = "xterm"
     os.environ["USECUDA_X_NCC"] = "0"  # set to 0 to stop GPU acceleration
     if os.environ["USECUDA_X_NCC"] == "1":
-        if pathlib.Path("/usr/lib/jvm/java-11-openjdk-amd64/lib/server").exists():
+        if Path("/usr/lib/jvm/java-11-openjdk-amd64/lib/server").exists():
             os.environ["LD_LIBRARY_PATH"] = "/usr/lib/jvm/java-11-openjdk-amd64/lib/server"
         else:
             log.error("Error: JAVA path not found")
             raise RuntimeError
-        if pathlib.Path("/usr/local/cuda-11.4/").exists() and pathlib.Path("/usr/local/cuda-11.4/bin").exists():
+        if Path("/usr/local/cuda-11.4/").exists() and Path("/usr/local/cuda-11.4/bin").exists():
             os.environ["CUDA_ROOT_DIR"] = "/usr/local/cuda-11.4/"
-        elif pathlib.Path("/usr/local/cuda-10.1/").exists() and pathlib.Path("/usr/local/cuda-10.1/bin").exists():
+        elif Path("/usr/local/cuda-10.1/").exists() and Path("/usr/local/cuda-10.1/bin").exists():
             os.environ["CUDA_ROOT_DIR"] = "/usr/local/cuda-10.1/"
         else:
             log.error("Error: CUDA path not found")
@@ -119,7 +119,7 @@ if not parastitcher.exists():
     log.error("Error: ParaStitcher not found")
     raise RuntimeError
 
-imaris_converter = pathlib.Path(r"./imaris") / "ImarisConvertiv.exe"
+imaris_converter = Path(r"./imaris") / "ImarisConvertiv.exe"
 if not imaris_converter.exists():
     log.error("Error: ImarisConvertiv.exe not found")
     raise RuntimeError
@@ -203,20 +203,20 @@ def get_voxel_sizes():
     return objective, voxel_size_x, voxel_size_y, voxel_size_z, tile_size
 
 
-def get_destination_path(folder_name_prefix, what_for='tif', posix='', default_path=pathlib.Path('')):
+def get_destination_path(folder_name_prefix, what_for='tif', posix='', default_path=Path('')):
     input_path = input(
         f"\n"
         f"Enter destination path for {what_for}.\n"
         f"for example: {CacheDriveExample}\n"
         f"If nothing entered, {default_path.absolute()} will be used.\n").strip()
-    drive_path = pathlib.Path(input_path)
+    drive_path = Path(input_path)
     while not drive_path.exists():
         input_path = input(
             f"\n"
             f"Enter a valid destination path for {what_for}. "
             f"for example: {CacheDriveExample}\n"
             f"If nothing entered, {default_path.absolute()} will be used.\n").strip()
-        drive_path = pathlib.Path(input_path)
+        drive_path = Path(input_path)
     if input_path == '':
         destination_path = default_path
     else:
@@ -274,9 +274,9 @@ def p_log(txt):
         break
 
 
-def worker(x):
-    result = subprocess.call(x, shell=True)
-    p_log(f"\nfinished:\n{x}\nresult:\n{result}\n")
+def worker(command: str):
+    result = subprocess.call(command, shell=True)
+    print(f"\nfinished:\n{command}\nresult:\n{result}\n")
     return result
 
 
@@ -334,7 +334,7 @@ def main(source_folder):
                     "(It might not be compatible with your microscopes.)"
                 )
                 if use_default_flat_classification_data:
-                    image_classes_training_data_path = pathlib.Path(__file__).parent / "image_classes.csv"
+                    image_classes_training_data_path = Path(__file__).parent / "image_classes.csv"
                     print(f"default classification data path is:\n"
                           f"{image_classes_training_data_path.absolute()}")
                 else:
@@ -661,7 +661,7 @@ def main(source_folder):
             work += [" ".join(command)]
 
     with Pool(processes=cpu_physical_core_count) as pool:
-        pool.imap_unordered(worker, work)
+        list(pool.imap_unordered(worker, work))
 
     # ::::::::::::::::::::::::::::: Done ::::::::::::::::::::::::::::::
 
@@ -672,9 +672,9 @@ def main(source_folder):
 if __name__ == '__main__':
     freeze_support()
     if len(sys.argv) == 1:
-        main(source_folder=pathlib.Path(__file__).parent.absolute())
+        main(source_folder=Path(__file__).parent.absolute())
     elif len(sys.argv) == 2:
-        if pathlib.Path(sys.argv[1]).exists():
-            main(source_folder=pathlib.Path(sys.argv[1]).absolute())
+        if Path(sys.argv[1]).exists():
+            main(source_folder=Path(sys.argv[1]).absolute())
         else:
             print("The entered path is not valid")
