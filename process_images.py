@@ -344,9 +344,9 @@ def main(source_folder):
     if need_raw_to_tiff_conversion:
         de_striped_posix += "_tif"
         what_for += "tif "
-    need_16bit_to_8bit_conversion = True
-    # ask_true_false_question("Do you need to convert 16-bit images to 8-bit before stitching?")
-    right_bit_shift = 8
+    need_16bit_to_8bit_conversion = ask_true_false_question(
+        "Do you need to convert 16-bit images to 8-bit before stitching?")
+    right_bit_shift: int = 8
     if need_16bit_to_8bit_conversion:
         right_bit_shift_str = ""
         while right_bit_shift_str not in ["0", "1", "2", "3", "4", "5", "6", "7", "8"]:
