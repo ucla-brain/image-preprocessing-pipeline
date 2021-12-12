@@ -83,7 +83,8 @@ def convert_to_2D_tif(
     for z in range(volume.z0, volume.z1, decimation):
         arg_list.append((v, compression, decimation, dtype, output_pattern, volume, z, rotation))
     num_images_need_processing = len(arg_list)
-    while num_images_need_processing//chunks < cores:
+    while num_images_need_processing//chunks < cores and chunks > 1:
+        # print(f"chunks={chunks}")
         chunks //= 2
     print(f"tsv is converting {num_images_need_processing} images using {cores} cores and {chunks} chunks")
 

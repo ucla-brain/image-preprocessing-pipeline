@@ -495,7 +495,7 @@ def main(source_folder):
             subprocess.run(command, check=True)
             assert proj_out.exists()
             if Channel == most_informative_channel and \
-                    not dir_stitched.joinpath(Channel + '_xml_import_step_' + str(5) + '.xml').exists():
+                    not dir_stitched.joinpath(f'{Channel}_xml_import_step_5.xml').exists():
                 for step in [2, 3, 4, 5]:
                     p_log(f"{datetime.now()}: starting step {step} of stitching for most informative channel ...")
                     proj_in = dir_stitched / f"{Channel}_xml_import_step_{step - 1}.xml"
@@ -515,6 +515,8 @@ def main(source_folder):
                     subprocess.call(" ".join(command), shell=True)  # subprocess.run(command)
                     assert proj_out.exists()
                     proj_in.unlink(missing_ok=False)
+            elif dir_stitched.joinpath(f'{Channel}_xml_import_step_5.xml').exists():
+                proj_out.unlink(missing_ok=True)
         else:
             p_log(f"{datetime.now()}: {channel_dir} did not exist and not imported ...")
 
