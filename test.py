@@ -408,31 +408,53 @@ import subprocess
 #
 # folder_iterator(Path(r"Y:\SmartSPIM_Data\20211122_11_13_27_SA210705_02_L_HPF_LS_15X_1000z"))
 
-def worker(command: str):
-    result = subprocess.call(command, shell=True)
-    print(f"\nfinished:\n{command}\nresult:\n{result}\n")
-    return result
 
-
-if __name__ == '__main__':
-    freeze_support()
-    TeraStitcherPath = Path(r"./TeraStitcher_windows_avx2")
-    os.environ["PATH"] = f"{os.environ['PATH']};{TeraStitcherPath.as_posix()}"
-    os.environ["PATH"] = f"{os.environ['PATH']};{TeraStitcherPath.joinpath('pyscripts').as_posix()}"
-    work = [
-        "imaris\ImarisConvertiv.exe "
-        "--input D:\\20211005_08_30_35_NW210718_01_LS_4x_2000z_stitched_v4\\tif\\img_000000.tif "
-        "--output D:\\20211005_08_30_35_NW210718_01_LS_4x_2000z_stitched_v4\\20211005_08_30_35_NW210718_01_LS_4x_2000z.ims "
-        "--inputformat TiffSeries "
-        "--nthreads 40 "
-        "--compression 1",
-
-        "mpiexec -np 20 python -m mpi4py TeraStitcher_windows_avx2\pyscripts\paraconverter.py "
-        "--sfmt=\"TIFF (series, 2D)\" --dfmt=\"TIFF (tiled, 3D)\" --resolutions=\"012345\" --clist=0 --halve=max "
-        "--noprogressbar --sparse_data "
-        "-s=D:\\20211005_08_30_35_NW210718_01_LS_4x_2000z_stitched_v4\\tif "
-        "-d=D:\\20211005_08_30_35_NW210718_01_LS_4x_2000z_stitched_v4\\TeraFly_Ex_561_Em_600"
-    ]
-    with Pool(processes=61) as pool:
-        a = list(pool.imap_unordered(worker, work, chunksize=1))
-        print(a)
+# def worker(command: str):
+#     result = subprocess.call(command, shell=True)
+#     print(f"\nfinished:\n{command}\nresult:\n{result}\n")
+#     return result
+#
+#
+# if __name__ == '__main__':
+#     freeze_support()
+#     TeraStitcherPath = Path(r"./TeraStitcher_windows_avx2")
+#     os.environ["PATH"] = f"{os.environ['PATH']};{TeraStitcherPath.as_posix()}"
+#     os.environ["PATH"] = f"{os.environ['PATH']};{TeraStitcherPath.joinpath('pyscripts').as_posix()}"
+#     work = [
+#         "imaris\ImarisConvertiv.exe "
+#         "--input D:\\20211005_08_30_35_NW210718_01_LS_4x_2000z_stitched_v4\\tif\\img_000000.tif "
+#         "--output D:\\20211005_08_30_35_NW210718_01_LS_4x_2000z_stitched_v4\\20211005_08_30_35_NW210718_01_LS_4x_2000z.ims "
+#         "--inputformat TiffSeries "
+#         "--nthreads 40 "
+#         "--compression 1",
+#
+#         "mpiexec -np 20 python -m mpi4py TeraStitcher_windows_avx2\pyscripts\paraconverter.py "
+#         "--sfmt=\"TIFF (series, 2D)\" --dfmt=\"TIFF (tiled, 3D)\" --resolutions=\"012345\" --clist=0 --halve=max "
+#         "--noprogressbar --sparse_data "
+#         "-s=D:\\20211005_08_30_35_NW210718_01_LS_4x_2000z_stitched_v4\\tif "
+#         "-d=D:\\20211005_08_30_35_NW210718_01_LS_4x_2000z_stitched_v4\\TeraFly_Ex_561_Em_600"
+#     ]
+#     with Pool(processes=61) as pool:
+#         a = list(pool.imap_unordered(worker, work, chunksize=1))
+#         print(a)
+import os
+from pathlib import Path
+channel_dir = Path(r'Y:\SmartSPIM_Data\2021_11_02\20211102_11_42_49_SA210705_02_LS_4x_2000z_8b_3bsh_ds\Ex_488_Em_525')
+correct_damaged_source = True
+num_files = 5100
+voxel_size_z = 2.0
+# np.zeros
+if correct_damaged_source:
+    for sub_dir, dirs, files in os.walk(channel_dir):
+        for directory in dirs:
+            path = Path(sub_dir) / directory
+            files = [f.is_file() for f in path.glob('*')]
+            if all(files):
+                print(path)
+                if len(files) == 0:
+                    print(f'{0:06}.tif')
+                elif 1 < len(files) < num_files:
+                    for file_num in range(num_files):
+                        file_name = f'{int(file_num * voxel_size_z * 10):06}.tif'
+                        if not (path / file_name).exists():
+                            print(file_name)
