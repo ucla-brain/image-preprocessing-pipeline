@@ -168,7 +168,7 @@ def get_voxel_sizes():
         objective = "4x"
         voxel_size_x = VoxelSizeX_4x
         voxel_size_y = VoxelSizeY_4x
-        tile_size = (1600, 2000)  # y, x = tile_size
+        tile_size = (1600, 2000)  # y (vertical, height?), x (horizontal, width?) = tile_size
     elif objective == "2":
         objective = "10x"
         voxel_size_x = VoxelSizeX_10x
@@ -340,7 +340,7 @@ def main(source_folder):
                 else:
                     print("You need classification data for flat image generation!")
                     raise RuntimeError
-    need_raw_to_tiff_conversion = False  # ask_true_false_question("Are images in raw format?")
+    need_raw_to_tiff_conversion = ask_true_false_question("Are images in raw format?")
     if need_raw_to_tiff_conversion:
         de_striped_posix += "_tif"
         what_for += "tif "
@@ -378,7 +378,7 @@ def main(source_folder):
                 int(round(tile_size[1] * voxel_size_x / voxel_size_z, 0))
             )
             voxel_size_x = voxel_size_y = voxel_size_z
-    need_compression = False  # ask_true_false_question("Do you need to compress temporary tif files?")
+    need_compression = ask_true_false_question("Do you need to compress temporary tif files?")
     need_tera_fly_conversion = ask_true_false_question("Do you need to convert to teraFly format?")
     de_striped_dir = source_folder.parent / (source_folder.name + de_striped_posix)
     continue_process_pystripe = False
@@ -459,6 +459,8 @@ def main(source_folder):
                     convert_to_8bit=need_16bit_to_8bit_conversion,
                     bit_shift_to_right=right_bit_shift,
                     continue_process=continue_process_pystripe,
+                    dtype='uint16',
+                    tile_size=tile_size,
                     down_sample=down_sampling_factor,
                     new_size=new_tile_size
                 )
@@ -645,7 +647,7 @@ def main(source_folder):
             dir_tera_fly = dir_stitched / f'TeraFly_{channel}'
             dir_tera_fly.mkdir(exist_ok=True)
             command = [
-                f"mpiexec -np {4} python -m mpi4py {parasconverter}",
+                f"mpiexec -np 4 python -m mpi4py {parasconverter}",
                 "--sfmt=\"TIFF (series, 2D)\"",
                 "--dfmt=\"TIFF (tiled, 3D)\"",
                 "--resolutions=\"012345\"",

@@ -437,24 +437,37 @@ import subprocess
 #     with Pool(processes=61) as pool:
 #         a = list(pool.imap_unordered(worker, work, chunksize=1))
 #         print(a)
-import os
+
+# import os
+# from pathlib import Path
+# channel_dir = Path(r'Y:\SmartSPIM_Data\2021_11_02\20211102_11_42_49_SA210705_02_LS_4x_2000z_8b_3bsh_ds\Ex_488_Em_525')
+# correct_damaged_source = True
+# num_files = 5100
+# voxel_size_z = 2.0
+# # np.zeros
+# if correct_damaged_source:
+#     for sub_dir, dirs, files in os.walk(channel_dir):
+#         for directory in dirs:
+#             path = Path(sub_dir) / directory
+#             files = [f.is_file() for f in path.glob('*')]
+#             if all(files):
+#                 print(path)
+#                 if len(files) == 0:
+#                     print(f'{0:06}.tif')
+#                 elif 1 < len(files) < num_files:
+#                     for file_num in range(num_files):
+#                         file_name = f'{int(file_num * voxel_size_z * 10):06}.tif'
+#                         if not (path / file_name).exists():
+#                             print(file_name)
+
 from pathlib import Path
-channel_dir = Path(r'Y:\SmartSPIM_Data\2021_11_02\20211102_11_42_49_SA210705_02_LS_4x_2000z_8b_3bsh_ds\Ex_488_Em_525')
-correct_damaged_source = True
-num_files = 5100
-voxel_size_z = 2.0
-# np.zeros
-if correct_damaged_source:
-    for sub_dir, dirs, files in os.walk(channel_dir):
-        for directory in dirs:
-            path = Path(sub_dir) / directory
-            files = [f.is_file() for f in path.glob('*')]
-            if all(files):
-                print(path)
-                if len(files) == 0:
-                    print(f'{0:06}.tif')
-                elif 1 < len(files) < num_files:
-                    for file_num in range(num_files):
-                        file_name = f'{int(file_num * voxel_size_z * 10):06}.tif'
-                        if not (path / file_name).exists():
-                            print(file_name)
+from os import access, R_OK
+file = Path(r'Y:\SmartSPIM_Data\2021_12_17\20211217_10_49_47_SA210705_01_WholeBrain_LS_15x_1000z\Ex_561_Em_600\123840\123840_218270\073560.raw')
+print(file.is_file())
+print(file.exists())
+print(access(file, R_OK))
+try:
+    with open(file) as fp:
+        pass
+except IOError:
+    print("could not read", file)

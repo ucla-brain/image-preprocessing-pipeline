@@ -36,13 +36,21 @@ os.environ['NUMEXPR_NUM_THREADS'] = '1'
 os.environ['OMP_NUM_THREADS'] = '1'
 
 
-def imread_tif_raw(path: Path):
+def imread_tif_raw(
+        path: Path,
+        dtype: str = None,
+        shape: Tuple[int, int] = None
+):
     """Load a tiff or raw image
 
     Parameters
     ----------
     path : str
         path to tiff or raw image
+    dtype: str or None,
+        optional. If given will reduce the raw to tif conversion time.
+    shape : tuple (int, int) or None
+        optional. If given will reduce the raw to tif conversion time.
 
     Returns
     -------
@@ -56,7 +64,7 @@ def imread_tif_raw(path: Path):
         try:
             extension = path.suffix
             if extension == '.raw':
-                img = raw_imread(path)
+                img = raw_imread(path, dtype=dtype, shape=shape)
             elif extension == '.tif' or extension == '.tiff':
                 img = imread(path)
         except OSError or TypeError or PermissionError:
@@ -556,6 +564,8 @@ def read_filter_save(
         convert_to_8bit: bool = True,
         bit_shift_to_right: int = 8,
         continue_process: bool = False,
+        dtype: str = None,
+        tile_size: Tuple[int, int] = None,
         down_sample: Tuple[int, int] = None,  # (2, 2),
         new_size: Tuple[int, int] = None
 ):
@@ -609,6 +619,10 @@ def read_filter_save(
         Bit shifts smaller than 8 bit, enhances the signal brightness.
     continue_process: bool
         If true do not process images if the output file is already exist
+    dtype: str or None,
+        optional. data type of the input file. If given will reduce the raw to tif conversion time.
+    tile_size : tuple (int, int) or None
+        optional. If given will reduce the raw to tif conversion time.
     down_sample : tuple (int, int)
         Sets down sample factor. Down_sample (3, 2) means 3 pixels in y axis, and 2 pixels in x-axis merges into 1.
     new_size : tuple (int, int) or None
@@ -617,6 +631,7 @@ def read_filter_save(
     try:
         if continue_process and output_file.exists() and output_file.stat().st_size > 272:  # 272 is header offset size
             return
+        # print(f"\n{input_file}")
         # if not input_file.exists() or not input_file.is_file():
         #     raise FileNotFoundError  # A Variant of OS error
         # if input_file.stat().st_size < 272:
@@ -625,14 +640,17 @@ def read_filter_save(
         #           f"size = {input_file.stat().st_size} bytes")
         # print(str(input_file))
         if z_idx is None:
-            img = imread_tif_raw(input_file)  # file must be TIFF or RAW
+            img = imread_tif_raw(input_file, dtype=dtype, shape=tile_size)  # file must be TIFF or RAW
         else:
             img = imread_dcimg(input_file, z_idx)  # file must be DCIMG
         if img is None:
-            print(f"\nimread function returned None."
-                  f"\nPossible damaged input file: \n{input_file}.")
-            return
-        dtype = img.dtype
+            print(f"\nimread function returned None. Possible damaged input file: "
+                  f"\n{input_file}."
+                  f"\noutput file set to an array of zeros instead:"
+                  f"\n{output_file}")
+            img = np.zeros(dtype=dtype, shape=tile_size)
+            # return
+        d_type = img.dtype
         if not output_file.parent.exists():
             output_file.parent.mkdir(parents=True, exist_ok=True)
         if flat is not None:
@@ -672,8 +690,8 @@ def read_filter_save(
             img = img.astype(np.uint16)
         elif convert_to_8bit and img.dtype != np.uint8:
             img = convert_to_8bit_fun(img, bit_shift_to_right=bit_shift_to_right)
-        elif img.dtype != dtype:
-            img = img.astype(dtype)
+        elif img.dtype != d_type:
+            img = img.astype(d_type)
 
         imsave_tif(
             output_file,
@@ -821,6 +839,8 @@ def batch_filter(
         convert_to_8bit: bool = False,
         bit_shift_to_right: int = 8,
         continue_process: bool = False,
+        dtype: str = None,
+        tile_size: Tuple[int, int] = None,
         down_sample: Tuple[int, int] = None,  # (2, 2)
         new_size: Tuple[int, int] = None
 ):
@@ -873,6 +893,10 @@ def batch_filter(
         Bit shifts smaller than 8 bit, enhances the signal brightness.
     continue_process : bool
         True means only process the remaining images.
+    dtype: str or None,
+        optional. If given will reduce the raw to tif conversion time.
+    tile_size : tuple (int, int) or None
+        optional. If given will reduce the raw to tif conversion time.
     down_sample : tuple (int, int) or None
         Sets down sample factor. Down_sample (3, 2) means 3 pixels in y axis, and 2 pixels in x-axis merges into 1.
     new_size : tuple (y: int, x: int) or None
@@ -919,6 +943,8 @@ def batch_filter(
         'convert_to_8bit': convert_to_8bit,
         'bit_shift_to_right': bit_shift_to_right,
         'continue_process': continue_process,
+        'dtype': dtype,
+        'tile_size': tile_size,
         'down_sample': down_sample,
         'new_size': new_size
     }
