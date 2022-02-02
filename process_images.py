@@ -115,8 +115,8 @@ if not parastitcher.exists():
     raise RuntimeError
 
 parasconverter = TeraStitcherPath / "pyscripts" / "paraconverter.py"
-if not parastitcher.exists():
-    log.error("Error: ParaStitcher not found")
+if not parasconverter.exists():
+    log.error("Error: parasconverter not found")
     raise RuntimeError
 
 imaris_converter = Path(r"./imaris") / "ImarisConvertiv.exe"
