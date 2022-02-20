@@ -1,14 +1,14 @@
 """convert.py - programs to convert stacks to output formats"""
 
+import os
+import sys
+import tqdm
 import argparse
 import itertools
 import multiprocessing
 import numpy as np
 from tifffile import imsave
 from .volume import VExtent, TSVVolume
-import sys
-import tqdm
-import os
 
 try:
     from blockfs.directory import Directory
@@ -70,6 +70,9 @@ def convert_to_2D_tif(
     else:
         decimation = 1
 
+    if sys.platform == "win32" and cores > 61:
+        cores = 61
+
     # futures = []
     # with multiprocessing.Pool(cores) as pool:
     #     for z in range(volume.z0, volume.z1, decimation):
@@ -83,9 +86,9 @@ def convert_to_2D_tif(
     for z in range(volume.z0, volume.z1, decimation):
         arg_list.append((v, compression, decimation, dtype, output_pattern, volume, z, rotation))
     num_images_need_processing = len(arg_list)
-    while num_images_need_processing//chunks < cores:
-        chunks //= 2
-    print(f"tsv is converting {num_images_need_processing} images using {cores} cores and {chunks} chunks")
+    while num_images_need_processing // chunks < cores or num_images_need_processing % chunks > 10:
+        chunks -= 1
+    print(f"\tTSV is converting {num_images_need_processing} z-planes using {cores} cores and {chunks} chunks")
 
     with multiprocessing.Pool(processes=cores) as pool:
         worker.fun = convert_one_plane
@@ -97,6 +100,8 @@ def convert_to_2D_tif(
             total=num_images_need_processing,
             ascii=True
         ))
+
+    return num_images_need_processing, volume.shape
 
 
 def convert_one_plane(v, compression, decimation, dtype, output_pattern, volume, z, rotation):

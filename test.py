@@ -408,31 +408,162 @@ import subprocess
 #
 # folder_iterator(Path(r"Y:\SmartSPIM_Data\20211122_11_13_27_SA210705_02_L_HPF_LS_15X_1000z"))
 
-def worker(command: str):
-    result = subprocess.call(command, shell=True)
-    print(f"\nfinished:\n{command}\nresult:\n{result}\n")
-    return result
+# def worker(command: str):
+#     result = subprocess.call(command, shell=True)
+#     print(f"\nfinished:\n{command}\nresult:\n{result}\n")
+#     return result
 
 
-if __name__ == '__main__':
-    freeze_support()
-    TeraStitcherPath = Path(r"./TeraStitcher_windows_avx2")
-    os.environ["PATH"] = f"{os.environ['PATH']};{TeraStitcherPath.as_posix()}"
-    os.environ["PATH"] = f"{os.environ['PATH']};{TeraStitcherPath.joinpath('pyscripts').as_posix()}"
-    work = [
-        "imaris\ImarisConvertiv.exe "
-        "--input D:\\20211005_08_30_35_NW210718_01_LS_4x_2000z_stitched_v4\\tif\\img_000000.tif "
-        "--output D:\\20211005_08_30_35_NW210718_01_LS_4x_2000z_stitched_v4\\20211005_08_30_35_NW210718_01_LS_4x_2000z.ims "
-        "--inputformat TiffSeries "
-        "--nthreads 40 "
-        "--compression 1",
-
-        "mpiexec -np 20 python -m mpi4py TeraStitcher_windows_avx2\pyscripts\paraconverter.py "
-        "--sfmt=\"TIFF (series, 2D)\" --dfmt=\"TIFF (tiled, 3D)\" --resolutions=\"012345\" --clist=0 --halve=max "
-        "--noprogressbar --sparse_data "
-        "-s=D:\\20211005_08_30_35_NW210718_01_LS_4x_2000z_stitched_v4\\tif "
-        "-d=D:\\20211005_08_30_35_NW210718_01_LS_4x_2000z_stitched_v4\\TeraFly_Ex_561_Em_600"
-    ]
-    with Pool(processes=61) as pool:
-        a = list(pool.imap_unordered(worker, work, chunksize=1))
-        print(a)
+# if __name__ == '__main__':
+#     freeze_support()
+#     TeraStitcherPath = Path(r"./TeraStitcher_windows_avx2")
+#     os.environ["PATH"] = f"{os.environ['PATH']};{TeraStitcherPath.as_posix()}"
+#     os.environ["PATH"] = f"{os.environ['PATH']};{TeraStitcherPath.joinpath('pyscripts').as_posix()}"
+#     work = [
+#         "imaris\ImarisConvertiv.exe "
+#         "--input D:\\20211005_08_30_35_NW210718_01_LS_4x_2000z_stitched_v4\\tif\\img_000000.tif "
+#         "--output D:\\20211005_08_30_35_NW210718_01_LS_4x_2000z_stitched_v4\\20211005_08_30_35_NW210718_01_LS_4x_2000z.ims "
+#         "--inputformat TiffSeries "
+#         "--nthreads 40 "
+#         "--compression 1",
+#
+#         "mpiexec -np 20 python -m mpi4py TeraStitcher_windows_avx2\pyscripts\paraconverter.py "
+#         "--sfmt=\"TIFF (series, 2D)\" --dfmt=\"TIFF (tiled, 3D)\" --resolutions=\"012345\" --clist=0 --halve=max "
+#         "--noprogressbar --sparse_data "
+#         "-s=D:\\20211005_08_30_35_NW210718_01_LS_4x_2000z_stitched_v4\\tif "
+#         "-d=D:\\20211005_08_30_35_NW210718_01_LS_4x_2000z_stitched_v4\\TeraFly_Ex_561_Em_600"
+#     ]
+#     with Pool(processes=61) as pool:
+#         a = list(pool.imap_unordered(worker, work, chunksize=1))
+#         print(a)
+from pathlib import Path
+# from multiprocessing import freeze_support, Pool, Queue, Process
+# from typing import List
+# from datetime import datetime
+# import subprocess
+# import sys
+# from process_images2 import correct_path_for_cmd
+# from time import time, sleep
+# from queue import Empty
+# from tqdm import tqdm
+# import re
+#
+#
+# class MultiProcess(Process):
+#     def __init__(self, queue, command, position):
+#         Process.__init__(self)
+#         super().__init__()
+#         self.daemon = True
+#         self.queue = queue
+#         self.command = command
+#         self.position = position
+#
+#     def run(self):
+#         return_code = None  # 0 == success and any other number is an error code
+#         pattern = re.compile(r"(WriteProgress:)\s+(\d*.\d+)\s*$")
+#         previous_percent = 0
+#         try:
+#             process = subprocess.Popen(
+#                 self.command,
+#                 stdout=subprocess.PIPE,
+#                 # stderr=subprocess.PIPE,
+#                 shell=True,
+#                 text=True)
+#             while return_code is None:
+#                 return_code = process.poll()
+#                 line = process.stdout.readline()
+#                 m = re.match(pattern, line)
+#                 if m:
+#                     percent = int(float(m[2])*100)
+#                     self.queue.put([percent - previous_percent, self.position, return_code, self.command])
+#                     previous_percent = percent
+#         except Exception as inst:
+#             print(f'Process failed for {self.command}.')
+#             print(type(inst))  # the exception instance
+#             print(inst.args)  # arguments stored in .args
+#             print(inst)
+#         self.queue.put([100 if return_code == 0 else 0, self.position, return_code, self.command])
+#
+#
+# def get_imaris_command(
+#         path,
+#         voxel_size_x: float,
+#         voxel_size_y: float,
+#         voxel_size_z: float,
+#         workers: int = cpu_count()):
+#
+#     files = list(path.rglob("*.tif"))
+#     file = files[0]
+#     command = []
+#     if imaris_converter.exists() and len(files) > 0:
+#         print(f"{datetime.now()}: converting {path.name} to ims ... ")
+#         ims_file_path = path.parent / f'{path.name}.ims'
+#         command = [
+#             f"{imaris_converter}" if sys.platform == "win32" else f"wine {imaris_converter}",
+#             f"--input {file}",
+#             f"--output {ims_file_path}",
+#         ]
+#         if sys.platform == "linux" and 'microsoft' in uname().release.lower():
+#             command = [
+#                 f'{correct_path_for_cmd(imaris_converter)}',
+#                 f'--input {correct_path_for_wsl(file)}',
+#                 f"--output {correct_path_for_wsl(ims_file_path)}",
+#             ]
+#         if len(files) > 1:
+#             command += ["--inputformat TiffSeries"]
+#
+#         command += [
+#             f"--nthreads {workers}",
+#             f"--compression 1",
+#             f"--voxelsize {voxel_size_x}-{voxel_size_y}-{voxel_size_z}",  # x-y-z
+#             "--logprogress"
+#         ]
+#         print(f"\ttiff to ims conversion command:\n\t\t{' '.join(command)}\n")
+#
+#     else:
+#         if len(files) > 0:
+#             print("\tnot found Imaris View: not converting tiff to ims ... ")
+#         else:
+#             print("\tno tif file found to convert to ims!")
+#
+#     return " ".join(command)
+#
+#
+# def main():
+#     queue = Queue()
+#
+#     command = get_imaris_command(Path(r"D:\unstitched_deconvoluted_stitched\Ex_642_Em_680_tif_test"), 0.2, 0.2, 1.0)
+#     # command = r"imaris\ImarisConvertiv.exe --input D:\unstitched_deconvoluted_stitched\Ex_642_Em_680_tif_test\img_000051.tif --output D:\unstitched_deconvoluted_stitched\Ex_642_Em_680_tif_test.ims --inputformat TiffSeries --nthreads 96 --compression 1 --voxelsize 0.2-0.2-1.0 --logprogress"
+#     MultiProcess(queue, command, 0).start()
+#     running_processes = 1
+#     progress_bar = [tqdm(total=100, ascii=True, position=0), tqdm(total=100, ascii=True, position=1)]
+#     start_time = time()
+#     while running_processes > 0:
+#         try:
+#             [percent_addition, position, return_code, command] = queue.get()
+#             if return_code is not None:
+#                 if return_code > 0:
+#                     print(f"Following command failed:\n\t{command}\n\treturn code: {return_code}")
+#                 else:
+#                     print(f"Following command succeeded:\n\t{command}")
+#                 running_processes -= 1
+#                 print(time() - start_time)
+#             progress_bar[position].update(percent_addition)
+#         except Empty:
+#             sleep(1)  # waite one minutes before checking again
+#
+#
+# if __name__ == '__main__':
+#     freeze_support()
+#     imaris_converter = Path(r"./imaris/ImarisConvertiv.exe")
+#     main()
+import shutil
+installed_imaris = Path(r"C:\Program Files\Bitplane\ImarisViewer 9.8.2")
+new_imaris = Path(r"D:\imaris")
+new_imaris.mkdir(exist_ok=True)
+for file in Path(r"./imaris").rglob("*.*"):
+    path_file = installed_imaris / file.name
+    if path_file.exists():
+        shutil.copy(path_file, new_imaris)
+    else:
+        print(f"{path_file} did not exist.")

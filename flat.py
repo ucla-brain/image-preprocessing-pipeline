@@ -5,8 +5,8 @@ import psutil
 import pathlib
 import numpy as np
 import pandas as pd
-import pystripe_forked as pystripe
-from pystripe_forked.raw import raw_imread
+import pystripe
+from pystripe.raw import raw_imread
 from scipy import stats
 from sklearn.model_selection import train_test_split
 from skimage.restoration import denoise_bilateral
