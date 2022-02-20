@@ -655,6 +655,14 @@ def read_filter_save(
             )
             img = np.zeros(dtype=dtype, shape=tile_size)
             # return
+        if img.shape != tile_size:
+            print(
+                f"\nwarning: input tile had a different shape. resizing:\n"
+                f"\tinput_file: {input_file} -> \n"
+                f"\t\tinput shape = {img.shape}\n"
+                f"\t\tnew shape   = {tile_size}\n")
+            img = resize(img, tile_size, preserve_range=True, anti_aliasing=True)
+
         d_type = img.dtype
         if not output_file.parent.exists():
             output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -985,7 +993,7 @@ def batch_filter(
     manager = Manager()
     args_list = manager.list(args_list)
     num_images_need_processing = len(args_list)
-    while num_images_need_processing // chunks < workers:
+    while chunks > 1 and num_images_need_processing // chunks < workers:
         chunks //= 2
     print(f'{datetime.now()}: {num_images_need_processing} images need processing.\n\t'
           f'Setting up {workers} workers. Each worker processes {chunks} images at a time.\n'

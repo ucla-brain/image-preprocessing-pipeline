@@ -160,29 +160,9 @@ def p_log(txt):
 
 
 def worker(command: str):
-    result = subprocess.call(command, shell=True)
-    print(f"\nfinished:\n{command}\nresult:\n{result}\n")
-    return result
-
-
-# class MultiProcess(Process):
-#     def __init__(self, queue, command):
-#         Process.__init__(self)
-#         super().__init__()
-#         self.daemon = True
-#         self.queue = queue
-#         self.command = command
-#
-#     def run(self):
-#         success = 1  # 0 == success and any other number is the error code
-#         try:
-#             success = worker(self.command)
-#         except Exception as inst:
-#             print(f'Process failed for {self.command}.')
-#             print(type(inst))  # the exception instance
-#             print(inst.args)  # arguments stored in .args
-#             print(inst)
-#         self.queue.put([success, self.command])
+    return_code = subprocess.call(command, shell=True)
+    print(f"\nfinished:\n\t{command}\n\treturn code: {return_code}\n")
+    return return_code
 
 
 class MultiProcess(Process):
@@ -196,8 +176,6 @@ class MultiProcess(Process):
 
     def run(self):
         return_code = None  # 0 == success and any other number is an error code
-        pattern = compile(r"(WriteProgress:)\s+(\d*.\d+)\s*$")
-        previous_percent = 0
         try:
             if self.position is None:
                 return_code = worker(self.command)
@@ -208,11 +186,13 @@ class MultiProcess(Process):
                     # stderr=subprocess.PIPE,
                     shell=True,
                     text=True)
+                pattern = compile(r"(WriteProgress:)\s+(\d*.\d+)\s*$")
+                previous_percent = 0
                 while return_code is None:
                     return_code = process.poll()
                     m = match(pattern, process.stdout.readline())
                     if m:
-                        percent = int(float(m[2])*100)
+                        percent = int(float(m[2]) * 100)
                         self.queue.put([percent - previous_percent, self.position, return_code, self.command])
                         previous_percent = percent
         except Exception as inst:
@@ -332,8 +312,8 @@ def process_channel(
             "--ref1=H",  # x horizontal?
             "--ref2=V",  # y vertical?
             "--ref3=D",  # z depth?
-            f"--vxl1={voxel_size_y}",
-            f"--vxl2={voxel_size_x}",
+            f"--vxl1={voxel_size_x}",
+            f"--vxl2={voxel_size_y}",
             f"--vxl3={voxel_size_z}",
             "--sparse_data",
             f"--volin={preprocessed_path / channel}",
@@ -342,7 +322,9 @@ def process_channel(
         ]
         print("\timport command:\n\t\t" + " ".join(command))
         subprocess.run(command, check=True)
-        assert proj_out.exists()
+        if not proj_out.exists():
+            print(f"{channel}: importing tif files failed.")
+            raise RuntimeError
 
         for step in [2, 3, 4, 5]:
             print(f"{datetime.now()} - {channel}: starting step {step} of stitching ...")
@@ -374,7 +356,8 @@ def process_channel(
         TSVVolume.load(stitched_path / f'{channel}_xml_import_step_5.xml'),
         str(stitched_tif_path / "img_{z:06d}.tif"),
         compression=("ZLIB", 1),
-        cores=cpu_logical_core_count  # here the limit is 61 on Windows
+        cores=cpu_logical_core_count,  # here the limit is 61 on Windows
+        dtype='uint8' if need_16bit_to_8bit_conversion else 'uint16'
     )  # shape is in z y x format
     # ------------------------------------------------------------------------------------------------------------------
     running_processes: int = 0
@@ -439,7 +422,7 @@ def merge_channels_by_file_name(
                     image = image[:shape[0], :shape[1]]
             multi_channel_img[:, :, idx] = image
 
-    imsave_tif(rgb_file, multi_channel_img, compression=("ZIP", 1))
+    imsave_tif(rgb_file, multi_channel_img, compression=("ZLIB", 1))
 
 
 def merge_channels_by_file_name_worker(input_dict):
@@ -453,7 +436,7 @@ def merge_all_channels(
         order_of_colors: str = "gbr",
         workers: int = cpu_count()
 ):
-    num_files_in_each_path = map(lambda p: len(list(p.rglob("*.tif"))), stitched_tif_paths)
+    num_files_in_each_path = list(map(lambda p: len(list(p.rglob("*.tif"))), stitched_tif_paths))
     if len(unique(array(num_files_in_each_path, dtype=int))) > 1:
         print("warning: some channel tif folders have different number of files in them:\n\t" +
               "\n\t".join(map(lambda p: f"{p[0]} tif files were in {p[1]}",
@@ -465,6 +448,7 @@ def merge_all_channels(
 
         y, x = max(y, shape[1]), max(x, shape[2])
 
+    merged_tif_path.mkdir(exist_ok=True)
     work: List[dict] = [{
         "file_name": file.name,
         "stitched_tif_paths": stitched_tif_paths,
@@ -472,11 +456,15 @@ def merge_all_channels(
         "merged_tif_path": merged_tif_path,
         "shape": (y, x)
     } for file in stitched_tif_paths[num_files_in_each_path.index(max(num_files_in_each_path))].rglob("*.tif")]
-
+    workers = 61 if sys.platform == "win32" and workers > 61 else workers
+    chunks = 128
+    while chunks > 1 and len(work) // chunks < workers:
+        chunks //= 2
     with Pool(processes=workers) as pool:
         list(
             tqdm(
-                pool.imap_unordered(merge_channels_by_file_name_worker, work, chunksize=10),
+                pool.imap_unordered(merge_channels_by_file_name_worker, work,
+                                    chunksize=10 if len(work) > workers else 1),
                 total=max(num_files_in_each_path),
                 ascii=True))
 
@@ -535,7 +523,6 @@ def get_imaris_command(
         voxel_size_y: float,
         voxel_size_z: float,
         workers: int = cpu_count()):
-
     files = list(path.rglob("*.tif"))
     file = files[0]
     command = []
@@ -740,7 +727,7 @@ def main(source_path):
 
     if not channel_volume_shapes.count(channel_volume_shapes[0]) == len(channel_volume_shapes):
         p_log("warning: channels had different shapes:\n\t" + "\n\t".join(
-            map(lambda p: f"channel {p[0]}: volume shape(z={p[1][0]}, y={p[1][1]}, x={p[1][2]})",
+            map(lambda p: f"channel {p[0]}: volume shape={p[1]}",
                 zip(AllChannels, channel_volume_shapes))))
 
     # merge channels to RGB ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
@@ -783,11 +770,11 @@ def main(source_path):
             [percent_addition, position, return_code, command] = queue.get()
             if return_code is not None:
                 if return_code > 0:
-                    print(f"Following command failed:\n\t{command}\n\treturn code: {return_code}")
+                    print(f"\nFollowing command failed:\n\t{command}\n\treturn code: {return_code}\n")
                 else:
-                    print(f"Following command succeeded:\n\t{command}")
+                    print(f"\nFollowing command succeeded:\n\t{command}\n")
                 running_processes -= 1
-            if position is not None and 0 < len(progress_bar) <= position+1:
+            if position is not None and 0 < len(progress_bar) <= position + 1:
                 progress_bar[position].update(percent_addition)
         except Empty:
             sleep(1)  # waite one second before checking the queue again

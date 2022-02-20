@@ -86,7 +86,7 @@ def convert_to_2D_tif(
     for z in range(volume.z0, volume.z1, decimation):
         arg_list.append((v, compression, decimation, dtype, output_pattern, volume, z, rotation))
     num_images_need_processing = len(arg_list)
-    while num_images_need_processing // chunks < cores or num_images_need_processing % chunks > 10:
+    while chunks > 1 and (num_images_need_processing // chunks < cores or num_images_need_processing % chunks > 10):
         chunks -= 1
     print(f"\tTSV is converting {num_images_need_processing} z-planes using {cores} cores and {chunks} chunks")
 
@@ -101,7 +101,7 @@ def convert_to_2D_tif(
             ascii=True
         ))
 
-    return num_images_need_processing, volume.shape
+    return volume.shape
 
 
 def convert_one_plane(v, compression, decimation, dtype, output_pattern, volume, z, rotation):
