@@ -5,8 +5,6 @@
 # :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 import os
 import sys
-import tsv
-import shutil
 import mpi4py
 import platform
 import subprocess
@@ -15,7 +13,7 @@ import psutil
 from re import compile, match
 from psutil import cpu_count, virtual_memory
 from tqdm import tqdm
-from numpy import ndarray, dstack, zeros, array, unique
+from numpy import ndarray, zeros, array, unique
 from pathlib import Path
 from flat import create_flat_img
 from datetime import datetime
@@ -217,6 +215,7 @@ def process_channel(
         voxel_size_x: float,
         voxel_size_y: float,
         voxel_size_z: float,
+        objective: str,
         queue: Queue,
         memory_ram: int,
         need_reconstruction=False,
@@ -711,6 +710,7 @@ def main(source_path):
             voxel_size_x,
             voxel_size_y,
             voxel_size_z,
+            objective,
             queue,
             memory_ram,
             need_reconstruction=channel in channels_need_reconstruction,

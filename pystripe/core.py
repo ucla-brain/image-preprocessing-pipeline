@@ -838,7 +838,7 @@ def batch_filter(
         wavelet: str = 'db10',
         crossover: int = 10,
         threshold: int = -1,
-        compression: Tuple[int, int] = ('ZLIB', 1),
+        compression: Tuple[str, int] = ('ZLIB', 1),
         flat=None,
         dark: int = 0,
         z_step: float = None,
