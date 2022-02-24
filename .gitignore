@@ -7,3 +7,4 @@
 /cudaDecon/
 /log.txt
 /supplements/3D Manual Tracing Tracking Sheet copy.csv
+*/__pycache__/
