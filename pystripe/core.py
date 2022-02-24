@@ -993,7 +993,7 @@ def batch_filter(
     manager = Manager()
     args_list = manager.list(args_list)
     num_images_need_processing = len(args_list)
-    while chunks > 1 and num_images_need_processing // chunks < workers:
+    while chunks > 1 and num_images_need_processing % (chunks * workers) > 10:
         chunks //= 2
     print(f'{datetime.now()}: {num_images_need_processing} images need processing.\n\t'
           f'Setting up {workers} workers. Each worker processes {chunks} images at a time.\n'
