@@ -2,17 +2,22 @@ import os
 import sys
 import psutil
 import subprocess
+
+from dill.pointers import parents
+
 from pystripe.core import batch_filter
 from multiprocessing import freeze_support
 from pathlib import Path
 from time import time
+from platform import uname
+import re
 
 
 # source_folder = Path(r'X:\3D_stitched\20210910_SM210705_01_R_PFC_LS_6x_1000z\tif')
-final_tiff_folder = Path(r'D:\20210910_SM210705_01_R_PFC_LS_6x_1000z\tif')
-dir_tera_fly = Path(r'D:\20210910_SM210705_01_R_PFC_LS_6x_1000z\TeraFly_C2')
+final_tiff_folder = Path(r'/panfs/dong/R01_Yin/642nm_NeuN')
+dir_tera_fly = Path(r'/mnt/md0/R01_Yin/642nm_NeuN_TeraFly')
 
-dir_tera_fly.mkdir(exist_ok=True)
+dir_tera_fly.mkdir(exist_ok=True, parents=True)
 PyScriptsPath = Path(r"./TeraStitcher/pyscripts")
 if sys.platform == "win32":
     # print("Windows is detected.")
@@ -42,7 +47,7 @@ elif sys.platform == 'linux' and 'microsoft' in uname().release.lower():
     teraconverter = "teraconverter"
     os.environ["TERM"] = "xterm"
 else:
-    log.error("yet unsupported OS")
+    print("yet unsupported OS")
     raise RuntimeError
 
 paraconverter = PyScriptsPath / "paraconverter.py"
@@ -53,7 +58,7 @@ if not paraconverter.exists():
 
 imaris_converter = Path(r"./imaris") / "ImarisConvertiv.exe"
 if not imaris_converter.exists():
-    log.error("Error: ImarisConvertiv.exe not found")
+    print("Error: ImarisConvertiv.exe not found")
     raise RuntimeError
 
 
@@ -103,19 +108,19 @@ if __name__ == '__main__':
     # )
 
     command = [
-        f"mpiexec -np 48 python -m mpi4py {paraconverter}",
+        f"mpiexec -np 12 python -m mpi4py {paraconverter}",
         # f"{teraconverter}",
         "--sfmt=\"TIFF (series, 2D)\"",
         "--dfmt=\"TIFF (tiled, 3D)\"",
         "--resolutions=\"012345\"",
-        "--clist=2",
+        "--clist=0",
         "--halve=max",
         # "--noprogressbar",
         # "--sparse_data",
         # "--fixed_tiling",
-        "--height=256",
-        "--width=256",
-        "--depth=256",
+        # "--height=256",
+        # "--width=256",
+        # "--depth=256",
         f"-s={final_tiff_folder}",  # destination_folder
         f"-d={dir_tera_fly}",
     ]
