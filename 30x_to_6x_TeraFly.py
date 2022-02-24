@@ -14,67 +14,56 @@ import re
 final_tiff_folder = Path(r'/panfs/dong/R01_Yin/642nm_NeuN')
 dir_tera_fly = Path(r'/mnt/md0/R01_Yin/642nm_NeuN_TeraFly')
 
-dir_tera_fly.mkdir(exist_ok=True, parents=True)
-PyScriptsPath = Path(r"./TeraStitcher/pyscripts")
-if sys.platform == "win32":
-    # print("Windows is detected.")
-    psutil.Process().nice(psutil.IDLE_PRIORITY_CLASS)
-    TeraStitcherPath = Path(r"./TeraStitcher/windows/avx512")
-    os.environ["PATH"] = f"{os.environ['PATH']};{TeraStitcherPath.as_posix()}"
-    os.environ["PATH"] = f"{os.environ['PATH']};{PyScriptsPath.as_posix()}"
-    terastitcher = "terastitcher.exe"
-    teraconverter = "teraconverter.exe"
-elif sys.platform == 'linux' and 'microsoft' not in uname().release.lower():
-    print("Linux is detected.")
-    psutil.Process().nice(value=19)
-    TeraStitcherPath = Path(r"./TeraStitcher/Linux/AVX512")
-    os.environ["PATH"] = f"{os.environ['PATH']}:{TeraStitcherPath.as_posix()}"
-    os.environ["PATH"] = f"{os.environ['PATH']}:{PyScriptsPath.as_posix()}"
-    terastitcher = "terastitcher"
-    teraconverter = "teraconverter"
-    os.environ["TERM"] = "xterm"
-elif sys.platform == 'linux' and 'microsoft' in uname().release.lower():
-    print("Windows subsystem for Linux is detected.")
-    psutil.Process().nice(value=19)
-    CacheDriveExample = "/mnt/d/"
-    TeraStitcherPath = Path(r"./TeraStitcher/Linux/AVX512")
-    os.environ["PATH"] = f"{os.environ['PATH']}:{TeraStitcherPath.as_posix()}"
-    os.environ["PATH"] = f"{os.environ['PATH']}:{PyScriptsPath.as_posix()}"
-    terastitcher = "terastitcher"
-    teraconverter = "teraconverter"
-    os.environ["TERM"] = "xterm"
-else:
-    print("yet unsupported OS")
-    raise RuntimeError
-
-paraconverter = PyScriptsPath / "paraconverter.py"
-if not paraconverter.exists():
-    print(paraconverter)
-    print("Error: paraconverter not found")
-    raise RuntimeError
-
-imaris_converter = Path(r"./imaris") / "ImarisConvertiv.exe"
-if not imaris_converter.exists():
-    print("Error: ImarisConvertiv.exe not found")
-    raise RuntimeError
-
-
-def correct_path_for_cmd(filepath):
-    if sys.platform == "win32":
-        return f"\"{filepath}\""
-    else:
-        return str(filepath).replace(" ", r"\ ").replace("(", r"\(").replace(")", r"\)")
-
-
-def correct_path_for_wsl(filepath):
-    p = re.compile(r"/mnt/(.)/")
-    new_path = p.sub(r'\1:\\\\', str(filepath))
-    new_path = new_path.replace(" ", r"\ ").replace("(", r"\(").replace(")", r"\)").replace("/", "\\\\")
-    return new_path
-
 
 if __name__ == '__main__':
     freeze_support()
+    dir_tera_fly.mkdir(exist_ok=True, parents=True)
+    PyScriptsPath = Path(r"./TeraStitcher/pyscripts")
+    if sys.platform == "win32":
+        # print("Windows is detected.")
+        psutil.Process().nice(psutil.IDLE_PRIORITY_CLASS)
+        TeraStitcherPath = Path(r"./TeraStitcher/windows/avx512")
+        os.environ["PATH"] = f"{os.environ['PATH']};{TeraStitcherPath.as_posix()}"
+        os.environ["PATH"] = f"{os.environ['PATH']};{PyScriptsPath.as_posix()}"
+        terastitcher = "terastitcher.exe"
+        teraconverter = "teraconverter.exe"
+    elif sys.platform == 'linux' and 'microsoft' not in uname().release.lower():
+        print("Linux is detected.")
+        psutil.Process().nice(value=19)
+        TeraStitcherPath = Path(r"./TeraStitcher/Linux/AVX512")
+        os.environ["PATH"] = f"{os.environ['PATH']}:{TeraStitcherPath.as_posix()}"
+        os.environ["PATH"] = f"{os.environ['PATH']}:{PyScriptsPath.as_posix()}"
+        terastitcher = "terastitcher"
+        teraconverter = "teraconverter"
+        os.environ["TERM"] = "xterm"
+    else:
+        print("yet unsupported OS")
+        raise RuntimeError
+
+    paraconverter = PyScriptsPath / "paraconverter.py"
+    if not paraconverter.exists():
+        print(paraconverter)
+        print("Error: paraconverter not found")
+        raise RuntimeError
+
+    imaris_converter = Path(r"./imaris") / "ImarisConvertiv.exe"
+    if not imaris_converter.exists():
+        print("Error: ImarisConvertiv.exe not found")
+        raise RuntimeError
+
+
+    def correct_path_for_cmd(filepath):
+        if sys.platform == "win32":
+            return f"\"{filepath}\""
+        else:
+            return str(filepath).replace(" ", r"\ ").replace("(", r"\(").replace(")", r"\)")
+
+
+    def correct_path_for_wsl(filepath):
+        p = re.compile(r"/mnt/(.)/")
+        new_path = p.sub(r'\1:\\\\', str(filepath))
+        new_path = new_path.replace(" ", r"\ ").replace("(", r"\(").replace(")", r"\)").replace("/", "\\\\")
+        return new_path
     # batch_filter(
     #     source_folder,
     #     final_tiff_folder,
