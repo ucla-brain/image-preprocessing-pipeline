@@ -813,10 +813,14 @@ if __name__ == '__main__':
         os.environ["PATH"] = f"{os.environ['PATH']};{PyScriptPath.as_posix()}"
         terastitcher = "terastitcher.exe"
         teraconverter = "teraconverter.exe"
-    elif sys.platform == 'linux' and 'microsoft' not in uname().release.lower():
-        print("Linux is detected.")
+    elif sys.platform == 'linux':
+        if 'microsoft' in uname().release.lower():
+            print("Windows subsystem for Linux is detected.")
+            CacheDriveExample = "/mnt/d/"
+        else:
+            print("Linux is detected.")
+            CacheDriveExample = "/mnt/scratch"
         psutil.Process().nice(value=19)
-        CacheDriveExample = "/mnt/scratch"
         TeraStitcherPath = Path(r"./TeraStitcher/Linux")
         os.environ["PATH"] = f"{os.environ['PATH']}:{TeraStitcherPath.as_posix()}"
         os.environ["PATH"] = f"{os.environ['PATH']}:{PyScriptPath.as_posix()}"
@@ -830,43 +834,16 @@ if __name__ == '__main__':
             else:
                 log.error("Error: JAVA path not found")
                 raise RuntimeError
-            if Path("/usr/local/cuda-11.4/").exists() and Path("/usr/local/cuda-11.4/bin").exists():
-                os.environ["CUDA_ROOT_DIR"] = "/usr/local/cuda-11.4/"
-            elif Path("/usr/local/cuda-10.1/").exists() and Path("/usr/local/cuda-10.1/bin").exists():
-                os.environ["CUDA_ROOT_DIR"] = "/usr/local/cuda-10.1/"
+            cuda_version = input("What is your cuda version (for example 11.6)?")
+            if Path(f"/usr/local/cuda-{cuda_version}/").exists() and \
+                    Path(f"/usr/local/cuda-{cuda_version}/bin").exists():
+                os.environ["CUDA_ROOT_DIR"] = f"/usr/local/cuda-{cuda_version}/"
             else:
-                log.error("Error: CUDA path not found")
+                log.error(f"Error: CUDA path not found in {os.environ['CUDA_ROOT_DIR']}")
                 raise RuntimeError
             os.environ["PATH"] = f"{os.environ['PATH']}:{os.environ['CUDA_ROOT_DIR']}/bin"
             os.environ["LD_LIBRARY_PATH"] = f"{os.environ['LD_LIBRARY_PATH']}:{os.environ['CUDA_ROOT_DIR']}/lib64"
             # os.environ["CUDA_VISIBLE_DEVICES"] = "1"  # to train on a specific GPU on a multi-gpu machine
-    elif sys.platform == 'linux' and 'microsoft' in uname().release.lower():
-        print("Windows subsystem for Linux is detected.")
-        psutil.Process().nice(value=19)
-        CacheDriveExample = "/mnt/d/"
-        TeraStitcherPath = Path(r"./TeraStitcher/Linux")
-        os.environ["PATH"] = f"{os.environ['PATH']}:{TeraStitcherPath.as_posix()}"
-        os.environ["PATH"] = f"{os.environ['PATH']}:{PyScriptPath.as_posix()}"
-        terastitcher = "terastitcher"
-        teraconverter = "teraconverter"
-        os.environ["TERM"] = "xterm"
-        os.environ["USECUDA_X_NCC"] = "0"  # set to 0 to stop GPU acceleration
-        if os.environ["USECUDA_X_NCC"] == "1":
-            if Path("/usr/lib/jvm/java-11-openjdk-amd64/lib/server").exists():
-                os.environ["LD_LIBRARY_PATH"] = "/usr/lib/jvm/java-11-openjdk-amd64/lib/server"
-            else:
-                log.error("Error: JAVA path not found")
-                raise RuntimeError
-            if Path("/usr/local/cuda-11.4/").exists() and Path("/usr/local/cuda-11.4/bin").exists():
-                os.environ["CUDA_ROOT_DIR"] = "/usr/local/cuda-11.4/"
-            elif Path("/usr/local/cuda-10.1/").exists() and Path("/usr/local/cuda-10.1/bin").exists():
-                os.environ["CUDA_ROOT_DIR"] = "/usr/local/cuda-10.1/"
-            else:
-                log.error("Error: CUDA path not found")
-                raise RuntimeError
-            os.environ["PATH"] = f"{os.environ['PATH']}:{os.environ['CUDA_ROOT_DIR']}/bin"
-            os.environ["LD_LIBRARY_PATH"] = f"{os.environ['LD_LIBRARY_PATH']}:{os.environ['CUDA_ROOT_DIR']}/lib64"
-            os.environ["CUDA_VISIBLE_DEVICES"] = "1"  # to train on a specific GPU on a multi-gpu machine
     else:
         log.error("yet unsupported OS")
         raise RuntimeError
