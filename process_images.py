@@ -218,6 +218,7 @@ def process_channel(
         voxel_size_y: float,
         voxel_size_z: float,
         queue: Queue,
+        memory_ram: int,
         need_reconstruction=False,
         need_flat_image_application=False,
         image_classes_training_data_path=None,
@@ -326,13 +327,19 @@ def process_channel(
             print(f"{channel}: importing tif files failed.")
             raise RuntimeError
 
+        # each alignment thread needs about 16GB of RAM in 16bit and 8GB in 8bit
+        alignment_cores = cpu_logical_core_count if cpu_logical_core_count * 16 < memory_ram else memory_ram // 16
+        if need_16bit_to_8bit_conversion:
+            alignment_cores = cpu_logical_core_count if cpu_logical_core_count * 8 < memory_ram else memory_ram // 8
+
         for step in [2, 3, 4, 5]:
             print(f"{datetime.now()} - {channel}: starting step {step} of stitching ...")
             proj_in = stitched_path / f"{channel}_xml_import_step_{step - 1}.xml"
             proj_out = stitched_path / f"{channel}_xml_import_step_{step}.xml"
+
             assert proj_in.exists()
             if step == 2:
-                command = [f"mpiexec -np {cpu_logical_core_count} python -m mpi4py {parastitcher}"]
+                command = [f"mpiexec -np {alignment_cores} python -m mpi4py {parastitcher}"]
             else:
                 command = [f"{terastitcher}"]
             command += [
@@ -676,10 +683,11 @@ def main(source_path):
     # Start ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
     start_time = time()
+    memory_ram = virtual_memory().total // 1024 ** 3  # in GB
     p_log(
         f"{datetime.now()}: stitching started"
         f"\n\tRun on computer: {platform.node()}"
-        f"\n\tTotal physical memory: {virtual_memory().total // 1024 ** 3} GB"
+        f"\n\tTotal physical memory: {memory_ram} GB"
         f"\n\tPhysical CPU core count: {cpu_physical_core_count}"
         f"\n\tLogical CPU core count: {cpu_logical_core_count}"
         f"\n\tSource folder path:\n\t\t{source_path}"
@@ -704,6 +712,7 @@ def main(source_path):
             voxel_size_y,
             voxel_size_z,
             queue,
+            memory_ram,
             need_reconstruction=channel in channels_need_reconstruction,
             need_tera_fly_conversion=need_tera_fly_conversion,
             need_flat_image_application=need_flat_image_application,
