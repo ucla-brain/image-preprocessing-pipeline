@@ -249,15 +249,15 @@
 #     # # total = client.submit(sum, L)
 #     # print(progress(L))
 
-from pathlib import Path
-from itertools import chain, repeat
-from multiprocessing import freeze_support, Pool, cpu_count, Manager
-from timeit import default_timer
-import numpy as np
-import os
-import re
-from tifffile import imread, imwrite
-import subprocess
+# from pathlib import Path
+# from itertools import chain, repeat
+# from multiprocessing import freeze_support, Pool, cpu_count, Manager
+# from timeit import default_timer
+# import numpy as np
+# import os
+# import re
+# from tifffile import imread, imwrite
+# import subprocess
 
 
 # def glob_re(pattern: str, path: Path):
@@ -436,7 +436,7 @@ import subprocess
 #     with Pool(processes=61) as pool:
 #         a = list(pool.imap_unordered(worker, work, chunksize=1))
 #         print(a)
-from pathlib import Path
+# from pathlib import Path
 # from multiprocessing import freeze_support, Pool, Queue, Process
 # from typing import List
 # from datetime import datetime
@@ -557,13 +557,104 @@ from pathlib import Path
 #     freeze_support()
 #     imaris_converter = Path(r"./imaris/ImarisConvertiv.exe")
 #     main()
-import shutil
-installed_imaris = Path(r"C:\Program Files\Bitplane\ImarisViewer 9.8.2")
-new_imaris = Path(r"D:\imaris")
-new_imaris.mkdir(exist_ok=True)
-for file in Path(r"./imaris").rglob("*.*"):
-    path_file = installed_imaris / file.name
-    if path_file.exists():
-        shutil.copy(path_file, new_imaris)
-    else:
-        print(f"{path_file} did not exist.")
+# import shutil
+# installed_imaris = Path(r"C:\Program Files\Bitplane\ImarisViewer 9.8.2")
+# new_imaris = Path(r"D:\imaris")
+# new_imaris.mkdir(exist_ok=True)
+# for file in Path(r"./imaris").rglob("*.*"):
+#     path_file = installed_imaris / file.name
+#     if path_file.exists():
+#         shutil.copy(path_file, new_imaris)
+#     else:
+#         print(f"{path_file} did not exist.")
+
+# from mpi4py import MPI
+# import sys
+# if __name__ == '__main__':
+#     # Initialize environment variables
+#     comm = MPI.COMM_WORLD
+#     nprocs = comm.Get_size()
+#     myrank = comm.Get_rank()
+#     print(nprocs, myrank)
+
+import tqdm
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import pandas as pd
+import os
+from time import sleep
+
+
+# def create_data(datum):
+#     # print(datum)
+#     sleep(2)
+#     return datum
+#
+#
+# if __name__ == "__main__":
+#     date = range(100)
+#     futures = {}
+#     with ProcessPoolExecutor(max_workers=61) as executor:
+#         # total argument for tqdm is just the number of submitted tasks:
+#         with tqdm.tqdm(total=len(date), position=0) as progress_bar:
+#             for idx, dt in enumerate(date):
+#                 future = executor.submit(create_data, dt)
+#                 futures[future] = idx
+#             results = [None] * len(date) # pre_allocate slots
+#
+#             for future in as_completed(futures):
+#                 idx = futures[future] # order of submission
+#                 results[idx] = future.result()
+#                 progress_bar.update(1) # advance by 1
+#                 # data = [ent for sublist in results for ent in sublist]
+#                 # data = pd.DataFrame(data, columns=cols)
+#                 # print(results)
+
+import multiprocessing
+from time import sleep
+from tqdm import tqdm
+def maintain_pbar(queue, num_of_tasks):
+    """
+    {
+        "id": taskid,
+        "cmd": "create", "update", "terminate" or "finish"
+        "data": int, parameters for cmd
+        "message": string for updating the description of tqdm progress bar
+    }
+    """
+    pbars = dict()
+    overall_pbar = tqdm(total=num_of_tasks, ncols=80, desc="Total progress")
+    while True:
+        message = queue.get(True)
+        if message["cmd"] == "create":
+            pbars[str(message["id"])] = tqdm(total=message["data"],
+                                             ncols=80,
+                                             desc="Task #" + str(message["id"]) + message["message"])
+        elif message["cmd"] == "update":
+            pbars[str(message["id"])].update(message["data"])
+        elif message["cmd"] == "terminate":
+            pbars[str(message["id"])].close()
+            overall_pbar.update()
+        elif message["cmd"] == "finish":
+            overall_pbar.close()
+            break
+
+def progresser(params):
+    n = params[0]
+    queue = params[1]
+    interval = 0.01 / (n + 2)
+    total = 5000
+    queue.put({"id": n, "cmd": "create", "data": total, "message": ""})
+    for _ in range(total):
+        sleep(interval)
+        queue.put({"id": n, "cmd":"update", "data": 1, "message":""})
+    queue.put({"id": n, "cmd": "terminate", "data": 1, "message": ""})
+
+if __name__ == '__main__':
+    pool = multiprocessing.Pool(4)
+    queue = multiprocessing.Manager().Queue()
+    l = [(i, queue) for i in range(20)]
+    pool.apply_async(maintain_pbar, (queue, len(l)))
+    pool.map(progresser, l)
+    queue.put({"cmd": "finish"})
+    pool.close()
+    pool.join()

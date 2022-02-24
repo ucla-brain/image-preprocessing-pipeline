@@ -5,14 +5,14 @@ import subprocess
 from pystripe.core import batch_filter
 from multiprocessing import freeze_support
 from pathlib import Path
+from time import time
 
 
-source_folder = Path(r'X:\3D_stitched\20210910_SM210705_01_R_PFC_LS_6x_1000z\tif')
+# source_folder = Path(r'X:\3D_stitched\20210910_SM210705_01_R_PFC_LS_6x_1000z\tif')
 final_tiff_folder = Path(r'D:\20210910_SM210705_01_R_PFC_LS_6x_1000z\tif')
-# dir_tera_fly = final_tiff_folder.parent / (final_tiff_folder.name + '_TeraFly_max')
-dir_tera_fly = Path(r'D:\20210910_SM210705_01_R_PFC_LS_6x_1000z\TeraFly')
-dir_tera_fly.mkdir(exist_ok=True)
+dir_tera_fly = Path(r'D:\20210910_SM210705_01_R_PFC_LS_6x_1000z\TeraFly_C2')
 
+dir_tera_fly.mkdir(exist_ok=True)
 PyScriptsPath = Path(r"./TeraStitcher/pyscripts")
 if sys.platform == "win32":
     # print("Windows is detected.")
@@ -103,23 +103,25 @@ if __name__ == '__main__':
     # )
 
     command = [
-        f"mpiexec -np 4 python -m mpi4py {paraconverter}",
+        f"mpiexec -np 48 python -m mpi4py {paraconverter}",
         # f"{teraconverter}",
         "--sfmt=\"TIFF (series, 2D)\"",
         "--dfmt=\"TIFF (tiled, 3D)\"",
         "--resolutions=\"012345\"",
-        "--clist=0",
+        "--clist=2",
         "--halve=max",
         # "--noprogressbar",
         # "--sparse_data",
-        "--fixed_tiling",
+        # "--fixed_tiling",
         "--height=256",
         "--width=256",
         "--depth=256",
         f"-s={final_tiff_folder}",  # destination_folder
         f"-d={dir_tera_fly}",
     ]
+    start_time = time()
     subprocess.call(" ".join(command), shell=True)
+    print(f"elapsed time = {(time() - start_time) / 60}")
 
     # ims_file_path = destination_folder / f'{destination_folder.name}.ims'
     # file = destination_folder / "SP210729-01_Z000.tif"
