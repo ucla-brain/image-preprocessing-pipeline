@@ -867,6 +867,7 @@ if __name__ == '__main__':
     if not paraconverter.exists():
         log.error(f"Error: paraconverter.py not found\n{paraconverter}")
         raise RuntimeError
+    print(f"mpi4py version is {mpi4py.__version__}")
 
     imaris_converter = Path(r"./imaris/ImarisConvertiv.exe")
     if not imaris_converter.exists():
