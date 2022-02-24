@@ -2,9 +2,6 @@ import os
 import sys
 import psutil
 import subprocess
-
-from dill.pointers import parents
-
 from pystripe.core import batch_filter
 from multiprocessing import freeze_support
 from pathlib import Path
@@ -30,7 +27,7 @@ if sys.platform == "win32":
 elif sys.platform == 'linux' and 'microsoft' not in uname().release.lower():
     print("Linux is detected.")
     psutil.Process().nice(value=19)
-    TeraStitcherPath = Path(r"./TeraStitcher/linux")
+    TeraStitcherPath = Path(r"./TeraStitcher/Linux/AVX512")
     os.environ["PATH"] = f"{os.environ['PATH']}:{TeraStitcherPath.as_posix()}"
     os.environ["PATH"] = f"{os.environ['PATH']}:{PyScriptsPath.as_posix()}"
     terastitcher = "terastitcher"
@@ -40,7 +37,7 @@ elif sys.platform == 'linux' and 'microsoft' in uname().release.lower():
     print("Windows subsystem for Linux is detected.")
     psutil.Process().nice(value=19)
     CacheDriveExample = "/mnt/d/"
-    TeraStitcherPath = Path(r"./TeraStitcher/linux")
+    TeraStitcherPath = Path(r"./TeraStitcher/Linux/AVX512")
     os.environ["PATH"] = f"{os.environ['PATH']}:{TeraStitcherPath.as_posix()}"
     os.environ["PATH"] = f"{os.environ['PATH']}:{PyScriptsPath.as_posix()}"
     terastitcher = "terastitcher"
@@ -108,7 +105,7 @@ if __name__ == '__main__':
     # )
 
     command = [
-        f"mpiexec -np 12 python -m mpi4py {paraconverter}",
+        f"mpiexec -np 6 python -m mpi4py {paraconverter}",
         # f"{teraconverter}",
         "--sfmt=\"TIFF (series, 2D)\"",
         "--dfmt=\"TIFF (tiled, 3D)\"",
