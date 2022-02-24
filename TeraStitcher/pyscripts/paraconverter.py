@@ -105,9 +105,8 @@ to reduce this effect, status can be saved in a permament RAM disk of limited si
 """
 
 resume_status_fname = 'para_resume_status.bin'
-
-# suspend_resume_enabled = True  # suspend/resume mechanism enabled
-suspend_resume_enabled = False  # suspend/resume mechanism disabled
+suspend_resume_enabled = True  # suspend/resume mechanism enabled
+# suspend_resume_enabled = False  # suspend/resume mechanism disabled
 
 """
 if a special drive (e.g. a RAM disk) should be used to save the status for sispend/resume 
@@ -1032,7 +1031,7 @@ def create_commands(gi_np, info=False):  # 2016-12-10. Giulio. @ADDED parameter 
         len_arr = 0
         # print info
         voxel_num = round(1.1 * gi_np * (size_2[0] * size_3[0] * max(64, pow(2, max_res))) * n_chans * bytes_x_chan / (
-                    1024 * 1024 * 1024), 3)
+                1024 * 1024 * 1024), 3)
         print("#" * 80)
         print('Memory needed for ' + str(gi_np) + ' concurrent processes: ' + str(voxel_num) + ' GBytes')
         print("#" * 80)
@@ -1065,18 +1064,17 @@ def create_commands(gi_np, info=False):  # 2016-12-10. Giulio. @ADDED parameter 
 ###############################################################################
 
 if __name__ == '__main__':
-    # Initialize env. variables
+    # Initialize environment variables
     comm = MPI.COMM_WORLD
     nprocs = comm.Get_size()
     myrank = comm.Get_rank()
-    # Sincronizzation
+    # Synchronization
     comm.Barrier()
 
     tmp = read_item(sys.argv, '--info', 'no_info')
+    info = True
     if tmp == 'no_info':
         info = False
-    else:
-        info = True
 
     if myrank == 0:
         # timing
@@ -1089,12 +1087,10 @@ if __name__ == '__main__':
     if myrank == 0:
         if info:
             # get info and print them
-            (first_string, list_string, output_name, len_arr, final_string) = create_commands(nprocs - 1,
-                                                                                              True)  # 2017-02-06. Giulio. @ADDED output_name
+            first_string, list_string, output_name, len_arr, final_string = create_commands(nprocs - 1, True)
         else:
             # Generate strings of commands
-            (first_string, list_string, output_name, len_arr, final_string) = create_commands(
-                nprocs - 1)  # 2017-02-06. Giulio. @ADDED output_name
+            (first_string, list_string, output_name, len_arr, final_string) = create_commands(nprocs - 1)
 
             # 2017-02-08. Giulio. @ADDED support for suspend/resume
             if save_status_prefix == '':
