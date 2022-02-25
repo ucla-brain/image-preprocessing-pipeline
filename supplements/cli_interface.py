@@ -8,7 +8,7 @@ def select_among_multiple_options(
         choices_print = f"\n\n{question}"
         for idx, option in enumerate(options, start=0 if return_index else 1):
             choices_print += f"\n\t{idx} = {option}"
-        choices_print = choices_print.strip() + "\n\n"
+        choices_print = choices_print + "\n\n"
         choice = str()
         while choice not in choices:
             choice = input(choices_print).strip()
