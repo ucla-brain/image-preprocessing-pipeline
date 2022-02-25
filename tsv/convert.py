@@ -98,7 +98,10 @@ def convert_to_2D_tif(
                 arg_list,
                 chunksize=chunks),
             total=num_images_need_processing,
-            ascii=True
+            ascii=True,
+            smoothing=0,
+            unit="img",
+            desc="TSV"
         ))
 
     return volume.shape

@@ -146,7 +146,7 @@ def correct_path_for_wsl(filepath):
     return new_path
 
 
-def p_log(txt):
+def p_log(txt: str):
     print(txt)
     for _ in range(10):
         try:
@@ -174,6 +174,7 @@ class MultiProcess(Process):
 
     def run(self):
         return_code = None  # 0 == success and any other number is an error code
+        previous_percent, percent = 0, 0
         try:
             if self.position is None:
                 return_code = worker(self.command)
@@ -185,7 +186,6 @@ class MultiProcess(Process):
                     shell=True,
                     text=True)
                 pattern = compile(r"(WriteProgress:)\s+(\d*.\d+)\s*$")
-                previous_percent = 0
                 while return_code is None:
                     return_code = process.poll()
                     m = match(pattern, process.stdout.readline())
@@ -198,7 +198,10 @@ class MultiProcess(Process):
             print(type(inst))  # the exception instance
             print(inst.args)  # arguments stored in .args
             print(inst)
-        self.queue.put([100 if return_code == 0 else 0, self.position, return_code, self.command])
+        final_percent = 100 - previous_percent
+        if return_code is not None and int(return_code) != 0:
+            final_percent = 0
+        self.queue.put([final_percent, self.position, return_code, self.command])
 
 
 def reorder_list(a, b):
@@ -415,7 +418,7 @@ def merge_channels_by_file_name(
         (shape[0], shape[1], 3),  # height (y), width(x), colors
         dtype=images.get(order_of_colors[0]).dtype
     )
-    for idx, color in enumerate("rgb"):  # the order of letters should be "rgb" here
+    for idx, color in enumerate("bgr"):  # the order of letters should be "rgb" here
         image: ndarray = images[color]
         if image is not None:
             image_shape = image.shape
@@ -464,15 +467,19 @@ def merge_all_channels(
     } for file in stitched_tif_paths[num_files_in_each_path.index(max(num_files_in_each_path))].rglob("*.tif")]
     workers = 61 if sys.platform == "win32" and workers > 61 else workers
     chunks = 128
-    while chunks > 1 and len(work) // chunks < workers:
-        chunks //= 2
+    while chunks > 1 and len(work) % (chunks * workers) > 10:
+        chunks -= 1
     with Pool(processes=workers) as pool:
         list(
             tqdm(
                 pool.imap_unordered(merge_channels_by_file_name_worker, work,
                                     chunksize=10 if len(work) > workers else 1),
                 total=max(num_files_in_each_path),
-                ascii=True))
+                ascii=True,
+                smoothing=0,
+                unit="img",
+                desc="RGB"
+            ))
 
 
 def get_imaris_command(
@@ -526,10 +533,6 @@ def main(source_path):
     objective, voxel_size_x, voxel_size_y, voxel_size_z, tile_size = get_voxel_sizes()
     global AllChannels
     AllChannels = [channel for channel in AllChannels if source_path.joinpath(channel).exists()]
-    channels_need_reconstruction = [select_among_multiple_options(
-        "Choose channel contains neurites and will be reconstructed to apply lightsheet cleaning:", AllChannels)]
-    p_log(f"\n\n{channels_need_reconstruction} channel is chosen as the most informative channel.\n"
-          f"\tYou can chose to convert it to TeraFly format or apply lightsheet cleaning.")
     de_striped_posix, what_for = "", ""
     image_classes_training_data_path = source_path / FlatNonFlatTrainingData
     need_lightsheet_cleaning = ask_true_false_question("Do you need to computationally clean images?")
@@ -566,28 +569,30 @@ def main(source_path):
         what_for += "tif "
     need_16bit_to_8bit_conversion = ask_true_false_question(
         "Do you need to convert 16-bit images to 8-bit before stitching to reduce final file size?")
-    right_bit_shift: int = 8
+    right_bit_shift: Dict[str, int] = {channel: 8 for channel in AllChannels}
     if need_16bit_to_8bit_conversion:
-        right_bit_shift = int(select_among_multiple_options(
-            "\nEnter right bit shift [0 to 8] for 8-bit conversion: \n"
-            "\tbitshift smaller than 8 will increase the pixel brightness. "
-            "The smaller the value the brighter the pixels.\n"
-            "\tA small bitshift is less destructive for dim (axons) pixels.\n"
-            "\tWe suggest 0-4 for 3D images and 8 for max projection. \n",
-            [
-                "any value larger than   255 will be set to 255 in 8 bit, values smaller than 255 will not change",
-                "any value larger than   511 will be set to 255 in 8 bit, 0-  1 will be set to 0,   2-  3 to 1, ...",
-                "any value larger than  1023 will be set to 255 in 8 bit, 0-  3 will be set to 0,   4-  7 to 1, ...",
-                "any value larger than  2047 will be set to 255 in 8 bit, 0-  7 will be set to 0,   8- 15 to 1, ...",
-                "any value larger than  4095 will be set to 255 in 8 bit, 0- 15 will be set to 0,  16- 31 to 1, ...",
-                "any value larger than  8191 will be set to 255 in 8 bit, 0- 31 will be set to 0,  32- 63 to 1, ...",
-                "any value larger than 16383 will be set to 255 in 8 bit, 0- 63 will be set to 0,  64-127 to 1, ...",
-                "any value larger than 32767 will be set to 255 in 8 bit, 0-127 will be set to 0, 128-255 to 1, ...",
-                "any value larger than 65535 will be set to 255 in 8 bit, 0-255 will be set to 0, 256-511 to 1, ...",
-            ],
-            return_index=True
-        ))
-        de_striped_posix += f"_{right_bit_shift}bsh"
+        for channel in AllChannels:
+            right_bit_shift[channel] = int(select_among_multiple_options(
+                f"For {channel} channel, enter right bit shift [0 to 8] for 8-bit conversion: \n"
+                "\tbitshift smaller than 8 will increase the pixel brightness. "
+                "The smaller the value the brighter the pixels.\n"
+                "\tA small bitshift is less destructive for dim (axons) pixels.\n"
+                "\tWe suggest 0-4 for 3D images and 8 for max projection. \n",
+                [
+                    "any value larger than   255 will be set to 255 in 8 bit, values smaller than 255 will not change",
+                    "any value larger than   511 will be set to 255 in 8 bit, 0-  1 will be set to 0,   2-  3 to 1,...",
+                    "any value larger than  1023 will be set to 255 in 8 bit, 0-  3 will be set to 0,   4-  7 to 1,...",
+                    "any value larger than  2047 will be set to 255 in 8 bit, 0-  7 will be set to 0,   8- 15 to 1,...",
+                    "any value larger than  4095 will be set to 255 in 8 bit, 0- 15 will be set to 0,  16- 31 to 1,...",
+                    "any value larger than  8191 will be set to 255 in 8 bit, 0- 31 will be set to 0,  32- 63 to 1,...",
+                    "any value larger than 16383 will be set to 255 in 8 bit, 0- 63 will be set to 0,  64-127 to 1,...",
+                    "any value larger than 32767 will be set to 255 in 8 bit, 0-127 will be set to 0, 128-255 to 1,...",
+                    "any value larger than 65535 will be set to 255 in 8 bit, 0-255 will be set to 0, 256-511 to 1,...",
+                ],
+                return_index=True
+            ))
+        de_striped_posix += "_" + ".".join(
+            [f"{channel.replace('_', '')}bsh{right_bit_shift[channel]}" for channel in AllChannels])
     down_sampling_factor = (int(voxel_size_z // voxel_size_y), int(voxel_size_z // voxel_size_x))
     need_down_sampling = False
     new_tile_size = None
@@ -628,6 +633,12 @@ def main(source_path):
         source_path.name, what_for="stitched files", posix="_stitched", default_path=stitched_path)
 
     need_tera_fly_conversion = ask_true_false_question("Do you need to convert the neurite channel to teraFly format?")
+    channels_need_reconstruction: list = []
+    if need_tera_fly_conversion:
+        channels_need_reconstruction = [select_among_multiple_options(
+            "Choose channel contains neurites and will be reconstructed to apply lightsheet cleaning:", AllChannels)]
+        p_log(f"\n\n{channels_need_reconstruction} channel is chosen as the most informative channel.\n"
+              f"\tYou can chose to convert it to TeraFly format or apply lightsheet cleaning.")
     need_merged_channels = ask_true_false_question("Do you need to merge channels to RGB color tiff?")
     need_imaris_conversion = ask_true_false_question("Do you need to convert to Imaris format?")
     # Start ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
@@ -674,7 +685,7 @@ def main(source_path):
             need_destriping=need_destriping,
             need_compression=need_compression,
             need_16bit_to_8bit_conversion=need_16bit_to_8bit_conversion,
-            right_bit_shift=right_bit_shift,
+            right_bit_shift=right_bit_shift[channel],
             continue_process_pystripe=continue_process_pystripe,
             down_sampling_factor=down_sampling_factor,
             tile_size=tile_size,
@@ -715,13 +726,11 @@ def main(source_path):
     progress_bar = []
     if need_imaris_conversion:
         p_log(f"{datetime.now()}: started ims conversion  ...")
-        # convert_to_imaris(merged_tif_paths, voxel_size_x, voxel_size_y, voxel_size_z, workers=cpu_logical_core_count)
-
         for idx, path in enumerate(merged_tif_paths):
             command = get_imaris_command(path, voxel_size_x, voxel_size_y, voxel_size_z, workers=cpu_logical_core_count)
             MultiProcess(queue, command, idx).start()
             running_processes += 1
-            progress_bar += [tqdm(total=100, ascii=True, position=idx)]
+            progress_bar += [tqdm(total=100, ascii=True, position=idx, unit="%", desc=f"imaris{idx+1}", smoothing=0)]
 
     # waite for TeraFly and Imaris conversion to finish ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
     p_log(f"{datetime.now()}: waiting for TeraFly and Imaris conversion to finish.")

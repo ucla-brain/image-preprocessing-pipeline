@@ -994,7 +994,11 @@ def batch_filter(
         list(tqdm.tqdm(
             pool.imap_unordered(_read_filter_save, args_list, chunksize=chunks),
             total=num_images_need_processing,
-            ascii=True))
+            ascii=True,
+            smoothing=0,
+            unit="img",
+            desc="PyStripe"
+        ))
 
     #     running_processes, completed = 0, 0
     #     queue = Queue()
