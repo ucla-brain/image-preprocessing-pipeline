@@ -277,7 +277,7 @@ def process_channel(
             source_path / channel,
             preprocessed_path / channel,
             workers=cpu_logical_core_count,  # here the limit is 61 on Windows
-            chunks=128,
+            # chunks=128,
             # sigma=[foreground, background] Default is [0, 0], indicating no de-striping.
             sigma=((32, 32) if objective == "4x" else (256, 256)) if need_destriping else (0, 0),
             # level=0,
@@ -475,54 +475,6 @@ def merge_all_channels(
                 ascii=True))
 
 
-# def convert_to_imaris(
-#         merged_tif_paths: List[Path],
-#         voxel_size_x: float,
-#         voxel_size_y: float,
-#         voxel_size_z: float,
-#         workers: int = cpu_count()):
-#     work = []
-#     for path in merged_tif_paths:
-#         files = list(path.rglob("*.tif"))
-#         file = files[0]
-#         if imaris_converter.exists() and len(files) > 0:
-#             print(f"{datetime.now()}: converting {path.name} to ims ... ")
-#             ims_file_path = path.parent / f'{path.name}.ims'
-#             command = [
-#                 f"" if sys.platform == "win32" else "wine",
-#                 f"{correct_path_for_cmd(imaris_converter)}",
-#                 f"--input {correct_path_for_cmd(file)}",
-#                 f"--output {ims_file_path}",
-#                 # f"--log {log_file}" if sys.platform == "win32" else "",
-#             ]
-#             if sys.platform == "linux" and 'microsoft' in uname().release.lower():
-#                 command = [
-#                     f'{correct_path_for_cmd(imaris_converter)}',
-#                     f'--input {correct_path_for_wsl(file)}',
-#                     f"--output {correct_path_for_wsl(ims_file_path)}",
-#                 ]
-#             if len(files) > 1:
-#                 command += ["--inputformat TiffSeries"]
-#
-#             command += [
-#                 f"--nthreads {workers}",
-#                 f"--compression 1",
-#                 f"--voxelsize {voxel_size_x}-{voxel_size_y}-{voxel_size_z}",  # x-y-z
-#                 "--logprogress --defaultcolorlist 00-10-00"
-#             ]
-#             print(f"\ttiff to ims conversion command:\n\t\t{' '.join(command)}\n")
-#             # subprocess.call(" ".join(command), shell=True)
-#             work += [" ".join(command)]
-#         else:
-#             if len(files) > 0:
-#                 print("\tnot found Imaris View: not converting tiff to ims ... ")
-#             else:
-#                 print("\tno tif file found to convert to ims!")
-#
-#     with Pool(processes=len(merged_tif_paths)) as pool:
-#         list(pool.imap_unordered(worker, work))
-
-
 def get_imaris_command(
         path,
         voxel_size_x: float,
@@ -636,7 +588,6 @@ def main(source_path):
             return_index=True
         ))
         de_striped_posix += f"_{right_bit_shift}bsh"
-
     down_sampling_factor = (int(voxel_size_z // voxel_size_y), int(voxel_size_z // voxel_size_x))
     need_down_sampling = False
     new_tile_size = None
