@@ -6,9 +6,7 @@ import argparse
 import warnings
 import numpy as np
 from sys import platform
-from psutil import cpu_percent
-from multiprocessing import Process, Pool, Manager, Queue, cpu_count
-from queue import Empty
+from multiprocessing import Pool, Manager, cpu_count
 from time import sleep
 from datetime import datetime
 from argparse import RawDescriptionHelpFormatter
@@ -20,13 +18,15 @@ from skimage.measure import block_reduce
 from skimage.transform import resize
 from tifffile import imread, imsave
 from tifffile.tifffile import TiffFileError
-# from imagecodecs._deflate import DeflateError
 from dcimg import DCIMGFile
 from typing import Tuple
 from operator import iconcat
 from functools import reduce
 from pystripe.raw import raw_imread
 from .lightsheet_correct import correct_lightsheet
+# from multiprocessing import Process, Queue
+# from queue import Empty
+# from psutil import cpu_percent
 
 warnings.filterwarnings("ignore")
 supported_extensions = ['.tif', '.tiff', '.raw', '.dcimg']
@@ -36,11 +36,7 @@ os.environ['NUMEXPR_NUM_THREADS'] = '1'
 os.environ['OMP_NUM_THREADS'] = '1'
 
 
-def imread_tif_raw(
-        path: Path,
-        dtype: str = None,
-        shape: Tuple[int, int] = None
-):
+def imread_tif_raw(path: Path, dtype: str = None, shape: Tuple[int, int] = None):
     """Load a tiff or raw image
 
     Parameters
@@ -155,11 +151,7 @@ def convert_to_8bit_fun(img: np.ndarray, bit_shift_to_right: int = 3):
     return img.astype('uint8')
 
 
-def imsave_tif(
-        path: Path,
-        img: np.ndarray,
-        compression: Tuple[str, int] = ('ZLIB', 1),
-):
+def imsave_tif(path: Path, img: np.ndarray, compression: Tuple[str, int] = ('ZLIB', 1)):
     """Save an array as a tiff or raw image
 
     The file format will be inferred from the file extension in `path`
@@ -807,32 +799,32 @@ def process_dc_imgs(input_file: Path, input_path: Path, output_path: Path, args_
     return sub_stack
 
 
-class MultiProcess(Process):
-    def __init__(self, queue, shared_list, idx):
-        Process.__init__(self)
-        self.daemon = True
-        self.queue = queue
-        self.shared_list = shared_list
-        self.idx = idx
-
-    def run(self):
-        success = False
-        try:
-            read_filter_save(**self.shared_list[self.idx])
-            success = True
-        except Exception as inst:
-            print(f'Process failed for {self.shared_list[self.idx]}.')
-            print(type(inst))  # the exception instance
-            print(inst.args)  # arguments stored in .args
-            print(inst)
-        self.queue.put(success)
+# class MultiProcess(Process):
+#     def __init__(self, queue, shared_list, idx):
+#         Process.__init__(self)
+#         self.daemon = True
+#         self.queue = queue
+#         self.shared_list = shared_list
+#         self.idx = idx
+#
+#     def run(self):
+#         success = False
+#         try:
+#             read_filter_save(**self.shared_list[self.idx])
+#             success = True
+#         except Exception as inst:
+#             print(f'Process failed for {self.shared_list[self.idx]}.')
+#             print(type(inst))  # the exception instance
+#             print(inst.args)  # arguments stored in .args
+#             print(inst)
+#         self.queue.put(success)
 
 
 def batch_filter(
         input_path: Path,
         output_path: Path,
         workers: int = os.cpu_count(),
-        chunks: int = 8,
+        chunks: int = 128,
         sigma: Tuple[int, int] = (0, 0),
         level=0,
         wavelet: str = 'db10',
@@ -969,7 +961,7 @@ def batch_filter(
     }
 
     print(f'{datetime.now()}: Looking for images in {input_path} ...')
-    with Pool(processes=workers if workers < 62 else 61) as pool:
+    with Pool(processes=workers) as pool:
         if z_step is None:
             args_list = pool.starmap(
                 process_tif_raw_imgs,
@@ -995,41 +987,38 @@ def batch_filter(
     num_images_need_processing = len(args_list)
     while chunks > 32 and num_images_need_processing % (chunks * workers) > 10:
         chunks -= 1
-    print(f'{datetime.now()}: {num_images_need_processing} images need processing.\n\t'
-          f'Setting up {workers} workers. Each worker processes {chunks} images at a time.\n'
-          f'Progress:')
-    if platform == 'linux' or workers < 62:
-        with Pool(processes=workers) as pool:
-            list(tqdm.tqdm(
-                pool.imap_unordered(_read_filter_save, args_list, chunksize=chunks),
-                total=num_images_need_processing,
-                ascii=True))
-    else:
-        running_processes, completed = 0, 0
-        queue = Queue()
-        progress_bar = tqdm.tqdm(total=num_images_need_processing, ascii=True)
-        while completed < num_images_need_processing:
-            if workers - running_processes > chunks and num_images_need_processing - completed > chunks:
-                batch_size = chunks
-            else:
-                batch_size = 1
-            if cpu_percent() > 85:
-                sleep(1.0)
-            for _ in range(batch_size):
-                MultiProcess(queue, args_list, completed + running_processes).start()
-                running_processes += 1
-            try:
-                queue.get()
-                completed += 1
-                running_processes -= 1
-                if completed % workers == 0:
-                    progress_bar.update(workers)
-            except Empty:
-                if running_processes > workers - chunks:
-                    sleep(0.1)
-        progress_bar.close()
+    print(f"{datetime.now()}: {num_images_need_processing} images need processing.\n\t"
+          f"Setting up {workers} workers. Each worker processes {chunks} images at a time.\n"
+          f"Progress:")
+    with Pool(processes=workers) as pool:
+        list(tqdm.tqdm(
+            pool.imap_unordered(_read_filter_save, args_list, chunksize=chunks),
+            total=num_images_need_processing,
+            ascii=True))
 
-    print('Done!')
+    #     running_processes, completed = 0, 0
+    #     queue = Queue()
+    #     progress_bar = tqdm.tqdm(total=num_images_need_processing, ascii=True)
+    #     while completed < num_images_need_processing:
+    #         if workers - running_processes > chunks and num_images_need_processing - completed > chunks:
+    #             batch_size = chunks
+    #         else:
+    #             batch_size = 1
+    #         if cpu_percent() > 85:
+    #             sleep(1.0)
+    #         for _ in range(batch_size):
+    #             MultiProcess(queue, args_list, completed + running_processes).start()
+    #             running_processes += 1
+    #         try:
+    #             queue.get()
+    #             completed += 1
+    #             running_processes -= 1
+    #             if completed % workers == 0:
+    #                 progress_bar.update(workers)
+    #         except Empty:
+    #             if running_processes > workers - chunks:
+    #                 sleep(0.1)
+    #     progress_bar.close()
 
 
 def normalize_flat(flat):
