@@ -24,6 +24,8 @@ from operator import iconcat
 from functools import reduce
 from pystripe.raw import raw_imread
 from .lightsheet_correct import correct_lightsheet
+from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 # from multiprocessing import Process, Queue
 # from queue import Empty
 # from psutil import cpu_percent
@@ -56,20 +58,26 @@ def imread_tif_raw(path: Path, dtype: str = None, shape: Tuple[int, int] = None)
     """
     img = None
     # for NAS
-    for _ in range(num_retries):
+    attempt = 0
+    for attempt in range(num_retries):
         try:
             extension = path.suffix
             if extension == '.raw':
-                img = raw_imread(path, dtype=dtype, shape=shape)
+                # img = raw_imread(path, dtype=dtype, shape=shape)
+                with ProcessPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(raw_imread, path, {"dtype": dtype, "shape": shape})
+                    img = future.result(timeout=100)
             elif extension == '.tif' or extension == '.tiff':
                 img = imread(path)
+        except BrokenProcessPool:
+            print(f"\ntimeout reached for path:\n\t{path}")
+            return None
         except OSError or TypeError or PermissionError:
-            # print(f'\nRetrying reading file:\n{path}')
             sleep(0.1)
             continue
         break
     if img is None:
-        print(f"after {num_retries} attempts failed to read file:\n{path}")
+        print(f"after {attempt + 1} attempts failed to read file:\n{path}")
     return img
 
 
@@ -990,15 +998,33 @@ def batch_filter(
     print(f"{datetime.now()}: {num_images_need_processing} images need processing.\n\t"
           f"Setting up {workers} workers. Each worker processes {chunks} images at a time.\n"
           f"Progress:")
-    with Pool(processes=workers) as pool:
+    # with Pool(processes=workers) as pool:
+    #     list(tqdm.tqdm(
+    #         pool.imap_unordered(_read_filter_save, args_list, chunksize=chunks),
+    #         total=num_images_need_processing,
+    #         ascii=True,
+    #         smoothing=0,
+    #         unit="img",
+    #         desc="PyStripe"
+    #     ))
+    with ProcessPoolExecutor(max_workers=workers) as pool:
         list(tqdm.tqdm(
-            pool.imap_unordered(_read_filter_save, args_list, chunksize=chunks),
+            pool.map(_read_filter_save, args_list, chunksize=chunks),
             total=num_images_need_processing,
             ascii=True,
             smoothing=0,
             unit="img",
             desc="PyStripe"
         ))
+
+        # future_to_args = {pool.submit(_read_filter_save, args) for args in args_list}
+        # for future in as_completed(future_to_args, timeout=100):
+        #     try:
+        #         future.result()
+        #     except BrokenProcessPool:
+        #         args = future_to_args[future]
+        #         print(f"timeout for args:\n\t{args}")
+        #     progress_bar.update(1)
 
     #     running_processes, completed = 0, 0
     #     queue = Queue()
