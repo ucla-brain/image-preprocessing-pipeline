@@ -1,63 +1,34 @@
-# from multiprocessing import Pool, freeze_support
-# from time import sleep
-# import tqdm
-# import signal
-# from functools import wraps
-#
-#
-# def handle_ctrl_c(func):
-#     @wraps(func)
-#     def wrapper(*args, **kwargs):
-#         global ctrl_c_entered
-#         if not ctrl_c_entered:
-#             signal.signal(signal.SIGINT, default_sigint_handler) # the default
-#             try:
-#                 return func(*args, **kwargs)
-#             except KeyboardInterrupt:
-#                 ctrl_c_entered = True
-#                 return KeyboardInterrupt()
-#             finally:
-#                 signal.signal(signal.SIGINT, pool_ctrl_c_handler)
-#         else:
-#             return KeyboardInterrupt()
-#     return wrapper
-#
-#
-# @handle_ctrl_c
-# def slowly_square(i):
-#     sleep(1)
-#     return i*i
-#
-#
-# def pool_ctrl_c_handler(*args, **kwargs):
-#     global ctrl_c_entered
-#     ctrl_c_entered = True
-#
-#
-# def init_pool():
-#     # set global variable for each process in the pool:
-#     global ctrl_c_entered
-#     global default_sigint_handler
-#     ctrl_c_entered = False
-#     default_sigint_handler = signal.signal(signal.SIGINT, pool_ctrl_c_handler)
-#
-#
-# def main():
-#     signal.signal(signal.SIGINT, signal.SIG_IGN)
-#     with Pool(processes=61, initializer=init_pool) as pool:
-#         results = tqdm.tqdm(
-#             pool.map(slowly_square, range(100)),
-#             total=100,
-#             ascii=True
-#         )
-#         list(results)
-#         # if any(list(map(lambda x: isinstance(x, KeyboardInterrupt), results))):
-#         #     print('Ctrl-C was entered.')
-#         # else:
-#         #     print(results)
-#
-#
-# if __name__ == '__main__':
-#     freeze_support()
-#     ctrl_c_entered, default_sigint_handler = None, None
-#     main()
+from multiprocessing import freeze_support
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures.process import BrokenProcessPool
+from pystripe.raw import raw_imread
+from pathlib import Path
+
+
+if __name__ == '__main__':
+    freeze_support()
+    with ProcessPoolExecutor(max_workers=61) as pool:
+        inputs = [
+            Path(r"Y:\SmartSPIM_Data\2022_02_21\20220221_17_24_07_SA210705_01_WholeBrain_LS_15x_1000z\Ex_561_Em_600\122520\122520_183950\007220.raw"),
+            Path(r"Y:\SmartSPIM_Data\2022_02_21\20220221_17_24_07_SA210705_01_WholeBrain_LS_15x_1000z\Ex_561_Em_600\122520\122520_183950\007210.raw"),
+        ]
+        # result = list(
+        #     pool.map(
+        #         raw_imread,
+        #         [
+        #             Path(r"Y:\SmartSPIM_Data\2022_02_21\20220221_17_24_07_SA210705_01_WholeBrain_LS_15x_1000z\Ex_561_Em_600\122520\122520_183950\007220.raw"),
+        #             Path(r"Y:\SmartSPIM_Data\2022_02_21\20220221_17_24_07_SA210705_01_WholeBrain_LS_15x_1000z\Ex_561_Em_600\122520\122520_183950\007210.raw"),
+        #         ],
+        #         timeout=10, chunksize=1, unordered=True
+        #     )
+        # )
+        future_to_path = {pool.submit(raw_imread, path, {"shape": (1850, 1850), "dtype": "uint16"}): path for path in inputs}
+        for future in as_completed(future_to_path, timeout=10):
+            try:
+                result = future.result()
+            except BrokenProcessPool:
+                path = future_to_path[future]
+                print(f"timeout for path:\n\t{path}")
+            else:
+                print(result)
+
