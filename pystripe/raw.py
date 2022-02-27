@@ -15,7 +15,6 @@ def raw_imread(path, dtype=None, shape=None):
         shape: (height, width) of the image
     returns: a Numpy read-only array mapping the file as an image
     """
-
     try:
         if dtype is None or shape is None:
             as_uint32 = memmap(
