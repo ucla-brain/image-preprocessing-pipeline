@@ -241,8 +241,8 @@ def process_channel(
     # preprocess each tile as needed using PyStripe --------------------------------------------------------------------
 
     assert source_path.joinpath(channel).exists()
-    if need_destriping or need_flat_image_application or need_raw_to_tiff_conversion or need_16bit_to_8bit_conversion \
-            or down_sampling_factor is not None or new_tile_size is not None:
+    if need_lightsheet_cleaning or need_destriping or need_flat_image_application or need_raw_to_tiff_conversion or \
+            need_16bit_to_8bit_conversion or down_sampling_factor is not None or new_tile_size is not None:
         global DarkThreshold
         dark = DarkThreshold
         img_flat = None
@@ -620,8 +620,8 @@ def main(source_path):
     print_input_file_names = False
     if need_destriping or need_flat_image_application or need_raw_to_tiff_conversion or need_16bit_to_8bit_conversion \
             or need_down_sampling:
-        print_input_file_names = ask_true_false_question(
-            "Do you need to print raw or tif file names to find corrupt files during preprocessing stage?")
+        print_input_file_names = False  # ask_true_false_question(
+        # "Do you need to print raw or tif file names to find corrupt files during preprocessing stage?")
         preprocessed_path, continue_process_pystripe = get_destination_path(
             source_path.name,
             what_for=what_for + "files",
@@ -730,7 +730,7 @@ def main(source_path):
             command = get_imaris_command(path, voxel_size_x, voxel_size_y, voxel_size_z, workers=cpu_logical_core_count)
             MultiProcess(queue, command, idx).start()
             running_processes += 1
-            progress_bar += [tqdm(total=100, ascii=True, position=idx, unit="%", desc=f"imaris{idx+1}", smoothing=0)]
+            progress_bar += [tqdm(total=100, ascii=True, position=idx, unit="%", desc=f"imaris{idx + 1}", smoothing=0)]
 
     # waite for TeraFly and Imaris conversion to finish ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
     p_log(f"{datetime.now()}: waiting for TeraFly and Imaris conversion to finish.")
@@ -767,7 +767,7 @@ if __name__ == '__main__':
     if sys.platform == "win32":
         print("Windows is detected.")
         psutil.Process().nice(psutil.IDLE_PRIORITY_CLASS)
-        CacheDriveExample = "W:\\3D_stitched\\"
+        CacheDriveExample = "D:\\"  # "W:\\3D_stitched\\"
         TeraStitcherPath = Path(r"./TeraStitcher/Windows") / cpu_instruction
         os.environ["PATH"] = f"{os.environ['PATH']};{TeraStitcherPath.as_posix()}"
         os.environ["PATH"] = f"{os.environ['PATH']};{PyScriptPath.as_posix()}"
