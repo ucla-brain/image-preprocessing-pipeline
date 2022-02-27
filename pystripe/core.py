@@ -1,34 +1,37 @@
 import os
 import re
 import pywt
-import tqdm
 import argparse
 import warnings
-import numpy as np
+from numpy import max as np_max
+from numpy import float as np_float
+from numpy import uint8, uint16, float32, float64, ndarray, generic, real, zeros, broadcast_to, sqrt, exp, log, \
+    cumsum, imag, arange, unique, interp, array, pad, clip, where, rot90
+from scipy import fftpack, ndimage
+from tqdm import tqdm
 from sys import platform
-from multiprocessing import Pool, Manager, cpu_count
 from time import sleep
 from datetime import datetime
 from argparse import RawDescriptionHelpFormatter
 from pathlib import Path
-from itertools import repeat
-from scipy import fftpack, ndimage
 from skimage.filters import threshold_otsu
 from skimage.measure import block_reduce
 from skimage.transform import resize
 from tifffile import imread, imsave
 from tifffile.tifffile import TiffFileError
 from dcimg import DCIMGFile
-from typing import Tuple
-from operator import iconcat
-from functools import reduce
+from typing import Tuple, Iterator, List
 from pystripe.raw import raw_imread
 from .lightsheet_correct import correct_lightsheet
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
-# from multiprocessing import Process, Queue
-# from queue import Empty
-# from psutil import cpu_percent
+from multiprocessing import cpu_count
+from multiprocessing import Process, Queue, Manager
+from queue import Empty
+from multiprocessing import Pool
+from operator import iconcat
+from functools import reduce
+from itertools import repeat
 
 warnings.filterwarnings("ignore")
 supported_extensions = ['.tif', '.tiff', '.raw', '.dcimg']
@@ -63,15 +66,9 @@ def imread_tif_raw(path: Path, dtype: str = None, shape: Tuple[int, int] = None)
         try:
             extension = path.suffix
             if extension == '.raw':
-                # img = raw_imread(path, dtype=dtype, shape=shape)
-                with ProcessPoolExecutor(max_workers=1) as executor:
-                    future = executor.submit(raw_imread, path, {"dtype": dtype, "shape": shape})
-                    img = future.result(timeout=100)
+                img = raw_imread(path, dtype=dtype, shape=shape)
             elif extension == '.tif' or extension == '.tiff':
                 img = imread(path)
-        except BrokenProcessPool:
-            print(f"\ntimeout reached for path:\n\t{path}")
-            return None
         except OSError or TypeError or PermissionError:
             sleep(0.1)
             continue
@@ -141,11 +138,11 @@ def check_dcimg_start(path):
     return int(os.path.basename(path).split('.')[0])
 
 
-def convert_to_8bit_fun(img: np.ndarray, bit_shift_to_right: int = 3):
+def convert_to_8bit_fun(img: ndarray, bit_shift_to_right: int = 3):
     if img.dtype == 'uint8':
         return img
     else:
-        img = img.astype(np.uint16)
+        img = img.astype(uint16)
     # bit shift then change the type to avoid floating point operations
     # img >> 8 is equivalent to img / 256
     if 0 < bit_shift_to_right < 9:
@@ -159,7 +156,7 @@ def convert_to_8bit_fun(img: np.ndarray, bit_shift_to_right: int = 3):
     return img.astype('uint8')
 
 
-def imsave_tif(path: Path, img: np.ndarray, compression: Tuple[str, int] = ('ZLIB', 1)):
+def imsave_tif(path: Path, img: ndarray, compression: Tuple[str, int] = ('ZLIB', 1)):
     """Save an array as a tiff or raw image
 
     The file format will be inferred from the file extension in `path`
@@ -219,12 +216,12 @@ def imsave_tif(path: Path, img: np.ndarray, compression: Tuple[str, int] = ('ZLI
             continue
 
 
-def wavedec(img: np.ndarray, wavelet: str, level: int = None):
+def wavedec(img: ndarray, wavelet: str, level: int = None):
     """Decompose `img` using discrete (decimated) wavelet transform using `wavelet`
 
     Parameters
     ----------
-    img : np.ndarray
+    img : ndarray
         image to be decomposed into wavelet coefficients
     wavelet : str
         name of the mother wavelet
@@ -316,7 +313,7 @@ def ifft2(fdata):
 
 
 def magnitude(fdata):
-    return np.sqrt(np.real(fdata) ** 2 + np.imag(fdata) ** 2)
+    return sqrt(real(fdata) ** 2 + imag(fdata) ** 2)
 
 
 def notch(n, sigma):
@@ -341,8 +338,8 @@ def notch(n, sigma):
         n = int(n)
     if sigma <= 0:
         raise ValueError('sigma must be positive')
-    x = np.arange(n)
-    g = 1 - np.exp(-x ** 2 / (2 * sigma ** 2))
+    x = arange(n)
+    g = 1 - exp(-x ** 2 / (2 * sigma ** 2))
     return g
 
 
@@ -363,7 +360,7 @@ def gaussian_filter(shape, sigma):
 
     """
     g = notch(n=shape[-1], sigma=sigma)
-    g_mask = np.broadcast_to(g, shape).copy()
+    g_mask = broadcast_to(g, shape).copy()
     return g_mask
 
 
@@ -389,21 +386,20 @@ def hist_match(source, template):
 
     # get the set of unique pixel values and their corresponding indices and
     # counts
-    s_values, bin_idx, s_counts = np.unique(source, return_inverse=True,
-                                            return_counts=True)
-    t_values, t_counts = np.unique(template, return_counts=True)
+    s_values, bin_idx, s_counts = unique(source, return_inverse=True, return_counts=True)
+    t_values, t_counts = unique(template, return_counts=True)
 
     # take the cumsum of the counts and normalize by the number of pixels to
     # get the empirical cumulative distribution functions for the source and
     # template images (maps pixel value --> quantile)
-    s_quantiles = np.cumsum(s_counts).astype(np.float64)
+    s_quantiles = cumsum(s_counts).astype(float64)
     s_quantiles /= s_quantiles[-1]
-    t_quantiles = np.cumsum(t_counts).astype(np.float64)
+    t_quantiles = cumsum(t_counts).astype(float64)
     t_quantiles /= t_quantiles[-1]
 
     # interpolate linearly to find the pixel values in the template image
     # that correspond most closely to the quantiles in the source image
-    interp_t_values = np.interp(s_quantiles, t_quantiles, t_values)
+    interp_t_values = interp(s_quantiles, t_quantiles, t_values)
 
     return interp_t_values[bin_idx].reshape(old_shape)
 
@@ -414,7 +410,7 @@ def max_level(min_len, wavelet):
 
 
 def sigmoid(x):
-    return 1 / (1 + np.exp(-x))
+    return 1 / (1 + exp(-x))
 
 
 def foreground_fraction(img, center, crossover, smoothing):
@@ -424,7 +420,7 @@ def foreground_fraction(img, center, crossover, smoothing):
 
 
 def filter_subband(img, sigma, level, wavelet):
-    img_log = np.log(1 + img)
+    img_log = log(1 + img)
 
     if level == 0:
         coeffs = wavedec(img_log, wavelet)
@@ -444,7 +440,7 @@ def filter_subband(img, sigma, level, wavelet):
         coeffs_filt.append((ch_filt, cv, cd))
 
     img_log_filtered = waverec(coeffs_filt, wavelet)
-    return np.exp(img_log_filtered) - 1
+    return exp(img_log_filtered) - 1
 
 
 def apply_flat(img, flat):
@@ -485,13 +481,13 @@ def filter_streaks(img, sigma, level=0, wavelet='db3', crossover=10, threshold=-
         except ValueError:
             threshold = 1
 
-    img = np.array(img, dtype=np.float)
+    img = array(img, dtype=np_float)
     #
     # Need to pad image to multiple of 2
     #
     pad_y, pad_x = [_ % 2 for _ in img.shape]
     if pad_y == 1 or pad_x == 1:
-        img = np.pad(img, ((0, pad_y), (0, pad_x)), mode="edge")
+        img = pad(img, ((0, pad_y), (0, pad_x)), mode="edge")
 
     # TODO: Clean up this logic with some dual-band CLI alternative
     sigma1 = sigma[0]  # foreground
@@ -501,22 +497,22 @@ def filter_streaks(img, sigma, level=0, wavelet='db3', crossover=10, threshold=-
             if sigma1 == sigma2:  # Single band
                 f_img = filter_subband(img, sigma1, level, wavelet)
             else:  # Dual-band
-                background = np.clip(img, None, threshold)
-                foreground = np.clip(img, threshold, None)
+                background = clip(img, None, threshold)
+                foreground = clip(img, threshold, None)
                 background_filtered = filter_subband(background, sigma[1], level, wavelet)
                 foreground_filtered = filter_subband(foreground, sigma[0], level, wavelet)
                 # Smoothed homotopy
                 f = foreground_fraction(img, threshold, crossover, smoothing=smoothing)
                 f_img = foreground_filtered * f + background_filtered * (1 - f)
         else:  # Foreground filter only
-            foreground = np.clip(img, threshold, None)
+            foreground = clip(img, threshold, None)
             foreground_filtered = filter_subband(foreground, sigma[0], level, wavelet)
             # Smoothed homotopy
             f = foreground_fraction(img, threshold, crossover, smoothing=smoothing)
             f_img = foreground_filtered * f + img * (1 - f)
     else:
         if sigma2 > 0:  # Background filter only
-            background = np.clip(img, None, threshold)
+            background = clip(img, None, threshold)
             background_filtered = filter_subband(background, sigma[1], level, wavelet)
             # Smoothed homotopy
             f = foreground_fraction(img, threshold, crossover, smoothing=smoothing)
@@ -527,10 +523,10 @@ def filter_streaks(img, sigma, level=0, wavelet='db3', crossover=10, threshold=-
 
     # TODO: Fix code to clip back to original bit depth
     # scaled_fimg = hist_match(f_img, img)
-    # np.clip(scaled_fimg, np.iinfo(img.dtype).min, np.iinfo(img.dtype).max, out=scaled_fimg)
+    # clip(scaled_fimg, np.iinfo(img.dtype).min, np.iinfo(img.dtype).max, out=scaled_fimg)
 
     # Convert to 16 bit image
-    np.clip(f_img, 0, 2 ** 16 - 1, out=f_img)  # Clip to 16-bit unsigned range
+    clip(f_img, 0, 2 ** 16 - 1, out=f_img)  # Clip to 16-bit unsigned range
     f_img = f_img.astype('uint16')
 
     if pad_x > 0:
@@ -549,7 +545,7 @@ def read_filter_save(
         crossover: float = 10,
         threshold: float = -1,
         compression: Tuple[str, int] = ('ZLIB', 1),
-        flat: np.ndarray = None,
+        flat: ndarray = None,
         dark: float = 0,
         z_idx: int = None,
         rotate: bool = False,
@@ -653,7 +649,7 @@ def read_filter_save(
                 f"\n\t{output_file}"
                 f"\n\tgenerating a dummy tile of shape {tile_size} and type {dtype}, instead."
             )
-            img = np.zeros(dtype=dtype, shape=tile_size)
+            img = zeros(dtype=dtype, shape=tile_size)
             # return
         if img.shape != tile_size:
             print(
@@ -669,13 +665,13 @@ def read_filter_save(
         if flat is not None:
             img = apply_flat(img, flat)
         if dark is not None and dark > 0:
-            img = np.where(img > dark, img - dark, 0)  # Subtract the dark offset
+            img = where(img > dark, img - dark, 0)  # Subtract the dark offset
         if down_sample is not None:
-            img = block_reduce(img, block_size=down_sample, func=np.max)
+            img = block_reduce(img, block_size=down_sample, func=np_max)
         if new_size is not None:
             img = resize(img, new_size, preserve_range=True, anti_aliasing=True)
         if rotate:
-            img = np.rot90(img)
+            img = rot90(img)
         if lightsheet:
             img = correct_lightsheet(
                 img.reshape(img.shape[0], img.shape[1], 1),
@@ -685,7 +681,7 @@ def read_filter_save(
                     selem=(background_window_size, background_window_size, 1),
                     spacing=(25, 25, 1),
                     interpolate=1,
-                    dtype=np.float32,
+                    dtype=float32,
                     step=(2, 2, 1)),
                 lightsheet_vs_background=lightsheet_vs_background
             ).reshape(img.shape[0], img.shape[1])
@@ -699,9 +695,9 @@ def read_filter_save(
                 threshold=threshold
             )
 
-        if convert_to_16bit and img.dtype != np.uint16:
-            img = img.astype(np.uint16)
-        elif convert_to_8bit and img.dtype != np.uint8:
+        if convert_to_16bit and img.dtype != uint16:
+            img = img.astype(uint16)
+        elif convert_to_8bit and img.dtype != uint8:
             img = convert_to_8bit_fun(img, bit_shift_to_right=bit_shift_to_right)
         elif img.dtype != d_type:
             img = img.astype(d_type)
@@ -738,11 +734,12 @@ def glob_re(pattern: str, path: Path):
             regular expression to search the file name.
     """
     regexp = re.compile(pattern, re.IGNORECASE)
-    for p in os.scandir(path):
+    paths: Iterator[os.DirEntry] = os.scandir(path)
+    for p in paths:
         if p.is_file() and regexp.search(p.name):
             yield Path(p.path)
         elif p.is_dir(follow_symlinks=False):
-            yield from glob_re(pattern, p.path)
+            yield from glob_re(pattern, Path(p.path))
 
 
 def process_tif_raw_imgs(input_file: Path, input_path: Path, output_path: Path, args_dict_template: dict):
@@ -807,32 +804,52 @@ def process_dc_imgs(input_file: Path, input_path: Path, output_path: Path, args_
     return sub_stack
 
 
-# class MultiProcess(Process):
-#     def __init__(self, queue, shared_list, idx):
-#         Process.__init__(self)
-#         self.daemon = True
-#         self.queue = queue
-#         self.shared_list = shared_list
-#         self.idx = idx
-#
-#     def run(self):
-#         success = False
-#         try:
-#             read_filter_save(**self.shared_list[self.idx])
-#             success = True
-#         except Exception as inst:
-#             print(f'Process failed for {self.shared_list[self.idx]}.')
-#             print(type(inst))  # the exception instance
-#             print(inst.args)  # arguments stored in .args
-#             print(inst)
-#         self.queue.put(success)
+class MultiProcess(Process):
+    def __init__(self, queue: Queue, shared_list: List[dict], indices: Iterator[int]):
+        Process.__init__(self)
+        self.daemon = False
+        self.queue = queue
+        self.shared_list = shared_list
+        self.indices = indices
+
+    def run(self):
+        running = True
+        pool = ProcessPoolExecutor(max_workers=1)
+        for idx in self.indices:
+            args = self.shared_list[idx]
+            try:
+                # read_filter_save(**self.shared_list[idx])
+                future = pool.submit(_read_filter_save, args)
+                future.result(timeout=100)
+            except BrokenProcessPool:
+                output_file: Path = args["output_file"]
+                print(f"\ntimeout reached for processing input file:\n\t{args['input_file']}\n\t"
+                      f"a dummy (zeros) image is saved as output instead:\n\t{output_file}")
+                if not output_file.exists():
+                    imsave_tif(
+                        output_file,
+                        zeros(
+                            shape=args["new_size"] if args["new_size"] else args["tile_size"],
+                            dtype=uint8 if args["convert_to_8bit"] else uint16
+                        )
+                    )
+                pool.shutdown()
+                pool = ProcessPoolExecutor(max_workers=1)
+            except Exception as inst:
+                print(f'\nProcess failed for {args}.')
+                print(type(inst))  # the exception instance
+                print(inst.args)  # arguments stored in .args
+                print(inst)
+            self.queue.put(running)
+        pool.shutdown()
+        running = False
+        self.queue.put(running)
 
 
 def batch_filter(
         input_path: Path,
         output_path: Path,
         workers: int = os.cpu_count(),
-        chunks: int = 128,
         sigma: Tuple[int, int] = (0, 0),
         level=0,
         wavelet: str = 'db10',
@@ -868,8 +885,6 @@ def batch_filter(
         root directory for writing results
     workers : int
         number of CPU workers to use
-    chunks : int
-        number of images for each CPU to process at a time
     sigma : tuple
         bandwidth of the stripe filter in pixels
         sigma=(foreground, background) Default is (0, 0), indicating no de-striping.
@@ -884,7 +899,7 @@ def batch_filter(
     compression : tuple (str, int)
         The 1st argument is compression method the 2nd compression level for tiff files
         For example, ('ZSTD', 1) or ('ZLIB', 1).
-    flat : np.ndarray
+    flat : ndarray
         reference image for illumination correction. Must be same shape as input images. Default is None
     dark : float
         Intensity to subtract from the images for dark offset. Default is 0.
@@ -908,7 +923,7 @@ def batch_filter(
     continue_process : bool
         True means only process the remaining images.
     dtype: str or None,
-        optional. If given will reduce the raw to tif conversion time.
+        optional. data type of input files (uint8, uint16, or etc.). If given reduces the raw to tif conversion time.
     tile_size : tuple (int, int) or None
         optional. If given will reduce the raw to tif conversion time.
     down_sample : tuple (int, int) or None
@@ -929,9 +944,7 @@ def batch_filter(
         sigma = [0, 0]
     if workers == 0:
         workers = cpu_count()
-    if platform == "win32" and workers > 61:
-        workers = 61
-    if isinstance(flat, (np.ndarray, np.generic)):
+    if isinstance(flat, (ndarray, generic)):
         flat = normalize_flat(flat)
     elif isinstance(flat, Path):
         flat = normalize_flat(imread_tif_raw(flat))
@@ -969,16 +982,16 @@ def batch_filter(
     }
 
     print(f'{datetime.now()}: Looking for images in {input_path} ...')
-    with Pool(processes=workers) as pool:
+    with Pool(processes=61 if platform == "win32" and workers > 61 else workers) as pool:
         if z_step is None:
-            args_list = pool.starmap(
+            args_list = list(pool.starmap(
                 process_tif_raw_imgs,
                 zip(glob_re(r"\.(?:tiff?|raw)$", input_path),  # find files
                     repeat(input_path),
                     repeat(output_path),
                     repeat(arg_dict_template)),
-                chunksize=1024
-            )
+                chunksize=8192
+            ))
         else:
             args_list = pool.starmap(
                 process_dc_imgs,
@@ -987,72 +1000,34 @@ def batch_filter(
                     repeat(output_path),
                     repeat(arg_dict_template),
                     repeat(z_step)),
-                chunksize=1024
+                chunksize=8192
             )
             args_list = reduce(iconcat, args_list, [])  # unravel the list of list the fastest way possible
+
     manager = Manager()
     args_list = manager.list(args_list)
-    num_images_need_processing = len(args_list)
-    while chunks > 32 and num_images_need_processing % (chunks * workers) > 10:
-        chunks -= 1
-    print(f"{datetime.now()}: {num_images_need_processing} images need processing.\n\t"
-          f"Setting up {workers} workers. Each worker processes {chunks} images at a time.\n"
-          f"Progress:")
-    # with Pool(processes=workers) as pool:
-    #     list(tqdm.tqdm(
-    #         pool.imap_unordered(_read_filter_save, args_list, chunksize=chunks),
-    #         total=num_images_need_processing,
-    #         ascii=True,
-    #         smoothing=0,
-    #         unit="img",
-    #         desc="PyStripe"
-    #     ))
-    with ProcessPoolExecutor(max_workers=workers) as pool:
-        list(tqdm.tqdm(
-            pool.map(_read_filter_save, args_list, chunksize=chunks),
-            total=num_images_need_processing,
-            ascii=True,
-            smoothing=0,
-            unit="img",
-            desc="PyStripe"
-        ))
-
-        # future_to_args = {pool.submit(_read_filter_save, args) for args in args_list}
-        # for future in as_completed(future_to_args, timeout=100):
-        #     try:
-        #         future.result()
-        #     except BrokenProcessPool:
-        #         args = future_to_args[future]
-        #         print(f"timeout for args:\n\t{args}")
-        #     progress_bar.update(1)
-
-    #     running_processes, completed = 0, 0
-    #     queue = Queue()
-    #     progress_bar = tqdm.tqdm(total=num_images_need_processing, ascii=True)
-    #     while completed < num_images_need_processing:
-    #         if workers - running_processes > chunks and num_images_need_processing - completed > chunks:
-    #             batch_size = chunks
-    #         else:
-    #             batch_size = 1
-    #         if cpu_percent() > 85:
-    #             sleep(1.0)
-    #         for _ in range(batch_size):
-    #             MultiProcess(queue, args_list, completed + running_processes).start()
-    #             running_processes += 1
-    #         try:
-    #             queue.get()
-    #             completed += 1
-    #             running_processes -= 1
-    #             if completed % workers == 0:
-    #                 progress_bar.update(workers)
-    #         except Empty:
-    #             if running_processes > workers - chunks:
-    #                 sleep(0.1)
-    #     progress_bar.close()
+    num_images = len(args_list)
+    queue = Queue()
+    progress_bar = tqdm(total=num_images, ascii=True, smoothing=0, unit="img", desc="PyStripe")
+    chunks = num_images // workers
+    for worker in range(workers):
+        MultiProcess(queue, args_list, range(worker * chunks, (worker+1) * chunks)).start()
+    MultiProcess(queue, args_list, range(num_images - num_images % workers, num_images)).start()
+    running_processes = workers + 1
+    while running_processes > 0:
+        try:
+            still_running = queue.get()
+            if still_running:
+                progress_bar.update(1)
+            else:
+                running_processes -= 1
+        except Empty:
+            sleep(1)
+    progress_bar.close()
 
 
 def normalize_flat(flat):
-    flat_float = flat.astype(np.float32)
+    flat_float = flat.astype(float32)
     return flat_float / flat_float.max()
 
 
@@ -1187,7 +1162,7 @@ def main():
             input_path,
             output_path,
             workers=args.workers,
-            chunks=args.chunks,
+            # chunks=args.chunks,
             sigma=sigma,
             level=args.level,
             wavelet=args.wavelet,
