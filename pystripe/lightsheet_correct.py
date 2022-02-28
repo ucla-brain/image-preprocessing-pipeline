@@ -15,8 +15,9 @@ Cell 165.7 (2016): 1789-1802.
 https://doi.org/10.1016/j.cell.2016.05.007
 """
 
-import numpy as np
-import scipy.ndimage as ndi
+from scipy.ndimage import zoom as ndi_zoom
+from numpy import array, ndarray, meshgrid, minimum, moveaxis, reshape, zeros, logical_and
+from numpy import percentile as np_percentile
 
 
 ###############################################################################
@@ -55,19 +56,19 @@ def correct_lightsheet(
     source : array
       The source to correct.
     percentile : float in [0,1]
-      Ther percentile to base the lightsheet correction on.
+      The percentile to base the lightsheet correction on.
     mask : array or None
       Optional mask.
     lightsheet : dict
       Parameter to pass to the percentile routine for the lightsheet artifact
       estimate. See :func:`ImageProcessing.Filter.Rank.percentile`.
     background : dict
-      Parameter to pass to the percentile rouitne for the background estimation.
+      Parameter to pass to the percentile routine for the background estimation.
     lightsheet_vs_background : float
       The background is multiplied by this weight before comparing to the
       lightsheet artifact estimate.
     return_lightsheet : bool
-      If True, return the lightsheeet artifact estimate.
+      If True, return the lightsheet artifact estimate.
     return_background : bool
       If True, return the background estimate.
 
@@ -82,10 +83,9 @@ def correct_lightsheet(
     # background estimate
     b = local_percentile(source, percentile=percentile, mask=mask, **background)
     # combined estimate
-    lb = np.minimum(l, lightsheet_vs_background * b)
+    lb = minimum(l, lightsheet_vs_background * b)
     # corrected image
-    c = source - np.minimum(source, lb)
-
+    c = source - minimum(source, lb)
     result = (c,)
     if return_lightsheet:
         result += (l,)
@@ -108,7 +108,7 @@ def apply_local_function(source, function, selem=(50, 50), spacing=None, step=No
     ---------
     source : ndarray
       The source to process.
-    function : function
+    function : function.
       Function to apply to the linear array of the local source data.
       If the function does not return a scalar, fshape has to be given.
     selem : tuple or array or None
@@ -157,24 +157,24 @@ def apply_local_function(source, function, selem=(50, 50), spacing=None, step=No
     left = tuple((s - (n - 1) * h) // 2 for s, n, h in zip(shape, n_centers, spacing))
 
     # center points
-    centers = np.array(np.meshgrid(*[range(l, s, h) for l, s, h in zip(left, shape, spacing)], indexing='ij'))
-    # centers = np.reshape(np.moveaxis(centers, 0, -1),(-1,len(shape)))
-    centers = np.moveaxis(centers, 0, -1)
+    centers = array(meshgrid(*[range(l, s, h) for l, s, h in zip(left, shape, spacing)], indexing='ij'))
+    # centers = reshape(moveaxis(centers, 0, -1),(-1,len(shape)))
+    centers = moveaxis(centers, 0, -1)
 
     # create result
     rshape = (1,) if fshape is None else fshape
     rdtype = source.dtype if dtype is None else dtype
-    results = np.zeros(n_centers + rshape, dtype=rdtype)
+    results = zeros(n_centers + rshape, dtype=rdtype)
 
     # calculate function
-    centers_flat = np.reshape(centers, (-1, ndim))
-    results_flat = np.reshape(results, (-1,) + rshape)
+    centers_flat = reshape(centers, (-1, ndim))
+    results_flat = reshape(results, (-1,) + rshape)
 
     # structuring element
-    if isinstance(selem, np.ndarray):
+    if isinstance(selem, ndarray):
         selem_shape = selem.shape
     else:
-        selem_shape = selem;
+        selem_shape = selem
         selem = None
 
     hshape_left = tuple(h // 2 for h in selem_shape)
@@ -194,7 +194,7 @@ def apply_local_function(source, function, selem=(50, 50), spacing=None, step=No
                 c, l, r, s, d, m in zip(center, hshape_left, hshape_right, shape, step, selem_shape))
             data = source[sl]
             if mask is not None:
-                data = data[np.logical_and(mask[sl], selem[slm])]
+                data = data[logical_and(mask[sl], selem[slm])]
             else:
                 data = data[selem[slm]]
 
@@ -205,14 +205,14 @@ def apply_local_function(source, function, selem=(50, 50), spacing=None, step=No
     if interpolate:
         res_shape = results.shape[:len(shape)]
         zoom = tuple(float(s) / float(r) for s, r in zip(shape, res_shape))
-        results_flat = np.reshape(results, res_shape + (-1,))
-        results_flat = np.moveaxis(results_flat, -1, 0)
-        full = np.zeros(shape + rshape, dtype=results.dtype)
-        full_flat = np.reshape(full, shape + (-1,))
-        full_flat = np.moveaxis(full_flat, -1, 0)
+        results_flat = reshape(results, res_shape + (-1,))
+        results_flat = moveaxis(results_flat, -1, 0)
+        full = zeros(shape + rshape, dtype=results.dtype)
+        full_flat = reshape(full, shape + (-1,))
+        full_flat = moveaxis(full_flat, -1, 0)
         # print results_flat.shape, full_flat.shape
         for r, f in zip(results_flat, full_flat):
-            f[:] = ndi.zoom(r, zoom=zoom, order=interpolate)
+            f[:] = ndi_zoom(r, zoom=zoom, order=interpolate)
         results = full
 
     if fshape is None:
@@ -269,13 +269,13 @@ def local_percentile(
       Optional centers of the sampling.
     """
     if isinstance(percentile, (tuple, list)):
-        percentile = np.array([100 * p for p in percentile])
+        percentile = array([100 * p for p in percentile])
         fshape = (len(percentile),)
 
         def _percentile(data):
             if len(data) == 0:
-                return np.array((0,) * len(percentile))
-            return np.percentile(data, percentile, axis=None)
+                return array((0,) * len(percentile))
+            return np_percentile(data, percentile, axis=None)
 
     else:
         percentile = 100 * percentile
@@ -284,7 +284,7 @@ def local_percentile(
         def _percentile(data):
             if len(data) == 0:
                 return 0
-            return np.percentile(data, percentile, axis=None)
+            return np_percentile(data, percentile, axis=None)
 
     return apply_local_function(
         source,
