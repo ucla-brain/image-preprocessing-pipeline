@@ -279,7 +279,8 @@ def process_channel(
         batch_filter(
             source_path / channel,
             preprocessed_path / channel,
-            workers=cpu_logical_core_count,  # here the limit is 61 on Windows
+            workers=cpu_logical_core_count * (
+                1 if need_reconstruction and need_lightsheet_cleaning and need_raw_to_tiff_conversion else 2),
             # chunks=128,
             # sigma=[foreground, background] Default is [0, 0], indicating no de-striping.
             sigma=((32, 32) if objective == "4x" else (256, 256)) if need_destriping else (0, 0),
@@ -409,15 +410,28 @@ def merge_channels_by_file_name(
     rgb_file = merged_tif_path / file_name
     if rgb_file.exists():
         return
-    images: Dict[str, ndarray] = {
-        order_of_colors[idx]: imread_tif_raw(path / file_name) for idx, path in enumerate(stitched_tif_paths)}
+
+    images: Dict[{str, ndarray}, {str, None}] = {}
+    dtypes = []
+    for idx, path in enumerate(stitched_tif_paths):
+        file_path = path / file_name
+        if file_path.exists():
+            image = imread_tif_raw(file_path)
+            images.update({order_of_colors[idx]: image})
+            dtypes += [image.dtype]
+        else:
+            images.update({order_of_colors[idx]: None})
+    del image, file_path
+    if dtypes.count(dtypes[0]) != len(dtypes):
+        paths = "\n\t".join(map(str, stitched_tif_paths))
+        print(f"\nwarning: merging channels should have identical dtypes:\n\t{paths}")
+        del paths
+
     if len(stitched_tif_paths) == 2:  # then the last color channel should remain all zeros
         images.update({order_of_colors[2]: None})
 
-    multi_channel_img: ndarray = zeros(
-        (shape[0], shape[1], 3),  # height (y), width(x), colors
-        dtype=images.get(order_of_colors[0]).dtype
-    )
+    # height (y), width(x), colors
+    multi_channel_img: ndarray = zeros((shape[0], shape[1], 3), dtype=dtypes[0])
     for idx, color in enumerate("bgr"):  # the order of letters should be "rgb" here
         image: ndarray = images[color]
         if image is not None:
@@ -466,17 +480,15 @@ def merge_all_channels(
         "shape": (y, x)
     } for file in stitched_tif_paths[num_files_in_each_path.index(max(num_files_in_each_path))].rglob("*.tif")]
     workers = 61 if sys.platform == "win32" and workers > 61 else workers
-    chunks = 128
-    while chunks > 1 and len(work) % (chunks * workers) > 10:
-        chunks -= 1
+    num_images = len(work)
+    chunks = num_images // (workers - 1)
     with Pool(processes=workers) as pool:
         list(
             tqdm(
-                pool.imap_unordered(merge_channels_by_file_name_worker, work,
-                                    chunksize=10 if len(work) > workers else 1),
+                pool.imap_unordered(merge_channels_by_file_name_worker, work, chunksize=chunks),
                 total=max(num_files_in_each_path),
                 ascii=True,
-                smoothing=0,
+                smoothing=0.05,
                 unit="img",
                 desc="RGB"
             ))
@@ -730,7 +742,8 @@ def main(source_path):
             command = get_imaris_command(path, voxel_size_x, voxel_size_y, voxel_size_z, workers=cpu_logical_core_count)
             MultiProcess(queue, command, idx).start()
             running_processes += 1
-            progress_bar += [tqdm(total=100, ascii=True, position=idx, unit="%", desc=f"imaris{idx + 1}", smoothing=0)]
+            progress_bar += [
+                tqdm(total=100, ascii=True, position=idx, unit="%", desc=f"imaris{idx + 1}", smoothing=0.05)]
 
     # waite for TeraFly and Imaris conversion to finish ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
     p_log(f"{datetime.now()}: waiting for TeraFly and Imaris conversion to finish.")
