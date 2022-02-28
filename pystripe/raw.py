@@ -38,15 +38,10 @@ def raw_imread(path, dtype=None, shape=None):
                 width, height = width_be, height_be
                 dtype = ">u2"
             shape = (height, width)
-        return memmap(
-            path,
-            dtype=dtype,
-            mode="r",
-            offset=8,
-            shape=shape
-        )
+
+        return memmap(path, dtype=dtype, mode="r", offset=8, shape=shape)
     except OSError or TypeError or PermissionError:
-        print(f"Bad path: {path}, height = {shape[0]}, width = {shape[1]}")
+        print(f"\nBad path: {path}, height = {shape[0]}, width = {shape[1]}")
         return None
 
 
