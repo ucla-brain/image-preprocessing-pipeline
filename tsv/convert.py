@@ -2,11 +2,11 @@
 
 import os
 import sys
-import tqdm
 import argparse
 import itertools
 import multiprocessing
 import numpy as np
+from tqdm import tqdm
 from tifffile import imsave
 from .volume import VExtent, TSVVolume
 
@@ -14,7 +14,6 @@ try:
     from blockfs.directory import Directory
     from mp_shared_memory import SharedMemory
     from precomputed_tif.blockfs_stack import BlockfsStack
-
     blockfs_present = True
 except:
     blockfs_present = False
@@ -79,27 +78,23 @@ def convert_to_2D_tif(
     #         futures.append(pool.apply_async(
     #             convert_one_plane,
     #             (v, compression, decimation, dtype, output_pattern, volume, z, rotation)))
-    #     for future in tqdm.tqdm(futures):
+    #     for future in tqdm(futures):
     #         future.get()
 
     arg_list = []
     for z in range(volume.z0, volume.z1, decimation):
         arg_list.append((v, compression, decimation, dtype, output_pattern, volume, z, rotation))
     num_images_need_processing = len(arg_list)
-    while chunks > 1 and num_images_need_processing % (chunks * cores) > 10:
-        chunks -= 1
+    chunks = num_images_need_processing // (cores - 1)
     print(f"\tTSV is converting {num_images_need_processing} z-planes using {cores} cores and {chunks} chunks")
 
     with multiprocessing.Pool(processes=cores) as pool:
         worker.fun = convert_one_plane
-        list(tqdm.tqdm(
-            pool.imap_unordered(
-                worker,
-                arg_list,
-                chunksize=chunks),
+        list(tqdm(
+            pool.imap_unordered(worker, arg_list, chunksize=chunks),
             total=num_images_need_processing,
             ascii=True,
-            smoothing=0,
+            smoothing=0.05,
             unit="img",
             desc="TSV"
         ))
@@ -181,7 +176,7 @@ if blockfs_present:
                            volume.y1 - volume.y0,
                            volume.x1 - volume.x0), dtype)
         with multiprocessing.Pool(cores) as pool:
-            for z0 in tqdm.tqdm(
+            for z0 in tqdm(
                     range(volume.z0, volume.z1, directory.z_block_size)):
                 z1 = min(volume.z1, z0 + directory.z_block_size)
                 futures = []
@@ -222,7 +217,7 @@ def make_diag_stack(xml_path, output_pattern,
     else:
         decimation = 1
     if cores == 1:
-        for z in tqdm.tqdm(range(volume.z0, volume.z1, decimation)):
+        for z in tqdm(range(volume.z0, volume.z1, decimation)):
             make_diag_plane(v, compression, decimation, dtype, mipmap_level,
                             output_pattern, volume, z)
         return
@@ -234,7 +229,7 @@ def make_diag_stack(xml_path, output_pattern,
                 make_diag_plane,
                 (v, compression, decimation, dtype, mipmap_level,
                  output_pattern, volume, z)))
-        for future in tqdm.tqdm(futures):
+        for future in tqdm(futures):
             future.get()
 
 
