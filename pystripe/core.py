@@ -1008,7 +1008,7 @@ def batch_filter(
     args_list = manager.list(args_list)
     num_images = len(args_list)
     queue = Queue()
-    progress_bar = tqdm(total=num_images, ascii=True, smoothing=0, unit="img", desc="PyStripe")
+    progress_bar = tqdm(total=num_images, ascii=True, smoothing=0.05, mininterval=1.0, unit="img", desc="PyStripe")
     chunks = num_images // workers
     for worker in range(workers):
         MultiProcess(queue, args_list, range(worker * chunks, (worker+1) * chunks)).start()
