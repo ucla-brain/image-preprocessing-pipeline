@@ -500,12 +500,7 @@ def merge_all_channels(
             ))
 
 
-def get_imaris_command(
-        path,
-        voxel_size_x: float,
-        voxel_size_y: float,
-        voxel_size_z: float,
-        workers: int = cpu_count()):
+def get_imaris_command(path, voxel_size_x: float, voxel_size_y: float, voxel_size_z: float, workers: int = cpu_count()):
     files = list(path.rglob("*.tif"))
     file = files[0]
     command = []
