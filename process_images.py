@@ -16,12 +16,12 @@ from tqdm import tqdm
 from numpy import ndarray, zeros, array, unique
 from pathlib import Path
 from flat import create_flat_img
-from datetime import datetime
+from datetime import datetime, timedelta
 from time import time, sleep
 from platform import uname
 from tsv.volume import TSVVolume
 from tsv.convert import convert_to_2D_tif
-from pystripe.core import batch_filter, imread_tif_raw, imsave_tif
+from pystripe.core import batch_filter, imread_tif_raw, imsave_tif, calculate_cores_and_chunk_size
 from queue import Empty
 from multiprocessing import freeze_support, Pool, Queue, Process
 from supplements.cli_interface import select_among_multiple_options, ask_true_false_question
@@ -221,7 +221,6 @@ def process_channel(
         objective: str,
         queue: Queue,
         memory_ram: int,
-        need_reconstruction=False,
         need_flat_image_application=False,
         image_classes_training_data_path=None,
         need_raw_to_tiff_conversion=False,
@@ -279,8 +278,7 @@ def process_channel(
         batch_filter(
             source_path / channel,
             preprocessed_path / channel,
-            workers=cpu_logical_core_count * (
-                1 if need_reconstruction and need_lightsheet_cleaning and need_raw_to_tiff_conversion else 2),
+            workers=cpu_logical_core_count * (1 if need_raw_to_tiff_conversion and not need_lightsheet_cleaning else 2),
             # chunks=128,
             # sigma=[foreground, background] Default is [0, 0], indicating no de-striping.
             sigma=((32, 32) if objective == "4x" else (256, 256)) if need_destriping else (0, 0),
@@ -293,7 +291,7 @@ def process_channel(
             dark=dark,
             # z_step=voxel_size_z,  # z-step in micron. Only used for DCIMG files.
             # rotate=False,
-            lightsheet=True if need_reconstruction and need_lightsheet_cleaning else False,
+            lightsheet=need_lightsheet_cleaning,
             artifact_length=artifact_length,
             # percentile=0.25,
             # convert_to_16bit=False,  # defaults to False
@@ -371,7 +369,7 @@ def process_channel(
     )  # shape is in z y x format
     # ------------------------------------------------------------------------------------------------------------------
     running_processes: int = 0
-    if need_tera_fly_conversion and need_reconstruction:
+    if need_tera_fly_conversion:
         tera_fly_path = stitched_path / f'{channel}_TeraFly'
         tera_fly_path.mkdir(exist_ok=True)
         print(f"{datetime.now()} - {channel}: starting to convert to TeraFly format ...")
@@ -481,7 +479,7 @@ def merge_all_channels(
     } for file in stitched_tif_paths[num_files_in_each_path.index(max(num_files_in_each_path))].rglob("*.tif")]
     workers = 61 if sys.platform == "win32" and workers > 61 else workers
     num_images = len(work)
-    chunks = num_images // (workers - 1)
+    workers, chunks = calculate_cores_and_chunk_size(num_images, workers, pool_can_handle_more_than_61_cores=False)
     with Pool(processes=workers) as pool:
         list(
             tqdm(
@@ -547,11 +545,28 @@ def main(source_path):
     AllChannels = [channel for channel in AllChannels if source_path.joinpath(channel).exists()]
     de_striped_posix, what_for = "", ""
     image_classes_training_data_path = source_path / FlatNonFlatTrainingData
-    need_lightsheet_cleaning = ask_true_false_question("Do you need to computationally clean images?")
+    need_lightsheet_cleaning = ask_true_false_question("Do you need to apply lightsheet cleaning algorithm?")
     need_destriping = False  # ask_true_false_question("Do you need to remove stripes from images?")
+    channels_need_lightsheet_cleaning: List[str] = []
     if need_destriping:
         de_striped_posix += "_destriped"
         what_for += "destriped "
+    elif need_lightsheet_cleaning:
+        de_striped_posix += "_lightsheet_cleaned"
+        what_for += "lightsheet cleaning "
+        if len(AllChannels) == 1 or \
+                ask_true_false_question(
+                    "Lightsheet cleaning is computationally expensive. "
+                    "For sparsly labeled channels, it can help compression algorithms "
+                    "to reduce the final file sizes up to a factor of 5. \n\n"
+                    "Do you want to clean all channels?"):
+            channels_need_lightsheet_cleaning: List[str] = AllChannels.copy()
+        else:
+            channels_need_lightsheet_cleaning: List[str] = []
+            for channel in AllChannels:
+                if ask_true_false_question(f"Do you need to apply lightsheet cleaning to {channel} channel?"):
+                    channels_need_lightsheet_cleaning += [channel]
+
     need_flat_image_application = False  # ask_true_false_question("Do you need to apply a flat image?")
     if need_flat_image_application:
         de_striped_posix += "_flat_applied"
@@ -609,16 +624,16 @@ def main(source_path):
     need_down_sampling = False
     new_tile_size = None
     if down_sampling_factor < (1, 1):
+        # Down-sampling makes sense if x-axis and y-axis voxel sizes were smaller than z axis voxel size
+        # Down-sampling is disabled.
         down_sampling_factor = None
-        print("Down-sampling makes sense if x and y axis voxel sizes were smaller than z axis voxel size.\n"
-              "Down-sampling is disabled.")
     else:
         need_down_sampling = ask_true_false_question(
             "Do you need to down-sample images for isotropic voxel generation before stitching?")
         if not need_down_sampling:
             down_sampling_factor = None
         else:
-            de_striped_posix += "_ds"
+            de_striped_posix += "_downsampled"
             what_for += "down-sampling "
             new_tile_size = (
                 int(round(tile_size[0] * voxel_size_y / voxel_size_z, 0)),
@@ -644,14 +659,26 @@ def main(source_path):
     stitched_path, continue_process_terastitcher = get_destination_path(
         source_path.name, what_for="stitched files", posix="_stitched", default_path=stitched_path)
 
-    need_tera_fly_conversion = ask_true_false_question("Do you need to convert the neurite channel to teraFly format?")
-    channels_need_reconstruction: list = []
+    need_tera_fly_conversion = ask_true_false_question("Do you need to convert the neurite channel to TeraFly format?")
+    channels_need_tera_fly_conversion: list = []
     if need_tera_fly_conversion:
-        channels_need_reconstruction = [select_among_multiple_options(
-            "Choose channel contains neurites and will be reconstructed to apply lightsheet cleaning:", AllChannels)]
-        p_log(f"\n\n{channels_need_reconstruction} channel is chosen as the most informative channel.\n"
-              f"\tYou can chose to convert it to TeraFly format or apply lightsheet cleaning.")
-    need_merged_channels = ask_true_false_question("Do you need to merge channels to RGB color tiff?")
+        if len(AllChannels) == 1:
+            channels_need_tera_fly_conversion = AllChannels.copy()
+        elif ask_true_false_question(
+                "List of channels need TeraFly conversion is identical to the "
+                "list of channels need lightsheet cleaning?"):
+            channels_need_tera_fly_conversion = channels_need_lightsheet_cleaning.copy()
+        else:
+            for channel in AllChannels:
+                if ask_true_false_question(f"Do you need to convert {channel} channel to TeraFly format?"):
+                    channels_need_tera_fly_conversion += [channel]
+
+        p_log(f"\n\n{' and '.join(channels_need_tera_fly_conversion)} "
+              f"channel{'s' if len(channels_need_tera_fly_conversion)>1 else ''}"
+              f" will be converted to TeraFly format.\n")
+    need_merged_channels = False
+    if len(AllChannels) > 1:
+        need_merged_channels = ask_true_false_question("Do you need to merge channels to RGB color tiff?")
     need_imaris_conversion = ask_true_false_question("Do you need to convert to Imaris format?")
     # Start ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
@@ -671,7 +698,7 @@ def main(source_path):
     # stitch :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
     # channels need reconstruction will be stitched first to start slow TeraFly conversion as soon as possible
 
-    AllChannels = reorder_list(AllChannels, channels_need_reconstruction)
+    AllChannels = reorder_list(AllChannels, channels_need_tera_fly_conversion)
     stitched_tif_paths, channel_volume_shapes = [], []
     queue = Queue()
     running_processes: int = 0
@@ -687,12 +714,11 @@ def main(source_path):
             objective,
             queue,
             memory_ram,
-            need_reconstruction=channel in channels_need_reconstruction,
-            need_tera_fly_conversion=need_tera_fly_conversion,
+            need_tera_fly_conversion=channel in channels_need_tera_fly_conversion,
             need_flat_image_application=need_flat_image_application,
             image_classes_training_data_path=image_classes_training_data_path,
             need_raw_to_tiff_conversion=need_raw_to_tiff_conversion,
-            need_lightsheet_cleaning=need_lightsheet_cleaning,
+            need_lightsheet_cleaning=channel in channels_need_lightsheet_cleaning,
             artifact_length=150,
             need_destriping=need_destriping,
             need_compression=need_compression,
@@ -715,7 +741,8 @@ def main(source_path):
 
     # merge channels to RGB ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
-    p_log(f"{datetime.now()}: merging channels to RGB started ...")
+    p_log(f"{datetime.now()}: merging channels to RGB started ...\n\t"
+          f"time elapsed so far {timedelta(seconds=time() - start_time)}")
     merged_tif_paths = [stitched_path / "merged_channels_tif"]
     if need_merged_channels:
         if 1 < len(stitched_tif_paths) < 4:
@@ -733,7 +760,6 @@ def main(source_path):
             merged_tif_paths = []
     else:
         merged_tif_paths = stitched_tif_paths
-
     # Imaris File Conversion :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
     progress_bar = []
     if need_imaris_conversion:
@@ -746,7 +772,10 @@ def main(source_path):
                 tqdm(total=100, ascii=True, position=idx, unit="%", desc=f"imaris{idx + 1}", smoothing=0.05)]
 
     # waite for TeraFly and Imaris conversion to finish ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
-    p_log(f"{datetime.now()}: waiting for TeraFly and Imaris conversion to finish.")
+
+    if need_tera_fly_conversion:
+        p_log(f"{datetime.now()}: waiting for TeraFly conversion to finish.\n\t"
+              f"time elapsed so far {timedelta(seconds=time() - start_time)}")
     while running_processes > 0:
         try:
             [percent_addition, position, return_code, command] = queue.get()
@@ -764,7 +793,7 @@ def main(source_path):
     # Done :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
     p_log(f"{datetime.now()}: done.\n\t"
-          f"Time elapsed: {time() - start_time}")
+          f"Time elapsed: {timedelta(seconds=time() - start_time)}")
 
 
 if __name__ == '__main__':

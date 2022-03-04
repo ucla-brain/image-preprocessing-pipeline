@@ -1,26 +1,37 @@
 """convert.py - programs to convert stacks to output formats"""
 
-import os
-import sys
-import argparse
-import itertools
-import multiprocessing
-import numpy as np
+from sys import platform, argv
+from os import path, environ, makedirs
+from argparse import ArgumentParser
+from itertools import product
+from multiprocessing import cpu_count, Pool
+from numpy import rot90, zeros, arange, minimum, dstack, uint16
 from tqdm import tqdm
 from tifffile import imsave
 from .volume import VExtent, TSVVolume
+blockfs_present = False
+if platform != "win32":
+    try:
+        from blockfs.directory import Directory
+        from mp_shared_memory import SharedMemory
+        from precomputed_tif.blockfs_stack import BlockfsStack
+        blockfs_present = True
+    except:
+        blockfs_present = False
 
-try:
-    from blockfs.directory import Directory
-    from mp_shared_memory import SharedMemory
-    from precomputed_tif.blockfs_stack import BlockfsStack
-    blockfs_present = True
-except:
-    blockfs_present = False
+environ['MKL_NUM_THREADS'] = '1'
+environ['NUMEXPR_NUM_THREADS'] = '1'
+environ['OMP_NUM_THREADS'] = '1'
 
-os.environ['MKL_NUM_THREADS'] = '1'
-os.environ['NUMEXPR_NUM_THREADS'] = '1'
-os.environ['OMP_NUM_THREADS'] = '1'
+
+def calculate_cores_and_chunk_size(num_images: int, cores: int, pool_can_handle_more_than_61_cores: bool = True):
+    if platform == "win32" and cores >= 61 and not pool_can_handle_more_than_61_cores:
+        chunks = num_images // (cores - 1)
+    else:
+        chunks = num_images // (cores + 1)
+        cores += 1
+    chunks = 1 if chunks == 0 else chunks
+    return cores, chunks
 
 
 def worker(args):
@@ -35,10 +46,9 @@ def convert_to_2D_tif(
         volume=None,
         dtype=None,
         compression=('ZLIB', 1),
-        cores=multiprocessing.cpu_count(),
-        chunks=1024,
+        cores=cpu_count(),
         rotation=0):
-    """Convert a terastitched volume to TIF
+    """Convert a tera-stitched volume to TIF
 
     v: the volume to convert
     output_pattern:
@@ -69,11 +79,11 @@ def convert_to_2D_tif(
     else:
         decimation = 1
 
-    if sys.platform == "win32" and cores > 61:
+    if platform == "win32" and cores > 61:
         cores = 61
 
     # futures = []
-    # with multiprocessing.Pool(cores) as pool:
+    # with Pool(cores) as pool:
     #     for z in range(volume.z0, volume.z1, decimation):
     #         futures.append(pool.apply_async(
     #             convert_one_plane,
@@ -84,15 +94,15 @@ def convert_to_2D_tif(
     arg_list = []
     for z in range(volume.z0, volume.z1, decimation):
         arg_list.append((v, compression, decimation, dtype, output_pattern, volume, z, rotation))
-    num_images_need_processing = len(arg_list)
-    chunks = num_images_need_processing // (cores - 1)
-    print(f"\tTSV is converting {num_images_need_processing} z-planes using {cores} cores and {chunks} chunks")
+    num_images = len(arg_list)
+    cores, chunks = calculate_cores_and_chunk_size(num_images, cores, pool_can_handle_more_than_61_cores=False)
+    print(f"\tTSV is converting {num_images} z-planes using {cores} cores and {chunks} chunks")
 
-    with multiprocessing.Pool(processes=cores) as pool:
+    with Pool(processes=cores) as pool:
         worker.fun = convert_one_plane
         list(tqdm(
             pool.imap_unordered(worker, arg_list, chunksize=chunks),
-            total=num_images_need_processing,
+            total=num_images,
             ascii=True,
             smoothing=0.05,
             unit="img",
@@ -103,13 +113,13 @@ def convert_to_2D_tif(
 
 
 def convert_one_plane(v, compression, decimation, dtype, output_pattern, volume, z, rotation):
-    path = output_pattern.format(z=z)
-    if os.path.exists(path):
+    file = output_pattern.format(z=z)
+    if path.exists(file):
         return
 
-    dir_path = os.path.dirname(path)
-    if not os.path.exists(dir_path):
-        os.makedirs(dir_path, exist_ok=True)
+    dir_path = path.dirname(file)
+    if not path.exists(dir_path):
+        makedirs(dir_path, exist_ok=True)
 
     mini_volume = VExtent(
         volume.x0, volume.x1, volume.y0, volume.y1, z, z + 1)
@@ -117,18 +127,19 @@ def convert_one_plane(v, compression, decimation, dtype, output_pattern, volume,
     if decimation > 1:
         plane = plane[::decimation, ::decimation]
     if rotation == 90:
-        plane = np.rot90(plane, 1)
+        plane = rot90(plane, 1)
     elif rotation == 180:
-        plane = np.rot90(plane, 2)
+        plane = rot90(plane, 2)
     elif rotation == 270:
-        plane = np.rot90(plane, 3)
+        plane = rot90(plane, 3)
 
     for _ in range(10):
         try:
-            imsave(path, plane, compress=compression)
+            imsave(file, plane, compress=compression)
+            return
         except OSError:
             continue
-        break
+    print(f"\nwarning: failed to save {file} after 10 attempts.")
 
 
 V: TSVVolume = None
@@ -139,15 +150,15 @@ if blockfs_present:
                  z0: int,
                  z: int,
                  sm: SharedMemory,
-                 path: str,
+                 file: str,
                  compression: int):
         mini_volume = VExtent(
             volume.x0, volume.x1, volume.y0, volume.y1, z, z + 1)
         plane = V.imread(mini_volume, sm.dtype)[0]
-        dir_path = os.path.dirname(path)
-        if not os.path.exists(dir_path):
-            os.makedirs(dir_path, exist_ok=True)
-        imsave(path, plane, compress=compression)
+        dir_path = path.dirname(file)
+        if not path.exists(dir_path):
+            makedirs(dir_path, exist_ok=True)
+        imsave(file, plane, compress=compression)
         with sm.txn() as memory:
             memory[z - z0] = plane
 
@@ -158,8 +169,8 @@ if blockfs_present:
             volume: VExtent = None,
             dtype=None,
             compression=4,
-            cores=multiprocessing.cpu_count(),
-            io_cores=multiprocessing.cpu_count(),
+            cores=cpu_count(),
+            io_cores=cpu_count(),
             voxel_size=(1800, 1800, 2000),
             n_levels: int = 5):
         if volume is None:
@@ -175,7 +186,7 @@ if blockfs_present:
         sm = SharedMemory((directory.z_block_size,
                            volume.y1 - volume.y0,
                            volume.x1 - volume.x0), dtype)
-        with multiprocessing.Pool(cores) as pool:
+        with Pool(cores) as pool:
             for z0 in tqdm(
                     range(volume.z0, volume.z1, directory.z_block_size)):
                 z1 = min(volume.z1, z0 + directory.z_block_size)
@@ -186,12 +197,12 @@ if blockfs_present:
                         (volume, z0, z, sm, output_pattern % z, compression)))
                 for future in futures:
                     future.get()
-                x0 = np.arange(0, sm.shape[2], directory.x_block_size)
-                x1 = np.minimum(sm.shape[2], x0 + directory.x_block_size)
-                y0 = np.arange(0, sm.shape[1], directory.y_block_size)
-                y1 = np.minimum(sm.shape[1], y0 + directory.y_block_size)
+                x0 = arange(0, sm.shape[2], directory.x_block_size)
+                x1 = minimum(sm.shape[2], x0 + directory.x_block_size)
+                y0 = arange(0, sm.shape[1], directory.y_block_size)
+                y1 = minimum(sm.shape[1], y0 + directory.y_block_size)
                 with sm.txn() as memory:
-                    for (x0a, x1a), (y0a, y1a) in itertools.product(
+                    for (x0a, x1a), (y0a, y1a) in product(
                             zip(x0, x1), zip(y0, y1)):
                         directory.write_block(memory[:z1 - z0, y0a:y1a, x0a:x1a],
                                               x0a, y0a, z0)
@@ -206,7 +217,7 @@ def make_diag_stack(xml_path, output_pattern,
                     dtype=None,
                     silent=False,
                     compression=4,
-                    cores=multiprocessing.cpu_count()):
+                    cores=cpu_count()):
     v = TSVVolume.load(xml_path)
     if volume is None:
         volume = v.volume
@@ -223,7 +234,7 @@ def make_diag_stack(xml_path, output_pattern,
         return
 
     futures = []
-    with multiprocessing.Pool(cores) as pool:
+    with Pool(cores) as pool:
         for z in range(volume.z0, volume.z1, decimation):
             futures.append(pool.apply_async(
                 make_diag_plane,
@@ -242,17 +253,14 @@ def make_diag_plane(v, compression, decimation, dtype, mipmap_level, output_patt
     if mipmap_level is not None:
         plane = plane[::decimation, ::decimation]
     if plane.shape[2] < 3:
-        plane = np.dstack(
+        plane = dstack(
             list(plane.transpose(2, 0, 1)) +
-            [np.zeros(plane.shape[:2], plane.dtype)] * (3 - plane.shape[2]))
-    path = output_pattern.format(z=z)
-    imsave(path, plane, compress=compression, photometric="rgb")
+            [zeros(plane.shape[:2], plane.dtype)] * (3 - plane.shape[2]))
+    imsave(output_pattern.format(z=z), plane, compress=compression, photometric="rgb")
 
 
-def main(args=sys.argv[1:]):
-    parser = argparse.ArgumentParser(
-        description="Make a z-stack out of a Terastitcher volume"
-    )
+def main(args=argv[1:]):
+    parser = ArgumentParser(description="Make a z-stack out of a Terastitcher volume")
     args, mipmap_level, volume = parse_args(parser, args)
     v = TSVVolume.load(args.xml_path, args.ignore_z_offsets, args.input)
 
@@ -273,7 +281,7 @@ def main(args=sys.argv[1:]):
         convert_to_tif_and_blockfs(args.precomputed_path,
                                    args.output_pattern,
                                    volume,
-                                   dtype=np.uint16,
+                                   dtype=uint16,
                                    compression=args.compression,
                                    cores=args.cpus,
                                    io_cores=args.n_io_cpus,
@@ -281,12 +289,15 @@ def main(args=sys.argv[1:]):
                                    n_levels=args.levels)
 
 
-def parse_args(parser: argparse.ArgumentParser, args=sys.argv[1:]):
+def parse_args(parser: ArgumentParser, args=argv[1:]):
     """Standardized argument parser for convert functions
 
-    :param parser: an argument parser, possibly configured for the application
-    :returns: the parsed argument dictionary, the mipmap level and the volume \
-    (or None for the entire volume)
+    parser: ArgumentParser
+        an argument parser, possibly configured for the application
+
+    Returns
+    -------
+        the parsed argument dictionary, the mipmap level and the volume (or None for the entire volume)
     """
     parser.add_argument(
         "--xml-path",
@@ -317,7 +328,7 @@ def parse_args(parser: argparse.ArgumentParser, args=sys.argv[1:]):
         action="store_true")
     parser.add_argument(
         "--cpus",
-        default=multiprocessing.cpu_count(),
+        default=cpu_count(),
         type=int,
         help="Number of CPUs to use for multiprocessing")
     parser.add_argument(
@@ -327,7 +338,7 @@ def parse_args(parser: argparse.ArgumentParser, args=sys.argv[1:]):
     )
     parser.add_argument(
         "--input",
-        help="Optional input location for unstitched stacks. Default is to "
+        help="Optional input location for un-stitched stacks. Default is to "
              "use the value encoded in the --xml-path file"
     )
     parser.add_argument(
@@ -353,7 +364,7 @@ def parse_args(parser: argparse.ArgumentParser, args=sys.argv[1:]):
             "--n-io-cpus",
             help="# of CPUs used when creating volume",
             type=int,
-            default=min(12, multiprocessing.cpu_count())
+            default=min(12, cpu_count())
         )
         parser.add_argument(
             "--voxel-size",
@@ -376,9 +387,7 @@ def parse_args(parser: argparse.ArgumentParser, args=sys.argv[1:]):
 
 def diag():
     """Produce a diagnostic image"""
-    parser = argparse.ArgumentParser(
-        description="Make a false-color diagnostic image stack"
-    )
+    parser = ArgumentParser(description="Make a false-color diagnostic image stack")
     args, mipmap_level, volume = parse_args(parser)
     make_diag_stack(args.xml_path,
                     args.output_pattern,
@@ -390,9 +399,9 @@ def diag():
 
 
 if __name__ == "__main__":
-    import os
+    from os import environ
 
-    if os.environ.get("TSV_DIAG", False):
+    if environ.get("TSV_DIAG", False):
         diag()
     else:
         main()

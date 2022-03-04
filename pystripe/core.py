@@ -33,6 +33,7 @@ from operator import iconcat
 from functools import reduce
 from itertools import repeat
 
+
 warnings.filterwarnings("ignore")
 supported_extensions = ['.tif', '.tiff', '.raw', '.dcimg']
 num_retries = 30
@@ -846,6 +847,16 @@ class MultiProcess(Process):
         self.queue.put(running)
 
 
+def calculate_cores_and_chunk_size(num_images: int, cores: int, pool_can_handle_more_than_61_cores: bool = True):
+    if platform == "win32" and cores >= 61 and not pool_can_handle_more_than_61_cores:
+        chunks = num_images // (cores - 1)
+    else:
+        chunks = num_images // (cores + 1)
+        cores += 1
+    chunks = 1 if chunks == 0 else chunks
+    return cores, chunks
+
+
 def batch_filter(
         input_path: Path,
         output_path: Path,
@@ -1009,7 +1020,8 @@ def batch_filter(
     num_images = len(args_list)
     queue = Queue()
     progress_bar = tqdm(total=num_images, ascii=True, smoothing=0.05, mininterval=1.0, unit="img", desc="PyStripe")
-    chunks = num_images // workers
+    workers, chunks = calculate_cores_and_chunk_size(num_images, workers, pool_can_handle_more_than_61_cores=True)
+    print(f'{datetime.now()}: preprocessing images using {workers} workers and {chunks} chunks ...')
     for worker in range(workers):
         MultiProcess(queue, args_list, range(worker * chunks, (worker+1) * chunks)).start()
     MultiProcess(queue, args_list, range(num_images - num_images % workers, num_images)).start()
