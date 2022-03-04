@@ -279,7 +279,7 @@ def process_channel(
         batch_filter(
             source_path / channel,
             preprocessed_path / channel,
-            workers=cpu_logical_core_count * (1 if need_raw_to_tiff_conversion and not need_lightsheet_cleaning else 2),
+            workers=cpu_logical_core_count * (2 if need_raw_to_tiff_conversion and not need_lightsheet_cleaning else 1),
             # chunks=128,
             # sigma=[foreground, background] Default is [0, 0], indicating no de-striping.
             sigma=((32, 32) if objective == "4x" else (256, 256)) if need_destriping else (0, 0),
@@ -565,9 +565,9 @@ def main(source_path):
         if len(AllChannels) == 1 or \
                 ask_true_false_question(
                     "Lightsheet cleaning is computationally expensive. "
-                    "For sparsly labeled channels, it can help compression algorithms "
-                    "to reduce the final file sizes up to a factor of 5. \n\n"
-                    "Do you want to clean all channels?"):
+                    "For sparsely labeled channels, it can help compression algorithms "
+                    "to reduce the final file sizes up to a factor of 5. \n"
+                    "Do you want to clean all channels? (if no, then you may choose a subset of channels)"):
             channels_need_lightsheet_cleaning: List[str] = AllChannels.copy()
         else:
             channels_need_lightsheet_cleaning: List[str] = []
