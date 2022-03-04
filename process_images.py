@@ -355,6 +355,7 @@ def process_channel(
             proj_in.unlink(missing_ok=False)
 
     # stitching: merge tiles to generate stitched 2D tiff series -------------------------------------------------------
+
     stitched_tif_path = stitched_path / f"{channel}_tif"
     stitched_tif_path.mkdir(exist_ok=True)
     print(f"{datetime.now()} - {channel}: starting step 6 of stitching, merging tiles to tif, using TSV ..."
@@ -367,7 +368,9 @@ def process_channel(
         cores=cpu_logical_core_count,  # here the limit is 61 on Windows
         dtype='uint8' if need_16bit_to_8bit_conversion else 'uint16'
     )  # shape is in z y x format
-    # ------------------------------------------------------------------------------------------------------------------
+
+    # TeraFly ----------------------------------------------------------------------------------------------------------
+
     running_processes: int = 0
     if need_tera_fly_conversion:
         tera_fly_path = stitched_path / f'{channel}_TeraFly'
