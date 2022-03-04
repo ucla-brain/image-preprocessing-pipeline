@@ -231,6 +231,7 @@ def process_channel(
         need_16bit_to_8bit_conversion=False,
         right_bit_shift=3,
         continue_process_pystripe=True,
+        continue_process_terastitcher=True,
         down_sampling_factor=None,
         tile_size=None,
         new_tile_size=None,
@@ -305,7 +306,7 @@ def process_channel(
         )
 
     # stitching: align the tiles GPU accelerated & parallel ------------------------------------------------------------
-    if not stitched_path.joinpath(f"{channel}_xml_import_step_5.xml").exists():
+    if not stitched_path.joinpath(f"{channel}_xml_import_step_5.xml").exists() or not continue_process_terastitcher:
         print(f"{datetime.now()} - {channel}: aligning tiles using parastitcher ...")
         proj_out = stitched_path / f'{channel}_xml_import_step_1.xml'
         command = [
@@ -366,7 +367,8 @@ def process_channel(
         str(stitched_tif_path / "img_{z:06d}.tif"),
         compression=("ZLIB", 1),
         cores=cpu_logical_core_count,  # here the limit is 61 on Windows
-        dtype='uint8' if need_16bit_to_8bit_conversion else 'uint16'
+        dtype='uint8' if need_16bit_to_8bit_conversion else 'uint16',
+        resume=continue_process_terastitcher
     )  # shape is in z y x format
 
     # TeraFly ----------------------------------------------------------------------------------------------------------
@@ -728,6 +730,7 @@ def main(source_path):
             need_16bit_to_8bit_conversion=need_16bit_to_8bit_conversion,
             right_bit_shift=right_bit_shift[channel],
             continue_process_pystripe=continue_process_pystripe,
+            continue_process_terastitcher=continue_process_terastitcher,
             down_sampling_factor=down_sampling_factor,
             tile_size=tile_size,
             new_tile_size=new_tile_size,

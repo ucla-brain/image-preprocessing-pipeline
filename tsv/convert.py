@@ -47,7 +47,9 @@ def convert_to_2D_tif(
         dtype=None,
         compression=('ZLIB', 1),
         cores=cpu_count(),
-        rotation=0):
+        rotation=0,
+        resume: bool = True,
+):
     """Convert a tera-stitched volume to TIF
 
     v: the volume to convert
@@ -69,6 +71,8 @@ def convert_to_2D_tif(
     chunks: int
         chunk size of multiprocessing pool
     rotation: Rotate image by 0, 90, 180, or 270 degrees
+    resume: bool
+        If true the remaining images will be stitched
     """
     if volume is None:
         volume = v.volume
@@ -93,7 +97,7 @@ def convert_to_2D_tif(
 
     arg_list = []
     for z in range(volume.z0, volume.z1, decimation):
-        arg_list.append((v, compression, decimation, dtype, output_pattern, volume, z, rotation))
+        arg_list.append((v, compression, decimation, dtype, output_pattern, volume, z, rotation, resume))
     num_images = len(arg_list)
     cores, chunks = calculate_cores_and_chunk_size(num_images, cores, pool_can_handle_more_than_61_cores=False)
     print(f"\tTSV is converting {num_images} z-planes using {cores} cores and {chunks} chunks")
@@ -112,9 +116,9 @@ def convert_to_2D_tif(
     return volume.shape
 
 
-def convert_one_plane(v, compression, decimation, dtype, output_pattern, volume, z, rotation):
+def convert_one_plane(v, compression, decimation, dtype, output_pattern, volume, z, rotation, resume):
     file = output_pattern.format(z=z)
-    if path.exists(file):
+    if resume and path.exists(file):
         return
 
     dir_path = path.dirname(file)
