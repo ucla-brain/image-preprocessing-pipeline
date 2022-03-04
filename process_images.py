@@ -408,10 +408,11 @@ def merge_channels_by_file_name(
         stitched_tif_paths: List[Path] = None,
         order_of_colors: str = "gbr",  # the order of r, g and b letters can be arbitrary here
         merged_tif_path: Path = None,
-        shape: Tuple[int, int] = None
+        shape: Tuple[int, int] = None,
+        resume: bool = True
 ):
     rgb_file = merged_tif_path / file_name
-    if rgb_file.exists():
+    if resume and rgb_file.exists():
         return
 
     images: Dict[{str, ndarray}, {str, None}] = {}
@@ -460,7 +461,8 @@ def merge_all_channels(
         merged_tif_path: Path,
         channel_volume_shapes: list = None,
         order_of_colors: str = "gbr",
-        workers: int = cpu_count()
+        workers: int = cpu_count(),
+        resume: bool = True
 ):
     num_files_in_each_path = list(map(lambda p: len(list(p.rglob("*.tif"))), stitched_tif_paths))
     if len(unique(array(num_files_in_each_path, dtype=int))) > 1:
@@ -480,7 +482,8 @@ def merge_all_channels(
         "stitched_tif_paths": stitched_tif_paths,
         "order_of_colors": order_of_colors,
         "merged_tif_path": merged_tif_path,
-        "shape": (y, x)
+        "shape": (y, x),
+        "resume": resume
     } for file in stitched_tif_paths[num_files_in_each_path.index(max(num_files_in_each_path))].rglob("*.tif")]
     workers = 61 if sys.platform == "win32" and workers > 61 else workers
     num_images = len(work)
@@ -753,20 +756,26 @@ def main(source_path):
     if need_merged_channels:
         if 1 < len(stitched_tif_paths) < 4:
             merge_all_channels(stitched_tif_paths, merged_tif_paths[0],
-                               channel_volume_shapes=channel_volume_shapes, workers=cpu_logical_core_count)
+                               channel_volume_shapes=channel_volume_shapes,
+                               workers=cpu_logical_core_count,
+                               resume=continue_process_terastitcher)
         elif len(stitched_tif_paths) == 1:
             merged_tif_paths = stitched_tif_paths
         elif len(stitched_tif_paths) >= 4:
             p_log("Warning: since number of channels are more than 3 merging channels is impossible.\n\t"
                   "merging the first 3 channels instead.")
             merge_all_channels(stitched_tif_paths[0:3], merged_tif_paths[0],
-                               channel_volume_shapes=channel_volume_shapes, workers=cpu_logical_core_count)
+                               channel_volume_shapes=channel_volume_shapes,
+                               workers=cpu_logical_core_count,
+                               resume=continue_process_terastitcher)
             merged_tif_paths += stitched_tif_paths[3:]
         else:
             merged_tif_paths = []
     else:
         merged_tif_paths = stitched_tif_paths
+
     # Imaris File Conversion :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+
     progress_bar = []
     if need_imaris_conversion:
         p_log(f"{datetime.now()}: started ims conversion  ...")
