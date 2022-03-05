@@ -644,20 +644,24 @@ def read_filter_save(
             img = imread_dcimg(input_file, z_idx)  # file must be DCIMG
         if img is None:
             print(
+                f"\033[93m"
                 f"\nimread function returned None. Possible damaged input file: "
                 f"\n\t{input_file}."
                 f"\n\toutput file set to an array of zeros instead:"
                 f"\n\t{output_file}"
                 f"\n\tgenerating a dummy tile of shape {tile_size} and type {dtype}, instead."
+                f"\033[0m"
             )
             img = zeros(dtype=dtype, shape=tile_size)
             # return
         if img.shape != tile_size:
             print(
+                f"\033[93m"
                 f"\nwarning: input tile had a different shape. resizing:\n"
                 f"\tinput_file: {input_file} -> \n"
                 f"\t\tinput shape = {img.shape}\n"
-                f"\t\tnew shape   = {tile_size}\n")
+                f"\t\tnew shape   = {tile_size}\n"
+                f"\033[0m")
             img = resize(img, tile_size, preserve_range=True, anti_aliasing=True)
 
         d_type = img.dtype
@@ -710,10 +714,12 @@ def read_filter_save(
         )
 
     except (OSError, IndexError, TypeError, RuntimeError, TiffFileError) as inst:
-        print(f"\n{type(inst)}"  # the exception instance
+        print(f"\033[93m"
+              f"\n{type(inst)}"  # the exception instance
               f"\n{inst.args}"  # arguments stored in .args
               f"\n{inst}"
-              f"\nPossible damaged input file: {input_file}")
+              f"\nPossible damaged input file: {input_file}"
+              f"\033[0m")
 
 
 def _read_filter_save(input_dict):
@@ -1019,9 +1025,9 @@ def batch_filter(
     args_list = manager.list(args_list)
     num_images = len(args_list)
     queue = Queue()
-    progress_bar = tqdm(total=num_images, ascii=True, smoothing=0.05, mininterval=1.0, unit="img", desc="PyStripe")
     workers, chunks = calculate_cores_and_chunk_size(num_images, workers, pool_can_handle_more_than_61_cores=True)
     print(f'{datetime.now()}: preprocessing images using {workers} workers and {chunks} chunks ...')
+    progress_bar = tqdm(total=num_images, ascii=True, smoothing=0.05, mininterval=1.0, unit="img", desc="PyStripe")
     for worker in range(workers):
         MultiProcess(queue, args_list, range(worker * chunks, (worker+1) * chunks)).start()
     MultiProcess(queue, args_list, range(num_images - num_images % workers, num_images)).start()

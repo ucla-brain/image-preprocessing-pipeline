@@ -10,7 +10,7 @@ import platform
 import subprocess
 import logging as log
 import psutil
-from re import compile, match
+from re import compile, match, IGNORECASE
 from psutil import cpu_count, virtual_memory
 from tqdm import tqdm
 from numpy import ndarray, zeros, array, unique
@@ -24,11 +24,12 @@ from tsv.convert import convert_to_2D_tif
 from pystripe.core import batch_filter, imread_tif_raw, imsave_tif, calculate_cores_and_chunk_size
 from queue import Empty
 from multiprocessing import freeze_support, Pool, Queue, Process
-from supplements.cli_interface import select_among_multiple_options, ask_true_false_question
+from supplements.cli_interface import select_among_multiple_options, ask_true_false_question, PrintColors
 from typing import List, Tuple, Dict
 
 # experiment setup: user needs to set them right
-AllChannels = ["Ex_488_Em_525", "Ex_561_Em_600", "Ex_642_Em_680"]  # the order determines color ["R", "G", "B"]?
+# AllChannels = [(channel folder name, rgb color)]
+AllChannels: List[Tuple[str, str]] = [("Ex_488_Em_525", "b"), ("Ex_561_Em_600", "g"), ("Ex_642_Em_680", "r")]
 VoxelSizeX_4x, VoxelSizeY_4x = 1.835, 1.835
 VoxelSizeX_10x, VoxelSizeY_10x = 0.661, 0.661  # new stage --> 0.6, 0.6
 VoxelSizeX_15x, VoxelSizeY_15x = 0.422, 0.422  # new stage --> 0.4, 0.4
@@ -164,13 +165,14 @@ def worker(command: str):
 
 
 class MultiProcess(Process):
-    def __init__(self, queue, command, position=None):
+    def __init__(self, queue, command, pattern="", position=None):
         Process.__init__(self)
         super().__init__()
         self.daemon = True
         self.queue = queue
         self.command = command
         self.position = position
+        self.pattern = pattern
 
     def run(self):
         return_code = None  # 0 == success and any other number is an error code
@@ -185,7 +187,7 @@ class MultiProcess(Process):
                     # stderr=subprocess.PIPE,
                     shell=True,
                     text=True)
-                pattern = compile(r"(WriteProgress:)\s+(\d*.\d+)\s*$")
+                pattern = compile(self.pattern, IGNORECASE)
                 while return_code is None:
                     return_code = process.poll()
                     m = match(pattern, process.stdout.readline())
@@ -208,6 +210,29 @@ def reorder_list(a, b):
     for c in b:
         a.remove(c)
     return b + a
+
+
+def run_command(command):
+    return_code = None
+    process = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        # stderr=subprocess.PIPE,
+        shell=True,
+        text=True)
+    pattern = compile(r"error|warning|fail", IGNORECASE)
+    while return_code is None:
+        return_code = process.poll()
+        stdout = process.stdout.readline()
+        m = match(pattern, stdout)
+        if m:
+            print(f"\n{PrintColors.WARNING}{stdout}{PrintColors.ENDC}\n")
+        else:
+            print(".", end="")
+    if return_code > 0:
+        print(f"{PrintColors.FAIL}TeraStitcher failed with return code {return_code}.{PrintColors.ENDC}")
+    else:
+        print("")
 
 
 def process_channel(
@@ -324,7 +349,8 @@ def process_channel(
             "--noprogressbar"
         ]
         print("\timport command:\n\t\t" + " ".join(command))
-        subprocess.run(command, check=True)
+        # subprocess.run(command, check=True)
+        run_command(" ".join(command))
         if not proj_out.exists():
             print(f"{channel}: importing tif files failed.")
             raise RuntimeError
@@ -350,8 +376,10 @@ def process_channel(
                 f"--projin={proj_in}",
                 f"--projout={proj_out}",
             ]
-            print("\tstitching command:\n\t\t" + " ".join(command))
-            subprocess.call(" ".join(command), shell=True)  # subprocess.run(command)
+            command = " ".join(command)
+            print("\tstitching command:\n\t\t" + command)
+            # subprocess.call(command, shell=True)  # subprocess.run(command)
+            run_command(command)
             assert proj_out.exists()
             proj_in.unlink(missing_ok=False)
 
@@ -428,7 +456,8 @@ def merge_channels_by_file_name(
     del image, file_path
     if dtypes.count(dtypes[0]) != len(dtypes):
         paths = "\n\t".join(map(str, stitched_tif_paths))
-        print(f"\nwarning: merging channels should have identical dtypes:\n\t{paths}")
+        print(f"\n{PrintColors.WARNING}warning: merging channels should have identical dtypes:\n\t"
+              f"{paths}{PrintColors.ENDC}")
         del paths
 
     if len(stitched_tif_paths) == 2:  # then the last color channel should remain all zeros
@@ -436,7 +465,7 @@ def merge_channels_by_file_name(
 
     # height (y), width(x), colors
     multi_channel_img: ndarray = zeros((shape[0], shape[1], 3), dtype=dtypes[0])
-    for idx, color in enumerate("bgr"):  # the order of letters should be "rgb" here
+    for idx, color in enumerate("rgb"):  # the order of letters should be "rgb" here
         image: ndarray = images[color]
         if image is not None:
             image_shape = image.shape
@@ -472,7 +501,7 @@ def merge_all_channels(
     x, y = 0, 0
     for path, n, shape in zip(stitched_tif_paths, num_files_in_each_path, channel_volume_shapes):
         if n != shape[0]:
-            print(f"warning: path {path} has {shape[0] - n} missing tiles!")
+            print(f"{PrintColors.WARNING}warning: path {path} has {shape[0] - n} missing tiles!{PrintColors.ENDC}")
 
         y, x = max(y, shape[1]), max(x, shape[2])
 
@@ -545,7 +574,8 @@ def main(source_path):
     # Ask questions ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
     objective, voxel_size_x, voxel_size_y, voxel_size_z, tile_size = get_voxel_sizes()
     global AllChannels
-    AllChannels = [channel for channel in AllChannels if source_path.joinpath(channel).exists()]
+    all_channels = [channel for channel, color in AllChannels if source_path.joinpath(channel).exists()]
+    channel_color_dict = {channel: color for channel, color in AllChannels}
     de_striped_posix, what_for = "", ""
     image_classes_training_data_path = source_path / FlatNonFlatTrainingData
     need_lightsheet_cleaning = ask_true_false_question("Do you need to apply lightsheet cleaning algorithm?")
@@ -557,16 +587,16 @@ def main(source_path):
     elif need_lightsheet_cleaning:
         de_striped_posix += "_lightsheet_cleaned"
         what_for += "lightsheet cleaning "
-        if len(AllChannels) == 1 or \
+        if len(all_channels) == 1 or \
                 ask_true_false_question(
                     "Lightsheet cleaning is computationally expensive. "
                     "For sparsely labeled channels, it can help compression algorithms "
                     "to reduce the final file sizes up to a factor of 5. \n"
                     "Do you want to clean all channels? (if no, then you may choose a subset of channels)"):
-            channels_need_lightsheet_cleaning: List[str] = AllChannels.copy()
+            channels_need_lightsheet_cleaning: List[str] = all_channels.copy()
         else:
             channels_need_lightsheet_cleaning: List[str] = []
-            for channel in AllChannels:
+            for channel in all_channels:
                 if ask_true_false_question(f"Do you need to apply lightsheet cleaning to {channel} channel?"):
                     channels_need_lightsheet_cleaning += [channel]
 
@@ -574,7 +604,7 @@ def main(source_path):
     if need_flat_image_application:
         de_striped_posix += "_flat_applied"
         flat_img_not_exist = []
-        for channel in AllChannels:
+        for channel in all_channels:
             flat_img_created_already = source_path.joinpath(channel + '_flat.tif')
             flat_img_not_exist.append(not flat_img_created_already.exists())
         if any(flat_img_not_exist):
@@ -599,9 +629,9 @@ def main(source_path):
         what_for += "tif "
     need_16bit_to_8bit_conversion = ask_true_false_question(
         "Do you need to convert 16-bit images to 8-bit before stitching to reduce final file size?")
-    right_bit_shift: Dict[str, int] = {channel: 8 for channel in AllChannels}
+    right_bit_shift: Dict[str, int] = {channel: 8 for channel in all_channels}
     if need_16bit_to_8bit_conversion:
-        for channel in AllChannels:
+        for channel in all_channels:
             right_bit_shift[channel] = int(select_among_multiple_options(
                 f"For {channel} channel, enter right bit shift [0 to 8] for 8-bit conversion: \n"
                 "\tbitshift smaller than 8 will increase the pixel brightness. "
@@ -621,8 +651,9 @@ def main(source_path):
                 ],
                 return_index=True
             ))
-        de_striped_posix += "_" + ".".join(
-            [f"{channel.replace('_', '')}bsh{right_bit_shift[channel]}" for channel in AllChannels])
+
+        de_striped_posix += "_bitshift." + ".".join(
+            [f"{channel_color_dict[channel]}{right_bit_shift[channel]}" for channel in all_channels])
     down_sampling_factor = (int(voxel_size_z // voxel_size_y), int(voxel_size_z // voxel_size_x))
     need_down_sampling = False
     new_tile_size = None
@@ -662,25 +693,25 @@ def main(source_path):
     stitched_path, continue_process_terastitcher = get_destination_path(
         source_path.name, what_for="stitched files", posix="_stitched", default_path=stitched_path)
 
-    need_tera_fly_conversion = ask_true_false_question("Do you need to convert the neurite channel to TeraFly format?")
+    need_tera_fly_conversion = ask_true_false_question("Do you need to convert a channel to TeraFly format?")
     channels_need_tera_fly_conversion: list = []
     if need_tera_fly_conversion:
-        if len(AllChannels) == 1:
-            channels_need_tera_fly_conversion = AllChannels.copy()
-        elif ask_true_false_question(
+        if len(all_channels) == 1:
+            channels_need_tera_fly_conversion = all_channels.copy()
+        elif len(channels_need_lightsheet_cleaning) > 0 and ask_true_false_question(
                 "List of channels need TeraFly conversion is identical to the "
                 "list of channels need lightsheet cleaning?"):
             channels_need_tera_fly_conversion = channels_need_lightsheet_cleaning.copy()
         else:
-            for channel in AllChannels:
+            for channel in all_channels:
                 if ask_true_false_question(f"Do you need to convert {channel} channel to TeraFly format?"):
                     channels_need_tera_fly_conversion += [channel]
 
         p_log(f"\n\n{' and '.join(channels_need_tera_fly_conversion)} "
-              f"channel{'s' if len(channels_need_tera_fly_conversion)>1 else ''}"
+              f"channel{'s' if len(channels_need_tera_fly_conversion) > 1 else ''}"
               f" will be converted to TeraFly format.\n")
     need_merged_channels = False
-    if len(AllChannels) > 1:
+    if len(all_channels) > 1:
         need_merged_channels = ask_true_false_question("Do you need to merge channels to RGB color tiff?")
     need_imaris_conversion = ask_true_false_question("Do you need to convert to Imaris format?")
     # Start ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
@@ -701,11 +732,11 @@ def main(source_path):
     # stitch :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
     # channels need reconstruction will be stitched first to start slow TeraFly conversion as soon as possible
 
-    AllChannels = reorder_list(AllChannels, channels_need_tera_fly_conversion)
+    all_channels = reorder_list(all_channels, channels_need_tera_fly_conversion)
     stitched_tif_paths, channel_volume_shapes = [], []
     queue = Queue()
     running_processes: int = 0
-    for channel in AllChannels:
+    for channel in all_channels:
         stitched_tif_path, shape, running_processes_addition = process_channel(
             source_path,
             channel,
@@ -739,9 +770,11 @@ def main(source_path):
         running_processes += running_processes_addition
 
     if not channel_volume_shapes.count(channel_volume_shapes[0]) == len(channel_volume_shapes):
-        p_log("warning: channels had different shapes:\n\t" + "\n\t".join(
-            map(lambda p: f"channel {p[0]}: volume shape={p[1]}",
-                zip(AllChannels, channel_volume_shapes))))
+        p_log(
+            f"{PrintColors.WARNING}warning: channels had different shapes:\n\t" + "\n\t".join(
+                map(lambda p: f"channel {p[0]}: volume shape={p[1]}",
+                    zip(all_channels, channel_volume_shapes))) + PrintColors.ENDC
+        )
 
     # merge channels to RGB ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
@@ -749,9 +782,17 @@ def main(source_path):
           f"time elapsed so far {timedelta(seconds=time() - start_time)}")
     merged_tif_paths = [stitched_path / "merged_channels_tif"]
     if need_merged_channels:
+        order_of_colors: str = ""
+        for channel in all_channels:
+            order_of_colors += channel_color_dict[channel]
+        for channel, color in AllChannels:
+            if color not in order_of_colors:
+                order_of_colors += color
+
         if 1 < len(stitched_tif_paths) < 4:
             merge_all_channels(stitched_tif_paths, merged_tif_paths[0],
                                channel_volume_shapes=channel_volume_shapes,
+                               order_of_colors=order_of_colors,
                                workers=cpu_logical_core_count,
                                resume=continue_process_terastitcher)
         elif len(stitched_tif_paths) == 1:
@@ -761,6 +802,7 @@ def main(source_path):
                   "merging the first 3 channels instead.")
             merge_all_channels(stitched_tif_paths[0:3], merged_tif_paths[0],
                                channel_volume_shapes=channel_volume_shapes,
+                               order_of_colors=order_of_colors,
                                workers=cpu_logical_core_count,
                                resume=continue_process_terastitcher)
             merged_tif_paths += stitched_tif_paths[3:]
@@ -776,7 +818,7 @@ def main(source_path):
         p_log(f"{datetime.now()}: started ims conversion  ...")
         for idx, path in enumerate(merged_tif_paths):
             command = get_imaris_command(path, voxel_size_x, voxel_size_y, voxel_size_z, workers=cpu_logical_core_count)
-            MultiProcess(queue, command, idx).start()
+            MultiProcess(queue, command, pattern=r"(WriteProgress:)\s+(\d*.\d+)\s*$", position=idx).start()
             running_processes += 1
             progress_bar += [
                 tqdm(total=100, ascii=True, position=idx, unit="%", desc=f"imaris{idx + 1}", smoothing=0.05)]

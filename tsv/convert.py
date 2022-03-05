@@ -143,7 +143,9 @@ def convert_one_plane(v, compression, decimation, dtype, output_pattern, volume,
             return
         except OSError:
             continue
-    print(f"\nwarning: failed to save {file} after 10 attempts.")
+    print(f"\033[93m"
+          f"\nwarning: failed to save file {file} after 10 attempts."
+          f"\033[0m")
 
 
 V: TSVVolume = None
