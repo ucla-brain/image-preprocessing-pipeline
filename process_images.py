@@ -376,7 +376,7 @@ def process_channel(
                 command = [f"{terastitcher}"]
             command += [
                 f"-{step}",
-                "--threshold=0.7",
+                "--threshold=0.9",
                 f"--projin={proj_in}",
                 f"--projout={proj_out}",
             ]
