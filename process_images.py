@@ -295,7 +295,7 @@ def process_channel(
                 )
 
         print(
-            f"{datetime.now()} - {channel}: started preprocessing images and converting to tif using DeStripe.\n"
+            f"{datetime.now()} - {channel}: started preprocessing images and converting them to tif.\n"
             f"\tsource: {source_path / channel}\n"
             f"\tdestination: {preprocessed_path / channel}\n"
             f"\tcompression: (ZLIB, {1 if need_compression else 0})\n"
