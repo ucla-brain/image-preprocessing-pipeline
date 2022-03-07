@@ -13,7 +13,7 @@ import psutil
 from re import compile, match, IGNORECASE
 from psutil import cpu_count, virtual_memory
 from tqdm import tqdm
-from numpy import ndarray, zeros, array, unique
+from numpy import ndarray, zeros
 from pathlib import Path
 from flat import create_flat_img
 from datetime import datetime, timedelta
@@ -494,10 +494,6 @@ def merge_all_channels(
         resume: bool = True
 ):
     num_files_in_each_path = list(map(lambda p: len(list(p.rglob("*.tif"))), stitched_tif_paths))
-    if len(unique(array(num_files_in_each_path, dtype=int))) > 1:
-        print("warning: some channel tif folders have different number of files in them:\n\t" +
-              "\n\t".join(map(lambda p: f"{p[0]} tif files were in {p[1]}",
-                              zip(num_files_in_each_path, stitched_tif_paths))))
     x, y = 0, 0
     for path, n, shape in zip(stitched_tif_paths, num_files_in_each_path, channel_volume_shapes):
         if n != shape[0]:
@@ -514,9 +510,9 @@ def merge_all_channels(
         "shape": (y, x),
         "resume": resume
     } for file in stitched_tif_paths[num_files_in_each_path.index(max(num_files_in_each_path))].rglob("*.tif")]
-    workers = 61 if sys.platform == "win32" and workers > 61 else workers
     num_images = len(work)
     workers, chunks = calculate_cores_and_chunk_size(num_images, workers, pool_can_handle_more_than_61_cores=False)
+    print(f"\tusing {workers} cores and {chunks} chunks")
     with Pool(processes=workers) as pool:
         list(
             tqdm(
@@ -778,10 +774,11 @@ def main(source_path):
 
     # merge channels to RGB ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
-    p_log(f"{datetime.now()}: merging channels to RGB started ...\n\t"
-          f"time elapsed so far {timedelta(seconds=time() - start_time)}")
-    merged_tif_paths = [stitched_path / "merged_channels_tif"]
-    if need_merged_channels:
+    merged_tif_paths = stitched_tif_paths
+    if need_merged_channels and len(stitched_tif_paths) > 1:
+        p_log(f"{datetime.now()}: merging channels to RGB started ...\n\t"
+              f"time elapsed so far {timedelta(seconds=time() - start_time)}")
+        merged_tif_paths = [stitched_path / "merged_channels_tif"]
         order_of_colors: str = ""
         for channel in all_channels:
             order_of_colors += channel_color_dict[channel]
@@ -795,8 +792,6 @@ def main(source_path):
                                order_of_colors=order_of_colors,
                                workers=cpu_logical_core_count,
                                resume=continue_process_terastitcher)
-        elif len(stitched_tif_paths) == 1:
-            merged_tif_paths = stitched_tif_paths
         elif len(stitched_tif_paths) >= 4:
             p_log("Warning: since number of channels are more than 3 merging channels is impossible.\n\t"
                   "merging the first 3 channels instead.")
@@ -808,8 +803,6 @@ def main(source_path):
             merged_tif_paths += stitched_tif_paths[3:]
         else:
             merged_tif_paths = []
-    else:
-        merged_tif_paths = stitched_tif_paths
 
     # Imaris File Conversion :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
@@ -849,6 +842,9 @@ def main(source_path):
 
 
 if __name__ == '__main__':
+    os.environ['MKL_NUM_THREADS'] = '1'
+    os.environ['NUMEXPR_NUM_THREADS'] = '1'
+    os.environ['OMP_NUM_THREADS'] = '1'
     freeze_support()
     FlatNonFlatTrainingData = "image_classes.csv"
     cpu_physical_core_count = cpu_count(logical=False)

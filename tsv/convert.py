@@ -24,13 +24,12 @@ environ['NUMEXPR_NUM_THREADS'] = '1'
 environ['OMP_NUM_THREADS'] = '1'
 
 
-def calculate_cores_and_chunk_size(num_images: int, cores: int, pool_can_handle_more_than_61_cores: bool = True):
+def calculate_cores_and_chunk_size(num_images: int, cores: int, pool_can_handle_more_than_61_cores: bool = False):
     if platform == "win32" and cores >= 61 and not pool_can_handle_more_than_61_cores:
-        chunks = num_images // (cores - 1)
-    else:
-        chunks = num_images // (cores + 1)
-        cores += 1
-    chunks = 1 if chunks == 0 else chunks
+        cores = 61
+    chunks = num_images // (cores - 1)
+    chunks = 1 if chunks <= 0 else chunks
+    cores = 1 if cores <= 0 else cores
     return cores, chunks
 
 
@@ -82,9 +81,6 @@ def convert_to_2D_tif(
         decimation = 2 ** mipmap_level
     else:
         decimation = 1
-
-    if platform == "win32" and cores > 61:
-        cores = 61
 
     # futures = []
     # with Pool(cores) as pool:

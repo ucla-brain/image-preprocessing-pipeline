@@ -448,6 +448,9 @@ def apply_flat(img, flat):
     if img.shape == flat.shape:
         return (img / flat).astype(img.dtype)
     else:
+        print("\033[93m"
+              "warning: image and flat arrays had different shapes"
+              "\033[0m")
         return img
 
 
@@ -825,13 +828,14 @@ class MultiProcess(Process):
         for idx in self.indices:
             args = self.shared_list[idx]
             try:
-                # read_filter_save(**self.shared_list[idx])
                 future = pool.submit(_read_filter_save, args)
                 future.result(timeout=100)
             except BrokenProcessPool:
                 output_file: Path = args["output_file"]
-                print(f"\ntimeout reached for processing input file:\n\t{args['input_file']}\n\t"
-                      f"a dummy (zeros) image is saved as output instead:\n\t{output_file}")
+                print(f"\033[93m"
+                      f"\nwarning: timeout reached for processing input file:\n\t{args['input_file']}\n\t"
+                      f"a dummy (zeros) image is saved as output instead:\n\t{output_file}"
+                      f"\033[0m")
                 if not output_file.exists():
                     imsave_tif(
                         output_file,
@@ -843,10 +847,13 @@ class MultiProcess(Process):
                 pool.shutdown()
                 pool = ProcessPoolExecutor(max_workers=1)
             except Exception as inst:
-                print(f'\nProcess failed for {args}.')
-                print(type(inst))  # the exception instance
-                print(inst.args)  # arguments stored in .args
-                print(inst)
+                print(
+                    f"\033[93m"
+                    f"\nwarning: process failed for {args}."
+                    f"exception instance: {type(inst)}"
+                    f"exception arguments: {inst.args}"
+                    f"exception: {inst}"
+                    f"\033[0m")
             self.queue.put(running)
         pool.shutdown()
         running = False
@@ -855,11 +862,10 @@ class MultiProcess(Process):
 
 def calculate_cores_and_chunk_size(num_images: int, cores: int, pool_can_handle_more_than_61_cores: bool = True):
     if platform == "win32" and cores >= 61 and not pool_can_handle_more_than_61_cores:
-        chunks = num_images // (cores - 1)
-    else:
-        chunks = num_images // (cores + 1)
-        cores += 1
-    chunks = 1 if chunks == 0 else chunks
+        cores = 61
+    chunks = num_images // (cores - 1)
+    chunks = 1 if chunks <= 0 else chunks
+    cores = 1 if cores <= 0 else cores
     return cores, chunks
 
 
@@ -1026,12 +1032,12 @@ def batch_filter(
     num_images = len(args_list)
     queue = Queue()
     workers, chunks = calculate_cores_and_chunk_size(num_images, workers, pool_can_handle_more_than_61_cores=True)
-    print(f'{datetime.now()}: preprocessing images using {workers} workers and {chunks} chunks ...')
+    print(f'{datetime.now()}: preprocessing {num_images} images using {workers} workers and {chunks} chunks ...')
     progress_bar = tqdm(total=num_images, ascii=True, smoothing=0.05, mininterval=1.0, unit="img", desc="PyStripe")
-    for worker in range(workers):
+    for worker in range(workers-1):
         MultiProcess(queue, args_list, range(worker * chunks, (worker+1) * chunks)).start()
-    MultiProcess(queue, args_list, range(num_images - num_images % workers, num_images)).start()
-    running_processes = workers + 1
+    MultiProcess(queue, args_list, range(num_images - num_images % (workers - 1), num_images)).start()
+    running_processes = workers
     while running_processes > 0:
         try:
             still_running = queue.get()
@@ -1042,6 +1048,7 @@ def batch_filter(
         except Empty:
             sleep(1)
     progress_bar.close()
+    print()
 
 
 def normalize_flat(flat):
