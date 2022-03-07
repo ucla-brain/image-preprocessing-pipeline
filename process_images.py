@@ -823,7 +823,8 @@ def main(source_path):
             MultiProcess(queue, command, pattern=r"(WriteProgress:)\s+(\d*.\d+)\s*$", position=idx).start()
             running_processes += 1
             progress_bar += [
-                tqdm(total=100, ascii=True, position=idx, unit="%", desc=f"imaris{idx + 1}", smoothing=0.05)]
+                tqdm(total=100, ascii=True, position=idx, unit="%", smoothing=0.05,
+                     desc=f"imaris {(idx + 1) if len(merged_tif_paths) > 1 else ''}")]
 
     # waite for TeraFly and Imaris conversion to finish ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
