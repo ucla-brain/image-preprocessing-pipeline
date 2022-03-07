@@ -401,6 +401,8 @@ def process_channel(
 
     # TeraFly ----------------------------------------------------------------------------------------------------------
 
+    # TODO: Paraconverter: Support converting with more than 4 cores
+    # TODO: Paraconverter: add a progress bar
     running_processes: int = 0
     if need_tera_fly_conversion:
         tera_fly_path = stitched_path / f'{channel}_TeraFly'
@@ -513,6 +515,7 @@ def merge_all_channels(
     num_images = len(work)
     workers, chunks = calculate_cores_and_chunk_size(num_images, workers, pool_can_handle_more_than_61_cores=False)
     print(f"\tusing {workers} cores and {chunks} chunks")
+    # TODO: RGB: Support more than 61 cores on windows
     with Pool(processes=workers) as pool:
         list(
             tqdm(
