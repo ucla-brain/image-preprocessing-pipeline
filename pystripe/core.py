@@ -1048,7 +1048,6 @@ def batch_filter(
         except Empty:
             sleep(1)
     progress_bar.close()
-    print()
 
 
 def normalize_flat(flat):
