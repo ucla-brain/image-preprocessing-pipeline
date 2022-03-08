@@ -133,6 +133,28 @@ def get_destination_path(folder_name_prefix, what_for='tif', posix='', default_p
     return destination_path, continue_process
 
 
+def inspect_for_missing_tiles(channel_path: Path, extensions: List[str]):
+    path_dict = {}
+    extensions = [ext.lower() for ext in extensions]
+    for x_folders in channel_path.iterdir():
+        for y_folders in x_folders.iterdir():
+            count = 0
+            for file in y_folders.glob("*.*"):
+                if file.suffix.lower() in extensions:
+                    count += 1
+            y_folders_list: list = path_dict.get(count, [])
+            y_folders_list += [str(y_folders)]
+            path_dict.update({count: y_folders_list})
+
+    if len(path_dict) > 1:
+        counts_list = [int(count) for count, folder_list in path_dict.items()]
+        print(f"{PrintColors.WARNING}warning: following folders have missing tiles:{PrintColors.ENDC}")
+        for count in sorted(counts_list)[:-1]:
+            folders = "\n\t\t".join(path_dict[count])
+            print(f"{PrintColors.WARNING}\tfolders having {count} tiles: \n"
+                  f"\t\t{folders}{PrintColors.ENDC}")
+
+
 def correct_path_for_cmd(filepath):
     if sys.platform == "win32":
         return f"\"{filepath}\""
@@ -580,6 +602,8 @@ def main(source_path):
     objective, voxel_size_x, voxel_size_y, voxel_size_z, tile_size = get_voxel_sizes()
     global AllChannels
     all_channels = [channel for channel, color in AllChannels if source_path.joinpath(channel).exists()]
+    for channel in all_channels:
+        inspect_for_missing_tiles(source_path / channel, [".tif", ".tiff", ".raw"])
     channel_color_dict = {channel: color for channel, color in AllChannels}
     de_striped_posix, what_for = "", ""
     image_classes_training_data_path = source_path / FlatNonFlatTrainingData
