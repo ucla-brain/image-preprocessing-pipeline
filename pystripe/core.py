@@ -1027,6 +1027,7 @@ def batch_filter(
                 total=len(files), ascii=True, smoothing=0.05, mininterval=1.0, unit="img", desc="dcimg",
             )
             args_list = reduce(iconcat, args_list, [])  # unravel the list of list the fastest way possible
+        del files, files_list
 
     manager = Manager()
     args_list = manager.list(args_list)

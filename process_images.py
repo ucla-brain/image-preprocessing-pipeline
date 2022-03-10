@@ -146,7 +146,6 @@ def inspect_for_missing_tiles_get_files_list(channel_path: Path):
     print(f"{datetime.now().isoformat(timespec='seconds', sep=' ')}: "
           f"inspecting channel {channel_path.name} for missing files.")
     folders_list = [y for x in channel_path.iterdir() if x.is_dir() for y in x.iterdir() if y.is_dir()]
-    start_time = time()
     file_list = list(tqdm(
         map(get_list_of_files, folders_list),
         total=len(folders_list),
@@ -156,7 +155,6 @@ def inspect_for_missing_tiles_get_files_list(channel_path: Path):
         ascii=True,
         smoothing=0.05
     ))
-    print(f"{round(time() - start_time, 1)}s elapsed: Serial")
 
     path_dict = {}
     unraveled_file_list = []
@@ -828,6 +826,7 @@ def main(source_path):
         stitched_tif_paths += [stitched_tif_path]
         channel_volume_shapes += [shape]
         running_processes += running_processes_addition
+    del files_list, file_list
 
     if not channel_volume_shapes.count(channel_volume_shapes[0]) == len(channel_volume_shapes):
         p_log(
