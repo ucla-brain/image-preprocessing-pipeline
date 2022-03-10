@@ -275,7 +275,7 @@ def run_command(command):
         else:
             print(".", end="")
     if return_code > 0:
-        print(f"{PrintColors.FAIL}TeraStitcher failed with return code {return_code}.{PrintColors.ENDC}")
+        print(f"\n{PrintColors.FAIL}TeraStitcher failed with return code {return_code}.{PrintColors.ENDC}")
     else:
         print("")
 
@@ -462,7 +462,7 @@ def process_channel(
         print(f"{datetime.now().isoformat(timespec='seconds', sep=' ')} - "
               f"{channel}: starting to convert to TeraFly format ...")
         command = " ".join([
-            f"mpiexec -np {4} python -m mpi4py {paraconverter}",
+            f"mpiexec -np {cpu_physical_core_count} python -m mpi4py {paraconverter}",
             # f"{teraconverter}",
             "--sfmt=\"TIFF (series, 2D)\"",
             "--dfmt=\"TIFF (tiled, 3D)\"",
