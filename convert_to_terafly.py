@@ -10,12 +10,13 @@ from platform import uname
 import re
 
 
-# source_folder = Path(r'X:\3D_stitched\20210910_SM210705_01_R_PFC_LS_6x_1000z\tif')
-final_tiff_folder = Path(r'/panfs/dong/R01_Yin/642nm_NeuN')
-dir_tera_fly = Path(r'/mnt/md0/R01_Yin/642nm_NeuN_TeraFly')
-
-
 if __name__ == '__main__':
+    # source_folder = Path(r'X:\3D_stitched\20210910_SM210705_01_R_PFC_LS_6x_1000z\tif')
+    final_tiff_folder = Path(sys.argv[1])
+    dir_tera_fly = Path(sys.argv[2])
+    print(f"source folder is {final_tiff_folder}")
+    print(f"TeraFly folder is {dir_tera_fly}")
+
     freeze_support()
     dir_tera_fly.mkdir(exist_ok=True, parents=True)
     PyScriptsPath = Path(r"./TeraStitcher/pyscripts")
@@ -136,4 +137,3 @@ if __name__ == '__main__':
     #     # f"--defaultcolorlist BBRRGG"
     # ]
     # subprocess.call(" ".join(command), shell=True)
-
