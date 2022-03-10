@@ -23,15 +23,13 @@ from dcimg import DCIMGFile
 from typing import Tuple, Iterator, List
 from pystripe.raw import raw_imread
 from .lightsheet_correct import correct_lightsheet
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
-from multiprocessing import cpu_count
-from multiprocessing import Process, Queue, Manager
+from multiprocessing import Process, Queue, Manager, cpu_count
 from queue import Empty
-from multiprocessing import Pool
 from operator import iconcat
 from functools import reduce
-from itertools import repeat
+# from itertools import repeat
 
 
 warnings.filterwarnings("ignore")
@@ -872,6 +870,7 @@ def calculate_cores_and_chunk_size(num_images: int, cores: int, pool_can_handle_
 def batch_filter(
         input_path: Path,
         output_path: Path,
+        files_list: List[Path] = None,
         workers: int = os.cpu_count(),
         sigma: Tuple[int, int] = (0, 0),
         level=0,
@@ -906,6 +905,8 @@ def batch_filter(
         root directory to search for images to filter
     output_path : Path
         root directory for writing results
+    files_list : List[Path]
+        list of files to process. If given, pystripe will not spend time searching for files in input path
     workers : int
         number of CPU workers to use
     sigma : tuple
@@ -1005,25 +1006,25 @@ def batch_filter(
     }
 
     print(f'{datetime.now()}: Looking for images in {input_path} ...')
-    with Pool(processes=61 if platform == "win32" and workers > 61 else workers) as pool:
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
         if z_step is None:
-            args_list = list(pool.starmap(
-                process_tif_raw_imgs,
-                zip(glob_re(r"\.(?:tiff?|raw)$", input_path),  # find files
-                    repeat(input_path),
-                    repeat(output_path),
-                    repeat(arg_dict_template)),
-                chunksize=8192
+            files = list(glob_re(r"\.(?:tiff?|raw)$", input_path)) if files_list is None else files_list
+            args_list = list(tqdm(
+                pool.map(
+                    lambda args: process_tif_raw_imgs(*args),
+                    [(file, input_path, output_path, arg_dict_template) for file in files],
+                    chunksize=len(files)//(workers-1)),
+                total=len(files), ascii=True, smoothing=0.05, mininterval=1.0, unit="img", desc="tif|raw",
             ))
         else:
-            args_list = pool.starmap(
-                process_dc_imgs,
-                zip(glob_re(r"\.(?:dcimg)$", input_path),
-                    repeat(input_path),
-                    repeat(output_path),
-                    repeat(arg_dict_template),
-                    repeat(z_step)),
-                chunksize=8192
+            files = list(glob_re(r"\.(?:dcimg)$", input_path)) if files_list is None else files_list
+            args_list = tqdm(
+                pool.map(
+                    lambda args: process_dc_imgs(*args),
+                    [(file, input_path, output_path, arg_dict_template, z_step) for file in files],
+                    chunksize=8192),
+                total=len(files), ascii=True, smoothing=0.05, mininterval=1.0, unit="img", desc="dcimg",
             )
             args_list = reduce(iconcat, args_list, [])  # unravel the list of list the fastest way possible
 

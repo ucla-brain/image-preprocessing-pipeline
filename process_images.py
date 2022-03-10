@@ -133,26 +133,51 @@ def get_destination_path(folder_name_prefix, what_for='tif', posix='', default_p
     return destination_path, continue_process
 
 
-def inspect_for_missing_tiles(channel_path: Path, extensions: List[str]):
-    path_dict = {}
-    extensions = [ext.lower() for ext in extensions]
-    for x_folders in channel_path.iterdir():
-        for y_folders in x_folders.iterdir():
-            count = 0
-            for file in y_folders.glob("*.*"):
-                if file.suffix.lower() in extensions:
-                    count += 1
-            y_folders_list: list = path_dict.get(count, [])
-            y_folders_list += [str(y_folders)]
-            path_dict.update({count: y_folders_list})
+def get_list_of_files(y_folder: Path, extensions=(".tif", ".tiff", ".raw")) -> List[Path]:
+    extensions: Tuple[str] = tuple(ext.lower() for ext in extensions)
+    files_list = []
+    for file in y_folder.iterdir():
+        if file.suffix.lower() in extensions:
+            files_list += [file]
+    return files_list
 
-    if len(path_dict) > 1:
-        counts_list = [int(count) for count, folder_list in path_dict.items()]
+
+def inspect_for_missing_tiles_get_files_list(channel_path: Path):
+    print(f"{datetime.now().isoformat(timespec='seconds', sep=' ')}: "
+          f"inspecting channel {channel_path.name} for missing files.")
+    folders_list = [y for x in channel_path.iterdir() if x.is_dir() for y in x.iterdir() if y.is_dir()]
+    start_time = time()
+    file_list = list(tqdm(
+        map(get_list_of_files, folders_list),
+        total=len(folders_list),
+        desc="inspection",
+        mininterval=1.0,
+        unit="tile",
+        ascii=True,
+        smoothing=0.05
+    ))
+    print(f"{round(time() - start_time, 1)}s elapsed: Serial")
+
+    path_dict = {}
+    unraveled_file_list = []
+    for y_folder, files in zip(folders_list, file_list):
+        count = len(files)
+        y_folders_list: list = path_dict.get(count, [])
+        y_folders_list += [str(y_folder)]
+        path_dict.update({count: y_folders_list})
+        unraveled_file_list += files
+
+    counts_list = sorted([int(count) for count, folder_list in path_dict.items()])
+    if (len(counts_list) > 1 and counts_list[0] != 1) or (len(counts_list) > 2 and counts_list[0] == 1):
+        print(counts_list)
         print(f"{PrintColors.WARNING}warning: following folders have missing tiles:{PrintColors.ENDC}")
-        for count in sorted(counts_list)[:-1]:
-            folders = "\n\t\t".join(path_dict[count])
-            print(f"{PrintColors.WARNING}\tfolders having {count} tiles: \n"
-                  f"\t\t{folders}{PrintColors.ENDC}")
+        for count in counts_list[:-1]:
+            if count != 1:
+                folders = "\n\t\t".join(path_dict[count])
+                print(f"{PrintColors.WARNING}\tfolders having {count} tiles: \n"
+                      f"\t\t{folders}{PrintColors.ENDC}")
+
+    return unraveled_file_list
 
 
 def correct_path_for_cmd(filepath):
@@ -268,6 +293,7 @@ def process_channel(
         objective: str,
         queue: Queue,
         memory_ram: int,
+        files_list: List[Path] = None,
         need_flat_image_application=False,
         image_classes_training_data_path=None,
         need_raw_to_tiff_conversion=False,
@@ -328,6 +354,7 @@ def process_channel(
         batch_filter(
             source_path / channel,
             preprocessed_path / channel,
+            files_list=files_list,
             workers=cpu_logical_core_count * (2 if need_raw_to_tiff_conversion and not need_lightsheet_cleaning else 1),
             # chunks=128,
             # sigma=[foreground, background] Default is [0, 0], indicating no de-striping.
@@ -602,8 +629,6 @@ def main(source_path):
     objective, voxel_size_x, voxel_size_y, voxel_size_z, tile_size = get_voxel_sizes()
     global AllChannels
     all_channels = [channel for channel, color in AllChannels if source_path.joinpath(channel).exists()]
-    for channel in all_channels:
-        inspect_for_missing_tiles(source_path / channel, [".tif", ".tiff", ".raw"])
     channel_color_dict = {channel: color for channel, color in AllChannels}
     de_striped_posix, what_for = "", ""
     image_classes_training_data_path = source_path / FlatNonFlatTrainingData
@@ -759,13 +784,18 @@ def main(source_path):
     )
 
     # stitch :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
-    # channels need reconstruction will be stitched first to start slow TeraFly conversion as soon as possible
 
+    # channels need reconstruction will be stitched first to start slow TeraFly conversion as soon as possible
     all_channels = reorder_list(all_channels, channels_need_tera_fly_conversion)
+
+    files_list = list(map(
+        inspect_for_missing_tiles_get_files_list,
+        [source_path / channel for channel in all_channels]))
+
     stitched_tif_paths, channel_volume_shapes = [], []
     queue = Queue()
     running_processes: int = 0
-    for channel in all_channels:
+    for channel, file_list in zip(all_channels, files_list):
         stitched_tif_path, shape, running_processes_addition = process_channel(
             source_path,
             channel,
@@ -777,6 +807,7 @@ def main(source_path):
             objective,
             queue,
             memory_ram,
+            files_list=file_list,
             need_tera_fly_conversion=channel in channels_need_tera_fly_conversion,
             need_flat_image_application=need_flat_image_application,
             image_classes_training_data_path=image_classes_training_data_path,
