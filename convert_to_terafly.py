@@ -11,9 +11,9 @@ import re
 
 
 if __name__ == '__main__':
-    # source_folder = Path(r'X:\3D_stitched\20210910_SM210705_01_R_PFC_LS_6x_1000z\tif')
-    final_tiff_folder = Path(sys.argv[1])
-    dir_tera_fly = Path(sys.argv[2])
+    source_folder = Path(sys.argv[1])
+    final_tiff_folder = Path(sys.argv[2])
+    dir_tera_fly = Path(sys.argv[3])
     print(f"source folder is {final_tiff_folder}")
     print(f"TeraFly folder is {dir_tera_fly}")
 
@@ -65,37 +65,38 @@ if __name__ == '__main__':
         new_path = p.sub(r'\1:\\\\', str(filepath))
         new_path = new_path.replace(" ", r"\ ").replace("(", r"\(").replace(")", r"\)").replace("/", "\\\\")
         return new_path
-    # batch_filter(
-    #     source_folder,
-    #     final_tiff_folder,
-    #     workers=61,
-    #     chunks=10,
-    #     # sigma=[foreground, background] Default is [0, 0], indicating no de-striping.
-    #     sigma=(0, 0),
-    #     # level=0,
-    #     wavelet="db10",
-    #     crossover=10,
-    #     # threshold=-1,
-    #     compression=('ZLIB', 0),  # ('ZSTD', 1) conda install imagecodecs
-    #     flat=None,
-    #     dark=None,
-    #     # z_step=voxel_size_z,  # z-step in micron. Only used for DCIMG files.
-    #     # rotate=False,
-    #     lightsheet=False,
-    #     artifact_length=150,
-    #     # percentile=0.25,
-    #     # convert_to_16bit=False,  # defaults to False
-    #     convert_to_8bit=False,
-    #     bit_shift_to_right=3,
-    #     continue_process=True,
-    #     dtype='uint16',
-    #     tile_size=None,
-    #     down_sample=5,
-    #     new_size=None
-    # )
+
+    batch_filter(
+        source_folder,
+        final_tiff_folder,
+        workers=92,
+        # sigma=[foreground, background] Default is [0, 0], indicating no de-striping.
+        sigma=(0, 0),
+        # level=0,
+        wavelet="db10",
+        crossover=10,
+        # threshold=-1,
+        compression=('ZLIB', 1),  # ('ZSTD', 1) conda install imagecodecs
+        flat=None,
+        dark=100,
+        # z_step=voxel_size_z,  # z-step in micron. Only used for DCIMG files.
+        # rotate=False,
+        lightsheet=True,
+        artifact_length=150,
+        # percentile=0.25,
+        # convert_to_16bit=False,  # defaults to False
+        convert_to_8bit=True,
+        bit_shift_to_right=1,
+        continue_process=True,
+        dtype='uint16',
+        tile_size=(37088, 22014),
+        down_sample=(2, 2),
+        new_size=(15651, 9290),
+        timeout=None
+    )
 
     command = [
-        f"mpiexec -np 6 python -m mpi4py {paraconverter}",
+        f"mpiexec -np 48 python -m mpi4py {paraconverter}",
         # f"{teraconverter}",
         "--sfmt=\"TIFF (series, 2D)\"",
         "--dfmt=\"TIFF (tiled, 3D)\"",
@@ -113,7 +114,7 @@ if __name__ == '__main__':
     ]
     start_time = time()
     subprocess.call(" ".join(command), shell=True)
-    print(f"elapsed time = {(time() - start_time) / 60}")
+    print(f"elapsed time = {round((time() - start_time) / 60, 1)}")
 
     # ims_file_path = destination_folder / f'{destination_folder.name}.ims'
     # file = destination_folder / "SP210729-01_Z000.tif"

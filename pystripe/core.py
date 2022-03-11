@@ -23,7 +23,7 @@ from dcimg import DCIMGFile
 from typing import Tuple, Iterator, List
 from pystripe.raw import raw_imread
 from .lightsheet_correct import correct_lightsheet
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, TimeoutError
 from concurrent.futures.process import BrokenProcessPool
 from multiprocessing import Process, Queue, Manager, cpu_count
 from queue import Empty
@@ -813,12 +813,13 @@ def process_dc_imgs(input_file: Path, input_path: Path, output_path: Path, args_
 
 
 class MultiProcess(Process):
-    def __init__(self, queue: Queue, shared_list: List[dict], indices: Iterator[int]):
+    def __init__(self, queue: Queue, shared_list: List[dict], indices: Iterator[int], timeout: float = None):
         Process.__init__(self)
         self.daemon = False
         self.queue = queue
         self.shared_list = shared_list
         self.indices = indices
+        self.timeout = timeout
 
     def run(self):
         running = True
@@ -827,8 +828,8 @@ class MultiProcess(Process):
             args = self.shared_list[idx]
             try:
                 future = pool.submit(_read_filter_save, args)
-                future.result(timeout=100)
-            except BrokenProcessPool:
+                future.result(timeout=self.timeout)
+            except BrokenProcessPool or TimeoutError:
                 output_file: Path = args["output_file"]
                 print(f"\033[93m"
                       f"\nwarning: timeout reached for processing input file:\n\t{args['input_file']}\n\t"
@@ -848,9 +849,9 @@ class MultiProcess(Process):
                 print(
                     f"\033[93m"
                     f"\nwarning: process failed for {args}."
-                    f"exception instance: {type(inst)}"
-                    f"exception arguments: {inst.args}"
-                    f"exception: {inst}"
+                    f"\nexception instance: {type(inst)}"
+                    f"\nexception arguments: {inst.args}"
+                    f"\nexception: {inst}"
                     f"\033[0m")
             self.queue.put(running)
         pool.shutdown()
@@ -878,7 +879,7 @@ def batch_filter(
         crossover: int = 10,
         threshold: int = -1,
         compression: Tuple[str, int] = ('ZLIB', 1),
-        flat=None,
+        flat: ndarray = None,
         dark: int = 0,
         z_step: float = None,
         rotate: bool = False,
@@ -895,7 +896,8 @@ def batch_filter(
         tile_size: Tuple[int, int] = None,
         down_sample: Tuple[int, int] = None,  # (2, 2)
         new_size: Tuple[int, int] = None,
-        print_input_file_names: bool = True
+        print_input_file_names: bool = False,
+        timeout: float = None
 ):
     """Applies `streak_filter` to all images in `input_path` and write the results to `output_path`.
 
@@ -956,6 +958,9 @@ def batch_filter(
         resize the image after down-sampling
     print_input_file_names : bool
         to find the corrupted files causing crash print the file names
+    timeout: float | None
+        if file processing took more than timeout seconds, terminate the process.
+        It is used whenever some tiles could be corrupt and in raw format and processing halts without raising an error.
     """
     input_path = Path(input_path)
     assert input_path.is_dir()
@@ -1038,7 +1043,7 @@ def batch_filter(
     progress_bar = tqdm(total=num_images, ascii=True, smoothing=0.05, mininterval=1.0, unit="img", desc="PyStripe")
     for worker in range(workers-1):
         MultiProcess(queue, args_list, range(worker * chunks, (worker+1) * chunks)).start()
-    MultiProcess(queue, args_list, range(num_images - num_images % (workers - 1), num_images)).start()
+    MultiProcess(queue, args_list, range(num_images - num_images % (workers - 1), num_images), timeout).start()
     running_processes = workers
     while running_processes > 0:
         try:

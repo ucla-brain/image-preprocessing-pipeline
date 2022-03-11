@@ -376,7 +376,8 @@ def process_channel(
             down_sample=down_sampling_factor,
             tile_size=tile_size,
             new_size=new_tile_size,
-            print_input_file_names=print_input_file_names
+            print_input_file_names=print_input_file_names,
+            timeout=100.0
         )
 
     # stitching: align the tiles GPU accelerated & parallel ------------------------------------------------------------
@@ -926,6 +927,7 @@ if __name__ == '__main__':
         os.environ["PATH"] = f"{os.environ['PATH']};{TeraStitcherPath.as_posix()}"
         os.environ["PATH"] = f"{os.environ['PATH']};{PyScriptPath.as_posix()}"
         terastitcher = "terastitcher.exe"
+        mergedisplacements = "mergedisplacements.exe"
         teraconverter = "teraconverter.exe"
     elif sys.platform == 'linux':
         if 'microsoft' in uname().release.lower():
@@ -939,6 +941,7 @@ if __name__ == '__main__':
         os.environ["PATH"] = f"{os.environ['PATH']}:{TeraStitcherPath.as_posix()}"
         os.environ["PATH"] = f"{os.environ['PATH']}:{PyScriptPath.as_posix()}"
         terastitcher = "terastitcher"
+        mergedisplacements = "mergedisplacements"
         teraconverter = "teraconverter"
         os.environ["TERM"] = "xterm"
         os.environ["USECUDA_X_NCC"] = "1"  # set to 0 to stop GPU acceleration
@@ -965,6 +968,11 @@ if __name__ == '__main__':
     terastitcher = TeraStitcherPath / terastitcher
     if not terastitcher.exists():
         log.error("Error: TeraStitcher not found")
+        raise RuntimeError
+
+    mergedisplacements = TeraStitcherPath / mergedisplacements  # parastitcher needs this program
+    if not mergedisplacements.exists():
+        log.error("Error: mergedisplacements not found")
         raise RuntimeError
 
     teraconverter = TeraStitcherPath / teraconverter
