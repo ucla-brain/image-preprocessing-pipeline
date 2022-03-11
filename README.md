@@ -112,7 +112,7 @@ We patched terastitcher and teraconverter so that they can read data from mounte
 12. 16-bit to 8-bit conversion.
 13. Generate training data for flat non-flat images.
 14. Use machine learning to find flat images with 98.5% accuracy.
-15. Generate flat images for each channel computationally.
+15. Generate flat images for each channel.
 16. Deconvolution (still researching).
 17. Display progress bar.
 18. CLI interface.
