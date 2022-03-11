@@ -49,9 +49,9 @@ You may edit `process_images.py` file to enable or disable some functionalities 
 
    `VoxelSizeX_4x, VoxelSizeY_4x, VoxelSizeZ_4x = 1.835, 1.835, 4.0`
 
-   `VoxelSizeX_10x, VoxelSizeY_10x, VoxelSizeZ_10x = 0.661, 0.661, 2.0`
+   `VoxelSizeX_10x, VoxelSizeY_10x, VoxelSizeZ_10x = 0.6, 0.6, 0.6`
 
-   `VoxelSizeX_15x, VoxelSizeY_15x, VoxelSizeZ_15x = 0.422, 0.422, 2.0`
+   `VoxelSizeX_15x, VoxelSizeY_15x, VoxelSizeZ_15x = 0.422, 0.422, 1.0`
 
    Please change them as needed. Different microscopes have different naming for channels. The rgb color code will be used only if you choose to merge channel colors into RGB format. If you do that rgb colored 2D tiff series and the final imaris file will be generated. Voxel sizes have impact on down-sampling, stitching and imaris file.
 
