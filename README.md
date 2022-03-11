@@ -114,7 +114,7 @@ We patched terastitcher and teraconverter so that they can read data from mounte
 14. Use machine learning to find flat images with 98.5% accuracy.
 15. Generate flat images for each channel computationally.
 16. Deconvolution (still researching).
-17. Display Progress bar.
+17. Display progress bar.
 18. CLI interface.
 
 # Compiling terastitcher (optional)
