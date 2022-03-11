@@ -76,8 +76,8 @@ Repeat step 2-5 for each channel separately.
 ## DeStripe
 We modified original DeStripe code to add the following functionalities:
 * Inspect corrupted raw or tif files and replace them with a blank image (zeros).
-* Timeout function.
-* Down-sampling in XY.
+* Timeout function which prevents program halting encountering corrupt raw files.
+* Down-sampling in XY to produce isotropic images.
 * Improved parallel processing model to be faster and more scalable. For example, using more than 61 CPU processes in Windows is possible now.
 * Fixed a bug regarding dark leveling.
 * conversion of 16bit images to 8bit and right bit shifting.
