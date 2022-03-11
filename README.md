@@ -68,6 +68,7 @@ You may edit `process_images.py` file to enable or disable some functionalities 
 * Step 5: merge tiles to 2D tif series using TSV.
 * Step 6: convert 2D tif series to TeraFly format using paraconverter (optional).
 * Step 7: down-sample in xyz for the registration of brain to common brain coordinates (optional).
+
 Repeat step 2-5 for each channel separately.
 * Step 8: merge channels to multichannel RGB colored 2D tif series (optional).
 * Step 9: convert 2D tif series to imaris format using ImarisConvertiv.exe (optional).
