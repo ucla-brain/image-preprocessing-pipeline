@@ -81,7 +81,8 @@ We modified original DeStripe code to add the following functionalities:
 * Fixed a bug regarding dark leveling.
 * conversion of 16bit images to 8bit and right bit shifting.
 
-You need to use PyStripe section if you need: 
+You need to use PyStripe step if you need: 
+* Raw to tif conversion.
 * dark level subtraction that sets all values smaller than dark level threshold to zero to remove camera noise, clears background and allows more compressible images,
 * flat image application to correct camera artifacts,
 * lightsheet cleaning that clears the background and helps reduce final file sizes up 5-folds factor, 
@@ -116,6 +117,13 @@ We patched terastitcher and teraconverter so that they can read data from mounte
 16. Deconvolution (still researching).
 17. Display progress bar.
 18. CLI interface.
+19. Selecting colors for different channels.
+20. Resume support.
+
+# Data flow and parallel processing design
+![image](https://user-images.githubusercontent.com/18602635/157983557-9511a194-2cd6-4d54-8c50-f2956609ebe8.png)
+![image](https://user-images.githubusercontent.com/18602635/157983654-061ab655-8545-4857-9405-31e11e0b95f5.png)
+
 
 # Compiling terastitcher (optional)
 For CUDA 11.6 and newer GPUs, in addition to [original compilation documentation instructions](https://github.com/abria/TeraStitcher/wiki/Get-and-build-source-code) do the following:
