@@ -29,7 +29,6 @@ from multiprocessing import Process, Queue, Manager, cpu_count
 from queue import Empty
 from operator import iconcat
 from functools import reduce
-# from itertools import repeat
 
 
 warnings.filterwarnings("ignore")
@@ -144,7 +143,7 @@ def convert_to_8bit_fun(img: ndarray, bit_shift_to_right: int = 3):
         img = img.astype(uint16)
     # bit shift then change the type to avoid floating point operations
     # img >> 8 is equivalent to img / 256
-    if 0 < bit_shift_to_right < 9:
+    if 0 <= bit_shift_to_right < 9:
         img = (img >> bit_shift_to_right)
         img[img > 255] = 255
     elif bit_shift_to_right is None:
@@ -829,11 +828,12 @@ class MultiProcess(Process):
             try:
                 future = pool.submit(_read_filter_save, args)
                 future.result(timeout=self.timeout)
-            except BrokenProcessPool or TimeoutError:
+            except (BrokenProcessPool, TimeoutError) as inst:
                 output_file: Path = args["output_file"]
                 print(f"\033[93m"
                       f"\nwarning: timeout reached for processing input file:\n\t{args['input_file']}\n\t"
                       f"a dummy (zeros) image is saved as output instead:\n\t{output_file}"
+                      f"\nexception instance: {type(inst)}"
                       f"\033[0m")
                 if not output_file.exists():
                     imsave_tif(
