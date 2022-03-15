@@ -145,12 +145,12 @@ def convert_to_8bit_fun(img: ndarray, bit_shift_to_right: int = 3):
     # img >> 8 is equivalent to img / 256
     if 0 <= bit_shift_to_right < 9:
         img = (img >> bit_shift_to_right)
-        img[img > 255] = 255
     elif bit_shift_to_right is None:
         img = (img >> 8)
     else:
         print("right shift should be between 0 and 8")
         raise RuntimeError
+    img[img > 255] = 255
     return img.astype('uint8')
 
 
