@@ -904,7 +904,11 @@ def batch_filter(
     Parameters
     ----------
     input_path : Path
-        root directory to search for images to filter
+        root directory to search for images to filter.
+        Supported formats:
+            root path for a deep hierarchy of tif or raw 2D series
+            dcimg files (untested)
+            one raw, or tif file
     output_path : Path
         root directory for writing results
     files_list : List[Path]
