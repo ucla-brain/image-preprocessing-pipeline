@@ -34,7 +34,7 @@ VoxelSizeX_4x, VoxelSizeY_4x = 1.835, 1.835
 VoxelSizeX_10x, VoxelSizeY_10x = 0.661, 0.661  # new stage --> 0.6, 0.6
 VoxelSizeX_15x, VoxelSizeY_15x = 0.422, 0.422  # new stage --> 0.4, 0.4
 # pixel values smaller than the dark value are camera noise and will be set to 0 to increase compression and clarity
-DarkThreshold = 110
+DarkThreshold = {"Ex_488_Em_525": 110, "Ex_561_Em_600": 20, "Ex_642_Em_680": 20}
 
 
 def get_voxel_sizes():
@@ -315,7 +315,7 @@ def process_channel(
     if need_lightsheet_cleaning or need_destriping or need_flat_image_application or need_raw_to_tiff_conversion or \
             need_16bit_to_8bit_conversion or down_sampling_factor is not None or new_tile_size is not None:
         global DarkThreshold
-        dark = DarkThreshold
+        dark = DarkThreshold[channel]
         img_flat = None
         if need_flat_image_application:
             flat_img_created_already = source_path / f'{channel}_flat.tif'
@@ -377,7 +377,7 @@ def process_channel(
             tile_size=tile_size,
             new_size=new_tile_size,
             print_input_file_names=print_input_file_names,
-            timeout=100.0
+            timeout=200.0
         )
 
     # stitching: align the tiles GPU accelerated & parallel ------------------------------------------------------------
