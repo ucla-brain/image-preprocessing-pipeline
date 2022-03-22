@@ -15,34 +15,30 @@ def raw_imread(path, dtype=None, shape=None):
         shape: (height, width) of the image
     returns: a Numpy read-only array mapping the file as an image
     """
-    try:
-        if dtype is None or shape is None:
-            as_uint32 = memmap(
-                path,
-                dtype=">u4",
-                mode="r", shape=(2,))
-            width_be, height_be = as_uint32[:2]
-            del as_uint32
-            as_uint32 = memmap(
-                path,
-                dtype="<u4",
-                mode="r", shape=(2,))
-            width_le, height_le = as_uint32[:2]
-            del as_uint32
+    if dtype is None or shape is None:
+        as_uint32 = memmap(
+            path,
+            dtype=">u4",
+            mode="r", shape=(2,))
+        width_be, height_be = as_uint32[:2]
+        del as_uint32
+        as_uint32 = memmap(
+            path,
+            dtype="<u4",
+            mode="r", shape=(2,))
+        width_le, height_le = as_uint32[:2]
+        del as_uint32
 
-            # Heuristic, detect endian by assuming that the smaller width is the right one. Works for widths < 64K
-            if width_le < width_be:
-                width, height = width_le, height_le
-                dtype = "<u2"
-            else:
-                width, height = width_be, height_be
-                dtype = ">u2"
-            shape = (height, width)
+        # Heuristic, detect endian by assuming that the smaller width is the right one. Works for widths < 64K
+        if width_le < width_be:
+            width, height = width_le, height_le
+            dtype = "<u2"
+        else:
+            width, height = width_be, height_be
+            dtype = ">u2"
+        shape = (height, width)
 
-        return memmap(path, dtype=dtype, mode="r", offset=8, shape=shape)
-    except OSError or TypeError or PermissionError:
-        print(f"\nBad path: {path}, height = {shape[0]}, width = {shape[1]}")
-        return None
+    return memmap(path, dtype=dtype, mode="r", offset=8, shape=shape)
 
 
 def raw_imsave(path, img):

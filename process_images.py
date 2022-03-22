@@ -374,6 +374,7 @@ def process_channel(
             bit_shift_to_right=right_bit_shift,
             continue_process=continue_process_pystripe,
             down_sample=down_sampling_factor,
+            dtype="uint16",
             tile_size=tile_size,
             new_size=new_tile_size,
             print_input_file_names=print_input_file_names,

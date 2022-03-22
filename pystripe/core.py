@@ -67,7 +67,7 @@ def imread_tif_raw(path: Path, dtype: str = None, shape: Tuple[int, int] = None)
                 img = raw_imread(path, dtype=dtype, shape=shape)
             elif extension == '.tif' or extension == '.tiff':
                 img = imread(path)
-        except OSError or TypeError or PermissionError:
+        except (OSError or TypeError or PermissionError):
             sleep(0.1)
             continue
         break
@@ -199,7 +199,7 @@ def imsave_tif(path: Path, img: ndarray, compression: Tuple[str, int] = ('ZLIB',
             #     if saved_file_size != offset + byte_count:
             #         raise OSError
             return
-        except OSError or TypeError or PermissionError as inst:
+        except (OSError or TypeError or PermissionError) as inst:
             if attempt == num_retries:
                 # f"Data size={img.size * img.itemsize} should be equal to the saved file's byte_count={byte_count}?"
                 # f"\nThe file_size={path.stat().st_size} should be at least larger than tif header={offset} bytes\n"
@@ -819,11 +819,14 @@ class MultiProcess(Process):
         self.shared_list = shared_list
         self.indices = indices
         self.timeout = timeout
+        self.die = False
 
     def run(self):
         running = True
         pool = ProcessPoolExecutor(max_workers=1)
         for idx in self.indices:
+            if self.die:
+                break
             args = self.shared_list[idx]
             try:
                 future = pool.submit(_read_filter_save, args)
@@ -936,7 +939,7 @@ def batch_filter(
     z_step : int
         z-step in tenths of micron. only used for DCIMG files.
     rotate : bool
-        Flag for 90 degree rotation.
+        Flag for 90-degree rotation.
     lightsheet : bool
         Specific destriping for light sheet images. Default to False.
     artifact_length : int
@@ -957,7 +960,7 @@ def batch_filter(
     tile_size : tuple (int, int) or None
         optional. If given will reduce the raw to tif conversion time.
     down_sample : tuple (int, int) or None
-        Sets down sample factor. Down_sample (3, 2) means 3 pixels in y axis, and 2 pixels in x-axis merges into 1.
+        Sets down sample factor. Down_sample (3, 2) means 3 pixels in y-axis, and 2 pixels in x-axis merges into 1.
     new_size : tuple (y: int, x: int) or None
         resize the image after down-sampling
     print_input_file_names : bool
@@ -1045,9 +1048,12 @@ def batch_filter(
     workers, chunks = calculate_cores_and_chunk_size(num_images, workers, pool_can_handle_more_than_61_cores=True)
     print(f'{datetime.now()}: preprocessing {num_images} images using {workers} workers and {chunks} chunks ...')
     progress_bar = tqdm(total=num_images, ascii=True, smoothing=0.05, mininterval=1.0, unit="img", desc="PyStripe")
+    process_list: List[MultiProcess, ...] = []
     for worker in range(workers-1):
-        MultiProcess(queue, args_list, range(worker * chunks, (worker+1) * chunks)).start()
-    MultiProcess(queue, args_list, range(num_images - num_images % (workers - 1), num_images), timeout).start()
+        process_list += [MultiProcess(queue, args_list, range(worker * chunks, (worker+1) * chunks))]
+        process_list[-1].start()
+    process_list += [MultiProcess(queue, args_list, range(num_images - num_images % (workers-1), num_images), timeout)]
+    process_list[-1].start()
     running_processes = workers
     while running_processes > 0:
         try:
@@ -1058,6 +1064,10 @@ def batch_filter(
                 running_processes -= 1
         except Empty:
             sleep(1)
+        except KeyboardInterrupt:
+            print("Please be patient. Terminating processes with dignity! :)")
+            for process in process_list:
+                process.die = True
     progress_bar.close()
 
 
