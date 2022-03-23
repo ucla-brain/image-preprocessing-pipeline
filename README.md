@@ -129,7 +129,7 @@ We patched terastitcher and teraconverter so that they can read data from mounte
 # Practical stitching guide
 In this section, I explain the workflow in our lab.
 
-If your lightsheet microscope generates maximum intensity projection (MIP) images, we suggest you stitch those images, first. The stitched MIP image let you choose a correct dark levels and right bitshift values. For example, in the main folder of our images, we have a set of folders that end with `*_MIP`: `Ex_488_Em_525_MIP`, `Ex_561_Em_600_MIP`, and `Ex_642_Em_680_MIP`. 
+If your lightsheet microscope generates maximum intensity projection (MIP) images, we suggest you stitch those images, first. The stitched MIP image allows you to choose a correct dark levels and right bitshift values. For example, in the main folder of our images, we have a set of folders that end with `*_MIP`: `Ex_488_Em_525_MIP`, `Ex_561_Em_600_MIP`, and `Ex_642_Em_680_MIP`. 
 * Create a folder named `MIP` (or any other name you like), and move `*_MIP` folders to the `MIP` folder you just created. 
 * Remove the `_MIP` suffix from the folder names: `Ex_488_Em_525`, `Ex_561_Em_60`, and `Ex_642_Em_680`.
 * Stitch the `MIP` folder: for Linux, `python process_images.py /path/to/MIP` or for Windows `python process_images.py X:\path\to\MIP`.
@@ -142,7 +142,7 @@ If your lightsheet microscope generates maximum intensity projection (MIP) image
 * merge to RGB --> Yes
 * covert to Imaris --> Yes
 
-Wait for the program to finish stitching. In the `MIP_stitched` folder, you can find a `merged_channels_tif.ims` file. Open it in Imaris Viewer. Press `CTRL + D` to see `Display Adjustment` dialog. Press `advanced` button. Click on a channel, then try to find the largest `MIN` value and the smallest `MAX` value with which your image looks better and perfectly visible. For the `MAX` value try only these numbers: 256, 512, 1024, 2048, 4096, 8192, 16384, 32768 and 65536. Write the `MIN` and `MAX` values for each channel. The `MIN` value is a number that depends on microscope camera. We let you set the `MIN` values of each channel in `process_images.py` file. Open `process_images.py` file for editing and find the line says, `DarkThreshold = {"Ex_488_Em_525": 110, "Ex_561_Em_600": 20, "Ex_642_Em_680": 20}`. DarkThreshold variable is a python dictionary class. Set the min value in front of the channel name. For, our camera, 100 to 120 could be good value. However, sometimes the signal-to-noise ratio of the image is not good and smaller values might be used.
+Wait for the program to finish stitching. In the `MIP_stitched` folder, you can find a `merged_channels_tif.ims` file. Open it in Imaris Viewer. Press `CTRL + D` to see `Display Adjustment` dialog. Press `advanced` button. Click on a channel, then try to find the largest `MIN` value and the smallest `MAX` value with which your images look perfectly visible. For the `MAX` value try only these numbers: 256, 512, 1024, 2048, 4096, 8192, 16384, 32768 and 65536. Write the `MIN` and `MAX` values for each channel. The `MIN` value is a number that depends on microscope camera. You need to set the `MIN` values of each channel in `process_images.py` file. Open `process_images.py` file for editing and find the line says, `DarkThreshold = {"Ex_488_Em_525": 110, "Ex_561_Em_600": 20, "Ex_642_Em_680": 20}`. DarkThreshold variable is a python dictionary class. Set the min value in front of the channel name. For, our camera, 100 to 120 could be a good value. However, sometimes the signal-to-noise ratio of the image is not good and smaller values might be used.
 
 After setting DarkThreshold values, start stitching the main image. For example,
 * `python process_images.py /path/to/image`
@@ -154,13 +154,13 @@ After setting DarkThreshold values, start stitching the main image. For example,
 * `16-bit to 8-bit conversion` --> Yes. 8-bit images align better, use less memory during alignment stage of stitching (8-GB/thread compared with 16-GB/thread), and compression algorithms can compress them more efficiently.
 * `bit shift` --> Considering the `MAX` values of each channel (that we found by inspecting the MIP image in the previous step), choose the correct right bit-shift value.
 * Downsampling for isotropic voxel generation --> Yes. This downsampling happens only in xy-plane, and the goal is to increase x and y voxel sizes so that they match the z-step. Isotropic images are better for (manual or automated) neuronal reconstruction and estimation of dendritic diameter.
-* compress tif --> Yes or NO. If you have a slow cache drive, if you want to store processed tif files permanently, or you have a limited space, choose YES. Otherwise, choose NO to reduce CPU overhead. This applies only to PyStripe stage. 2D stitched tif series will be compressed no mater what you choose here.
+* compress tif --> Yes or NO. If you have a slow cache drive, if you want to permanently store processed tif files, or you have a limited disk space, choose YES. Otherwise, choose NO to reduce CPU overhead. This applies only to PyStripe stage. 2D stitched tif series will be compressed no mater what you choose here.
 
 By answering YES to any of the above questions, you enable PyStripe module. You need to enter destination path for processed tif files. This can be a fast cache/scratch drive. You may delete processed tif files after stitching was done.
 * `destination path for lightsheet cleaning tif down-sampling files` --> For example, `D:\`
-* `destination path for stitched files` --> You may just press enter this time since stitching happens from cache/scratch drive to the original location. You may also choose any other location. It is your choice.
+* `destination path for stitched files` --> You may just press enter this time since stitching happens from cache/scratch drive to the original location. You may also choose any other location.
 * `convert a channel to TeraFly format` --> Yes.
-* select a channel or multiple channels you wish to reconstruct in TeraFly.
+* select a channel or multiple channels you wish to visualize/reconstruct in Vaa3D/TeraFly.
 * merge channels to RGB color tiff --> If you say NO, a set of stitched 2D grayscale tif series will be generated for each channel. Each channel will be converted to Imaris format if you ask for Imaris conversion. If you say YES, stitched 2D grayscale tif series will be merged into stitched 2D RGB color tif series, and RGB tif will be converted to Imaris.
 * `Convert to Imaris` --> Yes.
 
