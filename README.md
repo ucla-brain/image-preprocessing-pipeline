@@ -157,7 +157,7 @@ After setting DarkThreshold values, start stitching the main image. For example,
 * compress tif --> Yes or No. If you have a slow cache drive, if you want to permanently store processed tif files, or you have a limited disk space, choose YES. Otherwise, choose NO to reduce CPU overhead. This applies only to PyStripe stage. 2D stitched tif series will be compressed no mater what you choose here.
 
 By answering YES to any of the above questions, you enable PyStripe module. You need to enter destination path for processed tif files. This can be a fast cache/scratch drive. You may delete processed tif files after stitching was done.
-* `destination path for lightsheet cleaning tif down-sampling files` --> For example, `D:\`
+* `destination path for lightsheet cleaning tif down-sampling files` --> For example, let us assume `D:\` is your cache/scratch drive.
 * `destination path for stitched files` --> You may just press enter this time since stitching happens from cache/scratch drive to the original location. You may also choose any other location.
 * `convert a channel to TeraFly format` --> Yes.
 * select a channel or multiple channels you wish to visualize/reconstruct in Vaa3D/TeraFly.
