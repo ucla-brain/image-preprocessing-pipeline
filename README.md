@@ -129,7 +129,7 @@ We patched terastitcher and teraconverter so that they can read data from mounte
 # Practical stitching guide
 In this section, I explain the workflow in our lab.
 
-If your lightsheet microscope generates maximum intensity projection (MIP) images, we suggest you stitch those images, first. The stitched MIP image allows you to choose a correct dark levels and right bitshift values. For example, in the main folder of our images, we have a set of folders that end with `*_MIP`: `Ex_488_Em_525_MIP`, `Ex_561_Em_600_MIP`, and `Ex_642_Em_680_MIP`. 
+If your lightsheet microscope generates maximum intensity projection (MIP) images, we suggest you stitch those images, first. The stitched MIP image allows you to choose correct dark levels and right bitshift values. For example, in the main folder of our images, we have a set of folders that end with `*_MIP`: `Ex_488_Em_525_MIP`, `Ex_561_Em_600_MIP`, and `Ex_642_Em_680_MIP`. 
 * Create a folder named `MIP` (or any other name you like), and move `*_MIP` folders to the `MIP` folder you just created. 
 * Remove the `_MIP` suffix from the folder names: `Ex_488_Em_525`, `Ex_561_Em_60`, and `Ex_642_Em_680`.
 * Stitch the `MIP` folder: for Linux, `python process_images.py /path/to/MIP` or for Windows `python process_images.py X:\path\to\MIP`.
