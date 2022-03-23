@@ -1017,7 +1017,7 @@ def batch_filter(
         'print_input_file_names': print_input_file_names
     }
 
-    print(f'{datetime.now()}: Looking for images in {input_path} ...')
+    print(f'{datetime.now()}: Scheduling jobs for images in \n\t{input_path}')
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
         if z_step is None:
