@@ -154,7 +154,7 @@ After setting DarkThreshold values, start stitching the main image. For example,
 * `16-bit to 8-bit conversion` --> Yes. 8-bit images align better, use less memory during alignment stage of stitching (8-GB/thread compared with 16-GB/thread), and compression algorithms can compress them more efficiently.
 * `bit shift` --> Considering the `MAX` values of each channel (that we found by inspecting the MIP image in the previous step), choose the correct right bit-shift value.
 * Downsampling for isotropic voxel generation --> Yes. This downsampling happens only in xy-plane, and the goal is to increase x and y voxel sizes so that they match the z-step. Isotropic images are better for (manual or automated) neuronal reconstruction and estimation of dendritic diameter.
-* compress tif --> Yes or NO. If you have a slow cache drive, if you want to permanently store processed tif files, or you have a limited disk space, choose YES. Otherwise, choose NO to reduce CPU overhead. This applies only to PyStripe stage. 2D stitched tif series will be compressed no mater what you choose here.
+* compress tif --> Yes or No. If you have a slow cache drive, if you want to permanently store processed tif files, or you have a limited disk space, choose YES. Otherwise, choose NO to reduce CPU overhead. This applies only to PyStripe stage. 2D stitched tif series will be compressed no mater what you choose here.
 
 By answering YES to any of the above questions, you enable PyStripe module. You need to enter destination path for processed tif files. This can be a fast cache/scratch drive. You may delete processed tif files after stitching was done.
 * `destination path for lightsheet cleaning tif down-sampling files` --> For example, `D:\`
