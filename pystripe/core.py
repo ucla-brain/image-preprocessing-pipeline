@@ -673,7 +673,7 @@ def read_filter_save(
             img = where(img > dark, img - dark, 0)  # Subtract the dark offset
         if down_sample is not None:
             img = block_reduce(img, block_size=down_sample, func=np_max)
-        if new_size is not None:
+        if new_size is not None and tile_size > new_size:
             img = resize(img, new_size, preserve_range=True, anti_aliasing=True)
         if rotate:
             img = rot90(img)
@@ -699,6 +699,9 @@ def read_filter_save(
                 crossover=crossover,
                 threshold=threshold
             )
+
+        if new_size is not None and tile_size < new_size:
+            img = resize(img, new_size, preserve_range=True, anti_aliasing=False)
 
         if convert_to_16bit and img.dtype != uint16:
             img = img.astype(uint16)
@@ -1026,7 +1029,7 @@ def batch_filter(
                 pool.map(
                     lambda args: process_tif_raw_imgs(*args),
                     [(file, input_path, output_path, arg_dict_template) for file in files],
-                    chunksize=len(files)//(workers-1)),
+                    chunksize=8192),  # len(files)//(workers-1)
                 total=len(files), ascii=True, smoothing=0.05, mininterval=1.0, unit="img", desc="tif|raw",
             ))
         else:

@@ -34,7 +34,7 @@ VoxelSizeX_4x, VoxelSizeY_4x = 1.835, 1.835
 VoxelSizeX_10x, VoxelSizeY_10x = 0.661, 0.661  # new stage --> 0.6, 0.6
 VoxelSizeX_15x, VoxelSizeY_15x = 0.422, 0.422  # new stage --> 0.4, 0.4
 # pixel values smaller than the dark value are camera noise and will be set to 0 to increase compression and clarity
-DarkThreshold = {"Ex_488_Em_525": 110, "Ex_561_Em_600": 20, "Ex_642_Em_680": 20}
+DarkThreshold = {"Ex_488_Em_525": 110, "Ex_561_Em_600": 110, "Ex_642_Em_680": 110}
 
 
 def get_voxel_sizes():
@@ -715,6 +715,15 @@ def main(source_path):
         # Down-sampling makes sense if x-axis and y-axis voxel sizes were smaller than z axis voxel size
         # Down-sampling is disabled.
         down_sampling_factor = None
+        need_up_sizing = ask_true_false_question(
+            "Do you need to need_upsize images for isotropic voxel generation before stitching?")
+        if need_up_sizing:
+            de_striped_posix += "_upsized"
+            what_for += "upsizing "
+            new_tile_size = (
+                int(round(tile_size[0] * voxel_size_y / voxel_size_z, 0)),
+                int(round(tile_size[1] * voxel_size_x / voxel_size_z, 0))
+            )
     else:
         need_down_sampling = ask_true_false_question(
             "Do you need to down-sample images for isotropic voxel generation before stitching?")
