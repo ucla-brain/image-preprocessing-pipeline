@@ -67,7 +67,7 @@ def imread_tif_raw(path: Path, dtype: str = None, shape: Tuple[int, int] = None)
                 img = raw_imread(path, dtype=dtype, shape=shape)
             elif extension == '.tif' or extension == '.tiff':
                 img = imread(path)
-        except (OSError or TypeError or PermissionError):
+        except (OSError, TypeError, PermissionError):
             sleep(0.1)
             continue
         break
@@ -199,7 +199,7 @@ def imsave_tif(path: Path, img: ndarray, compression: Tuple[str, int] = ('ZLIB',
             #     if saved_file_size != offset + byte_count:
             #         raise OSError
             return
-        except (OSError or TypeError or PermissionError) as inst:
+        except (OSError, TypeError, PermissionError) as inst:
             if attempt == num_retries:
                 # f"Data size={img.size * img.itemsize} should be equal to the saved file's byte_count={byte_count}?"
                 # f"\nThe file_size={path.stat().st_size} should be at least larger than tif header={offset} bytes\n"
@@ -851,6 +851,8 @@ class MultiProcess(Process):
                     )
                 pool.shutdown()
                 pool = ProcessPoolExecutor(max_workers=1)
+            except KeyboardInterrupt:
+                self.die = True
             except Exception as inst:
                 print(
                     f"\033[93m"
