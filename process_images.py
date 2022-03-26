@@ -1020,7 +1020,7 @@ if __name__ == '__main__':
             else:
                 log.error("Error: JAVA path not found")
                 raise RuntimeError
-            cuda_version = input("What is your cuda version (for example 11.6)?")
+            cuda_version = input("What is your cuda version (for example 11.6)?\n")
             if Path(f"/usr/local/cuda-{cuda_version}/").exists() and \
                     Path(f"/usr/local/cuda-{cuda_version}/bin").exists():
                 os.environ["CUDA_ROOT_DIR"] = f"/usr/local/cuda-{cuda_version}/"
