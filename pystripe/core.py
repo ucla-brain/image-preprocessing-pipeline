@@ -867,7 +867,8 @@ class MultiProcess(Process):
         self.queue.put(running)
 
 
-def calculate_cores_and_chunk_size(num_images: int, cores: int, pool_can_handle_more_than_61_cores: bool = True):
+def calculate_cores_and_chunk_size(num_images: int,
+                                   cores: int = cpu_count(), pool_can_handle_more_than_61_cores: bool = True):
     if platform == "win32" and cores >= 61 and not pool_can_handle_more_than_61_cores:
         cores = 61
     chunks = num_images // (cores - 1)
