@@ -97,7 +97,7 @@ def convert_to_2D_tif(
     num_images = len(arg_list)
     cores, chunks = calculate_cores_and_chunk_size(num_images, cores, pool_can_handle_more_than_61_cores=False)
     print(f"\tTSV is converting {num_images} z-planes using {cores} cores and {chunks} chunks")
-    # TODO: TSV: Support more than 61 cores on windows
+    # TODO: TSV: Support more than 61 cores on Windows
     with Pool(processes=cores) as pool:
         worker.fun = convert_one_plane
         list(tqdm(

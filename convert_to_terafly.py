@@ -28,7 +28,7 @@ if __name__ == '__main__':
     if sys.platform == "win32":
         # print("Windows is detected.")
         psutil.Process().nice(psutil.IDLE_PRIORITY_CLASS)
-        TeraStitcherPath = Path(r"./TeraStitcher/windows/avx512")
+        TeraStitcherPath = Path(r"TeraStitcher/Windows/avx512")
         os.environ["PATH"] = f"{os.environ['PATH']};{TeraStitcherPath.as_posix()}"
         os.environ["PATH"] = f"{os.environ['PATH']};{PyScriptsPath.as_posix()}"
         terastitcher = "terastitcher.exe"
