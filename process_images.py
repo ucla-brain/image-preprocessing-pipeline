@@ -947,7 +947,7 @@ if __name__ == '__main__':
             print("Linux is detected.")
             CacheDriveExample = "/mnt/scratch"
         psutil.Process().nice(value=19)
-        TeraStitcherPath = Path(r"./TeraStitcher/Linux")
+        TeraStitcherPath = Path(r"./TeraStitcher/Linux") / cpu_instruction
         os.environ["PATH"] = f"{os.environ['PATH']}:{TeraStitcherPath.as_posix()}"
         os.environ["PATH"] = f"{os.environ['PATH']}:{PyScriptPath.as_posix()}"
         terastitcher = "terastitcher"
