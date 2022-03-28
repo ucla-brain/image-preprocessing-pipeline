@@ -724,6 +724,7 @@ def main(source_path):
                 int(round(tile_size[0] * voxel_size_y / voxel_size_z, 0)),
                 int(round(tile_size[1] * voxel_size_x / voxel_size_z, 0))
             )
+            voxel_size_x = voxel_size_y = voxel_size_z
     else:
         need_down_sampling = ask_true_false_question(
             "Do you need to down-sample images for isotropic voxel generation before stitching?")
