@@ -2,16 +2,39 @@ import os
 import sys
 import psutil
 import subprocess
-from pystripe.core import batch_filter, convert_to_8bit_fun
+from pystripe.core import batch_filter, convert_to_8bit_fun, imsave_tif
 from multiprocessing import freeze_support
 from pathlib import Path
 from time import time
 from platform import uname
 import re
 import h5py
-from tifffile import imsave
 from tqdm import tqdm
-from numpy import where
+from numpy import where, ndarray
+
+
+def correct_path_for_cmd(filepath):
+    if sys.platform == "win32":
+        return f"\"{filepath}\""
+    else:
+        return str(filepath).replace(" ", r"\ ").replace("(", r"\(").replace(")", r"\)")
+
+
+def correct_path_for_wsl(filepath):
+    p = re.compile(r"/mnt/(.)/")
+    new_path = p.sub(r'\1:\\\\', str(filepath))
+    new_path = new_path.replace(" ", r"\ ").replace("(", r"\(").replace(")", r"\)").replace("/", "\\\\")
+    return new_path
+
+
+def process_image(idx: int, img: ndarray, dark: int = 0, bit_shift: int = 8):
+    if dark > 0:
+        img = where(img > dark, img - dark, 0)
+    imsave_tif(
+        tif_2d_folder / f"img_{idx:04}.tif",
+        convert_to_8bit_fun(img, bit_shift_to_right=bit_shift),
+        compression=("ZLIB", 0)
+    )
 
 
 if __name__ == '__main__':
@@ -57,35 +80,11 @@ if __name__ == '__main__':
         print("Error: ImarisConvertiv.exe not found")
         raise RuntimeError
 
-
-    def correct_path_for_cmd(filepath):
-        if sys.platform == "win32":
-            return f"\"{filepath}\""
-        else:
-            return str(filepath).replace(" ", r"\ ").replace("(", r"\(").replace(")", r"\)")
-
-
-    def correct_path_for_wsl(filepath):
-        p = re.compile(r"/mnt/(.)/")
-        new_path = p.sub(r'\1:\\\\', str(filepath))
-        new_path = new_path.replace(" ", r"\ ").replace("(", r"\(").replace(")", r"\)").replace("/", "\\\\")
-        return new_path
-
-
     if source.is_file() and source.suffix.lower() == ".ims":
         with h5py.File(source, "r") as file:
-            dark = 120
-            bit_shift = 0
             images = file[f"DataSet/ResolutionLevel 0/TimePoint 0/Channel {1}/Data"]
             list(tqdm(
-                map(lambda args:
-                    imsave(
-                        tif_2d_folder / f"img_{args[0]:04}.tif",
-                        convert_to_8bit_fun(
-                            where(args[1] > dark, args[1] - dark, 0),
-                            bit_shift_to_right=bit_shift)
-                    ),
-                    enumerate(images)),
+                map(lambda args: process_image(args[0], args[1], dark=0, bit_shift=3), enumerate(images)),
                 total=len(images), ascii=True, smoothing=0.05, mininterval=1.0, unit="img", desc="ims2tif"
             ))
     else:
@@ -119,7 +118,7 @@ if __name__ == '__main__':
         )
 
     command = [
-        f"mpiexec -np 4 python -m mpi4py {paraconverter}",
+        f"mpiexec -np 96 python -m mpi4py {paraconverter}",
         "--sfmt=\"TIFF (series, 2D)\"",
         "--dfmt=\"TIFF (tiled, 3D)\"",
         "--resolutions=\"012345\"",
