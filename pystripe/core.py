@@ -29,6 +29,7 @@ from multiprocessing import Process, Queue, Manager, cpu_count
 from queue import Empty
 from operator import iconcat
 from functools import reduce
+from supplements.cli_interface import PrintColors
 
 
 warnings.filterwarnings("ignore")
@@ -199,6 +200,9 @@ def imsave_tif(path: Path, img: ndarray, compression: Tuple[str, int] = ('ZLIB',
             #     if saved_file_size != offset + byte_count:
             #         raise OSError
             return
+        except (KeyboardInterrupt, SystemExit):
+            print(f"{PrintColors.WARNING}dying from imsave_tif{PrintColors.ENDC}")
+            imsave(path, img, compression=compression)
         except (OSError, TypeError, PermissionError) as inst:
             if attempt == num_retries:
                 # f"Data size={img.size * img.itemsize} should be equal to the saved file's byte_count={byte_count}?"
@@ -627,7 +631,7 @@ def read_filter_save(
         to find the corrupted files causing crash print the file names
     """
     try:
-        if continue_process and output_file.exists() and output_file.stat().st_size > 272:  # 272 is header offset size
+        if continue_process and output_file.exists() and output_file.stat().st_size > 1150:  # 272 is header offset size
             return
         if print_input_file_names:
             print(f"\n{input_file}")
@@ -709,7 +713,6 @@ def read_filter_save(
             img = convert_to_8bit_fun(img, bit_shift_to_right=bit_shift_to_right)
         elif img.dtype != d_type:
             img = img.astype(d_type)
-
         imsave_tif(
             output_file,
             img,
@@ -851,7 +854,7 @@ class MultiProcess(Process):
                     )
                 pool.shutdown()
                 pool = ProcessPoolExecutor(max_workers=1)
-            except KeyboardInterrupt:
+            except (KeyboardInterrupt, SystemExit):
                 self.die = True
             except Exception as inst:
                 print(
@@ -871,9 +874,13 @@ def calculate_cores_and_chunk_size(num_images: int,
                                    cores: int = cpu_count(), pool_can_handle_more_than_61_cores: bool = True):
     if platform == "win32" and cores >= 61 and not pool_can_handle_more_than_61_cores:
         cores = 61
-    chunks = num_images // (cores - 1)
-    chunks = 1 if chunks <= 0 else chunks
-    cores = 1 if cores <= 0 else cores
+    if cores > 1:
+        chunks = num_images // (cores - 1)
+        chunks = 1 if chunks <= 0 else chunks
+        cores = 1 if cores <= 0 else cores
+    else:
+        cores = 1
+        chunks = num_images
     return cores, chunks
 
 
@@ -1070,8 +1077,8 @@ def batch_filter(
                 running_processes -= 1
         except Empty:
             sleep(1)
-        except KeyboardInterrupt:
-            print("Please be patient. Terminating processes with dignity! :)")
+        except (KeyboardInterrupt, SystemExit):
+            print(f"\n{PrintColors.WARNING}Terminating processes with dignity!{PrintColors.ENDC}")
             for process in process_list:
                 process.die = True
     progress_bar.close()
