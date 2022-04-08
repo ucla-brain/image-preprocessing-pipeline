@@ -631,7 +631,9 @@ def read_filter_save(
         to find the corrupted files causing crash print the file names
     """
     try:
-        if continue_process and output_file.exists() and output_file.stat().st_size > 1150:  # 272 is header offset size
+        # 1150 is 1850x1850 zeros image saved as compressed tif
+        # 272 is header offset size
+        if continue_process and output_file.exists() and output_file.stat().st_size > 272:
             return
         if print_input_file_names:
             print(f"\n{input_file}")
