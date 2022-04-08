@@ -8,17 +8,20 @@ from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from pystripe.core import imread_tif_raw, calculate_cores_and_chunk_size, glob_re
 
 source = Path(
-    r"Y:\SmartSPIM_Data\2022_03_22\20220322_11_15_40_SA210705_01_L_Hem_LS_10x_500z_stitched\Ex_561_Em_600_tif")
+    r"D:\20220331_15_18_23_SW220203_04_LS_15x_1000z_lightsheet_cleaned_tif_bitshift.g4.r0_downsampled")
 
 
 def test_image(file: Path):
     try:
+        # if not isinstance(file, Path):
+        #     file = Path(file)
         if file.is_file() and file.suffix == ".tif":
             with ThreadPoolExecutor(1) as tp:
-                future = tp.submit(imread_tif_raw, (file, ))
+                future = tp.submit(imread_tif_raw, file)
                 future.result(timeout=200)
-    except Exception:
-        print(file)
+    except Exception as e:
+        print(f"{file} {type(e)} {e.args} {e}\n")
+        file.unlink()
 
 
 if __name__ == "__main__":
