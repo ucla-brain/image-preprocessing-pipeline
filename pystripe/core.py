@@ -4,33 +4,31 @@ import pywt
 import argparse
 import warnings
 from numpy import max as np_max
-from numpy import float as np_float
 from numpy import uint8, uint16, float32, float64, ndarray, generic, real, zeros, broadcast_to, sqrt, exp, log, \
-    cumsum, imag, arange, unique, interp, array, pad, clip, where, rot90
+    cumsum, imag, arange, unique, interp, pad, clip, where, rot90
 from scipy import fftpack, ndimage
 from tqdm import tqdm
-from sys import platform
 from time import sleep
 from datetime import datetime
 from argparse import RawDescriptionHelpFormatter
 from pathlib import Path
-from skimage.filters import threshold_otsu
+from skimage.filters import threshold_otsu, gaussian
 from skimage.measure import block_reduce
 from skimage.transform import resize
-from tifffile import imread, imsave
+from tifffile import imread, imwrite
 from tifffile.tifffile import TiffFileError
 from dcimg import DCIMGFile
 from typing import Tuple, Iterator, List
+from types import GeneratorType
 from pystripe.raw import raw_imread
 from .lightsheet_correct import correct_lightsheet
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, TimeoutError
+from concurrent.futures import ProcessPoolExecutor, TimeoutError
 from concurrent.futures.process import BrokenProcessPool
-from multiprocessing import Process, Queue, Manager, cpu_count
+from multiprocessing import Process, Queue, cpu_count, Pool
 from queue import Empty
 from operator import iconcat
 from functools import reduce
 from supplements.cli_interface import PrintColors
-
 
 warnings.filterwarnings("ignore")
 supported_extensions = ['.tif', '.tiff', '.raw', '.dcimg']
@@ -137,7 +135,12 @@ def check_dcimg_start(path):
     return int(os.path.basename(path).split('.')[0])
 
 
-def convert_to_8bit_fun(img: ndarray, bit_shift_to_right: int = 3):
+def convert_to_16bit_fun(img: ndarray):
+    clip(img, 0, 65535, out=img)  # Clip to 16-bit [0, 2 ** 16 - 1] unsigned range
+    return img.astype(uint16)
+
+
+def convert_to_8bit_fun(img: ndarray, bit_shift_to_right: int = 8):
     if img.dtype == 'uint8':
         return img
     else:
@@ -151,8 +154,8 @@ def convert_to_8bit_fun(img: ndarray, bit_shift_to_right: int = 3):
     else:
         print("right shift should be between 0 and 8")
         raise RuntimeError
-    img[img > 255] = 255
-    return img.astype('uint8')
+    clip(img, 0, 255, out=img)  # Clip to 8-bit [0, 2 ** 8 - 1] unsigned range
+    return img.astype(uint8)
 
 
 def imsave_tif(path: Path, img: ndarray, compression: Tuple[str, int] = ('ZLIB', 1)):
@@ -170,39 +173,14 @@ def imsave_tif(path: Path, img: ndarray, compression: Tuple[str, int] = ('ZLIB',
         The 1st argument is compression method the 2nd compression level for tiff files
         For example, ('ZSTD', 1) or ('ZLIB', 1).
     """
-
-    # for NAS
-    # offset = None
-    # byte_count = None
-    # need_compression = True
-    # if (isinstance(compression, tuple) and list(map(type, compression)) == [str, int]
-    #     and compression[1] == 0) or \
-    #         (isinstance(compression, int) and compression == 0) or \
-    #         compression is None:
-    #     need_compression = False
-
     for attempt in range(1, num_retries):
         try:
-            imsave(path, img, compression=compression)
-            # if need_compression:
-            #     imsave(path, img, compression=compression)  # return offset does not work when compression is enabled
-            # else:
-            #     offset, byte_count = imsave(path, img, returnoffset=True)
-            # check file is saved
-            # if not path.exists():
-            #     raise OSError
-            # if byte_count is not None and offset is not None:
-            #     if byte_count != img.size * img.itemsize:
-            #         raise OSError
-            #     saved_file_size = path.stat().st_size
-            #     if saved_file_size < offset:
-            #         raise OSError
-            #     if saved_file_size != offset + byte_count:
-            #         raise OSError
+            imwrite(path, img, compression=compression)
             return
         except (KeyboardInterrupt, SystemExit):
             print(f"{PrintColors.WARNING}dying from imsave_tif{PrintColors.ENDC}")
-            imsave(path, img, compression=compression)
+            imwrite(path, img, compression=compression)
+            # raise KeyboardInterrupt
         except (OSError, TypeError, PermissionError) as inst:
             if attempt == num_retries:
                 # f"Data size={img.size * img.itemsize} should be equal to the saved file's byte_count={byte_count}?"
@@ -471,7 +449,7 @@ def filter_streaks(img, sigma, level=0, wavelet='db3', crossover=10, threshold=-
     crossover : float
         intensity range to switch between filtered background and unfiltered foreground
     threshold : float
-        intensity value to separate background from foreground. Default is Otsu
+        intensity value to separate background from foreground. Default is O tsu
 
     Returns
     -------
@@ -479,14 +457,19 @@ def filter_streaks(img, sigma, level=0, wavelet='db3', crossover=10, threshold=-
         filtered image
 
     """
+    sigma1 = sigma[0]  # foreground
+    sigma2 = sigma[1]  # background
+    if sigma1 == sigma2 == 0:
+        return img
+    dtype = img.dtype
     smoothing = 1
-    if threshold == -1:
+    if threshold == -1 and sigma1 != sigma2:
         try:
             threshold = threshold_otsu(img)
         except ValueError:
             threshold = 1
 
-    img = array(img, dtype=np_float)
+    img = img.astype(float32)
     #
     # Need to pad image to multiple of 2
     #
@@ -495,8 +478,6 @@ def filter_streaks(img, sigma, level=0, wavelet='db3', crossover=10, threshold=-
         img = pad(img, ((0, pad_y), (0, pad_x)), mode="edge")
 
     # TODO: Clean up this logic with some dual-band CLI alternative
-    sigma1 = sigma[0]  # foreground
-    sigma2 = sigma[1]  # background
     if sigma1 > 0:
         if sigma2 > 0:
             if sigma1 == sigma2:  # Single band
@@ -531,8 +512,13 @@ def filter_streaks(img, sigma, level=0, wavelet='db3', crossover=10, threshold=-
     # clip(scaled_fimg, np.iinfo(img.dtype).min, np.iinfo(img.dtype).max, out=scaled_fimg)
 
     # Convert to 16 bit image
-    clip(f_img, 0, 2 ** 16 - 1, out=f_img)  # Clip to 16-bit unsigned range
-    f_img = f_img.astype('uint16')
+    if dtype == uint16 or dtype == "uint16":
+        f_img = convert_to_16bit_fun(f_img)
+    elif dtype == uint8 or dtype == "uint8":
+        f_img = convert_to_8bit_fun(f_img, bit_shift_to_right=0)
+    else:
+        print(f"unexpected image dtype {f_img.dtype}")
+        raise RuntimeError
 
     if pad_x > 0:
         f_img = f_img[:, :-pad_x]
@@ -559,6 +545,7 @@ def read_filter_save(
         background_window_size: int = 200,
         percentile: float = 0.25,
         lightsheet_vs_background: float = 2.0,
+        gaussian_filter_2d: bool = False,
         convert_to_16bit: bool = False,
         convert_to_8bit: bool = True,
         bit_shift_to_right: int = 8,
@@ -610,6 +597,8 @@ def read_filter_save(
         Take this percentile as background with lightsheet
     lightsheet_vs_background : float
         weighting factor to use background or lightsheet background
+    gaussian_filter_2d : bool
+        If true the image will be denoised using a 5x5 gaussian filer.
     convert_to_16bit : bool
         Flag for converting to 16-bit
     convert_to_8bit : bool
@@ -633,41 +622,42 @@ def read_filter_save(
     try:
         # 1150 is 1850x1850 zeros image saved as compressed tif
         # 272 is header offset size
-        if continue_process and output_file.exists() and output_file.stat().st_size > 272:
+        if continue_process and output_file.exists():  # and output_file.stat().st_size > 272
             return
         if print_input_file_names:
             print(f"\n{input_file}")
-        # if not input_file.exists() or not input_file.is_file():
-        #     raise FileNotFoundError  # A Variant of OS error
-        # if input_file.stat().st_size < 272:
-        #     print(f"warning: very small input file\n"
-        #           f"{input_file}\n"
-        #           f"size = {input_file.stat().st_size} bytes")
-        # print(str(input_file))
         if z_idx is None:
             img = imread_tif_raw(input_file, dtype=dtype, shape=tile_size)  # file must be TIFF or RAW
         else:
             img = imread_dcimg(input_file, z_idx)  # file must be DCIMG
-        if img is None:
+        if img is None and dtype is not None and tile_size is not None:
             print(
-                f"\033[93m"
-                f"\nimread function returned None. Possible damaged input file: "
+                f"{PrintColors.WARNING}"
+                f"\nimread function returned None. Possible damaged input file:"
                 f"\n\t{input_file}."
-                f"\n\toutput file set to an array of zeros instead:"
+                f"\n\toutput file is set to a dummy zeros tile of shape {tile_size} and type {dtype}, instead:"
                 f"\n\t{output_file}"
-                f"\n\tgenerating a dummy tile of shape {tile_size} and type {dtype}, instead."
-                f"\033[0m"
+                f"{PrintColors.ENDC}"
             )
             img = zeros(dtype=dtype, shape=tile_size)
-            # return
-        if img.shape != tile_size:
+        elif img is None:
             print(
-                f"\033[93m"
+                f"{PrintColors.WARNING}"
+                f"\nimread function returned None. Possible damaged input file:"
+                f"\n\t{input_file}."
+                f"\n\toutput file could be replaced with a dummy tile of zeros if shape and dtype were provided."
+                f"{PrintColors.ENDC}"
+            )
+            return
+
+        if tile_size is not None and img.shape != tile_size:
+            print(
+                f"{PrintColors.WARNING}"
                 f"\nwarning: input tile had a different shape. resizing:\n"
                 f"\tinput_file: {input_file} -> \n"
                 f"\t\tinput shape = {img.shape}\n"
                 f"\t\tnew shape   = {tile_size}\n"
-                f"\033[0m")
+                f"{PrintColors.ENDC}")
             img = resize(img, tile_size, preserve_range=True, anti_aliasing=True)
 
         d_type = img.dtype
@@ -677,10 +667,12 @@ def read_filter_save(
             img = apply_flat(img, flat)
         if dark is not None and dark > 0:
             img = where(img > dark, img - dark, 0)  # Subtract the dark offset
+        if gaussian_filter_2d:
+            img = gaussian(img, sigma=1, preserve_range=True, truncate=2)
         if down_sample is not None:
             img = block_reduce(img, block_size=down_sample, func=np_max)
         if new_size is not None and tile_size > new_size:
-            img = resize(img, new_size, preserve_range=True, anti_aliasing=True)
+            img = resize(img, new_size, preserve_range=True, anti_aliasing=True).astype(d_type)
         if rotate:
             img = rot90(img)
         if lightsheet:
@@ -696,7 +688,7 @@ def read_filter_save(
                     step=(2, 2, 1)),
                 lightsheet_vs_background=lightsheet_vs_background
             ).reshape(img.shape[0], img.shape[1])
-        else:
+        if not sigma[0] == sigma[1] == 0:
             img = filter_streaks(
                 img,
                 sigma,
@@ -710,24 +702,21 @@ def read_filter_save(
             img = resize(img, new_size, preserve_range=True, anti_aliasing=False)
 
         if convert_to_16bit and img.dtype != uint16:
+            clip(img, 0, 65535, out=img)  # Clip to 16-bit [0, 2 ** 16 - 1] unsigned range
             img = img.astype(uint16)
         elif convert_to_8bit and img.dtype != uint8:
             img = convert_to_8bit_fun(img, bit_shift_to_right=bit_shift_to_right)
         elif img.dtype != d_type:
             img = img.astype(d_type)
-        imsave_tif(
-            output_file,
-            img,
-            compression=compression
-        )
+        imsave_tif(output_file, img, compression=compression)
 
     except (OSError, IndexError, TypeError, RuntimeError, TiffFileError) as inst:
-        print(f"\033[93m"
+        print(f"{PrintColors.WARNING}warning: read_filter_save function failed:"
               f"\n{type(inst)}"  # the exception instance
               f"\n{inst.args}"  # arguments stored in .args
               f"\n{inst}"
               f"\nPossible damaged input file: {input_file}"
-              f"\033[0m")
+              f"{PrintColors.ENDC}")
 
 
 def _read_filter_save(input_dict):
@@ -778,6 +767,8 @@ def process_tif_raw_imgs(input_file: Path, input_path: Path, output_path: Path, 
     """
     output_file = output_path / input_file.relative_to(input_path)
     output_file = output_file.parent / (output_file.name[0:-len(output_file.suffix)] + '.tif')
+    if args_dict_template['continue_process'] and output_file.exists():
+        return None
     args_dict_template.update({
         'input_file': input_file,
         'output_file': output_file
@@ -810,80 +801,102 @@ def process_dc_imgs(input_file: Path, input_path: Path, output_path: Path, args_
     start = check_dcimg_start(str(input_file))
     sub_stack = []
     for i in range(shape[0]):
+        output_file = output_path / input_file.relative_to(input_path).parent / f'z{start + i * z_step:08.1f}.tif'
         args_dict_template.update({
             'input_file': input_file,
-            'output_file': output_path / input_file.relative_to(input_path).parent / f'z{start + i * z_step:08.1f}.tif',
+            'output_file': output_file,
             'z_idx': i
         })
-        sub_stack += [args_dict_template.copy()]
+        if args_dict_template['continue_process'] and output_file.exists():
+            sub_stack += [None]
+        else:
+            sub_stack += [args_dict_template.copy()]
     return sub_stack
 
 
 class MultiProcess(Process):
-    def __init__(self, queue: Queue, shared_list: List[dict], indices: Iterator[int], timeout: float = None):
+    def __init__(self, progress_queue: Queue, args_queue: Queue, timeout: float = None):
         Process.__init__(self)
         self.daemon = False
-        self.queue = queue
-        self.shared_list = shared_list
-        self.indices = indices
+        self.progress_queue = progress_queue
+        self.args_queue = args_queue
         self.timeout = timeout
         self.die = False
 
     def run(self):
         running = True
         pool = ProcessPoolExecutor(max_workers=1)
-        for idx in self.indices:
+        while not self.args_queue.empty():
             if self.die:
                 break
-            args = self.shared_list[idx]
             try:
-                future = pool.submit(_read_filter_save, args)
-                future.result(timeout=self.timeout)
-            except (BrokenProcessPool, TimeoutError) as inst:
-                output_file: Path = args["output_file"]
-                print(f"\033[93m"
-                      f"\nwarning: timeout reached for processing input file:\n\t{args['input_file']}\n\t"
-                      f"a dummy (zeros) image is saved as output instead:\n\t{output_file}"
-                      f"\nexception instance: {type(inst)}"
-                      f"\033[0m")
-                if not output_file.exists():
-                    imsave_tif(
-                        output_file,
-                        zeros(
-                            shape=args["new_size"] if args["new_size"] else args["tile_size"],
-                            dtype=uint8 if args["convert_to_8bit"] else uint16
+                args = self.args_queue.get(block=True, timeout=10)
+                try:
+                    future = pool.submit(_read_filter_save, args)
+                    future.result(timeout=self.timeout)
+                except (BrokenProcessPool, TimeoutError) as inst:
+                    output_file: Path = args["output_file"]
+                    print(f"{PrintColors.WARNING}"
+                          f"\nwarning: timeout reached for processing input file:\n\t{args['input_file']}\n\t"
+                          f"a dummy (zeros) image is saved as output instead:\n\t{output_file}"
+                          f"\nexception instance: {type(inst)}"
+                          f"{PrintColors.ENDC}")
+                    if not output_file.exists():
+                        imsave_tif(
+                            output_file,
+                            zeros(
+                                shape=args["new_size"] if args["new_size"] else args["tile_size"],
+                                dtype=uint8 if args["convert_to_8bit"] else uint16
+                            )
                         )
-                    )
-                pool.shutdown()
-                pool = ProcessPoolExecutor(max_workers=1)
-            except (KeyboardInterrupt, SystemExit):
+                    pool.shutdown()
+                    pool = ProcessPoolExecutor(max_workers=1)
+                except (KeyboardInterrupt, SystemExit):
+                    self.die = True
+                except Exception as inst:
+                    print(
+                        f"{PrintColors.WARNING}"
+                        f"\nwarning: process unexpectedly failed for {args}."
+                        f"\nexception instance: {type(inst)}"
+                        f"\nexception arguments: {inst.args}"
+                        f"\nexception: {inst}"
+                        f"{PrintColors.ENDC}")
+                self.progress_queue.put(running)
+            except Empty:
                 self.die = True
-            except Exception as inst:
-                print(
-                    f"\033[93m"
-                    f"\nwarning: process failed for {args}."
-                    f"\nexception instance: {type(inst)}"
-                    f"\nexception arguments: {inst.args}"
-                    f"\nexception: {inst}"
-                    f"\033[0m")
-            self.queue.put(running)
         pool.shutdown()
         running = False
-        self.queue.put(running)
+        self.progress_queue.put(running)
 
 
-def calculate_cores_and_chunk_size(num_images: int,
-                                   cores: int = cpu_count(), pool_can_handle_more_than_61_cores: bool = True):
-    if platform == "win32" and cores >= 61 and not pool_can_handle_more_than_61_cores:
-        cores = 61
-    if cores > 1:
-        chunks = num_images // (cores - 1)
-        chunks = 1 if chunks <= 0 else chunks
-        cores = 1 if cores <= 0 else cores
-    else:
-        cores = 1
-        chunks = num_images
-    return cores, chunks
+def progress_manager(process_list: List[Process], progress_queue: Queue, workers: int, total: int, desc="PyStripe"):
+    return_code = 0
+    print(f'{datetime.now()}: preprocessing {total} images using {workers} workers.')
+    progress_bar = tqdm(total=total, ascii=True, smoothing=0.05, mininterval=1.0, unit="img", desc=desc)
+
+    def kill_processes(list_of_processes):
+        print(f"\n{PrintColors.WARNING}Terminating processes with dignity!{PrintColors.ENDC}")
+        for process in list_of_processes:
+            process.die = True
+        return 1
+
+    while workers > 0:
+        try:
+            still_running = progress_queue.get(block=False)
+            if still_running:
+                progress_bar.update(1)
+            else:
+                workers -= 1
+        except Empty:
+            try:
+                sleep(1)
+            except (KeyboardInterrupt, SystemExit):
+                return_code = kill_processes(process_list)
+        except (KeyboardInterrupt, SystemExit):
+            return_code = kill_processes(process_list)
+    progress_bar.close()
+    progress_queue.close()
+    return return_code
 
 
 def batch_filter(
@@ -906,6 +919,7 @@ def batch_filter(
         background_window_size: int = 200,
         percentile: float = .25,
         lightsheet_vs_background: float = 2.0,
+        gaussian_filter_2d: bool = False,
         convert_to_16bit: bool = False,
         convert_to_8bit: bool = False,
         bit_shift_to_right: int = 8,
@@ -961,6 +975,8 @@ def batch_filter(
     background_window_size : int
     percentile : float
     lightsheet_vs_background : float
+    gaussian_filter_2d : bool
+        If true the image will be denoised using a 5x5 gaussian filer.
     convert_to_16bit : bool
         Flag for converting to 16-bit
     convert_to_8bit : bool
@@ -987,13 +1003,13 @@ def batch_filter(
     input_path = Path(input_path)
     assert input_path.is_dir()
     if convert_to_16bit is True and convert_to_8bit is True:
-        print('Select 8 bit or 16 bit output format.')
+        print('Select 8-bit or 16-bit output format.')
         raise RuntimeError
     output_path = Path(output_path)
     output_path.mkdir(parents=True, exist_ok=True)
     if sigma is None:
         sigma = [0, 0]
-    if workers == 0:
+    if workers <= 0:
         workers = cpu_count()
     if isinstance(flat, (ndarray, generic)):
         flat = normalize_flat(flat)
@@ -1021,6 +1037,7 @@ def batch_filter(
         'background_window_size': background_window_size,
         'percentile': percentile,
         'lightsheet_vs_background': lightsheet_vs_background,
+        'gaussian_filter_2d': gaussian_filter_2d,
         'convert_to_16bit': convert_to_16bit,
         'convert_to_8bit': convert_to_8bit,
         'bit_shift_to_right': bit_shift_to_right,
@@ -1034,56 +1051,41 @@ def batch_filter(
 
     print(f'{datetime.now()}: Scheduling jobs for images in \n\t{input_path}')
 
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        if z_step is None:
-            files = list(glob_re(r"\.(?:tiff?|raw)$", input_path)) if files_list is None else files_list
-            args_list = list(tqdm(
-                pool.map(
-                    lambda args: process_tif_raw_imgs(*args),
-                    [(file, input_path, output_path, arg_dict_template) for file in files],
-                    chunksize=8192),  # len(files)//(workers-1)
-                total=len(files), ascii=True, smoothing=0.05, mininterval=1.0, unit="img", desc="tif|raw",
-            ))
-        else:
-            files = list(glob_re(r"\.(?:dcimg)$", input_path)) if files_list is None else files_list
-            args_list = tqdm(
-                pool.map(
-                    lambda args: process_dc_imgs(*args),
-                    [(file, input_path, output_path, arg_dict_template, z_step) for file in files],
-                    chunksize=8192),
-                total=len(files), ascii=True, smoothing=0.05, mininterval=1.0, unit="img", desc="dcimg",
-            )
-            args_list = reduce(iconcat, args_list, [])  # unravel the list of list the fastest way possible
-        del files, files_list
+    if z_step is None:
+        files = glob_re(r"\.(?:tiff?|raw)$", input_path) if files_list is None else files_list
+        args_list = list(tqdm(
+            map(lambda file: process_tif_raw_imgs(file, input_path, output_path, arg_dict_template), files),
+            total=None if isinstance(files, GeneratorType) else len(files),
+            ascii=True, smoothing=0.05, mininterval=1.0, unit=" tif|raw images", desc="found",
+        ))
+    else:
+        files = glob_re(r"\.(?:dcimg)$", input_path) if files_list is None else files_list
+        args_list = tqdm(
+            map(lambda file: process_dc_imgs(file, input_path, output_path, arg_dict_template, z_step), files),
+            total=None if isinstance(files, GeneratorType) else len(files),
+            ascii=True, smoothing=0.05, mininterval=1.0, unit=" dcimg images", desc="found",
+        )
+        args_list = reduce(iconcat, args_list, [])  # unravel the list of list the fastest way possible
+    del files, files_list
 
-    manager = Manager()
-    args_list = manager.list(args_list)
     num_images = len(args_list)
-    queue = Queue()
-    workers, chunks = calculate_cores_and_chunk_size(num_images, workers, pool_can_handle_more_than_61_cores=True)
-    print(f'{datetime.now()}: preprocessing {num_images} images using {workers} workers and {chunks} chunks ...')
-    progress_bar = tqdm(total=num_images, ascii=True, smoothing=0.05, mininterval=1.0, unit="img", desc="PyStripe")
+    args_queue = Queue(maxsize=num_images)
+    for arg in args_list:
+        if arg is not None:
+            args_queue.put(arg)
+    del args_list
+
+    workers = min(workers, args_queue.qsize())
+    progress_queue = Queue()
     process_list: List[MultiProcess, ...] = []
-    for worker in range(workers-1):
-        process_list += [MultiProcess(queue, args_list, range(worker * chunks, (worker+1) * chunks))]
+    for worker in range(workers):
+        process_list += [MultiProcess(progress_queue, args_queue, timeout)]
         process_list[-1].start()
-    process_list += [MultiProcess(queue, args_list, range(num_images - num_images % (workers-1), num_images), timeout)]
-    process_list[-1].start()
-    running_processes = workers
-    while running_processes > 0:
-        try:
-            still_running = queue.get()
-            if still_running:
-                progress_bar.update(1)
-            else:
-                running_processes -= 1
-        except Empty:
-            sleep(1)
-        except (KeyboardInterrupt, SystemExit):
-            print(f"\n{PrintColors.WARNING}Terminating processes with dignity!{PrintColors.ENDC}")
-            for process in process_list:
-                process.die = True
-    progress_bar.close()
+
+    return_code = progress_manager(process_list, progress_queue, workers, args_queue.qsize())
+    args_queue.close()
+    progress_queue.close()
+    return return_code
 
 
 def normalize_flat(flat):

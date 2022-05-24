@@ -5,10 +5,11 @@ Read tif files and if the file was damaged print its name.
 from pathlib import Path
 from multiprocessing import freeze_support
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
-from pystripe.core import imread_tif_raw, calculate_cores_and_chunk_size, glob_re
+from pystripe.core import imread_tif_raw, glob_re
+from tsv.convert import calculate_cores_and_chunk_size
 
 source = Path(
-    r"D:\20220331_15_18_23_SW220203_04_LS_15x_1000z_lightsheet_cleaned_tif_bitshift.g4.r0_downsampled")
+    r"X:\SmartSPIM_Data\2022_05_12\20220512_16_48_06_SW220303_04_15x_LS_1000z\MIP")
 
 
 def test_image(file: Path):
@@ -21,13 +22,13 @@ def test_image(file: Path):
                 future.result(timeout=200)
     except Exception as e:
         print(f"{file} {type(e)} {e.args} {e}\n")
-        file.unlink()
+        # file.unlink()
 
 
 if __name__ == "__main__":
     freeze_support()
-    with ProcessPoolExecutor(61) as pool:
+    with ProcessPoolExecutor(60) as pool:
         files = list(glob_re(r"\.(?:tiff?|raw)$", source))
         cores, chunks = calculate_cores_and_chunk_size(
-            len(files), cores=61, pool_can_handle_more_than_61_cores=False)
+            len(files), cores=60, pool_can_handle_more_than_61_cores=False)
         list(pool.map(test_image, files, chunksize=chunks))

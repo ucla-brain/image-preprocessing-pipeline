@@ -15,7 +15,7 @@ def parse_args(args=sys.argv[1:]):
         "This program scans the source directory tree to come up with a "
         "complete list of X, Y and Z coordinates for the planes in the "
         "acquired stacks. It then fills in missing planes with tif files "
-        "componsed of all zeros.")
+        "composed of all zeros.")
     parser.add_argument("--src",
                         required=True,
                         help="Path to root of source tree, e.g. Ex_0_Em_0")

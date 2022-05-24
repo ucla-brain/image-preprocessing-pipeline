@@ -1,3 +1,5 @@
+from typing import Tuple
+
 def select_among_multiple_options(
         question: str,
         options: list,
@@ -28,6 +30,16 @@ def ask_true_false_question(message):
             '\t1 = Yes\n'
             '\t2 = No\n').strip()
     return answer == "1"
+
+
+def ask_for_a_positive_integer(message: str, range_val: Tuple[int, int]):
+    answer = ''
+    while answer not in range(range_val[0], range_val[1]):
+        try:
+            answer = int(input(f'\n\n{message}\n').strip())
+        except ValueError:
+            answer = ''
+    return answer
 
 
 class PrintColors:

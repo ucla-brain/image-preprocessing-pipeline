@@ -5,10 +5,11 @@ from os import path, environ, makedirs
 from argparse import ArgumentParser
 from itertools import product
 from multiprocessing import cpu_count, Pool
-from numpy import rot90, zeros, arange, minimum, dstack, uint16
+from numpy import rot90, zeros, arange, minimum, dstack, uint16, float32
 from tqdm import tqdm
-from tifffile import imsave
+from tifffile import imwrite
 from .volume import VExtent, TSVVolume
+from pystripe.core import filter_streaks, correct_lightsheet
 blockfs_present = False
 if platform != "win32":
     try:
@@ -25,12 +26,12 @@ environ['OMP_NUM_THREADS'] = '1'
 
 
 def calculate_cores_and_chunk_size(num_images: int, cores: int, pool_can_handle_more_than_61_cores: bool = False):
-    if platform == "win32" and cores >= 61 and not pool_can_handle_more_than_61_cores:
-        cores = 61
-    chunks = num_images // (cores - 1)
-    chunks = 1 if chunks <= 0 else chunks
-    cores = 1 if cores <= 0 else cores
-    return cores, chunks
+    if platform == "win32" and cores > 60 and not pool_can_handle_more_than_61_cores:
+        cores = 60
+    chunks = num_images
+    if cores > 1:
+        chunks = num_images // (cores - 1)
+    return max(1, cores), max(1, chunks)
 
 
 def worker(args):
@@ -133,9 +134,27 @@ def convert_one_plane(v, compression, decimation, dtype, output_pattern, volume,
     elif rotation == 270:
         plane = rot90(plane, 3)
 
+    # plane = filter_streaks(plane, (256, 256), wavelet='db10')
+    # artifact_length: int = 150
+    # background_window_size: int = 200
+    # percentile: float = 0.25
+    # lightsheet_vs_background: float = 2.0
+    # plane = correct_lightsheet(
+    #     plane.reshape(plane.shape[0], plane.shape[1], 1),
+    #     percentile=percentile,
+    #     lightsheet=dict(selem=(1, artifact_length, 1)),
+    #     background=dict(
+    #         selem=(background_window_size, background_window_size, 1),
+    #         spacing=(25, 25, 1),
+    #         interpolate=1,
+    #         dtype=float32,
+    #         step=(2, 2, 1)),
+    #     lightsheet_vs_background=lightsheet_vs_background
+    # ).reshape(plane.shape[0], plane.shape[1])
+
     for _ in range(10):
         try:
-            imsave(file, plane, compress=compression)
+            imwrite(file, plane, compression=compression)
             return
         except OSError:
             continue
@@ -160,7 +179,7 @@ if blockfs_present:
         dir_path = path.dirname(file)
         if not path.exists(dir_path):
             makedirs(dir_path, exist_ok=True)
-        imsave(file, plane, compress=compression)
+        imwrite(file, plane, compression=compression)
         with sm.txn() as memory:
             memory[z - z0] = plane
 
@@ -213,13 +232,16 @@ if blockfs_present:
             blockfs_stack.write_level_n(level, n_cores=io_cores)
 
 
-def make_diag_stack(xml_path, output_pattern,
-                    mipmap_level=None,
-                    volume=None,
-                    dtype=None,
-                    silent=False,
-                    compression=4,
-                    cores=cpu_count()):
+def make_diag_stack(
+        xml_path,
+        output_pattern,
+        mipmap_level=None,
+        volume=None,
+        dtype=None,
+        silent=False,
+        compression=4,
+        cores=cpu_count()
+):
     v = TSVVolume.load(xml_path)
     if volume is None:
         volume = v.volume
@@ -231,8 +253,7 @@ def make_diag_stack(xml_path, output_pattern,
         decimation = 1
     if cores == 1:
         for z in tqdm(range(volume.z0, volume.z1, decimation)):
-            make_diag_plane(v, compression, decimation, dtype, mipmap_level,
-                            output_pattern, volume, z)
+            make_diag_plane(v, compression, decimation, dtype, mipmap_level, output_pattern, volume, z)
         return
 
     futures = []
@@ -240,8 +261,7 @@ def make_diag_stack(xml_path, output_pattern,
         for z in range(volume.z0, volume.z1, decimation):
             futures.append(pool.apply_async(
                 make_diag_plane,
-                (v, compression, decimation, dtype, mipmap_level,
-                 output_pattern, volume, z)))
+                (v, compression, decimation, dtype, mipmap_level, output_pattern, volume, z)))
         for future in tqdm(futures):
             future.get()
 
@@ -258,7 +278,7 @@ def make_diag_plane(v, compression, decimation, dtype, mipmap_level, output_patt
         plane = dstack(
             list(plane.transpose(2, 0, 1)) +
             [zeros(plane.shape[:2], plane.dtype)] * (3 - plane.shape[2]))
-    imsave(output_pattern.format(z=z), plane, compress=compression, photometric="rgb")
+    imwrite(output_pattern.format(z=z), plane, compression=compression, photometric="rgb")
 
 
 def main(args=argv[1:]):

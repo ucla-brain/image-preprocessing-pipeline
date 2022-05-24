@@ -20,11 +20,12 @@ from datetime import datetime, timedelta
 from time import time, sleep
 from platform import uname
 from tsv.volume import TSVVolume
-from tsv.convert import convert_to_2D_tif
-from pystripe.core import batch_filter, imread_tif_raw, imsave_tif, calculate_cores_and_chunk_size
+from tsv.convert import convert_to_2D_tif, calculate_cores_and_chunk_size
+from pystripe.core import batch_filter, imread_tif_raw, imsave_tif
 from queue import Empty
 from multiprocessing import freeze_support, Pool, Queue, Process
 from supplements.cli_interface import select_among_multiple_options, ask_true_false_question, PrintColors
+from supplements.cli_interface import ask_for_a_positive_integer
 from typing import List, Tuple, Dict
 
 # experiment setup: user needs to set them right
@@ -33,8 +34,6 @@ AllChannels: List[Tuple[str, str]] = [("Ex_488_Em_525", "b"), ("Ex_561_Em_600", 
 VoxelSizeX_4x, VoxelSizeY_4x = 1.835, 1.835
 VoxelSizeX_10x, VoxelSizeY_10x = 0.661, 0.661  # new stage --> 0.6, 0.6
 VoxelSizeX_15x, VoxelSizeY_15x = 0.422, 0.422  # new stage --> 0.4, 0.4
-# pixel values smaller than the dark value are camera noise and will be set to 0 to increase compression and clarity
-DarkThreshold = {"Ex_488_Em_525": 110, "Ex_561_Em_600": 110, "Ex_642_Em_680": 110}
 
 
 def get_voxel_sizes():
@@ -90,17 +89,18 @@ def get_voxel_sizes():
 
 
 def get_destination_path(folder_name_prefix, what_for='tif', posix='', default_path=Path('')):
-    input_path = input(
-        f"\nEnter destination path for {what_for}.\n"
-        f"for example: {CacheDriveExample}\n"
-        f"If nothing entered, {default_path.absolute()} will be used.\n").strip()
-    drive_path = Path(input_path)
-    while not drive_path.exists():
+    path_exists = False
+    while not path_exists:
         input_path = input(
             f"\nEnter a valid destination path for {what_for}. "
             f"for example: {CacheDriveExample}\n"
             f"If nothing entered, {default_path.absolute()} will be used.\n").strip()
+        if platform == "win32" and not input_path.endswith("\\"):
+            input_path = input_path.strip() + "\\"
+        elif platform == "linux" and not input_path.endswith("/"):
+            input_path = input_path.strip() + "/"
         drive_path = Path(input_path)
+        path_exists = drive_path.exists()
     if input_path == '':
         destination_path = default_path
     else:
@@ -291,31 +291,32 @@ def process_channel(
         objective: str,
         queue: Queue,
         memory_ram: int,
+        dark: int = 0,
         files_list: List[Path] = None,
-        need_flat_image_application=False,
+        need_flat_image_application: bool = False,
         image_classes_training_data_path=None,
-        need_raw_to_tiff_conversion=False,
-        need_lightsheet_cleaning=True,
-        artifact_length=150,
-        need_destriping=False,
-        need_compression=False,
-        need_16bit_to_8bit_conversion=False,
+        need_raw_to_tiff_conversion: bool = False,
+        need_lightsheet_cleaning: bool = True,
+        artifact_length: int = 150,
+        need_destriping: bool = False,
+        need_gaussian_filter_2d: bool = True,
+        need_compression: bool = False,
+        need_16bit_to_8bit_conversion: bool = False,
         right_bit_shift=3,
-        continue_process_pystripe=True,
-        continue_process_terastitcher=True,
-        down_sampling_factor=None,
-        tile_size=None,
-        new_tile_size=None,
-        need_tera_fly_conversion=False,
-        print_input_file_names=False
+        continue_process_pystripe: bool = True,
+        continue_process_terastitcher: bool = True,
+        down_sampling_factor: Tuple[int, int] = None,
+        tile_size: Tuple[int, int] = None,
+        new_tile_size: Tuple[int, int] = None,
+        need_tera_fly_conversion: bool = False,
+        print_input_file_names: bool = False
 ):
     # preprocess each tile as needed using PyStripe --------------------------------------------------------------------
 
     assert source_path.joinpath(channel).exists()
     if need_lightsheet_cleaning or need_destriping or need_flat_image_application or need_raw_to_tiff_conversion or \
-            need_16bit_to_8bit_conversion or down_sampling_factor is not None or new_tile_size is not None:
-        global DarkThreshold
-        dark = DarkThreshold[channel]
+            need_16bit_to_8bit_conversion or need_compression or \
+            down_sampling_factor is not None or new_tile_size is not None:
         img_flat = None
         if need_flat_image_application:
             flat_img_created_already = source_path / f'{channel}_flat.tif'
@@ -368,6 +369,7 @@ def process_channel(
             # rotate=False,
             lightsheet=need_lightsheet_cleaning,
             artifact_length=artifact_length,
+            gaussian_filter_2d=need_gaussian_filter_2d,
             # percentile=0.25,
             # convert_to_16bit=False,  # defaults to False
             convert_to_8bit=need_16bit_to_8bit_conversion,
@@ -380,6 +382,8 @@ def process_channel(
             print_input_file_names=print_input_file_names,
             timeout=200.0
         )
+
+    inspect_for_missing_tiles_get_files_list(preprocessed_path / channel)
 
     # stitching: align the tiles GPU accelerated & parallel ------------------------------------------------------------
     if not stitched_path.joinpath(f"{channel}_xml_import_step_5.xml").exists() or not continue_process_terastitcher:
@@ -425,7 +429,7 @@ def process_channel(
                 command = [f"{terastitcher}"]
             command += [
                 f"-{step}",
-                "--threshold=0.9",
+                "--threshold=0.95",
                 f"--projin={proj_in}",
                 f"--projout={proj_out}",
             ]
@@ -455,7 +459,7 @@ def process_channel(
 
     # TeraFly ----------------------------------------------------------------------------------------------------------
 
-    # TODO: Paraconverter: Support converting with more than 4 cores
+    # TODO: Paraconverter: Support converting with more cores
     # TODO: Paraconverter: add a progress bar
     running_processes: int = 0
     if need_tera_fly_conversion:
@@ -470,7 +474,7 @@ def process_channel(
             "--dfmt=\"TIFF (tiled, 3D)\"",
             "--resolutions=\"012345\"",
             "--clist=0",
-            "--halve=max",
+            "--halve=mean",
             # "--noprogressbar",
             # "--sparse_data",
             # "--fixed_tiling",
@@ -678,9 +682,11 @@ def main(source_path):
                     print("You need classification data for flat image generation!")
                     raise RuntimeError
     need_raw_to_tiff_conversion = ask_true_false_question("Are images in raw format?")
-    if need_raw_to_tiff_conversion:
+    need_compression = ask_true_false_question("Do you need to compress temporary tif files?")
+    if need_raw_to_tiff_conversion or need_compression:
         de_striped_posix += "_tif"
         what_for += "tif "
+
     need_16bit_to_8bit_conversion = ask_true_false_question(
         "Do you need to convert 16-bit images to 8-bit before stitching to reduce final file size?")
     right_bit_shift: Dict[str, int] = {channel: 8 for channel in all_channels}
@@ -705,7 +711,6 @@ def main(source_path):
                 ],
                 return_index=True
             ))
-
         de_striped_posix += "_bitshift." + ".".join(
             [f"{channel_color_dict[channel]}{right_bit_shift[channel]}" for channel in all_channels])
     down_sampling_factor = (int(voxel_size_z // voxel_size_y), int(voxel_size_z // voxel_size_x))
@@ -738,13 +743,25 @@ def main(source_path):
                 int(round(tile_size[1] * voxel_size_x / voxel_size_z, 0))
             )
             voxel_size_x = voxel_size_y = voxel_size_z
-    need_compression = ask_true_false_question("Do you need to compress temporary tif files?")
     preprocessed_path = source_path.parent / (source_path.name + de_striped_posix)
     continue_process_pystripe = False
     stitched_path = source_path.parent / (source_path.name + "_stitched")
     print_input_file_names = False
+    dark_threshold: Dict[str, int] = {channel: 0 for channel in all_channels}
+    need_gaussian_filter_2d: bool = False
     if need_destriping or need_flat_image_application or need_raw_to_tiff_conversion or need_16bit_to_8bit_conversion \
-            or need_down_sampling:
+            or need_down_sampling or need_compression:
+
+        # pixel values smaller than the dark value (camera noise) will be set to 0 to increase compression and clarity
+        for channel in all_channels:
+            dark_threshold[channel] = ask_for_a_positive_integer(
+                f"Enter foreground vs background (dark) threshold for channel {channel}:", (0, 2**16-1))
+
+        need_gaussian_filter_2d = ask_true_false_question(
+            f"Do you need to apply a 5x5 Gaussian filter to remove camera artifacts and "
+            f"produce up to two times smaller files?"
+        )
+
         print_input_file_names = False  # ask_true_false_question(
         # "Do you need to print raw or tif file names to find corrupt files during preprocessing stage?")
         preprocessed_path, continue_process_pystripe = get_destination_path(
@@ -781,11 +798,11 @@ def main(source_path):
     # Start ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
     start_time = time()
-    memory_ram = virtual_memory().total // 1024 ** 3  # in GB
+    memory_ram = virtual_memory().free // 1024 ** 3  # in GB
     p_log(
         f"{datetime.now().isoformat(timespec='seconds', sep=' ')}: stitching started"
         f"\n\tRun on computer: {platform.node()}"
-        f"\n\tTotal physical memory: {memory_ram} GB"
+        f"\n\tFree physical memory: {memory_ram} GB"
         f"\n\tPhysical CPU core count: {cpu_physical_core_count}"
         f"\n\tLogical CPU core count: {cpu_logical_core_count}"
         f"\n\tSource folder path:\n\t\t{source_path}"
@@ -817,6 +834,7 @@ def main(source_path):
             objective,
             queue,
             memory_ram,
+            dark=dark_threshold[channel],
             files_list=file_list,
             need_tera_fly_conversion=channel in channels_need_tera_fly_conversion,
             need_flat_image_application=need_flat_image_application,
@@ -825,6 +843,7 @@ def main(source_path):
             need_lightsheet_cleaning=channel in channels_need_lightsheet_cleaning,
             artifact_length=150,
             need_destriping=need_destriping,
+            need_gaussian_filter_2d=need_gaussian_filter_2d,
             need_compression=need_compression,
             need_16bit_to_8bit_conversion=need_16bit_to_8bit_conversion,
             right_bit_shift=right_bit_shift[channel],

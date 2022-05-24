@@ -5,6 +5,7 @@
 
 import numpy as np
 
+
 def raw_imread(path):
     """Read a .raw file
 
@@ -40,6 +41,7 @@ def raw_imread(path):
                      offset=8,
                      shape=(height, width))
 
+
 def raw_imsave(path, img):
     """Write a .raw file
 
@@ -55,9 +57,9 @@ def raw_imsave(path, img):
     as_uint32[1] = img.shape[0]
     del as_uint32
     as_uint16 = np.memmap(path,
-                     dtype=np.uint16,
-                     mode="r+",
-                     offset=8,
-                     shape=img.shape)
+                          dtype=np.uint16,
+                          mode="r+",
+                          offset=8,
+                          shape=img.shape)
     as_uint16[:] = img
     del as_uint16

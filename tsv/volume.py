@@ -339,7 +339,17 @@ class TSVStack(TSVStackBase):
                         continue
                 my_paths.append((ordering, os.path.join(directory, filename)))
             my_paths = [_[1] for _ in sorted(my_paths)]
-            self.__paths = [my_paths[_] for _ in self.__idxs_to_keep]
+            self.__paths = []
+            for idx in self.__idxs_to_keep:
+                try:
+                    self.__paths += [my_paths[idx]]
+                except IndexError:
+                    print(f"missing tif files in:\n\t{directory}")
+                    for i in range(self.__idxs_to_keep[-1]):
+                        file = os.path.join(directory, f"{i:05}0.tif")
+                        if not os.path.exists(file):
+                            print(file)
+                    raise RuntimeError
 
         return self.__paths
 
