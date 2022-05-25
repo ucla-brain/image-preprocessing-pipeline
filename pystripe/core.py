@@ -24,7 +24,7 @@ from pystripe.raw import raw_imread
 from .lightsheet_correct import correct_lightsheet
 from concurrent.futures import ProcessPoolExecutor, TimeoutError
 from concurrent.futures.process import BrokenProcessPool
-from multiprocessing import Process, Queue, cpu_count, Pool
+from multiprocessing import Process, Queue, cpu_count
 from queue import Empty
 from operator import iconcat
 from functools import reduce

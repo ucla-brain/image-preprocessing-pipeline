@@ -9,7 +9,7 @@ from pystripe.core import imread_tif_raw, glob_re
 from tsv.convert import calculate_cores_and_chunk_size
 
 source = Path(
-    r"X:\SmartSPIM_Data\2022_05_12\20220512_16_48_06_SW220303_04_15x_LS_1000z\MIP")
+    r"Y:\3D_stitched_LS\20220512_16_48_06_SW220303_04_15x_LS_1000z_stitched\Ex_488_Em_525_tif")
 
 
 def test_image(file: Path):

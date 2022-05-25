@@ -197,7 +197,7 @@ def p_log(txt: str):
     for _ in range(10):
         try:
             log.info(txt)
-        except OSError or PermissionError:
+        except (OSError, PermissionError):
             sleep(0.1)
             continue
         break
