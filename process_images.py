@@ -632,8 +632,13 @@ def main(source_path):
     # Ask questions ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
     objective, voxel_size_x, voxel_size_y, voxel_size_z, tile_size = get_voxel_sizes()
     global AllChannels
-    all_channels = [channel for channel, color in AllChannels if source_path.joinpath(channel).exists()]
-    channel_color_dict = {channel: color for channel, color in AllChannels}
+    stitch_mip = ask_true_false_question("Do you need to stitch the MIP image first?")
+    if stitch_mip:
+        all_channels = [channel+"_MIP" for channel, color in AllChannels if source_path.joinpath(channel).exists()]
+        channel_color_dict = {channel+"_MIP": color for channel, color in AllChannels}
+    else:
+        all_channels = [channel for channel, color in AllChannels if source_path.joinpath(channel).exists()]
+        channel_color_dict = {channel: color for channel, color in AllChannels}
     de_striped_posix, what_for = "", ""
     image_classes_training_data_path = source_path / FlatNonFlatTrainingData
     need_lightsheet_cleaning = ask_true_false_question("Do you need to apply lightsheet cleaning algorithm?")
