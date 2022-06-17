@@ -17,6 +17,7 @@ from pathlib import Path
 from supplements.cli_interface import PrintColors
 from pystripe.core import imread_tif_raw, convert_to_8bit_fun, imsave_tif, progress_manager
 from process_images import correct_path_for_cmd, correct_path_for_wsl
+from argparse import RawDescriptionHelpFormatter, ArgumentParser, Namespace
 
 os.environ['MKL_NUM_THREADS'] = '1'
 os.environ['NUMEXPR_NUM_THREADS'] = '1'
@@ -224,14 +225,17 @@ def process_img(image: ndarray, dark: int = 120, bit_shift: int = 0):
     return image
 
 
-def main(source: str, tif_2d_folder: str, dir_tera_fly: str, ims_file: str = None):
-    source = Path(source)
-    tif_2d_folder = Path(tif_2d_folder)
-    dir_tera_fly = Path(dir_tera_fly)
-    if ims_file is not None:
-        ims_file = Path(ims_file)
+def main(args: Namespace):
+    source = Path(args.input)
+    tif_2d_folder = Path(args.tif)
     tif_2d_folder.mkdir(exist_ok=True, parents=True)
-    dir_tera_fly.mkdir(exist_ok=True, parents=True)
+    dir_tera_fly = None
+    if args.teraFly:
+        dir_tera_fly = Path(args.teraFly)
+        dir_tera_fly.mkdir(exist_ok=True, parents=True)
+    ims_file = None
+    if args.imaris:
+        ims_file = Path(args.imaris)
 
     return_code = 0
     if source.is_file() and source.suffix.lower() == ".ims":
@@ -240,15 +244,15 @@ def main(source: str, tif_2d_folder: str, dir_tera_fly: str, ims_file: str = Non
             str(source),
             str(tif_2d_folder),
             (),
-            {"dark": 0, "bit_shift": 0},
-            max_processors=48,
-            channel=1
+            {"dark": args.dark, "bit_shift": args.bit_shift},
+            max_processors=args.nthreads,
+            channel=args.channel
         )
     elif source.is_dir():
         return_code = batch_filter(
             source,
             tif_2d_folder,
-            workers=96,
+            workers=args.nthreads,
             # sigma=[foreground, background] Default is [0, 0], indicating no de-striping.
             sigma=(0, 0),
             # level=0,
@@ -257,7 +261,7 @@ def main(source: str, tif_2d_folder: str, dir_tera_fly: str, ims_file: str = Non
             # threshold=-1,
             compression=('ZLIB', 0),  # ('ZSTD', 1) conda install imagecodecs
             flat=None,
-            dark=100,
+            dark=args.dark,
             # z_step=voxel_size_z,  # z-step in micron. Only used for DCIMG files.
             # rotate=False,
             lightsheet=False,
@@ -265,7 +269,7 @@ def main(source: str, tif_2d_folder: str, dir_tera_fly: str, ims_file: str = Non
             # percentile=0.25,
             # convert_to_16bit=False,  # defaults to False
             convert_to_8bit=True,
-            bit_shift_to_right=1,
+            bit_shift_to_right=args.bit_shift,
             continue_process=True,
             dtype='uint16',
             tile_size=None,
@@ -274,25 +278,27 @@ def main(source: str, tif_2d_folder: str, dir_tera_fly: str, ims_file: str = Non
             timeout=None
         )
     assert return_code == 0
-    command = [
-        f"mpiexec -np {cpu_count()} python -m mpi4py {paraconverter}",
-        "--sfmt=\"TIFF (series, 2D)\"",
-        "--dfmt=\"TIFF (tiled, 3D)\"",
-        "--resolutions=\"012345\"",
-        "--clist=0",
-        "--halve=mean",
-        # "--noprogressbar",
-        # "--sparse_data",
-        # "--fixed_tiling",
-        # "--height=256",
-        # "--width=256",
-        # "--depth=256",
-        f"-s={tif_2d_folder}",  # destination_folder
-        f"-d={dir_tera_fly}",
-    ]
-    start_time = time()
-    subprocess.call(" ".join(command), shell=True)
-    print(f"elapsed time = {round((time() - start_time) / 60, 1)}")
+
+    if dir_tera_fly is not None:
+        command = [
+            f"mpiexec -np {args.nthreads} python -m mpi4py {paraconverter}",
+            "--sfmt=\"TIFF (series, 2D)\"",
+            "--dfmt=\"TIFF (tiled, 3D)\"",
+            "--resolutions=\"012345\"",
+            "--clist=0",
+            "--halve=mean",
+            # "--noprogressbar",
+            # "--sparse_data",
+            # "--fixed_tiling",
+            # "--height=256",
+            # "--width=256",
+            # "--depth=256",
+            f"-s={tif_2d_folder}",  # destination_folder
+            f"-d={dir_tera_fly}",
+        ]
+        start_time = time()
+        subprocess.call(" ".join(command), shell=True)
+        print(f"elapsed time = {round((time() - start_time) / 60, 1)}")
 
     if ims_file is not None:
         file = tif_2d_folder / sorted(tif_2d_folder.glob("*.tif"))[0]
@@ -311,7 +317,7 @@ def main(source: str, tif_2d_folder: str, dir_tera_fly: str, ims_file: str = Non
 
         command += [
             "--inputformat TiffSeries",
-            f"--nthreads 96",
+            f"--nthreads {args.nthreads}",
             f"--compression 1"
         ]
         subprocess.call(" ".join(command), shell=True)
@@ -352,7 +358,26 @@ if __name__ == '__main__':
         print("Error: ImarisConvertiv.exe not found")
         raise RuntimeError
 
-    try:
-        main(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4])
-    except IndexError:
-        main(sys.argv[1], sys.argv[2], sys.argv[3])
+    parser = ArgumentParser(
+        description="Imaris to tif and TeraFly converter (version 0.1.0)\n\n",
+        formatter_class=RawDescriptionHelpFormatter,
+        epilog="Developed 2022 by Keivan Moradi, Hongwei Dong Lab (B.R.A.I.N) at UCLA\n"
+    )
+    parser.add_argument("--input", "-i", type=str, required=True,
+                        help="Path to input image or path")
+    parser.add_argument("--tif", "-t", type=str, required=True,
+                        help="Path to tif output path")
+    parser.add_argument("--teraFly", "-f", type=str, default='',
+                        help="Path to output teraFly path")
+    parser.add_argument("--imaris", "-o", type=str, default='',
+                        help="Path to 8-bit imaris output file")
+    parser.add_argument("--nthreads", "-n", type=int, default=cpu_count(),
+                        help="number of threads")
+    parser.add_argument("--channel", "-c", type=int, default=0,
+                        help="channel to be converted")
+    parser.add_argument("--dark", "-d", type=int, default=0,
+                        help="background vs foreground threshold")
+    parser.add_argument("--bit_shift", "-b", type=int, default=8,
+                        help="bit_shift for 8-bit conversion")
+
+    main(parser.parse_args())
