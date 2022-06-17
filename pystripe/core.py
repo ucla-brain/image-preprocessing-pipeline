@@ -1,8 +1,8 @@
 import os
 import re
 import pywt
-import argparse
 import warnings
+from argparse import RawDescriptionHelpFormatter, ArgumentParser
 from numpy import max as np_max
 from numpy import uint8, uint16, float32, float64, ndarray, generic, real, zeros, broadcast_to, sqrt, exp, log, \
     cumsum, imag, arange, unique, interp, pad, clip, where, rot90
@@ -10,7 +10,6 @@ from scipy import fftpack, ndimage
 from tqdm import tqdm
 from time import sleep
 from datetime import datetime
-from argparse import RawDescriptionHelpFormatter
 from pathlib import Path
 from skimage.filters import threshold_otsu, gaussian
 from skimage.measure import block_reduce
@@ -43,7 +42,7 @@ def imread_tif_raw(path: Path, dtype: str = None, shape: Tuple[int, int] = None)
 
     Parameters
     ----------
-    path : str
+    path : Path
         path to tiff or raw image
     dtype: str or None,
         optional. If given will reduce the raw to tif conversion time.
@@ -61,10 +60,10 @@ def imread_tif_raw(path: Path, dtype: str = None, shape: Tuple[int, int] = None)
     attempt = 0
     for attempt in range(num_retries):
         try:
-            extension = path.suffix
+            extension = path.suffix.lower()
             if extension == '.raw':
                 img = raw_imread(path, dtype=dtype, shape=shape)
-            elif extension == '.tif' or extension == '.tiff':
+            elif extension in ['.tif', '.tiff']:
                 img = imread(path)
         except (OSError, TypeError, PermissionError):
             sleep(0.1)
@@ -512,7 +511,7 @@ def filter_streaks(img, sigma, level=0, wavelet='db3', crossover=10, threshold=-
     # clip(scaled_fimg, np.iinfo(img.dtype).min, np.iinfo(img.dtype).max, out=scaled_fimg)
 
     # Convert to 16 bit image
-    if dtype == uint16 or dtype == "uint16":
+    if dtype == uint16 or dtype in ["uint16", "float64"]:
         f_img = convert_to_16bit_fun(f_img)
     elif dtype == uint8 or dtype == "uint8":
         f_img = convert_to_8bit_fun(f_img, bit_shift_to_right=0)
@@ -903,7 +902,7 @@ def batch_filter(
         input_path: Path,
         output_path: Path,
         files_list: List[Path] = None,
-        workers: int = os.cpu_count(),
+        workers: int = cpu_count(),
         sigma: Tuple[int, int] = (0, 0),
         level=0,
         wavelet: str = 'db10',
@@ -1094,7 +1093,7 @@ def normalize_flat(flat):
 
 
 def _parse_args():
-    parser = argparse.ArgumentParser(
+    parser = ArgumentParser(
         description="Pystripe (version 0.3.0)\n\n"
                     "If only sigma1 is specified, only foreground of the images will be filtered.\n"
                     "If sigma2 is specified and sigma1 = 0, only the background of the images will be filtered.\n"
