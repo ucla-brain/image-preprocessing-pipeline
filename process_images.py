@@ -27,10 +27,11 @@ from multiprocessing import freeze_support, Pool, Queue, Process
 from supplements.cli_interface import select_among_multiple_options, ask_true_false_question, PrintColors
 from supplements.cli_interface import ask_for_a_positive_integer
 from typing import List, Tuple, Dict
+from downsampling import TifStack
 
 # experiment setup: user needs to set them right
 # AllChannels = [(channel folder name, rgb color)]
-AllChannels: List[Tuple[str, str]] = [("Ex_488_Em_525", "b"), ("Ex_561_Em_600", "g"), ("Ex_642_Em_680", "r")]
+AllChannels: List[Tuple[str, str]] = [("Ex_488_Em_525", "g"), ("Ex_561_Em_600", "r"), ("Ex_642_Em_680", "b")]
 VoxelSizeX_4x, VoxelSizeY_4x = 1.835, 1.835
 VoxelSizeX_10x, VoxelSizeY_10x = 0.661, 0.661  # new stage --> 0.6, 0.6
 VoxelSizeX_15x, VoxelSizeY_15x = 0.422, 0.422  # new stage --> 0.4, 0.4
@@ -554,7 +555,14 @@ def merge_all_channels(
         workers: int = cpu_count(),
         resume: bool = True
 ):
+    """
+    file names should be identical for each z-step of each channel
+    """
     num_files_in_each_path = list(map(lambda p: len(list(p.rglob("*.tif"))), stitched_tif_paths))
+
+    if channel_volume_shapes is None:
+        channel_volume_shapes = [TifStack(path).shape for path in stitched_tif_paths]
+
     x, y = 0, 0
     for path, n, shape in zip(stitched_tif_paths, num_files_in_each_path, channel_volume_shapes):
         if n != shape[0]:
@@ -776,8 +784,16 @@ def main(source_path):
             default_path=preprocessed_path)
     else:
         preprocessed_path = source_path
+
+    # source_path_name = source_path.name
+    # if need_down_sampling and objective == "15x" and voxel_size_z == 1:
+    #     source_path_name = source_path_name.replace("_15x_", "_6x_")
+
     stitched_path, continue_process_terastitcher = get_destination_path(
-        source_path.name, what_for="stitched files", posix="_stitched", default_path=stitched_path)
+        source_path.name,
+        what_for="stitched files",
+        posix="_MIP_stitched" if stitch_mip else "_stitched",
+        default_path=stitched_path)
 
     need_tera_fly_conversion = ask_true_false_question("Do you need to convert a channel to TeraFly format?")
     channels_need_tera_fly_conversion: list = []
@@ -877,7 +893,7 @@ def main(source_path):
     if need_merged_channels and len(stitched_tif_paths) > 1:
         p_log(f"{datetime.now().isoformat(timespec='seconds', sep=' ')}: merging channels to RGB started ...\n\t"
               f"time elapsed so far {timedelta(seconds=time() - start_time)}")
-        merged_tif_paths = [stitched_path / "merged_channels_tif"]
+        merged_tif_paths = [stitched_path / "merged_channels_MIP_tif" if stitch_mip else "merged_channels_tif"]
         order_of_colors: str = ""
         for channel in all_channels:
             order_of_colors += channel_color_dict[channel]
