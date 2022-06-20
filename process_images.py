@@ -893,7 +893,7 @@ def main(source_path):
     if need_merged_channels and len(stitched_tif_paths) > 1:
         p_log(f"{datetime.now().isoformat(timespec='seconds', sep=' ')}: merging channels to RGB started ...\n\t"
               f"time elapsed so far {timedelta(seconds=time() - start_time)}")
-        merged_tif_paths = [stitched_path / "merged_channels_MIP_tif" if stitch_mip else "merged_channels_tif"]
+        merged_tif_paths = [stitched_path / ("merged_channels_MIP_tif" if stitch_mip else "merged_channels_tif")]
         order_of_colors: str = ""
         for channel in all_channels:
             order_of_colors += channel_color_dict[channel]
