@@ -91,6 +91,8 @@ def get_voxel_sizes():
 
 def get_destination_path(folder_name_prefix, what_for='tif', posix='', default_path=Path('')):
     path_exists = False
+    input_path = ''
+    drive_path = Path(input_path)
     while not path_exists:
         input_path = input(
             f"\nEnter a valid destination path for {what_for}. "
