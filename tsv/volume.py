@@ -20,9 +20,13 @@ from .raw import raw_imread
 def get_dim_tuple(element):
     """Given an element, extract the Terastitcher z, y, x dimensions
 
-    :param element: an etree DOM element
-    :returns: a tuple of the Z, Y and X extracted from the V, H and D attributes
-    of the element
+    Parameter
+    ----------
+    element: an etree DOM element
+
+    Returns
+    -------
+    a tuple of the Z, Y and X extracted from the V, H and D attributes of the element
     """
     return tuple([float(element.attrib[_]) for _ in "DVH"])
 
@@ -595,13 +599,17 @@ class TSVVolumeBase:
 
 class TSVVolume(TSVVolumeBase):
     def __init__(self, tree, ignore_z_offsets=False, alt_stack_dir=None):
-        """Initialize from an xml.etree.ElementTree
+        """
+        Initialize from a xml.etree.ElementTree
 
-        :param tree: a tree, e.g. as loaded from ElementTree.parse(xml_path)
-        :param ignore_z_offsets: if True, ignore Z offsets.
-         (e.g. if the stage always returns to the same Z coordinate repeatably)
-        :param alt_stack_dir: alternative directory of stacks for another channel
-
+        Parameters
+        ----------
+        tree:
+            a tree, e.g. as loaded from ElementTree.parse(xml_path)
+        ignore_z_offsets:
+            if True, ignore Z offsets. (e.g. if the stage always returns to the same Z coordinate repeatably)
+        alt_stack_dir:
+            alternative directory of stacks for another channel
         """
         self.ignore_z_offsets = ignore_z_offsets
         root = tree.getroot()
@@ -626,9 +634,13 @@ class TSVVolume(TSVVolumeBase):
         self.offsets = None
 
     def make_stacks(self, root):
-        """Parse and properly offset the stacks
+        """
+        Parse and properly offset the stacks
 
-        :param root: the root node of the xml
+        Parameters
+        ----------
+        root:
+            the root node of the xml
         """
         stacks = root.find("STACKS")
         selems = [[None] * self.stack_columns for _ in range(self.stack_rows)]
@@ -700,16 +712,26 @@ class TSVVolume(TSVVolumeBase):
             return np.uint32
 
     @staticmethod
-    def load(path, ignore_z_offsets=False, alt_stacks_dir=None):
-        """Load a volume from an XML file"""
+    def load(path, ignore_z_offsets=False, alt_stack_dir=None):
+        """
+        Load a volume from an XML file
+
+        Parameters
+        ----------
+        path:
+            xml file path
+        ignore_z_offsets:
+            if True, ignore Z offsets. (e.g. if the stage always returns to the same Z coordinate repeatably)
+        alt_stack_dir:
+            alternative directory of stacks for another channel
+        """
         tree = ElementTree.parse(path)
-        return TSVVolume(tree, ignore_z_offsets, alt_stacks_dir)
+        return TSVVolume(tree, ignore_z_offsets, alt_stack_dir)
 
 
 class TSVSimpleVolume(TSVVolumeBase):
-    """A volume created from a directory parse + voxel size
-
-
+    """
+    A volume created from a directory parse + voxel size
     """
 
     def __init__(self, root_dir, voxel_size_x, voxel_size_y, voxel_size_z):
