@@ -389,9 +389,16 @@ def process_channel(
     inspect_for_missing_tiles_get_files_list(preprocessed_path / channel)
 
     # stitching: align the tiles GPU accelerated & parallel ------------------------------------------------------------
+    print(f"{datetime.now().isoformat(timespec='seconds', sep=' ')} - "
+          f"{channel}: aligning tiles using parastitcher ...")
+
     if not stitched_path.joinpath(f"{channel}_xml_import_step_5.xml").exists() or not continue_process_terastitcher:
-        print(f"{datetime.now().isoformat(timespec='seconds', sep=' ')} - "
-              f"{channel}: aligning tiles using parastitcher ...")
+        tile_overlap_y = tile_size[0] * 10 // 100
+        tile_overlap_x = tile_size[1] * 10 // 100
+        if new_tile_size is not None:
+            tile_overlap_y = new_tile_size[0] * 10 // 100
+            tile_overlap_x = new_tile_size[1] * 10 // 100
+
         proj_out = stitched_path / f'{channel}_xml_import_step_1.xml'
         command = [
             f"{terastitcher}",
@@ -435,6 +442,14 @@ def process_channel(
                 "--threshold=0.95",
                 f"--projin={proj_in}",
                 f"--projout={proj_out}",
+                # "--restoreSPIM",
+                f"--oV={tile_overlap_y}",  # Overlap (in pixels) between two adjacent tiles along V.
+                f"--oH={tile_overlap_x}",  # Overlap (in pixels) between two adjacent tiles along H.
+                f"--sV={tile_overlap_y}",  # Displacements search radius along V (in pixels).
+                f"--sH={tile_overlap_x}",  # Displacements search radius along H (in pixels).
+                f"--sD={1}",  # Displacements search radius along D (in pixels).
+                # f"--subvoldim={}",  # Number of slices per subvolume partition
+                # used in the pairwise displacements computation step.
             ]
             command = " ".join(command)
             print("\tstitching command:\n\t\t" + command)
@@ -644,8 +659,8 @@ def main(source_path):
     global AllChannels
     stitch_mip = ask_true_false_question("Do you need to stitch the MIP image first?")
     if stitch_mip:
-        all_channels = [channel+"_MIP" for channel, color in AllChannels if source_path.joinpath(channel).exists()]
-        channel_color_dict = {channel+"_MIP": color for channel, color in AllChannels}
+        all_channels = [channel + "_MIP" for channel, color in AllChannels if source_path.joinpath(channel).exists()]
+        channel_color_dict = {channel + "_MIP": color for channel, color in AllChannels}
     else:
         all_channels = [channel for channel, color in AllChannels if source_path.joinpath(channel).exists()]
         channel_color_dict = {channel: color for channel, color in AllChannels}
@@ -758,6 +773,7 @@ def main(source_path):
                 int(round(tile_size[1] * voxel_size_x / voxel_size_z, 0))
             )
             voxel_size_x = voxel_size_y = voxel_size_z
+
     preprocessed_path = source_path.parent / (source_path.name + de_striped_posix)
     continue_process_pystripe = False
     stitched_path = source_path.parent / (source_path.name + "_stitched")
@@ -770,7 +786,7 @@ def main(source_path):
         # pixel values smaller than the dark value (camera noise) will be set to 0 to increase compression and clarity
         for channel in all_channels:
             dark_threshold[channel] = ask_for_a_positive_integer(
-                f"Enter foreground vs background (dark) threshold for channel {channel}:", (0, 2**16-1))
+                f"Enter foreground vs background (dark) threshold for channel {channel}:", (0, 2 ** 16 - 1))
 
         need_gaussian_filter_2d = ask_true_false_question(
             f"Do you need to apply a 5x5 Gaussian filter to remove camera artifacts and "
