@@ -713,60 +713,60 @@ from pystripe.core import batch_filter
 #             for file in z_folder.glob(f"{name}_*.TIF"):
 #                 file.rename(y_folder / file.name)
 
-from logging import basicConfig, DEBUG, debug, INFO, info
-from sys import stderr
-import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle
-basicConfig(stream=stderr, level=INFO)
-
-source = Path(r"E:\sm20220216_NEW_40X_2000z")
-file_suffix = ".TIF"
-file_suffix_length = len(file_suffix)
-tile_size = (2048, 2048)  # (y, x)
-overlap_ratio = 0.05
-metadata = []
-
-for z_folder in source.iterdir():
-    if z_folder.is_dir():
-        debug(z_folder.name)
-        x_n_max, y_n = 0, 0
-        y_min, y_max = float('inf'), float('-inf')
-        x_min, x_max = float('inf'), float('-inf')
-
-        fig, ax = plt.subplots()
-        ax.plot([-49661, 33898], [325593, 387034], alpha=0)
-
-        for y_folder in z_folder.iterdir():
-            if y_folder.is_dir():
-                y_n += 1
-                x_n = 0
-                y_axis = int(y_folder.name[1:])
-                y_min, y_max = min(y_min, y_axis), max(y_max, y_axis)
-                prefix_length = len(y_folder.name + "_X")
-                debug(f"{y_folder.name}, {y_axis}")
-                for x_file in y_folder.glob("*"+file_suffix):
-                    x_n += 1
-                    x_axis = int(x_file.name[prefix_length:-file_suffix_length])
-                    x_min, x_max = min(x_min, x_axis), max(x_max, x_axis)
-                    debug(f"\t, {x_file.name}, {x_axis}")
-
-                    ax.add_patch(Rectangle((x_axis, y_axis), 2048, 2048, fill=True, alpha=0.5))
-
-                debug(f"\tx={x_n}")
-                x_n_max = max(x_n, x_n_max)
-        debug(f"y={y_n}")
-        metadata += [{
-            "z_folder": z_folder.name,
-            "y_min": y_min,
-            "y_max": y_max,
-            "x_min": x_min,
-            "x_max": x_max,
-            "y_n": y_n,
-            "x_n": x_n_max,
-        }]
-        plt.savefig(f"{source/z_folder.name}.jpg")
-        # plt.show()
-        info(metadata[-1])
+# from logging import basicConfig, DEBUG, debug, INFO, info
+# from sys import stderr
+# import matplotlib.pyplot as plt
+# from matplotlib.patches import Rectangle
+# basicConfig(stream=stderr, level=INFO)
+#
+# source = Path(r"E:\sm20220216_NEW_40X_2000z")
+# file_suffix = ".TIF"
+# file_suffix_length = len(file_suffix)
+# tile_size = (2048, 2048)  # (y, x)
+# overlap_ratio = 0.05
+# metadata = []
+#
+# for z_folder in source.iterdir():
+#     if z_folder.is_dir():
+#         debug(z_folder.name)
+#         x_n_max, y_n = 0, 0
+#         y_min, y_max = float('inf'), float('-inf')
+#         x_min, x_max = float('inf'), float('-inf')
+#
+#         fig, ax = plt.subplots()
+#         ax.plot([-49661, 33898], [325593, 387034], alpha=0)
+#
+#         for y_folder in z_folder.iterdir():
+#             if y_folder.is_dir():
+#                 y_n += 1
+#                 x_n = 0
+#                 y_axis = int(y_folder.name[1:])
+#                 y_min, y_max = min(y_min, y_axis), max(y_max, y_axis)
+#                 prefix_length = len(y_folder.name + "_X")
+#                 debug(f"{y_folder.name}, {y_axis}")
+#                 for x_file in y_folder.glob("*"+file_suffix):
+#                     x_n += 1
+#                     x_axis = int(x_file.name[prefix_length:-file_suffix_length])
+#                     x_min, x_max = min(x_min, x_axis), max(x_max, x_axis)
+#                     debug(f"\t, {x_file.name}, {x_axis}")
+#
+#                     ax.add_patch(Rectangle((x_axis, y_axis), 2048, 2048, fill=True, alpha=0.5))
+#
+#                 debug(f"\tx={x_n}")
+#                 x_n_max = max(x_n, x_n_max)
+#         debug(f"y={y_n}")
+#         metadata += [{
+#             "z_folder": z_folder.name,
+#             "y_min": y_min,
+#             "y_max": y_max,
+#             "x_min": x_min,
+#             "x_max": x_max,
+#             "y_n": y_n,
+#             "x_n": x_n_max,
+#         }]
+#         plt.savefig(f"{source/z_folder.name}.jpg")
+#         # plt.show()
+#         info(metadata[-1])
 
 # info(f"X: {x_min}, {x_max}, {x_n_max}, {x_max-x_min}, {x_n_max*(tile_size[1]-tile_size[1]*overlap_ratio)}")
 # info(f"Y: {y_min}, {y_max}, {y_n_max}, {y_max-y_min}, {y_n_max*(tile_size[0]-tile_size[0]*overlap_ratio)}")
@@ -774,3 +774,8 @@ for z_folder in source.iterdir():
 # for num in range(1, 8000):
 #     if not Path(r"Y:\3D_stitched_LS\20220512_16_48_06_SW220303_04_15x_LS_1000z_stitched\Ex_488_Em_525_tif\deconvolved").joinpath(f"deconv_{num:06}.tif").exists():
 #         print(num)
+
+from xml.etree import ElementTree
+tree = ElementTree.parse(r"D:\20220622_17_23_43_SW220414_02_LS_15x_1000Z_MIP_stitched\Ex_488_Em_525_MIP_xml_import_step_5")
+root = tree.getroot()
+

@@ -643,20 +643,19 @@ class TSVVolume(TSVVolumeBase):
             the root node of the xml
         """
         stacks = root.find("STACKS")
-        selems = [[None] * self.stack_columns for _ in range(self.stack_rows)]
+        selems = [[ElementTree.Element] * self.stack_columns for _ in range(self.stack_rows)]
         self.stacks = [[None] * self.stack_columns for _ in range(self.stack_rows)]
         self.offsets = [[None] * self.stack_columns for _ in range(self.stack_rows)]
         self.offsets[0][0] = Location(0, 0, 0)
-        for child in stacks.getchildren():
-            if child.tag == "Stack":
-                row = int(child.attrib["ROW"])
-                column = int(child.attrib["COL"])
-                selems[row][column] = child
+        for child in stacks.iter(tag="Stack"):
+            row = int(child.attrib["ROW"])
+            column = int(child.attrib["COL"])
+            selems[row][column] = child
         for row, elements in enumerate(selems):
             for column, child in enumerate(elements):
                 if row > 0:
                     prev = self.offsets[row - 1][column]
-                    dn = child.find("NORTH_displacements").getchildren()[0]
+                    dn = list(child.find("NORTH_displacements"))[0]
                     xoff = -int(dn.find("H").attrib["displ"])
                     yoff = -int(dn.find("V").attrib["displ"])
                     zoff = 0 if self.ignore_z_offsets \
@@ -667,7 +666,7 @@ class TSVVolume(TSVVolumeBase):
                     self.offsets[row][column] = offset
                 elif column > 0:
                     prev = self.offsets[row][column - 1]
-                    dn = child.find("WEST_displacements").getchildren()[0]
+                    dn = list(child.find("WEST_displacements"))[0]
                     xoff = -int(dn.find("H").attrib["displ"])
                     yoff = -int(dn.find("V").attrib["displ"])
                     zoff = 0 if self.ignore_z_offsets \

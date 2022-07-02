@@ -445,8 +445,8 @@ def process_channel(
                 # "--restoreSPIM",
                 f"--oV={tile_overlap_y}",  # Overlap (in pixels) between two adjacent tiles along V.
                 f"--oH={tile_overlap_x}",  # Overlap (in pixels) between two adjacent tiles along H.
-                f"--sV={tile_overlap_y}",  # Displacements search radius along V (in pixels).
-                f"--sH={tile_overlap_x}",  # Displacements search radius along H (in pixels).
+                f"--sV={tile_overlap_y*2}",  # Displacements search radius along V (in pixels).
+                f"--sH={tile_overlap_x*2}",  # Displacements search radius along H (in pixels).
                 f"--sD={1}",  # Displacements search radius along D (in pixels).
                 # f"--subvoldim={}",  # Number of slices per subvolume partition
                 # used in the pairwise displacements computation step.
@@ -466,11 +466,16 @@ def process_channel(
           f"{channel}: starting step 6 of stitching, merging tiles to tif, using TSV ..."
           f"\n\tsource: {stitched_path / f'{channel}_xml_import_step_5.xml'}"
           f"\n\tdestination: {stitched_tif_path}")
+
+    merge_step_cores = cpu_logical_core_count if cpu_logical_core_count * 16 < memory_ram else memory_ram // 16
+    if need_16bit_to_8bit_conversion:
+        merge_step_cores = cpu_logical_core_count if cpu_logical_core_count * 8 < memory_ram else memory_ram // 8
+
     shape: Tuple[int, int, int] = convert_to_2D_tif(
         TSVVolume.load(stitched_path / f'{channel}_xml_import_step_5.xml'),
         str(stitched_tif_path / "img_{z:06d}.tif"),
         compression=("ZLIB", 1),
-        cores=cpu_logical_core_count,  # here the limit is 61 on Windows
+        cores=merge_step_cores,  # here the limit is 61 on Windows
         dtype='uint8' if need_16bit_to_8bit_conversion else 'uint16',
         resume=continue_process_terastitcher
     )  # shape is in z y x format
@@ -597,6 +602,7 @@ def merge_all_channels(
         "resume": resume
     } for file in stitched_tif_paths[num_files_in_each_path.index(max(num_files_in_each_path))].rglob("*.tif")]
     num_images = len(work)
+
     workers, chunks = calculate_cores_and_chunk_size(num_images, workers, pool_can_handle_more_than_61_cores=False)
     print(f"\tusing {workers} cores and {chunks} chunks")
     # TODO: RGB: Support more than 61 cores on Windows
@@ -907,6 +913,10 @@ def main(source_path):
 
     # merge channels to RGB ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
+    merge_channels_cores = cpu_logical_core_count if cpu_logical_core_count * 16 < memory_ram else memory_ram // 16
+    if need_16bit_to_8bit_conversion:
+        merge_channels_cores = cpu_logical_core_count if cpu_logical_core_count * 8 < memory_ram else memory_ram // 8
+
     merged_tif_paths = stitched_tif_paths
     if need_merged_channels and len(stitched_tif_paths) > 1:
         p_log(f"{datetime.now().isoformat(timespec='seconds', sep=' ')}: merging channels to RGB started ...\n\t"
@@ -923,7 +933,7 @@ def main(source_path):
             merge_all_channels(stitched_tif_paths, merged_tif_paths[0],
                                channel_volume_shapes=channel_volume_shapes,
                                order_of_colors=order_of_colors,
-                               workers=cpu_logical_core_count,
+                               workers=merge_channels_cores,
                                resume=continue_process_terastitcher)
         elif len(stitched_tif_paths) >= 4:
             p_log("Warning: since number of channels are more than 3 merging channels is impossible.\n\t"
@@ -931,7 +941,7 @@ def main(source_path):
             merge_all_channels(stitched_tif_paths[0:3], merged_tif_paths[0],
                                channel_volume_shapes=channel_volume_shapes,
                                order_of_colors=order_of_colors,
-                               workers=cpu_logical_core_count,
+                               workers=merge_channels_cores,
                                resume=continue_process_terastitcher)
             merged_tif_paths += stitched_tif_paths[3:]
         else:
