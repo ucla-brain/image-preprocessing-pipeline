@@ -409,6 +409,14 @@ def process_channel(
             f"--vxl1={voxel_size_x}",
             f"--vxl2={voxel_size_y}",
             f"--vxl3={voxel_size_z}",
+            f"--oV={tile_overlap_y}",  # Overlap (in pixels) between two adjacent tiles along V.
+            f"--oH={tile_overlap_x}",  # Overlap (in pixels) between two adjacent tiles along H.
+            f"--sV={tile_overlap_y-1}",  # Displacements search radius along V (in pixels). Default value is 25!
+            f"--sH={tile_overlap_x-1}",  # Displacements search radius along H (in pixels). Default value is 25!
+            f"--sD={0}",  # Displacements search radius along D (in pixels).
+            # f"--subvoldim={}",  # Number of slices per subvolume partition
+            # used in the pairwise displacements computation step.
+            # dimension of layers obtained by dividing the volume along D
             "--sparse_data",
             f"--volin={preprocessed_path / channel}",
             f"--projout={proj_out}",
@@ -422,9 +430,9 @@ def process_channel(
             raise RuntimeError
 
         # each alignment thread needs about 16GB of RAM in 16bit and 8GB in 8bit
-        alignment_cores = cpu_logical_core_count if cpu_logical_core_count * 16 < memory_ram else memory_ram // 16
+        alignment_cores = cpu_logical_core_count if cpu_logical_core_count * 14 < memory_ram else memory_ram // 14
         if need_16bit_to_8bit_conversion:
-            alignment_cores = cpu_logical_core_count if cpu_logical_core_count * 8 < memory_ram else memory_ram // 8
+            alignment_cores = cpu_logical_core_count if cpu_logical_core_count * 7 < memory_ram else memory_ram // 7
 
         for step in [2, 3, 4, 5]:
             print(f"{datetime.now().isoformat(timespec='seconds', sep=' ')} - "
@@ -443,14 +451,6 @@ def process_channel(
                 f"--projin={proj_in}",
                 f"--projout={proj_out}",
                 # "--restoreSPIM",
-                f"--oV={tile_overlap_y}",  # Overlap (in pixels) between two adjacent tiles along V.
-                f"--oH={tile_overlap_x}",  # Overlap (in pixels) between two adjacent tiles along H.
-                f"--sV={tile_overlap_y}",  # Displacements search radius along V (in pixels). Default is 25!
-                f"--sH={tile_overlap_x}",  # Displacements search radius along H (in pixels). Default is 25!
-                f"--sD={0}",  # Displacements search radius along D (in pixels).
-                # f"--subvoldim={}",  # Number of slices per subvolume partition
-                # used in the pairwise displacements computation step.
-                # dimension of layers obtained by dividing the volume along D
             ]
             command = " ".join(command)
             print("\tstitching command:\n\t\t" + command)
@@ -464,13 +464,13 @@ def process_channel(
     stitched_tif_path = stitched_path / f"{channel}_tif"
     stitched_tif_path.mkdir(exist_ok=True)
     print(f"{datetime.now().isoformat(timespec='seconds', sep=' ')} - "
-          f"{channel}: starting step 6 of stitching, merging tiles to tif, using TSV ..."
+          f"{channel}: starting step 6 of stitching, merging tiles into 2D tif series, using TSV ..."
           f"\n\tsource: {stitched_path / f'{channel}_xml_import_step_5.xml'}"
           f"\n\tdestination: {stitched_tif_path}")
 
-    merge_step_cores = cpu_logical_core_count if cpu_logical_core_count * 8 < memory_ram else memory_ram // 4
+    merge_step_cores = cpu_logical_core_count if cpu_logical_core_count * 14 < memory_ram else memory_ram // 14
     if need_16bit_to_8bit_conversion:
-        merge_step_cores = cpu_logical_core_count if cpu_logical_core_count * 4 < memory_ram else memory_ram // 2
+        merge_step_cores = cpu_logical_core_count if cpu_logical_core_count * 7 < memory_ram else memory_ram // 7
 
     shape: Tuple[int, int, int] = convert_to_2D_tif(
         TSVVolume.load(stitched_path / f'{channel}_xml_import_step_5.xml'),
@@ -914,9 +914,9 @@ def main(source_path):
 
     # merge channels to RGB ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
-    merge_channels_cores = cpu_logical_core_count if cpu_logical_core_count * 16 < memory_ram else memory_ram // 16
+    merge_channels_cores = cpu_logical_core_count if cpu_logical_core_count * 14 < memory_ram else memory_ram // 14
     if need_16bit_to_8bit_conversion:
-        merge_channels_cores = cpu_logical_core_count if cpu_logical_core_count * 8 < memory_ram else memory_ram // 8
+        merge_channels_cores = cpu_logical_core_count if cpu_logical_core_count * 7 < memory_ram else memory_ram // 7
 
     merged_tif_paths = stitched_tif_paths
     if need_merged_channels and len(stitched_tif_paths) > 1:
