@@ -439,17 +439,18 @@ def process_channel(
                 command = [f"{terastitcher}"]
             command += [
                 f"-{step}",
-                "--threshold=0.95",
+                "--threshold=0.99",
                 f"--projin={proj_in}",
                 f"--projout={proj_out}",
                 # "--restoreSPIM",
                 f"--oV={tile_overlap_y}",  # Overlap (in pixels) between two adjacent tiles along V.
                 f"--oH={tile_overlap_x}",  # Overlap (in pixels) between two adjacent tiles along H.
-                f"--sV={tile_overlap_y*2}",  # Displacements search radius along V (in pixels).
-                f"--sH={tile_overlap_x*2}",  # Displacements search radius along H (in pixels).
-                f"--sD={1}",  # Displacements search radius along D (in pixels).
+                f"--sV={tile_overlap_y}",  # Displacements search radius along V (in pixels). Default is 25!
+                f"--sH={tile_overlap_x}",  # Displacements search radius along H (in pixels). Default is 25!
+                f"--sD={0}",  # Displacements search radius along D (in pixels).
                 # f"--subvoldim={}",  # Number of slices per subvolume partition
                 # used in the pairwise displacements computation step.
+                # dimension of layers obtained by dividing the volume along D
             ]
             command = " ".join(command)
             print("\tstitching command:\n\t\t" + command)
@@ -467,9 +468,9 @@ def process_channel(
           f"\n\tsource: {stitched_path / f'{channel}_xml_import_step_5.xml'}"
           f"\n\tdestination: {stitched_tif_path}")
 
-    merge_step_cores = cpu_logical_core_count if cpu_logical_core_count * 16 < memory_ram else memory_ram // 16
+    merge_step_cores = cpu_logical_core_count if cpu_logical_core_count * 8 < memory_ram else memory_ram // 4
     if need_16bit_to_8bit_conversion:
-        merge_step_cores = cpu_logical_core_count if cpu_logical_core_count * 8 < memory_ram else memory_ram // 8
+        merge_step_cores = cpu_logical_core_count if cpu_logical_core_count * 4 < memory_ram else memory_ram // 2
 
     shape: Tuple[int, int, int] = convert_to_2D_tif(
         TSVVolume.load(stitched_path / f'{channel}_xml_import_step_5.xml'),
