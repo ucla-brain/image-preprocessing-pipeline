@@ -82,11 +82,12 @@ def get_voxel_sizes():
         log.error("Error: unsupported objective")
         raise RuntimeError
     voxel_size_z = float(input("what is the z-step size in µm?\n").strip())
+    tile_overlap_percent = int(input("what is the tile overlap in percent?\n").strip())
     print(
         f"Objective is {objective} so voxel sizes are x = {voxel_size_x}, y = {voxel_size_y}, and z = {voxel_size_z}")
     log.info(
         f"Objective is {objective} so voxel sizes are x = {voxel_size_x}, y = {voxel_size_y}, and z = {voxel_size_z}")
-    return objective, voxel_size_x, voxel_size_y, voxel_size_z, tile_size
+    return objective, voxel_size_x, voxel_size_y, voxel_size_z, tile_size, tile_overlap_percent
 
 
 def get_destination_path(folder_name_prefix, what_for='tif', posix='', default_path=Path('')):
@@ -292,6 +293,7 @@ def process_channel(
         voxel_size_y: float,
         voxel_size_z: float,
         objective: str,
+        tile_overlap_percent: int,
         queue: Queue,
         memory_ram: int,
         dark: int = 0,
@@ -393,11 +395,11 @@ def process_channel(
           f"{channel}: aligning tiles using parastitcher ...")
 
     if not stitched_path.joinpath(f"{channel}_xml_import_step_5.xml").exists() or not continue_process_terastitcher:
-        tile_overlap_y = tile_size[0] * 10 // 100
-        tile_overlap_x = tile_size[1] * 10 // 100
+        tile_overlap_y = tile_size[0] * tile_overlap_percent // 100
+        tile_overlap_x = tile_size[1] * tile_overlap_percent // 100
         if new_tile_size is not None:
-            tile_overlap_y = new_tile_size[0] * 10 // 100
-            tile_overlap_x = new_tile_size[1] * 10 // 100
+            tile_overlap_y = new_tile_size[0] * tile_overlap_percent // 100
+            tile_overlap_x = new_tile_size[1] * tile_overlap_percent // 100
 
         proj_out = stitched_path / f'{channel}_xml_import_step_1.xml'
         command = [
@@ -417,6 +419,7 @@ def process_channel(
             # f"--subvoldim={}",  # Number of slices per subvolume partition
             # used in the pairwise displacements computation step.
             # dimension of layers obtained by dividing the volume along D
+            "--threshold=0.99",
             "--sparse_data",
             f"--volin={preprocessed_path / channel}",
             f"--projout={proj_out}",
@@ -447,6 +450,11 @@ def process_channel(
                 command = [f"{terastitcher}"]
             command += [
                 f"-{step}",
+                f"--oV={tile_overlap_y}",  # Overlap (in pixels) between two adjacent tiles along V.
+                f"--oH={tile_overlap_x}",  # Overlap (in pixels) between two adjacent tiles along H.
+                f"--sV={tile_overlap_y - 1}",  # Displacements search radius along V (in pixels). Default value is 25!
+                f"--sH={tile_overlap_x - 1}",  # Displacements search radius along H (in pixels). Default value is 25!
+                f"--sD={0}",  # Displacements search radius along D (in pixels).
                 "--threshold=0.99",
                 f"--projin={proj_in}",
                 f"--projout={proj_out}",
@@ -662,11 +670,12 @@ def main(source_path):
     log.basicConfig(filename=str(log_file), level=log.INFO)
     log.FileHandler(str(log_file), mode="w")  # rewrite the file instead of appending
     # Ask questions ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
-    objective, voxel_size_x, voxel_size_y, voxel_size_z, tile_size = get_voxel_sizes()
+    objective, voxel_size_x, voxel_size_y, voxel_size_z, tile_size, tile_overlap_percent = get_voxel_sizes()
     global AllChannels
     stitch_mip = ask_true_false_question("Do you need to stitch the MIP image first?")
     if stitch_mip:
-        all_channels = [channel + "_MIP" for channel, color in AllChannels if source_path.joinpath(channel).exists()]
+        all_channels = [
+            channel + "_MIP" for channel, color in AllChannels if source_path.joinpath(channel + "_MIP").exists()]
         channel_color_dict = {channel + "_MIP": color for channel, color in AllChannels}
     else:
         all_channels = [channel for channel, color in AllChannels if source_path.joinpath(channel).exists()]
@@ -878,6 +887,7 @@ def main(source_path):
             voxel_size_y,
             voxel_size_z,
             objective,
+            tile_overlap_percent,
             queue,
             memory_ram,
             dark=dark_threshold[channel],
@@ -954,7 +964,8 @@ def main(source_path):
     if need_imaris_conversion:
         p_log(f"{datetime.now().isoformat(timespec='seconds', sep=' ')}: started ims conversion  ...")
         for idx, path in enumerate(merged_tif_paths):
-            command = get_imaris_command(path, voxel_size_x, voxel_size_y, voxel_size_z, workers=cpu_logical_core_count)
+            command = get_imaris_command(
+                path, voxel_size_x, voxel_size_y, voxel_size_z, workers=cpu_physical_core_count)
             MultiProcess(queue, command, pattern=r"(WriteProgress:)\s+(\d*.\d+)\s*$", position=idx).start()
             running_processes += 1
             progress_bar += [
@@ -963,9 +974,6 @@ def main(source_path):
 
     # waite for TeraFly and Imaris conversion to finish ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
-    if need_tera_fly_conversion:
-        p_log(f"{datetime.now().isoformat(timespec='seconds', sep=' ')}: waiting for TeraFly conversion to finish.\n\t"
-              f"time elapsed so far {timedelta(seconds=time() - start_time)}")
     while running_processes > 0:
         try:
             [percent_addition, position, return_code, command] = queue.get()
@@ -979,6 +987,11 @@ def main(source_path):
                 progress_bar[position].update(percent_addition)
         except Empty:
             sleep(1)  # waite one second before checking the queue again
+
+    if need_tera_fly_conversion:
+        p_log(
+            f"{datetime.now().isoformat(timespec='seconds', sep=' ')}: waiting for TeraFly conversion to finish.\n\t"
+            f"time elapsed so far {timedelta(seconds=time() - start_time)}")
 
     # Done :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
