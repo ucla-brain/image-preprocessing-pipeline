@@ -2,12 +2,12 @@
 Python code for stitching and image enhancement of Light Sheet data
 
 # Installation:
-* Install [Imaris Viewer](https://viewer.imaris.com/download/ImarisViewer9_8_2w64.exe) (on Linux use [wine](https://vitux.com/how-to-install-wine-on-ubuntu/)).
+* Install [Imaris Viewer](https://viewer.imaris.com/download/ImarisViewer9_9_1w64.exe) (on Linux use [wine](https://vitux.com/how-to-install-wine-on-ubuntu/)).
 * On Linux make sure Java server (e.g., [openjdk](https://openjdk.java.net/install/)), and [Nvidia drivers and CUDA >10.1](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/index.html#ubuntu-installation) are installed.
 * Install [anaconda python distribution](https://www.anaconda.com/products/individual):
   make a dedicated python environment for stitching:
 
-   `conda create -n stitching -c conda-forge python=3.8 psutil tqdm tifffile numpy scipy scikit-image scikit-learn matplotlib pyqt pandas imagecodecs git mpi4py hdf5plugin h5py`
+   `conda create -n stitching -c conda-forge python=3.10 psutil tqdm tifffile numpy scipy scikit-image scikit-learn matplotlib pyqt pandas imagecodecs git mpi4py hdf5plugin h5py`
    
    `conda activate stitching`
     
@@ -81,6 +81,7 @@ We modified original DeStripe code to add the following functionalities:
 * Improved parallel processing model to be faster and more scalable. For example, using more than 61 CPU processes in Windows is possible now.
 * Fixed a bug regarding dark leveling.
 * conversion of 16bit images to 8bit and right bit shifting.
+* Gaussian filter.
 
 You need to use PyStripe step if you need: 
 * Raw to tif conversion.
@@ -90,6 +91,7 @@ You need to use PyStripe step if you need:
 * down-sampling for isotropic voxel generation that improves automated neuronal reconstruction and allows you estimate neuronal diameters,
 * 8-bit conversion and right bit shifting that reduces file sizes, memory requirement during alignment stage and provides brighter pixels for neuronal reconstruction, or
 * compressed 2D tif tiles.
+* Gaussian filter.
 
 ## TeraStitcher steps:
 We patched terastitcher and teraconverter so that they can read data from mounted NAS drives and send a message if failed to do so.
@@ -129,31 +131,34 @@ We patched terastitcher and teraconverter so that they can read data from mounte
 # Practical stitching guide
 In this section, I explain the workflow in our lab.
 
-If your lightsheet microscope generates maximum intensity projection (MIP) images, we suggest you stitch those images, first. The stitched MIP image allows you to choose correct dark levels and right bitshift values. For example, in the main folder of our images, we have a set of folders that end with `*_MIP`: `Ex_488_Em_525_MIP`, `Ex_561_Em_600_MIP`, and `Ex_642_Em_680_MIP`. 
-* Create a folder named `MIP` (or any other name you like), and move `*_MIP` folders to the `MIP` folder you just created. 
-* Remove the `_MIP` suffix from the folder names: `Ex_488_Em_525`, `Ex_561_Em_60`, and `Ex_642_Em_680`.
-* Stitch the `MIP` folder: for Linux, `python process_images.py /path/to/MIP` or for Windows `python process_images.py X:\path\to\MIP`.
+If your lightsheet microscope generates maximum intensity projection (MIP) images, we suggest you stitch those images, first. The stitched MIP image allows you to choose correct dark levels and right bitshift values. For example, in the main folder of our images, we have a set of folders that end with `*_MIP`: `Ex_488_Em_525_MIP`, `Ex_561_Em_600_MIP`, and `Ex_642_Em_680_MIP`.
+* Stitch the `MIP` image: for Linux, `python process_images.py /path/to/image` or for Windows `python process_images.py X:\path\to\image`.
 * First, select the CPU architecture of your stitching computer: `SSE2`, `AVX`, `AVX2`, `AVX512`. At the moment, a relatively new AMD CPU supports up to AVX2, and Intel CPUs support AVX512. For older computers, you may choose AVX, and for ancient computers `SSE2`.
 * Choose objective. For example 15x.
 * Input the z-step size. Our microscope generates MIP images for every 600 um z-steps.
+* Set the tile overlap percentage, which is a setting in microscope software (for example 10).
+* For question `Do you need to stitch the MIP image first?` --> answer `Yes`.
 * For questions about lightsheet cleaning, raw format, 8-bit conversion, down-sampling, and tif compression choose `NO`, whenever you stitch MIP images.
 * Enter the location where you want to save the stitched files (destination). You need to enter the parent folder path (for example, `Y:\path\to`), or you may press enter to choose the default suggested path. We suggest you use a different drive as destination to optimize read and write. For example, stitching to/from a NAS, we use NFS mount for reading, and SMB mount as destination. On a local disk, you may read from `C:\` and write on `D:\`.
-* convert to TeraFly --> No
-* merge to RGB --> Yes
-* covert to Imaris --> Yes
+* convert to TeraFly --> `No`
+* merge to RGB --> `Yes`
+* covert to Imaris --> `Yes`
 
-Wait for the program to finish stitching. In the `MIP_stitched` folder, you can find a `merged_channels_tif.ims` file. Open it in Imaris Viewer. Press `CTRL + D` to see `Display Adjustment` dialog. Press `advanced` button. Click on a channel, then try to find the largest `MIN` value and the smallest `MAX` value with which your images look perfectly visible. For the `MAX` value try only these numbers: 256, 512, 1024, 2048, 4096, 8192, 16384, 32768 and 65536. The `MIN` value is a number that depends on microscope camera. You need to set the `MIN` values of each channel in `process_images.py` file. Open `process_images.py` file for editing and find the line says, `DarkThreshold = {"Ex_488_Em_525": 110, "Ex_561_Em_600": 20, "Ex_642_Em_680": 20}`. DarkThreshold variable is a python dictionary class. Set the min value in front of the channel name. For, our camera, 100 to 120 could be a good value. However, sometimes the signal-to-noise ratio of the image is not good and smaller values might be used. Write the `MIN` and `MAX` values for each channel. 
+Wait for the program to finish stitching. In the `*_stitched` folder, you can find a `merged_channels_MIP_tif.ims` file. Open it in Imaris Viewer. Press `CTRL + D` to see `Display Adjustment` dialog. Press `advanced` button. Click on a channel, then try to find the largest `MIN` value and the smallest `MAX` value with which your images look perfectly visible. For the `MAX` value try only these numbers: 256, 512, 1024, 2048, 4096, 8192, 16384, 32768 and 65536. The `MIN` value is a number that depends on microscope camera. For our camera, 100 to 120 could be a good value. However, sometimes the signal-to-noise ratio of the image is not good and smaller values might be used. Write the `MIN` and `MAX` values for each channel. 
 
 After setting DarkThreshold values, start stitching the main image. For example,
 * `python process_images.py /path/to/image`
 * `CPU` --> AVX2
 * `Objective` --> 15x
 * `z-step` --> 1. Our images have 15x objective with 1 um z-step.
+* `tile overlap` --> 10
 * `lightsheet cleaning` --> Yes. You may choose all channels or one of the channels. Lightsheet cleaning algorithm is computationally expensive, but I usually choose all channels to reduce the final image size.
 * `RAW` --> Yes
 * `16-bit to 8-bit conversion` --> Yes. 8-bit images align better, use less memory during alignment stage of stitching (8-GB/thread compared with 16-GB/thread), and compression algorithms can compress them more efficiently.
 * `bit shift` --> Considering the `MAX` values of each channel (that we found by inspecting the MIP image in the previous step), choose the correct right bit-shift value.
 * Downsampling for isotropic voxel generation --> Yes. This downsampling happens only in xy-plane, and the goal is to increase x and y voxel sizes so that they match the z-step. Isotropic images are better for (manual or automated) neuronal reconstruction and estimation of dendritic diameter.
+* `Dark` --> enter the `MIN` values of each channel (that we found by inspecting the MIP image in the previous step).
+* `Gaussian filter` --> We recommend saying `Yes` since it reduces stitching artifacts and final file size.
 * compress tif --> Yes or No. If you have a slow cache drive, if you want to permanently store processed tif files, or you have a limited disk space, choose YES. Otherwise, choose NO to reduce CPU overhead. This applies only to PyStripe stage. 2D stitched tif series will be compressed no mater what you choose here.
 
 By answering YES to any of the above questions, you enable PyStripe module. You need to enter destination path for processed tif files. This can be a fast cache/scratch drive. You may delete processed tif files after stitching was done.
