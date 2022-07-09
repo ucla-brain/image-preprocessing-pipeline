@@ -296,6 +296,7 @@ def process_channel(
         tile_overlap_percent: int,
         queue: Queue,
         memory_ram: int,
+        stitch_mip: bool,
         dark: int = 0,
         files_list: List[Path] = None,
         need_flat_image_application: bool = False,
@@ -433,9 +434,14 @@ def process_channel(
             raise RuntimeError
 
         # each alignment thread needs about 16GB of RAM in 16bit and 8GB in 8bit
-        alignment_cores = cpu_logical_core_count if cpu_logical_core_count * 14 < memory_ram else memory_ram // 14
+        memory_needed_per_thread = 14
+        if stitch_mip:
+            memory_needed_per_thread = 2
         if need_16bit_to_8bit_conversion:
-            alignment_cores = cpu_logical_core_count if cpu_logical_core_count * 7 < memory_ram else memory_ram // 7
+            memory_needed_per_thread //= 2
+        alignment_cores = memory_ram // memory_needed_per_thread
+        if alignment_cores > cpu_logical_core_count:
+            alignment_cores = cpu_logical_core_count
 
         for step in [2, 3, 4, 5]:
             print(f"{datetime.now().isoformat(timespec='seconds', sep=' ')} - "
@@ -890,6 +896,7 @@ def main(source_path):
             tile_overlap_percent,
             queue,
             memory_ram,
+            stitch_mip,
             dark=dark_threshold[channel],
             files_list=file_list,
             need_tera_fly_conversion=channel in channels_need_tera_fly_conversion,
