@@ -442,6 +442,8 @@ def process_channel(
         alignment_cores = memory_ram // memory_needed_per_thread
         if alignment_cores > cpu_logical_core_count:
             alignment_cores = cpu_logical_core_count
+        if alignment_cores > 128:
+            alignment_cores = 128
 
         for step in [2, 3, 4, 5]:
             print(f"{datetime.now().isoformat(timespec='seconds', sep=' ')} - "
@@ -1044,23 +1046,23 @@ if __name__ == '__main__':
         mergedisplacements = "mergedisplacements"
         teraconverter = "teraconverter"
         os.environ["TERM"] = "xterm"
-        os.environ["USECUDA_X_NCC"] = "1"  # set to 0 to stop GPU acceleration
-        if os.environ["USECUDA_X_NCC"] == "1":
-            if Path("/usr/lib/jvm/java-11-openjdk-amd64/lib/server").exists():
-                os.environ["LD_LIBRARY_PATH"] = "/usr/lib/jvm/java-11-openjdk-amd64/lib/server"
-            else:
-                log.error("Error: JAVA path not found")
-                raise RuntimeError
-            cuda_version = input("What is your cuda version (for example 11.6)?\n")
-            if Path(f"/usr/local/cuda-{cuda_version}/").exists() and \
-                    Path(f"/usr/local/cuda-{cuda_version}/bin").exists():
-                os.environ["CUDA_ROOT_DIR"] = f"/usr/local/cuda-{cuda_version}/"
-            else:
-                log.error(f"Error: CUDA path not found in {os.environ['CUDA_ROOT_DIR']}")
-                raise RuntimeError
-            os.environ["PATH"] = f"{os.environ['PATH']}:{os.environ['CUDA_ROOT_DIR']}/bin"
-            os.environ["LD_LIBRARY_PATH"] = f"{os.environ['LD_LIBRARY_PATH']}:{os.environ['CUDA_ROOT_DIR']}/lib64"
-            # os.environ["CUDA_VISIBLE_DEVICES"] = "1"  # to train on a specific GPU on a multi-gpu machine
+        # os.environ["USECUDA_X_NCC"] = "1"  # set to 0 to stop GPU acceleration
+        # if os.environ["USECUDA_X_NCC"] == "1":
+        #     if Path("/usr/lib/jvm/java-11-openjdk-amd64/lib/server").exists():
+        #         os.environ["LD_LIBRARY_PATH"] = "/usr/lib/jvm/java-11-openjdk-amd64/lib/server"
+        #     else:
+        #         log.error("Error: JAVA path not found")
+        #         raise RuntimeError
+        #     cuda_version = input("What is your cuda version (for example 11.7)?\n")
+        #     if Path(f"/usr/local/cuda-{cuda_version}/").exists() and \
+        #             Path(f"/usr/local/cuda-{cuda_version}/bin").exists():
+        #         os.environ["CUDA_ROOT_DIR"] = f"/usr/local/cuda-{cuda_version}/"
+        #     else:
+        #         log.error(f"Error: CUDA path not found in {os.environ['CUDA_ROOT_DIR']}")
+        #         raise RuntimeError
+        #     os.environ["PATH"] = f"{os.environ['PATH']}:{os.environ['CUDA_ROOT_DIR']}/bin"
+        #     os.environ["LD_LIBRARY_PATH"] = f"{os.environ['LD_LIBRARY_PATH']}:{os.environ['CUDA_ROOT_DIR']}/lib64"
+        #     # os.environ["CUDA_VISIBLE_DEVICES"] = "1"  # to train on a specific GPU on a multi-gpu machine
     else:
         log.error("yet unsupported OS")
         raise RuntimeError
