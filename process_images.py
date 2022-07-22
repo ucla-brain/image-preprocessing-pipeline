@@ -414,9 +414,9 @@ def process_channel(
             f"--vxl3={voxel_size_z}",
             f"--oV={tile_overlap_y}",  # Overlap (in pixels) between two adjacent tiles along V.
             f"--oH={tile_overlap_x}",  # Overlap (in pixels) between two adjacent tiles along H.
-            f"--sV={tile_overlap_y-1}",  # Displacements search radius along V (in pixels). Default value is 25!
-            f"--sH={tile_overlap_x-1}",  # Displacements search radius along H (in pixels). Default value is 25!
-            f"--sD={0}",  # Displacements search radius along D (in pixels).
+            f"--sV={tile_overlap_y - 1}",  # Displacements search radius along V (in pixels). Default value is 25!
+            f"--sH={tile_overlap_x - 1}",  # Displacements search radius along H (in pixels). Default value is 25!
+            f"--sD={50}",  # Displacements search radius along D (in pixels).
             # f"--subvoldim={}",  # Number of slices per subvolume partition
             # used in the pairwise displacements computation step.
             # dimension of layers obtained by dividing the volume along D
@@ -462,7 +462,7 @@ def process_channel(
                 f"--oH={tile_overlap_x}",  # Overlap (in pixels) between two adjacent tiles along H.
                 f"--sV={tile_overlap_y - 1}",  # Displacements search radius along V (in pixels). Default value is 25!
                 f"--sH={tile_overlap_x - 1}",  # Displacements search radius along H (in pixels). Default value is 25!
-                f"--sD={0}",  # Displacements search radius along D (in pixels).
+                f"--sD={50}",  # Displacements search radius along D (in pixels).
                 "--threshold=0.99",
                 f"--projin={proj_in}",
                 f"--projout={proj_out}",
@@ -491,7 +491,7 @@ def process_channel(
     shape: Tuple[int, int, int] = convert_to_2D_tif(
         TSVVolume.load(stitched_path / f'{channel}_xml_import_step_5.xml'),
         str(stitched_tif_path / "img_{z:06d}.tif"),
-        compression=("ZLIB", 1),
+        compression=("ZLIB", 0),
         cores=merge_step_cores,  # here the limit is 61 on Windows
         dtype='uint8' if need_16bit_to_8bit_conversion else 'uint16',
         resume=continue_process_terastitcher
@@ -803,19 +803,19 @@ def main(source_path):
     stitched_path = source_path.parent / (source_path.name + "_stitched")
     print_input_file_names = False
     dark_threshold: Dict[str, int] = {channel: 0 for channel in all_channels}
-    need_gaussian_filter_2d: bool = False
+
+    # need_gaussian_filter_2d: bool = False
+    need_gaussian_filter_2d = ask_true_false_question(
+        f"Do you need to apply a 5x5 Gaussian filter to remove camera artifacts and "
+        f"produce up to two times smaller files?"
+    )
     if need_destriping or need_flat_image_application or need_raw_to_tiff_conversion or need_16bit_to_8bit_conversion \
-            or need_down_sampling or need_compression:
+            or need_down_sampling or need_compression or need_gaussian_filter_2d or need_lightsheet_cleaning:
 
         # pixel values smaller than the dark value (camera noise) will be set to 0 to increase compression and clarity
         for channel in all_channels:
             dark_threshold[channel] = ask_for_a_positive_integer(
                 f"Enter foreground vs background (dark) threshold for channel {channel}:", (0, 2 ** 16 - 1))
-
-        need_gaussian_filter_2d = ask_true_false_question(
-            f"Do you need to apply a 5x5 Gaussian filter to remove camera artifacts and "
-            f"produce up to two times smaller files?"
-        )
 
         print_input_file_names = False  # ask_true_false_question(
         # "Do you need to print raw or tif file names to find corrupt files during preprocessing stage?")
@@ -861,7 +861,7 @@ def main(source_path):
     # Start ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
     start_time = time()
-    memory_ram = virtual_memory().free // 1024 ** 3  # in GB
+    memory_ram = virtual_memory().available // 1024 ** 3  # in GB
     p_log(
         f"{datetime.now().isoformat(timespec='seconds', sep=' ')}: stitching started"
         f"\n\tRun on computer: {platform.node()}"
@@ -1046,23 +1046,23 @@ if __name__ == '__main__':
         mergedisplacements = "mergedisplacements"
         teraconverter = "teraconverter"
         os.environ["TERM"] = "xterm"
-        # os.environ["USECUDA_X_NCC"] = "1"  # set to 0 to stop GPU acceleration
-        # if os.environ["USECUDA_X_NCC"] == "1":
-        #     if Path("/usr/lib/jvm/java-11-openjdk-amd64/lib/server").exists():
-        #         os.environ["LD_LIBRARY_PATH"] = "/usr/lib/jvm/java-11-openjdk-amd64/lib/server"
-        #     else:
-        #         log.error("Error: JAVA path not found")
-        #         raise RuntimeError
-        #     cuda_version = input("What is your cuda version (for example 11.7)?\n")
-        #     if Path(f"/usr/local/cuda-{cuda_version}/").exists() and \
-        #             Path(f"/usr/local/cuda-{cuda_version}/bin").exists():
-        #         os.environ["CUDA_ROOT_DIR"] = f"/usr/local/cuda-{cuda_version}/"
-        #     else:
-        #         log.error(f"Error: CUDA path not found in {os.environ['CUDA_ROOT_DIR']}")
-        #         raise RuntimeError
-        #     os.environ["PATH"] = f"{os.environ['PATH']}:{os.environ['CUDA_ROOT_DIR']}/bin"
-        #     os.environ["LD_LIBRARY_PATH"] = f"{os.environ['LD_LIBRARY_PATH']}:{os.environ['CUDA_ROOT_DIR']}/lib64"
-        #     # os.environ["CUDA_VISIBLE_DEVICES"] = "1"  # to train on a specific GPU on a multi-gpu machine
+        os.environ["USECUDA_X_NCC"] = "1"  # set to 0 to stop GPU acceleration
+        if os.environ["USECUDA_X_NCC"] == "1":
+            if Path("/usr/lib/jvm/java-11-openjdk-amd64/lib/server").exists():
+                os.environ["LD_LIBRARY_PATH"] = "/usr/lib/jvm/java-11-openjdk-amd64/lib/server"
+            else:
+                log.error("Error: JAVA path not found")
+                raise RuntimeError
+            cuda_version = input("What is your cuda version (for example 11.7)?\n")
+            if Path(f"/usr/local/cuda-{cuda_version}/").exists() and \
+                    Path(f"/usr/local/cuda-{cuda_version}/bin").exists():
+                os.environ["CUDA_ROOT_DIR"] = f"/usr/local/cuda-{cuda_version}/"
+            else:
+                log.error(f"Error: CUDA path not found in {os.environ['CUDA_ROOT_DIR']}")
+                raise RuntimeError
+            os.environ["PATH"] = f"{os.environ['PATH']}:{os.environ['CUDA_ROOT_DIR']}/bin"
+            os.environ["LD_LIBRARY_PATH"] = f"{os.environ['LD_LIBRARY_PATH']}:{os.environ['CUDA_ROOT_DIR']}/lib64"
+            os.environ["CUDA_VISIBLE_DEVICES"] = "0"  # to train on a specific GPU on a multi-gpu machine
     else:
         log.error("yet unsupported OS")
         raise RuntimeError
