@@ -491,7 +491,7 @@ def process_channel(
     shape: Tuple[int, int, int] = convert_to_2D_tif(
         TSVVolume.load(stitched_path / f'{channel}_xml_import_step_5.xml'),
         str(stitched_tif_path / "img_{z:06d}.tif"),
-        compression=("ZLIB", 0),
+        compression=("ZLIB", 1),
         cores=merge_step_cores,  # here the limit is 61 on Windows
         dtype='uint8' if need_16bit_to_8bit_conversion else 'uint16',
         resume=continue_process_terastitcher
