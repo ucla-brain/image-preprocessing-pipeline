@@ -3,7 +3,7 @@ from pandas import read_csv
 
 
 # annotation file that contains soma locations only
-annotations = Path(r"Y:\3D_stitched_LS\20210729_SW210318_07_R_HPC_6x_1000z\Ex_642_Em_680_tif_deconvoluted_3D_gaussian_6x_1000z_8bit_TeraFly_mean\somata_stamp_2022_07_22_13_25.ano.apo")
+annotations = Path(r"Y:\3D_stitched_LS\20210729_SW210318_07_R_HPC_6x_1000z\Ex_642_Em_680_tif_deconvoluted_3D_gaussian_6x_1000z_8bit_TeraFly_mean\somata_stamp_2022_07_27_09_32.ano.apo")
 recut = annotations.parent / 'soma_recut'
 recut.mkdir(exist_ok=True)
 annotations_df = read_csv(annotations)
