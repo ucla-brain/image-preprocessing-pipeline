@@ -659,7 +659,7 @@ def get_imaris_command(path, voxel_size_x: float, voxel_size_y: float, voxel_siz
         command += [
             f"--nthreads {workers}",
             f"--compression 1",
-            f"--voxelsize {voxel_size_x}-{voxel_size_y}-{voxel_size_z}",  # x-y-z
+            f"--voxelsize {voxel_size_x:.2f}-{voxel_size_y:.2f}-{voxel_size_z:.2f}",  # x-y-z in um max 2 decimals
             "--logprogress"
         ]
         print(f"\ttiff to ims conversion command:\n\t\t{' '.join(command)}\n")
