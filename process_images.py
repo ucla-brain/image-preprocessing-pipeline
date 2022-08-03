@@ -82,7 +82,7 @@ def get_voxel_sizes():
         log.error("Error: unsupported objective")
         raise RuntimeError
     voxel_size_z = float(input("what is the z-step size in µm?\n").strip())
-    tile_overlap_percent = int(input("what is the tile overlap in percent?\n").strip())
+    tile_overlap_percent = float(input("what is the tile overlap in percent?\n").strip())
     print(
         f"Objective is {objective} so voxel sizes are x = {voxel_size_x}, y = {voxel_size_y}, and z = {voxel_size_z}")
     log.info(
@@ -293,7 +293,7 @@ def process_channel(
         voxel_size_y: float,
         voxel_size_z: float,
         objective: str,
-        tile_overlap_percent: int,
+        tile_overlap_percent: float,
         queue: Queue,
         memory_ram: int,
         stitch_mip: bool,
@@ -396,11 +396,11 @@ def process_channel(
           f"{channel}: aligning tiles using parastitcher ...")
 
     if not stitched_path.joinpath(f"{channel}_xml_import_step_5.xml").exists() or not continue_process_terastitcher:
-        tile_overlap_y = tile_size[0] * tile_overlap_percent // 100
-        tile_overlap_x = tile_size[1] * tile_overlap_percent // 100
+        tile_overlap_y = int(tile_size[0] * tile_overlap_percent / 100)
+        tile_overlap_x = int(tile_size[1] * tile_overlap_percent / 100)
         if new_tile_size is not None:
-            tile_overlap_y = new_tile_size[0] * tile_overlap_percent // 100
-            tile_overlap_x = new_tile_size[1] * tile_overlap_percent // 100
+            tile_overlap_y = int(new_tile_size[0] * tile_overlap_percent / 100)
+            tile_overlap_x = int(new_tile_size[1] * tile_overlap_percent / 100)
 
         proj_out = stitched_path / f'{channel}_xml_import_step_1.xml'
         command = [
@@ -462,7 +462,7 @@ def process_channel(
                 f"--oH={tile_overlap_x}",  # Overlap (in pixels) between two adjacent tiles along H.
                 f"--sV={tile_overlap_y - 1}",  # Displacements search radius along V (in pixels). Default value is 25!
                 f"--sH={tile_overlap_x - 1}",  # Displacements search radius along H (in pixels). Default value is 25!
-                f"--sD={50}",  # Displacements search radius along D (in pixels).
+                f"--sD={100}",  # Displacements search radius along D (in pixels).
                 "--threshold=0.99",
                 f"--projin={proj_in}",
                 f"--projout={proj_out}",
