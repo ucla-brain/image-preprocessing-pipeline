@@ -508,7 +508,7 @@ def process_channel(
         print(f"{datetime.now().isoformat(timespec='seconds', sep=' ')} - "
               f"{channel}: starting to convert to TeraFly format ...")
         command = " ".join([
-            f"mpiexec -np {cpu_physical_core_count} python -m mpi4py {paraconverter}",
+            f"mpiexec -np {11} python -m mpi4py {paraconverter}",
             # f"{teraconverter}",
             "--sfmt=\"TIFF (series, 2D)\"",
             "--dfmt=\"TIFF (tiled, 3D)\"",
