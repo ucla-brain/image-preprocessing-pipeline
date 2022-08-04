@@ -1361,6 +1361,12 @@ if __name__ == '__main__':
     myrank = comm.Get_rank()
     # Sincronizzation
     comm.Barrier()
+    try:
+        num_gpus = str(check_output(["nvidia-smi", "-L"])).count('UUID')
+        if num_gpus > 0:
+            os.environ["CUDA_VISIBLE_DEVICES"] = str(int(myrank) % num_gpus)
+    except FileNotFoundError:
+        pass
 
     tmp = read_item(sys.argv, '--info', 'no_info')
     if tmp == 'no_info':
