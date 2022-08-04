@@ -1207,7 +1207,7 @@ def create_starts_end(array, start_point=0, open_dx=True):
     Create arrays containing all the starting and ending indexes for the tiles on the desidered direction
     Input:
        array = Array containing the size for each tile on the desidered direction
-       start_point = Starting index for the input immage (optional)
+       start_point = Starting index for the input image (optional)
        open_dx = If true (the default value) ==> ending indexes = subsequent starting indexes ==> Open end
     Output:
        star_arr = Array containing all the starting indexes for the tiles on the desidered direction
