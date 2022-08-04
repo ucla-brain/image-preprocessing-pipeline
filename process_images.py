@@ -635,7 +635,8 @@ def merge_all_channels(
             ))
 
 
-def get_imaris_command(path, voxel_size_x: float, voxel_size_y: float, voxel_size_z: float, workers: int = cpu_count()):
+def get_imaris_command(path, voxel_size_x: float, voxel_size_y: float, voxel_size_z: float, workers: int = cpu_count(),
+                       dtype: str = 'uint8'):
     files = list(path.rglob("*.tif"))
     file = files[0]
     command = []
@@ -657,9 +658,9 @@ def get_imaris_command(path, voxel_size_x: float, voxel_size_y: float, voxel_siz
             command += ["--inputformat TiffSeries"]
 
         command += [
-            f"--nthreads {workers}",
+            f"--nthreads {workers if dtype == 'uint8' or sys.platform == 'win32' else 1}",
             f"--compression 1",
-            f"--voxelsize {voxel_size_x:.2f}-{voxel_size_y:.2f}-{voxel_size_z:.2f}",  # x-y-z in um max 2 decimals
+            f"--voxelsize {voxel_size_x}-{voxel_size_y}-{voxel_size_z}",  # x-y-z
             "--logprogress"
         ]
         print(f"\ttiff to ims conversion command:\n\t\t{' '.join(command)}\n")
@@ -974,7 +975,10 @@ def main(source_path):
         p_log(f"{datetime.now().isoformat(timespec='seconds', sep=' ')}: started ims conversion  ...")
         for idx, path in enumerate(merged_tif_paths):
             command = get_imaris_command(
-                path, voxel_size_x, voxel_size_y, voxel_size_z, workers=cpu_physical_core_count)
+                path, voxel_size_x, voxel_size_y, voxel_size_z,
+                workers=cpu_physical_core_count,
+                dtype='uint8' if need_16bit_to_8bit_conversion else 'uint16'
+            )
             MultiProcess(queue, command, pattern=r"(WriteProgress:)\s+(\d*.\d+)\s*$", position=idx).start()
             running_processes += 1
             progress_bar += [
