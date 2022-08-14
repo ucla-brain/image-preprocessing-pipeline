@@ -833,7 +833,7 @@ class MultiProcess(Process):
                 try:
                     future = pool.submit(_read_filter_save, args)
                     future.result(timeout=self.timeout)
-                except (BrokenProcessPool, TimeoutError) as inst:
+                except (BrokenProcessPool, TimeoutError, ValueError) as inst:
                     output_file: Path = args["output_file"]
                     print(f"{PrintColors.WARNING}"
                           f"\nwarning: timeout reached for processing input file:\n\t{args['input_file']}\n\t"
