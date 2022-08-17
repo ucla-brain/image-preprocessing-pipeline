@@ -426,13 +426,20 @@ def apply_flat(img, flat):
     if img.shape == flat.shape:
         return (img / flat).astype(img.dtype)
     else:
-        print("\033[93m"
-              "warning: image and flat arrays had different shapes"
-              "\033[0m")
+        print(f"{PrintColors.WARNING}"
+              f"warning: image and flat arrays had different shapes"
+              f"{PrintColors.ENDC}")
         return img
 
 
-def filter_streaks(img, sigma, level=0, wavelet='db3', crossover=10, threshold=-1):
+def filter_streaks(
+        img: ndarray,
+        sigma: Tuple[int, int],
+        level: int = 0,
+        wavelet: str = 'db2',
+        crossover: float = 10,
+        threshold: float = -1,
+        directions: str = 'v'):
     """Filter horizontal streaks using wavelet-FFT filter
 
     Parameters
@@ -448,7 +455,9 @@ def filter_streaks(img, sigma, level=0, wavelet='db3', crossover=10, threshold=-
     crossover : float
         intensity range to switch between filtered background and unfiltered foreground
     threshold : float
-        intensity value to separate background from foreground. Default is O tsu
+        intensity value to separate background from foreground. Default is Otsu
+    directions : str
+        destriping direction: 'v' means top-down, 'h' means left-to-right, 'vh' means both directions.
 
     Returns
     -------
@@ -465,6 +474,7 @@ def filter_streaks(img, sigma, level=0, wavelet='db3', crossover=10, threshold=-
     if threshold == -1 and sigma1 != sigma2:
         try:
             threshold = threshold_otsu(img)
+            # print(threshold)
         except ValueError:
             threshold = 1
 
@@ -477,34 +487,48 @@ def filter_streaks(img, sigma, level=0, wavelet='db3', crossover=10, threshold=-
         img = pad(img, ((0, pad_y), (0, pad_x)), mode="edge")
 
     # TODO: Clean up this logic with some dual-band CLI alternative
-    if sigma1 > 0:
-        if sigma2 > 0:
-            if sigma1 == sigma2:  # Single band
-                f_img = filter_subband(img, sigma1, level, wavelet)
-            else:  # Dual-band
-                background = clip(img, None, threshold)
+    f_img = None
+    directions = directions.lower()
+    for direction in directions:
+        if direction == 'h':
+            img = rot90(img, k=1)
+
+        if sigma1 > 0:
+            if sigma2 > 0:
+                if sigma1 == sigma2:  # Single band
+                    f_img = filter_subband(img, sigma1, level, wavelet)
+                else:  # Dual-band
+                    background = clip(img, None, threshold)
+                    foreground = clip(img, threshold, None)
+                    background_filtered = filter_subband(background, sigma[1], level, wavelet)
+                    foreground_filtered = filter_subband(foreground, sigma[0], level, wavelet)
+                    # Smoothed homotopy
+                    f = foreground_fraction(img, threshold, crossover, smoothing=smoothing)
+                    f_img = foreground_filtered * f + background_filtered * (1 - f)
+            else:  # Foreground filter only
                 foreground = clip(img, threshold, None)
-                background_filtered = filter_subband(background, sigma[1], level, wavelet)
                 foreground_filtered = filter_subband(foreground, sigma[0], level, wavelet)
                 # Smoothed homotopy
                 f = foreground_fraction(img, threshold, crossover, smoothing=smoothing)
-                f_img = foreground_filtered * f + background_filtered * (1 - f)
-        else:  # Foreground filter only
-            foreground = clip(img, threshold, None)
-            foreground_filtered = filter_subband(foreground, sigma[0], level, wavelet)
-            # Smoothed homotopy
-            f = foreground_fraction(img, threshold, crossover, smoothing=smoothing)
-            f_img = foreground_filtered * f + img * (1 - f)
-    else:
-        if sigma2 > 0:  # Background filter only
-            background = clip(img, None, threshold)
-            background_filtered = filter_subband(background, sigma[1], level, wavelet)
-            # Smoothed homotopy
-            f = foreground_fraction(img, threshold, crossover, smoothing=smoothing)
-            f_img = img * f + background_filtered * (1 - f)
+                f_img = foreground_filtered * f + img * (1 - f)
         else:
-            # sigma1 and sigma2 are both 0, so skip the destriping
-            f_img = img
+            if sigma2 > 0:  # Background filter only
+                background = clip(img, None, threshold)
+                background_filtered = filter_subband(background, sigma[1], level, wavelet)
+                # Smoothed homotopy
+                f = foreground_fraction(img, threshold, crossover, smoothing=smoothing)
+                f_img = img * f + background_filtered * (1 - f)
+            else:
+                # sigma1 and sigma2 are both 0, so skip the destriping
+                f_img = img
+
+        if direction == 'h':
+            f_img = rot90(f_img, k=-1)
+
+        if f_img is not None:
+            img = f_img
+        else:
+            print(f"{PrintColors.WARNING}Warning: filtered image (f_img) should not be None.")
 
     # TODO: Fix code to clip back to original bit depth
     # scaled_fimg = hist_match(f_img, img)
@@ -534,6 +558,7 @@ def read_filter_save(
         wavelet: str = 'db3',
         crossover: float = 10,
         threshold: float = -1,
+        directions: str = 'v',
         compression: Tuple[str, int] = ('ZLIB', 1),
         flat: ndarray = None,
         dark: float = 0,
@@ -562,9 +587,9 @@ def read_filter_save(
     Parameters
     ----------
     input_file : Path
-        path to the image to filter
+        file path to the input image
     output_file : Path
-        path to write the result
+        file path to the processed image
     sigma : tuple
         bandwidth of the stripe filter
     level : int
@@ -574,7 +599,10 @@ def read_filter_save(
     crossover : float
         intensity range to switch between filtered background and unfiltered foreground
     threshold : float
-        intensity value to separate background from foreground. Default is Otsu
+        intensity value to separate background from foreground.
+        Default (-1) means automatic detection using Otsu method, otherwise uses the given positive value.
+    directions : str
+        destriping direction: 'v' means top-down, 'h' means left-to-right, 'vh' means both directions.
     compression : tuple (str, int)
         The 1st argument is compression method the 2nd compression level for tiff files
         For example, ('ZSTD', 1) or ('ZLIB', 1).
@@ -612,7 +640,7 @@ def read_filter_save(
     tile_size : tuple (int, int) or None
         optional. If given will reduce the raw to tif conversion time.
     down_sample : tuple (int, int)
-        Sets down sample factor. Down_sample (3, 2) means 3 pixels in y axis, and 2 pixels in x-axis merges into 1.
+        Sets down sample factor. Down_sample (3, 2) means 3 pixels in y-axis, and 2 pixels in x-axis merges into 1.
     new_size : tuple (int, int) or None
         resize the image after down-sampling
     print_input_file_names : bool
@@ -664,16 +692,24 @@ def read_filter_save(
             output_file.parent.mkdir(parents=True, exist_ok=True)
         if flat is not None:
             img = apply_flat(img, flat)
-        if dark is not None and dark > 0:
-            img = where(img > dark, img - dark, 0)  # Subtract the dark offset
         if gaussian_filter_2d:
             img = gaussian(img, sigma=1, preserve_range=True, truncate=2)
         if down_sample is not None:
             img = block_reduce(img, block_size=down_sample, func=np_max)
         if new_size is not None and tile_size > new_size:
             img = resize(img, new_size, preserve_range=True, anti_aliasing=True).astype(d_type)
-        if rotate:
-            img = rot90(img)
+        if not sigma[0] == sigma[1] == 0:
+            img = filter_streaks(
+                img,
+                sigma,
+                level=level,
+                wavelet=wavelet,
+                crossover=crossover,
+                threshold=threshold,
+                directions=directions
+            )
+        if dark is not None and dark > 0:
+            img = where(img > dark, img - dark, 0)  # Subtract the dark offset
         if lightsheet:
             img = correct_lightsheet(
                 img.reshape(img.shape[0], img.shape[1], 1),
@@ -687,15 +723,8 @@ def read_filter_save(
                     step=(2, 2, 1)),
                 lightsheet_vs_background=lightsheet_vs_background
             ).reshape(img.shape[0], img.shape[1])
-        if not sigma[0] == sigma[1] == 0:
-            img = filter_streaks(
-                img,
-                sigma,
-                level=level,
-                wavelet=wavelet,
-                crossover=crossover,
-                threshold=threshold
-            )
+        if rotate:
+            img = rot90(img)
 
         if new_size is not None and tile_size < new_size:
             img = resize(img, new_size, preserve_range=True, anti_aliasing=False)
@@ -908,6 +937,7 @@ def batch_filter(
         wavelet: str = 'db10',
         crossover: int = 10,
         threshold: int = -1,
+        directions: str = 'v',
         compression: Tuple[str, int] = ('ZLIB', 1),
         flat: ndarray = None,
         dark: int = 0,
@@ -950,13 +980,16 @@ def batch_filter(
         bandwidth of the stripe filter in pixels
         sigma=(foreground, background) Default is (0, 0), indicating no de-striping.
     level : int
-        number of wavelet levels to use
+        number of wavelet levels to use. 0 is the default.
     wavelet : str
         name of the mother wavelet
     crossover : float
-        intensity range to switch between filtered background and unfiltered foreground. Default: 100 a.u.
+        intensity range to switch between filtered background and unfiltered foreground. Default: 10 a.u.
     threshold : float
-        intensity value to separate background from foreground. Default is O tsu
+        intensity value to separate background from foreground.
+        Default (-1) means automatic detection using Otsu method, otherwise uses the given positive value.
+    directions : str
+        destriping direction: 'v' means top-down, 'h' means left-to-right, 'vh' means both directions.
     compression : tuple (str, int)
         The 1st argument is compression method the 2nd compression level for tiff files
         For example, ('ZSTD', 1) or ('ZLIB', 1).
@@ -1026,6 +1059,7 @@ def batch_filter(
         'wavelet': wavelet,
         'crossover': crossover,
         'threshold': threshold,
+        'directions': directions,
         'compression': compression,
         'flat': flat,
         'dark': dark,
@@ -1094,7 +1128,7 @@ def normalize_flat(flat):
 
 def _parse_args():
     parser = ArgumentParser(
-        description="Pystripe (version 0.3.0)\n\n"
+        description="Pystripe (version 0.4.0)\n\n"
                     "If only sigma1 is specified, only foreground of the images will be filtered.\n"
                     "If sigma2 is specified and sigma1 = 0, only the background of the images will be filtered.\n"
                     "If sigma1 == sigma2 > 0, input images will not be split before filtering.\n"
@@ -1119,6 +1153,11 @@ def _parse_args():
                         help="Name of the mother wavelet (Default: Daubechies 3 tap)")
     parser.add_argument("--threshold", "-t", type=float, default=-1,
                         help="Global threshold value (Default: -1, Otsu)")
+    parser.add_argument("--directions", "-dr", type=str, default='v',
+                        help="destriping direction: "
+                             "\n\t'v' means top-down (default), "
+                             "\n\t'h' means left-to-right, "
+                             "\n\t'vh' means both directions.")
     parser.add_argument("--crossover", "-x", type=float, default=10,
                         help="Intensity range to switch between foreground and background (Default: 10)")
     parser.add_argument("--workers", "-n", type=int, default=8,
