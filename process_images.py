@@ -412,14 +412,6 @@ def process_channel(
             f"--vxl1={voxel_size_x}",
             f"--vxl2={voxel_size_y}",
             f"--vxl3={voxel_size_z}",
-            f"--oV={tile_overlap_y}",  # Overlap (in pixels) between two adjacent tiles along V.
-            f"--oH={tile_overlap_x}",  # Overlap (in pixels) between two adjacent tiles along H.
-            f"--sV={tile_overlap_y - 1}",  # Displacements search radius along V (in pixels). Default value is 25!
-            f"--sH={tile_overlap_x - 1}",  # Displacements search radius along H (in pixels). Default value is 25!
-            f"--sD={50}",  # Displacements search radius along D (in pixels).
-            # f"--subvoldim={}",  # Number of slices per subvolume partition
-            # used in the pairwise displacements computation step.
-            # dimension of layers obtained by dividing the volume along D
             "--threshold=0.99",
             "--sparse_data",
             f"--volin={preprocessed_path / channel}",
@@ -462,7 +454,10 @@ def process_channel(
                 f"--oH={tile_overlap_x}",  # Overlap (in pixels) between two adjacent tiles along H.
                 f"--sV={tile_overlap_y - 1}",  # Displacements search radius along V (in pixels). Default value is 25!
                 f"--sH={tile_overlap_x - 1}",  # Displacements search radius along H (in pixels). Default value is 25!
-                f"--sD={100}",  # Displacements search radius along D (in pixels).
+                f"--sD={25}",  # Displacements search radius along D (in pixels).
+                f"--subvoldim={100}",  # Number of slices per subvolume partition
+                # used in the pairwise displacements computation step.
+                # dimension of layers obtained by dividing the volume along D
                 "--threshold=0.99",
                 f"--projin={proj_in}",
                 f"--projout={proj_out}",
