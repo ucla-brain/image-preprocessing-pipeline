@@ -260,11 +260,13 @@ class TSVStackBase(VExtentBase):
                 raise
 
     def imread(self, volume, result=None):
-        """Read the image data from a block
+        """
+        Read the image data from a block
 
-        :param volume: the volume to read, a VExtent
-        :param result: if not None, read into this array
-        :returns: the requested volume
+        volume: the volume to read, a VExtent
+        result: if not None, read into this array
+
+        returns: the requested volume
         """
         assert self.contains(volume)
         if result is None:
@@ -414,9 +416,10 @@ def compute_cosine(volume: VExtentBase, stack: TSVStack, ostack: TSVStack, img):
     angle = np.arctan2(d, od)
     blending = np.sin(angle) ** 2
     img[
-    iv.z0 - volume.z0:iv.z1 - volume.z0,
-    iv.y0 - volume.y0:iv.y1 - volume.y0,
-    iv.x0 - volume.x0:iv.x1 - volume.x0] *= blending.astype(img.dtype)
+        iv.z0 - volume.z0:iv.z1 - volume.z0,
+        iv.y0 - volume.y0:iv.y1 - volume.y0,
+        iv.x0 - volume.x0:iv.x1 - volume.x0
+    ] *= blending.astype(img.dtype)
 
 
 class Edge(enum.Flag):
@@ -520,7 +523,7 @@ class TSVVolumeBase:
         :param volume: a VExtent delimiting the volume to read
         :param dtype: the numpy dtype of the array to be returned
         :returns: the array corresponding to the volume (with zeros for
-        data outside of the array).
+        data outside the array).
         """
         result = np.zeros(volume.shape, np.float32)
         multiplier = np.zeros(volume.shape, np.float32)
@@ -545,15 +548,16 @@ class TSVVolumeBase:
                 for ostack, ointersection in inter_intersections:
                     compute_cosine(intersection, stack, ostack, part)
                     compute_cosine(intersection, stack, ostack, mpart)
-            result[intersection.z0 - volume.z0:intersection.z1 - volume.z0,
-            intersection.y0 - volume.y0:intersection.y1 - volume.y0,
-            intersection.x0 - volume.x0:intersection.x1 - volume.x0] += \
-                part
+            result[
+                intersection.z0 - volume.z0:intersection.z1 - volume.z0,
+                intersection.y0 - volume.y0:intersection.y1 - volume.y0,
+                intersection.x0 - volume.x0:intersection.x1 - volume.x0
+            ] += part
             multiplier[
-            intersection.z0 - volume.z0:intersection.z1 - volume.z0,
-            intersection.y0 - volume.y0:intersection.y1 - volume.y0,
-            intersection.x0 - volume.x0:intersection.x1 - volume.x0] += \
-                mpart
+                intersection.z0 - volume.z0:intersection.z1 - volume.z0,
+                intersection.y0 - volume.y0:intersection.y1 - volume.y0,
+                intersection.x0 - volume.x0:intersection.x1 - volume.x0
+            ] += mpart
         result = result / (multiplier + np.finfo(np.float32).eps)
         if np.dtype(dtype).kind in ("u", "i"):
             result = np.clip(np.around(result, 0),
@@ -576,10 +580,12 @@ class TSVVolumeBase:
         for idx, stack in enumerate(stacks):
             intersection = stack.intersection(volume)
             img = stack.imread(intersection)
-            result[intersection.z0 - volume.z0:intersection.z1 - volume.z0,
-            intersection.y0 - volume.y0:intersection.y1 - volume.y0,
-            intersection.x0 - volume.x0:intersection.x1 - volume.x0,
-            idx] = img.astype(result.dtype)
+            result[
+                intersection.z0 - volume.z0:intersection.z1 - volume.z0,
+                intersection.y0 - volume.y0:intersection.y1 - volume.y0,
+                intersection.x0 - volume.x0:intersection.x1 - volume.x0,
+                idx
+            ] = img.astype(result.dtype)
         return result
 
     @property
