@@ -6,7 +6,7 @@ import pathlib
 import numpy as np
 import pandas as pd
 import pystripe
-from pystripe.raw import raw_imread
+from pystripe import imread_tif_raw
 from scipy import stats
 from sklearn.model_selection import train_test_split
 from skimage.restoration import denoise_bilateral
@@ -19,15 +19,6 @@ from math import isnan
 
 # https://stackoverflow.com/questions/50306632/multiprocessing-not-achieving-full-cpu-usage-on-dual-processor-windows-machine
 os.environ["OPENBLAS_MAIN_FREE"] = "1"
-
-
-def img_read(path):
-    img_mem_map = None
-    if path.lower().endswith(".tif") or path.lower().endswith(".tiff"):
-        img_mem_map = pystripe.imread(path)
-    elif path.lower().endswith(".raw"):
-        img_mem_map = raw_imread(path)
-    return img_mem_map
 
 
 def get_img_stats(img_mem_map):
@@ -51,7 +42,7 @@ class MultiProcessGetImgStats(Process):
     def run(self):
         img_mem_map, img_stats = None, None
         try:
-            img_mem_map = img_read(self.img_path)
+            img_mem_map = imread_tif_raw(self.img_path)
             if img_mem_map is not None and img_mem_map.shape == self.tile_size:
                 # ['mean', 'min', 'max', 'cv', 'variance', 'std', 'skewness', 'kurtosis', 'n']
                 img_stats = get_img_stats(img_mem_map)

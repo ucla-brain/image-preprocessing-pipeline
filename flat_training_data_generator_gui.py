@@ -1,8 +1,8 @@
 import os
 import sys
 import psutil
-import pathlib
 import numpy as np
+from pathlib import Path
 from PyQt5 import QtCore, QtWidgets
 from PyQt5.QtWidgets import QSizePolicy, QWidget, QVBoxLayout, QMainWindow, QApplication, QMessageBox
 from matplotlib.figure import Figure
@@ -10,11 +10,11 @@ from matplotlib.backends.backend_qt5agg import (
     FigureCanvasQTAgg as FigureCanvas,
     NavigationToolbar2QT as NavigationToolbar)
 from math import isnan
-from flat import img_read, save_csv, get_img_stats
+from flat import save_csv, get_img_stats
 from queue import Empty
 from multiprocessing import freeze_support, Process, Queue
 from skimage.restoration import denoise_bilateral
-from pystripe_forked import imsave
+from pystripe import imsave_tif, imread_tif_raw
 try:
     psutil.Process().nice(psutil.REALTIME_PRIORITY_CLASS)
 except AttributeError:
@@ -28,11 +28,11 @@ def img_path_generator():
     for folder in AllChannels:
         img_folder = SourceFolder / folder
         if img_folder.exists():
-            for root, dirs, files in os.walk(img_folder):
+            for root, dirs, files in os.walk(SourceFolder):
                 for name in files:
                     name_l = name.lower()
                     if name_l.endswith(".raw") or name_l.endswith(".tif") or name_l.endswith(".tiff"):
-                        img_path = os.path.join(root, name)
+                        img_path = Path(os.path.join(root, name))
                         yield folder, img_path
 
 
@@ -47,7 +47,7 @@ class MultiProcessImageProcessing(Process):
         img = None
         img_stats = None
         try:
-            img_mem_map = img_read(self.img_path)
+            img_mem_map = imread_tif_raw(self.img_path)
             if img_mem_map is not None:
                 img_stats = get_img_stats(img_mem_map)
                 img_stats = [0 if isnan(x) else x for x in img_stats]
@@ -313,10 +313,9 @@ class DesignerMainWindow(QMainWindow, UiMplMainWindow):
             img_flat_average = self.img_flat_sum / self.yes_counter
             img_flat_average = denoise_bilateral(img_flat_average, sigma_spatial=1)
             img_flat = img_flat_average / np.max(img_flat_average)
-            imsave(
-                str(SourceFolder / (self.folder + '_flat.tif')),
-                img_flat,
-                convert_to_8bit=False
+            imsave_tif(
+                SourceFolder / (self.folder + '_flat.tif'),
+                img_flat
             )
         print("saved")
 
@@ -327,14 +326,14 @@ class DesignerMainWindow(QMainWindow, UiMplMainWindow):
 if __name__ == '__main__':
     freeze_support()
     AllChannels = ["Ex_488_Em_525",  "Ex_561_Em_600", "Ex_642_Em_680", ]
-    if len(sys.argv) == 2 and pathlib.Path(sys.argv[1]).exists():
-        SourceFolder = pathlib.Path(sys.argv[1]).absolute()
+    if len(sys.argv) == 2 and Path(sys.argv[1]).exists():
+        SourceFolder = Path(sys.argv[1]).absolute()
     else:
-        SourceFolder = pathlib.Path(
+        SourceFolder = Path(
             # r"C:\Users\kmoradi\Downloads\20210917_14_29_44_With_FlatImage_During_Acquisition_15x_HalfSampling_Compressed"
             r"/mnt/md0/20210729_16_18_40_SW210318-07_R-HPC_15x_Zstep1um_50p_4ms_destriped_flat_subtracted"
         )
-        # SourceFolder = pathlib.Path(r"F:\test")
+        # SourceFolder = Path(r"F:\test")
     MinRequiredSamplePerClass = 1000
     app = QApplication(sys.argv)
     dmw = DesignerMainWindow()
