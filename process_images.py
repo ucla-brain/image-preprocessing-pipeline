@@ -35,6 +35,7 @@ AllChannels: List[Tuple[str, str]] = [("Ex_488_Em_525", "g"), ("Ex_561_Em_600", 
 VoxelSizeX_4x, VoxelSizeY_4x = 1.835, 1.835
 VoxelSizeX_10x, VoxelSizeY_10x = 0.661, 0.661  # new stage --> 0.6, 0.6
 VoxelSizeX_15x, VoxelSizeY_15x = 0.422, 0.422  # new stage --> 0.4, 0.4
+VoxelSizeX_40x, VoxelSizeY_40x = 0.15, 0.15
 
 
 def get_voxel_sizes():
@@ -44,7 +45,7 @@ def get_voxel_sizes():
             f"4x: Voxel Size X = {VoxelSizeX_4x}, Y = {VoxelSizeY_4x}, tile_size = 1600 x 2000",
             f"10x: Voxel Size X = {VoxelSizeX_10x}, Y = {VoxelSizeY_10x}, tile_size = 1850 x 1850",
             f"15x: Voxel Size X = {VoxelSizeX_15x}, Y = {VoxelSizeY_15x}, tile_size = 1850 x 1850",
-            f"15x 1/2 sample: Voxel Size X = {VoxelSizeX_15x * 2}, Y = {VoxelSizeY_15x * 2}, tile_size = 925 x 925",
+            f"40x: Voxel Size X = {VoxelSizeX_40x}, Y = {VoxelSizeY_40x}, tile_size = 2048 x 2048",
             f"other: allows entering custom voxel sizes for custom tile_size"
         ],
         return_index=True
@@ -66,10 +67,10 @@ def get_voxel_sizes():
         voxel_size_y = VoxelSizeY_15x
         tile_size = (1850, 1850)
     elif objective == "3":
-        objective = "15x"
-        voxel_size_x = VoxelSizeX_15x * 2
-        voxel_size_y = VoxelSizeY_15x * 2
-        tile_size = (925, 925)
+        objective = "40x"
+        voxel_size_x = VoxelSizeX_40x
+        voxel_size_y = VoxelSizeY_40x
+        tile_size = (2048, 2048)
     elif objective == "4":
         objective = ""
         tile_size_x = int(input("what is the tile size on x axis in pixels?\n").strip())
@@ -412,7 +413,6 @@ def process_channel(
             f"--vxl1={voxel_size_x}",
             f"--vxl2={voxel_size_y}",
             f"--vxl3={voxel_size_z}",
-            "--threshold=0.99",
             "--sparse_data",
             f"--volin={preprocessed_path / channel}",
             f"--projout={proj_out}",
@@ -450,15 +450,15 @@ def process_channel(
                 command = [f"{terastitcher}"]
             command += [
                 f"-{step}",
-                f"--oV={tile_overlap_y}",  # Overlap (in pixels) between two adjacent tiles along V.
                 f"--oH={tile_overlap_x}",  # Overlap (in pixels) between two adjacent tiles along H.
-                f"--sV={tile_overlap_y - 1}",  # Displacements search radius along V (in pixels). Default value is 25!
+                f"--oV={tile_overlap_y}",  # Overlap (in pixels) between two adjacent tiles along V.
                 f"--sH={tile_overlap_x - 1}",  # Displacements search radius along H (in pixels). Default value is 25!
+                f"--sV={tile_overlap_y - 1}",  # Displacements search radius along V (in pixels). Default value is 25!
                 f"--sD={25}",  # Displacements search radius along D (in pixels).
                 f"--subvoldim={100}",  # Number of slices per subvolume partition
                 # used in the pairwise displacements computation step.
                 # dimension of layers obtained by dividing the volume along D
-                "--threshold=0.99",
+                "--threshold=0.7",
                 f"--projin={proj_in}",
                 f"--projout={proj_out}",
                 # "--restoreSPIM",
