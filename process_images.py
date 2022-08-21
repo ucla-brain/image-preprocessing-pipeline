@@ -329,8 +329,8 @@ def process_channel(
             flat_img_created_already = source_path / f'{channel}_flat.tif'
             if flat_img_created_already.exists():
                 img_flat = imread_tif_raw(flat_img_created_already)
-                with open(source_path / f'{channel}_dark.txt', "r") as f:
-                    dark = int(f.read())
+                # with open(source_path / f'{channel}_dark.txt', "r") as f:
+                #     dark = int(f.read())
                 print(f"{datetime.now().isoformat(timespec='seconds', sep=' ')}: "
                       f"{channel}: using the existing flat image:\n"
                       f"{flat_img_created_already.absolute()}.")
@@ -357,18 +357,29 @@ def process_channel(
             f"\tcompression: (ZLIB, {1 if need_compression else 0})\n"
             f"\tdark = {dark}"
         )
+
+        # sigma=(foreground, background) Default is (0, 0), indicating no de-striping.
+        sigma = (0, 0)
+        if need_destriping:
+            if objective == "4x":
+                sigma = (32, 32)
+            elif objective == "40x":
+                sigma = (128, 256)
+            else:
+                sigma = (256, 256)
+
         batch_filter(
             source_path / channel,
             preprocessed_path / channel,
             files_list=files_list,
-            workers=cpu_logical_core_count * (2 if need_raw_to_tiff_conversion and not need_lightsheet_cleaning else 1),
-            # chunks=128,
-            # sigma=[foreground, background] Default is [0, 0], indicating no de-striping.
-            sigma=((32, 32) if objective == "4x" else (256, 256)) if need_destriping else (0, 0),
-            # level=0,
-            wavelet="db10",
+            workers=cpu_logical_core_count,
+            # chunks=128,  # is calculated automatically now
+            sigma=sigma,
+            level=0,
+            wavelet="db9" if objective == "40x" else "db10",
             crossover=10,
-            # threshold=-1,
+            threshold=-1,
+            directions='vh' if objective == "40x" else "v",
             compression=('ZLIB', 1 if need_compression else 0),  # ('ZSTD', 1) conda install imagecodecs
             flat=img_flat,
             dark=dark,
@@ -454,7 +465,7 @@ def process_channel(
                 f"--oV={tile_overlap_y}",  # Overlap (in pixels) between two adjacent tiles along V.
                 f"--sH={tile_overlap_x - 1}",  # Displacements search radius along H (in pixels). Default value is 25!
                 f"--sV={tile_overlap_y - 1}",  # Displacements search radius along V (in pixels). Default value is 25!
-                f"--sD={25}",  # Displacements search radius along D (in pixels).
+                f"--sD={100}",  # Displacements search radius along D (in pixels).
                 f"--subvoldim={100}",  # Number of slices per subvolume partition
                 # used in the pairwise displacements computation step.
                 # dimension of layers obtained by dividing the volume along D
@@ -686,29 +697,7 @@ def main(source_path):
         channel_color_dict = {channel: color for channel, color in AllChannels}
     de_striped_posix, what_for = "", ""
     image_classes_training_data_path = source_path / FlatNonFlatTrainingData
-    need_lightsheet_cleaning = ask_true_false_question("Do you need to apply lightsheet cleaning algorithm?")
-    need_destriping = False  # ask_true_false_question("Do you need to remove stripes from images?")
-    channels_need_lightsheet_cleaning: List[str] = []
-    if need_destriping:
-        de_striped_posix += "_destriped"
-        what_for += "destriped "
-    elif need_lightsheet_cleaning:
-        de_striped_posix += "_lightsheet_cleaned"
-        what_for += "lightsheet cleaning "
-        if len(all_channels) == 1 or \
-                ask_true_false_question(
-                    "Lightsheet cleaning is computationally expensive. "
-                    "For sparsely labeled channels, it can help compression algorithms "
-                    "to reduce the final file sizes up to a factor of 5. \n"
-                    "Do you want to clean all channels? (if no, then you may choose a subset of channels)"):
-            channels_need_lightsheet_cleaning: List[str] = all_channels.copy()
-        else:
-            channels_need_lightsheet_cleaning: List[str] = []
-            for channel in all_channels:
-                if ask_true_false_question(f"Do you need to apply lightsheet cleaning to {channel} channel?"):
-                    channels_need_lightsheet_cleaning += [channel]
-
-    need_flat_image_application = False  # ask_true_false_question("Do you need to apply a flat image?")
+    need_flat_image_application = ask_true_false_question("Do you need to apply a flat image?")
     if need_flat_image_application:
         de_striped_posix += "_flat_applied"
         flat_img_not_exist = []
@@ -731,6 +720,75 @@ def main(source_path):
                 else:
                     print("You need classification data for flat image generation!")
                     raise RuntimeError
+
+    # need_gaussian_filter_2d: bool = False
+    need_gaussian_filter_2d = ask_true_false_question(
+        f"Do you need to apply a 5x5 Gaussian filter to remove camera artifacts and "
+        f"produce up to two times smaller files?"
+    )
+
+    down_sampling_factor = (int(voxel_size_z // voxel_size_y), int(voxel_size_z // voxel_size_x))
+    need_down_sampling = False
+    new_tile_size = None
+    if down_sampling_factor < (1, 1):
+        # Down-sampling makes sense if x-axis and y-axis voxel sizes were smaller than z axis voxel size
+        # Down-sampling is disabled.
+        down_sampling_factor = None
+        need_up_sizing = ask_true_false_question(
+            "Do you need to need_upsize images for isotropic voxel generation before stitching?")
+        if need_up_sizing:
+            de_striped_posix += "_upsized"
+            what_for += "upsizing "
+            new_tile_size = (
+                int(round(tile_size[0] * voxel_size_y / voxel_size_z, 0)),
+                int(round(tile_size[1] * voxel_size_x / voxel_size_z, 0))
+            )
+            voxel_size_x = voxel_size_y = voxel_size_z
+    else:
+        need_down_sampling = ask_true_false_question(
+            "Do you need to down-sample images for isotropic voxel generation before stitching?")
+        if not need_down_sampling:
+            down_sampling_factor = None
+        else:
+            de_striped_posix += "_downsampled"
+            what_for += "down-sampling "
+            new_tile_size = (
+                int(round(tile_size[0] * voxel_size_y / voxel_size_z, 0)),
+                int(round(tile_size[1] * voxel_size_x / voxel_size_z, 0))
+            )
+            voxel_size_x = voxel_size_y = voxel_size_z
+
+    need_destriping = ask_true_false_question("Do you need to remove stripes from images?")
+    if need_destriping:
+        de_striped_posix += "_destriped"
+        what_for += "destriped "
+
+    dark_threshold: Dict[str, int] = {channel: 0 for channel in all_channels}
+    need_baseline_subtraction = ask_true_false_question("Do you need to remove baseline (dark) from images?")
+    if need_baseline_subtraction:
+        # pixel values smaller than the dark value (camera noise) will be set to 0 to increase compression and clarity
+        for channel in all_channels:
+            dark_threshold[channel] = ask_for_a_positive_integer(
+                f"Enter foreground vs background (dark) threshold for channel {channel}:", (0, 2 ** 16 - 1))
+
+    channels_need_lightsheet_cleaning: List[str] = []
+    need_lightsheet_cleaning = ask_true_false_question("Do you need to apply lightsheet cleaning algorithm?")
+    if need_lightsheet_cleaning:
+        de_striped_posix += "_lightsheet_cleaned"
+        what_for += "lightsheet cleaning "
+        if len(all_channels) == 1 or \
+                ask_true_false_question(
+                    "Lightsheet cleaning is computationally expensive. "
+                    "For sparsely labeled channels, it can help compression algorithms "
+                    "to reduce the final file sizes up to a factor of 5. \n"
+                    "Do you want to clean all channels? (if no, then you may choose a subset of channels)"):
+            channels_need_lightsheet_cleaning: List[str] = all_channels.copy()
+        else:
+            channels_need_lightsheet_cleaning: List[str] = []
+            for channel in all_channels:
+                if ask_true_false_question(f"Do you need to apply lightsheet cleaning to {channel} channel?"):
+                    channels_need_lightsheet_cleaning += [channel]
+
     need_raw_to_tiff_conversion = ask_true_false_question("Are images in raw format?")
     need_compression = ask_true_false_question("Do you need to compress temporary tif files?")
     if need_raw_to_tiff_conversion or need_compression:
@@ -763,55 +821,15 @@ def main(source_path):
             ))
         de_striped_posix += "_bitshift." + ".".join(
             [f"{channel_color_dict[channel]}{right_bit_shift[channel]}" for channel in all_channels])
-    down_sampling_factor = (int(voxel_size_z // voxel_size_y), int(voxel_size_z // voxel_size_x))
-    need_down_sampling = False
-    new_tile_size = None
-    if down_sampling_factor < (1, 1):
-        # Down-sampling makes sense if x-axis and y-axis voxel sizes were smaller than z axis voxel size
-        # Down-sampling is disabled.
-        down_sampling_factor = None
-        need_up_sizing = ask_true_false_question(
-            "Do you need to need_upsize images for isotropic voxel generation before stitching?")
-        if need_up_sizing:
-            de_striped_posix += "_upsized"
-            what_for += "upsizing "
-            new_tile_size = (
-                int(round(tile_size[0] * voxel_size_y / voxel_size_z, 0)),
-                int(round(tile_size[1] * voxel_size_x / voxel_size_z, 0))
-            )
-            voxel_size_x = voxel_size_y = voxel_size_z
-    else:
-        need_down_sampling = ask_true_false_question(
-            "Do you need to down-sample images for isotropic voxel generation before stitching?")
-        if not need_down_sampling:
-            down_sampling_factor = None
-        else:
-            de_striped_posix += "_downsampled"
-            what_for += "down-sampling "
-            new_tile_size = (
-                int(round(tile_size[0] * voxel_size_y / voxel_size_z, 0)),
-                int(round(tile_size[1] * voxel_size_x / voxel_size_z, 0))
-            )
-            voxel_size_x = voxel_size_y = voxel_size_z
 
     preprocessed_path = source_path.parent / (source_path.name + de_striped_posix)
     continue_process_pystripe = False
     stitched_path = source_path.parent / (source_path.name + "_stitched")
     print_input_file_names = False
-    dark_threshold: Dict[str, int] = {channel: 0 for channel in all_channels}
 
-    # need_gaussian_filter_2d: bool = False
-    need_gaussian_filter_2d = ask_true_false_question(
-        f"Do you need to apply a 5x5 Gaussian filter to remove camera artifacts and "
-        f"produce up to two times smaller files?"
-    )
     if need_destriping or need_flat_image_application or need_raw_to_tiff_conversion or need_16bit_to_8bit_conversion \
-            or need_down_sampling or need_compression or need_gaussian_filter_2d or need_lightsheet_cleaning:
-
-        # pixel values smaller than the dark value (camera noise) will be set to 0 to increase compression and clarity
-        for channel in all_channels:
-            dark_threshold[channel] = ask_for_a_positive_integer(
-                f"Enter foreground vs background (dark) threshold for channel {channel}:", (0, 2 ** 16 - 1))
+            or need_down_sampling or need_compression or need_gaussian_filter_2d or need_lightsheet_cleaning or \
+            need_baseline_subtraction:
 
         print_input_file_names = False  # ask_true_false_question(
         # "Do you need to print raw or tif file names to find corrupt files during preprocessing stage?")
