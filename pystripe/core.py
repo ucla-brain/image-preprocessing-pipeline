@@ -1,12 +1,13 @@
 import os
 import re
-import pywt
-import warnings
-from argparse import RawDescriptionHelpFormatter, ArgumentParser
+from warnings import filterwarnings
 from numpy import max as np_max
-from numpy import uint8, uint16, float32, float64, ndarray, generic, real, zeros, broadcast_to, sqrt, exp, log, \
-    cumsum, imag, arange, unique, interp, pad, clip, where, rot90
-from scipy import fftpack, ndimage
+from numpy import uint8, uint16, float32, float64, ndarray, generic, zeros, broadcast_to, exp, log, \
+    cumsum, arange, unique, interp, pad, clip, where, rot90
+from scipy.fftpack import rfft, fftshift, irfft
+from scipy.ndimage import gaussian_filter as gaussian_filter_nd
+from pywt import wavedec2, waverec2, Wavelet, dwt_max_level
+from argparse import RawDescriptionHelpFormatter, ArgumentParser
 from tqdm import tqdm
 from time import sleep
 from datetime import datetime
@@ -29,7 +30,7 @@ from operator import iconcat
 from functools import reduce
 from supplements.cli_interface import PrintColors
 
-warnings.filterwarnings("ignore")
+filterwarnings("ignore")
 supported_extensions = ['.tif', '.tiff', '.raw', '.dcimg']
 num_retries = 40
 os.environ['MKL_NUM_THREADS'] = '1'
@@ -195,46 +196,6 @@ def imsave_tif(path: Path, img: ndarray, compression: Tuple[str, int] = ('ZLIB',
             continue
 
 
-def wavedec(img: ndarray, wavelet: str, level: int = None):
-    """Decompose `img` using discrete (decimated) wavelet transform using `wavelet`
-
-    Parameters
-    ----------
-    img : ndarray
-        image to be decomposed into wavelet coefficients
-    wavelet : str
-        name of the mother wavelet
-    level : int (optional)
-        number of wavelet levels to use. Default is the maximum possible decimation
-
-    Returns
-    -------
-    coeffs : list
-        the approximation coefficients followed by detail coefficient tuple for each level
-
-    """
-    return pywt.wavedec2(img, wavelet, mode='symmetric', level=level, axes=(-2, -1))
-
-
-def waverec(coeffs, wavelet):
-    """Reconstruct an image using a multilevel 2D inverse discrete wavelet transform
-
-    Parameters
-    ----------
-    coeffs : list
-        the approximation coefficients followed by detail coefficient tuple for each level
-    wavelet : str
-        name of the mother wavelet
-
-    Returns
-    -------
-    img : ndarray
-        reconstructed image
-
-    """
-    return pywt.waverec2(coeffs, wavelet, mode='symmetric', axes=(-2, -1))
-
-
 def fft(data, axis=-1, shift=True):
     """Computes the 1D Fast Fourier Transform of an input array
 
@@ -253,46 +214,10 @@ def fft(data, axis=-1, shift=True):
         transformed data
 
     """
-    fdata = fftpack.rfft(data, axis=axis)
-    # fdata = fftpack.rfft(fdata, axis=0)
+    fdata = rfft(data, axis=axis)
     if shift:
-        fdata = fftpack.fftshift(fdata)
+        fdata = fftshift(fdata)
     return fdata
-
-
-def ifft(fdata, axis=-1):
-    # fdata = fftpack.irfft(fdata, axis=0)
-    return fftpack.irfft(fdata, axis=axis)
-
-
-def fft2(data, shift=True):
-    """Computes the 2D Fast Fourier Transform of an input array
-
-    Parameters
-    ----------
-    data : ndarray
-        data to transform
-    shift : bool
-        indicator for center the DC component
-
-    Returns
-    -------
-    fdata : ndarray
-        transformed data
-
-    """
-    fdata = fftpack.fft2(data)
-    if shift:
-        fdata = fftpack.fftshift(fdata)
-    return fdata
-
-
-def ifft2(fdata):
-    return fftpack.ifft2(fdata)
-
-
-def magnitude(fdata):
-    return sqrt(real(fdata) ** 2 + imag(fdata) ** 2)
 
 
 def notch(n, sigma):
@@ -384,8 +309,8 @@ def hist_match(source, template):
 
 
 def max_level(min_len, wavelet):
-    w = pywt.Wavelet(wavelet)
-    return pywt.dwt_max_level(min_len, w.dec_len)
+    w = Wavelet(wavelet)
+    return dwt_max_level(min_len, w.dec_len)
 
 
 def sigmoid(x):
@@ -395,16 +320,12 @@ def sigmoid(x):
 def foreground_fraction(img, center, crossover, smoothing):
     z = (img - center) / crossover
     f = sigmoid(z)
-    return ndimage.gaussian_filter(f, sigma=smoothing)
+    return gaussian_filter_nd(f, sigma=smoothing)
 
 
 def filter_subband(img, sigma, level, wavelet):
     img_log = log(1 + img)
-
-    if level == 0:
-        coeffs = wavedec(img_log, wavelet)
-    else:
-        coeffs = wavedec(img_log, wavelet, level)
+    coeffs = wavedec2(img_log, wavelet, mode='symmetric', level=None if level == 0 else level, axes=(-2, -1))
     approx = coeffs[0]
     detail = coeffs[1:]
 
@@ -415,10 +336,10 @@ def filter_subband(img, sigma, level, wavelet):
         fch = fft(ch, shift=False)
         g = gaussian_filter(shape=fch.shape, sigma=s)
         fch_filt = fch * g
-        ch_filt = ifft(fch_filt)
+        ch_filt = irfft(fch_filt, axis=-1)
         coeffs_filt.append((ch_filt, cv, cd))
 
-    img_log_filtered = waverec(coeffs_filt, wavelet)
+    img_log_filtered = waverec2(coeffs_filt, wavelet, mode='symmetric', axes=(-2, -1))
     return exp(img_log_filtered) - 1
 
 
@@ -436,7 +357,7 @@ def filter_streaks(
         img: ndarray,
         sigma: Tuple[int, int],
         level: int = 0,
-        wavelet: str = 'db2',
+        wavelet: str = 'db9',
         crossover: float = 10,
         threshold: float = -1,
         directions: str = 'v'):
@@ -449,7 +370,7 @@ def filter_streaks(
     sigma : tuple
         filter bandwidth(s) in pixels (larger gives more filtering)
     level : int
-        number of wavelet levels to use
+        number of wavelet levels to use. 0 means the maximum possible decimation.
     wavelet : str
         name of the mother wavelet
     crossover : float
@@ -457,7 +378,7 @@ def filter_streaks(
     threshold : float
         intensity value to separate background from foreground. Default is Otsu
     directions : str
-        destriping direction: 'v' means top-down, 'h' means left-to-right, 'vh' means both directions.
+        destriping direction: 'v' means top-down, 'h' means left-to-right, 'vh' or 'hv' means both directions.
 
     Returns
     -------
@@ -477,21 +398,25 @@ def filter_streaks(
             # print(threshold)
         except ValueError:
             threshold = 1
-
-    img = img.astype(float32)
+    # print(f"step 5-1: {img.dtype}, max={img.max()}")
+    img = img.astype(float64)
     #
     # Need to pad image to multiple of 2
     #
     pad_y, pad_x = [_ % 2 for _ in img.shape]
     if pad_y == 1 or pad_x == 1:
         img = pad(img, ((0, pad_y), (0, pad_x)), mode="edge")
-
+    # print(f"step 5-2: {img.dtype}, max={img.max()}")
     # TODO: Clean up this logic with some dual-band CLI alternative
     f_img = None
     directions = directions.lower()
-    for direction in directions:
+    for idx, direction in enumerate(directions):
         if direction == 'h':
-            img = rot90(img, k=1)
+            img = rot90(img, k=-1)
+
+        if idx > 0 and sigma1 != sigma2:
+            threshold = threshold_otsu(img)
+            # print(threshold)
 
         if sigma1 > 0:
             if sigma2 > 0:
@@ -500,21 +425,21 @@ def filter_streaks(
                 else:  # Dual-band
                     background = clip(img, None, threshold)
                     foreground = clip(img, threshold, None)
-                    background_filtered = filter_subband(background, sigma[1], level, wavelet)
-                    foreground_filtered = filter_subband(foreground, sigma[0], level, wavelet)
+                    background_filtered = filter_subband(background, sigma2, level, wavelet)
+                    foreground_filtered = filter_subband(foreground, sigma1, level, wavelet)
                     # Smoothed homotopy
                     f = foreground_fraction(img, threshold, crossover, smoothing=smoothing)
                     f_img = foreground_filtered * f + background_filtered * (1 - f)
             else:  # Foreground filter only
                 foreground = clip(img, threshold, None)
-                foreground_filtered = filter_subband(foreground, sigma[0], level, wavelet)
+                foreground_filtered = filter_subband(foreground, sigma1, level, wavelet)
                 # Smoothed homotopy
                 f = foreground_fraction(img, threshold, crossover, smoothing=smoothing)
                 f_img = foreground_filtered * f + img * (1 - f)
         else:
             if sigma2 > 0:  # Background filter only
                 background = clip(img, None, threshold)
-                background_filtered = filter_subband(background, sigma[1], level, wavelet)
+                background_filtered = filter_subband(background, sigma2, level, wavelet)
                 # Smoothed homotopy
                 f = foreground_fraction(img, threshold, crossover, smoothing=smoothing)
                 f_img = img * f + background_filtered * (1 - f)
@@ -523,16 +448,13 @@ def filter_streaks(
                 f_img = img
 
         if direction == 'h':
-            f_img = rot90(f_img, k=-1)
+            f_img = rot90(f_img, k=1)
 
         if f_img is not None:
             img = f_img
         else:
             print(f"{PrintColors.WARNING}Warning: filtered image (f_img) should not be None.")
-
-    # TODO: Fix code to clip back to original bit depth
-    # scaled_fimg = hist_match(f_img, img)
-    # clip(scaled_fimg, np.iinfo(img.dtype).min, np.iinfo(img.dtype).max, out=scaled_fimg)
+    # print(f"step 5-3: {img.dtype}, max={img.max()}")
 
     # Convert to 16 bit image
     if dtype == uint16 or dtype in ["uint16", "float64"]:
@@ -542,7 +464,7 @@ def filter_streaks(
     else:
         print(f"unexpected image dtype {f_img.dtype}")
         raise RuntimeError
-
+    # print(f"step 5-4: {img.dtype}, max={img.max()}")
     if pad_x > 0:
         f_img = f_img[:, :-pad_x]
     if pad_y > 0:
@@ -578,7 +500,7 @@ def read_filter_save(
         tile_size: Tuple[int, int] = None,
         down_sample: Tuple[int, int] = None,  # (2, 2),
         new_size: Tuple[int, int] = None,
-        print_input_file_names: bool = True
+        print_input_file_names: bool = False
 ):
     """Convenience wrapper around filter streaks. Takes in a path to an image rather than an image array
 
@@ -593,7 +515,7 @@ def read_filter_save(
     sigma : tuple
         bandwidth of the stripe filter
     level : int
-        number of wavelet levels to use
+        number of wavelet levels to use. 0 means the maximum possible decimation.
     wavelet : str
         name of the mother wavelet
     crossover : float
@@ -602,7 +524,7 @@ def read_filter_save(
         intensity value to separate background from foreground.
         Default (-1) means automatic detection using Otsu method, otherwise uses the given positive value.
     directions : str
-        destriping direction: 'v' means top-down, 'h' means left-to-right, 'vh' means both directions.
+        destriping direction: 'v' means top-down, 'h' means left-to-right, 'vh' or 'hv' means both directions.
     compression : tuple (str, int)
         The 1st argument is compression method the 2nd compression level for tiff files
         For example, ('ZSTD', 1) or ('ZLIB', 1).
@@ -690,14 +612,19 @@ def read_filter_save(
         d_type = img.dtype
         if not output_file.parent.exists():
             output_file.parent.mkdir(parents=True, exist_ok=True)
+        # print(f"step 0: {img.dtype}, max={img.max()}")
         if flat is not None:
             img = apply_flat(img, flat)
+        # print(f"step 1: {img.dtype}, max={img.max()}")
         if gaussian_filter_2d:
-            img = gaussian(img, sigma=1, preserve_range=True, truncate=2)
+            img = gaussian(img, sigma=1, preserve_range=True, truncate=2).astype(d_type)
+        # print(f"step 2: {img.dtype}, max={img.max()}")
         if down_sample is not None:
             img = block_reduce(img, block_size=down_sample, func=np_max)
-        if new_size is not None and tile_size > new_size:
-            img = resize(img, new_size, preserve_range=True, anti_aliasing=True).astype(d_type)
+        # print(f"step 3: {img.dtype}")
+        if new_size is not None and tile_size < new_size:
+            img = resize(img, new_size, preserve_range=True, anti_aliasing=False)
+        # print(f"step 4: {img.dtype}")
         if not sigma[0] == sigma[1] == 0:
             img = filter_streaks(
                 img,
@@ -708,8 +635,10 @@ def read_filter_save(
                 threshold=threshold,
                 directions=directions
             )
+        # print(f"step 5: {img.dtype}, max={img.max()}")
         if dark is not None and dark > 0:
             img = where(img > dark, img - dark, 0)  # Subtract the dark offset
+        # print(f"step 6: {img.dtype}, max={img.max()}")
         if lightsheet:
             img = correct_lightsheet(
                 img.reshape(img.shape[0], img.shape[1], 1),
@@ -722,13 +651,14 @@ def read_filter_save(
                     dtype=float32,
                     step=(2, 2, 1)),
                 lightsheet_vs_background=lightsheet_vs_background
-            ).reshape(img.shape[0], img.shape[1])
+            ).reshape(img.shape[0], img.shape[1]).astype(d_type)
+        # print(f"step 7: {img.dtype}, max={img.max()}")
+        if new_size is not None and tile_size > new_size:
+            img = resize(img, new_size, preserve_range=True, anti_aliasing=True).astype(d_type)
+        # print(f"step 8: {img.dtype}")
+
         if rotate:
             img = rot90(img)
-
-        if new_size is not None and tile_size < new_size:
-            img = resize(img, new_size, preserve_range=True, anti_aliasing=False)
-
         if convert_to_16bit and img.dtype != uint16:
             clip(img, 0, 65535, out=img)  # Clip to 16-bit [0, 2 ** 16 - 1] unsigned range
             img = img.astype(uint16)
@@ -748,7 +678,7 @@ def read_filter_save(
 
 
 def _read_filter_save(input_dict):
-    """Same as `read_filter_save' but with a single input dictionary. Used for pool.imap() in batch_filter
+    """Same as 'read_filter_save' but with a single input dictionary. Used for pool.imap() in batch_filter
 
     Parameters
     ----------
@@ -934,7 +864,7 @@ def batch_filter(
         workers: int = cpu_count(),
         sigma: Tuple[int, int] = (0, 0),
         level=0,
-        wavelet: str = 'db10',
+        wavelet: str = 'db9',
         crossover: int = 10,
         threshold: int = -1,
         directions: str = 'v',
@@ -980,7 +910,7 @@ def batch_filter(
         bandwidth of the stripe filter in pixels
         sigma=(foreground, background) Default is (0, 0), indicating no de-striping.
     level : int
-        number of wavelet levels to use. 0 is the default.
+        number of wavelet levels to use. 0 is the default and means the maximum possible decimation.
     wavelet : str
         name of the mother wavelet
     crossover : float
@@ -989,7 +919,7 @@ def batch_filter(
         intensity value to separate background from foreground.
         Default (-1) means automatic detection using Otsu method, otherwise uses the given positive value.
     directions : str
-        destriping direction: 'v' means top-down, 'h' means left-to-right, 'vh' means both directions.
+        destriping direction: 'v' means top-down, 'h' means left-to-right, 'vh' or 'hv' means both directions.
     compression : tuple (str, int)
         The 1st argument is compression method the 2nd compression level for tiff files
         For example, ('ZSTD', 1) or ('ZLIB', 1).
@@ -1081,6 +1011,7 @@ def batch_filter(
         'new_size': new_size,
         'print_input_file_names': print_input_file_names
     }
+    # print(arg_dict_template)
 
     print(f'{datetime.now()}: Scheduling jobs for images in \n\t{input_path}')
 
