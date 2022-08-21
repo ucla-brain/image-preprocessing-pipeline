@@ -544,7 +544,8 @@ def merge_channels_by_file_name(
         order_of_colors: str = "gbr",  # the order of r, g and b letters can be arbitrary here
         merged_tif_path: Path = None,
         shape: Tuple[int, int] = None,
-        resume: bool = True
+        resume: bool = True,
+        compression: Tuple[str, int] = ("ZLIB", 1)
 ):
     rgb_file = merged_tif_path / file_name
     if resume and rgb_file.exists():
@@ -585,7 +586,7 @@ def merge_channels_by_file_name(
                     image = image[:shape[0], :shape[1]]
             multi_channel_img[:, :, idx] = image
 
-    imsave_tif(rgb_file, multi_channel_img, compression=("ZLIB", 1))
+    imsave_tif(rgb_file, multi_channel_img, compression=compression)
 
 
 def merge_channels_by_file_name_worker(input_dict):
@@ -598,7 +599,8 @@ def merge_all_channels(
         channel_volume_shapes: list = None,
         order_of_colors: str = "gbr",
         workers: int = cpu_count(),
-        resume: bool = True
+        resume: bool = True,
+        compression: Tuple[str, int] = ("ZLIB", 1)
 ):
     """
     file names should be identical for each z-step of each channel
@@ -622,7 +624,8 @@ def merge_all_channels(
         "order_of_colors": order_of_colors,
         "merged_tif_path": merged_tif_path,
         "shape": (y, x),
-        "resume": resume
+        "resume": resume,
+        "compression": compression
     } for file in stitched_tif_paths[num_files_in_each_path.index(max(num_files_in_each_path))].rglob("*.tif")]
     num_images = len(work)
 
