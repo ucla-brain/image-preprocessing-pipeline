@@ -51,7 +51,7 @@ class MultiProcessImageProcessing(Process):
             if img_mem_map is not None:
                 img_stats = get_img_stats(img_mem_map)
                 img_stats = [0 if isnan(x) else x for x in img_stats]
-                img = denoise_bilateral(img_mem_map, sigma_spatial=self.sigma_spatial)
+                img = denoise_bilateral(img_mem_map, sigma_spatial=self.sigma_spatial, mode="edge")
         except Exception as inst:
             print(f'Process failed for {self.img_path}.')
             print(type(inst))    # the exception instance
@@ -311,8 +311,8 @@ class DesignerMainWindow(QMainWindow, UiMplMainWindow):
         )
         if self.yes_counter > 0:
             img_flat_average = self.img_flat_sum / self.yes_counter
-            img_flat_average = denoise_bilateral(img_flat_average, sigma_spatial=1)
-            img_flat = img_flat_average / np.max(img_flat_average)
+            img_flat_average = denoise_bilateral(img_flat_average, sigma_spatial=1, mode="edge")
+            img_flat = img_flat_average / img_flat_average.max()
             imsave_tif(
                 SourceFolder / (self.folder + '_flat.tif'),
                 img_flat

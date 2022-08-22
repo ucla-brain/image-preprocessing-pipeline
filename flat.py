@@ -2,11 +2,10 @@ import os
 import sys
 import csv
 import psutil
-import pathlib
 import numpy as np
 import pandas as pd
-import pystripe
-from pystripe import imread_tif_raw
+from pathlib import Path
+from pystripe import imread_tif_raw, imsave_tif
 from scipy import stats
 from sklearn.model_selection import train_test_split
 from skimage.restoration import denoise_bilateral
@@ -74,7 +73,7 @@ class MultiProcessDenoiseImg(Process):
     def run(self):
         img_denoised = None
         try:
-            img_denoised = denoise_bilateral(self.img_list[self.img_idx], sigma_spatial=self.sigma_spatial)
+            img_denoised = denoise_bilateral(self.img_list[self.img_idx], sigma_spatial=self.sigma_spatial, mode="edge")
         except Exception as inst:
             print(f'Denoise process failed.')
             print(type(inst))    # the exception instance
@@ -89,8 +88,7 @@ def img_path_generator(path):
             for name in files:
                 name_l = name.lower()
                 if name_l.endswith(".raw") or name_l.endswith(".tif") or name_l.endswith(".tiff"):
-                    img_path = os.path.join(root, name)
-                    yield img_path
+                    yield Path(os.path.join(root, name))
 
 
 def update_progress(percent, prefix='progress', posix=''):
@@ -257,20 +255,26 @@ def create_flat_img(
 
     if img_flat_count > 0:
         img_flat_median = np.median(img_flat_list, axis=0)
-        img_flat_denoised = denoise_bilateral(img_flat_median, sigma_spatial=sigma_spatial)
-        img_flat = img_flat_denoised / np.max(img_flat_denoised)
-        dark = int(round(float(np.median(img_mean_list)/np.median(img_flat)), 0))
+        img_flat_median = denoise_bilateral(img_flat_median, sigma_spatial=sigma_spatial, mode="edge")
+        img_flat_median = img_flat_median / img_flat_median.max()
+        img_flat_mean = stats.trim_mean(img_flat_list, 0.1, axis=0)
+        img_flat_mean = denoise_bilateral(img_flat_mean, sigma_spatial=sigma_spatial, mode="edge")
+        img_flat_mean = img_flat_mean / img_flat_mean.max()
+        dark = int(round(float(np.median(img_mean_list)/np.median(img_flat_median)), 0))
         if save_as_tiff:
-            pystripe.imsave(
-                str(img_source_path.parent / (img_source_path.name + '_flat.tif')),
-                img_flat,
-                convert_to_8bit=False
+            imsave_tif(
+                img_source_path.parent / (img_source_path.name + '_flat.tif'),
+                img_flat_median,
+            )
+            imsave_tif(
+                img_source_path.parent / (img_source_path.name + '_flat_mean.tif'),
+                img_flat_mean,
             )
             with open(img_source_path.parent / (img_source_path.name + '_dark.txt'), "w") as f:
                 f.write(str(dark))
         update_progress(
             100, prefix=img_source_path.name, posix=f'found: {img_flat_count}                                         ')
-        return img_flat, dark
+        return img_flat_median, dark
     else:
         print("no flat image found!")
         raise RuntimeError
@@ -279,18 +283,18 @@ def create_flat_img(
 if __name__ == '__main__':
     freeze_support()
     AllChannels = ["Ex_488_Em_525", "Ex_561_Em_600", "Ex_642_Em_680"]
-    SourceFolder = pathlib.Path(
-        r"Y:\SmartSPIM_Data\2021_10_21\20211021_11_14_46_15x_FlatImage_0_Offset_Compressed"
+    SourceFolder = Path(
+        r"G:\sm20220717-01_40X_ZStep2um_20220813_175015-17_F50"
         # r"/mnt/f/20210907_16_56_41_SM210705_01_LS_4X_4000z"
     )
 
-    # SourceFolder = pathlib.Path(__file__).parent
+    # SourceFolder = Path(__file__).parent
     for Channel in AllChannels:
         if SourceFolder.joinpath(Channel).exists():
             img_flat_, img_dark_ = create_flat_img(
                 SourceFolder / Channel,
                 None,  # r'./image_classes.csv',
-                (1850, 1850),  # (1850, 1850) (1600, 2000)
+                (2048, 2048),  # (1850, 1850) (1600, 2000)
                 max_images=999,
                 batch_size=psutil.cpu_count(logical=True),
                 patience_before_skipping=None,
