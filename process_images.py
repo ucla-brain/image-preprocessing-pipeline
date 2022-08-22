@@ -418,8 +418,8 @@ def process_channel(
         command = [
             f"{terastitcher}",
             "-1",
-            "--ref1=H",  # x horizontal?
-            "--ref2=V",  # y vertical?
+            f"--ref1={'V' if objective == '40x' else 'H'}",  # x horizontal?
+            f"--ref2={'H' if objective == '40x' else 'V'}",  # y vertical?
             "--ref3=D",  # z depth?
             f"--vxl1={voxel_size_x}",
             f"--vxl2={voxel_size_y}",
@@ -461,8 +461,10 @@ def process_channel(
                 command = [f"{terastitcher}"]
             command += [
                 f"-{step}",
-                f"--oH={tile_overlap_x}",  # Overlap (in pixels) between two adjacent tiles along H.
-                f"--oV={tile_overlap_y}",  # Overlap (in pixels) between two adjacent tiles along V.
+                # Overlap (in pixels) between two adjacent tiles along H.
+                f"--oH={tile_overlap_x}",
+                # Overlap (in pixels) between two adjacent tiles along V.
+                f"--oV={0 if objective == '40x' else tile_overlap_y}",
                 f"--sH={tile_overlap_x - 1}",  # Displacements search radius along H (in pixels). Default value is 25!
                 f"--sV={tile_overlap_y - 1}",  # Displacements search radius along V (in pixels). Default value is 25!
                 f"--sD={100}",  # Displacements search radius along D (in pixels).
