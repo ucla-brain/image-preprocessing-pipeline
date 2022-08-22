@@ -392,32 +392,28 @@ def filter_streaks(
         return img
     dtype = img.dtype
     smoothing = 1
-    if threshold == -1 and sigma1 != sigma2:
-        try:
-            threshold = threshold_otsu(img)
-            # print(threshold)
-        except ValueError:
-            threshold = 1
-    # print(f"step 5-1: {img.dtype}, max={img.max()}")
-    img = img.astype(float64)
-    #
     # Need to pad image to multiple of 2
-    #
     pad_y, pad_x = [_ % 2 for _ in img.shape]
     if pad_y == 1 or pad_x == 1:
         img = pad(img, ((0, pad_y), (0, pad_x)), mode="edge")
-    # print(f"step 5-2: {img.dtype}, max={img.max()}")
-    # TODO: Clean up this logic with some dual-band CLI alternative
+    # print(f"step 5-1: {img.dtype}, max={img.max()}")
+    img = img.astype(float64)
     f_img = None
     directions = directions.lower()
     for idx, direction in enumerate(directions):
+        if (threshold == -1 or idx > 0) and sigma1 != sigma2:
+            try:
+                threshold = threshold_otsu(img)
+                # print(threshold)
+            except ValueError:
+                threshold = 1
+
         if direction == 'h':
-            img = rot90(img, k=-1)
+            img = rot90(img, k=1)
 
-        if idx > 0 and sigma1 != sigma2:
-            threshold = threshold_otsu(img)
-            # print(threshold)
+        # print(f"step 5-2: {img.dtype}, max={img.max()}")
 
+        # TODO: Clean up this logic with some dual-band CLI alternative
         if sigma1 > 0:
             if sigma2 > 0:
                 if sigma1 == sigma2:  # Single band
@@ -447,13 +443,20 @@ def filter_streaks(
                 # sigma1 and sigma2 are both 0, so skip the destriping
                 f_img = img
 
+        # print(f"step 5-4: {img.dtype}, max={img.max()}")
+
         if direction == 'h':
-            f_img = rot90(f_img, k=1)
+            f_img = rot90(f_img, k=-1)
 
         if f_img is not None:
             img = f_img
         else:
             print(f"{PrintColors.WARNING}Warning: filtered image (f_img) should not be None.")
+
+    if pad_x > 0:
+        f_img = f_img[:, :-pad_x]
+    if pad_y > 0:
+        f_img = f_img[:-pad_y]
     # print(f"step 5-3: {img.dtype}, max={img.max()}")
 
     # Convert to 16 bit image
@@ -464,11 +467,7 @@ def filter_streaks(
     else:
         print(f"unexpected image dtype {f_img.dtype}")
         raise RuntimeError
-    # print(f"step 5-4: {img.dtype}, max={img.max()}")
-    if pad_x > 0:
-        f_img = f_img[:, :-pad_x]
-    if pad_y > 0:
-        f_img = f_img[:-pad_y]
+
     return f_img
 
 
