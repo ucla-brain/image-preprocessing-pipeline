@@ -501,7 +501,7 @@ def process_channel(
         str(stitched_tif_path / "img_{z:06d}.tif"),
         compression=("ZLIB", 1),
         cores=merge_step_cores,  # here the limit is 61 on Windows
-        dtype='uint8' if need_16bit_to_8bit_conversion else 'uint16',
+        dtype='uint8' if need_16bit_to_8bit_conversion else TifStack(preprocessed_path / channel).dtype,
         resume=continue_process_terastitcher
     )  # shape is in z y x format
 
