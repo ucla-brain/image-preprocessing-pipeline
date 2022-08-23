@@ -254,27 +254,27 @@ def create_flat_img(
         running_processes = future_running_processes
 
     if img_flat_count > 0:
-        img_flat_median = np.median(img_flat_list, axis=0)
-        img_flat_median = denoise_bilateral(img_flat_median, sigma_spatial=sigma_spatial, mode="edge")
-        img_flat_median = img_flat_median / img_flat_median.max()
+        # img_flat_median = np.median(img_flat_list, axis=0)
+        # img_flat_median = denoise_bilateral(img_flat_median, sigma_spatial=sigma_spatial, mode="edge")
+        # img_flat_median = img_flat_median / img_flat_median.max()
         img_flat_mean = stats.trim_mean(img_flat_list, 0.1, axis=0)
         img_flat_mean = denoise_bilateral(img_flat_mean, sigma_spatial=sigma_spatial, mode="edge")
         img_flat_mean = img_flat_mean / img_flat_mean.max()
-        dark = int(round(float(np.median(img_mean_list)/np.median(img_flat_median)), 0))
+        dark = int(round(float(np.median(img_mean_list)/np.median(img_flat_mean)), 0))
         if save_as_tiff:
             imsave_tif(
                 img_source_path.parent / (img_source_path.name + '_flat.tif'),
-                img_flat_median,
-            )
-            imsave_tif(
-                img_source_path.parent / (img_source_path.name + '_flat_mean.tif'),
                 img_flat_mean,
             )
+            # imsave_tif(
+            #     img_source_path.parent / (img_source_path.name + '_flat_mean.tif'),
+            #     img_flat_mean,
+            # )
             with open(img_source_path.parent / (img_source_path.name + '_dark.txt'), "w") as f:
                 f.write(str(dark))
         update_progress(
             100, prefix=img_source_path.name, posix=f'found: {img_flat_count}                                         ')
-        return img_flat_median, dark
+        return img_flat_mean, dark
     else:
         print("no flat image found!")
         raise RuntimeError
