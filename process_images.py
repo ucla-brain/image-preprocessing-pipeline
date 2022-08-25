@@ -13,14 +13,14 @@ import psutil
 from re import compile, match, IGNORECASE
 from psutil import cpu_count, virtual_memory
 from tqdm import tqdm
-from numpy import ndarray, zeros
+from numpy import ndarray, zeros, rot90
 from pathlib import Path
 from flat import create_flat_img
 from datetime import datetime, timedelta
 from time import time, sleep
 from platform import uname
 from tsv.volume import TSVVolume
-from tsv.convert import convert_to_2D_tif, calculate_cores_and_chunk_size
+from tsv.convert import calculate_cores_and_chunk_size
 from pystripe.core import batch_filter, imread_tif_raw, imsave_tif
 from queue import Empty
 from multiprocessing import freeze_support, Pool, Queue, Process
@@ -28,14 +28,17 @@ from supplements.cli_interface import select_among_multiple_options, ask_true_fa
 from supplements.cli_interface import ask_for_a_positive_integer
 from typing import List, Tuple, Dict
 from downsampling import TifStack
-
+from parallel_image_processor import parallel_image_processor
 # experiment setup: user needs to set them right
 # AllChannels = [(channel folder name, rgb color)]
-AllChannels: List[Tuple[str, str]] = [("Ex_488_Em_525", "g"), ("Ex_561_Em_600", "r"), ("Ex_642_Em_680", "b")]
+AllChannels: List[Tuple[str, str]] = [
+    ("Ex_488_Em_525", "g"), ("Ex_561_Em_600", "r"), ("Ex_642_Em_680", "b"),
+    ("Ex_488_Em_1", "g"), ("Ex_561_Em_1", "r"), ("Ex_642_Em_1", "b")
+]
 VoxelSizeX_4x, VoxelSizeY_4x = 1.835, 1.835
 VoxelSizeX_10x, VoxelSizeY_10x = 0.661, 0.661  # new stage --> 0.6, 0.6
 VoxelSizeX_15x, VoxelSizeY_15x = 0.422, 0.422  # new stage --> 0.4, 0.4
-VoxelSizeX_40x, VoxelSizeY_40x = 0.15, 0.15
+VoxelSizeX_40x, VoxelSizeY_40x = 0.143, 0.12
 
 
 def get_voxel_sizes():
@@ -285,6 +288,16 @@ def run_command(command):
         print("")
 
 
+def process_stitched_tif(img: ndarray, rotation: int = 0):
+    if rotation == 90:
+        img = rot90(img, 1)
+    elif rotation == 180:
+        img = rot90(img, 2)
+    elif rotation == 270:
+        img = rot90(img, 3)
+    return img
+
+
 def process_channel(
         source_path: Path,
         channel: str,
@@ -308,6 +321,7 @@ def process_channel(
         need_destriping: bool = False,
         need_gaussian_filter_2d: bool = True,
         need_compression: bool = False,
+        need_compression_stitched_tif: bool = True,
         need_16bit_to_8bit_conversion: bool = False,
         right_bit_shift=3,
         continue_process_pystripe: bool = True,
@@ -442,11 +456,9 @@ def process_channel(
             memory_needed_per_thread = 2
         if need_16bit_to_8bit_conversion:
             memory_needed_per_thread //= 2
-        alignment_cores = memory_ram // memory_needed_per_thread
-        if alignment_cores > cpu_logical_core_count:
-            alignment_cores = cpu_logical_core_count
-        if alignment_cores > 128:
-            alignment_cores = 128
+        alignment_cores = memory_ram // memory_needed_per_thread + 1
+        if alignment_cores > cpu_physical_core_count + 1:
+            alignment_cores = cpu_physical_core_count + 1
 
         for step in [2, 3, 4, 5]:
             print(f"{datetime.now().isoformat(timespec='seconds', sep=' ')} - "
@@ -467,7 +479,7 @@ def process_channel(
                 f"--oV={0 if objective == '40x' else tile_overlap_y}",
                 f"--sH={tile_overlap_x - 1}",  # Displacements search radius along H (in pixels). Default value is 25!
                 f"--sV={tile_overlap_y - 1}",  # Displacements search radius along V (in pixels). Default value is 25!
-                f"--sD={100}",  # Displacements search radius along D (in pixels).
+                f"--sD={25}",  # Displacements search radius along D (in pixels).
                 f"--subvoldim={100}",  # Number of slices per subvolume partition
                 # used in the pairwise displacements computation step.
                 # dimension of layers obtained by dividing the volume along D
@@ -492,18 +504,33 @@ def process_channel(
           f"\n\tsource: {stitched_path / f'{channel}_xml_import_step_5.xml'}"
           f"\n\tdestination: {stitched_tif_path}")
 
-    merge_step_cores = cpu_logical_core_count if cpu_logical_core_count * 14 < memory_ram else memory_ram // 14
+    merge_step_cores = cpu_physical_core_count if cpu_physical_core_count * 14 < memory_ram else memory_ram // 14
     if need_16bit_to_8bit_conversion:
         merge_step_cores = cpu_logical_core_count if cpu_logical_core_count * 7 < memory_ram else memory_ram // 7
+    if merge_step_cores > cpu_physical_core_count:
+        merge_step_cores = cpu_physical_core_count
 
-    shape: Tuple[int, int, int] = convert_to_2D_tif(
-        TSVVolume.load(stitched_path / f'{channel}_xml_import_step_5.xml'),
-        str(stitched_tif_path / "img_{z:06d}.tif"),
-        compression=("ZLIB", 1),
-        cores=merge_step_cores,  # here the limit is 61 on Windows
-        dtype='uint8' if need_16bit_to_8bit_conversion else TifStack(preprocessed_path / channel).dtype,
-        resume=continue_process_terastitcher
-    )  # shape is in z y x format
+    # shape: Tuple[int, int, int] = convert_to_2D_tif(
+    #     TSVVolume.load(stitched_path / f'{channel}_xml_import_step_5.xml'),
+    #     str(stitched_tif_path / "img_{z:06d}.tif"),
+    #     compression=("ZLIB", 1 if need_compression_stitched_tif else 0),
+    #     cores=merge_step_cores,  # here the limit is 61 on Windows
+    #     dtype='uint8' if need_16bit_to_8bit_conversion else TifStack(preprocessed_path / channel).dtype,
+    #     resume=continue_process_terastitcher
+    # )
+
+    tsv_volume = TSVVolume.load(stitched_path / f'{channel}_xml_import_step_5.xml')
+    shape: Tuple[int, int, int] = tsv_volume.volume.shape  # shape is in z y x format
+    parallel_image_processor(
+        process_stitched_tif,
+        source=tsv_volume,
+        destination=stitched_tif_path,
+        args=(),
+        kwargs={"rotation": 0},
+        max_processors=merge_step_cores,
+        progress_bar_name="tsv",
+        compression=("ZLIB", 1 if need_compression_stitched_tif else 0)
+    )
 
     # TeraFly ----------------------------------------------------------------------------------------------------------
 
@@ -686,6 +713,7 @@ def get_imaris_command(path, voxel_size_x: float, voxel_size_y: float, voxel_siz
 
 
 def main(source_path):
+    source_path = source_path.rename(source_path.parent / source_path.name.replace("-", "_"))
     log_file = source_path / "log.txt"
     log.basicConfig(filename=str(log_file), level=log.INFO)
     log.FileHandler(str(log_file), mode="w")  # rewrite the file instead of appending
@@ -799,6 +827,8 @@ def main(source_path):
     if need_raw_to_tiff_conversion or need_compression:
         de_striped_posix += "_tif"
         what_for += "tif "
+
+    need_compression_stitched_tif = ask_true_false_question("Do you need to compress stitched tif files?")
 
     need_16bit_to_8bit_conversion = ask_true_false_question(
         "Do you need to convert 16-bit images to 8-bit before stitching to reduce final file size?")
@@ -929,6 +959,7 @@ def main(source_path):
             need_destriping=need_destriping,
             need_gaussian_filter_2d=need_gaussian_filter_2d,
             need_compression=need_compression,
+            need_compression_stitched_tif=need_compression_stitched_tif,
             need_16bit_to_8bit_conversion=need_16bit_to_8bit_conversion,
             right_bit_shift=right_bit_shift[channel],
             continue_process_pystripe=continue_process_pystripe,
