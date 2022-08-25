@@ -9,7 +9,7 @@ from numpy import rot90, zeros, arange, minimum, dstack, uint16, float32
 from tqdm import tqdm
 from tifffile import imwrite
 from .volume import VExtent, TSVVolume
-from pystripe.core import filter_streaks, correct_lightsheet
+from pystripe.core import filter_streaks
 blockfs_present = False
 if platform != "win32":
     try:
@@ -64,8 +64,9 @@ def convert_to_2D_tif(
         an optional VExtent giving the volume to output
     dtype:
         an optional numpy dtype, defaults to the dtype indicated by the bit depth
-    compression:
-        between 0 and 9
+    compression: Tuple[str, int]
+        str = ZLIB, ZSTD
+        int = between 0 and 9
     cores:
         # of processes to run simultaneously
     chunks: int
@@ -422,7 +423,6 @@ def diag():
 
 if __name__ == "__main__":
     from os import environ
-
     if environ.get("TSV_DIAG", False):
         diag()
     else:
