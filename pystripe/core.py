@@ -828,6 +828,7 @@ class MultiProcess(Process):
 
 def progress_manager(process_list: List[Process], progress_queue: Queue, workers: int, total: int, desc="PyStripe"):
     return_code = 0
+    list_of_outputs = []
     print(f'{datetime.now()}: using {workers} workers. {total} images need be processed.')
     progress_bar = tqdm(total=total, ascii=True, smoothing=0.05, mininterval=1.0, unit="images", desc=desc)
 
@@ -840,10 +841,12 @@ def progress_manager(process_list: List[Process], progress_queue: Queue, workers
     while workers > 0:
         try:
             still_running = progress_queue.get(block=False)
-            if still_running:
+            if isinstance(still_running, bool) and still_running:
                 progress_bar.update(1)
             else:
                 workers -= 1
+                if not isinstance(still_running, bool):
+                    list_of_outputs += [still_running]
         except Empty:
             try:
                 sleep(1)
@@ -853,7 +856,7 @@ def progress_manager(process_list: List[Process], progress_queue: Queue, workers
             return_code = kill_processes(process_list)
     progress_bar.close()
     progress_queue.close()
-    return return_code
+    return list_of_outputs if list_of_outputs else return_code
 
 
 def batch_filter(

@@ -6,10 +6,10 @@ from queue import Empty
 from concurrent.futures import ProcessPoolExecutor, TimeoutError
 from concurrent.futures.process import BrokenProcessPool
 from typing import List, Tuple, Union, Callable
-from numpy import zeros
+from numpy import zeros, ulonglong
 from pathlib import Path
 from supplements.cli_interface import PrintColors
-from pystripe.core import imread_tif_raw, convert_to_8bit_fun, imsave_tif, progress_manager
+from pystripe.core import imread_tif_raw, imsave_tif, progress_manager
 from tsv.volume import TSVVolume, VExtent
 
 os.environ['MKL_NUM_THREADS'] = '1'
@@ -45,10 +45,10 @@ class MultiProcess(Process):
         self.args_queue = args_queue
         self.function = function
         self.is_ims = False
-        self.is_tsv = isinstance(images, TSVVolume)
+        self.is_tsv = False
         if isinstance(images, TSVVolume):
             self.is_tsv = True
-        elif isinstance(images, str):
+        elif isinstance(images, str) or isinstance(images, Path):
             images = Path(images)
             assert images.suffix.lower() == ".ims"
             self.is_ims = True
@@ -86,6 +86,10 @@ class MultiProcess(Process):
         resume = self.resume
         compression = self.compression
         file = None
+        img_sum = None
+        counter = 0
+        if save_path is None:
+            img_sum = zeros(shape, ulonglong)
         x0, x1, y0, y1 = 0, 0, 0, 0
         if is_tsv:
             x0, x1, y0, y1 = images.volume.x0, images.volume.x1, images.volume.y0, images.volume.y1
@@ -97,9 +101,11 @@ class MultiProcess(Process):
                 break
             try:
                 idx = self.args_queue.get(block=True, timeout=10)
-                tif_save_path = save_path / f"{tif_prefix}_{idx:06}.tif"
-                if resume and tif_save_path.exists():
-                    continue
+                tif_save_path = None
+                if isinstance(save_path, Path):
+                    tif_save_path = save_path / f"{tif_prefix}_{idx:06}.tif"
+                    if resume and tif_save_path.exists():
+                        continue
                 try:
                     if is_ims:
                         img = images[idx]
@@ -113,11 +119,16 @@ class MultiProcess(Process):
                             img = img[0]
                         if len(img.shape) == 3:
                             img = img[:, :, channel]
-                    img = function(img, *args, **kwargs)
-                    imsave_tif(tif_save_path, img, compression=compression)
+                    if function is not None:
+                        img = function(img, *args, **kwargs)
+                    if img_sum is not None:
+                        img_sum += img
+                        counter += 1
+                    else:
+                        imsave_tif(tif_save_path, img, compression=compression)
                 except (BrokenProcessPool, TimeoutError):
                     message = f"\nwarning: {timeout}s timeout reached for processing input file number: {idx}\n"
-                    if not tif_save_path.exists():
+                    if tif_save_path is not None and not tif_save_path.exists():
                         message += f"\ta dummy (zeros) image is saved as output instead:\n\t\t{tif_save_path}\n"
                         imsave_tif(tif_save_path, self.default_img)
                     print(f"{PrintColors.WARNING}{message}{PrintColors.ENDC}")
@@ -142,7 +153,10 @@ class MultiProcess(Process):
         pool.shutdown()
         if is_ims and isinstance(file, h5py.File):
             file.close()
-        running = False
+        if counter > 0:
+            running = (img_sum / counter).astype(dtype)
+        else:
+            running = False
         self.progress_queue.put(running)
 
 
@@ -165,8 +179,8 @@ def parallel_image_processor(
         is a function that process images
     source: Path or str
         path to a folder contacting 2d tif or raw series or path to an ims file. Hierarchical model is not supported.
-    destination: Path or str
-        destination folder.
+    destination: Path, str or None
+        destination folder. If destination is None an average image will be generated.
     args: Tuple
         arguments of given function in correct order
     kwargs:
@@ -190,7 +204,6 @@ def parallel_image_processor(
         destination = Path(destination)
 
     args_queue = Queue()
-    num_images = 0
     if isinstance(source, TSVVolume):
         images = source
         for idx in range(source.volume.z0, source.volume.z1, 1):
@@ -223,7 +236,8 @@ def parallel_image_processor(
         print("source can be either a tsv volume, a ims file path, or 2D tif series folder")
         raise RuntimeError
 
-    Path(destination).mkdir(exist_ok=True)
+    if destination is not None:
+        Path(destination).mkdir(exist_ok=True)
 
     process_list: List[MultiProcess, ...] = []
     progress_queue = Queue()

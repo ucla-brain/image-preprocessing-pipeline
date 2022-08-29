@@ -282,10 +282,14 @@ def create_flat_img(
 
 if __name__ == '__main__':
     freeze_support()
-    AllChannels = ["Ex_488_Em_525", "Ex_561_Em_600", "Ex_642_Em_680"]
+    if sys.platform == "win32":
+        psutil.Process().nice(psutil.IDLE_PRIORITY_CLASS)
+    else:
+        psutil.Process().nice(value=19)
+    AllChannels = ["Ex_488_Em_525", "Ex_561_Em_600", "Ex_642_Em_680", "Ex_488_Em_1", "Ex_561_Em_1", "Ex_642_Em_1"]
+    AllChannels += [channel+"_tif" for channel in AllChannels]
     SourceFolder = Path(
-        r"G:\sm20220717-01_40X_ZStep2um_20220813_175015-17_F50"
-        # r"/mnt/f/20210907_16_56_41_SM210705_01_LS_4X_4000z"
+        r"/data/20220725_17_41_55_SW220510_02_LS_15x_1000z_lightsheet_cleaned_tif_bitshift.g0.r0.b0_stitched"
     )
 
     # SourceFolder = Path(__file__).parent
@@ -294,9 +298,9 @@ if __name__ == '__main__':
             img_flat_, img_dark_ = create_flat_img(
                 SourceFolder / Channel,
                 None,  # r'./image_classes.csv',
-                (2048, 2048),  # (1850, 1850) (1600, 2000)
+                (41926, 30009),  # (1850, 1850) (1600, 2000)
                 max_images=999,
-                batch_size=psutil.cpu_count(logical=True),
+                batch_size=psutil.cpu_count(logical=False),
                 patience_before_skipping=None,
                 skips=256,
                 sigma_spatial=1,
