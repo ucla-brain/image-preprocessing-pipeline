@@ -3,7 +3,7 @@ from pandas import read_csv
 
 
 # annotation file that contains soma locations only
-annotations = Path(r"Y:\3D_stitched_LS\20210729_SW210318_07_R_HPC_6x_1000z\Ex_642_Em_680_tif_deconvoluted_3D_gaussian_6x_1000z_8bit_TeraFly_mean\somata_stamp_2022_07_27_09_32.ano.apo")
+annotations = Path(r"/qnap/3D_stitched_LS/20220725_SW220510_02_LS_6x_1000z/Ex_488_Em_525_Terafly_Ano/Somata/SW220406_01_LS_6x_1000z_combined.ano.apo")
 recut = annotations.parent / 'soma_recut'
 recut.mkdir(exist_ok=True)
 annotations_df = read_csv(annotations)
@@ -12,7 +12,6 @@ for column in ("x", "y", "z", "volsize"):
     annotations_df[column] = annotations_df[column].round(decimals=0).astype(int)
 
 for row in annotations_df.itertuples():
-    with open(recut/f"marker_{row.x}_{row.y}_{row.z}_{row.volsize}", 'w') as soma_file:
+    with open(recut/f"marker_{row.x}_{row.y}_{row.z}_{row.volsize * 3}", 'w') as soma_file:
         soma_file.write("# x,y,z\n")
         soma_file.write(f"{row.x},{row.y},{row.z}")
-
