@@ -713,7 +713,16 @@ def get_imaris_command(path, voxel_size_x: float, voxel_size_y: float, voxel_siz
 
 
 def main(source_path):
-    source_path = source_path.rename(source_path.parent / source_path.name.replace("-", "_"))
+    if "-" in source_path.name:
+        if source_path.exists():
+            source_path = source_path.rename(source_path.parent / source_path.name.replace("-", "_"))
+            print(f"{PrintColors.WARNING}input path renamed to replace '-' with '_'{PrintColors.ENDC}")
+        else:
+            source_path = source_path.parent / source_path.name.replace("-", "_")
+    if not (source_path.exists() and source_path.is_dir()):
+        print(f"{PrintColors.FAIL}input path should be an existing folder!{PrintColors.ENDC}")
+        raise RuntimeError
+
     log_file = source_path / "log.txt"
     log.basicConfig(filename=str(log_file), level=log.INFO)
     log.FileHandler(str(log_file), mode="w")  # rewrite the file instead of appending
@@ -1146,7 +1155,7 @@ if __name__ == '__main__':
         raise RuntimeError
     print(f"mpi4py version is {mpi4py.__version__}")
 
-    imaris_converter = Path(r"./imaris/ImarisConvertiv.exe")
+    imaris_converter = Path(r"./imaris9.7/ImarisConvertiv.exe")
     if not imaris_converter.exists():
         log.error("Error: ImarisConvertiv.exe not found")
         raise RuntimeError
