@@ -15,6 +15,8 @@ import re
 import tifffile
 from xml.etree import ElementTree
 from .raw import raw_imread
+from numpy import ndarray
+from supplements.cli_interface import PrintColors
 
 
 def get_dim_tuple(element):
@@ -282,16 +284,21 @@ class TSVStackBase(VExtentBase):
 class TSVStack(TSVStackBase):
     def __init__(self, element, offset: Location, root_dir,
                  ordering_pattern=None,
-                 input_plugin=None):
+                 input_plugin=None,
+                 z_step: int = None):
         """Initialize a stack from a "Stack" element
 
-        :param element: an ElementTree element (with the "Stack" tag)
-        :param root_dir: the root directory of the directory hierarchy
-        :param ordering_pattern: how to find the image order # - an expression
-        that extracts a numeric z from the path name.
-        :param input_plugin: the input plugin that was used to read the files
-        in TeraStitcher
-        that the stage always returns to the same place.
+        element:
+            an ElementTree element (with the "Stack" tag)
+        root_dir:
+            the root directory of the directory hierarchy
+        ordering_pattern:
+            how to find the image order # - an expression that extracts a numeric z from the path name.
+        input_plugin:
+            the input plugin that was used to read the files in TeraStitcher
+            that the stage always returns to the same place.
+        z_step: int
+            used to find missing files if there is any
         """
         TSVStackBase.__init__(self)
         self.root_dir = root_dir
@@ -306,6 +313,7 @@ class TSVStack(TSVStackBase):
         self.input_plugin = input_plugin
         z_ranges = element.attrib["Z_RANGES"]
         self.__idxs_to_keep = np.zeros(0, int)
+        self.z_step = z_step
         if len(z_ranges) == 0:
             self.z0slice = self.z1slice = 0
         else:
@@ -350,9 +358,9 @@ class TSVStack(TSVStackBase):
                 try:
                     self.__paths += [my_paths[idx]]
                 except IndexError:
-                    print(f"missing tif files in:\n\t{directory}")
+                    print(f"{PrintColors.WARNING}missing tif files in:\n\t{directory}{PrintColors.ENDC}")
                     for i in range(self.__idxs_to_keep[-1]):
-                        file = os.path.join(directory, f"{i:05}0.tif")
+                        file = os.path.join(directory, f"{int(i*self.z_step[0]*10):06}.tif")
                         if not os.path.exists(file):
                             print(file)
                     raise RuntimeError
@@ -387,13 +395,17 @@ class TSVSimpleStack(TSVStackBase):
         return [str(_) for _ in self.__paths]
 
 
-def compute_cosine(volume: VExtentBase, stack: TSVStack, ostack: TSVStack, img):
+def compute_cosine(volume: VExtentBase, stack: TSVStack, ostack: TSVStack, img: ndarray):
     """Given two overlapping stacks, compute the cosine blend between them
 
-    :param volume: the volume being blended
-    :param stack: the stack from which the data is being taken
-    :param ostack: the stack that overlaps it
-    :param img: reduce the intensity using the cosine blend on this image
+    volume:
+        the volume being blended
+    stack:
+        the stack from which the data is being taken
+    ostack:
+        the stack that overlaps it
+    img:
+        reduce the intensity using the cosine blend on this image
     """
     if not volume.intersects(ostack):
         return
@@ -620,7 +632,7 @@ class TSVVolume(TSVVolumeBase):
         self.ignore_z_offsets = ignore_z_offsets
         root = tree.getroot()
         assert root.tag == "TeraStitcher"
-        self.voxel_dims = get_dim_tuple(root.find("voxel_dims"))
+        self.voxel_dims = get_dim_tuple(root.find("voxel_dims")) # zyx order
         dims = root.find("dimensions")
         self.stack_rows = int(dims.attrib["stack_rows"])
         self.origin = get_dim_tuple(root.find("origin"))
@@ -704,7 +716,9 @@ class TSVVolume(TSVVolumeBase):
                 selems[row][column],
                 offset,
                 self.stacks_dir,
-                input_plugin=self.input_plugin)
+                input_plugin=self.input_plugin,
+                z_step=self.voxel_dims
+            )
 
     @property
     def dtype(self):
