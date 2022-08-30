@@ -15,7 +15,7 @@ import re
 import tifffile
 from xml.etree import ElementTree
 from .raw import raw_imread
-from numpy import ndarray
+from numpy import ndarray, zeros, hstack
 from supplements.cli_interface import PrintColors
 
 
@@ -272,7 +272,7 @@ class TSVStackBase(VExtentBase):
         """
         assert self.contains(volume)
         if result is None:
-            result = np.zeros(volume.shape, self.dtype)
+            result = zeros(volume.shape, self.dtype)
         for z in range(volume.z0, volume.z1):
             plane = self.read_plane(self.paths[z - self.z0])
             result[z - volume.z0] = plane[
@@ -312,7 +312,7 @@ class TSVStack(TSVStackBase):
         self.dir_name = element.attrib["DIR_NAME"]
         self.input_plugin = input_plugin
         z_ranges = element.attrib["Z_RANGES"]
-        self.__idxs_to_keep = np.zeros(0, int)
+        self.__idxs_to_keep = zeros(0, int)
         self.z_step = z_step
         if len(z_ranges) == 0:
             self.z0slice = self.z1slice = 0
@@ -327,7 +327,7 @@ class TSVStack(TSVStackBase):
                 if not z_ranges.endswith(")"):
                     z1 += 1
                 self.__idxs_to_keep = \
-                    np.hstack([self.__idxs_to_keep, np.arange(z0, z1)])
+                    hstack([self.__idxs_to_keep, np.arange(z0, z1)])
             self.z0slice = 0
             self.z1slice = len(self.__idxs_to_keep)
         self.img_regex = element.attrib["IMG_REGEX"]
@@ -459,12 +459,15 @@ class Edge(enum.Flag):
 def get_distance_from_edge(tgt: VExtentBase, stack: VExtentBase, ostack: VExtentBase) -> np.ndarray:
     """For the volume, get the distance per voxel to the nearest edge
 
+    tgt:
+        the target volume to be filled
+    stack:
+        The stack on which to make the distance estimate
+    ostack:
+        The stack that is overlapping
 
-    :param tgt: the target volume to be filled
-    :param stack: The stack on which to make the distance estimate
-    :param ostack: The stack that is overlapping
-    :returns: an array, similarly sized to the overlap volume, giving the
-              minimum distance to the nearest edge.
+    returns:
+        an array, similarly sized to the overlap volume, giving the minimum distance to the nearest edge.
     """
     edges = Edge(0)
     if ostack.x1 > stack.x0 > ostack.x0:
@@ -532,13 +535,16 @@ class TSVVolumeBase:
     def imread(self, volume, dtype):
         """Read the given volume
 
-        :param volume: a VExtent delimiting the volume to read
-        :param dtype: the numpy dtype of the array to be returned
-        :returns: the array corresponding to the volume (with zeros for
-        data outside the array).
+        volume:
+            a VExtent delimiting the volume to read
+        dtype:
+            the numpy dtype of the array to be returned
+
+        returns:
+            the array corresponding to the volume (with zeros for data outside the array).
         """
-        result = np.zeros(volume.shape, np.float32)
-        multiplier = np.zeros(volume.shape, np.float32)
+        result = zeros(volume.shape, np.float32)
+        multiplier = zeros(volume.shape, np.float32)
         intersections = []
         for stack in self.flattened_stacks():
             if stack.intersects(volume):
@@ -586,7 +592,7 @@ class TSVVolumeBase:
         row-major order.
         """
         stacks = [s for s in self.flattened_stacks() if s.intersects(volume)]
-        result = np.zeros(
+        result = zeros(
             (volume.shape[0], volume.shape[1], volume.shape[2], len(stacks)),
             self.dtype)
         for idx, stack in enumerate(stacks):
