@@ -727,7 +727,7 @@ def main(source_path):
     log.basicConfig(filename=str(log_file), level=log.INFO)
     log.FileHandler(str(log_file), mode="w")  # rewrite the file instead of appending
     # Ask questions ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
-    objective, voxel_size_x, voxel_size_y, voxel_size_z, tile_size, tile_overlap_percent = get_voxel_sizes()
+
     global AllChannels
     stitch_mip = ask_true_false_question("Do you need to stitch the MIP image first?")
     if stitch_mip:
@@ -737,6 +737,9 @@ def main(source_path):
     else:
         all_channels = [channel for channel, color in AllChannels if source_path.joinpath(channel).exists()]
         channel_color_dict = {channel: color for channel, color in AllChannels}
+
+    objective, voxel_size_x, voxel_size_y, voxel_size_z, tile_size, tile_overlap_percent = get_voxel_sizes()
+
     de_striped_posix, what_for = "", ""
     image_classes_training_data_path = source_path / FlatNonFlatTrainingData
     need_flat_image_application = ask_true_false_question("Do you need to apply a flat image?")
