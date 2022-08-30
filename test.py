@@ -776,6 +776,19 @@ from pystripe.core import batch_filter
 #         print(num)
 
 from xml.etree import ElementTree
-tree = ElementTree.parse(r"D:\20220622_17_23_43_SW220414_02_LS_15x_1000Z_MIP_stitched\Ex_488_Em_525_MIP_xml_import_step_5")
-root = tree.getroot()
-
+# tree = ElementTree.parse(r"D:\20220622_17_23_43_SW220414_02_LS_15x_1000Z_MIP_stitched\Ex_488_Em_525_MIP_xml_import_step_5")
+# root = tree.getroot()
+from parallel_image_processor import parallel_image_processor
+from process_images import process_stitched_tif
+parallel_image_processor(
+    process_stitched_tif,
+    source=TSVVolume.load(
+        Path(r"/qnap/SmartSPIM_Data/2022_08_18/20220818_12_24_18_SW220405_05_LS_15x_1000z_stitched/Ex_488_Em_525_MIP_xml_import_step_5.xml")
+    ),
+    destination=Path(r"/data/test"),
+    args=(),
+    kwargs={"rotation": 0},
+    max_processors=12,
+    progress_bar_name="tsv",
+    compression=("ZLIB", 0)
+)
