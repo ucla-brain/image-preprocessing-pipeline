@@ -462,7 +462,7 @@ def process_channel(
         alignment_cores = memory_ram // memory_needed_per_thread + 1
         if alignment_cores > cpu_physical_core_count + 1:
             alignment_cores = cpu_physical_core_count + 1
-
+        steps_str = ["alignment", "z-displacement", "threshold-displacement", "optimal tiles placement"]
         for step in [2, 3, 4, 5]:
             print(f"{datetime.now().isoformat(timespec='seconds', sep=' ')} - "
                   f"{channel}: starting step {step} of stitching ...")
@@ -492,8 +492,7 @@ def process_channel(
                 # "--restoreSPIM",
             ]
             command = " ".join(command)
-            print("\tstitching command:\n\t\t" + command)
-            # subprocess.call(command, shell=True)  # subprocess.run(command)
+            print(f"\t{PrintColors.BLUE}{steps_str[step-2]} command:{PrintColors.ENDC}\n\t\t" + command)
             run_command(command)
             assert proj_out.exists()
             proj_in.unlink(missing_ok=False)
