@@ -1,14 +1,12 @@
 from pandas import read_csv, concat
 from pathlib import Path
 
-source = Path(r"Y:\3D_stitched_LS\20220605_SW220406_01_LS_6x_1000z\Ex_488_Em_525_TeraFly_Ano\Somata\Nnaemeka")
+source = Path(r"Y:\3D_stitched_LS\20220725_SW220510_02_LS_6x_1000z\Ex_488_Em_525_Terafly_Ano\Somata")
 files = [
-    r"SW220406_01_LS_6x_1000z_Neuron_0027_stamp_2022_08_19_10_01.ano.apo",
-    r"SW220406_01_LS_6x_1000z_Somas_(NEW)_stamp_2022_08_26_16_48.ano.apo",
-    r"SW220406_01_LS_6x_1000z_Somas_stamp_2022_08_05_11_40.ano.apo",
-    r"SW220406_01_LS_6x_1000z_Somas_stamp_2022_08_26_03_29.ano.apo"
+    r"SW220406_01_LS_6x_1000z_L_Hemisphere_Adriana_stamp_2022_08_30_18_35.ano.apo",
+    r"SW220406_01_LS_6x_1000z_R_Hemisphere_Christine_stamp_2022_08_30_17_08.ano.apo",
 ]
-output = "SW220406_01_LS_6x_1000z_Somas"
+output = "SW220406_01_LS_6x_1000z_combined"
 df = concat([read_csv(source/file) for file in files], ignore_index=True).drop_duplicates().reset_index(drop=True)
 # for column in df.columns:
 #     print(column)
