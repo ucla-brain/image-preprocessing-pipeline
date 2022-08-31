@@ -1,4 +1,12 @@
-from typing import Tuple
+from typing import Tuple, Callable, Union
+from math import inf
+from os import getenv
+from sys import platform
+
+
+def is_pycharm():
+    return getenv("PYCHARM_HOSTED") is not None
+
 
 def select_among_multiple_options(
         question: str,
@@ -32,13 +40,13 @@ def ask_true_false_question(message):
     return answer == "1"
 
 
-def ask_for_a_positive_integer(message: str, range_val: Tuple[int, int]):
-    answer = ''
-    while answer not in range(range_val[0], range_val[1]):
+def ask_for_a_number_in_range(message: str, range_val: Union[Tuple[int, int], Tuple[float, float]], dtype: Callable):
+    answer = inf
+    while not range_val[0] <= answer <= range_val[1]:
         try:
-            answer = int(input(f'\n\n{message}\n').strip())
+            answer = dtype(input(f'\n\n{message}\n').strip())
         except ValueError:
-            answer = ''
+            answer = inf
     return answer
 
 
