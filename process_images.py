@@ -374,7 +374,7 @@ def process_channel(
                 )
 
         print(
-            f"{PrintColors.GREEN}{datetime.now().isoformat(timespec='seconds', sep=' ')}{PrintColors.ENDC} - "
+            f"{PrintColors.GREEN}{datetime.now().isoformat(timespec='seconds', sep=' ')}: {PrintColors.ENDC}"
             f"{channel}: started preprocessing images and converting them to tif.\n"
             f"\tsource: {source_path / channel}\n"
             f"\tdestination: {preprocessed_path / channel}\n"
@@ -428,7 +428,7 @@ def process_channel(
     inspect_for_missing_tiles_get_files_list(preprocessed_path / channel)
 
     # stitching: align the tiles GPU accelerated & parallel ------------------------------------------------------------
-    print(f"{PrintColors.GREEN}{datetime.now().isoformat(timespec='seconds', sep=' ')}{PrintColors.ENDC} - "
+    print(f"{PrintColors.GREEN}{datetime.now().isoformat(timespec='seconds', sep=' ')}: {PrintColors.ENDC}"
           f"{channel}: aligning tiles using parastitcher ...")
 
     if not stitched_path.joinpath(f"{channel}_xml_import_step_5.xml").exists() or not continue_process_terastitcher:
@@ -454,7 +454,6 @@ def process_channel(
             "--noprogressbar"
         ]
         print(f"\t{PrintColors.BLUE}import command:{PrintColors.ENDC}\n\t\t" + " ".join(command))
-        # subprocess.run(command, check=True)
         run_command(" ".join(command))
         if not proj_out.exists():
             print(f"{channel}: importing tif files failed.")
@@ -471,7 +470,7 @@ def process_channel(
             alignment_cores = cpu_physical_core_count + 1
         steps_str = ["alignment", "z-displacement", "threshold-displacement", "optimal tiles placement"]
         for step in [2, 3, 4, 5]:
-            print(f"{PrintColors.GREEN}{datetime.now().isoformat(timespec='seconds', sep=' ')}{PrintColors.ENDC} - "
+            print(f"{PrintColors.GREEN}{datetime.now().isoformat(timespec='seconds', sep=' ')}: {PrintColors.ENDC}"
                   f"{channel}: starting step {step} of stitching ...")
             proj_in = stitched_path / f"{channel}_xml_import_step_{step - 1}.xml"
             proj_out = stitched_path / f"{channel}_xml_import_step_{step}.xml"
@@ -486,7 +485,7 @@ def process_channel(
                 # Overlap (in pixels) between two adjacent tiles along H.
                 f"--oH={tile_overlap_x}",
                 # Overlap (in pixels) between two adjacent tiles along V.
-                f"--oV={0 if objective == '40x' else tile_overlap_y}",
+                f"--oV={tile_overlap_y}",  # 0 if objective == '40x' else
                 f"--sH={tile_overlap_x - 1}",  # Displacements search radius along H (in pixels). Default value is 25!
                 f"--sV={tile_overlap_y - 1}",  # Displacements search radius along V (in pixels). Default value is 25!
                 f"--sD={25}",  # Displacements search radius along D (in pixels).
@@ -508,7 +507,7 @@ def process_channel(
 
     stitched_tif_path = stitched_path / f"{channel}_tif"
     stitched_tif_path.mkdir(exist_ok=True)
-    print(f"{PrintColors.GREEN}{datetime.now().isoformat(timespec='seconds', sep=' ')}{PrintColors.ENDC} - "
+    print(f"{PrintColors.GREEN}{datetime.now().isoformat(timespec='seconds', sep=' ')}: {PrintColors.ENDC}"
           f"{channel}: starting step 6 of stitching, merging tiles into 2D tif series, using TSV ..."
           f"\n\tsource: {stitched_path / f'{channel}_xml_import_step_5.xml'}"
           f"\n\tdestination: {stitched_tif_path}")
@@ -551,7 +550,7 @@ def process_channel(
     if need_tera_fly_conversion:
         tera_fly_path = stitched_path / f'{channel}_TeraFly'
         tera_fly_path.mkdir(exist_ok=True)
-        print(f"{PrintColors.GREEN}{datetime.now().isoformat(timespec='seconds', sep=' ')}{PrintColors.ENDC} - "
+        print(f"{PrintColors.GREEN}{datetime.now().isoformat(timespec='seconds', sep=' ')}: {PrintColors.ENDC}"
               f"{channel}: starting to convert to TeraFly format ...")
         command = " ".join([
             f"mpiexec -np {11} python -m mpi4py {paraconverter}",
@@ -1088,7 +1087,7 @@ def main(source_path):
 
     # Done :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
-    p_log(f"{PrintColors.GREEN}{datetime.now().isoformat(timespec='seconds', sep=' ')}:{PrintColors.ENDC} done.\n\t"
+    p_log(f"{PrintColors.GREEN}{datetime.now().isoformat(timespec='seconds', sep=' ')}: {PrintColors.ENDC}done.\n\t"
           f"Time elapsed: {timedelta(seconds=time() - start_time)}")
 
 
