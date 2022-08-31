@@ -159,7 +159,7 @@ def get_list_of_files(y_folder: Path, extensions=(".tif", ".tiff", ".raw")) -> L
 
 
 def inspect_for_missing_tiles_get_files_list(channel_path: Path):
-    print(f"{datetime.now().isoformat(timespec='seconds', sep=' ')}: "
+    print(f"{PrintColors.GREEN}{datetime.now().isoformat(timespec='seconds', sep=' ')}: {PrintColors.ENDC}"
           f"inspecting channel {channel_path.name} for missing files.")
     folders_list = [y for x in channel_path.iterdir() if x.is_dir() for y in x.iterdir() if y.is_dir()]
     file_list = list(tqdm(
@@ -354,11 +354,12 @@ def process_channel(
                 img_flat = imread_tif_raw(flat_img_created_already)
                 # with open(source_path / f'{channel}_dark.txt', "r") as f:
                 #     dark = int(f.read())
-                print(f"{datetime.now().isoformat(timespec='seconds', sep=' ')}: "
+                print(f"{PrintColors.GREEN}{datetime.now().isoformat(timespec='seconds', sep=' ')}: {PrintColors.ENDC}"
                       f"{channel}: using the existing flat image:\n"
                       f"{flat_img_created_already.absolute()}.")
             else:
-                print(f"{datetime.now().isoformat(timespec='seconds', sep=' ')}: {channel}: creating a new flat image.")
+                print(f"{PrintColors.GREEN}{datetime.now().isoformat(timespec='seconds', sep=' ')}: {PrintColors.ENDC}"
+                      f"{channel}: creating a new flat image.")
                 img_flat, dark = create_flat_img(
                     source_path / channel,
                     image_classes_training_data_path,
@@ -373,7 +374,7 @@ def process_channel(
                 )
 
         print(
-            f"{datetime.now().isoformat(timespec='seconds', sep=' ')} - "
+            f"{PrintColors.GREEN}{datetime.now().isoformat(timespec='seconds', sep=' ')}{PrintColors.ENDC} - "
             f"{channel}: started preprocessing images and converting them to tif.\n"
             f"\tsource: {source_path / channel}\n"
             f"\tdestination: {preprocessed_path / channel}\n"
@@ -427,7 +428,7 @@ def process_channel(
     inspect_for_missing_tiles_get_files_list(preprocessed_path / channel)
 
     # stitching: align the tiles GPU accelerated & parallel ------------------------------------------------------------
-    print(f"{datetime.now().isoformat(timespec='seconds', sep=' ')} - "
+    print(f"{PrintColors.GREEN}{datetime.now().isoformat(timespec='seconds', sep=' ')}{PrintColors.ENDC} - "
           f"{channel}: aligning tiles using parastitcher ...")
 
     if not stitched_path.joinpath(f"{channel}_xml_import_step_5.xml").exists() or not continue_process_terastitcher:
@@ -452,7 +453,7 @@ def process_channel(
             f"--projout={proj_out}",
             "--noprogressbar"
         ]
-        print("\timport command:\n\t\t" + " ".join(command))
+        print(f"\t{PrintColors.BLUE}import command:{PrintColors.ENDC}\n\t\t" + " ".join(command))
         # subprocess.run(command, check=True)
         run_command(" ".join(command))
         if not proj_out.exists():
@@ -470,7 +471,7 @@ def process_channel(
             alignment_cores = cpu_physical_core_count + 1
         steps_str = ["alignment", "z-displacement", "threshold-displacement", "optimal tiles placement"]
         for step in [2, 3, 4, 5]:
-            print(f"{datetime.now().isoformat(timespec='seconds', sep=' ')} - "
+            print(f"{PrintColors.GREEN}{datetime.now().isoformat(timespec='seconds', sep=' ')}{PrintColors.ENDC} - "
                   f"{channel}: starting step {step} of stitching ...")
             proj_in = stitched_path / f"{channel}_xml_import_step_{step - 1}.xml"
             proj_out = stitched_path / f"{channel}_xml_import_step_{step}.xml"
@@ -507,7 +508,7 @@ def process_channel(
 
     stitched_tif_path = stitched_path / f"{channel}_tif"
     stitched_tif_path.mkdir(exist_ok=True)
-    print(f"{datetime.now().isoformat(timespec='seconds', sep=' ')} - "
+    print(f"{PrintColors.GREEN}{datetime.now().isoformat(timespec='seconds', sep=' ')}{PrintColors.ENDC} - "
           f"{channel}: starting step 6 of stitching, merging tiles into 2D tif series, using TSV ..."
           f"\n\tsource: {stitched_path / f'{channel}_xml_import_step_5.xml'}"
           f"\n\tdestination: {stitched_tif_path}")
@@ -550,7 +551,7 @@ def process_channel(
     if need_tera_fly_conversion:
         tera_fly_path = stitched_path / f'{channel}_TeraFly'
         tera_fly_path.mkdir(exist_ok=True)
-        print(f"{datetime.now().isoformat(timespec='seconds', sep=' ')} - "
+        print(f"{PrintColors.GREEN}{datetime.now().isoformat(timespec='seconds', sep=' ')}{PrintColors.ENDC} - "
               f"{channel}: starting to convert to TeraFly format ...")
         command = " ".join([
             f"mpiexec -np {11} python -m mpi4py {paraconverter}",
@@ -689,7 +690,8 @@ def get_imaris_command(path, voxel_size_x: float, voxel_size_y: float, voxel_siz
     file = files[0]
     command = []
     if imaris_converter.exists() and len(files) > 0:
-        print(f"{datetime.now().isoformat(timespec='seconds', sep=' ')}: converting {path.name} to ims ... ")
+        print(f"{PrintColors.GREEN}{datetime.now().isoformat(timespec='seconds', sep=' ')}: {PrintColors.ENDC}"
+              f"converting {path.name} to ims ... ")
         ims_file_path = path.parent / f'{path.name}.ims'
         command = [
             f"{imaris_converter}" if sys.platform == "win32" else f"wine {imaris_converter}",
@@ -936,7 +938,8 @@ def main(source_path):
     start_time = time()
     memory_ram = virtual_memory().available // 1024 ** 3  # in GB
     p_log(
-        f"{datetime.now().isoformat(timespec='seconds', sep=' ')}: stitching started"
+        f"{PrintColors.GREEN}{datetime.now().isoformat(timespec='seconds', sep=' ')}: {PrintColors.ENDC}"
+        f"stitching started"
         f"\n\tRun on computer: {platform.node()}"
         f"\n\tFree physical memory: {memory_ram} GB"
         f"\n\tPhysical CPU core count: {cpu_physical_core_count}"
@@ -1014,7 +1017,8 @@ def main(source_path):
 
     merged_tif_paths = stitched_tif_paths
     if need_merged_channels and len(stitched_tif_paths) > 1:
-        p_log(f"{datetime.now().isoformat(timespec='seconds', sep=' ')}: merging channels to RGB started ...\n\t"
+        p_log(f"{PrintColors.GREEN}{datetime.now().isoformat(timespec='seconds', sep=' ')}: {PrintColors.ENDC}"
+              f"merging channels to RGB started ...\n\t"
               f"time elapsed so far {timedelta(seconds=time() - start_time)}")
         merged_tif_paths = [stitched_path / ("merged_channels_MIP_tif" if stitch_mip else "merged_channels_tif")]
         order_of_colors: str = ""
@@ -1046,7 +1050,8 @@ def main(source_path):
 
     progress_bar = []
     if need_imaris_conversion:
-        p_log(f"{datetime.now().isoformat(timespec='seconds', sep=' ')}: started ims conversion  ...")
+        p_log(f"{PrintColors.GREEN}{datetime.now().isoformat(timespec='seconds', sep=' ')}: {PrintColors.ENDC}"
+              f"started ims conversion  ...")
         for idx, path in enumerate(merged_tif_paths):
             command = get_imaris_command(
                 path, voxel_size_x, voxel_size_y, voxel_size_z,
@@ -1077,12 +1082,13 @@ def main(source_path):
 
     if need_tera_fly_conversion:
         p_log(
-            f"{datetime.now().isoformat(timespec='seconds', sep=' ')}: waiting for TeraFly conversion to finish.\n\t"
+            f"{PrintColors.GREEN}{datetime.now().isoformat(timespec='seconds', sep=' ')}: {PrintColors.ENDC}"
+            f"waiting for TeraFly conversion to finish.\n\t"
             f"time elapsed so far {timedelta(seconds=time() - start_time)}")
 
     # Done :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
-    p_log(f"{datetime.now().isoformat(timespec='seconds', sep=' ')}: done.\n\t"
+    p_log(f"{PrintColors.GREEN}{datetime.now().isoformat(timespec='seconds', sep=' ')}:{PrintColors.ENDC} done.\n\t"
           f"Time elapsed: {timedelta(seconds=time() - start_time)}")
 
 
