@@ -829,7 +829,8 @@ class MultiProcess(Process):
 def progress_manager(process_list: List[Process], progress_queue: Queue, workers: int, total: int, desc="PyStripe"):
     return_code = 0
     list_of_outputs = []
-    print(f'{datetime.now()}: using {workers} workers. {total} images need to be processed.')
+    print(f"{PrintColors.GREEN}{datetime.now().isoformat(timespec='seconds', sep=' ')}: {PrintColors.ENDC}"
+          f"using {workers} workers. {total} images need to be processed.")
     progress_bar = tqdm(total=total, ascii=True, smoothing=0.05, mininterval=1.0, unit="images", desc=desc)
 
     def kill_processes(list_of_processes):
@@ -1015,7 +1016,8 @@ def batch_filter(
     }
     # print(arg_dict_template)
 
-    print(f'{datetime.now()}: Scheduling jobs for images in \n\t{input_path}')
+    print(f"{PrintColors.GREEN}{datetime.now().isoformat(timespec='seconds', sep=' ')}: {PrintColors.ENDC}"
+          f"Scheduling jobs for images in \n\t{input_path}")
 
     if z_step is None:
         files = glob_re(r"\.(?:tiff?|raw)$", input_path) if files_list is None else files_list
