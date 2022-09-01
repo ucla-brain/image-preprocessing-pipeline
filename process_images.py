@@ -1138,7 +1138,7 @@ if __name__ == '__main__':
         mergedisplacements = "mergedisplacements"
         teraconverter = "teraconverter"
         os.environ["TERM"] = "xterm"
-        os.environ["USECUDA_X_NCC"] = "1"  # set to 0 to stop GPU acceleration
+        os.environ["USECUDA_X_NCC"] = "1"  # set to '' to stop GPU acceleration
         if os.environ["USECUDA_X_NCC"] == "1":
             if Path("/usr/lib/jvm/java-11-openjdk-amd64/lib/server").exists():
                 os.environ["LD_LIBRARY_PATH"] = "/usr/lib/jvm/java-11-openjdk-amd64/lib/server"
