@@ -45,7 +45,7 @@ VoxelSizeX_40x, VoxelSizeY_40x = (0.15,) * 2   # 0.143, 0.12
 def p_log(txt: Union[str, list]):
     txt = str(txt)
     print(txt)
-    for _ in range(10):
+    for _ in range(40):
         try:
             txt = txt.replace(
                 PrintColors.ENDC, '').replace(
