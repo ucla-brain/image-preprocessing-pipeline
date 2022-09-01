@@ -795,6 +795,4 @@ from xml.etree import ElementTree
 from subprocess import check_output
 from re import compile
 
-
-cuda = str(check_output(["nvidia-smi"]))
-print(compile(r'CUDA *Version: *(\d*(?:\.\d*)?)').findall(cuda))
+print(compile(r"CUDA *Version: *(\d+(?:\.\d+)?)").findall(str(check_output(["nvidia-smi"])))[0]

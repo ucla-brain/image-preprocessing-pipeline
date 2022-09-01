@@ -1146,7 +1146,7 @@ if __name__ == '__main__':
                 log.error("Error: JAVA path not found")
                 raise RuntimeError
             try:
-                cuda_version = compile(r'CUDA *Version: *(\d*(?:\.\d*)?)').findall(str(check_output(["nvidia-smi"])))[0]
+                cuda_version = compile(r"CUDA *Version: *(\d+(?:\.\d+)?)").findall(str(check_output(["nvidia-smi"])))[0]
             except IndexError:
                 cuda_version = ask_for_a_number_in_range(
                     "What is your cuda version (for example 11.7)?", (1, 20), float)
