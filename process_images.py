@@ -68,7 +68,7 @@ def get_voxel_sizes(is_mip):
     objective = select_among_multiple_options(
         "What is the Objective?",
         [
-            f"4x: Voxel Size X = {VoxelSizeX_4x}, Y = {VoxelSizeY_4x}, tile_size = 1600 x 2000",
+            f" 4x: Voxel Size X = {VoxelSizeX_4x}, Y = {VoxelSizeY_4x}, tile_size = 1600 x 2000",
             f"10x: Voxel Size X = {VoxelSizeX_10x}, Y = {VoxelSizeY_10x}, tile_size = 1850 x 1850",
             f"15x: Voxel Size X = {VoxelSizeX_15x}, Y = {VoxelSizeY_15x}, tile_size = 1850 x 1850",
             f"40x: Voxel Size X = {VoxelSizeX_40x}, Y = {VoxelSizeY_40x}, tile_size = 2048 x 2048",
