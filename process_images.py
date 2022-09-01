@@ -26,7 +26,7 @@ from queue import Empty
 from multiprocessing import freeze_support, Pool, Queue, Process
 from supplements.cli_interface import select_among_multiple_options, ask_true_false_question, PrintColors
 from supplements.cli_interface import ask_for_a_number_in_range
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Union
 from downsampling import TifStack
 from parallel_image_processor import parallel_image_processor
 # experiment setup: user needs to set them right
@@ -40,6 +40,28 @@ VoxelSizeX_8x, VoxelSizeY_8x = (0.8,) * 2
 VoxelSizeX_10x, VoxelSizeY_10x = (0.661,) * 2  # new stage --> 0.6, 0.6
 VoxelSizeX_15x, VoxelSizeY_15x = (0.422,) * 2  # new stage --> 0.4, 0.4
 VoxelSizeX_40x, VoxelSizeY_40x = (0.15,) * 2   # 0.143, 0.12
+
+
+def p_log(txt: Union[str, list]):
+    txt = str(txt)
+    print(txt)
+    for _ in range(10):
+        try:
+            txt = txt.replace(
+                PrintColors.ENDC, '').replace(
+                PrintColors.WARNING, '').replace(
+                PrintColors.BLUE, '').replace(
+                PrintColors.GREEN, '').replace(
+                PrintColors.FAIL, '').replace(
+                PrintColors.BOLD, '').replace(
+                PrintColors.CYAN, '').replace(
+                PrintColors.HEADER, '').replace(
+                PrintColors.UNDERLINE, '')
+            log.info(txt)
+        except (OSError, PermissionError):
+            sleep(0.1)
+            continue
+        break
 
 
 def get_voxel_sizes(is_mip):
@@ -86,8 +108,6 @@ def get_voxel_sizes(is_mip):
         print("Error: unsupported objective")
         log.error("Error: unsupported objective")
         raise RuntimeError
-    if is_mip:
-        print()
     voxel_size_z = ask_for_a_number_in_range(
         "what is the z-step size in µm?\n"
         f"{PrintColors.BLUE}hint: z-step is {'600' if is_mip else 'typically 1'} µm for the "
@@ -97,14 +117,12 @@ def get_voxel_sizes(is_mip):
         f"what is the tile overlap in percent?\n"
         f"{PrintColors.BLUE}hint: for SmartSPIM typically 9, for the other microscope 16.2{PrintColors.ENDC}",
         (0, 100), float)
-    # print(
-    #     f"Objective is {objective} so voxel sizes are x = {voxel_size_x}, y = {voxel_size_y}, and z = {voxel_size_z}")
     p_log(
-        f"Objective is {objective} so voxel sizes are:\n\t"
-        f"x = {voxel_size_x} µm,\n\t"
-        f"y = {voxel_size_y} µm, and\n\t"
-        f"z = {voxel_size_z} µm\n"
-        f"tile overlap = {tile_overlap_percent}%"
+        f"Objective is {objective} so voxel sizes are:\n"
+        f"\tx = {voxel_size_x} µm,\n"
+        f"\ty = {voxel_size_y} µm, and\n"
+        f"\tz = {voxel_size_z} µm.\n"
+        f"Tile overlap is {tile_overlap_percent}%."
     )
     return objective, voxel_size_x, voxel_size_y, voxel_size_z, tile_size, tile_overlap_percent
 
@@ -166,7 +184,7 @@ def get_list_of_files(y_folder: Path, extensions=(".tif", ".tiff", ".raw")) -> L
 
 
 def inspect_for_missing_tiles_get_files_list(channel_path: Path):
-    print(f"{PrintColors.GREEN}{datetime.now().isoformat(timespec='seconds', sep=' ')}: {PrintColors.ENDC}"
+    p_log(f"{PrintColors.GREEN}{datetime.now().isoformat(timespec='seconds', sep=' ')}: {PrintColors.ENDC}"
           f"inspecting channel {channel_path.name} for missing files.")
     folders_list = [y for x in channel_path.iterdir() if x.is_dir() for y in x.iterdir() if y.is_dir()]
     file_list = list(tqdm(
@@ -190,12 +208,12 @@ def inspect_for_missing_tiles_get_files_list(channel_path: Path):
 
     counts_list = sorted([int(count) for count, folder_list in path_dict.items()])
     if (len(counts_list) > 1 and counts_list[0] != 1) or (len(counts_list) > 2 and counts_list[0] == 1):
-        print(counts_list)
-        print(f"{PrintColors.WARNING}warning: following folders have missing tiles:{PrintColors.ENDC}")
+        p_log(counts_list)
+        p_log(f"{PrintColors.WARNING}warning: following folders have missing tiles:{PrintColors.ENDC}")
         for count in counts_list[:-1]:
             if count != 1:
                 folders = "\n\t\t".join(path_dict[count])
-                print(f"{PrintColors.WARNING}\tfolders having {count} tiles: \n"
+                p_log(f"{PrintColors.WARNING}\tfolders having {count} tiles: \n"
                       f"\t\t{folders}{PrintColors.ENDC}")
 
     return unraveled_file_list
@@ -215,20 +233,9 @@ def correct_path_for_wsl(filepath):
     return new_path
 
 
-def p_log(txt: str):
-    print(txt)
-    for _ in range(10):
-        try:
-            log.info(txt)
-        except (OSError, PermissionError):
-            sleep(0.1)
-            continue
-        break
-
-
 def worker(command: str):
     return_code = call(command, shell=True)
-    print(f"\nfinished:\n\t{command}\n\treturn code: {return_code}\n")
+    p_log(f"\nfinished:\n\t{command}\n\treturn code: {return_code}\n")
     return return_code
 
 
@@ -264,7 +271,7 @@ class MultiProcess(Process):
                         self.queue.put([percent - previous_percent, self.position, return_code, self.command])
                         previous_percent = percent
         except Exception as inst:
-            print(f'Process failed for {self.command}.')
+            p_log(f'Process failed for {self.command}.')
             print(type(inst))  # the exception instance
             print(inst.args)  # arguments stored in .args
             print(inst)
@@ -294,13 +301,13 @@ def run_command(command):
         stdout = process.stdout.readline()
         m = match(pattern, stdout)
         if m:
-            print(f"\n{PrintColors.WARNING}{stdout}{PrintColors.ENDC}\n")
+            p_log(f"\n{PrintColors.WARNING}{stdout}{PrintColors.ENDC}\n")
         else:
             print(".", end="")
     if return_code > 0:
-        print(f"\n{PrintColors.FAIL}TeraStitcher failed with return code {return_code}.{PrintColors.ENDC}")
+        p_log(f"\n{PrintColors.FAIL}TeraStitcher failed with return code {return_code}.{PrintColors.ENDC}")
     else:
-        print("")
+        p_log("")
 
 
 def process_stitched_tif(img: ndarray, rotation: int = 0):
@@ -361,11 +368,11 @@ def process_channel(
                 img_flat = imread_tif_raw(flat_img_created_already)
                 # with open(source_path / f'{channel}_dark.txt', "r") as f:
                 #     dark = int(f.read())
-                print(f"{PrintColors.GREEN}{datetime.now().isoformat(timespec='seconds', sep=' ')}: {PrintColors.ENDC}"
+                p_log(f"{PrintColors.GREEN}{datetime.now().isoformat(timespec='seconds', sep=' ')}: {PrintColors.ENDC}"
                       f"{channel}: using the existing flat image:\n"
                       f"{flat_img_created_already.absolute()}.")
             else:
-                print(f"{PrintColors.GREEN}{datetime.now().isoformat(timespec='seconds', sep=' ')}: {PrintColors.ENDC}"
+                p_log(f"{PrintColors.GREEN}{datetime.now().isoformat(timespec='seconds', sep=' ')}: {PrintColors.ENDC}"
                       f"{channel}: creating a new flat image.")
                 img_flat, dark = create_flat_img(
                     source_path / channel,
@@ -380,7 +387,7 @@ def process_channel(
                     save_as_tiff=True
                 )
 
-        print(
+        p_log(
             f"{PrintColors.GREEN}{datetime.now().isoformat(timespec='seconds', sep=' ')}: {PrintColors.ENDC}"
             f"{channel}: started preprocessing images and converting them to tif.\n"
             f"\tsource: {source_path / channel}\n"
@@ -435,7 +442,7 @@ def process_channel(
     inspect_for_missing_tiles_get_files_list(preprocessed_path / channel)
 
     # stitching: align the tiles GPU accelerated & parallel ------------------------------------------------------------
-    print(f"{PrintColors.GREEN}{datetime.now().isoformat(timespec='seconds', sep=' ')}: {PrintColors.ENDC}"
+    p_log(f"{PrintColors.GREEN}{datetime.now().isoformat(timespec='seconds', sep=' ')}: {PrintColors.ENDC}"
           f"{channel}: aligning tiles using parastitcher ...")
 
     if not stitched_path.joinpath(f"{channel}_xml_import_step_5.xml").exists() or not continue_process_terastitcher:
@@ -460,10 +467,10 @@ def process_channel(
             f"--projout={proj_out}",
             "--noprogressbar"
         ]
-        print(f"\t{PrintColors.BLUE}import command:{PrintColors.ENDC}\n\t\t" + " ".join(command))
+        p_log(f"\t{PrintColors.BLUE}import command:{PrintColors.ENDC}\n\t\t" + " ".join(command))
         run_command(" ".join(command))
         if not proj_out.exists():
-            print(f"{channel}: importing tif files failed.")
+            p_log(f"{channel}: importing tif files failed.")
             raise RuntimeError
 
         # each alignment thread needs about 16GB of RAM in 16bit and 8GB in 8bit
@@ -477,7 +484,7 @@ def process_channel(
             alignment_cores = cpu_physical_core_count + 1
         steps_str = ["alignment", "z-displacement", "threshold-displacement", "optimal tiles placement"]
         for step in [2, 3, 4, 5]:
-            print(f"{PrintColors.GREEN}{datetime.now().isoformat(timespec='seconds', sep=' ')}: {PrintColors.ENDC}"
+            p_log(f"{PrintColors.GREEN}{datetime.now().isoformat(timespec='seconds', sep=' ')}: {PrintColors.ENDC}"
                   f"{channel}: starting step {step} of stitching ...")
             proj_in = stitched_path / f"{channel}_xml_import_step_{step - 1}.xml"
             proj_out = stitched_path / f"{channel}_xml_import_step_{step}.xml"
@@ -505,7 +512,7 @@ def process_channel(
                 # "--restoreSPIM",
             ]
             command = " ".join(command)
-            print(f"\t{PrintColors.BLUE}{steps_str[step-2]} command:{PrintColors.ENDC}\n\t\t" + command)
+            p_log(f"\t{PrintColors.BLUE}{steps_str[step-2]} command:{PrintColors.ENDC}\n\t\t" + command)
             run_command(command)
             assert proj_out.exists()
             proj_in.unlink(missing_ok=False)
@@ -514,7 +521,7 @@ def process_channel(
 
     stitched_tif_path = stitched_path / f"{channel}_tif"
     stitched_tif_path.mkdir(exist_ok=True)
-    print(f"{PrintColors.GREEN}{datetime.now().isoformat(timespec='seconds', sep=' ')}: {PrintColors.ENDC}"
+    p_log(f"{PrintColors.GREEN}{datetime.now().isoformat(timespec='seconds', sep=' ')}: {PrintColors.ENDC}"
           f"{channel}: starting step 6 of stitching, merging tiles into 2D tif series, using TSV ..."
           f"\n\tsource: {stitched_path / f'{channel}_xml_import_step_5.xml'}"
           f"\n\tdestination: {stitched_tif_path}")
@@ -557,7 +564,7 @@ def process_channel(
     if need_tera_fly_conversion:
         tera_fly_path = stitched_path / f'{channel}_TeraFly'
         tera_fly_path.mkdir(exist_ok=True)
-        print(f"{PrintColors.GREEN}{datetime.now().isoformat(timespec='seconds', sep=' ')}: {PrintColors.ENDC}"
+        p_log(f"{PrintColors.GREEN}{datetime.now().isoformat(timespec='seconds', sep=' ')}: {PrintColors.ENDC}"
               f"{channel}: starting to convert to TeraFly format ...")
         command = " ".join([
             f"mpiexec -np {11} python -m mpi4py {paraconverter}",
@@ -576,7 +583,7 @@ def process_channel(
             f"-s={stitched_tif_path}",
             f"-d={tera_fly_path}",
         ])
-        print(f"\tTeraFly conversion command:\n\t\t{command}\n")
+        p_log(f"\tTeraFly conversion command:\n\t\t{command}\n")
         MultiProcess(queue, command).start()
         running_processes += 1
 
@@ -609,7 +616,7 @@ def merge_channels_by_file_name(
     del image, file_path
     if dtypes.count(dtypes[0]) != len(dtypes):
         paths = "\n\t".join(map(str, stitched_tif_paths))
-        print(f"\n{PrintColors.WARNING}warning: merging channels should have identical dtypes:\n\t"
+        p_log(f"\n{PrintColors.WARNING}warning: merging channels should have identical dtypes:\n\t"
               f"{paths}{PrintColors.ENDC}")
         del paths
 
@@ -658,7 +665,7 @@ def merge_all_channels(
     x, y = 0, 0
     for path, n, shape in zip(stitched_tif_paths, num_files_in_each_path, channel_volume_shapes):
         if n != shape[0]:
-            print(f"{PrintColors.WARNING}warning: path {path} has {shape[0] - n} missing tiles!{PrintColors.ENDC}")
+            p_log(f"{PrintColors.WARNING}warning: path {path} has {shape[0] - n} missing tiles!{PrintColors.ENDC}")
 
         y, x = max(y, shape[1]), max(x, shape[2])
 
@@ -675,7 +682,7 @@ def merge_all_channels(
     num_images = len(work)
 
     workers, chunks = calculate_cores_and_chunk_size(num_images, workers, pool_can_handle_more_than_61_cores=False)
-    print(f"\tusing {workers} cores and {chunks} chunks")
+    p_log(f"\tusing {workers} cores and {chunks} chunks")
     # TODO: RGB: Support more than 61 cores on Windows
     with Pool(processes=workers) as pool:
         list(
@@ -695,7 +702,7 @@ def get_imaris_command(path, voxel_size_x: float, voxel_size_y: float, voxel_siz
     file = files[0]
     command = []
     if imaris_converter.exists() and len(files) > 0:
-        print(f"{PrintColors.GREEN}{datetime.now().isoformat(timespec='seconds', sep=' ')}: {PrintColors.ENDC}"
+        p_log(f"{PrintColors.GREEN}{datetime.now().isoformat(timespec='seconds', sep=' ')}: {PrintColors.ENDC}"
               f"converting {path.name} to ims ... ")
         ims_file_path = path.parent / f'{path.name}.ims'
         command = [
@@ -718,13 +725,13 @@ def get_imaris_command(path, voxel_size_x: float, voxel_size_y: float, voxel_siz
             f"--voxelsize {voxel_size_x}-{voxel_size_y}-{voxel_size_z}",  # x-y-z
             "--logprogress"
         ]
-        print(f"\ttiff to ims conversion command:\n\t\t{' '.join(command)}\n")
+        p_log(f"\ttiff to ims conversion command:\n\t\t{' '.join(command)}\n")
 
     else:
         if len(files) > 0:
-            print("\tnot found Imaris View: not converting tiff to ims ... ")
+            p_log("\tnot found Imaris View: not converting tiff to ims ... ")
         else:
-            print("\tno tif file found to convert to ims!")
+            p_log("\tno tif file found to convert to ims!")
 
     return " ".join(command)
 
@@ -768,7 +775,7 @@ def main(source_path):
             flat_img_not_exist.append(not flat_img_created_already.exists())
         if any(flat_img_not_exist):
             if not image_classes_training_data_path.exists():
-                print(
+                p_log(
                     f'Looked for flat vs not-flat training data in {image_classes_training_data_path} '
                     f'and it was missing!')
                 use_default_flat_classification_data = ask_true_false_question(
@@ -777,10 +784,10 @@ def main(source_path):
                 )
                 if use_default_flat_classification_data:
                     image_classes_training_data_path = Path(__file__).parent / "image_classes.csv"
-                    print(f"default classification data path is:\n"
+                    p_log(f"default classification data path is:\n"
                           f"{image_classes_training_data_path.absolute()}")
                 else:
-                    print("You need classification data for flat image generation!")
+                    p_log("All images will be used for flat image generation!")
                     image_classes_training_data_path = None
 
     need_gaussian_filter_2d = ask_true_false_question(
@@ -791,7 +798,6 @@ def main(source_path):
     down_sampling_factor = (int(voxel_size_z // voxel_size_y), int(voxel_size_z // voxel_size_x))
     need_down_sampling = False
     new_tile_size = None
-    print()
     if down_sampling_factor < (1, 1):
         # Down-sampling makes sense if x-axis and y-axis voxel sizes were smaller than z axis voxel size
         # Down-sampling is disabled.
@@ -1076,9 +1082,9 @@ def main(source_path):
             [percent_addition, position, return_code, command] = queue.get()
             if return_code is not None:
                 if return_code > 0:
-                    print(f"\nFollowing command failed:\n\t{command}\n\treturn code: {return_code}\n")
+                    p_log(f"\nFollowing command failed:\n\t{command}\n\treturn code: {return_code}\n")
                 else:
-                    print(f"\nFollowing command succeeded:\n\t{command}\n")
+                    p_log(f"\nFollowing command succeeded:\n\t{command}\n")
                 running_processes -= 1
             if position is not None and 0 < len(progress_bar) <= position + 1:
                 progress_bar[position].update(percent_addition)
@@ -1113,7 +1119,7 @@ if __name__ == '__main__':
     for item in ["SSE2", "AVX", "AVX2", "AVX512f"]:
         cpu_instruction = item if CPUFeature[item] else cpu_instruction
     PyScriptPath = Path(r"./TeraStitcher/pyscripts")
-    if sys.platform == "win32":
+    if sys.platform.lower() == "win32":
         print("Windows is detected.")
         psutil.Process().nice(psutil.IDLE_PRIORITY_CLASS)
         CacheDriveExample = "D:\\"  # "W:\\3D_stitched\\"
@@ -1123,7 +1129,7 @@ if __name__ == '__main__':
         terastitcher = "terastitcher.exe"
         mergedisplacements = "mergedisplacements.exe"
         teraconverter = "teraconverter.exe"
-    elif sys.platform == 'linux':
+    elif sys.platform.lower() == 'linux':
         if 'microsoft' in uname().release.lower():
             print("Windows subsystem for Linux is detected.")
             CacheDriveExample = "/mnt/d/"
@@ -1158,9 +1164,9 @@ if __name__ == '__main__':
                 raise RuntimeError
             os.environ["PATH"] = f"{os.environ['PATH']}:{os.environ['CUDA_ROOT_DIR']}/bin"
             os.environ["LD_LIBRARY_PATH"] = f"{os.environ['LD_LIBRARY_PATH']}:{os.environ['CUDA_ROOT_DIR']}/lib64"
-            os.environ["CUDA_VISIBLE_DEVICES"] = "0"  # to train on a specific GPU on a multi-gpu machine
+            # os.environ["CUDA_VISIBLE_DEVICES"] = "0"  # to train on a specific GPU on a multi-gpu machine
     else:
-        log.error("yet unsupported OS")
+        log.error("yet untested OS")
         raise RuntimeError
 
     terastitcher = TeraStitcherPath / terastitcher

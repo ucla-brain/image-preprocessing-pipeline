@@ -272,8 +272,7 @@ def create_flat_img(
             # )
             with open(img_source_path.parent / (img_source_path.name + '_dark.txt'), "w") as f:
                 f.write(str(dark))
-        update_progress(
-            100, prefix=img_source_path.name, posix=f'found: {img_flat_count}                                         ')
+        update_progress(100, prefix=img_source_path.name, posix=f'found: {img_flat_count}\n')
         return img_flat_mean, dark
     else:
         print("no flat image found!")
