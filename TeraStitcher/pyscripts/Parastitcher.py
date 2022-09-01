@@ -65,17 +65,12 @@ import sys
 import shutil
 import time
 import datetime
-import operator
 import platform
-
-from math import *
-from glob import glob
-from mpi4py import MPI
-from collections import deque
-from subprocess import *
-
 import os.path
 import pickle
+from math import *
+from mpi4py import MPI
+from subprocess import *
 
 """
 The script needs to find the executables of terastitcher (step 2, Align) or teraconverter (step 6, Merge)
@@ -106,13 +101,13 @@ default_tile_size = 256
 
 """
 *************************
-* SUSPEND/RESUME option *  WARNING: this feature has not fully debugged and occcasionally fails
+* SUSPEND/RESUME option *  WARNING: this feature has not fully debugged and occasionally fails
 *************************
 
 invert comments if you want to enable suspend/resume behavior
 suspend/resume may reduce achievable speedup since it may introduce delays when status is saved
 after every instance of TeraConverter terminates
-to reduce this effect, status can be saved in a permament RAM disk of limited size (tens of Kbytes)
+to reduce this effect, status can be saved in a permanent RAM disk of limited size (tens of Kbytes)
 """
 resume_status_fname = 'para_resume_status.bin'
 
@@ -120,8 +115,8 @@ resume_status_fname = 'para_resume_status.bin'
 suspend_resume_enabled = False  # suspend/resume mechanism disabled
 
 """
-if a special drive (e.g. a RAM disk) should be used to save the status for sispend/resume 
-the variable 'save_status_prefix' should be assinged with the path where the status should be 
+if a special drive (e.g. a RAM disk) should be used to save the status for suspend/resume 
+the variable 'save_status_prefix' should be assigned with the path where the status should be 
 saved 
 if 'save_status_prefix' is the empty string the status is saved in the destination directory
 (i.e. where TeraConverter instances store their own suspend/resume status
