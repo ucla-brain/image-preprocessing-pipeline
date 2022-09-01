@@ -6,9 +6,9 @@ import os
 import sys
 import mpi4py
 import platform
-import subprocess
 import logging as log
 import psutil
+from subprocess import check_output, call, Popen, PIPE
 from cpufeature.extension import CPUFeature
 from re import compile, match, IGNORECASE
 from psutil import cpu_count, virtual_memory
@@ -227,7 +227,7 @@ def p_log(txt: str):
 
 
 def worker(command: str):
-    return_code = subprocess.call(command, shell=True)
+    return_code = call(command, shell=True)
     print(f"\nfinished:\n\t{command}\n\treturn code: {return_code}\n")
     return return_code
 
@@ -249,10 +249,10 @@ class MultiProcess(Process):
             if self.position is None:
                 return_code = worker(self.command)
             else:
-                process = subprocess.Popen(
+                process = Popen(
                     self.command,
-                    stdout=subprocess.PIPE,
-                    # stderr=subprocess.PIPE,
+                    stdout=PIPE,
+                    # stderr=PIPE,
                     shell=True,
                     text=True)
                 pattern = compile(self.pattern, IGNORECASE)
@@ -282,10 +282,10 @@ def reorder_list(a, b):
 
 def run_command(command):
     return_code = None
-    process = subprocess.Popen(
+    process = Popen(
         command,
-        stdout=subprocess.PIPE,
-        # stderr=subprocess.PIPE,
+        stdout=PIPE,
+        # stderr=PIPE,
         shell=True,
         text=True)
     pattern = compile(r"error|warning|fail", IGNORECASE)
@@ -577,7 +577,6 @@ def process_channel(
             f"-d={tera_fly_path}",
         ])
         print(f"\tTeraFly conversion command:\n\t\t{command}\n")
-        # subprocess.call(" ".join(command), shell=True)
         MultiProcess(queue, command).start()
         running_processes += 1
 
@@ -1146,7 +1145,11 @@ if __name__ == '__main__':
             else:
                 log.error("Error: JAVA path not found")
                 raise RuntimeError
-            cuda_version = ask_for_a_number_in_range("What is your cuda version (for example 11.7)?", (1, 20), float)
+            try:
+                cuda_version = compile(r'CUDA *Version: *(\d*(?:\.\d*)?)').findall(str(check_output(["nvidia-smi"])))[0]
+            except IndexError:
+                cuda_version = ask_for_a_number_in_range(
+                    "What is your cuda version (for example 11.7)?", (1, 20), float)
             if Path(f"/usr/local/cuda-{cuda_version}/").exists() and \
                     Path(f"/usr/local/cuda-{cuda_version}/bin").exists():
                 os.environ["CUDA_ROOT_DIR"] = f"/usr/local/cuda-{cuda_version}/"
