@@ -503,7 +503,7 @@ def process_channel(
                 f"--sH={tile_overlap_x - 1}",  # Displacements search radius along H (in pixels). Default value is 25!
                 f"--sV={tile_overlap_y - 1}",  # Displacements search radius along V (in pixels). Default value is 25!
                 f"--sD={25}",  # Displacements search radius along D (in pixels).
-                f"--subvoldim={150}",  # Number of slices per subvolume partition
+                f"--subvoldim={8400}",  # Number of slices per subvolume partition
                 # used in the pairwise displacements computation step.
                 # dimension of layers obtained by dividing the volume along D
                 "--threshold=0.95",
@@ -1072,7 +1072,7 @@ def main(source_path):
             MultiProcess(queue, command, pattern=r"(WriteProgress:)\s+(\d*.\d+)\s*$", position=idx).start()
             running_processes += 1
             progress_bar += [
-                tqdm(total=100, ascii=True, position=idx, unit="%", smoothing=0.05,
+                tqdm(total=100, ascii=True, position=idx, unit=" %", smoothing=0.05,
                      desc=f"imaris {(idx + 1) if len(merged_tif_paths) > 1 else ''}")]
 
     # waite for TeraFly and Imaris conversion to finish ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
