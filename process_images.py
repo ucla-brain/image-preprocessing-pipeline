@@ -39,7 +39,7 @@ VoxelSizeX_4x, VoxelSizeY_4x = (1.835,) * 2    # new stage --> 1.5, 1.5?
 VoxelSizeX_8x, VoxelSizeY_8x = (0.8,) * 2
 VoxelSizeX_10x, VoxelSizeY_10x = (0.661,) * 2  # new stage --> 0.6, 0.6
 VoxelSizeX_15x, VoxelSizeY_15x = (0.422,) * 2  # new stage --> 0.4, 0.4
-VoxelSizeX_40x, VoxelSizeY_40x = (0.15, 0.12)  # 0.143, 0.12
+VoxelSizeX_40x, VoxelSizeY_40x = (0.143, 0.12)  # 0.143, 0.12
 
 
 def p_log(txt: Union[str, list]):
@@ -68,10 +68,10 @@ def get_voxel_sizes(is_mip):
     objective = select_among_multiple_options(
         "What is the Objective?",
         [
-            f" 4x: Voxel Size X = {VoxelSizeX_4x}, Y = {VoxelSizeY_4x}, tile_size = 1600 x 2000",
-            f"10x: Voxel Size X = {VoxelSizeX_10x}, Y = {VoxelSizeY_10x}, tile_size = 1850 x 1850",
-            f"15x: Voxel Size X = {VoxelSizeX_15x}, Y = {VoxelSizeY_15x}, tile_size = 1850 x 1850",
-            f"40x: Voxel Size X = {VoxelSizeX_40x}, Y = {VoxelSizeY_40x}, tile_size = 2048 x 2048",
+            f" 4x: Voxel Size X = {VoxelSizeX_4x:.3f}, Y = {VoxelSizeY_4x:.3f}, tile_size = 1600 x 2000",
+            f"10x: Voxel Size X = {VoxelSizeX_10x:.3f}, Y = {VoxelSizeY_10x:.3f}, tile_size = 1850 x 1850",
+            f"15x: Voxel Size X = {VoxelSizeX_15x:.3f}, Y = {VoxelSizeY_15x:.3f}, tile_size = 1850 x 1850",
+            f"40x: Voxel Size X = {VoxelSizeX_40x:.3f}, Y = {VoxelSizeY_40x:.3f}, tile_size = 2048 x 2048",
             f"other: allows entering custom voxel sizes for custom tile_size"
         ],
         return_index=True
@@ -457,11 +457,11 @@ def process_channel(
         command = [
             f"{terastitcher}",
             "-1",
-            "--ref1=H",  # x horizontal?
-            "--ref2=V",  # y vertical? 'H' if objective == '40x' else 'V'
+            f"--ref1={'V' if objective == '40x' else 'H'}",  # x horizontal?
+            f"--ref2={'H' if objective == '40x' else 'V'}",  # y vertical?
             "--ref3=D",  # z depth?
-            f"--vxl1={voxel_size_x}",
-            f"--vxl2={voxel_size_y}",
+            f"--vxl1={voxel_size_y if objective == '40x' else voxel_size_x}",
+            f"--vxl2={voxel_size_x if objective == '40x' else voxel_size_y}",
             f"--vxl3={voxel_size_z}",
             "--sparse_data",
             f"--volin={preprocessed_path / channel}",
