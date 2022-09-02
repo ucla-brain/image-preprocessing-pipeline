@@ -831,7 +831,7 @@ def progress_manager(process_list: List[Process], progress_queue: Queue, workers
     list_of_outputs = []
     print(f"{PrintColors.GREEN}{datetime.now().isoformat(timespec='seconds', sep=' ')}: {PrintColors.ENDC}"
           f"using {workers} workers. {total} images need to be processed.")
-    progress_bar = tqdm(total=total, ascii=True, smoothing=0.05, mininterval=1.0, unit="images", desc=desc)
+    progress_bar = tqdm(total=total, ascii=True, smoothing=0.05, mininterval=1.0, unit=" images", desc=desc)
 
     def kill_processes(list_of_processes):
         print(f"\n{PrintColors.WARNING}Terminating processes with dignity!{PrintColors.ENDC}")
