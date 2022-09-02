@@ -39,7 +39,7 @@ VoxelSizeX_4x, VoxelSizeY_4x = (1.835,) * 2    # new stage --> 1.5, 1.5?
 VoxelSizeX_8x, VoxelSizeY_8x = (0.8,) * 2
 VoxelSizeX_10x, VoxelSizeY_10x = (0.661,) * 2  # new stage --> 0.6, 0.6
 VoxelSizeX_15x, VoxelSizeY_15x = (0.422,) * 2  # new stage --> 0.4, 0.4
-VoxelSizeX_40x, VoxelSizeY_40x = (0.15,) * 2   # 0.143, 0.12
+VoxelSizeX_40x, VoxelSizeY_40x = (0.15, 0.12)  # 0.143, 0.12
 
 
 def p_log(txt: Union[str, list]):
@@ -216,7 +216,7 @@ def inspect_for_missing_tiles_get_files_list(channel_path: Path):
                 p_log(f"{PrintColors.WARNING}\tfolders having {count} tiles: \n"
                       f"\t\t{folders}{PrintColors.ENDC}")
 
-    return unraveled_file_list
+    return unraveled_file_list, counts_list[-1]
 
 
 def correct_path_for_cmd(filepath):
@@ -353,7 +353,8 @@ def process_channel(
         tile_size: Tuple[int, int] = None,
         new_tile_size: Tuple[int, int] = None,
         need_tera_fly_conversion: bool = False,
-        print_input_file_names: bool = False
+        print_input_file_names: bool = False,
+        subvolume_depth: int = 1
 ):
     # preprocess each tile as needed using PyStripe --------------------------------------------------------------------
 
@@ -456,8 +457,8 @@ def process_channel(
         command = [
             f"{terastitcher}",
             "-1",
-            f"--ref1={'V' if objective == '40x' else 'H'}",  # x horizontal?
-            f"--ref2={'H' if objective == '40x' else 'V'}",  # y vertical?
+            "--ref1=H",  # x horizontal?
+            "--ref2=V",  # y vertical? 'H' if objective == '40x' else 'V'
             "--ref3=D",  # z depth?
             f"--vxl1={voxel_size_x}",
             f"--vxl2={voxel_size_y}",
@@ -503,7 +504,7 @@ def process_channel(
                 f"--sH={tile_overlap_x - 1}",  # Displacements search radius along H (in pixels). Default value is 25!
                 f"--sV={tile_overlap_y - 1}",  # Displacements search radius along V (in pixels). Default value is 25!
                 f"--sD={25}",  # Displacements search radius along D (in pixels).
-                f"--subvoldim={8400}",  # Number of slices per subvolume partition
+                f"--subvoldim={subvolume_depth}",  # Number of slices per subvolume partition
                 # used in the pairwise displacements computation step.
                 # dimension of layers obtained by dividing the volume along D
                 "--threshold=0.95",
@@ -972,7 +973,7 @@ def main(source_path):
     stitched_tif_paths, channel_volume_shapes = [], []
     queue = Queue()
     running_processes: int = 0
-    for channel, file_list in zip(all_channels, files_list):
+    for channel, (file_list, subvolume_depth) in zip(all_channels, files_list):
         stitched_tif_path, shape, running_processes_addition = process_channel(
             source_path,
             channel,
@@ -1006,7 +1007,8 @@ def main(source_path):
             down_sampling_factor=down_sampling_factor,
             tile_size=tile_size,
             new_tile_size=new_tile_size,
-            print_input_file_names=print_input_file_names
+            print_input_file_names=print_input_file_names,
+            subvolume_depth=subvolume_depth
         )
         stitched_tif_paths += [stitched_tif_path]
         channel_volume_shapes += [shape]
