@@ -35,7 +35,7 @@ class MultiProcess(Process):
             shape: Tuple[int, int],
             dtype: str,
             channel: int = 0,
-            timeout: float = 300,
+            timeout: Union[float, None] = 900,
             resume: bool = True,
             compression: Tuple[str, int] = ("ZLIB", 1)
     ):
@@ -168,7 +168,7 @@ def parallel_image_processor(
         kwargs: dict = None,
         tif_prefix: str = "img",
         channel: int = 0,
-        timeout: int = 300,
+        timeout: Union[float, None] = 900,
         max_processors: int = cpu_count(),
         progress_bar_name: str = "ImgProc",
         compression: Tuple[str, int] = ("ZLIB", 1),
@@ -189,7 +189,7 @@ def parallel_image_processor(
         prefix of the processed tif file
     channel: int
         The channel of multichannel tif or ims file
-    timeout: int
+    timeout: float
         max time in seconds to waite for each image to be processed not including the save time
     max_processors: int
         maximum number of processors
