@@ -553,7 +553,7 @@ def process_channel(
         destination=stitched_tif_path,
         args=(),
         kwargs={"rotation": 90 if need_rotation_stitched_tif else 0},
-        timeout=900,
+        timeout=None,
         max_processors=merge_step_cores,
         progress_bar_name="tsv",
         compression=("ZLIB", 1 if need_compression_stitched_tif else 0)
@@ -944,8 +944,10 @@ def main(source_path):
               f"channel{'s' if len(channels_need_tera_fly_conversion) > 1 else ''}"
               f" will be converted to TeraFly format.\n")
     need_merged_channels = False
+    need_compression_merged_channels = False
     if len(all_channels) > 1:
         need_merged_channels = ask_true_false_question("Do you need to merge channels to RGB color tiff?")
+        need_compression_merged_channels = ask_true_false_question("Do you need to compress RGB color tif files?")
     need_imaris_conversion = ask_true_false_question("Do you need to convert to Imaris format?")
     # Start ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
@@ -1044,19 +1046,25 @@ def main(source_path):
                 order_of_colors += color
 
         if 1 < len(stitched_tif_paths) < 4:
-            merge_all_channels(stitched_tif_paths, merged_tif_paths[0],
-                               channel_volume_shapes=channel_volume_shapes,
-                               order_of_colors=order_of_colors,
-                               workers=merge_channels_cores,
-                               resume=continue_process_terastitcher)
+            merge_all_channels(
+                stitched_tif_paths, merged_tif_paths[0],
+                channel_volume_shapes=channel_volume_shapes,
+                order_of_colors=order_of_colors,
+                workers=merge_channels_cores,
+                resume=continue_process_terastitcher,
+                compression=("ZLIB", 1 if need_compression_merged_channels else 0)
+            )
         elif len(stitched_tif_paths) >= 4:
             p_log("Warning: since number of channels are more than 3 merging channels is impossible.\n\t"
                   "merging the first 3 channels instead.")
-            merge_all_channels(stitched_tif_paths[0:3], merged_tif_paths[0],
-                               channel_volume_shapes=channel_volume_shapes,
-                               order_of_colors=order_of_colors,
-                               workers=merge_channels_cores,
-                               resume=continue_process_terastitcher)
+            merge_all_channels(
+                stitched_tif_paths[0:3], merged_tif_paths[0],
+                channel_volume_shapes=channel_volume_shapes,
+                order_of_colors=order_of_colors,
+                workers=merge_channels_cores,
+                resume=continue_process_terastitcher,
+                compression=("ZLIB", 1 if need_compression_merged_channels else 0)
+            )
             merged_tif_paths += stitched_tif_paths[3:]
         else:
             merged_tif_paths = []
