@@ -215,12 +215,11 @@ def parallel_image_processor(
         print(f"ims file detected. hdf5plugin=v{hdf5plugin.version}")
         with h5py.File(source) as ims_file:
             img = ims_file[f"DataSet/ResolutionLevel 0/TimePoint 0/Channel {channel}/Data"]
-            shape = img.shape
+            num_images = img.shape[0]
+            shape = img.shape[1:3]
             dtype = img.dtype
-        num_images = shape[0]
         for idx in range(num_images):
             args_queue.put(idx)
-        shape = (shape[1], shape[2])
         images = str(source)
     elif source.is_dir():
         images = [str(f) for f in source.iterdir() if f.is_file() and f.suffix.lower() in (".tif", ".tiff", ".raw")]
