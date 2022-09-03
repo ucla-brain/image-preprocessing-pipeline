@@ -209,7 +209,7 @@ def inspect_for_missing_tiles_get_files_list(channel_path: Path):
     counts_list = sorted([int(count) for count, folder_list in path_dict.items()])
     if (len(counts_list) > 1 and counts_list[0] != 1) or (len(counts_list) > 2 and counts_list[0] == 1):
         p_log(counts_list)
-        p_log(f"{PrintColors.WARNING}warning: following folders have missing tiles:{PrintColors.ENDC}")
+        p_log(f"{PrintColors.WARNING}warning: following folders might have missing tiles:{PrintColors.ENDC}")
         for count in counts_list[:-1]:
             if count != 1:
                 folders = "\n\t\t".join(path_dict[count])
@@ -553,6 +553,7 @@ def process_channel(
         destination=stitched_tif_path,
         args=(),
         kwargs={"rotation": 90 if need_rotation_stitched_tif else 0},
+        timeout=900,
         max_processors=merge_step_cores,
         progress_bar_name="tsv",
         compression=("ZLIB", 1 if need_compression_stitched_tif else 0)
