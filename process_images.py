@@ -371,7 +371,7 @@ def process_channel(
                 #     dark = int(f.read())
                 p_log(f"{PrintColors.GREEN}{datetime.now().isoformat(timespec='seconds', sep=' ')}: {PrintColors.ENDC}"
                       f"{channel}: using the existing flat image:\n"
-                      f"{flat_img_created_already.absolute()}.")
+                      f"\t{flat_img_created_already.absolute()}.")
             else:
                 p_log(f"{PrintColors.GREEN}{datetime.now().isoformat(timespec='seconds', sep=' ')}: {PrintColors.ENDC}"
                       f"{channel}: creating a new flat image.")
@@ -407,7 +407,7 @@ def process_channel(
             else:
                 sigma = (256, 256)
 
-        batch_filter(
+        return_code = batch_filter(
             source_path / channel,
             preprocessed_path / channel,
             files_list=files_list,
@@ -439,6 +439,9 @@ def process_channel(
             print_input_file_names=print_input_file_names,
             timeout=200.0
         )
+
+        if return_code != 0:
+            exit(return_code)
 
     inspect_for_missing_tiles_get_files_list(preprocessed_path / channel)
 
@@ -740,12 +743,11 @@ def get_imaris_command(path, voxel_size_x: float, voxel_size_y: float, voxel_siz
 
 
 def main(source_path):
-    if "-" in source_path.name:
-        if source_path.exists():
-            source_path = source_path.rename(source_path.parent / source_path.name.replace("-", "_"))
-            print(f"{PrintColors.WARNING}input path renamed to replace '-' with '_'{PrintColors.ENDC}")
-        else:
-            source_path = source_path.parent / source_path.name.replace("-", "_")
+    if "-" in source_path.name and source_path.exists():
+        source_path = source_path.rename(source_path.parent / source_path.name.replace("-", "_"))
+        print(f"{PrintColors.WARNING}input path renamed to replace '-' with '_'{PrintColors.ENDC}")
+    else:
+        source_path = source_path.parent / source_path.name.replace("-", "_")
     if not (source_path.exists() and source_path.is_dir()):
         print(f"{PrintColors.FAIL}input path should be an existing folder!{PrintColors.ENDC}")
         raise RuntimeError
@@ -1215,7 +1217,7 @@ if __name__ == '__main__':
     if len(sys.argv) == 1:
         main(source_path=Path(__file__).parent.absolute())
     elif len(sys.argv) == 2:
-        if Path(sys.argv[1]).exists():
-            main(source_path=Path(sys.argv[1]).absolute())
-        else:
-            print("The entered path is not valid")
+        main(source_path=Path(sys.argv[1]).absolute())
+    else:
+        print(f"{PrintColors.FAIL}Only one argument is allowed!{PrintColors.ENDC}")
+        raise RuntimeError

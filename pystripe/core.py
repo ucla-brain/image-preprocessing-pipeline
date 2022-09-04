@@ -29,6 +29,7 @@ from queue import Empty
 from operator import iconcat
 from functools import reduce
 from supplements.cli_interface import PrintColors
+from signal import signal, SIG_IGN, SIGINT
 
 filterwarnings("ignore")
 supported_extensions = ['.tif', '.tiff', '.raw', '.dcimg']
@@ -173,14 +174,15 @@ def imsave_tif(path: Path, img: ndarray, compression: Tuple[str, int] = ('ZLIB',
         The 1st argument is compression method the 2nd compression level for tiff files
         For example, ('ZSTD', 1) or ('ZLIB', 1).
     """
+    signal(SIGINT, SIG_IGN)
     for attempt in range(1, num_retries):
         try:
             imwrite(path, img, compression=compression)
             return
-        except (KeyboardInterrupt, SystemExit):
-            print(f"{PrintColors.WARNING}dying from imsave_tif{PrintColors.ENDC}")
-            imwrite(path, img, compression=compression)
-            # raise KeyboardInterrupt
+        # except KeyboardInterrupt:
+        #     print(f"{PrintColors.WARNING}\ndying from imsave_tif{PrintColors.ENDC}")
+        #     imwrite(path, img, compression=compression)
+        #     raise KeyboardInterrupt
         except (OSError, TypeError, PermissionError) as inst:
             if attempt == num_retries:
                 # f"Data size={img.size * img.itemsize} should be equal to the saved file's byte_count={byte_count}?"
@@ -676,17 +678,6 @@ def read_filter_save(
               f"{PrintColors.ENDC}")
 
 
-def _read_filter_save(input_dict):
-    """Same as 'read_filter_save' but with a single input dictionary. Used for pool.imap() in batch_filter
-
-    Parameters
-    ----------
-    input_dict : dict
-        input dictionary with arguments for `read_filter_save`.
-    """
-    read_filter_save(**input_dict)
-
-
 def glob_re(pattern: str, path: Path):
     """Recursively find all files having a specific name
         path: Path
@@ -783,13 +774,11 @@ class MultiProcess(Process):
     def run(self):
         running = True
         pool = ProcessPoolExecutor(max_workers=1)
-        while not self.args_queue.empty():
-            if self.die:
-                break
+        while not self.die and not self.args_queue.qsize() == 0:
             try:
                 args = self.args_queue.get(block=True, timeout=10)
                 try:
-                    future = pool.submit(_read_filter_save, args)
+                    future = pool.submit(read_filter_save, **args)
                     future.result(timeout=self.timeout)
                 except (BrokenProcessPool, TimeoutError, ValueError) as inst:
                     output_file: Path = args["output_file"]
@@ -808,7 +797,7 @@ class MultiProcess(Process):
                         )
                     pool.shutdown()
                     pool = ProcessPoolExecutor(max_workers=1)
-                except (KeyboardInterrupt, SystemExit):
+                except KeyboardInterrupt:
                     self.die = True
                 except Exception as inst:
                     print(
@@ -826,18 +815,13 @@ class MultiProcess(Process):
         self.progress_queue.put(running)
 
 
-def progress_manager(process_list: List[Process], progress_queue: Queue, workers: int, total: int, desc="PyStripe"):
+def progress_manager(progress_queue: Queue, workers: int, total: int,
+                     desc="PyStripe"):
     return_code = 0
     list_of_outputs = []
     print(f"{PrintColors.GREEN}{datetime.now().isoformat(timespec='seconds', sep=' ')}: {PrintColors.ENDC}"
           f"using {workers} workers. {total} images need to be processed.")
     progress_bar = tqdm(total=total, ascii=True, smoothing=0.05, mininterval=1.0, unit=" images", desc=desc)
-
-    def kill_processes(list_of_processes):
-        print(f"\n{PrintColors.WARNING}Terminating processes with dignity!{PrintColors.ENDC}")
-        for process in list_of_processes:
-            process.die = True
-        return 1
 
     while workers > 0:
         try:
@@ -851,12 +835,13 @@ def progress_manager(process_list: List[Process], progress_queue: Queue, workers
         except Empty:
             try:
                 sleep(1)
-            except (KeyboardInterrupt, SystemExit):
-                return_code = kill_processes(process_list)
-        except (KeyboardInterrupt, SystemExit):
-            return_code = kill_processes(process_list)
+            except KeyboardInterrupt:
+                print(f"\n{PrintColors.WARNING}Terminating processes with dignity!{PrintColors.ENDC}")
+                return_code = 1
+        except KeyboardInterrupt:
+            print(f"\n{PrintColors.WARNING}Terminating processes with dignity!{PrintColors.ENDC}")
+            return_code = 1
     progress_bar.close()
-    progress_queue.close()
     return list_of_outputs if list_of_outputs else return_code
 
 
@@ -968,12 +953,12 @@ def batch_filter(
     input_path = Path(input_path)
     assert input_path.is_dir()
     if convert_to_16bit is True and convert_to_8bit is True:
-        print('Select 8-bit or 16-bit output format.')
-        raise RuntimeError
+        print(f"{PrintColors.FAIL}Select 8-bit or 16-bit output format.{PrintColors.ENDC}")
+        raise TypeError
     output_path = Path(output_path)
     output_path.mkdir(parents=True, exist_ok=True)
     if sigma is None:
-        sigma = [0, 0]
+        sigma = (0, 0)
     if workers <= 0:
         workers = cpu_count()
     if isinstance(flat, (ndarray, generic)):
@@ -983,8 +968,8 @@ def batch_filter(
     elif isinstance(flat, str):
         flat = normalize_flat(imread_tif_raw(Path(flat)))
     elif flat is not None:
-        print('flat argument should be a numpy array or a path to a flat.tif file')
-        raise RuntimeError
+        print(f"{PrintColors.FAIL}flat argument should be a numpy array or a path to a flat.tif file{PrintColors.ENDC}")
+        raise TypeError
 
     arg_dict_template = {
         'sigma': sigma,
@@ -1043,15 +1028,15 @@ def batch_filter(
             args_queue.put(arg)
     del args_list
 
-    workers = min(workers, args_queue.qsize())
+    workers = min(workers, num_images)
     progress_queue = Queue()
-    process_list: List[MultiProcess, ...] = []
     for worker in range(workers):
-        process_list += [MultiProcess(progress_queue, args_queue, timeout)]
-        process_list[-1].start()
+        MultiProcess(progress_queue, args_queue, timeout).start()
 
-    return_code = progress_manager(process_list, progress_queue, workers, args_queue.qsize())
+    return_code = progress_manager(progress_queue, workers, num_images)
+    args_queue.cancel_join_thread()
     args_queue.close()
+    progress_queue.cancel_join_thread()
     progress_queue.close()
     return return_code
 

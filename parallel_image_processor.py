@@ -96,9 +96,7 @@ class MultiProcess(Process):
         if is_ims:
             file = h5py.File(images)
             images = file[f"DataSet/ResolutionLevel 0/TimePoint 0/Channel {channel}/Data"]
-        while not self.args_queue.empty():
-            if self.die:
-                break
+        while not self.die and not self.args_queue.qsize() == 0:
             try:
                 idx = self.args_queue.get(block=True, timeout=10)
                 tif_save_path = None
@@ -134,8 +132,7 @@ class MultiProcess(Process):
                     print(f"{PrintColors.WARNING}{message}{PrintColors.ENDC}")
                     pool.shutdown()
                     pool = ProcessPoolExecutor(max_workers=1)
-                except (KeyboardInterrupt, SystemExit):
-                    # print(f"{PrintColors.WARNING}dying from {idx}{PrintColors.ENDC}")
+                except KeyboardInterrupt:
                     self.die = True
                 except Exception as inst:
                     print(
@@ -170,7 +167,7 @@ def parallel_image_processor(
         channel: int = 0,
         timeout: Union[float, None] = 900,
         max_processors: int = cpu_count(),
-        progress_bar_name: str = "ImgProc",
+        progress_bar_name: str = " ImgProc",
         compression: Tuple[str, int] = ("ZLIB", 1),
         resume: bool = True
 ):
@@ -238,20 +235,19 @@ def parallel_image_processor(
     if destination is not None:
         Path(destination).mkdir(exist_ok=True)
 
-    process_list: List[MultiProcess, ...] = []
     progress_queue = Queue()
     workers = min(max_processors, num_images)
     for worker in range(workers):
-        process_list += [MultiProcess(
+        MultiProcess(
             progress_queue, args_queue, fun, images, destination, tif_prefix, args, kwargs, shape, dtype,
-            channel=channel, timeout=timeout, compression=compression, resume=resume)
-        ]
-        process_list[-1].start()
+            channel=channel, timeout=timeout, compression=compression, resume=resume).start()
 
-    return_code = progress_manager(process_list, progress_queue, workers, num_images, desc=progress_bar_name)
+    return_code_or_img_list = progress_manager(progress_queue, workers, num_images, desc=progress_bar_name)
+    args_queue.cancel_join_thread()
     args_queue.close()
+    progress_queue.cancel_join_thread()
     progress_queue.close()
-    return return_code
+    return return_code_or_img_list
 
 
 if __name__ == '__main__':
