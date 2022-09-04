@@ -1,7 +1,7 @@
 from typing import Tuple, Callable, Union
 from math import inf
 from os import getenv
-from sys import platform
+from datetime import datetime
 
 
 def is_pycharm():
@@ -60,3 +60,7 @@ class PrintColors:
     ENDC = '\033[0m'
     BOLD = '\033[1m'
     UNDERLINE = '\033[4m'
+
+
+def date_time_now():
+    return datetime.now().isoformat(timespec='seconds', sep=' ')

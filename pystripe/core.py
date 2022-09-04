@@ -28,7 +28,7 @@ from multiprocessing import Process, Queue, cpu_count
 from queue import Empty
 from operator import iconcat
 from functools import reduce
-from supplements.cli_interface import PrintColors
+from supplements.cli_interface import PrintColors, date_time_now
 from signal import signal, SIG_IGN, SIGINT
 
 filterwarnings("ignore")
@@ -819,7 +819,7 @@ def progress_manager(progress_queue: Queue, workers: int, total: int,
                      desc="PyStripe"):
     return_code = 0
     list_of_outputs = []
-    print(f"{PrintColors.GREEN}{datetime.now().isoformat(timespec='seconds', sep=' ')}: {PrintColors.ENDC}"
+    print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
           f"using {workers} workers. {total} images need to be processed.")
     progress_bar = tqdm(total=total, ascii=True, smoothing=0.05, mininterval=1.0, unit=" images", desc=desc)
 
@@ -1001,7 +1001,7 @@ def batch_filter(
     }
     # print(arg_dict_template)
 
-    print(f"{PrintColors.GREEN}{datetime.now().isoformat(timespec='seconds', sep=' ')}: {PrintColors.ENDC}"
+    print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
           f"Scheduling jobs for images in \n\t{input_path}")
 
     if z_step is None:
