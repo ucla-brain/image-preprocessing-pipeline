@@ -171,7 +171,7 @@ def downsample(I, d):
     '''
     Downsample along each axis
 
-    If it can be factored it would be really good
+    If it can be factored it would be perfect
 
     In factors always put the small number first
 
@@ -330,4 +330,3 @@ def downsample_2d_tif_series(
     print(f'Finished downsampling, time {time.time() - start:.1f}')
     np.savez(output_filename, I=Id, xI=np.array(xId, dtype='object'))  # note specify object to avoid "ragged" warning
     assert Id.shape == (len(xId[0]), len(xId[1]), len(xId[2]))
-
