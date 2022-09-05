@@ -115,7 +115,7 @@ def get_voxel_sizes(is_mip):
         (0.001, 1000), float)
     tile_overlap_percent = ask_for_a_number_in_range(
         f"what is the tile overlap in percent?\n"
-        f"{PrintColors.BLUE}hint: for SmartSPIM typically 9, for the other microscope 16.2{PrintColors.ENDC}",
+        f"{PrintColors.BLUE}hint: for SmartSPIM typically 10, for the other microscope 16.2{PrintColors.ENDC}",
         (0, 100), float)
     p_log(
         f"Objective is {objective} so voxel sizes are:\n"
@@ -506,9 +506,9 @@ def process_channel(
                 f"--oV={0 if objective == '40x' else tile_overlap_y}",
                 f"--sH={tile_overlap_x - 1}",  # Displacements search radius along H (in pixels). Default value is 25!
                 f"--sV={tile_overlap_y - 1}",  # Displacements search radius along V (in pixels). Default value is 25!
-                f"--sD={25}",  # Displacements search radius along D (in pixels).
+                f"--sD={200}",  # Displacements search radius along D (in pixels).
                 # Number of slices per subvolume partition
-                f"--subvoldim={1 if objective == '40x' else subvolume_depth}",
+                f"--subvoldim={1 if objective == '40x' else 600}",
                 # used in the pairwise displacements computation step.
                 # dimension of layers obtained by dividing the volume along D
                 "--threshold=0.95",
@@ -550,7 +550,7 @@ def process_channel(
     shape: Tuple[int, int, int] = tsv_volume.volume.shape  # shape is in z y x format
     if need_rotation_stitched_tif:
         shape = (shape[0], shape[2], shape[1])
-    parallel_image_processor(
+    return_code = parallel_image_processor(
         process_stitched_tif,
         source=tsv_volume,
         destination=stitched_tif_path,
@@ -561,6 +561,8 @@ def process_channel(
         progress_bar_name="tsv",
         compression=("ZLIB", 1 if need_compression_stitched_tif else 0)
     )
+    if return_code != 0:
+        exit(return_code)
 
     # TeraFly ----------------------------------------------------------------------------------------------------------
 
@@ -589,7 +591,7 @@ def process_channel(
             f"-s={stitched_tif_path}",
             f"-d={tera_fly_path}",
         ])
-        p_log(f"\tTeraFly conversion command:\n\t\t{command}\n")
+        p_log(f"\t{PrintColors.BLUE}TeraFly conversion command:{PrintColors.ENDC}\n\t\t{command}\n")
         MultiProcess(queue, command).start()
         running_processes += 1
 
@@ -731,7 +733,7 @@ def get_imaris_command(path, voxel_size_x: float, voxel_size_y: float, voxel_siz
             f"--voxelsize {voxel_size_x}-{voxel_size_y}-{voxel_size_z}",  # x-y-z
             "--logprogress"
         ]
-        p_log(f"\ttiff to ims conversion command:\n\t\t{' '.join(command)}\n")
+        p_log(f"\t{PrintColors.BLUE}tiff to ims conversion command:{PrintColors.ENDC}\n\t\t{' '.join(command)}\n")
 
     else:
         if len(files) > 0:
@@ -849,18 +851,18 @@ def main(source_path):
     if need_lightsheet_cleaning:
         de_striped_posix += "_lightsheet_cleaned"
         what_for += "lightsheet cleaning "
-        if len(all_channels) == 1 or \
-                ask_true_false_question(
-                    "Lightsheet cleaning is computationally expensive. "
-                    "For sparsely labeled channels, it can help compression algorithms "
-                    "to reduce the final file sizes up to a factor of 5. \n"
-                    "Do you want to clean all channels? (if no, then you may choose a subset of channels)"):
-            channels_need_lightsheet_cleaning: List[str] = all_channels.copy()
-        else:
-            channels_need_lightsheet_cleaning: List[str] = []
-            for channel in all_channels:
-                if ask_true_false_question(f"Do you need to apply lightsheet cleaning to {channel} channel?"):
-                    channels_need_lightsheet_cleaning += [channel]
+        channels_need_lightsheet_cleaning = all_channels.copy()
+        # if len(all_channels) == 1 or \
+        #         ask_true_false_question(
+        #             "Lightsheet cleaning is computationally expensive. "
+        #             "For sparsely labeled channels, it can help compression algorithms "
+        #             "to reduce the final file sizes up to a factor of 5. \n"
+        #             "Do you want to clean all channels? (if no, then you may choose a subset of channels)"):
+        #     channels_need_lightsheet_cleaning = all_channels.copy()
+        # else:
+        #     for channel in all_channels:
+        #         if ask_true_false_question(f"Do you need to apply lightsheet cleaning to {channel} channel?"):
+        #             channels_need_lightsheet_cleaning += [channel]
 
     need_raw_to_tiff_conversion = ask_true_false_question("Are images in raw format?")
 

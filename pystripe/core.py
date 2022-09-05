@@ -799,6 +799,8 @@ class MultiProcess(Process):
                     pool = ProcessPoolExecutor(max_workers=1)
                 except KeyboardInterrupt:
                     self.die = True
+                    with self.args_queue.mutex:
+                        self.args_queue.queue.clear()
                 except Exception as inst:
                     print(
                         f"{PrintColors.WARNING}"
@@ -821,7 +823,7 @@ def progress_manager(progress_queue: Queue, workers: int, total: int,
     list_of_outputs = []
     print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
           f"using {workers} workers. {total} images need to be processed.")
-    progress_bar = tqdm(total=total, ascii=True, smoothing=0.05, mininterval=1.0, unit=" images", desc=desc)
+    progress_bar = tqdm(total=total, ascii=True, smoothing=0.01, mininterval=1.0, unit=" images", desc=desc)
 
     while workers > 0:
         try:
