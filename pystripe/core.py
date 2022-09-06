@@ -10,7 +10,6 @@ from pywt import wavedec2, waverec2, Wavelet, dwt_max_level
 from argparse import RawDescriptionHelpFormatter, ArgumentParser
 from tqdm import tqdm
 from time import sleep
-from datetime import datetime
 from pathlib import Path
 from skimage.filters import threshold_otsu, gaussian
 from skimage.measure import block_reduce
@@ -29,7 +28,7 @@ from queue import Empty
 from operator import iconcat
 from functools import reduce
 from supplements.cli_interface import PrintColors, date_time_now
-from signal import signal, SIG_IGN, SIGINT
+# from signal import signal, SIG_IGN, SIGINT
 
 filterwarnings("ignore")
 supported_extensions = ['.tif', '.tiff', '.raw', '.dcimg']
@@ -174,15 +173,15 @@ def imsave_tif(path: Path, img: ndarray, compression: Tuple[str, int] = ('ZLIB',
         The 1st argument is compression method the 2nd compression level for tiff files
         For example, ('ZSTD', 1) or ('ZLIB', 1).
     """
-    signal(SIGINT, SIG_IGN)
+    die = False
     for attempt in range(1, num_retries):
         try:
             imwrite(path, img, compression=compression)
             return
-        # except KeyboardInterrupt:
-        #     print(f"{PrintColors.WARNING}\ndying from imsave_tif{PrintColors.ENDC}")
-        #     imwrite(path, img, compression=compression)
-        #     raise KeyboardInterrupt
+        except KeyboardInterrupt:
+            print(f"{PrintColors.WARNING}\ndying from imsave_tif{PrintColors.ENDC}")
+            imwrite(path, img, compression=compression)
+            die = True
         except (OSError, TypeError, PermissionError) as inst:
             if attempt == num_retries:
                 # f"Data size={img.size * img.itemsize} should be equal to the saved file's byte_count={byte_count}?"
@@ -196,6 +195,8 @@ def imsave_tif(path: Path, img: ndarray, compression: Tuple[str, int] = ('ZLIB',
             else:
                 sleep(0.1)
             continue
+    if die:
+        raise KeyboardInterrupt
 
 
 def fft(data, axis=-1, shift=True):
@@ -799,8 +800,11 @@ class MultiProcess(Process):
                     pool = ProcessPoolExecutor(max_workers=1)
                 except KeyboardInterrupt:
                     self.die = True
-                    with self.args_queue.mutex:
-                        self.args_queue.queue.clear()
+                    # while not self.args_queue.qsize() == 0:
+                    #     try:
+                    #         self.args_queue.get(block=True, timeout=10)
+                    #     except Empty:
+                    #         continue
                 except Exception as inst:
                     print(
                         f"{PrintColors.WARNING}"

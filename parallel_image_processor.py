@@ -134,8 +134,11 @@ class MultiProcess(Process):
                     pool = ProcessPoolExecutor(max_workers=1)
                 except KeyboardInterrupt:
                     self.die = True
-                    with self.args_queue.mutex:
-                        self.args_queue.queue.clear()
+                    # while not self.args_queue.qsize() == 0:
+                    #     try:
+                    #         self.args_queue.get(block=True, timeout=10)
+                    #     except Empty:
+                    #         continue
                 except Exception as inst:
                     print(
                         f"{PrintColors.WARNING}"
