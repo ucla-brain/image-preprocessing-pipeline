@@ -43,7 +43,7 @@ VoxelSizeX_40x, VoxelSizeY_40x = (0.143, 0.12)  # 0.143, 0.12
 
 
 def p_log(txt: Union[str, list]):
-    txt = str(txt)
+    txt: str = str(txt)
     print(txt)
     for _ in range(40):
         try:
@@ -478,14 +478,23 @@ def process_channel(
             raise RuntimeError
 
         # each alignment thread needs about 16GB of RAM in 16bit and 8GB in 8bit
-        memory_needed_per_thread = 14
-        if stitch_mip:
-            memory_needed_per_thread = 2
+        memory_needed_per_thread = 32 * (1 if objective == '40x' or stitch_mip else subvolume_depth)
+        if isinstance(new_tile_size, tuple):
+            for resolution in new_tile_size:
+                memory_needed_per_thread *= resolution
+        elif isinstance(tile_size, tuple):
+            if isinstance(down_sampling_factor, tuple):
+                for resolution, factor in zip(tile_size, down_sampling_factor):
+                    memory_needed_per_thread *= resolution/factor
+            else:
+                for resolution in tile_size:
+                    memory_needed_per_thread *= resolution
+        else:
+            memory_needed_per_thread *= 2048 * 2048
         if need_16bit_to_8bit_conversion:
-            memory_needed_per_thread //= 2
-        alignment_cores = memory_ram // memory_needed_per_thread + 1
-        if alignment_cores > cpu_physical_core_count + 1:
-            alignment_cores = cpu_physical_core_count + 1
+            memory_needed_per_thread /= 2
+        alignment_cores = min(int(round(memory_ram / memory_needed_per_thread, 0)), cpu_physical_core_count) + 1
+
         steps_str = ["alignment", "z-displacement", "threshold-displacement", "optimal tiles placement"]
         for step in [2, 3, 4, 5]:
             p_log(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
@@ -508,7 +517,7 @@ def process_channel(
                 f"--sV={tile_overlap_y - 1}",  # Displacements search radius along V (in pixels). Default value is 25!
                 f"--sD={200}",  # Displacements search radius along D (in pixels).
                 # Number of slices per subvolume partition
-                f"--subvoldim={1 if objective == '40x' else 600}",
+                f"--subvoldim={1 if objective == '40x' else subvolume_depth}",
                 # used in the pairwise displacements computation step.
                 # dimension of layers obtained by dividing the volume along D
                 "--threshold=0.95",
@@ -531,11 +540,15 @@ def process_channel(
           f"\n\tsource: {stitched_path / f'{channel}_xml_import_step_5.xml'}"
           f"\n\tdestination: {stitched_tif_path}")
 
-    merge_step_cores = cpu_physical_core_count if cpu_physical_core_count * 14 < memory_ram else memory_ram // 14
+    tsv_volume = TSVVolume.load(stitched_path / f'{channel}_xml_import_step_5.xml')
+    shape: Tuple[int, int, int] = tsv_volume.volume.shape  # shape is in z y x format
+    if need_rotation_stitched_tif:
+        shape = (shape[0], shape[2], shape[1])
+
+    memory_needed_per_thread = shape[1] * shape[2] * 16 / (1024**3)
     if need_16bit_to_8bit_conversion:
-        merge_step_cores = cpu_logical_core_count if cpu_logical_core_count * 7 < memory_ram else memory_ram // 7
-    if merge_step_cores > cpu_physical_core_count:
-        merge_step_cores = cpu_physical_core_count
+        memory_needed_per_thread //= 2
+    merge_step_cores = min(memory_ram // memory_needed_per_thread, cpu_physical_core_count + 2)
 
     # shape: Tuple[int, int, int] = convert_to_2D_tif(
     #     TSVVolume.load(stitched_path / f'{channel}_xml_import_step_5.xml'),
@@ -546,10 +559,6 @@ def process_channel(
     #     resume=continue_process_terastitcher
     # )
 
-    tsv_volume = TSVVolume.load(stitched_path / f'{channel}_xml_import_step_5.xml')
-    shape: Tuple[int, int, int] = tsv_volume.volume.shape  # shape is in z y x format
-    if need_rotation_stitched_tif:
-        shape = (shape[0], shape[2], shape[1])
     return_code = parallel_image_processor(
         process_stitched_tif,
         source=tsv_volume,
@@ -802,8 +811,22 @@ def main(source_path):
         f"produce up to two times smaller files?"
     )
 
+    def destination_name(name: str):
+        resolution: str = compile(r"(\d+)[xX]").findall(name)[0]
+        new_resolution: int = 0
+        if resolution:
+            new_resolution = int(round(int(resolution)/(voxel_size_z/voxel_size_x), 0))
+        new_name = name
+        if new_resolution:
+            new_name = name.replace(
+                f"_{resolution}x_", f"_{new_resolution}x_").replace(
+                f"_{resolution}X_", f"_{new_resolution}x_")
+        return new_name
+
+    new_destination_name = destination_name(source_path.name)
     down_sampling_factor = (int(voxel_size_z // voxel_size_y), int(voxel_size_z // voxel_size_x))
     need_down_sampling = False
+    need_up_sizing = False
     new_tile_size = None
     if down_sampling_factor < (1, 1):
         # Down-sampling makes sense if x-axis and y-axis voxel sizes were smaller than z axis voxel size
@@ -913,19 +936,15 @@ def main(source_path):
         print_input_file_names = False  # ask_true_false_question(
         # "Do you need to print raw or tif file names to find corrupt files during preprocessing stage?")
         preprocessed_path, continue_process_pystripe = get_destination_path(
-            source_path.name,
+            new_destination_name if need_down_sampling or need_up_sizing else source_path.name,
             what_for=what_for + "files",
             posix=de_striped_posix,
             default_path=preprocessed_path)
     else:
         preprocessed_path = source_path
 
-    # source_path_name = source_path.name
-    # if need_down_sampling and objective == "15x" and voxel_size_z == 1:
-    #     source_path_name = source_path_name.replace("_15x_", "_6x_")
-
     stitched_path, continue_process_terastitcher = get_destination_path(
-        source_path.name,
+        new_destination_name if need_down_sampling or need_up_sizing else source_path.name,
         what_for="stitched files",
         posix="_MIP_stitched" if stitch_mip else "_stitched",
         default_path=stitched_path)
@@ -1032,9 +1051,11 @@ def main(source_path):
 
     # merge channels to RGB ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
+    # TODO: calculate based on memory requirement
     merge_channels_cores = cpu_logical_core_count if cpu_logical_core_count * 14 < memory_ram else memory_ram // 14
     if need_16bit_to_8bit_conversion:
         merge_channels_cores = cpu_logical_core_count if cpu_logical_core_count * 7 < memory_ram else memory_ram // 7
+    merge_channels_cores = min(merge_channels_cores, cpu_physical_core_count + 2)
 
     merged_tif_paths = stitched_tif_paths
     if need_merged_channels and len(stitched_tif_paths) > 1:
