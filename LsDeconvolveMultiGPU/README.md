@@ -22,7 +22,7 @@ IMPORTANT INSTALLATION NOTE:
 LsDeconv REQUIRES THE MATLAB TO WORK PROPERLY!
 ********************************************************
 
-The program was tested on a PC with 256 Cores and 4TB RAM and 8x NVIDIA Tesla A100 GPUs under Windows and Ubuntu Linux.
+The program was tested on a HGX server with 256 Cores and 4TB RAM and 8x NVIDIA Tesla A100 GPUs.
 
 Supported input format: 2D tif series.
 
@@ -34,6 +34,6 @@ If data did not fit into your GPU memory restart MATLAB and reduce block size.
 Note: If you do not restart MATLAB, some MATLAB files remain open on GPU memory.
     You may check it with nvidia-smi command.
 
-After the program has finished, the deconvolved images can be found in an automatically generated subfolder of input folder named "deconvolved".
+After the program has finished, the results will be saved in a subfolder of input folder named "deconvolved".
 	
 ********************************************************
