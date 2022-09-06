@@ -590,7 +590,7 @@ def process_channel(
             "--dfmt=\"TIFF (tiled, 3D)\"",
             "--resolutions=\"012345\"",
             "--clist=0",
-            "--halve=mean",
+            "--halve=max",
             # "--noprogressbar",
             # "--sparse_data",
             # "--fixed_tiling",
