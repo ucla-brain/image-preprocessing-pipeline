@@ -1,10 +1,20 @@
-Copyright TU-Wien 2019, written Klaus Becker (klaus.becker@tuwien.ac.at)
+Initial Copyright TU-Wien 2019, Klaus Becker (klaus.becker@tuwien.ac.at)
 
 Modified by Keivan Moradi, Hongwei Dong Lab (B.R.A.I.N) at UCLA 2022 (kmoradi at mednet dot ucla dot edu)
+    * parallel processing
+    * multiGPU support
+    * resume support
+    * 3D gaussian filtering
+    * Speed enhancement
 
-LsDeconv is free software. You can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or at your option) any later version.
+LsDeconv is free software. 
+You can redistribute it and/or modify it under the terms of the GNU General Public License as published by the 
+Free Software Foundation, either version 3 of the License, or at your option) any later version.
 
-LsDeconv is distributed in the hope that they will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more details. You should have received a copy of the GNU General PublicLicense along with LsDeconv. If not, see <http://www.gnu.org/licenses/>.
+LsDeconv is distributed in the hope that they will be useful, but WITHOUT ANY WARRANTY; 
+without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  
+See the GNU General Public License for more details.
+If not, see <http://www.gnu.org/licenses/>.
 
 
 IMPORTANT INSTALLATION NOTE:
