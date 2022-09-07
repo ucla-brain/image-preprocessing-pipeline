@@ -239,7 +239,7 @@ def worker(command: str):
     return return_code
 
 
-class MultiProcess(Process):
+class MultiProcessCommandRunner(Process):
     def __init__(self, queue, command, pattern="", position=None):
         Process.__init__(self)
         super().__init__()
@@ -601,7 +601,7 @@ def process_channel(
             f"-d={tera_fly_path}",
         ])
         p_log(f"\t{PrintColors.BLUE}TeraFly conversion command:{PrintColors.ENDC}\n\t\t{command}\n")
-        MultiProcess(queue, command).start()
+        MultiProcessCommandRunner(queue, command).start()
         running_processes += 1
 
     return stitched_tif_path, shape, running_processes
@@ -713,23 +713,29 @@ def merge_all_channels(
             ))
 
 
-def get_imaris_command(path, voxel_size_x: float, voxel_size_y: float, voxel_size_z: float, workers: int = cpu_count(),
+def get_imaris_command(imaris_path: Path, input_path: Path, output_path: Path = None,
+                       voxel_size_x: float = 1, voxel_size_y: float = 1, voxel_size_z: float = 1,
+                       workers: int = cpu_count(),
                        dtype: str = 'uint8'):
-    files = list(path.rglob("*.tif"))
+    files = sorted(list(input_path.rglob("*.tif")))
     file = files[0]
     command = []
-    if imaris_converter.exists() and len(files) > 0:
+    if imaris_path.exists() and len(files) > 0:
         p_log(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
-              f"converting {path.name} to ims ... ")
-        ims_file_path = path.parent / f'{path.name}.ims'
+              f"converting {input_path.name} to ims ... ")
+
+        ims_file_path = input_path.parent / f'{input_path.name}.ims'
+        if output_path:
+            ims_file_path = output_path
+
         command = [
-            f"{imaris_converter}" if sys.platform == "win32" else f"wine {imaris_converter}",
+            f"{imaris_path}" if sys.platform == "win32" else f"WINEDEBUG=-all wine {imaris_path}",
             f"--input {file}",
             f"--output {ims_file_path}",
         ]
         if sys.platform == "linux" and 'microsoft' in uname().release.lower():
             command = [
-                f'{correct_path_for_cmd(imaris_converter)}',
+                f'{correct_path_for_cmd(imaris_path)}',
                 f'--input {correct_path_for_wsl(file)}',
                 f"--output {correct_path_for_wsl(ims_file_path)}",
             ]
@@ -742,7 +748,6 @@ def get_imaris_command(path, voxel_size_x: float, voxel_size_y: float, voxel_siz
             f"--voxelsize {voxel_size_x}-{voxel_size_y}-{voxel_size_z}",  # x-y-z
             "--logprogress"
         ]
-        p_log(f"\t{PrintColors.BLUE}tiff to ims conversion command:{PrintColors.ENDC}\n\t\t{' '.join(command)}\n")
 
     else:
         if len(files) > 0:
@@ -751,6 +756,22 @@ def get_imaris_command(path, voxel_size_x: float, voxel_size_y: float, voxel_siz
             p_log("\tno tif file found to convert to ims!")
 
     return " ".join(command)
+
+
+def commands_progress_manger(queue: Queue, progress_bars: List[tqdm], running_processes: int):
+    while running_processes > 0:
+        try:
+            [percent_addition, position, return_code, command] = queue.get()
+            if return_code is not None:
+                if return_code > 0:
+                    p_log(f"\nFollowing command failed:\n\t{command}\n\treturn code: {return_code}\n")
+                else:
+                    p_log(f"\nFollowing command succeeded:\n\t{command}\n")
+                running_processes -= 1
+            if position is not None and 0 < len(progress_bars) <= position + 1:
+                progress_bars[position].update(percent_addition)
+        except Empty:
+            sleep(1)  # waite one second before checking the queue again
 
 
 def main(source_path):
@@ -1096,37 +1117,42 @@ def main(source_path):
 
     # Imaris File Conversion :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
-    progress_bar = []
+    progress_bars = []
     if need_imaris_conversion:
         p_log(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
               f"started ims conversion  ...")
-        for idx, path in enumerate(merged_tif_paths):
+        for idx, merged_tif_path in enumerate(merged_tif_paths):
             command = get_imaris_command(
-                path, voxel_size_x, voxel_size_y, voxel_size_z,
+                imaris_path=imaris_converter,
+                input_path=merged_tif_path,
+                voxel_size_x=voxel_size_x,
+                voxel_size_y=voxel_size_y,
+                voxel_size_z=voxel_size_z,
                 workers=cpu_physical_core_count,
                 dtype='uint8' if need_16bit_to_8bit_conversion else 'uint16'
             )
-            MultiProcess(queue, command, pattern=r"(WriteProgress:)\s+(\d*.\d+)\s*$", position=idx).start()
+            p_log(f"\t{PrintColors.BLUE}tiff to ims conversion command:{PrintColors.ENDC}\n\t\t{' '.join(command)}\n")
+            MultiProcessCommandRunner(queue, command, pattern=r"(WriteProgress:)\s+(\d*.\d+)\s*$", position=idx).start()
             running_processes += 1
-            progress_bar += [
-                tqdm(total=100, ascii=True, position=idx, unit=" %", smoothing=0.05,
+            progress_bars += [
+                tqdm(total=100, ascii=True, position=idx, unit=" %", smoothing=0.01,
                      desc=f"imaris {(idx + 1) if len(merged_tif_paths) > 1 else ''}")]
 
     # waite for TeraFly and Imaris conversion to finish ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
-
-    while running_processes > 0:
-        try:
-            [percent_addition, position, return_code, command] = queue.get()
-            if return_code is not None:
-                if return_code > 0:
-                    p_log(f"\nFollowing command failed:\n\t{command}\n\treturn code: {return_code}\n")
-                else:
-                    p_log(f"\nFollowing command succeeded:\n\t{command}\n")
-                running_processes -= 1
-            if position is not None and 0 < len(progress_bar) <= position + 1:
-                progress_bar[position].update(percent_addition)
-        except Empty:
-            sleep(1)  # waite one second before checking the queue again
+    commands_progress_manger(queue, progress_bars, running_processes)
+    # while running_processes > 0:
+    #     try:
+    #         [percent_addition, position, return_code, command] = queue.get()
+    #         if return_code is not None:
+    #             if return_code > 0:
+    #                 p_log(f"\nFollowing command failed:\n\t{command}\n\treturn code: {return_code}\n")
+    #             else:
+    #                 p_log(f"\nFollowing command succeeded:\n\t{command}\n")
+    #             running_processes -= 1
+    #         if position is not None and 0 < len(progress_bar) <= position + 1:
+    #             progress_bar[position].update(percent_addition)
+    #     except Empty:
+    #         sleep(1)  # waite one second before checking the queue again
 
     if need_tera_fly_conversion:
         p_log(

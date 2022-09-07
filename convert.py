@@ -5,15 +5,16 @@ import subprocess
 from pystripe.core import batch_filter
 from time import time
 from platform import uname
-from multiprocessing import freeze_support
+from multiprocessing import freeze_support, Queue
 from numpy import ndarray, where
 from pathlib import Path
 from pystripe.core import convert_to_8bit_fun
-from process_images import correct_path_for_cmd, correct_path_for_wsl
+from process_images import get_imaris_command, MultiProcessCommandRunner, commands_progress_manger
 from argparse import RawDescriptionHelpFormatter, ArgumentParser, Namespace, BooleanOptionalAction
 from parallel_image_processor import parallel_image_processor
 from supplements.cli_interface import PrintColors
 from cpufeature.extension import CPUFeature
+from tqdm import tqdm
 
 os.environ['MKL_NUM_THREADS'] = '1'
 os.environ['NUMEXPR_NUM_THREADS'] = '1'
@@ -117,26 +118,17 @@ def main(args: Namespace):
         print(f"elapsed time = {round((time() - start_time) / 60, 1)}")
 
     if args.imaris:
-        file = tif_2d_folder / sorted(tif_2d_folder.glob("*.tif"))[0]
-        command = [
-            f"" if sys.platform == "win32" else "wine",
-            f"{correct_path_for_cmd(imaris_converter)}",
-            f"--input {correct_path_for_cmd(file)}",
-            f"--output {ims_file}",
-        ]
-        if sys.platform == "linux" and 'microsoft' in uname().release.lower():
-            command = [
-                f'{correct_path_for_cmd(imaris_converter)}',
-                f'--input {correct_path_for_wsl(file)}',
-                f"--output {correct_path_for_wsl(ims_file)}",
-            ]
 
-        command += [
-            "--inputformat TiffSeries",
-            f"--nthreads {args.nthreads}",
-            f"--compression 1"
-        ]
-        subprocess.call(" ".join(command), shell=True)
+        files = [file.rename(file.parent / ("_" + file.name)) for file in tif_2d_folder.glob("*.tif")]
+
+        command = get_imaris_command(imaris_path=imaris_converter, input_path=tif_2d_folder, output_path=ims_file)
+        progress_queue = Queue()
+        MultiProcessCommandRunner(progress_queue, command,
+                                  pattern=r"(WriteProgress:)\s+(\d*.\d+)\s*$", position=0).start()
+        progress_bars = [tqdm(total=100, ascii=True, position=0, unit=" %", smoothing=0.01, desc=f"imaris")]
+        commands_progress_manger(progress_queue, progress_bars, running_processes=1)
+
+        [file.rename(file.parent / file.name[1:]) for file in files]
 
 
 if __name__ == '__main__':
@@ -172,7 +164,7 @@ if __name__ == '__main__':
         print("Error: paraconverter not found")
         raise RuntimeError
 
-    imaris_converter = Path(r"./imaris") / "ImarisConvertiv.exe"
+    imaris_converter = Path(r"./imaris9.7/ImarisConvertiv.exe")
     if not imaris_converter.exists():
         print("Error: ImarisConvertiv.exe not found")
         raise RuntimeError
