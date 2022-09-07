@@ -1027,11 +1027,11 @@ def batch_filter(
         args_list = reduce(iconcat, args_list, [])  # unravel the list of list the fastest way possible
     del files, files_list
 
+    args_list = [arg for arg in args_list if arg is not None]
     num_images = len(args_list)
     args_queue = Queue(maxsize=num_images)
     for arg in args_list:
-        if arg is not None:
-            args_queue.put(arg)
+        args_queue.put(arg)
     del args_list
 
     workers = min(workers, num_images)
