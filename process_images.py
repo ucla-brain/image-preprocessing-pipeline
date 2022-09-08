@@ -717,7 +717,7 @@ def get_imaris_command(imaris_path: Path, input_path: Path, output_path: Path = 
                        voxel_size_x: float = 1, voxel_size_y: float = 1, voxel_size_z: float = 1,
                        workers: int = cpu_count(),
                        dtype: str = 'uint8'):
-    files = sorted(list(input_path.rglob("*.tif")))
+    files = sorted(input_path.rglob("*.tif"))
     file = files[0]
     command = []
     if imaris_path.exists() and len(files) > 0:
