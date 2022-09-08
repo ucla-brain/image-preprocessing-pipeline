@@ -133,7 +133,7 @@ def main(args: Namespace):
         duration = 0.05
 
         with open(tif_2d_folder/"ffmpeg_input.txt", "wb") as ffmpeg_input:
-            for file in list(tif_2d_folder.glob("*.tif"))[args.movie_start:args.movie_end]:
+            for file in sorted(tif_2d_folder.glob("*.tif"))[args.movie_start:args.movie_end]:
                 ffmpeg_input.write(f"file '{file.absolute().as_posix()}'\n".encode())
                 ffmpeg_input.write(f"duration {duration}\n".encode())
 
