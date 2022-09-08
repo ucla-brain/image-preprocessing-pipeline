@@ -4,11 +4,12 @@ Python code for stitching and image enhancement of Light Sheet data
 # Installation:
 * Install [Imaris Viewer](https://viewer.imaris.com/download/ImarisViewer9_9_1w64.exe) (on Linux use [wine](https://vitux.com/how-to-install-wine-on-ubuntu/)).
 * Install 64 bit version of [Microsoft Visual C++ 2010 Service Pack 1 Redistributable Package](https://www.microsoft.com/en-us/download/confirmation.aspx?id=26999), specifically in Wine.
+* On Windows install [Microsoft C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/), which is required for installation of `cpufeature` python package.
 * On Linux make sure Java server (e.g., [openjdk](https://openjdk.java.net/install/)), and [Nvidia drivers and CUDA >10.1](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/index.html#ubuntu-installation) are installed.
 * Install [anaconda python distribution](https://www.anaconda.com/products/individual):
   make a dedicated python environment for stitching:
 
-   `conda create -n stitching -c conda-forge python=3.10 psutil tqdm tifffile numpy scipy scikit-image scikit-learn matplotlib pyqt pandas imagecodecs git mpi4py hdf5plugin h5py`
+   `conda create -n stitching -c conda-forge python=3.10 psutil tqdm tifffile numpy scipy scikit-image scikit-learn matplotlib pyqt pandas imagecodecs git mpi4py hdf5plugin h5py ffmpeg`
    
    `conda activate stitching`
     
@@ -125,6 +126,8 @@ We patched terastitcher and teraconverter so that they can read data from mounte
 18. CLI interface.
 19. Selecting colors for different channels.
 20. Resume support.
+21. Rotation of stitched image.
+22. File converter.
 
 # Data flow and parallel processing design
 ![image](https://user-images.githubusercontent.com/18602635/157983557-9511a194-2cd6-4d54-8c50-f2956609ebe8.png)
@@ -135,12 +138,11 @@ We patched terastitcher and teraconverter so that they can read data from mounte
 In this section, I explain the workflow in our lab.
 
 If your lightsheet microscope generates maximum intensity projection (MIP) images, we suggest you stitch those images, first. The stitched MIP image allows you to choose correct dark levels and right bitshift values. For example, in the main folder of our images, we have a set of folders that end with `*_MIP`: `Ex_488_Em_525_MIP`, `Ex_561_Em_600_MIP`, and `Ex_642_Em_680_MIP`.
-* Stitch the `MIP` image: for Linux, `python process_images.py /path/to/image` or for Windows `python process_images.py X:\path\to\image`.
-* First, select the CPU architecture of your stitching computer: `SSE2`, `AVX`, `AVX2`, `AVX512`. At the moment, a relatively new AMD CPU supports up to AVX2, and Intel CPUs support AVX512. For older computers, you may choose AVX, and for ancient computers `SSE2`.
+* To start stitching the `MIP` image, run the following command for Linux, `python process_images.py /path/to/image` or for Windows `python process_images.py X:\path\to\image`.
+* For question `Do you need to stitch the MIP image first?` --> answer `Yes`.
 * Choose objective. For example 15x.
 * Input the z-step size. Our microscope generates MIP images for every 600 um z-steps.
 * Set the tile overlap percentage, which is a setting in microscope software (for example 10).
-* For question `Do you need to stitch the MIP image first?` --> answer `Yes`.
 * For questions about lightsheet cleaning, raw format, 8-bit conversion, down-sampling, and tif compression choose `NO`, whenever you stitch MIP images.
 * Enter the location where you want to save the stitched files (destination). You need to enter the parent folder path (for example, `Y:\path\to`), or you may press enter to choose the default suggested path. We suggest you use a different drive as destination to optimize read and write. For example, stitching to/from a NAS, we use NFS mount for reading, and SMB mount as destination. On a local disk, you may read from `C:\` and write on `D:\`.
 * convert to TeraFly --> `No`
@@ -151,7 +153,6 @@ Wait for the program to finish stitching. In the `*_stitched` folder, you can fi
 
 After setting DarkThreshold values, start stitching the main image. For example,
 * `python process_images.py /path/to/image`
-* `CPU` --> AVX2
 * `Objective` --> 15x
 * `z-step` --> 1. Our images have 15x objective with 1 um z-step.
 * `tile overlap` --> 10
@@ -174,6 +175,17 @@ By answering YES to any of the above questions, you enable PyStripe module. You 
 
 Stitching starts by inspecting your images for missing tiles. If you saw a warning in this regard, you may stop stitching to correct the issue. For example, there might be file transfer/conversion issues that you can fix. As a last resort, you may choose to duplicate neighboring tiles of the missing tiles and give them an appropriate name.
 
+# Using converter module
+
+File converter supports the following file conversions:
+
+`Imaris` or `TIF` --> preprocessed TIF (optional: 8bit conversion + right bit-shifting, baseline (dark) subtraction) --> Single channel `TeraFly`, `Imaris`, or `MP4`
+
+Run the following command from the `image-preprocessing-pipeline` folder:
+
+`python convert.py --help`
+
+``
 
 # Compiling terastitcher (optional)
 For CUDA 11.6 and newer GPUs, in addition to [original compilation documentation instructions](https://github.com/abria/TeraStitcher/wiki/Get-and-build-source-code) do the following:

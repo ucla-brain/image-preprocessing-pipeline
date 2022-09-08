@@ -43,8 +43,6 @@ def main(args: Namespace):
     if args.teraFly:
         dir_tera_fly.mkdir(exist_ok=True, parents=True)
 
-    ims_file = Path(args.imaris)
-
     return_code = 0
     if input_path.is_file() and input_path.suffix.lower() == ".ims":
         if not args.tif:
@@ -118,7 +116,7 @@ def main(args: Namespace):
         print(f"elapsed time = {round((time() - start_time) / 60, 1)}")
 
     if args.imaris:
-
+        ims_file = Path(args.imaris)
         files = [file.rename(file.parent / ("_" + file.name)) for file in tif_2d_folder.glob("*.tif")]
 
         command = get_imaris_command(imaris_path=imaris_converter, input_path=tif_2d_folder, output_path=ims_file)
@@ -129,6 +127,26 @@ def main(args: Namespace):
         commands_progress_manger(progress_queue, progress_bars, running_processes=1)
 
         [file.rename(file.parent / file.name[1:]) for file in files]
+
+    if args.movie:
+        movie_file = Path(args.movie)
+        duration = 0.05
+
+        with open(tif_2d_folder/"ffmpeg_input.txt", "wb") as ffmpeg_input:
+            for file in list(tif_2d_folder.glob("*.tif"))[args.movie_start:args.movie_end]:
+                ffmpeg_input.write(f"file '{file.absolute().as_posix()}'\n".encode())
+                ffmpeg_input.write(f"duration {duration}\n".encode())
+
+        command = " ".join([
+            f"ffmpeg -r 60 -f concat -safe 0",
+            f"-i {tif_2d_folder/'ffmpeg_input.txt'}",
+            f"{movie_file.absolute()}"
+        ])
+        print(f"{PrintColors.BLUE}{command}{PrintColors.ENDC}")
+
+        pipe = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE).stdout
+        pipe.read().decode()
+        pipe.close()
 
 
 if __name__ == '__main__':
@@ -182,6 +200,8 @@ if __name__ == '__main__':
                         help="Path to output teraFly path")
     parser.add_argument("--imaris", "-o", type=str, required=False, default='',
                         help="Path to 8-bit imaris output file")
+    parser.add_argument("--movie", "-m", type=str, required=False, default='',
+                        help="Path to mp4 output file")
     parser.add_argument("--nthreads", "-n", type=int, default=12,
                         help="number of threads")
     parser.add_argument("--channel", "-c", type=int, default=0,
@@ -192,5 +212,9 @@ if __name__ == '__main__':
                         help="convert to 8-bit")
     parser.add_argument("--bit_shift", "-b", type=int, default=8,
                         help="bit_shift for 8-bit conversion")
+    parser.add_argument("--movie_start", type=int, default=0,
+                        help="start frame counting from 0")
+    parser.add_argument("--movie_end", type=int, default=None,
+                        help="end frame counting from 0")
 
     main(parser.parse_args())
