@@ -331,7 +331,6 @@ def process_channel(
         objective: str,
         tile_overlap_percent: float,
         queue: Queue,
-        memory_ram: int,
         stitch_mip: bool,
         dark: int = 0,
         files_list: List[Path] = None,
@@ -493,6 +492,7 @@ def process_channel(
             memory_needed_per_thread *= 2048 * 2048
         if need_16bit_to_8bit_conversion:
             memory_needed_per_thread /= 2
+        memory_ram = virtual_memory().available // 1024 ** 3  # in GB
         alignment_cores = min(int(round(memory_ram / memory_needed_per_thread, 0)), cpu_physical_core_count) + 1
 
         steps_str = ["alignment", "z-displacement", "threshold-displacement", "optimal tiles placement"]
@@ -548,6 +548,7 @@ def process_channel(
     memory_needed_per_thread = shape[1] * shape[2] * 16 / (1024**3)
     if need_16bit_to_8bit_conversion:
         memory_needed_per_thread //= 2
+    memory_ram = virtual_memory().available // 1024 ** 3  # in GB
     merge_step_cores = min(memory_ram // memory_needed_per_thread, cpu_physical_core_count + 2)
 
     # shape: Tuple[int, int, int] = convert_to_2D_tif(
@@ -996,7 +997,7 @@ def main(source_path):
     # Start ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
     start_time = time()
-    memory_ram = virtual_memory().available // 1024 ** 3  # in GB
+    memory_ram = virtual_memory().available // 1024**3  # in GB
     p_log(
         f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
         f"stitching started"
@@ -1013,11 +1014,9 @@ def main(source_path):
 
     # channels need reconstruction will be stitched first to start slow TeraFly conversion as soon as possible
     all_channels = reorder_list(all_channels, channels_need_tera_fly_conversion)
-
     files_list = list(map(
         inspect_for_missing_tiles_get_files_list,
         [source_path / channel for channel in all_channels]))
-
     stitched_tif_paths, channel_volume_shapes = [], []
     queue = Queue()
     running_processes: int = 0
@@ -1033,7 +1032,6 @@ def main(source_path):
             objective,
             tile_overlap_percent,
             queue,
-            memory_ram,
             stitch_mip,
             dark=dark_threshold[channel],
             files_list=file_list,
@@ -1073,6 +1071,7 @@ def main(source_path):
     # merge channels to RGB ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
     # TODO: calculate based on memory requirement
+    memory_ram = virtual_memory().available // 1024 ** 3  # in GB
     merge_channels_cores = cpu_logical_core_count if cpu_logical_core_count * 14 < memory_ram else memory_ram // 14
     if need_16bit_to_8bit_conversion:
         merge_channels_cores = cpu_logical_core_count if cpu_logical_core_count * 7 < memory_ram else memory_ram // 7
