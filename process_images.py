@@ -1257,7 +1257,7 @@ if __name__ == '__main__':
         raise RuntimeError
     print(f"mpi4py version is {mpi4py.__version__}")
 
-    imaris_converter = Path(r"./imaris9.7/ImarisConvertiv.exe")
+    imaris_converter = Path(r"imaris/ImarisConvertiv.exe")
     if not imaris_converter.exists():
         log.error("Error: ImarisConvertiv.exe not found")
         raise RuntimeError

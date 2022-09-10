@@ -101,7 +101,7 @@ def main(args: Namespace):
             "--dfmt=\"TIFF (tiled, 3D)\"",
             "--resolutions=\"012345\"",
             "--clist=0",
-            "--halve=max",
+            "--halve=mean",
             # "--noprogressbar",
             # "--sparse_data",
             # "--fixed_tiling",
@@ -182,7 +182,7 @@ if __name__ == '__main__':
         print("Error: paraconverter not found")
         raise RuntimeError
 
-    imaris_converter = Path(r"./imaris9.7/ImarisConvertiv.exe")
+    imaris_converter = Path(r"imaris/ImarisConvertiv.exe")
     if not imaris_converter.exists():
         print("Error: ImarisConvertiv.exe not found")
         raise RuntimeError
