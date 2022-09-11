@@ -8,9 +8,9 @@ import mpi4py
 import platform
 import logging as log
 import psutil
-from subprocess import check_output, call, Popen, PIPE
+from subprocess import check_output, call, Popen, PIPE, CalledProcessError
 from cpufeature.extension import CPUFeature
-from re import compile, match, IGNORECASE
+from re import compile, match, findall, IGNORECASE, MULTILINE
 from psutil import cpu_count, virtual_memory
 from tqdm import tqdm
 from numpy import ndarray, zeros, rot90
@@ -29,13 +29,14 @@ from supplements.cli_interface import ask_for_a_number_in_range, date_time_now
 from typing import List, Tuple, Dict, Union
 from downsampling import TifStack
 from parallel_image_processor import parallel_image_processor
+
 # experiment setup: user needs to set them right
 # AllChannels = [(channel folder name, rgb color)]
 AllChannels: List[Tuple[str, str]] = [
     ("Ex_488_Em_525", "g"), ("Ex_561_Em_600", "r"), ("Ex_642_Em_680", "b"),
     ("Ex_488_Em_1", "g"), ("Ex_561_Em_1", "r"), ("Ex_642_Em_1", "b")
 ]
-VoxelSizeX_4x, VoxelSizeY_4x = (1.835,) * 2    # new stage --> 1.5, 1.5?
+VoxelSizeX_4x, VoxelSizeY_4x = (1.835,) * 2  # new stage --> 1.5, 1.5?
 VoxelSizeX_8x, VoxelSizeY_8x = (0.8,) * 2
 VoxelSizeX_10x, VoxelSizeY_10x = (0.661,) * 2  # new stage --> 0.6, 0.6
 VoxelSizeX_15x, VoxelSizeY_15x = (0.422,) * 2  # new stage --> 0.4, 0.4
@@ -287,27 +288,29 @@ def reorder_list(a, b):
     return b + a
 
 
-def run_command(command):
-    return_code = None
-    process = Popen(
-        command,
-        stdout=PIPE,
-        # stderr=PIPE,
-        shell=True,
-        text=True)
-    pattern = compile(r"error|warning|fail", IGNORECASE)
-    while return_code is None:
-        return_code = process.poll()
-        stdout = process.stdout.readline()
-        m = match(pattern, stdout)
-        if m:
-            p_log(f"\n{PrintColors.WARNING}{stdout}{PrintColors.ENDC}\n")
+def execute(command):
+    popen = Popen(command, stdout=PIPE, shell=True, text=True, universal_newlines=True, bufsize=0)
+    for stdout_line in iter(popen.stdout.readline, ""):
+        yield stdout_line
+    popen.stdout.close()
+    return_code = popen.wait()
+    if return_code:
+        p_log(f"\n{PrintColors.FAIL}Process failed for command:\n\t{command}{PrintColors.ENDC}\n")
+        raise CalledProcessError(return_code, command)
+
+
+def run_command(command, need_progress_dot=True):
+    pattern = compile(r"error|warning|fail", IGNORECASE | MULTILINE)
+    for stdout in execute(command):
+        if need_progress_dot:
+            m = findall(pattern, stdout)
+            if m:
+                p_log(f"\n{PrintColors.WARNING}{stdout}{PrintColors.ENDC}\n")
+            else:
+                print(".", end="")
         else:
-            print(".", end="")
-    if return_code > 0:
-        p_log(f"\n{PrintColors.FAIL}TeraStitcher failed with return code {return_code}.{PrintColors.ENDC}")
-    else:
-        p_log("")
+            print(stdout)
+    p_log("")
 
 
 def process_stitched_tif(img: ndarray, rotation: int = 0):
@@ -477,14 +480,14 @@ def process_channel(
             raise RuntimeError
 
         # each alignment thread needs about 16GB of RAM in 16bit and 8GB in 8bit
-        memory_needed_per_thread = 32 / 1024**3 * (1 if objective == '40x' or stitch_mip else subvolume_depth)
+        memory_needed_per_thread = 32 / 1024 ** 3 * (1 if objective == '40x' or stitch_mip else subvolume_depth)
         if isinstance(new_tile_size, tuple):
             for resolution in new_tile_size:
                 memory_needed_per_thread *= resolution
         elif isinstance(tile_size, tuple):
             if isinstance(down_sampling_factor, tuple):
                 for resolution, factor in zip(tile_size, down_sampling_factor):
-                    memory_needed_per_thread *= resolution/factor
+                    memory_needed_per_thread *= resolution / factor
             else:
                 for resolution in tile_size:
                     memory_needed_per_thread *= resolution
@@ -503,7 +506,7 @@ def process_channel(
             proj_out = stitched_path / f"{channel}_xml_import_step_{step}.xml"
 
             assert proj_in.exists()
-            if step == 2:
+            if step == 2 and alignment_cores > 2:
                 command = [f"mpiexec -np {alignment_cores} python -m mpi4py {parastitcher}"]
             else:
                 command = [f"{terastitcher}"]
@@ -526,7 +529,7 @@ def process_channel(
                 # "--restoreSPIM",
             ]
             command = " ".join(command)
-            p_log(f"\t{PrintColors.BLUE}{steps_str[step-2]} command:{PrintColors.ENDC}\n\t\t" + command)
+            p_log(f"\t{PrintColors.BLUE}{steps_str[step - 2]} command:{PrintColors.ENDC}\n\t\t" + command)
             run_command(command)
             assert proj_out.exists()
             proj_in.unlink(missing_ok=False)
@@ -545,7 +548,7 @@ def process_channel(
     if need_rotation_stitched_tif:
         shape = (shape[0], shape[2], shape[1])
 
-    memory_needed_per_thread = shape[1] * shape[2] * 16 / (1024**3)
+    memory_needed_per_thread = shape[1] * shape[2] * 16 / (1024 ** 3)
     if need_16bit_to_8bit_conversion:
         memory_needed_per_thread //= 2
     memory_ram = virtual_memory().available // 1024 ** 3  # in GB
@@ -591,7 +594,7 @@ def process_channel(
             "--dfmt=\"TIFF (tiled, 3D)\"",
             "--resolutions=\"012345\"",
             "--clist=0",
-            "--halve=max",
+            "--halve=mean",
             # "--noprogressbar",
             # "--sparse_data",
             # "--fixed_tiling",
@@ -837,7 +840,7 @@ def main(source_path):
         resolution: str = compile(r"(\d+)[xX]").findall(name)[0]
         new_resolution: int = 0
         if resolution:
-            new_resolution = int(round(int(resolution)/(voxel_size_z/voxel_size_x), 0))
+            new_resolution = int(round(int(resolution) / (voxel_size_z / voxel_size_x), 0))
         new_name = name
         if new_resolution:
             new_name = name.replace(
@@ -997,7 +1000,7 @@ def main(source_path):
     # Start ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
     start_time = time()
-    memory_ram = virtual_memory().available // 1024**3  # in GB
+    memory_ram = virtual_memory().available // 1024 ** 3  # in GB
     p_log(
         f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
         f"stitching started"
