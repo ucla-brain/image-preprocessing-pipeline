@@ -130,7 +130,7 @@ def main(args: Namespace):
 
     if args.movie:
         movie_file = Path(args.movie)
-        duration = 0.05
+        duration = args.movie_frame_duration
 
         with open(tif_2d_folder/"ffmpeg_input.txt", "wb") as ffmpeg_input:
             for file in sorted(tif_2d_folder.glob("*.tif"))[args.movie_start:args.movie_end]:
@@ -215,6 +215,8 @@ if __name__ == '__main__':
     parser.add_argument("--movie_start", type=int, default=0,
                         help="start frame counting from 0")
     parser.add_argument("--movie_end", type=int, default=None,
+                        help="end frame counting from 0")
+    parser.add_argument("--movie_frame_duration", type=int, default=5,
                         help="end frame counting from 0")
 
     main(parser.parse_args())
