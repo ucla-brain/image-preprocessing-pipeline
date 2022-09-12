@@ -13,7 +13,7 @@ from cpufeature.extension import CPUFeature
 from re import compile, match, findall, IGNORECASE, MULTILINE
 from psutil import cpu_count, virtual_memory
 from tqdm import tqdm
-from numpy import ndarray, zeros, rot90
+from numpy import ndarray, zeros, rot90, uint8
 from pathlib import Path
 from flat import create_flat_img
 from datetime import timedelta
@@ -29,6 +29,7 @@ from supplements.cli_interface import ask_for_a_number_in_range, date_time_now
 from typing import List, Tuple, Dict, Union
 from downsampling import TifStack
 from parallel_image_processor import parallel_image_processor
+from math import ceil
 
 # experiment setup: user needs to set them right
 # AllChannels = [(channel folder name, rgb color)]
@@ -496,7 +497,7 @@ def process_channel(
         if need_16bit_to_8bit_conversion:
             memory_needed_per_thread /= 2
         memory_ram = virtual_memory().available // 1024 ** 3  # in GB
-        alignment_cores = min(int(round(memory_ram / memory_needed_per_thread, 0)), cpu_physical_core_count) + 1
+        alignment_cores = min(int(ceil(memory_ram / memory_needed_per_thread)), cpu_physical_core_count) + 1
 
         steps_str = ["alignment", "z-displacement", "threshold-displacement", "optimal tiles placement"]
         for step in [2, 3, 4, 5]:
@@ -548,11 +549,11 @@ def process_channel(
     if need_rotation_stitched_tif:
         shape = (shape[0], shape[2], shape[1])
 
-    memory_needed_per_thread = shape[1] * shape[2] * 16 / (1024 ** 3)
-    if need_16bit_to_8bit_conversion:
-        memory_needed_per_thread //= 2
-    memory_ram = virtual_memory().available // 1024 ** 3  # in GB
-    merge_step_cores = min(memory_ram // memory_needed_per_thread, cpu_physical_core_count + 2)
+    memory_needed_per_thread = 32 * shape[1] * shape[2] / 1024 ** 3
+    if need_16bit_to_8bit_conversion or tsv_volume.dtype in (uint8, "uint8"):
+        memory_needed_per_thread /= 2
+    memory_ram = virtual_memory().available / 1024 ** 3  # in GB
+    merge_step_cores = min(int(ceil(memory_ram / memory_needed_per_thread)), cpu_physical_core_count + 2)
 
     # shape: Tuple[int, int, int] = convert_to_2D_tif(
     #     TSVVolume.load(stitched_path / f'{channel}_xml_import_step_5.xml'),
@@ -572,7 +573,7 @@ def process_channel(
         timeout=None,
         max_processors=merge_step_cores,
         progress_bar_name="tsv",
-        compression=("ZLIB", 1 if need_compression_stitched_tif else 0)
+        compression=("ZLIB", 1 if need_compression_stitched_tif else 0),
     )
     if return_code != 0:
         exit(return_code)
@@ -1127,8 +1128,8 @@ def main(source_path):
             command = get_imaris_command(
                 imaris_path=imaris_converter,
                 input_path=merged_tif_path,
-                voxel_size_x=voxel_size_x,
-                voxel_size_y=voxel_size_y,
+                voxel_size_x=voxel_size_y if need_rotation_stitched_tif else voxel_size_x,
+                voxel_size_y=voxel_size_x if need_rotation_stitched_tif else voxel_size_y,
                 voxel_size_z=voxel_size_z,
                 workers=cpu_physical_core_count,
                 dtype='uint8' if need_16bit_to_8bit_conversion else 'uint16'
