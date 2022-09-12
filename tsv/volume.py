@@ -12,11 +12,11 @@ import numpy as np
 import os
 import pathlib
 import re
-import tifffile
 from xml.etree import ElementTree
 from .raw import raw_imread
 from numpy import ndarray, zeros, hstack
 from supplements.cli_interface import PrintColors
+from tifffile import imread, imwrite
 
 
 def get_dim_tuple(element):
@@ -256,7 +256,7 @@ class TSVStackBase(VExtentBase):
             return raw_imread(path)
         else:
             try:
-                return tifffile.imread(path)
+                return imread(path)
             except:
                 print("Bad file: %s" % path)
                 raise
@@ -362,8 +362,10 @@ class TSVStack(TSVStackBase):
                     for i in range(self.__idxs_to_keep[-1]):
                         file = os.path.join(directory, f"{int(i*self.z_step[0]*10):06}.tif")
                         if not os.path.exists(file):
-                            print(file)
-                    raise RuntimeError
+                            print(f"\t\tthe following missing files is replaced with a dummy (zeros) image:\n"
+                                  f"\t\t\t{file}")
+                            imwrite(file, zeros(self.shape[1:3], dtype=self.dtype))
+                    # raise RuntimeError
 
         return self.__paths
 
