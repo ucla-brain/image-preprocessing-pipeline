@@ -66,6 +66,8 @@ def imread_tif_raw(path: Path, dtype: str = None, shape: Tuple[int, int] = None)
                 img = raw_imread(path, dtype=dtype, shape=shape)
             elif extension in ['.tif', '.tiff']:
                 img = imread(path)
+            else:
+                print(f"{PrintColors.WARNING}encountered unsupported file format: {extension}{PrintColors.ENDC}")
         except (OSError, TypeError, PermissionError):
             sleep(0.1)
             continue
