@@ -17,7 +17,7 @@ from skimage.transform import resize
 from tifffile import imread, imwrite
 from tifffile.tifffile import TiffFileError
 from dcimg import DCIMGFile
-from typing import Tuple, Iterator, List
+from typing import Tuple, Iterator, List, Callable
 from types import GeneratorType
 from pystripe.raw import raw_imread
 from .lightsheet_correct import correct_lightsheet
@@ -765,39 +765,49 @@ def process_dc_imgs(input_file: Path, input_path: Path, output_path: Path, args_
     return sub_stack
 
 
-class MultiProcess(Process):
-    def __init__(self, progress_queue: Queue, args_queue: Queue, timeout: float = None):
+class MultiProcessQueueRunner(Process):
+    def __init__(self, progress_queue: Queue, args_queue: Queue,
+                 fun: Callable = read_filter_save, timeout: float = None, replace_timeout_with_dummy: bool = True):
         Process.__init__(self)
         self.daemon = False
         self.progress_queue = progress_queue
         self.args_queue = args_queue
         self.timeout = timeout
         self.die = False
+        self.function = fun
+        self.replace_timeout_with_dummy = replace_timeout_with_dummy
 
     def run(self):
         running = True
         pool = ProcessPoolExecutor(max_workers=1)
+        fun = self.function
         while not self.die and not self.args_queue.qsize() == 0:
             try:
                 args = self.args_queue.get(block=True, timeout=10)
                 try:
-                    future = pool.submit(read_filter_save, **args)
+                    future = pool.submit(fun, **args)
                     future.result(timeout=self.timeout)
                 except (BrokenProcessPool, TimeoutError, ValueError) as inst:
-                    output_file: Path = args["output_file"]
-                    print(f"{PrintColors.WARNING}"
-                          f"\nwarning: timeout reached for processing input file:\n\t{args['input_file']}\n\t"
-                          f"a dummy (zeros) image is saved as output instead:\n\t{output_file}"
-                          f"\nexception instance: {type(inst)}"
-                          f"{PrintColors.ENDC}")
-                    if not output_file.exists():
-                        imsave_tif(
-                            output_file,
-                            zeros(
-                                shape=args["new_size"] if args["new_size"] else args["tile_size"],
-                                dtype=uint8 if args["convert_to_8bit"] else uint16
+                    if self.replace_timeout_with_dummy:
+                        output_file: Path = args["output_file"]
+                        print(f"{PrintColors.WARNING}"
+                              f"\nwarning: timeout reached for processing input file:\n\t{args['input_file']}\n\t"
+                              f"a dummy (zeros) image is saved as output instead:\n\t{output_file}"
+                              f"\nexception instance: {type(inst)}"
+                              f"{PrintColors.ENDC}")
+                        if not output_file.exists():
+                            imsave_tif(
+                                output_file,
+                                zeros(
+                                    shape=args["new_size"] if args["new_size"] else args["tile_size"],
+                                    dtype=uint8 if args["convert_to_8bit"] else uint16
+                                )
                             )
-                        )
+                    else:
+                        print(f"{PrintColors.WARNING}"
+                              f"\nwarning: timeout reached for processing input file:\n\t{args['file_name']}\n\t"
+                              f"\nexception instance: {type(inst)}"
+                              f"{PrintColors.ENDC}")
                     pool.shutdown()
                     pool = ProcessPoolExecutor(max_workers=1)
                 except KeyboardInterrupt:
@@ -1032,14 +1042,14 @@ def batch_filter(
     args_list = [arg for arg in args_list if arg is not None]
     num_images = len(args_list)
     args_queue = Queue(maxsize=num_images)
-    for arg in args_list:
-        args_queue.put(arg)
+    for args in args_list:
+        args_queue.put(args)
     del args_list
 
     workers = min(workers, num_images)
     progress_queue = Queue()
     for worker in range(workers):
-        MultiProcess(progress_queue, args_queue, timeout).start()
+        MultiProcessQueueRunner(progress_queue, args_queue, fun=read_filter_save, timeout=timeout).start()
 
     return_code = progress_manager(progress_queue, workers, num_images)
     args_queue.cancel_join_thread()

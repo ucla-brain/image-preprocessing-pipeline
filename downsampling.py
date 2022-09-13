@@ -245,7 +245,7 @@ class TifStack:
     def __init__(self, input_directory: Path, pattern='*.tif'):
         self.input_directory = input_directory
         self.pattern = pattern
-        self.files = list(input_directory.rglob(pattern))
+        self.files = list(input_directory.glob(pattern))
         self.files.sort()
         img = imread(self.files[0])
         self.dtype = img.dtype

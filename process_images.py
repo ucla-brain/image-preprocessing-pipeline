@@ -20,10 +20,9 @@ from datetime import timedelta
 from time import time, sleep
 from platform import uname
 from tsv.volume import TSVVolume
-from tsv.convert import calculate_cores_and_chunk_size
-from pystripe.core import batch_filter, imread_tif_raw, imsave_tif
+from pystripe.core import batch_filter, imread_tif_raw, imsave_tif, MultiProcessQueueRunner, progress_manager
 from queue import Empty
-from multiprocessing import freeze_support, Pool, Queue, Process
+from multiprocessing import freeze_support, Queue, Process
 from supplements.cli_interface import select_among_multiple_options, ask_true_false_question, PrintColors
 from supplements.cli_interface import ask_for_a_number_in_range, date_time_now
 from typing import List, Tuple, Dict, Union
@@ -663,10 +662,6 @@ def merge_channels_by_file_name(
     imsave_tif(rgb_file, multi_channel_img, compression=compression)
 
 
-def merge_channels_by_file_name_worker(input_dict):
-    merge_channels_by_file_name(**input_dict)
-
-
 def merge_all_channels(
         stitched_tif_paths: List[Path],
         merged_tif_path: Path,
@@ -679,7 +674,7 @@ def merge_all_channels(
     """
     file names should be identical for each z-step of each channel
     """
-    num_files_in_each_path = list(map(lambda p: len(list(p.rglob("*.tif"))), stitched_tif_paths))
+    num_files_in_each_path = list(map(lambda p: len(list(p.glob("*.tif"))), stitched_tif_paths))
 
     if channel_volume_shapes is None:
         channel_volume_shapes = [TifStack(path).shape for path in stitched_tif_paths]
@@ -692,30 +687,32 @@ def merge_all_channels(
         y, x = max(y, shape[1]), max(x, shape[2])
 
     merged_tif_path.mkdir(exist_ok=True)
-    work: List[dict] = [{
-        "file_name": file.name,
-        "stitched_tif_paths": stitched_tif_paths,
-        "order_of_colors": order_of_colors,
-        "merged_tif_path": merged_tif_path,
-        "shape": (y, x),
-        "resume": resume,
-        "compression": compression
-    } for file in stitched_tif_paths[num_files_in_each_path.index(max(num_files_in_each_path))].rglob("*.tif")]
-    num_images = len(work)
 
-    workers, chunks = calculate_cores_and_chunk_size(num_images, workers, pool_can_handle_more_than_61_cores=False)
-    p_log(f"\tusing {workers} cores and {chunks} chunks")
-    # TODO: RGB: Support more than 61 cores on Windows
-    with Pool(processes=workers) as pool:
-        list(
-            tqdm(
-                pool.imap_unordered(merge_channels_by_file_name_worker, work, chunksize=chunks),
-                total=max(num_files_in_each_path),
-                ascii=True,
-                smoothing=0.05,
-                unit="img",
-                desc="RGB"
-            ))
+    num_images = max(num_files_in_each_path)
+    args_queue = Queue(maxsize=num_images)
+    for file in stitched_tif_paths[num_files_in_each_path.index(num_images)].glob("*.tif"):
+        args_queue.put({
+            "file_name": file.name,
+            "stitched_tif_paths": stitched_tif_paths,
+            "order_of_colors": order_of_colors,
+            "merged_tif_path": merged_tif_path,
+            "shape": (y, x),
+            "resume": resume,
+            "compression": compression
+        })
+
+    workers = min(workers, num_images)
+    progress_queue = Queue()
+    for worker_ in range(workers):
+        MultiProcessQueueRunner(progress_queue, args_queue,
+                                fun=merge_channels_by_file_name, replace_timeout_with_dummy=False).start()
+
+    return_code = progress_manager(progress_queue, workers, num_images, desc="RGB")
+    args_queue.cancel_join_thread()
+    args_queue.close()
+    progress_queue.cancel_join_thread()
+    progress_queue.close()
+    assert return_code == 0
 
 
 def get_imaris_command(imaris_path: Path, input_path: Path, output_path: Path = None,
@@ -1076,9 +1073,9 @@ def main(source_path):
 
     # TODO: calculate based on memory requirement
     memory_ram = virtual_memory().available // 1024 ** 3  # in GB
-    merge_channels_cores = cpu_logical_core_count if cpu_logical_core_count * 14 < memory_ram else memory_ram // 14
+    merge_channels_cores = cpu_physical_core_count if cpu_physical_core_count * 14 < memory_ram else memory_ram // 14
     if need_16bit_to_8bit_conversion:
-        merge_channels_cores = cpu_logical_core_count if cpu_logical_core_count * 7 < memory_ram else memory_ram // 7
+        merge_channels_cores = cpu_physical_core_count if cpu_physical_core_count * 7 < memory_ram else memory_ram // 7
     merge_channels_cores = min(merge_channels_cores, cpu_physical_core_count + 2)
 
     merged_tif_paths = stitched_tif_paths
