@@ -253,6 +253,18 @@ function  process(inpath, tx, ty, tz, dxy, dz, numit, NA, rf, ...
         delete(fullfile(save_path, "*.*"))
     end
     min_max_path = fullfile(save_path, "min_max.mat");
+
+    % make folder for results and make sure the outpath is writable
+    outpath = fullfile(inpath, 'deconvolved');
+    if ~exist(outpath, 'dir')
+        mkdir(outpath);
+    elseif resume && numel(dir(fullfile(outpath, '*.tif'))) == numel(dir(fullfile(inpath, '*.tif')))
+        disp("it seems all the files are already deconvolved!");
+        return
+    elseif ~resume
+        delete(fullfile(outpath, '*.tif'));
+    end
+    
     
     % start deconvolution
     if size(gpus, 2) > 1
@@ -282,13 +294,7 @@ function  process(inpath, tx, ty, tz, dxy, dz, numit, NA, rf, ...
             resume, starting_block);
     end
     
-    % make folder for results and write tiff-images
-    outpath = fullfile(inpath, 'deconvolved');
-    if ~exist(outpath, 'dir')
-        mkdir(outpath);
-    elseif ~resume
-        delete(fullfile(outpath, '*.tif'));
-    end
+    % postprocess and write tif files
     delete(gcp('nocreate'));
     scal = postprocess_save(outpath, min_max_path, clipval, blocklist, p1, p2, info, resume, tx, ty, tz, rawmax, amplification);
 
@@ -508,7 +514,7 @@ function scal = postprocess_save(outpath, min_max_path, clipval, blocklist, p1, 
     num_tif_files = numel(dir(fullfile(outpath, '*.tif')));
     if resume && num_tif_files
         starting_z_block = 0;
-        while p1(blnr, z)-1 <= num_tif_files
+        while blnr <= length(p1) && p1(blnr, z)-1 <= num_tif_files
             if p1(blnr, x) == 1 && p1(blnr, y) == 1
                 starting_block_number = blnr;
                 starting_z_block = starting_z_block + 1;
