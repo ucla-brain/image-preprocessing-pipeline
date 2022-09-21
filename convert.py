@@ -222,7 +222,7 @@ if __name__ == '__main__':
     parser.add_argument("--movie_end", type=int, default=None,
                         help="end frame counting from 0")
     parser.add_argument("--movie_frame_duration", type=int, default=5,
-                        help="end frame counting from 0")
+                        help="duration of each frame. should be a positive integer.")
     parser.add_argument("--voxel_size_x", type=float, default=1,
                         help="x voxel size in µm. It is relevant to imaris conversion only.")
     parser.add_argument("--voxel_size_y", type=float, default=1,
