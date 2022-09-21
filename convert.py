@@ -119,7 +119,12 @@ def main(args: Namespace):
         ims_file = Path(args.imaris)
         files = [file.rename(file.parent / ("_" + file.name)) for file in tif_2d_folder.glob("*.tif")]
 
-        command = get_imaris_command(imaris_path=imaris_converter, input_path=tif_2d_folder, output_path=ims_file)
+        command = get_imaris_command(
+            imaris_path=imaris_converter, input_path=tif_2d_folder, output_path=ims_file,
+            voxel_size_x=args.voxel_size_x,
+            voxel_size_y=args.voxel_size_y,
+            voxel_size_z=args.voxel_size_z,
+        )
         progress_queue = Queue()
         MultiProcessCommandRunner(progress_queue, command,
                                   pattern=r"(WriteProgress:)\s+(\d*.\d+)\s*$", position=0).start()
@@ -216,5 +221,11 @@ if __name__ == '__main__':
                         help="start frame counting from 0")
     parser.add_argument("--movie_end", type=int, default=None,
                         help="end frame counting from 0")
+    parser.add_argument("--voxel_size_x", type=float, default=1,
+                        help="x voxel size in µm. It is relevant to imaris conversion only.")
+    parser.add_argument("--voxel_size_y", type=float, default=1,
+                        help="y voxel size in µm. It is relevant to imaris conversion only.")
+    parser.add_argument("--voxel_size_z", type=float, default=1,
+                        help="z voxel size in µm. It is relevant to imaris conversion only.")
 
     main(parser.parse_args())
