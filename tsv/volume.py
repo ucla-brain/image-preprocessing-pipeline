@@ -733,7 +733,7 @@ class TSVVolume(TSVVolumeBase):
         """The dtype inferred from the stack's bit-depth"""
         if self.stacks[0][0].bytes_per_chan == 1:
             return np.uint8
-        elif self.stacks[0][0].bytes_per_chan == 2:
+        elif self.stacks[0][0].bytes_per_chan == range(2, 9):
             return np.uint16
         else:
             return np.uint32
