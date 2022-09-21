@@ -1,12 +1,12 @@
 LsDeconv(...
-    "/data/20220818_12_24_18_SW220405_05_LS_6x_1000z_stitched/Ex_642_Em_680_tif", ...
-    1000, ... % dxy (nm)
+    "/panfs/dong/U01_MORF/upload/20220818_22_59_23_Camk2a_MORF3_D1Tom_TME12_1_15x_5x5_x042_y042_z100_stitched/15x/Ex_561_Em_1_tif", ...
+    422, ... % dxy (nm)
     1000, ... % dz (nm)
     9,    ... % numit
     0.40, ... % NA
     1.52, ... % rf
-    642,  ... % lambda_ex 488 561 642
-    680,  ... % lambda_em 525 600 680
+    561,  ... % lambda_ex 488 561 642
+    600,  ... % lambda_em 525 600 680
     240,  ... % fcyl
     12.0, ... % slitwidth (mm)
     0,    ... % damping percent or lambda
@@ -18,5 +18,5 @@ LsDeconv(...
     [0.5, 0.5, 2.0], ... % x y z sigma of the 3D gaussian filter applied before deconvolution
     1,    ... % 0 not resume, 1 = resume
     1,    ... % starting block should be greater than 0 for multiGPU processing
-    "/data/cache_deconvolution/" ... % cache drive (optional)
+    "/data/cache_deconvolution_yang/" ... % cache drive (optional)
 );

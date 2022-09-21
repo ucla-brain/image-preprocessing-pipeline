@@ -747,7 +747,7 @@ def get_imaris_command(imaris_path: Path, input_path: Path, output_path: Path = 
         command += [
             f"--nthreads {workers if dtype == 'uint8' or sys.platform == 'win32' else 1}",
             f"--compression 1",
-            f"--voxelsize {voxel_size_x}-{voxel_size_y}-{voxel_size_z}",  # x-y-z
+            f"--voxelsize {voxel_size_x:.2f}-{voxel_size_y:.2f}-{voxel_size_z:.2f}",  # x-y-z
             "--logprogress"
         ]
 
