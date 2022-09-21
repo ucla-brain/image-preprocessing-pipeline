@@ -389,7 +389,6 @@ def filter_streaks(
     -------
     f_img : ndarray
         filtered image
-
     """
     sigma1 = sigma[0]  # foreground
     sigma2 = sigma[1]  # background
@@ -612,6 +611,8 @@ def read_filter_save(
                 f"\t\tnew shape   = {tile_size}\n"
                 f"{PrintColors.ENDC}")
             img = resize(img, tile_size, preserve_range=True, anti_aliasing=True)
+        else:
+            tile_size = img.shape
 
         d_type = img.dtype
         if not output_file.parent.exists():
