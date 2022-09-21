@@ -17,6 +17,7 @@ from .raw import raw_imread
 from numpy import ndarray, zeros, hstack
 from supplements.cli_interface import PrintColors
 from tifffile import imread, imwrite
+from typing import List, Union
 
 
 def get_dim_tuple(element):
@@ -645,7 +646,7 @@ class TSVVolume(TSVVolumeBase):
         self.stack_rows = int(dims.attrib["stack_rows"])
         self.origin = get_dim_tuple(root.find("origin"))
         self.stack_columns = int(dims.attrib["stack_columns"])
-        self.stacks = [[None] * self.stack_columns for _ in range(self.stack_rows)]
+        self.stacks: List[List[Union[TSVStack, None]]] = [[None] * self.stack_columns for _ in range(self.stack_rows)]
         self.input_plugin = root.attrib["input_plugin"]
         self.volume_format = root.attrib["volume_format"]
         if alt_stack_dir is None:
