@@ -1,6 +1,4 @@
-### this is a script to convert the 15x deconvouted 2d-series to ###
-### 6x/12x 2d-series###
-
+# this is a script to convert the 15x deconvouted 2d-series to 6x/12x 2d-series
 
 from pystripe.core import batch_filter
 from pathlib import Path
