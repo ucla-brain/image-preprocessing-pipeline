@@ -333,8 +333,7 @@ class TSVStack(TSVStackBase):
             self.z1slice = len(self.__idxs_to_keep)
         self.img_regex = element.attrib["IMG_REGEX"]
         if ordering_pattern is None:
-            ordering_pattern = "[^0-9]*(\\d+).*\\.raw" if input_plugin == "raw" \
-                else "[^0-9]*(\\d+).*\\.tiff?"
+            ordering_pattern = "[^0-9]*(\\d+).*\\.raw" if input_plugin == "raw" else "[^0-9]*(\\d+).*\\.tiff?"
         self.ordering_pattern = ordering_pattern
         self.__paths = None
 
@@ -734,7 +733,7 @@ class TSVVolume(TSVVolumeBase):
         """The dtype inferred from the stack's bit-depth"""
         if self.stacks[0][0].bytes_per_chan == 1:
             return np.uint8
-        elif self.stacks[0][0].bytes_per_chan in range(2, 9):
+        elif self.stacks[0][0].bytes_per_chan < 9:
             return np.uint16
         else:
             return np.uint32
