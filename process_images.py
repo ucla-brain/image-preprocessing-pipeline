@@ -1131,7 +1131,7 @@ def main(source_path):
                 workers=cpu_physical_core_count,
                 dtype='uint8' if need_16bit_to_8bit_conversion else 'uint16'
             )
-            p_log(f"\t{PrintColors.BLUE}tiff to ims conversion command:{PrintColors.ENDC}\n\t\t{' '.join(command)}\n")
+            p_log(f"\t{PrintColors.BLUE}tiff to ims conversion command:{PrintColors.ENDC}\n\t\t{command}\n")
             MultiProcessCommandRunner(queue, command, pattern=r"(WriteProgress:)\s+(\d*.\d+)\s*$", position=idx).start()
             running_processes += 1
             progress_bars += [
