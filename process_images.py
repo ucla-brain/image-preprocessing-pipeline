@@ -993,7 +993,8 @@ def main(source_path):
     need_compression_merged_channels = False
     if len(all_channels) > 1:
         need_merged_channels = ask_true_false_question("Do you need to merge channels to RGB color tiff?")
-        need_compression_merged_channels = ask_true_false_question("Do you need to compress RGB color tif files?")
+        if need_merged_channels:
+            need_compression_merged_channels = ask_true_false_question("Do you need to compress RGB color tif files?")
     need_imaris_conversion = ask_true_false_question("Do you need to convert to Imaris format?")
     # Start ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
