@@ -993,7 +993,8 @@ def main(source_path):
     need_compression_merged_channels = False
     if len(all_channels) > 1:
         need_merged_channels = ask_true_false_question("Do you need to merge channels to RGB color tiff?")
-        need_compression_merged_channels = ask_true_false_question("Do you need to compress RGB color tif files?")
+        if need_merged_channels:
+            need_compression_merged_channels = ask_true_false_question("Do you need to compress RGB color tif files?")
     need_imaris_conversion = ask_true_false_question("Do you need to convert to Imaris format?")
     # Start ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
@@ -1098,7 +1099,7 @@ def main(source_path):
                 order_of_colors=order_of_colors,
                 workers=merge_channels_cores,
                 resume=continue_process_terastitcher,
-                compression=("ZLIB", 1 if need_compression_merged_channels else 0)
+                compression=("ZLIB", 1) if need_compression_merged_channels else None
             )
         elif len(stitched_tif_paths) >= 4:
             p_log("Warning: since number of channels are more than 3 merging channels is impossible.\n\t"
