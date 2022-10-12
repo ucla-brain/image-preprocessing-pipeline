@@ -21,7 +21,7 @@ os.environ['NUMEXPR_NUM_THREADS'] = '1'
 os.environ['OMP_NUM_THREADS'] = '1'
 
 
-def process_img(image: ndarray, dark: int = 120, bit_shift: int = 0):
+def process_img(image: ndarray, dark: int = 0, bit_shift: int = 8):
     # image = filter_streaks(image, (128, 256), wavelet='db2')
     if dark > 0:
         image = where(image > dark, image - dark, 0)
@@ -208,26 +208,26 @@ if __name__ == '__main__':
     parser.add_argument("--movie", "-m", type=str, required=False, default='',
                         help="Path to mp4 output file")
     parser.add_argument("--nthreads", "-n", type=int, default=12,
-                        help="number of threads")
+                        help="number of threads. default is 12.")
     parser.add_argument("--channel", "-c", type=int, default=0,
                         help="channel to be converted")
     parser.add_argument("--dark", "-d", type=int, default=0,
-                        help="background vs foreground threshold")
+                        help="background vs foreground threshold. Default is 0.")
     parser.add_argument("--convert_to_8bit", default=False, action=BooleanOptionalAction,
-                        help="convert to 8-bit")
+                        help="convert to 8-bit. Default is --no-convert_to_8bit")
     parser.add_argument("--bit_shift", "-b", type=int, default=8,
-                        help="bit_shift for 8-bit conversion")
+                        help="bit_shift for 8-bit conversion. Default is 8.")
     parser.add_argument("--movie_start", type=int, default=0,
-                        help="start frame counting from 0")
+                        help="start frame counting from 0. Default is 0.")
     parser.add_argument("--movie_end", type=int, default=None,
-                        help="end frame counting from 0")
+                        help="end frame counting from 0. Default is the last frame.")
     parser.add_argument("--movie_frame_duration", type=int, default=5,
-                        help="duration of each frame. should be a positive integer.")
+                        help="duration of each frame. should be a positive integer. Default is 5.")
     parser.add_argument("--voxel_size_x", type=float, default=1,
-                        help="x voxel size in µm. It is relevant to imaris conversion only.")
+                        help="x voxel size in µm. It is relevant to imaris conversion only. Default is 1.")
     parser.add_argument("--voxel_size_y", type=float, default=1,
-                        help="y voxel size in µm. It is relevant to imaris conversion only.")
+                        help="y voxel size in µm. It is relevant to imaris conversion only. Default is 1.")
     parser.add_argument("--voxel_size_z", type=float, default=1,
-                        help="z voxel size in µm. It is relevant to imaris conversion only.")
+                        help="z voxel size in µm. It is relevant to imaris conversion only. Default is 1.")
 
     main(parser.parse_args())
