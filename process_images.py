@@ -496,7 +496,16 @@ def process_channel(
         if need_16bit_to_8bit_conversion:
             memory_needed_per_thread /= 2
         memory_ram = virtual_memory().available // 1024 ** 3  # in GB
-        alignment_cores = min(int(ceil(memory_ram / memory_needed_per_thread)), cpu_physical_core_count) + 1
+        if memory_needed_per_thread <= memory_ram:
+            alignment_cores = min(int(ceil(memory_ram / memory_needed_per_thread)), cpu_physical_core_count) + 1
+        else:
+            alignment_cores = 2
+            if not (objective == '40x' or stitch_mip):
+                while memory_needed_per_thread > memory_ram:
+                    memory_needed_per_thread /= subvolume_depth
+                    subvolume_depth /= 2
+                    memory_needed_per_thread *= subvolume_depth
+                print(f"memory_needed_per_thread = {memory_needed_per_thread}")
 
         steps_str = ["alignment", "z-displacement", "threshold-displacement", "optimal tiles placement"]
         for step in [2, 3, 4, 5]:
