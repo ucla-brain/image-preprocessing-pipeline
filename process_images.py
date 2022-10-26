@@ -516,7 +516,7 @@ def process_channel(
 
             assert proj_in.exists()
             if step == 2 and alignment_cores > 2:
-                command = [f"mpiexec -np {alignment_cores} python -m mpi4py {parastitcher}"]
+                command = [f"mpiexec -np {alignment_cores} --oversubscribe python -m mpi4py {parastitcher}"]
             else:
                 command = [f"{terastitcher}"]
             command += [
@@ -597,7 +597,7 @@ def process_channel(
         p_log(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
               f"{channel}: starting to convert to TeraFly format ...")
         command = " ".join([
-            f"mpiexec -np {11} python -m mpi4py {paraconverter}",
+            f"mpiexec -np {11} --oversubscribe python -m mpi4py {paraconverter}",
             # f"{teraconverter}",
             "--sfmt=\"TIFF (series, 2D)\"",
             "--dfmt=\"TIFF (tiled, 3D)\"",
