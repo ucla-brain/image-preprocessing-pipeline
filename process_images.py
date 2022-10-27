@@ -516,7 +516,8 @@ def process_channel(
 
             assert proj_in.exists()
             if step == 2 and alignment_cores > 2:
-                command = [f"mpiexec -np {alignment_cores} --oversubscribe python -m mpi4py {parastitcher}"]
+                command = [f"mpiexec -np {alignment_cores}{' --oversubscribe' if sys.platform == 'linux' else ''} "
+                           f"python -m mpi4py {parastitcher}"]
             else:
                 command = [f"{terastitcher}"]
             command += [
@@ -544,6 +545,8 @@ def process_channel(
             proj_in.unlink(missing_ok=False)
 
     # stitching: merge tiles to generate stitched 2D tiff series -------------------------------------------------------
+
+    # mpiexec -np 12 python -m mpi4py %Parastitcher% -6 --projin=.\xml_merging.xml --volout="..\%OUTPUTDIR%" --volout_plugin="TiledXY|2Dseries" --slicewidth=100000 --sliceheight=150000
 
     stitched_tif_path = stitched_path / f"{channel}_tif"
     stitched_tif_path.mkdir(exist_ok=True)
@@ -597,7 +600,7 @@ def process_channel(
         p_log(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
               f"{channel}: starting to convert to TeraFly format ...")
         command = " ".join([
-            f"mpiexec -np {11} --oversubscribe python -m mpi4py {paraconverter}",
+            f"mpiexec -np {11}{' --oversubscribe' if sys.platform == 'linux' else ''} python -m mpi4py {paraconverter}",
             # f"{teraconverter}",
             "--sfmt=\"TIFF (series, 2D)\"",
             "--dfmt=\"TIFF (tiled, 3D)\"",
