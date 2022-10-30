@@ -600,7 +600,8 @@ def process_channel(
         p_log(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
               f"{channel}: starting to convert to TeraFly format ...")
         command = " ".join([
-            f"mpiexec -np {11}{' --oversubscribe' if sys.platform == 'linux' else ''} python -m mpi4py {paraconverter}",
+            f"mpiexec -np {min(11, merge_step_cores)}{' --oversubscribe' if sys.platform == 'linux' else ''} "
+            f"python -m mpi4py {paraconverter}",
             # f"{teraconverter}",
             "--sfmt=\"TIFF (series, 2D)\"",
             "--dfmt=\"TIFF (tiled, 3D)\"",
