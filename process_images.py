@@ -28,7 +28,7 @@ from supplements.cli_interface import ask_for_a_number_in_range, date_time_now
 from typing import List, Tuple, Dict, Union
 from downsampling import TifStack
 from parallel_image_processor import parallel_image_processor
-from math import ceil
+from math import floor
 
 # experiment setup: user needs to set them right
 # AllChannels = [(channel folder name, rgb color)]
@@ -497,7 +497,7 @@ def process_channel(
             memory_needed_per_thread /= 2
         memory_ram = virtual_memory().available // 1024 ** 3  # in GB
         if memory_needed_per_thread <= memory_ram:
-            alignment_cores = min(int(ceil(memory_ram / memory_needed_per_thread)), cpu_physical_core_count) + 1
+            alignment_cores = min(floor(memory_ram / memory_needed_per_thread), cpu_physical_core_count) + 1
         else:
             alignment_cores = 2
             if not (objective == '40x' or stitch_mip):
@@ -564,7 +564,7 @@ def process_channel(
     if need_16bit_to_8bit_conversion or tsv_volume.dtype in (uint8, "uint8"):
         memory_needed_per_thread /= 2
     memory_ram = virtual_memory().available / 1024 ** 3  # in GB
-    merge_step_cores = min(int(ceil(memory_ram / memory_needed_per_thread)), cpu_physical_core_count + 2)
+    merge_step_cores = min(floor(memory_ram / memory_needed_per_thread), cpu_physical_core_count + 2)
 
     # shape: Tuple[int, int, int] = convert_to_2D_tif(
     #     TSVVolume.load(stitched_path / f'{channel}_xml_import_step_5.xml'),
