@@ -1,0 +1,11 @@
+src/iomanager/ioplugins.h
+
+src/CMakeCache.txt
+
+src/CMakeFiles/cmake.check_cache
+/pyscripts
+/build_sse2
+/build_avx512
+/build_avx2
+/build_avx
+/build
