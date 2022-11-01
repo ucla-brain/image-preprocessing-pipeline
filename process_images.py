@@ -1210,9 +1210,11 @@ if __name__ == '__main__':
         if 'microsoft' in uname().release.lower():
             print("Windows subsystem for Linux is detected.")
             CacheDriveExample = "/mnt/d/"
+            nvidia_smi = "nvidia-smi.exe"
         else:
             print("Linux is detected.")
             CacheDriveExample = "/mnt/scratch"
+            nvidia_smi = "nvidia-smi"
         psutil.Process().nice(value=19)
         TeraStitcherPath = Path(r"./TeraStitcher/Linux") / cpu_instruction
         os.environ["PATH"] = f"{os.environ['PATH']}:{TeraStitcherPath.as_posix()}"
@@ -1223,22 +1225,31 @@ if __name__ == '__main__':
         os.environ["TERM"] = "xterm"
         os.environ["USECUDA_X_NCC"] = "1"  # set to '' to stop GPU acceleration
         if os.environ["USECUDA_X_NCC"] == "1":
+            cuda_version = "11.7"
             if Path("/usr/lib/jvm/java-11-openjdk-amd64/lib/server").exists():
                 os.environ["LD_LIBRARY_PATH"] = "/usr/lib/jvm/java-11-openjdk-amd64/lib/server"
             else:
                 log.error("Error: JAVA path not found")
                 raise RuntimeError
             try:
-                cuda_version = compile(r"CUDA *Version: *(\d+(?:\.\d+)?)").findall(str(check_output(["nvidia-smi"])))[0]
+                cuda_version = compile(r"CUDA *Version: *(\d+(?:\.\d+)?)").findall(str(check_output([nvidia_smi])))[0]
             except IndexError:
-                cuda_version = ask_for_a_number_in_range(
-                    "What is your cuda version (for example 11.7)?", (1, 20), float)
+                pass
             if Path(f"/usr/local/cuda-{cuda_version}/").exists() and \
                     Path(f"/usr/local/cuda-{cuda_version}/bin").exists():
                 os.environ["CUDA_ROOT_DIR"] = f"/usr/local/cuda-{cuda_version}/"
+            elif Path(f"/usr/local/cuda/").exists() and \
+                    Path(f"/usr/local/cuda/bin").exists():
+                os.environ["CUDA_ROOT_DIR"] = f"/usr/local/cuda/"
             else:
-                log.error(f"Error: CUDA path not found in {os.environ['CUDA_ROOT_DIR']}")
-                raise RuntimeError
+                cuda_version = ask_for_a_number_in_range(
+                    f"What is your cuda version (for example {cuda_version})?", (1, 20), float)
+                if Path(f"/usr/local/cuda-{cuda_version}/").exists() and \
+                        Path(f"/usr/local/cuda-{cuda_version}/bin").exists():
+                    os.environ["CUDA_ROOT_DIR"] = f"/usr/local/cuda-{cuda_version}/"
+                else:
+                    log.error(f"Error: CUDA path not found in {os.environ['CUDA_ROOT_DIR']}")
+                    raise RuntimeError
             os.environ["PATH"] = f"{os.environ['PATH']}:{os.environ['CUDA_ROOT_DIR']}/bin"
             os.environ["LD_LIBRARY_PATH"] = f"{os.environ['LD_LIBRARY_PATH']}:{os.environ['CUDA_ROOT_DIR']}/lib64"
             # os.environ["CUDA_VISIBLE_DEVICES"] = "0"  # to train on a specific GPU on a multi-gpu machine
