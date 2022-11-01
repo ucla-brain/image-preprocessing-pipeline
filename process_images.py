@@ -855,8 +855,8 @@ def main(source_path):
         new_name = name
         if new_resolution:
             new_name = name.replace(
-                f"_{resolution}x_{z_step}", f"_{new_resolution}x_{z_step}").replace(
-                f"_{resolution}X_{z_step}", f"_{new_resolution}x_{z_step}")
+                f"_{resolution}x_{z_step}", f"_{new_resolution}X_{z_step}").replace(
+                f"_{resolution}X_{z_step}", f"_{new_resolution}X_{z_step}")
         return new_name
 
     new_destination_name = destination_name(source_path.name)
