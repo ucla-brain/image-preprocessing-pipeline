@@ -848,15 +848,18 @@ def main(source_path):
     )
 
     def destination_name(name: str):
-        resolution, z_step = compile(r"(\d+)[xX]_(\d+)").findall(name)[0]
-        new_resolution: int = 0
-        if resolution:
-            new_resolution = int(round(int(resolution) / (voxel_size_z / voxel_size_x), 0))
         new_name = name
-        if new_resolution:
-            new_name = name.replace(
-                f"_{resolution}x_{z_step}", f"_{new_resolution}X_{z_step}").replace(
-                f"_{resolution}X_{z_step}", f"_{new_resolution}X_{z_step}")
+        try:
+            resolution, z_step = compile(r"(\d+)[xX]_(\d+)").findall(name)[0]
+            new_resolution: int = 0
+            if resolution:
+                new_resolution = int(round(int(resolution) / (voxel_size_z / voxel_size_x), 0))
+            if new_resolution:
+                new_name = name.replace(
+                    f"_{resolution}x_{z_step}", f"_{new_resolution}X_{z_step}").replace(
+                    f"_{resolution}X_{z_step}", f"_{new_resolution}X_{z_step}")
+        except Exception as e:
+            print(e)
         return new_name
 
     new_destination_name = destination_name(source_path.name)
