@@ -178,11 +178,11 @@ def imsave_tif(path: Path, img: ndarray, compression: Tuple[str, int] = ('ZLIB',
     die = False
     for attempt in range(1, num_retries):
         try:
-            imwrite(path, img, compression=compression)
+            imwrite(path, img, compression=compression[0], compressionargs={'level': compression[1]})
             return
         except KeyboardInterrupt:
             print(f"{PrintColors.WARNING}\ndying from imsave_tif{PrintColors.ENDC}")
-            imwrite(path, img, compression=compression)
+            imwrite(path, img, compression=compression[0], compressionargs={'level': compression[1]})
             die = True
         except (OSError, TypeError, PermissionError) as inst:
             if attempt == num_retries:
