@@ -870,7 +870,6 @@ def main(source_path):
                 new_name = name.replace(
                     f"_{resolution}x_{z}{z_step}", f"_{new_resolution}X_z{z_step}").replace(
                     f"_{resolution}X_{z}{z_step}", f"_{new_resolution}X_z{z_step}")
-
         return new_name
 
     new_destination_name = destination_name(source_path.name)
@@ -1209,12 +1208,12 @@ if __name__ == '__main__':
     cpu_instruction = "SSE2"
     for item in ["SSE2", "AVX", "AVX2", "AVX512f"]:
         cpu_instruction = item if CPUFeature[item] else cpu_instruction
-    PyScriptPath = Path(r"./TeraStitcher/pyscripts")
+    PyScriptPath = Path(r".") / "TeraStitcher" / "pyscripts"
     if sys.platform.lower() == "win32":
         print("Windows is detected.")
         psutil.Process().nice(psutil.IDLE_PRIORITY_CLASS)
         CacheDriveExample = "D:\\"  # "W:\\3D_stitched\\"
-        TeraStitcherPath = Path(r"TeraStitcher/Windows") / cpu_instruction
+        TeraStitcherPath = Path(r"TeraStitcher") / "Windows" / cpu_instruction
         os.environ["PATH"] = f"{os.environ['PATH']};{TeraStitcherPath.as_posix()}"
         os.environ["PATH"] = f"{os.environ['PATH']};{PyScriptPath.as_posix()}"
         terastitcher = "terastitcher.exe"
@@ -1230,7 +1229,7 @@ if __name__ == '__main__':
             CacheDriveExample = "/mnt/scratch"
             nvidia_smi = "nvidia-smi"
         psutil.Process().nice(value=19)
-        TeraStitcherPath = Path(r"./TeraStitcher/Linux") / cpu_instruction
+        TeraStitcherPath = Path(r".") / "TeraStitcher" / "Linux" / cpu_instruction
         os.environ["PATH"] = f"{os.environ['PATH']}:{TeraStitcherPath.as_posix()}"
         os.environ["PATH"] = f"{os.environ['PATH']}:{PyScriptPath.as_posix()}"
         terastitcher = "terastitcher"
