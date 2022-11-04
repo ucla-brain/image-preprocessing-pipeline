@@ -584,7 +584,7 @@ def process_channel(
         kwargs={"rotation": 90 if need_rotation_stitched_tif else 0},
         timeout=None,
         max_processors=merge_step_cores,
-        progress_bar_name="tsv",
+        progress_bar_name="TSV",
         compression=("ZLIB", 1 if need_compression_stitched_tif else 0),
     )
     if return_code != 0:
