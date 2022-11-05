@@ -138,7 +138,8 @@ def get_destination_path(folder_name_prefix, what_for='tif', posix='', default_p
             f"\nEnter a valid destination path for {what_for}. "
             f"for example: {CacheDriveExample}\n"
             f"If nothing entered, {default_path.absolute()} will be used.\n").strip()
-        if input_path and sys.platform.lower() == "win32" and (input_path.endswith(":") or not input_path.endswith("\\")):
+        if input_path and sys.platform.lower() == "win32" and (
+                input_path.endswith(":") or not input_path.endswith("\\")):
             input_path = input_path + "\\"
         elif input_path and sys.platform.lower() == "linux" and not input_path.endswith("/"):
             input_path = input_path + "/"
