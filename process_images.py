@@ -1213,7 +1213,7 @@ if __name__ == '__main__':
     PyScriptPath = Path(r".") / "TeraStitcher" / "pyscripts"
     if sys.platform.lower() == "win32":
         print("Windows is detected.")
-        psutil.Process().nice(psutil.IDLE_PRIORITY_CLASS)
+        psutil.Process().nice(getattr(psutil, "IDLE_PRIORITY_CLASS"))
         CacheDriveExample = "D:\\"  # "W:\\3D_stitched\\"
         TeraStitcherPath = Path(r"TeraStitcher") / "Windows" / cpu_instruction
         os.environ["PATH"] = f"{os.environ['PATH']};{TeraStitcherPath.as_posix()}"
