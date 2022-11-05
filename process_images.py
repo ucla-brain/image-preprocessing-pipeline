@@ -172,8 +172,7 @@ def get_destination_path(folder_name_prefix, what_for='tif', posix='', default_p
         print("No permission to create the destination folder.")
         raise RuntimeError
     except Exception as e:
-        print("An unexpected error happened!")
-        print(e)
+        print(f"An unexpected error happened!\n{e}")
         raise RuntimeError
     return destination_path, continue_process
 
