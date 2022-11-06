@@ -180,7 +180,7 @@ def imsave_tif(path: Path, img: ndarray, compression: Tuple[str, int] = ('ZLIB',
     compression_level: int = 0
     if compression and isinstance(compression, tuple) and len(compression) == 2:
         compression_method, compression_level = compression
-        compression_method = None if compression_level == 0 else compression_level
+        compression_method = None if compression_level <= 0 else compression_level
     for attempt in range(1, num_retries):
         try:
             imwrite(path, img, compression=compression_method, compressionargs={'level': compression_level})
