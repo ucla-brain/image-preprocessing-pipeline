@@ -728,7 +728,9 @@ def merge_all_channels(
     args_queue.close()
     progress_queue.cancel_join_thread()
     progress_queue.close()
-    assert return_code == 0
+    if return_code != 0:
+        p_log(f"{PrintColors.FAIL}merge_all_channels function failed{PrintColors.ENDC}")
+        raise RuntimeError
 
 
 def get_imaris_command(imaris_path: Path, input_path: Path, output_path: Path = None,

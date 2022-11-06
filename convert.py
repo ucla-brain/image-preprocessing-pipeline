@@ -15,6 +15,7 @@ from parallel_image_processor import parallel_image_processor
 from supplements.cli_interface import PrintColors
 from cpufeature.extension import CPUFeature
 from tqdm import tqdm
+from re import compile
 
 os.environ['MKL_NUM_THREADS'] = '1'
 os.environ['NUMEXPR_NUM_THREADS'] = '1'
@@ -117,7 +118,11 @@ def main(args: Namespace):
 
     if args.imaris:
         ims_file = Path(args.imaris)
-        files = [file.rename(file.parent / ("_" + file.name)) for file in tif_2d_folder.glob("*.tif")]
+        files = list(tif_2d_folder.glob("*.tif"))
+        is_renamed: bool = False
+        if compile(r"^\d+$").findall(files[0].name[:-len(files[0].suffix)]):
+            files = [file.rename(file.parent / ("_" + file.name)) for file in files]
+            is_renamed = True
 
         command = get_imaris_command(
             imaris_path=imaris_converter, input_path=tif_2d_folder, output_path=ims_file,
@@ -131,7 +136,8 @@ def main(args: Namespace):
         progress_bars = [tqdm(total=100, ascii=True, position=0, unit=" %", smoothing=0.01, desc=f"imaris")]
         commands_progress_manger(progress_queue, progress_bars, running_processes=1)
 
-        [file.rename(file.parent / file.name[1:]) for file in files]
+        if is_renamed:
+            [file.rename(file.parent / file.name[1:]) for file in files]
 
     if args.movie:
         movie_file = Path(args.movie)
