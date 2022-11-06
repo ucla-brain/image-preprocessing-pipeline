@@ -531,7 +531,8 @@ def process_channel(
                 f"--oV={0 if objective == '40x' else tile_overlap_y}",
                 f"--sH={tile_overlap_x - 1}",  # Displacements search radius along H (in pixels). Default value is 25!
                 f"--sV={tile_overlap_y - 1}",  # Displacements search radius along V (in pixels). Default value is 25!
-                f"--sD={0 if (objective == '40x' or stitch_mip) else 200}",  # Displacements search radius along D (in pixels).
+                # Displacements search radius along D (in pixels).
+                f"--sD={0 if (objective == '40x' or stitch_mip) else 200}",
                 # Number of slices per subvolume partition
                 f"--subvoldim={1 if objective == '40x' else subvolume_depth}",
                 # used in the pairwise displacements computation step.
@@ -549,7 +550,8 @@ def process_channel(
 
     # stitching: merge tiles to generate stitched 2D tiff series -------------------------------------------------------
 
-    # mpiexec -np 12 python -m mpi4py %Parastitcher% -6 --projin=.\xml_merging.xml --volout="..\%OUTPUTDIR%" --volout_plugin="TiledXY|2Dseries" --slicewidth=100000 --sliceheight=150000
+    # mpiexec -np 12 python -m mpi4py %Parastitcher% -6 --projin=.\xml_merging.xml --volout="..\%OUTPUTDIR%"
+    # --volout_plugin="TiledXY|2Dseries" --slicewidth=100000 --sliceheight=150000
 
     stitched_tif_path = stitched_path / f"{channel}_tif"
     stitched_tif_path.mkdir(exist_ok=True)
