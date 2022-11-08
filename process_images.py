@@ -502,13 +502,14 @@ def process_channel(
         if memory_needed_per_thread <= memory_ram:
             alignment_cores = min(floor(memory_ram / memory_needed_per_thread), cpu_physical_core_count) + 1
         else:
-            alignment_cores = 2
-            if not (objective == '40x' or stitch_mip):
-                while memory_needed_per_thread > memory_ram:
-                    memory_needed_per_thread /= subvolume_depth
-                    subvolume_depth /= 2
-                    memory_needed_per_thread *= subvolume_depth
-                print(f"memory_needed_per_thread = {memory_needed_per_thread}")
+            alignment_cores = 1
+            memory_needed_per_thread /= subvolume_depth
+            while memory_needed_per_thread * subvolume_depth > memory_ram and subvolume_depth > 1:
+                subvolume_depth //= 2
+
+        # while alignment_cores < cpu_physical_core_count and subvolume_depth > 600:
+        #     subvolume_depth //= 2
+        #     alignment_cores *= 2
 
         steps_str = ["alignment", "z-displacement", "threshold-displacement", "optimal tiles placement"]
         for step in [2, 3, 4, 5]:
@@ -518,9 +519,8 @@ def process_channel(
             proj_out = stitched_path / f"{channel}_xml_import_step_{step}.xml"
 
             assert proj_in.exists()
-            if step == 2 and alignment_cores > 2:
-                command = [f"mpiexec -np {alignment_cores}{' --oversubscribe' if sys.platform == 'linux' else ''} "
-                           f"python -m mpi4py {parastitcher}"]
+            if step == 2 and alignment_cores > 1:
+                command = [f"mpiexec -np {int(alignment_cores)} python -m mpi4py {parastitcher}"]
             else:
                 command = [f"{terastitcher}"]
             command += [
@@ -534,7 +534,7 @@ def process_channel(
                 # Displacements search radius along D (in pixels).
                 f"--sD={0 if (objective == '40x' or stitch_mip) else 200}",
                 # Number of slices per subvolume partition
-                f"--subvoldim={1 if objective == '40x' else subvolume_depth}",
+                f"--subvoldim={1 if objective == '40x' else int(subvolume_depth)}",
                 # used in the pairwise displacements computation step.
                 # dimension of layers obtained by dividing the volume along D
                 "--threshold=0.95",

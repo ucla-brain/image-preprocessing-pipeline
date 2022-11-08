@@ -1435,16 +1435,16 @@ if __name__ == '__main__':
 
             # select the minimum number of slices
             tmp = check_flag(params, 'subvoldim=', True)
-            if tmp == None:
+            if tmp is None:
                 nsubstring_min = 200
                 print("Number of substring was not declared. It will be set to", nsubstring_min, "by default.")
             else:
-                tmp = int(tmp)
+                tmp = int(float(tmp))
                 nsubstring_min = tmp
 
             # Declare input file
             tmp = check_flag(params, 'projin=', False)
-            if tmp == None:
+            if tmp is None:
                 input_name = 'xml_import.xml'
                 print("Name of the input file was not declared. It will be set to", input_name, "by default.")
             else:
