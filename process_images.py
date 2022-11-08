@@ -292,7 +292,7 @@ def reorder_list(a, b):
 
 
 def execute(command):
-    popen = Popen(command, stdout=PIPE, shell=True, text=True, universal_newlines=True, bufsize=0)
+    popen = Popen(command, stdout=PIPE, shell=True, text=True, universal_newlines=True, bufsize=1)
     for stdout_line in iter(popen.stdout.readline, ""):
         yield stdout_line
     popen.stdout.close()
@@ -483,6 +483,7 @@ def process_channel(
             raise RuntimeError
 
         # each alignment thread needs about 16GB of RAM in 16bit and 8GB in 8bit
+        alignment_cores: int = 1
         memory_needed_per_thread = 32 / 1024 ** 3 * (1 if objective == '40x' or stitch_mip else subvolume_depth)
         if isinstance(new_tile_size, tuple):
             for resolution in new_tile_size:
@@ -502,10 +503,12 @@ def process_channel(
         if memory_needed_per_thread <= memory_ram:
             alignment_cores = min(floor(memory_ram / memory_needed_per_thread), cpu_physical_core_count) + 1
         else:
-            alignment_cores = 1
             memory_needed_per_thread /= subvolume_depth
             while memory_needed_per_thread * subvolume_depth > memory_ram and subvolume_depth > 1:
                 subvolume_depth //= 2
+
+        if num_gpus > 0 and sys.platform.lower() == 'linux':
+            alignment_cores = min(alignment_cores, num_gpus * 6)
 
         # while alignment_cores < cpu_physical_core_count and subvolume_depth > 600:
         #     subvolume_depth //= 2
@@ -1228,6 +1231,7 @@ if __name__ == '__main__':
         terastitcher = "terastitcher.exe"
         mergedisplacements = "mergedisplacements.exe"
         teraconverter = "teraconverter.exe"
+        nvidia_smi = "nvidia-smi.exe"
     elif sys.platform.lower() == 'linux':
         if 'microsoft' in uname().release.lower():
             print("Windows subsystem for Linux is detected.")
@@ -1278,6 +1282,12 @@ if __name__ == '__main__':
     else:
         log.error("yet untested OS")
         raise RuntimeError
+
+    num_gpus = 0
+    try:
+        num_gpus = str(check_output([nvidia_smi, "-L"])).count('UUID')
+    except FileNotFoundError:
+        pass
 
     terastitcher = TeraStitcherPath / terastitcher
     if not terastitcher.exists():
