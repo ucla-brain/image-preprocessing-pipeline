@@ -71,6 +71,7 @@ import pickle
 from math import *
 from mpi4py import MPI
 from subprocess import *
+from platform import uname
 
 """
 The script needs to find the executables of terastitcher (step 2, Align) or teraconverter (step 6, Merge)
@@ -1317,7 +1318,7 @@ def create_commands(gi_np, info=False):  # 2016-12-10. Giulio. @ADDED parameter 
         len_arr = 0
         # print info
         voxel_num = round(1.1 * gi_np * (size_2[0] * size_3[0] * max(64, pow(2, max_res))) * n_chans * bytes_x_chan / (
-                    1024 * 1024 * 1024), 3)
+                1024 * 1024 * 1024), 3)
         print("#" * 80)
         print('Memory needed for ' + str(gi_np) + ' concurrent processes: ' + str(voxel_num) + ' GBytes')
         print("#" * 80)
@@ -1354,10 +1355,14 @@ if __name__ == '__main__':
     comm = MPI.COMM_WORLD
     nprocs = comm.Get_size()
     myrank = comm.Get_rank()
-    # Sincronizzation
+    # Synchronization
     comm.Barrier()
     try:
-        num_gpus = str(check_output(["nvidia-smi", "-L"])).count('UUID')
+        nvidia_smi = "nvidia-smi"
+        if sys.platform.lower() == "win32" or (
+                sys.platform.lower() == 'linux' and 'microsoft' in uname().release.lower()):
+            nvidia_smi = "nvidia-smi.exe"
+        num_gpus = str(check_output([nvidia_smi, "-L"])).count('UUID')
         if num_gpus > 0:
             os.environ["CUDA_VISIBLE_DEVICES"] = str(int(myrank) % num_gpus)
     except FileNotFoundError:

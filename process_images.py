@@ -479,7 +479,7 @@ def process_channel(
         p_log(f"\t{PrintColors.BLUE}import command:{PrintColors.ENDC}\n\t\t" + " ".join(command))
         run_command(" ".join(command))
         if not proj_out.exists():
-            p_log(f"{channel}: importing tif files failed.")
+            p_log(f"{PrintColors.FAIL}{channel}: importing tif files failed.{PrintColors.ENDC}")
             raise RuntimeError
 
         # each alignment thread needs about 16GB of RAM in 16bit and 8GB in 8bit
@@ -510,6 +510,8 @@ def process_channel(
         # while alignment_cores < cpu_physical_core_count and subvolume_depth > 600:
         #     subvolume_depth //= 2
         #     alignment_cores *= 2
+        alignment_cores = int(alignment_cores)
+        subvolume_depth = int(subvolume_depth)
 
         steps_str = ["alignment", "z-displacement", "threshold-displacement", "optimal tiles placement"]
         for step in [2, 3, 4, 5]:
@@ -520,7 +522,8 @@ def process_channel(
 
             assert proj_in.exists()
             if step == 2 and alignment_cores > 1:
-                command = [f"mpiexec -np {int(alignment_cores)} python -m mpi4py {parastitcher}"]
+                command = [f"slots={cpu_logical_core_count} mpiexec --use-hwthread-cpus -np {alignment_cores} "
+                           f"python -m mpi4py {parastitcher}"]
             else:
                 command = [f"{terastitcher}"]
             command += [
@@ -534,7 +537,7 @@ def process_channel(
                 # Displacements search radius along D (in pixels).
                 f"--sD={0 if (objective == '40x' or stitch_mip) else 200}",
                 # Number of slices per subvolume partition
-                f"--subvoldim={1 if objective == '40x' else int(subvolume_depth)}",
+                f"--subvoldim={1 if objective == '40x' else subvolume_depth}",
                 # used in the pairwise displacements computation step.
                 # dimension of layers obtained by dividing the volume along D
                 "--threshold=0.95",
