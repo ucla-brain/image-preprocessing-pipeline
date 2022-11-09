@@ -130,6 +130,7 @@ def main(args: Namespace):
             voxel_size_y=args.voxel_size_y,
             voxel_size_z=args.voxel_size_z,
         )
+        print(f"\t{PrintColors.BLUE}tiff to ims conversion command:{PrintColors.ENDC}\n\t\t{command}\n")
         progress_queue = Queue()
         MultiProcessCommandRunner(progress_queue, command,
                                   pattern=r"(WriteProgress:)\s+(\d*.\d+)\s*$", position=0).start()
@@ -168,7 +169,7 @@ if __name__ == '__main__':
     PyScriptsPath = Path(r"./TeraStitcher/pyscripts")
     if sys.platform == "win32":
         # print("Windows is detected.")
-        psutil.Process().nice(psutil.IDLE_PRIORITY_CLASS)
+        psutil.Process().nice(getattr(psutil, "IDLE_PRIORITY_CLASS"))
         TeraStitcherPath = Path(r"TeraStitcher/Windows")/cpu_instruction
         os.environ["PATH"] = f"{os.environ['PATH']};{TeraStitcherPath.as_posix()}"
         os.environ["PATH"] = f"{os.environ['PATH']};{PyScriptsPath.as_posix()}"
