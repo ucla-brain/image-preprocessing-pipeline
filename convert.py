@@ -166,11 +166,11 @@ if __name__ == '__main__':
     cpu_instruction = "SSE2"
     for item in ["SSE2", "AVX", "AVX2", "AVX512f"]:
         cpu_instruction = item if CPUFeature[item] else cpu_instruction
-    PyScriptsPath = Path(r"./TeraStitcher/pyscripts")
+    PyScriptsPath = Path(r".") / "TeraStitcher" / "pyscripts"
     if sys.platform == "win32":
         # print("Windows is detected.")
         psutil.Process().nice(getattr(psutil, "IDLE_PRIORITY_CLASS"))
-        TeraStitcherPath = Path(r"TeraStitcher/Windows")/cpu_instruction
+        TeraStitcherPath = Path(r"TeraStitcher") / "Windows" / cpu_instruction
         os.environ["PATH"] = f"{os.environ['PATH']};{TeraStitcherPath.as_posix()}"
         os.environ["PATH"] = f"{os.environ['PATH']};{PyScriptsPath.as_posix()}"
         terastitcher = "terastitcher.exe"
@@ -178,7 +178,7 @@ if __name__ == '__main__':
     elif sys.platform == 'linux' and 'microsoft' not in uname().release.lower():
         print("Linux is detected.")
         psutil.Process().nice(value=19)
-        TeraStitcherPath = Path(r"./TeraStitcher/Linux")/cpu_instruction
+        TeraStitcherPath = Path(r".") / "TeraStitcher" / "Linux" / cpu_instruction
         os.environ["PATH"] = f"{os.environ['PATH']}:{TeraStitcherPath.as_posix()}"
         os.environ["PATH"] = f"{os.environ['PATH']}:{PyScriptsPath.as_posix()}"
         terastitcher = "terastitcher"
@@ -194,7 +194,7 @@ if __name__ == '__main__':
         print("Error: paraconverter not found")
         raise RuntimeError
 
-    imaris_converter = Path(r"imaris/ImarisConvertiv.exe")
+    imaris_converter = Path(r"imaris") / "ImarisConvertiv.exe"
     if not imaris_converter.exists():
         print("Error: ImarisConvertiv.exe not found")
         raise RuntimeError
