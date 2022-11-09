@@ -9,3 +9,4 @@
 /supplements/3D Manual Tracing Tracking Sheet copy.csv
 */__pycache__/
 /test.ipynb
+/LsDeconvolveMultiGPU/psf.tif
