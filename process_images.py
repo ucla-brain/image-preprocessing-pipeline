@@ -33,9 +33,9 @@ from math import floor
 # experiment setup: user needs to set them right
 # AllChannels = [(channel folder name, rgb color)]
 AllChannels: List[Tuple[str, str]] = [
-    ("Ex_488_Em_525", "g"), ("Ex_561_Em_600", "r"), ("Ex_642_Em_680", "b"),
-    ("Ex_488_Em_1", "g"), ("Ex_561_Em_1", "r"), ("Ex_642_Em_1", "b"),
-    ("Ex_488_Em_2", "g"), ("Ex_561_Em_2", "r"), ("Ex_642_Em_2", "b")
+    ("Ex_488_Em_525", "b"), ("Ex_561_Em_600", "r"), ("Ex_642_Em_680", "g"),
+    ("Ex_488_Em_1", "b"), ("Ex_561_Em_1", "r"), ("Ex_642_Em_1", "g"),
+    ("Ex_488_Em_2", "b"), ("Ex_561_Em_2", "r"), ("Ex_642_Em_2", "g")
 ]
 VoxelSizeX_4x, VoxelSizeY_4x = (1.835,) * 2  # new stage --> 1.5, 1.5?
 VoxelSizeX_8x, VoxelSizeY_8x = (0.8,) * 2
