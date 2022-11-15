@@ -5,7 +5,7 @@ import psutil
 import numpy as np
 import pandas as pd
 from pathlib import Path
-from pystripe import imread_tif_raw, imsave_tif
+from pystripe import imread_tif_raw_png, imsave_tif
 from scipy import stats
 from sklearn.model_selection import train_test_split
 from skimage.restoration import denoise_bilateral
@@ -41,7 +41,7 @@ class MultiProcessGetImgStats(Process):
     def run(self):
         img_mem_map, img_stats = None, None
         try:
-            img_mem_map = imread_tif_raw(self.img_path)
+            img_mem_map = imread_tif_raw_png(self.img_path)
             if img_mem_map is not None and img_mem_map.shape == self.tile_size:
                 # ['mean', 'min', 'max', 'cv', 'variance', 'std', 'skewness', 'kurtosis', 'n']
                 img_stats = get_img_stats(img_mem_map)
