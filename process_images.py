@@ -533,8 +533,9 @@ def process_channel(
             assert proj_in.exists()
             if step == 2 and alignment_cores > 1:
                 os.environ["slots"] = f"{cpu_logical_core_count}"
-                command = [f"mpiexec --use-hwthread-cpus -np {alignment_cores} "
-                           f"python -m mpi4py {parastitcher}"]
+                command = [
+                    f"mpiexec {'--use-hwthread-cpus' if sys.platform.lower() == 'linux' else ''} -np {alignment_cores} "
+                    f"python -m mpi4py {parastitcher}"]
             else:
                 command = [f"{terastitcher}"]
             command += [
