@@ -20,7 +20,7 @@ from datetime import timedelta
 from time import time, sleep
 from platform import uname
 from tsv.volume import TSVVolume
-from pystripe.core import batch_filter, imread_tif_raw, imsave_tif, MultiProcessQueueRunner, progress_manager
+from pystripe.core import batch_filter, imread_tif_raw_png, imsave_tif, MultiProcessQueueRunner, progress_manager
 from queue import Empty
 from multiprocessing import freeze_support, Queue, Process
 from supplements.cli_interface import select_among_multiple_options, ask_true_false_question, PrintColors
@@ -33,14 +33,15 @@ from math import floor
 # experiment setup: user needs to set them right
 # AllChannels = [(channel folder name, rgb color)]
 AllChannels: List[Tuple[str, str]] = [
-    ("Ex_488_Em_525", "b"), ("Ex_561_Em_600", "r"), ("Ex_642_Em_680", "g"),
+    ("Ex_488_Em_525", "b"), ("Ex_561_Em_600", "r"), ("Ex_642_Em_680", "g"), ("Ex_647_Em_690", "g"),
     ("Ex_488_Em_1", "b"), ("Ex_561_Em_1", "r"), ("Ex_642_Em_1", "g"),
     ("Ex_488_Em_2", "b"), ("Ex_561_Em_2", "r"), ("Ex_642_Em_2", "g")
 ]
 VoxelSizeX_4x, VoxelSizeY_4x = (1.835,) * 2  # new stage --> 1.5, 1.5?
 VoxelSizeX_8x, VoxelSizeY_8x = (0.8,) * 2
 VoxelSizeX_10x, VoxelSizeY_10x = (0.661,) * 2  # new stage --> 0.6, 0.6
-VoxelSizeX_15x, VoxelSizeY_15x = (0.422,) * 2  # new stage --> 0.4, 0.4
+# VoxelSizeX_15x, VoxelSizeY_15x = (0.422,) * 2  # new stage --> 0.4, 0.4
+VoxelSizeX_15x, VoxelSizeY_15x = (0.4,) * 2  # new stage --> 0.4, 0.4
 VoxelSizeX_40x, VoxelSizeY_40x = (0.143, 0.12)  # 0.143, 0.12
 
 
@@ -371,7 +372,7 @@ def process_channel(
         if need_flat_image_application:
             flat_img_created_already = source_path / f'{channel}_flat.tif'
             if flat_img_created_already.exists():
-                img_flat = imread_tif_raw(flat_img_created_already)
+                img_flat = imread_tif_raw_png(flat_img_created_already)
                 # with open(source_path / f'{channel}_dark.txt', "r") as f:
                 #     dark = int(f.read())
                 p_log(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
@@ -525,7 +526,8 @@ def process_channel(
 
             assert proj_in.exists()
             if step == 2 and alignment_cores > 1:
-                command = [f"slots={cpu_logical_core_count} mpiexec --use-hwthread-cpus -np {alignment_cores} "
+                os.environ["slots"] = f"{cpu_logical_core_count}"
+                command = [f"mpiexec --use-hwthread-cpus -np {alignment_cores} "
                            f"python -m mpi4py {parastitcher}"]
             else:
                 command = [f"{terastitcher}"]
@@ -653,7 +655,7 @@ def merge_channels_by_file_name(
     for idx, path in enumerate(stitched_tif_paths):
         file_path = path / file_name
         if file_path.exists():
-            image = imread_tif_raw(file_path)
+            image = imread_tif_raw_png(file_path)
             images.update({order_of_colors[idx]: image})
             dtypes += [image.dtype]
         else:

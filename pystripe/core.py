@@ -14,6 +14,7 @@ from pathlib import Path
 from skimage.filters import threshold_otsu, gaussian
 from skimage.measure import block_reduce
 from skimage.transform import resize
+from imageio import imread as png_imread
 from tifffile import imread, imwrite
 from tifffile.tifffile import TiffFileError
 from dcimg import DCIMGFile
@@ -31,20 +32,20 @@ from supplements.cli_interface import PrintColors, date_time_now
 # from signal import signal, SIG_IGN, SIGINT
 
 filterwarnings("ignore")
-supported_extensions = ['.tif', '.tiff', '.raw', '.dcimg']
+supported_extensions = ['.png', '.tif', '.tiff', '.raw', '.dcimg']
 num_retries = 40
 os.environ['MKL_NUM_THREADS'] = '1'
 os.environ['NUMEXPR_NUM_THREADS'] = '1'
 os.environ['OMP_NUM_THREADS'] = '1'
 
 
-def imread_tif_raw(path: Path, dtype: str = None, shape: Tuple[int, int] = None):
+def imread_tif_raw_png(path: Path, dtype: str = None, shape: Tuple[int, int] = None):
     """Load a tiff or raw image
 
     Parameters
     ----------
     path : Path
-        path to tiff or raw image
+        path to tiff, raw or png image
     dtype: str or None,
         optional. If given will reduce the raw to tif conversion time.
     shape : tuple (int, int) or None
@@ -64,6 +65,8 @@ def imread_tif_raw(path: Path, dtype: str = None, shape: Tuple[int, int] = None)
             extension = path.suffix.lower()
             if extension == '.raw':
                 img = raw_imread(path, dtype=dtype, shape=shape)
+            elif extension == '.png':
+                img = png_imread(path)
             elif extension in ['.tif', '.tiff']:
                 img = imread(path.__str__())
             else:
@@ -180,7 +183,8 @@ def imsave_tif(path: Path, img: ndarray, compression: Tuple[str, int] = ('ZLIB',
     compression_level: int = 0
     if compression and isinstance(compression, tuple) and len(compression) == 2:
         compression_method, compression_level = compression
-        compression_method = None if compression_level <= 0 else compression_level
+        if compression_level <= 0:
+            compression_method = None
     for attempt in range(1, num_retries):
         try:
             imwrite(path, img, compression=compression_method, compressionargs={'level': compression_level})
@@ -584,7 +588,7 @@ def read_filter_save(
         if print_input_file_names:
             print(f"\n{input_file}")
         if z_idx is None:
-            img = imread_tif_raw(input_file, dtype=dtype, shape=tile_size)  # file must be TIFF or RAW
+            img = imread_tif_raw_png(input_file, dtype=dtype, shape=tile_size)  # file must be TIFF or RAW
         else:
             img = imread_dcimg(input_file, z_idx)  # file must be DCIMG
         if img is None and dtype is not None and tile_size is not None:
@@ -703,7 +707,7 @@ def glob_re(pattern: str, path: Path):
             yield from glob_re(pattern, Path(p.path))
 
 
-def process_tif_raw_imgs(input_file: Path, input_path: Path, output_path: Path, args_dict_template: dict):
+def process_tif_raw_png_images(input_file: Path, input_path: Path, output_path: Path, args_dict_template: dict):
     """Find all images with a supported file extension within a directory and all its subdirectories
 
     Parameters
@@ -733,7 +737,7 @@ def process_tif_raw_imgs(input_file: Path, input_path: Path, output_path: Path, 
     return args_dict_template.copy()
 
 
-def process_dc_imgs(input_file: Path, input_path: Path, output_path: Path, args_dict_template: dict, z_step: float):
+def process_dc_images(input_file: Path, input_path: Path, output_path: Path, args_dict_template: dict, z_step: float):
     """Find all images with a supported file extension within a directory and all its subdirectories
 
         Parameters
@@ -988,9 +992,9 @@ def batch_filter(
     if isinstance(flat, (ndarray, generic)):
         flat = normalize_flat(flat)
     elif isinstance(flat, Path):
-        flat = normalize_flat(imread_tif_raw(flat))
+        flat = normalize_flat(imread_tif_raw_png(flat))
     elif isinstance(flat, str):
-        flat = normalize_flat(imread_tif_raw(Path(flat)))
+        flat = normalize_flat(imread_tif_raw_png(Path(flat)))
     elif flat is not None:
         print(f"{PrintColors.FAIL}flat argument should be a numpy array or a path to a flat.tif file{PrintColors.ENDC}")
         raise TypeError
@@ -1029,16 +1033,16 @@ def batch_filter(
           f"Scheduling jobs for images in \n\t{input_path}")
 
     if z_step is None:
-        files = glob_re(r"\.(?:tiff?|raw)$", input_path) if files_list is None else files_list
+        files = glob_re(r"\.(?:tiff?|raw|png)$", input_path) if files_list is None else files_list
         args_list = list(tqdm(
-            map(lambda file: process_tif_raw_imgs(file, input_path, output_path, arg_dict_template), files),
+            map(lambda file: process_tif_raw_png_images(file, input_path, output_path, arg_dict_template), files),
             total=None if isinstance(files, GeneratorType) else len(files),
-            ascii=True, smoothing=0.05, mininterval=1.0, unit=" tif|raw images", desc="found",
+            ascii=True, smoothing=0.05, mininterval=1.0, unit=" tif|raw|png images", desc="found",
         ))
     else:
         files = glob_re(r"\.(?:dcimg)$", input_path) if files_list is None else files_list
         args_list = tqdm(
-            map(lambda file: process_dc_imgs(file, input_path, output_path, arg_dict_template, z_step), files),
+            map(lambda file: process_dc_images(file, input_path, output_path, arg_dict_template, z_step), files),
             total=None if isinstance(files, GeneratorType) else len(files),
             ascii=True, smoothing=0.05, mininterval=1.0, unit=" dcimg images", desc="found",
         )
@@ -1155,7 +1159,7 @@ def main():
 
     flat = None
     if args.flat is not None:
-        flat = normalize_flat(imread_tif_raw(Path(args.flat)))
+        flat = normalize_flat(imread_tif_raw_png(Path(args.flat)))
 
     zstep = None
     if args.zstep is not None:
