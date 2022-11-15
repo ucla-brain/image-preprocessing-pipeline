@@ -9,7 +9,7 @@ from typing import List, Tuple, Union, Callable
 from numpy import zeros, ulonglong
 from pathlib import Path
 from supplements.cli_interface import PrintColors
-from pystripe.core import imread_tif_raw, imsave_tif, progress_manager
+from pystripe.core import imread_tif_raw_png, imsave_tif, progress_manager
 from tsv.volume import TSVVolume, VExtent
 
 os.environ['MKL_NUM_THREADS'] = '1'
@@ -37,7 +37,7 @@ class MultiProcess(Process):
             channel: int = 0,
             timeout: Union[float, None] = 900,
             resume: bool = True,
-            compression: Tuple[str, int] = ("ZLIB", 1)
+            compression: Tuple[str, int] = ("ADOBE_DEFLATE", 1)
     ):
         Process.__init__(self)
         self.daemon = False
@@ -111,7 +111,7 @@ class MultiProcess(Process):
                         if is_tsv:
                             future = pool.submit(imread_tsv, images, VExtent(x0, x1, y0, y1, idx, idx + 1), dtype)
                         else:
-                            future = pool.submit(imread_tif_raw, (Path(images[idx],)), {"dtype": dtype, "shape": shape})
+                            future = pool.submit(imread_tif_raw_png, (Path(images[idx],)), {"dtype": dtype, "shape": shape})
                         img = future.result(timeout=timeout)
                         if is_tsv:
                             img = img[0]
@@ -173,7 +173,7 @@ def parallel_image_processor(
         timeout: Union[float, None] = 900,
         max_processors: int = cpu_count(),
         progress_bar_name: str = " ImgProc",
-        compression: Tuple[str, int] = ("ZLIB", 1),
+        compression: Tuple[str, int] = ("ADOBE_DEFLATE", 1),
         resume: bool = True
 ):
     """
@@ -228,7 +228,7 @@ def parallel_image_processor(
         num_images = len(images)
         for idx in range(num_images):
             args_queue.put(idx)
-        img = imread_tif_raw(Path(images[0]))
+        img = imread_tif_raw_png(Path(images[0]))
         shape = img.shape
         dtype = img.dtype
         manager = Manager()

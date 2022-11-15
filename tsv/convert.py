@@ -45,7 +45,7 @@ def convert_to_2D_tif(
         mipmap_level=None,
         volume=None,
         dtype=None,
-        compression=('ZLIB', 1),
+        compression=('ADOBE_DEFLATE', 1),
         cores=cpu_count(),
         rotation=0,
         resume: bool = True,
@@ -65,7 +65,7 @@ def convert_to_2D_tif(
     dtype:
         an optional numpy dtype, defaults to the dtype indicated by the bit depth
     compression: Tuple[str, int]
-        str = ZLIB, ZSTD
+        str = ADOBE_DEFLATE, ZSTD
         int = between 0 and 9
     cores:
         # of processes to run simultaneously

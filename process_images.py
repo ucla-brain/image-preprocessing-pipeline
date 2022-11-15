@@ -40,8 +40,8 @@ AllChannels: List[Tuple[str, str]] = [
 VoxelSizeX_4x, VoxelSizeY_4x = (1.835,) * 2  # new stage --> 1.5, 1.5?
 VoxelSizeX_8x, VoxelSizeY_8x = (0.8,) * 2
 VoxelSizeX_10x, VoxelSizeY_10x = (0.661,) * 2  # new stage --> 0.6, 0.6
-# VoxelSizeX_15x, VoxelSizeY_15x = (0.422,) * 2  # new stage --> 0.4, 0.4
-VoxelSizeX_15x, VoxelSizeY_15x = (0.4,) * 2  # new stage --> 0.4, 0.4
+VoxelSizeX_15x, VoxelSizeY_15x = (0.422,) * 2  # new stage --> 0.4, 0.4
+VoxelSizeX_15x_new, VoxelSizeY_15x_new = (0.4,) * 2  # new stage --> 0.4, 0.4
 VoxelSizeX_40x, VoxelSizeY_40x = (0.143, 0.12)  # 0.143, 0.12
 
 
@@ -74,6 +74,7 @@ def get_voxel_sizes(is_mip):
             f" 4x: Voxel Size X = {VoxelSizeX_4x:.3f}, Y = {VoxelSizeY_4x:.3f}, tile_size = 1600 x 2000",
             f"10x: Voxel Size X = {VoxelSizeX_10x:.3f}, Y = {VoxelSizeY_10x:.3f}, tile_size = 1850 x 1850",
             f"15x: Voxel Size X = {VoxelSizeX_15x:.3f}, Y = {VoxelSizeY_15x:.3f}, tile_size = 1850 x 1850",
+            f"15x: Voxel Size X = {VoxelSizeX_15x_new:.3f}, Y = {VoxelSizeY_15x_new:.3f}, tile_size = 2000 x 2000",
             f"40x: Voxel Size X = {VoxelSizeX_40x:.3f}, Y = {VoxelSizeY_40x:.3f}, tile_size = 2048 x 2048",
             f"other: allows entering custom voxel sizes for custom tile_size"
         ],
@@ -96,11 +97,16 @@ def get_voxel_sizes(is_mip):
         voxel_size_y = VoxelSizeY_15x
         tile_size = (1850, 1850)
     elif objective == "3":
+        objective = "15x"
+        voxel_size_x = VoxelSizeX_15x_new
+        voxel_size_y = VoxelSizeY_15x_new
+        tile_size = (2000, 2000)
+    elif objective == "4":
         objective = "40x"
         voxel_size_x = VoxelSizeX_40x
         voxel_size_y = VoxelSizeY_40x
         tile_size = (2048, 2048)
-    elif objective == "4":
+    elif objective == "5":
         objective = ""
         tile_size_x = ask_for_a_number_in_range("what is the tile size on x axis in pixels?", (1, 2049), int)
         tile_size_y = ask_for_a_number_in_range("what is the tile size on y axis in pixels?", (1, 2049), int)
@@ -179,7 +185,7 @@ def get_destination_path(folder_name_prefix, what_for='tif', posix='', default_p
     return destination_path, continue_process
 
 
-def get_list_of_files(y_folder: Path, extensions=(".tif", ".tiff", ".raw")) -> List[Path]:
+def get_list_of_files(y_folder: Path, extensions=(".tif", ".tiff", ".raw", ".png")) -> List[Path]:
     extensions: Tuple[str] = tuple(ext.lower() for ext in extensions)
     files_list = []
     for file in y_folder.iterdir():
@@ -399,7 +405,7 @@ def process_channel(
             f"{channel}: started preprocessing images and converting them to tif.\n"
             f"\tsource: {source_path / channel}\n"
             f"\tdestination: {preprocessed_path / channel}\n"
-            f"\tcompression: (ZLIB, {1 if need_compression else 0})\n"
+            f"\tcompression: (ADOBE_DEFLATE, {1 if need_compression else 0})\n"
             f"\tdark = {dark}"
         )
 
@@ -425,7 +431,7 @@ def process_channel(
             crossover=10,
             threshold=-1,
             directions='vh' if objective == "40x" else "v",
-            compression=('ZLIB', 1 if need_compression else 0),  # ('ZSTD', 1) conda install imagecodecs
+            compression=('ADOBE_DEFLATE', 1 if need_compression else 0),  # ('ZSTD', 1) conda install imagecodecs
             flat=img_flat,
             dark=dark,
             # z_step=voxel_size_z,  # z-step in micron. Only used for DCIMG files.
@@ -582,7 +588,7 @@ def process_channel(
     # shape: Tuple[int, int, int] = convert_to_2D_tif(
     #     TSVVolume.load(stitched_path / f'{channel}_xml_import_step_5.xml'),
     #     str(stitched_tif_path / "img_{z:06d}.tif"),
-    #     compression=("ZLIB", 1 if need_compression_stitched_tif else 0),
+    #     compression=("ADOBE_DEFLATE", 1 if need_compression_stitched_tif else 0),
     #     cores=merge_step_cores,  # here the limit is 61 on Windows
     #     dtype='uint8' if need_16bit_to_8bit_conversion else TifStack(preprocessed_path / channel).dtype,
     #     resume=continue_process_terastitcher
@@ -597,7 +603,7 @@ def process_channel(
         timeout=None,
         max_processors=merge_step_cores,
         progress_bar_name="TSV",
-        compression=("ZLIB", 1 if need_compression_stitched_tif else 0),
+        compression=("ADOBE_DEFLATE", 1 if need_compression_stitched_tif else 0),
     )
     if return_code != 0:
         exit(return_code)
@@ -644,7 +650,7 @@ def merge_channels_by_file_name(
         merged_tif_path: Path = None,
         shape: Tuple[int, int] = None,
         resume: bool = True,
-        compression: Tuple[str, int] = ("ZLIB", 1)
+        compression: Tuple[str, int] = ("ADOBE_DEFLATE", 1)
 ):
     rgb_file = merged_tif_path / file_name
     if resume and rgb_file.exists():
@@ -695,7 +701,7 @@ def merge_all_channels(
         order_of_colors: str = "gbr",
         workers: int = cpu_count(),
         resume: bool = True,
-        compression: Tuple[str, int] = ("ZLIB", 1)
+        compression: Tuple[str, int] = ("ADOBE_DEFLATE", 1)
 ):
     """
     file names should be identical for each z-step of each channel
@@ -905,7 +911,7 @@ def main(source_path):
                 int(round(tile_size[1] * voxel_size_x / voxel_size_z, 0))
             )
             voxel_size_x = voxel_size_y = voxel_size_z
-    else:
+    elif down_sampling_factor > (1, 1):
         need_down_sampling = ask_true_false_question(
             "Do you need to down-sample images for isotropic voxel generation before stitching?")
         if not need_down_sampling:
@@ -1139,7 +1145,7 @@ def main(source_path):
                 order_of_colors=order_of_colors,
                 workers=merge_channels_cores,
                 resume=continue_process_terastitcher,
-                compression=("ZLIB", 1 if need_compression_merged_channels else 0)
+                compression=("ADOBE_DEFLATE", 1 if need_compression_merged_channels else 0)
             )
         elif len(stitched_tif_paths) >= 4:
             p_log("Warning: since number of channels are more than 3 merging channels is impossible.\n\t"
@@ -1150,7 +1156,7 @@ def main(source_path):
                 order_of_colors=order_of_colors,
                 workers=merge_channels_cores,
                 resume=continue_process_terastitcher,
-                compression=("ZLIB", 1 if need_compression_merged_channels else 0)
+                compression=("ADOBE_DEFLATE", 1 if need_compression_merged_channels else 0)
             )
             merged_tif_paths += stitched_tif_paths[3:]
         else:

@@ -15,7 +15,7 @@ from skimage.filters import threshold_otsu, gaussian
 from skimage.measure import block_reduce
 from skimage.transform import resize
 from imageio import imread as png_imread
-from tifffile import imread, imwrite
+from tifffile import imread, imwrite, TIFF, enumarg
 from tifffile.tifffile import TiffFileError
 from dcimg import DCIMGFile
 from typing import Tuple, Iterator, List, Callable
@@ -163,7 +163,7 @@ def convert_to_8bit_fun(img: ndarray, bit_shift_to_right: int = 8):
     return img.astype(uint8)
 
 
-def imsave_tif(path: Path, img: ndarray, compression: Tuple[str, int] = ('ZLIB', 1)):
+def imsave_tif(path: Path, img: ndarray, compression: Tuple[str, int] = ('ADOBE_DEFLATE', 1)):
     """Save an array as a tiff or raw image
 
     The file format will be inferred from the file extension in `path`
@@ -176,22 +176,23 @@ def imsave_tif(path: Path, img: ndarray, compression: Tuple[str, int] = ('ZLIB',
         image as a numpy array
     compression : Tuple[str, int]
         The 1st argument is compression method the 2nd compression level for tiff files
-        For example, ('ZSTD', 1) or ('ZLIB', 1).
+        For example, ('ZSTD', 1) or ('ADOBE_DEFLATE', 1).
     """
     die = False
-    compression_method = None
-    compression_level: int = 0
-    if compression and isinstance(compression, tuple) and len(compression) == 2:
-        compression_method, compression_level = compression
-        if compression_level <= 0:
-            compression_method = None
+    # compression_method = enumarg(TIFF.COMPRESSION, "None")
+    # compression_level: int = 0
+    # if compression and isinstance(compression, tuple) and len(compression) >= 2 and \
+    #         isinstance(compression[1], int) and compression[1] <= 0:
+    #     compression = False
     for attempt in range(1, num_retries):
         try:
-            imwrite(path, img, compression=compression_method, compressionargs={'level': compression_level})
+            # imwrite(path, data=img, compression=compression_method, compressionargs={'level': compression_level})
+            imwrite(path, data=img, compression=compression)
             return
         except KeyboardInterrupt:
             print(f"{PrintColors.WARNING}\ndying from imsave_tif{PrintColors.ENDC}")
-            imwrite(path, img, compression=compression_method, compressionargs={'level': compression_level})
+            # imwrite(path, data=img, compression=compression_method, compressionargs={'level': compression_level})
+            imwrite(path, data=img, compression=compression)
             die = True
         except (OSError, TypeError, PermissionError) as inst:
             if attempt == num_retries:
@@ -493,7 +494,7 @@ def read_filter_save(
         crossover: float = 10,
         threshold: float = -1,
         directions: str = 'v',
-        compression: Tuple[str, int] = ('ZLIB', 1),
+        compression: Tuple[str, int] = ('ADOBE_DEFLATE', 1),
         flat: ndarray = None,
         dark: float = 0,
         z_idx: int = None,
@@ -539,7 +540,7 @@ def read_filter_save(
         destriping direction: 'v' means top-down, 'h' means left-to-right, 'vh' or 'hv' means both directions.
     compression : tuple (str, int)
         The 1st argument is compression method the 2nd compression level for tiff files
-        For example, ('ZSTD', 1) or ('ZLIB', 1).
+        For example, ('ZSTD', 1) or ('ADOBE_DEFLATE', 1).
     flat : ndarray
         reference image for illumination correction. Must be same shape as input images. Default is None
     dark : float
@@ -884,7 +885,7 @@ def batch_filter(
         crossover: int = 10,
         threshold: int = -1,
         directions: str = 'v',
-        compression: Tuple[str, int] = ('ZLIB', 1),
+        compression: Tuple[str, int] = ('ADOBE_DEFLATE', 1),
         flat: ndarray = None,
         dark: int = 0,
         z_step: float = None,
@@ -938,7 +939,7 @@ def batch_filter(
         destriping direction: 'v' means top-down, 'h' means left-to-right, 'vh' or 'hv' means both directions.
     compression : tuple (str, int)
         The 1st argument is compression method the 2nd compression level for tiff files
-        For example, ('ZSTD', 1) or ('ZLIB', 1).
+        For example, ('ZSTD', 1) or ('ADOBE_DEFLATE', 1).
     flat : ndarray
         reference image for illumination correction. Must be same shape as input images. Default is None
     dark : float
@@ -1112,8 +1113,8 @@ def _parse_args():
                         help="Number of workers for batch processing (Default: # CPU cores)")
     parser.add_argument("--chunks", type=int, default=4,
                         help="Chunk size for parallel processing (Default: 1)")
-    parser.add_argument("--compression_method", "-cm", type=str, default='ZLIB',
-                        help="Compression method for written tiffs (Default: ZLIB)")
+    parser.add_argument("--compression_method", "-cm", type=str, default='ADOBE_DEFLATE',
+                        help="Compression method for written tiffs (Default: ADOBE_DEFLATE)")
     parser.add_argument("--compression_level", "-cl", type=int, default=1,
                         help="Compression level for written tiffs (Default: 1)")
     parser.add_argument("--flat", "-f", type=str, default=None,

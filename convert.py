@@ -72,7 +72,7 @@ def main(args: Namespace):
             wavelet="db10",
             crossover=10,
             # threshold=-1,
-            compression=('ZLIB', 0),  # ('ZSTD', 1) conda install imagecodecs
+            compression=('ADOBE_DEFLATE', 0),  # ('ZSTD', 1) conda install imagecodecs
             flat=None,
             dark=args.dark,
             # z_step=voxel_size_z,  # z-step in micron. Only used for DCIMG files.
