@@ -126,6 +126,9 @@ def get_voxel_sizes(is_mip):
         f"what is the tile overlap in percent?\n"
         f"{PrintColors.BLUE}hint: for SmartSPIM typically 10, for the other microscope 16.2{PrintColors.ENDC}",
         (0, 100), float)
+    # For tile overlap in smartSPIM is 1 percent higher than the requested value
+    if objective != "40x":
+        tile_overlap_percent += 1
     p_log(
         f"Objective is {objective} so voxel sizes are:\n"
         f"\tx = {voxel_size_x} µm,\n"
@@ -491,7 +494,8 @@ def process_channel(
 
         # each alignment thread needs about 16GB of RAM in 16bit and 8GB in 8bit
         alignment_cores: int = 1
-        memory_needed_per_thread = 32 / 1024 ** 3 * (1 if objective == '40x' or stitch_mip else subvolume_depth)
+        subvolume_depth = int(1 if objective == '40x' else min(subvolume_depth, 600))
+        memory_needed_per_thread = 32 / 1024 ** 3 * subvolume_depth
         if isinstance(new_tile_size, tuple):
             for resolution in new_tile_size:
                 memory_needed_per_thread *= resolution
@@ -510,7 +514,7 @@ def process_channel(
         if memory_needed_per_thread <= memory_ram:
             alignment_cores = min(floor(memory_ram / memory_needed_per_thread), cpu_physical_core_count) + 1
         else:
-            memory_needed_per_thread /= subvolume_depth
+            memory_needed_per_thread //= subvolume_depth
             while memory_needed_per_thread * subvolume_depth > memory_ram and subvolume_depth > 1:
                 subvolume_depth //= 2
 
@@ -521,7 +525,6 @@ def process_channel(
         #     subvolume_depth //= 2
         #     alignment_cores *= 2
         alignment_cores = int(alignment_cores)
-        subvolume_depth = int(subvolume_depth)
 
         steps_str = ["alignment", "z-displacement", "threshold-displacement", "optimal tiles placement"]
         for step in [2, 3, 4, 5]:
@@ -534,7 +537,7 @@ def process_channel(
             if step == 2 and alignment_cores > 1:
                 os.environ["slots"] = f"{cpu_logical_core_count}"
                 command = [
-                    f"mpiexec {'--use-hwthread-cpus' if sys.platform.lower() == 'linux' else ''} -np {alignment_cores} "
+                    f"mpiexec{' --use-hwthread-cpus' if sys.platform.lower() == 'linux' else ''} -np {alignment_cores} "
                     f"python -m mpi4py {parastitcher}"]
             else:
                 command = [f"{terastitcher}"]
@@ -549,10 +552,10 @@ def process_channel(
                 # Displacements search radius along D (in pixels).
                 f"--sD={0 if (objective == '40x' or stitch_mip) else 200}",
                 # Number of slices per subvolume partition
-                f"--subvoldim={1 if objective == '40x' else subvolume_depth}",
+                f"--subvoldim={subvolume_depth}",
                 # used in the pairwise displacements computation step.
                 # dimension of layers obtained by dividing the volume along D
-                "--threshold=0.95",
+                "--threshold=0.7",  # threshold between 0.55 and 0.7 is good. Higher values block alignment
                 f"--projin={proj_in}",
                 f"--projout={proj_out}",
                 # "--restoreSPIM",
