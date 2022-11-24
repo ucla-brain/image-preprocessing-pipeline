@@ -512,7 +512,7 @@ def process_channel(
             memory_needed_per_thread /= 2
         memory_ram = virtual_memory().available // 1024 ** 3  # in GB
         if memory_needed_per_thread <= memory_ram:
-            alignment_cores = min(floor(memory_ram / memory_needed_per_thread), cpu_physical_core_count) + 1
+            alignment_cores = min(floor(memory_ram / memory_needed_per_thread), cpu_physical_core_count)
         else:
             memory_needed_per_thread //= subvolume_depth
             while memory_needed_per_thread * subvolume_depth > memory_ram and subvolume_depth > 1:
@@ -524,7 +524,7 @@ def process_channel(
         # while alignment_cores < cpu_physical_core_count and subvolume_depth > 600:
         #     subvolume_depth //= 2
         #     alignment_cores *= 2
-        alignment_cores = int(alignment_cores)
+        alignment_cores = int(alignment_cores + 1)  # one extra thread is needed for management
 
         steps_str = ["alignment", "z-displacement", "threshold-displacement", "optimal tiles placement"]
         for step in [2, 3, 4, 5]:
