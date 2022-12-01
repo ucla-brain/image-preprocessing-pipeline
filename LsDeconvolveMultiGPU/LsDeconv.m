@@ -98,7 +98,8 @@ function [] = LsDeconv(varargin)
         if tx * ty * tz > 1
             disp(['deconvolution split into ' num2str(tx*ty*tz) ' = ' num2str(tx) ' x ' num2str(ty) ' x ' num2str(tz) ' xyz blocks.']);
         end
-
+        
+        delete(gcp('nocreate'));
         process(inpath, tx, ty, tz, dxy, dz, numit, NA, rf, ...
             lambda_ex, lambda_em, fcyl, slitwidth, damping, clipval, ...
             stop_criterion, gpus, cache_drive, amplification, sigma, ...
