@@ -1149,7 +1149,7 @@ def main(source_path):
                 order_of_colors=order_of_colors,
                 workers=merge_channels_cores,
                 resume=continue_process_terastitcher,
-                compression=("ADOBE_DEFLATE", 1 if need_compression_merged_channels else 0)
+                compression=("ADOBE_DEFLATE", 1) if need_compression_merged_channels else None
             )
         elif len(stitched_tif_paths) >= 4:
             p_log("Warning: since number of channels are more than 3 merging channels is impossible.\n\t"
@@ -1160,7 +1160,7 @@ def main(source_path):
                 order_of_colors=order_of_colors,
                 workers=merge_channels_cores,
                 resume=continue_process_terastitcher,
-                compression=("ADOBE_DEFLATE", 1 if need_compression_merged_channels else 0)
+                compression=("ADOBE_DEFLATE", 1) if need_compression_merged_channels else None
             )
             merged_tif_paths += stitched_tif_paths[3:]
         else:

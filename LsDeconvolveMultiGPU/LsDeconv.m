@@ -247,13 +247,24 @@ function  process(inpath, tx, ty, tz, dxy, dz, numit, NA, rf, ...
     [info.x, info.y, info.z, info.bit_depth] = getstackinfo(inpath); % TODO call this function only one time 
     [p1, p2] = split(info, tx, ty, tz);
 
-    save_path = cache_drive;
-    if ~exist(save_path, 'dir')
-        mkdir(save_path);
+    if ~exist(cache_drive, 'dir')
+        mkdir(cache_drive);
     elseif ~resume
-        delete(fullfile(save_path, "*.*"))
+        delete(fullfile(cache_drive, "*.*"));
+    else
+        files = dir(fullfile(cache_drive, "bl_*"));
+        files = files(~[files.isdir]); % files only
+        for file = files
+            if file.bytes <= 10
+                try
+                    delete(fullfile(cache_drive, file.name));
+                catch  
+                    warning('Cannot delete %s', file.name);
+                end
+            end
+        end
     end
-    min_max_path = fullfile(save_path, "min_max.mat");
+    min_max_path = fullfile(cache_drive, "min_max.mat");
 
     % make folder for results and make sure the outpath is writable
     outpath = fullfile(inpath, 'deconvolved');
@@ -279,6 +290,7 @@ function  process(inpath, tx, ty, tz, dxy, dz, numit, NA, rf, ...
                 tx, ty, tz, info, p1, p2, min_max_path, ...
                 stop_criterion, gpu, cache_drive, sigma, ...
                 resume, starting_block + idx - 1);
+            pause(30);
         end
         rawmax = 0;
         for j = idx:-1:1
@@ -619,7 +631,7 @@ function bl = load_block(inpath, start_x, end_x, start_y, end_y, start_z, end_z)
     for k = 1 : nz+1
         path{k} = fullfile(inpath, filelist((k-1)+start_z).name);
     end
-    parfor k = 1 : nz+1
+    for k = 1 : nz+1
         im = im2single((imread(path{k}, 'PixelRegion', {[start_y, end_y],[start_x, end_x]})));
         bl(:, :, k) = im';
     end
@@ -627,7 +639,9 @@ end
 
 function block = process_block(block, psf, numit, damping, stopcrit, gpu, sigma)
     %for efficiency of FFT pad data in a way that the largest prime factor becomes <= 5
-    blx = size(block, 1); bly = size(block, 2); blz = size(block, 3);
+    blx = size(block, 1);
+    bly = size(block, 2);
+    blz = size(block, 3);
     pad_x = 0.5 * (findGoodFFTLength(blx + 4 * size(psf, 1)) - blx);
     pad_y = 0.5 * (findGoodFFTLength(bly + 4 * size(psf, 2)) - bly);
     pad_z = 0.5 * (findGoodFFTLength(blz + 4 * size(psf, 3)) - blz);
