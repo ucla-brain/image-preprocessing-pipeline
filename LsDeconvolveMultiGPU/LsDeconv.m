@@ -254,8 +254,9 @@ function  process(inpath, tx, ty, tz, dxy, dz, numit, NA, rf, ...
     else
         files = dir(fullfile(cache_drive, "bl_*"));
         files = files(~[files.isdir]); % files only
-        for file = files
-            if file.bytes <= 10
+        for idx = 1:length(files) 
+            file = files(idx);
+            if file.bytes < 10
                 try
                     delete(fullfile(cache_drive, file.name));
                 catch  
