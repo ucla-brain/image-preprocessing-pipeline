@@ -434,7 +434,7 @@ def process_channel(
             crossover=10,
             threshold=-1,
             directions='vh' if objective == "40x" else "v",
-            compression=('ADOBE_DEFLATE', 1 if need_compression else 0),  # ('ZSTD', 1) conda install imagecodecs
+            compression=('ADOBE_DEFLATE', 1) if need_compression else None,  # ('ZSTD', 1) conda install imagecodecs
             flat=img_flat,
             dark=dark,
             # z_step=voxel_size_z,  # z-step in micron. Only used for DCIMG files.
@@ -494,7 +494,7 @@ def process_channel(
 
         # each alignment thread needs about 16GB of RAM in 16bit and 8GB in 8bit
         alignment_cores: int = 1
-        subvolume_depth = int(1 if objective == '40x' else min(subvolume_depth, 600))
+        subvolume_depth = int(1 if objective == '40x' else min(subvolume_depth, 1200))
         memory_needed_per_thread = 32 / 1024 ** 3 * subvolume_depth
         if isinstance(new_tile_size, tuple):
             for resolution in new_tile_size:
@@ -555,7 +555,7 @@ def process_channel(
                 f"--subvoldim={subvolume_depth}",
                 # used in the pairwise displacements computation step.
                 # dimension of layers obtained by dividing the volume along D
-                "--threshold=0.7",  # threshold between 0.55 and 0.7 is good. Higher values block alignment
+                "--threshold=0.65",  # threshold between 0.55 and 0.7 is good. Higher values block alignment
                 f"--projin={proj_in}",
                 f"--projout={proj_out}",
                 # "--restoreSPIM",
@@ -592,7 +592,7 @@ def process_channel(
     # shape: Tuple[int, int, int] = convert_to_2D_tif(
     #     TSVVolume.load(stitched_path / f'{channel}_xml_import_step_5.xml'),
     #     str(stitched_tif_path / "img_{z:06d}.tif"),
-    #     compression=("ADOBE_DEFLATE", 1 if need_compression_stitched_tif else 0),
+    #     compression=("ADOBE_DEFLATE", 1) if need_compression_stitched_tif else None,
     #     cores=merge_step_cores,  # here the limit is 61 on Windows
     #     dtype='uint8' if need_16bit_to_8bit_conversion else TifStack(preprocessed_path / channel).dtype,
     #     resume=continue_process_terastitcher
@@ -607,7 +607,7 @@ def process_channel(
         timeout=None,
         max_processors=merge_step_cores,
         progress_bar_name="TSV",
-        compression=("ADOBE_DEFLATE", 1 if need_compression_stitched_tif else 0),
+        compression=("ADOBE_DEFLATE", 1) if need_compression_stitched_tif else None,
     )
     if return_code != 0:
         exit(return_code)
