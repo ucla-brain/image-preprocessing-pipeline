@@ -15,7 +15,8 @@ function [] = LsDeconv(varargin)
     try
         disp(' ');
         disp('LsDeconv: Deconvolution tool for Light Sheet Microscopy.'); 
-        disp('(c) TU Wien, 2019. This program was written in MATLAB V2018b by klaus.becker@tuwien.ac.at');
+        disp('(c) TU Wien, 2019. This program was was initially written in MATLAB V2018b by klaus.becker@tuwien.ac.at');
+        disp('Keivan Moradi at UCLA B.R.A.I.N (Dong lab) patched it in MATLAB V2022b. kmoradi@mednet.ucla.edu. Main changes: Multi-GPU, resume, and 3D gaussian filter support');
         disp(' ');
         disp(datetime('now'));
 
@@ -469,6 +470,9 @@ function [rawmax, blocklist] = deconvolve(inpath, psf, numit, damping, ...
             else
                 delete(block_path);
             end
+        end
+        if num_blocks == 1
+            break;
         end
     end
 end

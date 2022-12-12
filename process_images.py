@@ -494,7 +494,7 @@ def process_channel(
 
         # each alignment thread needs about 16GB of RAM in 16bit and 8GB in 8bit
         alignment_cores: int = 1
-        subvolume_depth = int(1 if objective == '40x' else min(subvolume_depth, 1200))
+        subvolume_depth = int(1 if objective == '40x' else min(subvolume_depth, 600))
         memory_needed_per_thread = 32 / 1024 ** 3 * subvolume_depth
         if isinstance(new_tile_size, tuple):
             for resolution in new_tile_size:
@@ -555,7 +555,7 @@ def process_channel(
                 f"--subvoldim={subvolume_depth}",
                 # used in the pairwise displacements computation step.
                 # dimension of layers obtained by dividing the volume along D
-                "--threshold=0.65",  # threshold between 0.55 and 0.7 is good. Higher values block alignment
+                "--threshold=0.7",  # threshold between 0.55 and 0.7 is good. Higher values block alignment
                 f"--projin={proj_in}",
                 f"--projout={proj_out}",
                 # "--restoreSPIM",
