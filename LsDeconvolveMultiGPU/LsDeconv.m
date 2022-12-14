@@ -96,8 +96,9 @@ function [] = LsDeconv(varargin)
         % end
 
         [tx, ty, tz] = autosplit(nx, ny, nz, mem);
-        if tx * ty * tz > 1
-            disp(['deconvolution split into ' num2str(tx*ty*tz) ' = ' num2str(tx) ' x ' num2str(ty) ' x ' num2str(tz) ' xyz blocks.']);
+        num_blocks = tx * ty * tz;
+        if num_blocks > 1
+            disp(['deconvolution split into ' num2str(num_blocks) ' = ' num2str(tx) ' x ' num2str(ty) ' x ' num2str(tz) ' xyz blocks.']);
         end
         
         delete(gcp('nocreate'));
@@ -245,9 +246,8 @@ function  process(inpath, tx, ty, tz, dxy, dz, numit, NA, rf, ...
     saveastiff(psf, 'psf.tif', options);
     
     % get stack info and split it to chunks
-    [info.x, info.y, info.z, info.bit_depth] = getstackinfo(inpath); % TODO call this function only one time 
+    [info.x, info.y, info.z, info.bit_depth] = getstackinfo(inpath);
     [p1, p2] = split(info, tx, ty, tz);
-
     if ~exist(cache_drive, 'dir')
         mkdir(cache_drive);
     elseif ~resume
@@ -281,6 +281,8 @@ function  process(inpath, tx, ty, tz, dxy, dz, numit, NA, rf, ...
     
     
     % start deconvolution
+    num_blocks = tx * ty * tz;
+    gpus = gpus(1:min(size(gpus, 2), num_blocks));
     if size(gpus, 2) > 1
         pool = parpool('local', size(gpus, 2));
         parallel_deconvolve(1 : size(gpus, 2)) = parallel.FevalFuture;
@@ -445,13 +447,10 @@ function [rawmax, blocklist] = deconvolve(inpath, psf, numit, damping, ...
                 deconvmin = min(min(bl(:)), deconvmin);
                 save(min_max_path, "deconvmin", "deconvmax", "rawmax", "-v7.3", "-nocompression");
                 
-                if num_blocks > 1 % there is more than one block
-                    disp(['saving block ' num2str(i) ' from ' num_blocks_str]);
-                    
-                    % save block to disk
-                    blocklist(i) = block_path;
-                    save(blocklist(i), 'bl', '-v7.3', '-nocompression');
-                end
+                disp(['saving block ' num2str(i) ' from ' num_blocks_str]);
+                % save block to disk
+                blocklist(i) = block_path;
+                save(blocklist(i), 'bl', '-v7.3', '-nocompression');
             catch error
                 % remove the placeholder file in case of error
                 fprintf(1,'The identifier was:\n%s', error.identifier);
@@ -470,9 +469,6 @@ function [rawmax, blocklist] = deconvolve(inpath, psf, numit, damping, ...
             else
                 delete(block_path);
             end
-        end
-        if num_blocks == 1
-            break;
         end
     end
 end
