@@ -494,7 +494,7 @@ def process_channel(
 
         # each alignment thread needs about 16GB of RAM in 16bit and 8GB in 8bit
         alignment_cores: int = 1
-        subvolume_depth = int(1 if objective == '40x' else min(subvolume_depth, 600))
+        subvolume_depth = int(1 if objective == '40x' else subvolume_depth)
         memory_needed_per_thread = 32 / 1024 ** 3 * subvolume_depth
         if isinstance(new_tile_size, tuple):
             for resolution in new_tile_size:
@@ -1171,7 +1171,7 @@ def main(source_path):
     progress_bars = []
     if need_imaris_conversion:
         p_log(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
-              f"started ims conversion  ...")
+              f"started ims conversion ...")
         for idx, merged_tif_path in enumerate(merged_tif_paths):
             command = get_imaris_command(
                 imaris_path=imaris_converter,
