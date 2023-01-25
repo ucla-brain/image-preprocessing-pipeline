@@ -495,7 +495,7 @@ def process_channel(
         # each alignment thread needs about 16GB of RAM in 16bit and 8GB in 8bit
         alignment_cores: int = 1
         subvolume_depth = int(1 if objective == '40x' else subvolume_depth)
-        memory_needed_per_thread = 32 * subvolume_depth
+        memory_needed_per_thread = 64 * subvolume_depth
         if isinstance(new_tile_size, tuple):
             for resolution in new_tile_size:
                 memory_needed_per_thread *= resolution
