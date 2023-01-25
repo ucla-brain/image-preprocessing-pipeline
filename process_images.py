@@ -495,7 +495,7 @@ def process_channel(
         # each alignment thread needs about 16GB of RAM in 16bit and 8GB in 8bit
         alignment_cores: int = 1
         subvolume_depth = int(1 if objective == '40x' else subvolume_depth)
-        memory_needed_per_thread = 32 / 1024 ** 3 * subvolume_depth
+        memory_needed_per_thread = 32 * subvolume_depth
         if isinstance(new_tile_size, tuple):
             for resolution in new_tile_size:
                 memory_needed_per_thread *= resolution
@@ -511,6 +511,7 @@ def process_channel(
         if need_16bit_to_8bit_conversion:
             memory_needed_per_thread /= 2
         memory_ram = virtual_memory().available // 1024 ** 3  # in GB
+        memory_needed_per_thread //= 1024 ** 3
         if memory_needed_per_thread <= memory_ram:
             alignment_cores = min(floor(memory_ram / memory_needed_per_thread), cpu_physical_core_count)
         else:
@@ -520,7 +521,8 @@ def process_channel(
 
         if num_gpus > 0 and sys.platform.lower() == 'linux':
             alignment_cores = min(alignment_cores, num_gpus * 6)
-
+        p_log(f"memory_needed_per_thread = {memory_needed_per_thread} GB"
+              f"memory_ram = {memory_ram} GB")
         # while alignment_cores < cpu_physical_core_count and subvolume_depth > 600:
         #     subvolume_depth //= 2
         #     alignment_cores *= 2
