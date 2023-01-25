@@ -521,7 +521,7 @@ def process_channel(
 
         if num_gpus > 0 and sys.platform.lower() == 'linux':
             alignment_cores = min(alignment_cores, num_gpus * 6)
-        p_log(f"memory_needed_per_thread = {memory_needed_per_thread} GB"
+        p_log(f"memory_needed_per_thread = {memory_needed_per_thread} GB\n"
               f"memory_ram = {memory_ram} GB")
         # while alignment_cores < cpu_physical_core_count and subvolume_depth > 600:
         #     subvolume_depth //= 2
