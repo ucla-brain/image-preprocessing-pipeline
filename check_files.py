@@ -31,6 +31,6 @@ if __name__ == "__main__":
         print(f"{PrintColors.FAIL}Only one argument is allowed!{PrintColors.ENDC}")
         raise RuntimeError
     with ProcessPoolExecutor(60) as pool:
-        files = list(glob_re(r"\.(?:tiff?|raw)$", source))
+        files = list(glob_re(r"\.(?:tiff?|raw|png)$", source))
         cores, chunks = calculate_cores_and_chunk_size(len(files), cores=60, pool_can_handle_more_than_61_cores=False)
         list(pool.map(test_image, files, chunksize=chunks))
