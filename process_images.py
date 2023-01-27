@@ -37,7 +37,7 @@ AllChannels: List[Tuple[str, str]] = [
     ("Ex_488_Em_1", "b"), ("Ex_561_Em_1", "r"), ("Ex_642_Em_1", "g"),
     ("Ex_488_Em_2", "b"), ("Ex_561_Em_2", "r"), ("Ex_642_Em_2", "g")
 ]
-VoxelSizeX_4x, VoxelSizeY_4x = (1.835,) * 2  # new stage --> 1.5, 1.5?
+VoxelSizeX_4x, VoxelSizeY_4x = (1.835,) * 2  # new stage --> 1.8, 1.8?
 VoxelSizeX_8x, VoxelSizeY_8x = (0.8,) * 2
 VoxelSizeX_10x, VoxelSizeY_10x = (0.661,) * 2  # new stage --> 0.6, 0.6
 VoxelSizeX_15x, VoxelSizeY_15x = (0.422,) * 2  # new stage --> 0.4, 0.4
@@ -515,6 +515,10 @@ def process_channel(
         alignment_cores: int = 1
         if memory_needed_per_thread <= memory_ram:
             alignment_cores = min(floor(memory_ram / memory_needed_per_thread), cpu_physical_core_count)
+            if num_gpus > 0 and sys.platform.lower() == 'linux':
+                while alignment_cores < num_gpus and subvolume_depth > 1:
+                    subvolume_depth //= 2
+                    alignment_cores *= 2
         else:
             memory_needed_per_thread //= subvolume_depth
             while memory_needed_per_thread * subvolume_depth > memory_ram and subvolume_depth > 1:
