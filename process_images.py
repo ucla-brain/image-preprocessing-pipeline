@@ -42,7 +42,7 @@ VoxelSizeX_8x, VoxelSizeY_8x = (0.8,) * 2
 VoxelSizeX_10x, VoxelSizeY_10x = (0.661,) * 2  # new stage --> 0.6, 0.6
 VoxelSizeX_15x, VoxelSizeY_15x = (0.422,) * 2  # new stage --> 0.4, 0.4
 VoxelSizeX_15x_new, VoxelSizeY_15x_new = (0.4,) * 2  # new stage --> 0.4, 0.4
-VoxelSizeX_40x, VoxelSizeY_40x = (0.143, 0.12)  # 0.143, 0.12
+VoxelSizeX_40x, VoxelSizeY_40x = (0.14, 0.14)  # 0.143, 0.12
 
 
 def p_log(txt: Union[str, list]):
