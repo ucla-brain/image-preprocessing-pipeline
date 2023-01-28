@@ -47,7 +47,7 @@ class MultiProcessGetImgStats(Process):
                 img_stats = get_img_stats(img_mem_map)
                 img_stats = img_stats[0:-1]
                 img_stats = [0 if isnan(x) else x for x in img_stats]
-                img_stats = np.array(img_stats, dtype=np.float)
+                img_stats = np.array(img_stats, dtype=float)
                 # is_flat = self.classifier_model.predict([img_stats[0:-1]])
             elif img_mem_map.shape != self.tile_size:
                 print(f"tile size mismatch for file:\n{self.img_path}")
