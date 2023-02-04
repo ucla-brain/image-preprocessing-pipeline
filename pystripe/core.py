@@ -2,6 +2,7 @@ import os
 import re
 from warnings import filterwarnings
 from numpy import max as np_max
+from numpy import min as np_min
 from numpy import uint8, uint16, float32, float64, ndarray, generic, zeros, broadcast_to, exp, log, \
     cumsum, arange, unique, interp, pad, clip, where, rot90
 from scipy.fftpack import rfft, fftshift, irfft
@@ -14,8 +15,8 @@ from pathlib import Path
 from skimage.filters import threshold_otsu, gaussian
 from skimage.measure import block_reduce
 from skimage.transform import resize
-from imageio import imread as png_imread
-from tifffile import imread, imwrite, TIFF, enumarg
+from imageio.v2 import imread as png_imread
+from tifffile import imread, imwrite
 from tifffile.tifffile import TiffFileError
 from dcimg import DCIMGFile
 from typing import Tuple, Iterator, List, Callable
@@ -402,7 +403,7 @@ def filter_streaks(
     """
     sigma1 = sigma[0]  # foreground
     sigma2 = sigma[1]  # background
-    if sigma1 == sigma2 == 0 or img.min() == img.max():
+    if sigma1 == sigma2 == 0:
         return img
     dtype = img.dtype
     smoothing = 1
@@ -627,50 +628,44 @@ def read_filter_save(
         d_type = img.dtype
         if not output_file.parent.exists():
             output_file.parent.mkdir(parents=True, exist_ok=True)
-        # print(f"step 0: {img.dtype}, max={img.max()}")
         if flat is not None:
             img = apply_flat(img, flat)
-        # print(f"step 1: {img.dtype}, max={img.max()}")
         if gaussian_filter_2d:
             img = gaussian(img, sigma=1, preserve_range=True, truncate=2).astype(d_type)
-        # print(f"step 2: {img.dtype}, max={img.max()}")
         if down_sample is not None:
             img = block_reduce(img, block_size=down_sample, func=np_max)
-        # print(f"step 3: {img.dtype}")
         if new_size is not None and tile_size < new_size:
             img = resize(img, new_size, preserve_range=True, anti_aliasing=False)
-        # print(f"step 4: {img.dtype}")
-        if not sigma[0] == sigma[1] == 0:
-            img = filter_streaks(
-                img,
-                sigma,
-                level=level,
-                wavelet=wavelet,
-                crossover=crossover,
-                threshold=threshold,
-                directions=directions
-            )
-        # print(f"step 5: {img.dtype}, max={img.max()}")
-        if dark is not None and dark > 0:
-            img = where(img > dark, img - dark, 0)  # Subtract the dark offset
-        # print(f"step 6: {img.dtype}, max={img.max()}")
-        if lightsheet:
-            img = correct_lightsheet(
-                img.reshape(img.shape[0], img.shape[1], 1),
-                percentile=percentile,
-                lightsheet=dict(selem=(1, artifact_length, 1)),
-                background=dict(
-                    selem=(background_window_size, background_window_size, 1),
-                    spacing=(25, 25, 1),
-                    interpolate=1,
-                    dtype=float32,
-                    step=(2, 2, 1)),
-                lightsheet_vs_background=lightsheet_vs_background
-            ).reshape(img.shape[0], img.shape[1]).astype(d_type)
-        # print(f"step 7: {img.dtype}, max={img.max()}")
+        img_min = np_min(img)
+        img_max = np_max(img)
+        if img_min < img_max:
+            if not sigma[0] == sigma[1] == 0:
+                img = filter_streaks(
+                    img,
+                    sigma,
+                    level=level,
+                    wavelet=wavelet,
+                    crossover=crossover,
+                    threshold=threshold,
+                    directions=directions
+                )
+            if dark is not None and dark > 0:
+                img = where(img > dark, img - dark, 0)  # Subtract the dark offset
+            if lightsheet:
+                img = correct_lightsheet(
+                    img.reshape(img.shape[0], img.shape[1], 1),
+                    percentile=percentile,
+                    lightsheet=dict(selem=(1, artifact_length, 1)),
+                    background=dict(
+                        selem=(background_window_size, background_window_size, 1),
+                        spacing=(25, 25, 1),
+                        interpolate=1,
+                        dtype=float32,
+                        step=(2, 2, 1)),
+                    lightsheet_vs_background=lightsheet_vs_background
+                ).reshape(img.shape[0], img.shape[1]).astype(d_type)
         if new_size is not None and tile_size > new_size:
             img = resize(img, new_size, preserve_range=True, anti_aliasing=True).astype(d_type)
-        # print(f"step 8: {img.dtype}")
 
         if rotate:
             img = rot90(img)
