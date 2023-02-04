@@ -452,7 +452,7 @@ def process_channel(
             tile_size=tile_size,
             new_size=new_tile_size,
             print_input_file_names=print_input_file_names,
-            timeout=200.0
+            timeout=300.0
         )
 
         if return_code != 0:
