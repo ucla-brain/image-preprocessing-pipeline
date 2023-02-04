@@ -628,16 +628,17 @@ def read_filter_save(
         d_type = img.dtype
         if not output_file.parent.exists():
             output_file.parent.mkdir(parents=True, exist_ok=True)
-        if flat is not None:
-            img = apply_flat(img, flat)
-        if gaussian_filter_2d:
-            img = gaussian(img, sigma=1, preserve_range=True, truncate=2).astype(d_type)
+        img_min = np_min(img)
+        img_max = np_max(img)
+        if img_min < img_max:
+            if flat is not None:
+                img = apply_flat(img, flat)
+            if gaussian_filter_2d:
+                img = gaussian(img, sigma=1, preserve_range=True, truncate=2).astype(d_type)
         if down_sample is not None:
             img = block_reduce(img, block_size=down_sample, func=np_max)
         if new_size is not None and tile_size < new_size:
             img = resize(img, new_size, preserve_range=True, anti_aliasing=False)
-        img_min = np_min(img)
-        img_max = np_max(img)
         if img_min < img_max:
             if not sigma[0] == sigma[1] == 0:
                 img = filter_streaks(
