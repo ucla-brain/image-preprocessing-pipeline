@@ -402,7 +402,7 @@ def filter_streaks(
     """
     sigma1 = sigma[0]  # foreground
     sigma2 = sigma[1]  # background
-    if sigma1 == sigma2 == 0:
+    if sigma1 == sigma2 == 0 or img.min() == img.max():
         return img
     dtype = img.dtype
     smoothing = 1
