@@ -7,6 +7,8 @@ from time import time
 from platform import uname
 from multiprocessing import freeze_support, Queue
 from numpy import ndarray, where
+from numpy import max as np_max
+from numpy import min as np_min
 from pathlib import Path
 from pystripe.core import convert_to_8bit_fun
 from process_images import get_imaris_command, MultiProcessCommandRunner, commands_progress_manger
@@ -16,16 +18,20 @@ from supplements.cli_interface import PrintColors
 from cpufeature.extension import CPUFeature
 from tqdm import tqdm
 from re import compile
+from skimage.filters import gaussian
 
 os.environ['MKL_NUM_THREADS'] = '1'
 os.environ['NUMEXPR_NUM_THREADS'] = '1'
 os.environ['OMP_NUM_THREADS'] = '1'
 
 
-def process_img(image: ndarray, dark: int = 0, bit_shift: int = 8):
+def process_img(image: ndarray, dark: int = 0, bit_shift: int = 8, gaussian_filter_2d=True):
     # image = filter_streaks(image, (128, 256), wavelet='db2')
-    if dark > 0:
-        image = where(image > dark, image - dark, 0)
+    if np_min(image) < np_max(image):
+        if dark > 0:
+            image = where(image > dark, image - dark, 0)
+        if gaussian_filter_2d:
+            image = gaussian(image, sigma=1, preserve_range=True, truncate=2).astype(image.dtype)
     image = convert_to_8bit_fun(image, bit_shift_to_right=bit_shift)
     return image
 
@@ -54,7 +60,7 @@ def main(args: Namespace):
             input_path,
             tif_2d_folder,
             (),
-            {"dark": args.dark, "bit_shift": args.bit_shift},
+            {"dark": args.dark, "bit_shift": args.bit_shift, "gaussian_filter_2d": args.gaussian},
             max_processors=args.nthreads,
             channel=args.channel
         )
@@ -80,6 +86,7 @@ def main(args: Namespace):
             lightsheet=False,
             artifact_length=150,
             # percentile=0.25,
+            gaussian_filter_2d=args.gaussian,
             # convert_to_16bit=False,  # defaults to False
             convert_to_8bit=args.convert_to_8bit,
             bit_shift_to_right=args.bit_shift,
@@ -205,21 +212,23 @@ if __name__ == '__main__':
         epilog="Developed 2022 by Keivan Moradi, Hongwei Dong Lab (B.R.A.I.N) at UCLA\n"
     )
     parser.add_argument("--input", "-i", type=str, required=True,
-                        help="Path to input image or path")
+                        help="Path to input image or path.")
     parser.add_argument("--tif", "-t", type=str, required=False, default='',
-                        help="Path to tif output path")
+                        help="Path to tif output path.")
     parser.add_argument("--teraFly", "-f", type=str, required=False, default='',
-                        help="Path to output teraFly path")
+                        help="Path to output teraFly path.")
     parser.add_argument("--imaris", "-o", type=str, required=False, default='',
-                        help="Path to 8-bit imaris output file")
+                        help="Path to 8-bit imaris output file.")
     parser.add_argument("--movie", "-m", type=str, required=False, default='',
                         help="Path to mp4 output file")
     parser.add_argument("--nthreads", "-n", type=int, default=12,
                         help="number of threads. default is 12.")
     parser.add_argument("--channel", "-c", type=int, default=0,
-                        help="channel to be converted")
+                        help="channel to be converted. Default is 0.")
     parser.add_argument("--dark", "-d", type=int, default=0,
                         help="background vs foreground threshold. Default is 0.")
+    parser.add_argument("--gaussian", default=False, action=BooleanOptionalAction,
+                        help="apply Gaussian filter to denoise. Default is --no-gaussian.")
     parser.add_argument("--convert_to_8bit", default=False, action=BooleanOptionalAction,
                         help="convert to 8-bit. Default is --no-convert_to_8bit")
     parser.add_argument("--bit_shift", "-b", type=int, default=8,
