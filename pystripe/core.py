@@ -500,7 +500,7 @@ def read_filter_save(
         dark: float = 0,
         z_idx: int = None,
         rotate: bool = False,
-        flip_upside_down: bool = false,
+        flip_upside_down: bool = False,
         lightsheet: bool = False,
         artifact_length: int = 150,
         background_window_size: int = 200,
