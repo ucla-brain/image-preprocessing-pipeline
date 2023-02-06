@@ -543,6 +543,7 @@ function scal = postprocess_save(outpath, min_max_path, clipval, blocklist, p1, 
     clear num_tif_files;
 
     pool = parpool('local', 3);
+    pool.IdleTimeout = 120; % 120=2h
     async_load(1 : numxblocks * numyblocks) = parallel.FevalFuture;
 
     for i = starting_z_block : numzblocks
@@ -550,12 +551,18 @@ function scal = postprocess_save(outpath, min_max_path, clipval, blocklist, p1, 
         %load and mount next layer of images
         R = zeros(info.x, info.y, p2(blnr, z) - p1(blnr, z) + 1, 'single');
         for j = 1 : numxblocks * numyblocks
-            async_load(j) = pool.parfeval(@my_load, 1, blocklist(blnr+j-1));
+             async_load(j) = pool.parfeval(@my_load, 1, blocklist(blnr+j-1));
         end
         for j = 1 : numxblocks * numyblocks
-            %R( p1(blnr, x) : p2(blnr, x), p1(blnr, y) : p2(blnr, y), :) = my_load(blocklist(blnr+j-1));
-            disp(['  loading block ' num2str(blnr) ' which is file: ' blocklist(blnr)]);
-            async_load(j).wait('finished', 600); % timeout in seconds
+            if ispc
+                file_path_parts = strsplit(blocklist(blnr), '\');
+            else
+                file_path_parts = strsplit(blocklist(blnr), '/');
+            end
+            file_name = string(file_path_parts(end));
+            disp(append('   loading block ', num2str(blnr), ' file ', file_name));
+        %    R( p1(blnr, x) : p2(blnr, x), p1(blnr, y) : p2(blnr, y), :) = my_load(blocklist(blnr));
+            async_load(j).wait('finished', 1200); % timeout in seconds
             R( p1(blnr, x) : p2(blnr, x), p1(blnr, y) : p2(blnr, y), :) = async_load(j).fetchOutputs;
             blnr = blnr + 1;
         end
