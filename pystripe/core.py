@@ -1128,8 +1128,10 @@ def _parse_args():
                         help="Intensity of dark offset in flat-field correction")
     parser.add_argument("--zstep", "-z", type=float, default=None,
                         help="Z-step in micron. Only used for DCIMG files.")
-    parser.add_argument("--rotate", "-r", action='store_true',
+    parser.add_argument("--rotate", "-r", action='store_false',
                         help="Rotate output images 90 degrees counter-clockwise")
+    parser.add_argument("--flip_upside_down", "-flup", action='store_false',
+                        help="Flip the image upside down along the y-axis. Default is false")
     parser.add_argument("--lightsheet", action="store_true",
                         help="Use the lightsheet method")
     parser.add_argument("--artifact-length", default=150, type=int,
@@ -1195,6 +1197,7 @@ def main():
             flat=flat,
             dark=args.dark,
             rotate=args.rotate,  # Does not work on DCIMG files
+            flip_upside_down=args.flip_upside_down,
             lightsheet=args.lightsheet,
             artifact_length=args.artifact_length,
             background_window_size=args.background_window_size,
