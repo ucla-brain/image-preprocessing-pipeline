@@ -4,7 +4,7 @@ from warnings import filterwarnings
 from numpy import max as np_max
 from numpy import min as np_min
 from numpy import uint8, uint16, float32, float64, ndarray, generic, zeros, broadcast_to, exp, log, \
-    cumsum, arange, unique, interp, pad, clip, where, rot90
+    cumsum, arange, unique, interp, pad, clip, where, rot90, flipud
 from scipy.fftpack import rfft, fftshift, irfft
 from scipy.ndimage import gaussian_filter as gaussian_filter_nd
 from pywt import wavedec2, waverec2, Wavelet, dwt_max_level
@@ -500,6 +500,7 @@ def read_filter_save(
         dark: float = 0,
         z_idx: int = None,
         rotate: bool = False,
+        flip_upside_down: bool = false,
         lightsheet: bool = False,
         artifact_length: int = 150,
         background_window_size: int = 200,
@@ -550,6 +551,8 @@ def read_filter_save(
         z index of DCIMG slice. Only applicable to DCIMG files.
     rotate : bool
         rotate x and y if true
+    flip_upside_down : bool
+        flip the image parallel to y-axis. Default is false.
     lightsheet : bool
         if False, use wavelet method, if true use correct_lightsheet
     artifact_length : int
@@ -670,6 +673,8 @@ def read_filter_save(
 
         if rotate:
             img = rot90(img)
+        if flip_upside_down:
+            img = flipud(img)
         if convert_to_16bit and img.dtype != uint16:
             clip(img, 0, 65535, out=img)  # Clip to 16-bit [0, 2 ** 16 - 1] unsigned range
             img = img.astype(uint16)
@@ -886,6 +891,7 @@ def batch_filter(
         dark: int = 0,
         z_step: float = None,
         rotate: bool = False,
+        flip_upside_down: bool = False,
         lightsheet: bool = False,
         artifact_length: int = 150,
         background_window_size: int = 200,
@@ -944,6 +950,8 @@ def batch_filter(
         z-step in tenths of micron. only used for DCIMG files.
     rotate : bool
         Flag for 90-degree rotation.
+    flip_upside_down : bool
+        flip the image parallel to y-axis. Default is false.
     lightsheet : bool
         Specific destriping for light sheet images. Default to False.
     artifact_length : int
@@ -1008,6 +1016,7 @@ def batch_filter(
         'dark': dark,
         'z_idx': None,
         'rotate': rotate,
+        'flip_upside_down': flip_upside_down,
         'lightsheet': lightsheet,
         'artifact_length': artifact_length,
         'background_window_size': background_window_size,
