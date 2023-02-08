@@ -35,7 +35,7 @@ class MultiProcess(Process):
             shape: Tuple[int, int],
             dtype: str,
             channel: int = 0,
-            timeout: Union[float, None] = 900,
+            timeout: Union[float, None] = 1800,
             resume: bool = True,
             compression: Tuple[str, int] = ("ADOBE_DEFLATE", 1)
     ):
@@ -98,7 +98,7 @@ class MultiProcess(Process):
             images = file[f"DataSet/ResolutionLevel 0/TimePoint 0/Channel {channel}/Data"]
         while not self.die and not self.args_queue.qsize() == 0:
             try:
-                idx = self.args_queue.get(block=True, timeout=10)
+                idx = self.args_queue.get(block=True, timeout=20)
                 tif_save_path = None
                 if isinstance(save_path, Path):
                     tif_save_path = save_path / f"{tif_prefix}_{idx:06}.tif"
@@ -170,7 +170,7 @@ def parallel_image_processor(
         kwargs: dict = None,
         tif_prefix: str = "img",
         channel: int = 0,
-        timeout: Union[float, None] = 900,
+        timeout: Union[float, None] = 1800,
         max_processors: int = cpu_count(),
         progress_bar_name: str = " ImgProc",
         compression: Tuple[str, int] = ("ADOBE_DEFLATE", 1),
