@@ -34,7 +34,7 @@ class DotDict(dict):
     __delattr__ = dict.__delitem__
 
 
-def get_soma_locations(reconstructions: Path, y_axis_length: float, z_axis_length: float):
+def get_soma_locations(reconstructions: Path, y_axis_length: float):
     soma_coordinates = []
     for swc_file in reconstructions.rglob("*.swc"):
         swc_df = read_csv(swc_file, sep=" ", comment="#", names=("id", "type_id", "x", "y", "z", "radius", "parent_id"),
@@ -44,7 +44,7 @@ def get_soma_locations(reconstructions: Path, y_axis_length: float, z_axis_lengt
         else:
             soma_coordinates += [DotDict({
                 'swc_path': swc_file,
-                'point': correct_point((swc_df.x[0], swc_df.y[0], swc_df.z[0]), y_axis_length, z_axis_length)
+                'point': correct_point((swc_df.x[0], swc_df.y[0], swc_df.z[0]), y_axis_length)
             })]
     return soma_coordinates
 
