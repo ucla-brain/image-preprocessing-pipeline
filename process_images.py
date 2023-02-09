@@ -768,7 +768,7 @@ def merge_all_channels(
 
 def get_imaris_command(imaris_path: Path, input_path: Path, output_path: Path = None,
                        voxel_size_x: float = 1, voxel_size_y: float = 1, voxel_size_z: float = 1,
-                       workers: int = cpu_count(),
+                       workers: int = cpu_count(logical=False),
                        dtype: str = 'uint8'):
     files = sorted(input_path.rglob("*.tif"))
     file = files[0]
@@ -796,7 +796,7 @@ def get_imaris_command(imaris_path: Path, input_path: Path, output_path: Path = 
             command += ["--inputformat TiffSeries"]
 
         command += [
-            f"--nthreads {workers if sys.platform == 'win32' else 1}",
+            f"--nthreads {workers if dtype=='uint8' or sys.platform == 'win32' else 1}",
             f"--compression 1",
             f"--voxelsize {voxel_size_x:.2f}-{voxel_size_y:.2f}-{voxel_size_z:.2f}",  # x-y-z
             "--logprogress"
