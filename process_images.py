@@ -26,7 +26,7 @@ from multiprocessing import freeze_support, Queue, Process
 from supplements.cli_interface import select_among_multiple_options, ask_true_false_question, PrintColors
 from supplements.cli_interface import ask_for_a_number_in_range, date_time_now
 from typing import List, Tuple, Dict, Union
-from downsampling import TifStack
+from supplements.downsampling import TifStack
 from parallel_image_processor import parallel_image_processor
 from math import floor
 
