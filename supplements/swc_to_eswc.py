@@ -34,7 +34,6 @@ def main(args: Namespace):
             swc_df.to_csv(eswc_file, sep=" ", mode="a")
 
 
-
 if __name__ == '__main__':
     parser = ArgumentParser(
         description="Convert swcs exported from Imaris to eswcs that can be read in y-flipped TeraFly images\n\n",
