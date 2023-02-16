@@ -62,7 +62,8 @@ def main(args: Namespace):
             (),
             {"dark": args.dark, "bit_shift": args.bit_shift, "gaussian_filter_2d": args.gaussian},
             max_processors=args.nthreads,
-            channel=args.channel
+            channel=args.channel,
+            compression=("ADOBE_DEFLATE", args.compression_level) if args.compression_level > 0 else None
         )
     elif input_path.is_dir() and (args.dark > 0 or args.convert_to_8bit):
         if not args.tif:
@@ -78,7 +79,7 @@ def main(args: Namespace):
             wavelet="db10",
             crossover=10,
             # threshold=-1,
-            compression=('ADOBE_DEFLATE', 0),  # ('ZSTD', 1) conda install imagecodecs
+            compression=("ADOBE_DEFLATE", args.compression_level) if args.compression_level > 0 else None,
             flat=None,
             dark=args.dark,
             # z_step=voxel_size_z,  # z-step in micron. Only used for DCIMG files.
@@ -233,17 +234,19 @@ if __name__ == '__main__':
                         help="convert to 8-bit. Default is --no-convert_to_8bit")
     parser.add_argument("--bit_shift", "-b", type=int, default=8,
                         help="bit_shift for 8-bit conversion. Default is 8.")
+    parser.add_argument("--compression_level", "-z", type=int, default=1,
+                        help="compression level for tif files. Default is 1.")
     parser.add_argument("--movie_start", type=int, default=0,
                         help="start frame counting from 0. Default is 0.")
     parser.add_argument("--movie_end", type=int, default=None,
                         help="end frame counting from 0. Default is the last frame.")
     parser.add_argument("--movie_frame_duration", type=int, default=5,
                         help="duration of each frame. should be a positive integer. Default is 5.")
-    parser.add_argument("--voxel_size_x", type=float, default=1,
+    parser.add_argument("--voxel_size_x", "-dx", type=float, default=1,
                         help="x voxel size in µm. It is relevant to imaris conversion only. Default is 1.")
-    parser.add_argument("--voxel_size_y", type=float, default=1,
+    parser.add_argument("--voxel_size_y", "-dy", type=float, default=1,
                         help="y voxel size in µm. It is relevant to imaris conversion only. Default is 1.")
-    parser.add_argument("--voxel_size_z", type=float, default=1,
+    parser.add_argument("--voxel_size_z", "-dz", type=float, default=1,
                         help="z voxel size in µm. It is relevant to imaris conversion only. Default is 1.")
 
     main(parser.parse_args())
