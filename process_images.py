@@ -320,7 +320,7 @@ def run_command(command, need_progress_dot=True):
             if m:
                 p_log(f"\n{PrintColors.WARNING}{stdout}{PrintColors.ENDC}\n")
             else:
-                print(".", end="")
+                print(".", end="", flush=True)
         else:
             print(stdout)
     p_log("")
