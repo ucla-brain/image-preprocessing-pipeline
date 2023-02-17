@@ -376,7 +376,7 @@ def process_channel(
     assert source_path.joinpath(channel).exists()
     if need_lightsheet_cleaning or need_destriping or need_flat_image_application or need_raw_to_tiff_conversion or \
             need_16bit_to_8bit_conversion or need_compression or \
-            down_sampling_factor is not None or new_tile_size is not None:
+            down_sampling_factor is not None or down_sampling_factor == (1, 1) or new_tile_size is not None:
         print(f"{need_lightsheet_cleaning}{need_destriping}{need_flat_image_application}{need_raw_to_tiff_conversion}"
               f"{need_16bit_to_8bit_conversion}{need_compression}{down_sampling_factor}{new_tile_size}")
         img_flat = None
