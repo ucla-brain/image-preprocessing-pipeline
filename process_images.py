@@ -568,7 +568,7 @@ def process_channel(
                 f"--sH={tile_overlap_x - 1}",  # Displacements search radius along H (in pixels). Default value is 25!
                 f"--sV={tile_overlap_y - 1}",  # Displacements search radius along V (in pixels). Default value is 25!
                 # Displacements search radius along D (in pixels).
-                f"--sD={0 if (objective == '40x' or stitch_mip) else 200}",
+                f"--sD={0 if (objective == '40x' or stitch_mip) else min(200, subvolume_depth - 1)}",
                 # Number of slices per subvolume partition
                 f"--subvoldim={subvolume_depth}",
                 # used in the pairwise displacements computation step.
