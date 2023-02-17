@@ -573,7 +573,7 @@ def process_channel(
                 f"--subvoldim={subvolume_depth}",
                 # used in the pairwise displacements computation step.
                 # dimension of layers obtained by dividing the volume along D
-                "--threshold=0.7",  # threshold between 0.55 and 0.7 is good. Higher values block alignment
+                "--threshold=0.7",  # threshold between 0.55 and 0.7 is good. Higher values block alignment.
                 f"--projin={proj_in}",
                 f"--projout={proj_out}",
                 # "--restoreSPIM",
@@ -606,15 +606,6 @@ def process_channel(
         memory_needed_per_thread /= 2
     memory_ram = virtual_memory().available / 1024 ** 3  # in GB
     merge_step_cores = min(floor(memory_ram / memory_needed_per_thread), cpu_physical_core_count + 2)
-
-    # shape: Tuple[int, int, int] = convert_to_2D_tif(
-    #     TSVVolume.load(stitched_path / f'{channel}_xml_import_step_5.xml'),
-    #     str(stitched_tif_path / "img_{z:06d}.tif"),
-    #     compression=("ADOBE_DEFLATE", 1) if need_compression_stitched_tif else None,
-    #     cores=merge_step_cores,  # here the limit is 61 on Windows
-    #     dtype='uint8' if need_16bit_to_8bit_conversion else TifStack(preprocessed_path / channel).dtype,
-    #     resume=continue_process_terastitcher
-    # )
 
     return_code = parallel_image_processor(
         process_stitched_tif,
