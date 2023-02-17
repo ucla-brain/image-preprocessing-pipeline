@@ -1029,7 +1029,7 @@ def batch_filter(
         'continue_process': continue_process,
         'dtype': dtype,
         'tile_size': tile_size,
-        'down_sample': down_sample,
+        'down_sample': None if isinstance(down_sample, tuple) and down_sample == (1, 1) else down_sample,
         'new_size': new_size,
         'print_input_file_names': print_input_file_names
     }
