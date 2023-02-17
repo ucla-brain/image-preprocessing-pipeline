@@ -605,7 +605,7 @@ def process_channel(
     if need_16bit_to_8bit_conversion or tsv_volume.dtype in (uint8, "uint8"):
         memory_needed_per_thread /= 2
     memory_ram = virtual_memory().available / 1024 ** 3  # in GB
-    merge_step_cores = min(floor(memory_ram / memory_needed_per_thread), cpu_physical_core_count + 2)
+    merge_step_cores = min(floor(memory_ram / memory_needed_per_thread), cpu_physical_core_count)
 
     return_code = parallel_image_processor(
         process_stitched_tif,
