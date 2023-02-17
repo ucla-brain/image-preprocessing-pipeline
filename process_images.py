@@ -352,7 +352,7 @@ def process_channel(
         files_list: List[Path] = None,
         need_flat_image_application: bool = False,
         image_classes_training_data_path=None,
-        need_raw_to_tiff_conversion: bool = False,
+        need_raw_png_to_tiff_conversion: bool = False,
         need_lightsheet_cleaning: bool = True,
         artifact_length: int = 150,
         need_destriping: bool = False,
@@ -374,8 +374,8 @@ def process_channel(
     # preprocess each tile as needed using PyStripe --------------------------------------------------------------------
 
     assert source_path.joinpath(channel).exists()
-    if need_lightsheet_cleaning or need_destriping or need_flat_image_application or need_raw_to_tiff_conversion or \
-            need_16bit_to_8bit_conversion or need_compression or \
+    if need_lightsheet_cleaning or need_destriping or need_flat_image_application or \
+            need_raw_png_to_tiff_conversion or need_16bit_to_8bit_conversion or need_compression or \
             down_sampling_factor not in (None, (1, 1)) or new_tile_size is not None:
         img_flat = None
         if need_flat_image_application:
@@ -973,7 +973,7 @@ def main(source_path):
         #         if ask_true_false_question(f"Do you need to apply lightsheet cleaning to {channel} channel?"):
         #             channels_need_lightsheet_cleaning += [channel]
 
-    need_raw_to_tiff_conversion = ask_true_false_question("Are images in raw format?")
+    need_raw_png_to_tiff_conversion = ask_true_false_question("Are images in raw or png format?")
 
     need_16bit_to_8bit_conversion = ask_true_false_question(
         "Do you need to convert 16-bit images to 8-bit before stitching to reduce final file size?")
@@ -1003,7 +1003,7 @@ def main(source_path):
             [f"{channel_color_dict[channel]}{right_bit_shift[channel]}" for channel in all_channels])
 
     need_compression = ask_true_false_question("Do you need to compress temporary tif files?")
-    if need_raw_to_tiff_conversion or need_compression:
+    if need_raw_png_to_tiff_conversion or need_compression:
         de_striped_posix += "_tif"
         what_for += "tif "
 
@@ -1015,9 +1015,9 @@ def main(source_path):
     stitched_path = source_path.parent / (source_path.name + "_stitched")
     print_input_file_names = False
 
-    if need_destriping or need_flat_image_application or need_raw_to_tiff_conversion or need_16bit_to_8bit_conversion \
-            or need_down_sampling or need_compression or need_gaussian_filter_2d or need_lightsheet_cleaning or \
-            need_baseline_subtraction:
+    if need_destriping or need_flat_image_application or need_raw_png_to_tiff_conversion or \
+            need_16bit_to_8bit_conversion or need_down_sampling or need_compression or need_gaussian_filter_2d or \
+            need_lightsheet_cleaning or need_baseline_subtraction:
 
         print_input_file_names = False  # ask_true_false_question(
         # "Do you need to print raw or tif file names to find corrupt files during preprocessing stage?")
@@ -1103,7 +1103,7 @@ def main(source_path):
             need_tera_fly_conversion=channel in channels_need_tera_fly_conversion,
             need_flat_image_application=need_flat_image_application,
             image_classes_training_data_path=image_classes_training_data_path,
-            need_raw_to_tiff_conversion=need_raw_to_tiff_conversion,
+            need_raw_png_to_tiff_conversion=need_raw_png_to_tiff_conversion,
             need_lightsheet_cleaning=channel in channels_need_lightsheet_cleaning,
             artifact_length=150,
             need_destriping=need_destriping,
