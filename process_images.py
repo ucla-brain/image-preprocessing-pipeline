@@ -507,7 +507,8 @@ def process_channel(
                     memory_needed_per_thread *= resolution
         else:
             memory_needed_per_thread *= 2048 * 2048
-        if need_16bit_to_8bit_conversion:
+        if need_16bit_to_8bit_conversion or \
+                TifStack(preprocessed_path.joinpath(channel).rglob("*.tif").__next__().parent) == uint8:
             memory_needed_per_thread /= 2
         memory_ram = virtual_memory().available // 1024 ** 3  # in GB
         memory_needed_per_thread //= 1024 ** 3
