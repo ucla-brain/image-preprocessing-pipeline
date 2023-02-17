@@ -519,16 +519,16 @@ def process_channel(
             if memory_needed_per_thread > 0:
                 alignment_cores = min(floor(memory_ram / memory_needed_per_thread), cpu_physical_core_count)
             if num_gpus > 0 and sys.platform.lower() == 'linux':
-                while alignment_cores < num_gpus and subvolume_depth > 1:
+                while alignment_cores < num_gpus and subvolume_depth > 10:
                     subvolume_depth //= 2
                     alignment_cores *= 2
             else:
-                while alignment_cores < cpu_physical_core_count and subvolume_depth > 1:
+                while alignment_cores < cpu_physical_core_count and subvolume_depth > 10:
                     subvolume_depth //= 2
                     alignment_cores *= 2
         else:
             memory_needed_per_thread //= subvolume_depth
-            while memory_needed_per_thread * subvolume_depth > memory_ram and subvolume_depth > 1:
+            while memory_needed_per_thread * subvolume_depth > memory_ram and subvolume_depth > 10:
                 subvolume_depth //= 2
             memory_needed_per_thread *= subvolume_depth
 
