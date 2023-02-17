@@ -522,6 +522,10 @@ def process_channel(
                 while alignment_cores < num_gpus and subvolume_depth > 1:
                     subvolume_depth //= 2
                     alignment_cores *= 2
+            else:
+                while alignment_cores < cpu_physical_core_count and subvolume_depth > 1:
+                    subvolume_depth //= 2
+                    alignment_cores *= 2
         else:
             memory_needed_per_thread //= subvolume_depth
             while memory_needed_per_thread * subvolume_depth > memory_ram and subvolume_depth > 1:
