@@ -566,7 +566,7 @@ function scal = postprocess_save(outpath, min_max_path, clipval, blocklist, p1, 
             R( p1(blnr, x) : p2(blnr, x), p1(blnr, y) : p2(blnr, y), :) = async_load(j).fetchOutputs;
             blnr = blnr + 1;
         end
-
+        
         if clipval > 0
             %perform histogram clipping
             R(R < low_clip) = low_clip;
@@ -578,8 +578,10 @@ function scal = postprocess_save(outpath, min_max_path, clipval, blocklist, p1, 
             if deconvmin > 0
                 R = (R - deconvmin) ./ (deconvmax - deconvmin) .* (scal .* amplification);
             else
-                R = R  .* (scal .* amplification ./ deconvmax);
+                R = R .* (scal .* amplification ./ deconvmax);
             end
+            R = R - amplification;
+            R(R<0) = 0;
             R(R>scal) = scal;
         end
 
