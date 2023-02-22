@@ -1,6 +1,7 @@
 from argparse import RawDescriptionHelpFormatter, ArgumentParser, Namespace
 from pathlib import Path
 from pandas import read_csv, concat
+from math import pi
 
 
 def main(args: Namespace):
@@ -22,7 +23,7 @@ def main(args: Namespace):
             "##n,orderinfo,name,comment,z,x,y,pixmax,intensity,sdev,volsize,mass,,,,color_r,color_g,color_b")
         for row in seeds_df.itertuples():
             apo.write(
-                f"{row.Index},,,,,{row.z},{row.x},{row.y},0.000,0.000,0.000,{4 / 3 * row.radius**3},0.000,,,,"
+                f"{row.Index},,,,,{row.z},{row.x},{row.y},0.000,0.000,0.000,{4 / 3 * pi * row.radius**3},0.000,,,,"
                 f"{args.red},{args.green},{args.blue}\n"
             )
 

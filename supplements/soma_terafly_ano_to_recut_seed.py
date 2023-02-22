@@ -2,22 +2,40 @@ from pathlib import Path
 from pandas import read_csv
 from shutil import rmtree
 from math import pi
+from argparse import RawDescriptionHelpFormatter, ArgumentParser, Namespace
 
 
-# annotation file that contains soma locations only
-annotations = next(
-    Path(r"/qnap/3D_stitched_LS/20220725_SW220510_02_LS_6x_1000z/Ex_488_Em_525_Terafly_Ano/Somata").glob(
-        "SW220510_02_LS_6x_1000z_combined_stamp*.ano.apo"))
-recut = annotations.parent / 'soma_recut'
-if recut.exists():
-    rmtree(recut)
-recut.mkdir()
-annotations_df = read_csv(annotations)
-soma_radius_um = 8.0
-for column in ("x", "y", "z", "volsize"):
-    annotations_df[column] = annotations_df[column].round(decimals=0).astype(int)
+def main(args: Namespace):
+    apo_file = Path(args.apo_file)
+    annotations_df = read_csv(apo_file)
 
-for row in annotations_df.itertuples():
-    with open(recut/f"marker_{row.x}_{row.y}_{row.z}_{int(4/3*pi * soma_radius_um**3 + 0.5)}", 'w') as soma_file:
-        soma_file.write("# x,y,z,radius_um\n")
-        soma_file.write(f"{row.x},{row.y},{row.z},{soma_radius_um}")
+    recut = apo_file.parent / apo_file.name
+    if recut.exists():
+        rmtree(recut)
+    recut.mkdir()
+
+    soma_radius_um = args.default_radius if args.default_radius > 0 else None
+    for column in ("x", "y", "z", "volsize"):
+        annotations_df[column] = annotations_df[column].round(decimals=0).astype(int)
+
+    for row in annotations_df.itertuples():
+        if soma_radius_um:
+            volume = round(4 / 3 * pi * soma_radius_um ** 3, 3)
+        else:
+            soma_radius_um = row.volsize**(1/3)*3/4/pi
+        with open(recut / f"marker_{row.x}_{row.y}_{row.z}_{int(volume)}", 'w') as marker_file:
+            marker_file.write("# x,y,z,radius_um\n")
+            marker_file.write(f"{row.x},{row.y},{row.z},{soma_radius_um}")
+
+
+if __name__ == '__main__':
+    parser = ArgumentParser(
+        description="Convert TeraFly apo file to recut seeds (marker files) \n\n",
+        formatter_class=RawDescriptionHelpFormatter,
+        epilog="Developed 2023 by Keivan Moradi at UCLA, Hong Wei Dong Lab (B.R.A.I.N) \n"
+    )
+    parser.add_argument("--apo_file", "-a", type=str, required=True,
+                        help="Marker file containing all seed locations.")
+    parser.add_argument("--default_radius", "-r", type=float, default=0, required=False,
+                        help="Default .")
+    main(parser.parse_args())
