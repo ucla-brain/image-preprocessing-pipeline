@@ -21,11 +21,11 @@ def main(args: Namespace):
             swc_df[col_name] = value
         print(swc_df.head())
 
-        with open(ano_file, 'w'):
-            ano_file.write_text(f"APOFILE={apo_file.name}\n")
-            ano_file.write_text(f"SWCFILE={eswc_file.name}\n")
+        with ano_file.open('w') as ano:
+            ano.write(f"APOFILE={apo_file.name}\n")
+            ano.write(f"SWCFILE={eswc_file.name}\n")
 
-        with open(apo_file, 'w'):
+        with apo_file.open('w'):
             apo_file.write_text(
                 "##n,orderinfo,name,comment,z,x,y, pixmax,intensity,sdev,volsize,mass,,,, color_r,color_g,color_b")
 
