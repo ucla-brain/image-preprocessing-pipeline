@@ -14,8 +14,8 @@ def main(args: Namespace):
         read_csv(f, sep=",", comment="#", names=("x", "y", "z", "radius"), index_col=0) for f in seeds_path.glob(
             "marker_*")
     ]).reset_index()
-    print(seeds_df.head())
-    print(list(seeds_df.itertuples())[0])
+    # print(seeds_df.head())
+    # print(list(seeds_df.itertuples())[0])
     if apo_file.exists():
         apo_file.unlink()
     with apo_file.open('a') as apo:
