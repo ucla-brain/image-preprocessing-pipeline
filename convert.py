@@ -105,7 +105,7 @@ def main(args: Namespace):
 
     if args.teraFly:
         command = [
-            f"mpiexec -np {min(12, args.nthreads)}python -m mpi4py {paraconverter}",
+            f"mpiexec -np {min(12, args.nthreads)} python -m mpi4py {paraconverter}",
             "--sfmt=\"TIFF (series, 2D)\"",
             "--dfmt=\"TIFF (tiled, 3D)\"",
             "--resolutions=\"012345\"",
