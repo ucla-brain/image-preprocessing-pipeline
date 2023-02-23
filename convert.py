@@ -105,7 +105,7 @@ def main(args: Namespace):
 
     if args.teraFly:
         command = [
-            f"mpiexec -np {args.nthreads} python -m mpi4py {paraconverter}",
+            f"mpiexec -np 12 python -m mpi4py {paraconverter}",
             "--sfmt=\"TIFF (series, 2D)\"",
             "--dfmt=\"TIFF (tiled, 3D)\"",
             "--resolutions=\"012345\"",
@@ -137,6 +137,7 @@ def main(args: Namespace):
             voxel_size_x=args.voxel_size_x,
             voxel_size_y=args.voxel_size_y,
             voxel_size_z=args.voxel_size_z,
+            workers=args.nthreads
         )
         print(f"\t{PrintColors.BLUE}tiff to ims conversion command:{PrintColors.ENDC}\n\t\t{command}\n")
         progress_queue = Queue()
@@ -222,18 +223,18 @@ if __name__ == '__main__':
                         help="Path to 8-bit imaris output file.")
     parser.add_argument("--movie", "-m", type=str, required=False, default='',
                         help="Path to mp4 output file")
-    parser.add_argument("--nthreads", "-n", type=int, default=12,
+    parser.add_argument("--nthreads", "-n", type=int, default=psutil.cpu_count(logical=False),
                         help="number of threads. default is 12.")
     parser.add_argument("--channel", "-c", type=int, default=0,
                         help="channel to be converted. Default is 0.")
     parser.add_argument("--dark", "-d", type=int, default=0,
                         help="background vs foreground threshold. Default is 0.")
-    parser.add_argument("--gaussian", default=False, action=BooleanOptionalAction,
+    parser.add_argument("--gaussian", "-g", default=False, action=BooleanOptionalAction,
                         help="apply Gaussian filter to denoise. Default is --no-gaussian.")
     parser.add_argument("--convert_to_8bit", default=False, action=BooleanOptionalAction,
                         help="convert to 8-bit. Default is --no-convert_to_8bit")
     parser.add_argument("--bit_shift", "-b", type=int, default=8,
-                        help="bit_shift for 8-bit conversion. Default is 8.")
+                        help="bit_shift for 8-bit conversion. An number between 0 and 8. Smaller values make images brighter compared with he original image. Default is 8 (no change in brightness).")
     parser.add_argument("--compression_level", "-z", type=int, default=1,
                         help="compression level for tif files. Default is 1.")
     parser.add_argument("--movie_start", type=int, default=0,
