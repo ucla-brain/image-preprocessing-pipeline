@@ -14,6 +14,9 @@ def main(args: Namespace):
         read_csv(f, sep=",", comment="#", names=("x", "y", "z", "radius"), index_col=0) for f in seeds_path.glob(
             "marker_*")
     ]).reset_index()
+    seeds_df['x'] /= args.voxel_size_x
+    seeds_df['y'] /= args.voxel_size_y
+    seeds_df['z'] /= args.voxel_size_z
     # print(seeds_df.head())
     # print(list(seeds_df.itertuples())[0])
     if apo_file.exists():
@@ -23,7 +26,7 @@ def main(args: Namespace):
             "##n,orderinfo,name,comment,z,x,y,pixmax,intensity,sdev,volsize,mass,,,,color_r,color_g,color_b")
         for row in seeds_df.itertuples():
             apo.write(
-                f"{row.Index},,,,,{row.z},{row.x},{row.y},0.000,0.000,0.000,{4 / 3 * pi * row.radius**3},0.000,,,,"
+                f"{row.Index},,,,{row.z},{row.x},{row.y},0.000,0.000,0.000,{4 / 3 * pi * row.radius**3},0.000,,,,"
                 f"{args.red},{args.green},{args.blue}\n"
             )
 
@@ -53,4 +56,10 @@ if __name__ == '__main__':
                         help="green intensity value between 0 to 255")
     parser.add_argument("--blue", "-b", type=int, required=False, default=255,
                         help="blue intensity value between 0 to 255")
+    parser.add_argument("--voxel_size_x", "-dx", type=float, default=1,
+                        help="Image voxel size on x-axis (µm).")
+    parser.add_argument("--voxel_size_y", "-dy", type=float, default=1,
+                        help="Image voxel size on y-axis (µm).")
+    parser.add_argument("--voxel_size_z", "-dz", type=float, default=1,
+                        help="Image voxel size on z-axis (µm).")
     main(parser.parse_args())
