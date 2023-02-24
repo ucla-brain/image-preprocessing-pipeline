@@ -246,6 +246,10 @@ class TifStack:
         self.input_directory = input_directory
         self.pattern = pattern
         self.files = list(input_directory.glob(pattern))
+        if not self.files and pattern.lower() == '*.tif':
+            self.files = list(input_directory.glob(pattern.lower()+'f'))
+        elif not self.files and pattern.lower() == '*.tiff':
+            self.files = list(input_directory.glob(pattern[:-1]))
         self.files.sort()
         img = imread(self.files[0])
         self.dtype = img.dtype

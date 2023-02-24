@@ -20,7 +20,8 @@ from datetime import timedelta
 from time import time, sleep
 from platform import uname
 from tsv.volume import TSVVolume
-from pystripe.core import batch_filter, imread_tif_raw_png, imsave_tif, MultiProcessQueueRunner, progress_manager
+from pystripe.core import batch_filter, imread_tif_raw_png, imsave_tif, MultiProcessQueueRunner, progress_manager, \
+    glob_re
 from queue import Empty
 from multiprocessing import freeze_support, Queue, Process
 from supplements.cli_interface import select_among_multiple_options, ask_true_false_question, PrintColors
@@ -33,9 +34,9 @@ from math import floor
 # experiment setup: user needs to set them right
 # AllChannels = [(channel folder name, rgb color)]
 AllChannels: List[Tuple[str, str]] = [
-    ("Ex_488_Em_525", "b"), ("Ex_561_Em_600", "r"), ("Ex_642_Em_680", "g"), ("Ex_647_Em_690", "g"),
-    ("Ex_488_Em_1", "b"), ("Ex_561_Em_1", "r"), ("Ex_642_Em_1", "g"),
-    ("Ex_488_Em_2", "b"), ("Ex_561_Em_2", "r"), ("Ex_642_Em_2", "g")
+    ("Ex_488_Em_525", "b"), ("Ex_561_Em_600", "g"), ("Ex_647_Em_690", "r"), ("Ex_642_Em_690", "r"),
+    ("Ex_488_Em_1", "b"), ("Ex_561_Em_1", "g"), ("Ex_642_Em_1", "r"),
+    ("Ex_488_Em_2", "b"), ("Ex_561_Em_2", "g"), ("Ex_642_Em_2", "r"), ("Ex_642_Em_680", "r")
 ]
 VoxelSizeX_4x, VoxelSizeY_4x = (1.809,) * 2  # old stage --> 1.835
 VoxelSizeX_8x, VoxelSizeY_8x = (0.8,) * 2
@@ -508,7 +509,7 @@ def process_channel(
         else:
             memory_needed_per_thread *= 2048 * 2048
         if need_16bit_to_8bit_conversion or \
-                TifStack(preprocessed_path.joinpath(channel).rglob("*.tif").__next__().parent).dtype == uint8:
+                TifStack(glob_re(r"\.tiff?$", preprocessed_path.joinpath(channel)).__next__().parent).dtype == uint8:
             memory_needed_per_thread /= 2
         memory_ram = virtual_memory().available // 1024 ** 3  # in GB
         memory_needed_per_thread //= 1024 ** 3

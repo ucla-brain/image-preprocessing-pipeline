@@ -1,5 +1,5 @@
-import os
-import re
+from os import scandir, environ, DirEntry
+from re import compile, IGNORECASE
 from warnings import filterwarnings
 from numpy import max as np_max
 from numpy import min as np_min
@@ -35,9 +35,9 @@ from supplements.cli_interface import PrintColors, date_time_now
 filterwarnings("ignore")
 supported_extensions = ['.png', '.tif', '.tiff', '.raw', '.dcimg']
 num_retries = 40
-os.environ['MKL_NUM_THREADS'] = '1'
-os.environ['NUMEXPR_NUM_THREADS'] = '1'
-os.environ['OMP_NUM_THREADS'] = '1'
+environ['MKL_NUM_THREADS'] = '1'
+environ['NUMEXPR_NUM_THREADS'] = '1'
+environ['OMP_NUM_THREADS'] = '1'
 
 
 def imread_tif_raw_png(path: Path, dtype: str = None, shape: Tuple[int, int] = None):
@@ -102,12 +102,12 @@ def imread_dcimg(path: Path, z: int):
     return img
 
 
-def check_dcimg_shape(path):
+def check_dcimg_shape(path: Path):
     """Returns the image shape of a DCIMG file
 
     Parameters
     ------------
-    path : str
+    path : Path
         path to DCIMG file
 
     Returns
@@ -121,7 +121,7 @@ def check_dcimg_shape(path):
     return shape
 
 
-def check_dcimg_start(path):
+def check_dcimg_start(path: Path):
     """Returns the starting z position of a DCIMG substack.
 
     This function assumes a zero-padded 6 digit filename in tenths of micron.
@@ -138,7 +138,7 @@ def check_dcimg_start(path):
         starting z position in tenths of micron
 
     """
-    return int(os.path.basename(path).split('.')[0])
+    return int(path.name.split('.')[0])
 
 
 def convert_to_16bit_fun(img: ndarray):
@@ -700,8 +700,8 @@ def glob_re(pattern: str, path: Path):
         pattern: str
             regular expression to search the file name.
     """
-    regexp = re.compile(pattern, re.IGNORECASE)
-    paths: Iterator[os.DirEntry] = os.scandir(path)
+    regexp = compile(pattern, IGNORECASE)
+    paths: Iterator[DirEntry] = scandir(path)
     for p in paths:
         if p.is_file() and regexp.search(p.name):
             yield Path(p.path)
@@ -760,8 +760,8 @@ def process_dc_images(input_file: Path, input_path: Path, output_path: Path, arg
         img_paths : dict
             all arguments of the read_filter_save function including input_path and output_path
     """
-    shape = check_dcimg_shape(str(input_file))
-    start = check_dcimg_start(str(input_file))
+    shape = check_dcimg_shape(input_file)
+    start = check_dcimg_start(input_file)
     sub_stack = []
     for i in range(shape[0]):
         output_file = output_path / input_file.relative_to(input_path).parent / f'z{start + i * z_step:08.1f}.tif'
