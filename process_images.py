@@ -37,11 +37,11 @@ AllChannels: List[Tuple[str, str]] = [
     ("Ex_488_Em_1", "b"), ("Ex_561_Em_1", "r"), ("Ex_642_Em_1", "g"),
     ("Ex_488_Em_2", "b"), ("Ex_561_Em_2", "r"), ("Ex_642_Em_2", "g")
 ]
-VoxelSizeX_4x, VoxelSizeY_4x = (1.835,) * 2  # new stage --> 1.8, 1.8?
+VoxelSizeX_4x, VoxelSizeY_4x = (1.809,) * 2  # old stage --> 1.835
 VoxelSizeX_8x, VoxelSizeY_8x = (0.8,) * 2
 VoxelSizeX_10x, VoxelSizeY_10x = (0.661,) * 2  # new stage --> 0.6, 0.6
-VoxelSizeX_15x, VoxelSizeY_15x = (0.422,) * 2  # new stage --> 0.4, 0.4
-VoxelSizeX_15x_new, VoxelSizeY_15x_new = (0.4,) * 2  # new stage --> 0.4, 0.4
+VoxelSizeX_15x, VoxelSizeY_15x = (0.422,) * 2
+VoxelSizeX_15x_new, VoxelSizeY_15x_new = (0.4,) * 2
 VoxelSizeX_40x, VoxelSizeY_40x = (0.14, 0.14)  # 0.143, 0.12
 
 
