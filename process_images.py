@@ -520,7 +520,7 @@ def process_channel(
             if memory_needed_per_thread > 0:
                 alignment_cores = min(floor(memory_ram / memory_needed_per_thread), cpu_physical_core_count)
             if num_gpus > 0 and sys.platform.lower() == 'linux':
-                while alignment_cores < num_gpus and subvolume_depth > 10:
+                while alignment_cores < 6*num_gpus and subvolume_depth > 10:
                     subvolume_depth //= 2
                     alignment_cores *= 2
             else:
@@ -1197,7 +1197,7 @@ def main(source_path):
             running_processes += 1
             progress_bars += [
                 tqdm(total=100, ascii=True, position=idx, unit=" %", smoothing=0.01,
-                     desc=f"imaris {(idx + 1) if len(merged_tif_paths) > 1 else ''}")]
+                     desc=f"Imaris {(idx + 1) if len(merged_tif_paths) > 1 else ''}")]
 
     # waite for TeraFly and Imaris conversion to finish ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
     commands_progress_manger(queue, progress_bars, running_processes)
