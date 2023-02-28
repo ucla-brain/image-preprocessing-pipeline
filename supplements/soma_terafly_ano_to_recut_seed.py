@@ -9,7 +9,7 @@ def main(args: Namespace):
     apo_file = Path(args.apo_file)
     annotations_df = read_csv(apo_file)
 
-    recut = apo_file.parent / 'recut_seeds'
+    recut = apo_file.parent / 'recut_seeds_from_marker'
     if recut.exists():
         rmtree(recut)
     recut.mkdir(exist_ok=True)
@@ -36,7 +36,7 @@ if __name__ == '__main__':
         epilog="Developed 2023 by Keivan Moradi at UCLA, Hong Wei Dong Lab (B.R.A.I.N) \n"
     )
     parser.add_argument("--apo_file", "-a", type=str, required=True,
-                        help="Marker file containing all seed locations.")
+                        help="Marker (apo) file containing all seed locations.")
     parser.add_argument("--default_radius", "-r", type=float, default=0, required=False,
                         help="Default .")
     main(parser.parse_args())
