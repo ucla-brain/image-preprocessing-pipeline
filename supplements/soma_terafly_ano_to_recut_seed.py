@@ -9,8 +9,7 @@ def main(args: Namespace):
     apo_file = Path(args.apo_file)
     annotations_df = read_csv(apo_file)
 
-    recut = apo_file.parent.parent / apo_file.name
-    print(recut.__str__())
+    recut = apo_file.parent / 'recut_seeds'
     if recut.exists():
         rmtree(recut)
     recut.mkdir(exist_ok=True)
@@ -26,6 +25,8 @@ def main(args: Namespace):
         with open(recut / f"marker_{row.x}_{row.y}_{row.z}_{int(volume)}", 'w') as marker_file:
             marker_file.write("# x,y,z,radius_um\n")
             marker_file.write(f"{row.x},{row.y},{row.z},{soma_radius_um}")
+
+    print(f"files saved in {recut.__str__()}")
 
 
 if __name__ == '__main__':
