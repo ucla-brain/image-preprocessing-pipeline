@@ -22,7 +22,7 @@ def main(args: Namespace):
     soma_radius_um = args.default_radius if args.default_radius > 0 else None
 
     apo_file = Path(args.apo_file)
-    annotations_df = read_csv(apo_file)
+    annotations_df = read_csv(apo_file).drop_duplicates().reset_index(drop=True)
 
     # create a folder to store recut marker files converted from apo files
     recut = apo_file.parent / 'recut_seeds_from_marker'
