@@ -65,7 +65,7 @@ def main(args: Namespace):
                             f"{soma_radius_um_each_point} {-1}\n")
 
     print(f"Marker files (in um) saved in {recut.__str__()}")
-    print('Somas are consolidated into SWC file called seeds_for_Imaris_proofread.swc')
+    print(f"Consolidated SWC file containing all somata that can be imported in Imaris {imaris.__str__()}")
 
 
 if __name__ == '__main__':
