@@ -40,6 +40,7 @@ def main(args: Namespace):
     annotations_df['x'] = annotations_df['x'] * voxel_size_x
     annotations_df['y'] = annotations_df['y'] * voxel_size_y
     annotations_df['z'] = annotations_df['z'] * voxel_size_z
+    annotations_df['volsize_um'] = annotations_df['volsize'] * voxel_size_x * voxel_size_y * voxel_size_z
 
     # convert to integer (in um)
     for column in ("x", "y", "z", "volsize", 'x_in_voxel', 'y_in_voxel', 'z_in_voxel'):
@@ -48,7 +49,7 @@ def main(args: Namespace):
     # create a consolidated .swc file to store all the somata, to be imported to imaris
     with imaris.open('w') as imaris_file:
         for row in annotations_df.itertuples():
-            soma_radius_um_each_point = (row.volsize * 3 / 4 / pi) ** (1 / 3)
+            soma_radius_um_each_point = (row.volsize_um * 3 / 4 / pi) ** (1 / 3)
             volume = round(4 / 3 * pi * soma_radius_um_each_point ** 3, 3)
             if soma_radius_um:
                 soma_radius_um_each_point = soma_radius_um
