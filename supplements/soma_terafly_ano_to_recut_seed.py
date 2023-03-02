@@ -62,8 +62,9 @@ def main(args: Namespace):
                 marker_file.write(f"{row.x},{row.y},{row.z},{soma_radius_um_each_point}")
 
             # unit should be in voxels
+            soma_radius_in_voxels_each_point = (row.volsize * 3 / 4 / pi) ** (1 / 3)
             imaris_file.write(f"{row.Index} 0 {row.x_in_voxel} {row.y_in_voxel} {row.z_in_voxel} "
-                              f"{soma_radius_um_each_point} {-1}\n")
+                              f"{soma_radius_in_voxels_each_point} {-1}\n")
 
     print(f"Marker files (in um) saved in {recut.__str__()}")
     print(f"Consolidated SWC file containing all somata that can be imported in Imaris {imaris.__str__()}")
