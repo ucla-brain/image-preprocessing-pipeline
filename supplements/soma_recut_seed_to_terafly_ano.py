@@ -17,6 +17,7 @@ def main(args: Namespace):
     seeds_df['x'] /= args.voxel_size_x
     seeds_df['y'] /= args.voxel_size_y
     seeds_df['z'] /= args.voxel_size_z
+    seeds_df['radius'] /= min([args.voxel_size_x, args.voxel_size_y, args.voxel_size_z])
     # print(seeds_df.head())
     # print(list(seeds_df.itertuples())[0])
     if apo_file.exists():
@@ -56,10 +57,10 @@ if __name__ == '__main__':
                         help="green intensity value between 0 to 255")
     parser.add_argument("--blue", "-b", type=int, required=False, default=255,
                         help="blue intensity value between 0 to 255")
-    parser.add_argument("--voxel_size_x", "-dx", type=float, default=1,
+    parser.add_argument("--voxel_size_x", "-dx", type=float, default=1.0,
                         help="Image voxel size on x-axis (µm).")
-    parser.add_argument("--voxel_size_y", "-dy", type=float, default=1,
+    parser.add_argument("--voxel_size_y", "-dy", type=float, default=1.0,
                         help="Image voxel size on y-axis (µm).")
-    parser.add_argument("--voxel_size_z", "-dz", type=float, default=1,
+    parser.add_argument("--voxel_size_z", "-dz", type=float, default=1.0,
                         help="Image voxel size on z-axis (µm).")
     main(parser.parse_args())
