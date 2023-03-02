@@ -72,7 +72,8 @@ def main(args: Namespace):
 
 if __name__ == '__main__':
     parser = ArgumentParser(
-        description="Convert TeraFly apo file to recut seeds (marker files) \n\n",
+        description="Convert TeraFly apo file to recut seeds (marker files) and "
+                    "a swc file that can be imported from Imaris\n\n",
         formatter_class=RawDescriptionHelpFormatter,
         epilog="Developed 2023 by Keivan Moradi at UCLA, Hong Wei Dong Lab (B.R.A.I.N) \n"
     )
