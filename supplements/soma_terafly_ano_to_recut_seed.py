@@ -16,20 +16,19 @@ from tqdm import tqdm
 
 
 def main(args: Namespace):
-    apo_file = Path(args.apo_file)
-    annotations_df = read_csv(apo_file)
-
     voxel_size_x = float(args.voxel_size_x)
     voxel_size_y = float(args.voxel_size_y)
     voxel_size_z = float(args.voxel_size_z)
+    soma_radius_um = args.default_radius if args.default_radius > 0 else None
+
+    apo_file = Path(args.apo_file)
+    annotations_df = read_csv(apo_file)
 
     # create a folder to store recut marker files converted from apo files
     recut = apo_file.parent / 'recut_seeds_from_marker'
     if recut.exists():
         rmtree(recut)
     recut.mkdir(exist_ok=True)
-
-    soma_radius_um = args.default_radius if args.default_radius > 0 else None
 
     # make a copy of xyz in voxel, to generate the consolidated SWC file for proofread in Imaris
     annotations_df['x_in_voxel'] = annotations_df['x']
@@ -42,39 +41,29 @@ def main(args: Namespace):
     annotations_df['z'] = annotations_df['z'] * voxel_size_z
 
     # convert to integer (in um)
-    for column in ("x", "y", "z", "volsize", 'x_in_voxel','y_in_voxel','z_in_voxel'):
+    for column in ("x", "y", "z", "volsize", 'x_in_voxel', 'y_in_voxel', 'z_in_voxel'):
         annotations_df[column] = annotations_df[column].round(decimals=0).astype(int)
 
-    for row in annotations_df.itertuples():
-        if not soma_radius_um:
-            # soma_radius_um = row.volsize**(1/3)*3/4/pi
-            soma_radius_um_each_point = (row.volsize * 3 / 4 / pi) ** (1/3)
-            # print('soma_radius_um: ', soma_radius_um_each_point)
+    # create a consolidated .swc file to store all the somata, to be imported to imaris
+    with open(recut / 'seeds_for_Imaris_proofread.swc', 'w') as soma_file:
+        for row in annotations_df.itertuples():
+            soma_radius_um_each_point = (row.volsize * 3 / 4 / pi) ** (1 / 3)
             volume = round(4 / 3 * pi * soma_radius_um_each_point ** 3, 3)
-        elif soma_radius_um:
-            soma_radius_um_each_point = soma_radius_um
-            volume = round(4 / 3 * pi * soma_radius_um_each_point ** 3, 3)
+            if soma_radius_um:
+                soma_radius_um_each_point = soma_radius_um
+                volume = round(4 / 3 * pi * soma_radius_um_each_point ** 3, 3)
 
-        with open(recut / f"marker_{row.x_in_voxel}_{row.y_in_voxel}_{row.z_in_voxel}_{int(volume)}", 'w') as marker_file:
-            marker_file.write("# x,y,z,radius_um\n")
-            marker_file.write(f"{row.x},{row.y},{row.z},{soma_radius_um_each_point}")
+            with open(recut / f"marker_{row.x_in_voxel}_{row.y_in_voxel}_{row.z_in_voxel}_{int(volume)}", 'w') as \
+                    marker_file:
+                marker_file.write("# x,y,z,radius_um\n")
+                # unit should be in um
+                marker_file.write(f"{row.x},{row.y},{row.z},{soma_radius_um_each_point}")
+
+            # unit should be in voxels
+            soma_file.write(f"{row.Index} 0 {row.x_in_voxel} {row.y_in_voxel} {row.z_in_voxel} "
+                            f"{soma_radius_um_each_point} {-1}\n")
 
     print(f"Marker files (in um) saved in {recut.__str__()}")
-
-    # create a consolidated .swc file to store all the somas, to be imported to imaris
-    # unit should be in voxel
-    with open(recut/'seeds_for_Imaris_proofread.swc', 'w') as soma_file:
-        cnt = 1
-        for row in annotations_df.itertuples():
-            if not soma_radius_um:
-                soma_radius_um_each_point = (row.volsize * 3 / 4 / pi) ** (1/3)
-            elif soma_radius_um:
-                soma_radius_um_each_point = soma_radius_um
-            # if soma_radius_um < 12:
-            #     soma_radius_um = 12
-            soma_file.write(f"{cnt} 0 {row.x_in_voxel} {row.y_in_voxel} {row.z_in_voxel} {soma_radius_um_each_point} {-1}\n")
-            cnt += 1
-    soma_file.close()
     print('Somas are consolidated into SWC file called seeds_for_Imaris_proofread.swc')
 
 
@@ -87,7 +76,8 @@ if __name__ == '__main__':
     parser.add_argument("--apo_file", "-a", type=str, required=True,
                         help="Marker (apo) file containing all seed locations.")
     parser.add_argument("--default_radius", "-r", type=float, default=0, required=False,
-                        help="Default .")
+                        help="Default radius of the seeds to apply uniformly.  "
+                             "If not given, marker volume will be used to calculate the radius.")
     parser.add_argument("--voxel_size_x", "-dx", type=float, default=0.4,
                         help="Image voxel size on x-axis (µm).")
     parser.add_argument("--voxel_size_y", "-dy", type=float, default=0.4,
