@@ -26,6 +26,7 @@ def main(args: Namespace):
 
     # create a folder to store recut marker files converted from apo files
     recut = apo_file.parent / 'recut_seeds_from_marker'
+    imaris = recut / 'seeds_for_Imaris_proofread.swc'
     if recut.exists():
         rmtree(recut)
     recut.mkdir(exist_ok=True)
@@ -45,7 +46,7 @@ def main(args: Namespace):
         annotations_df[column] = annotations_df[column].round(decimals=0).astype(int)
 
     # create a consolidated .swc file to store all the somata, to be imported to imaris
-    with open(recut / 'seeds_for_Imaris_proofread.swc', 'w') as soma_file:
+    with open(imaris, 'w') as soma_file:
         for row in annotations_df.itertuples():
             soma_radius_um_each_point = (row.volsize * 3 / 4 / pi) ** (1 / 3)
             volume = round(4 / 3 * pi * soma_radius_um_each_point ** 3, 3)
