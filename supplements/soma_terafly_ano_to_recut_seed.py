@@ -46,7 +46,7 @@ def main(args: Namespace):
         annotations_df[column] = annotations_df[column].round(decimals=0).astype(int)
 
     # create a consolidated .swc file to store all the somata, to be imported to imaris
-    with open(imaris, 'w') as soma_file:
+    with imaris.open('w') as imaris_file:
         for row in annotations_df.itertuples():
             soma_radius_um_each_point = (row.volsize * 3 / 4 / pi) ** (1 / 3)
             volume = round(4 / 3 * pi * soma_radius_um_each_point ** 3, 3)
@@ -61,7 +61,7 @@ def main(args: Namespace):
                 marker_file.write(f"{row.x},{row.y},{row.z},{soma_radius_um_each_point}")
 
             # unit should be in voxels
-            soma_file.write(f"{row.Index} 0 {row.x_in_voxel} {row.y_in_voxel} {row.z_in_voxel} "
+            imaris_file.write(f"{row.Index} 0 {row.x_in_voxel} {row.y_in_voxel} {row.z_in_voxel} "
                             f"{soma_radius_um_each_point} {-1}\n")
 
     print(f"Marker files (in um) saved in {recut.__str__()}")
