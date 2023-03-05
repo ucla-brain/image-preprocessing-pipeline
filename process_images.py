@@ -427,7 +427,7 @@ def process_channel(
             source_path / channel,
             preprocessed_path / channel,
             files_list=files_list,
-            workers=cpu_logical_core_count,
+            workers=cpu_physical_core_count,
             # chunks=128,  # is calculated automatically now
             sigma=sigma,
             level=0,
@@ -453,7 +453,7 @@ def process_channel(
             tile_size=tile_size,
             new_size=new_tile_size,
             print_input_file_names=print_input_file_names,
-            timeout=300.0
+            timeout=600.0
         )
 
         if return_code != 0:
