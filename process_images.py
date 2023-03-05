@@ -574,7 +574,7 @@ def process_channel(
                 f"--subvoldim={subvolume_depth}",
                 # used in the pairwise displacements computation step.
                 # dimension of layers obtained by dividing the volume along D
-                "--threshold=0.7",  # threshold between 0.55 and 0.7 is good. Higher values block alignment.
+                "--threshold=0.65",  # threshold between 0.55 and 0.7 is good. Higher values block alignment.
                 f"--projin={proj_in}",
                 f"--projout={proj_out}",
                 # "--restoreSPIM",
