@@ -1,6 +1,7 @@
 % Program for Deconvolution of Light Sheet Microscopy Stacks.
-% Copyright TU-Wien 2019, written using MATLAB 2018b by Klaus Becker
-% (klaus.becker@tuwien.ac.at)
+% Copyright TU-Wien 2019, written using MATLAB 2018b by Klaus Becker(klaus.becker@tuwien.ac.at)
+% Keivan Moradi at UCLA B.R.A.I.N (Dong lab) patched it in MATLAB V2022b. kmoradi@mednet.ucla.edu.
+% Main changes by Keivan Moradi: Multi-GPU, resume, and 3D gaussian filter support
 % LsDeconv is free software: you can redistribute it and/or modify it under the terms of the
 % GNU General Public License as published by the Free Software Foundation, either version 3 of the
 % License, or at your option) any later version.
@@ -8,17 +9,24 @@
 % even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
 % General Public License for more details. You should have received a copy of the GNU General Public
 % License along with this file. If not, see <http://www.gnu.org/licenses/>.
-% LsDeconv('D:/test_raw_tif_0offset', 422, 1000, 100, 0.40, 1.52, 561, 600, 240, 12.0, 1, 0.01, 2.0, 80.0, 0)
-% LsDeconv('F:/20210729_16_18_40_SW210318-07_R-HPC_15x_Zstep1um_50p_4ms/Ex_642_Em_680/143750/143750_153710', 422, 1000, 9, 0.40, 1.52, 642, 680, 240, 12.0, 1, 0.01, 2.0, 20, 1);
+
+% TODO: save both filpped and non-flipped
+% TODO: option to enable flipping
+% TODO: Test SmartSPIM PSF
+% TODO: move all padding calculation from process_block to autosplit so
+% that memory requirement can be calculated accuratly
+% TODO: resume saving consider images saved already in save_image function
 
 function [] = LsDeconv(varargin)
     try
         disp(' ');
         disp('LsDeconv: Deconvolution tool for Light Sheet Microscopy.');
-        disp('(c) TU Wien, 2019. This program was was initially written in MATLAB V2018b by klaus.becker@tuwien.ac.at');
-        disp('Keivan Moradi at UCLA B.R.A.I.N (Dong lab) patched it in MATLAB V2022b. kmoradi@mednet.ucla.edu. Main changes: Multi-GPU, resume, and 3D gaussian filter support');
+        disp('TU Wien, 2019: This program was was initially written in MATLAB V2018b by klaus.becker@tuwien.ac.at');
+        disp('Keivan Moradi, 2023: Patched it in MATLAB V2022b. kmoradi@mednet.ucla.edu. UCLA B.R.A.I.N (Dong lab)');
+        disp('Main changes: Multi-GPU, Resume, and 3D gaussian filter support');
         disp(' ');
         disp(datetime('now'));
+        disp(' ');
 
         if nargin < 19
             showinfo();
@@ -71,47 +79,142 @@ function [] = LsDeconv(varargin)
             clipval = str2double(strrep(clipval, ',', '.'));
             stop_criterion = str2double(strrep(stop_criterion, ',', '.'));
             block_size_max = str2double(strrep(block_size_max, ',', '.'));
-            %gpus = str2double(strrep(gpus, ',', '.'));
+            % gpus = str2double(strrep(gpus, ',', '.'));
             amplification = str2double(strrep(amplification, ',', '.'));
             resume = str2double(strrep(resume, ',', '.'));
             starting_block = str2double(strrep(starting_block, ',', '.'));
         end
 
         if isfolder(inpath)
-            disp('path exist! getting stack info ...')
-            [nx, ny, nz] = getstackinfo(inpath); % n is volume dimension
+            % make folder for results and make sure the outpath is writable
+            outpath = fullfile(inpath, 'deconvolved_fliped_upside_down');
+            if ~exist(outpath, 'dir')
+                mkdir(outpath);
+            end
+
+            log_file_path = fullfile(outpath, 'log.txt');
+            log_file = fopen(log_file_path, 'w');
+            p_log(log_file, 'input path exist! getting stack info ...');
+            [info.x, info.y, info.z, info.bit_depth] = getstackinfo(inpath); % n is volume dimension
+
+            if resume && numel(dir(fullfile(outpath, '*.tif'))) == info.z
+                disp("it seems all the files are already deconvolved!");
+                return
+            elseif ~resume
+                delete(fullfile(outpath, '*.tif'));
+            end
         else
-            disp('provided path did not exist!')
+            error('provided path did not exist!');
         end
 
-        if nx * ny * nz == 0
+        if info.x * info.y * info.z == 0
             error('No valid TIFF files could be found!');
         end
 
-        %start data processing
-        mem = block_size_max * 1024^3;
-        % mem = getmemory(gpus, mem_percent); % free memory in byted
-        % if min(gpus, mem)
-        %     gpuDevice(gpu);
-        % end
-
-        [tx, ty, tz] = autosplit(nx, ny, nz, mem);
-        num_blocks = tx * ty * tz;
-        if num_blocks > 1
-            disp(['deconvolution split into ' num2str(num_blocks) ' = ' num2str(tx) ' x ' num2str(ty) ' x ' num2str(tz) ' xyz blocks.']);
+        if ~exist(cache_drive, 'dir')
+            mkdir(cache_drive);
+        elseif ~resume
+            delete(fullfile(cache_drive, "*.mat"));
+        % else
+        %     files = dir(fullfile(cache_drive, "bl_*"));
+        %     files = files(~[files.isdir]); % files only
+        %     for idx = 1:length(files)
+        %         file = files(idx);
+        %         if file.bytes < 10
+        %             try
+        %                 delete(fullfile(cache_drive, file.name));
+        %             catch
+        %                 warning('Cannot delete %s', file.name);
+        %             end
+        %         end
+        %     end
         end
 
-        delete(gcp('nocreate'));
-        process(inpath, tx, ty, tz, dxy, dz, numit, NA, rf, ...
-            lambda_ex, lambda_em, fcyl, slitwidth, damping, clipval, ...
-            stop_criterion, gpus, cache_drive, amplification, sigma, ...
-            resume, starting_block);
+        p_log(log_file, ['   image size (voxels): ' num2str(info.x)  'x * ' num2str(info.y) 'y * ' num2str(info.z) 'z = ' num2str(info.x * info.y * info.z)]);
+        p_log(log_file, ['   voxel size (nm^3): ' num2str(dxy)  'x * ' num2str(dxy) 'y * ' num2str(dz) 'z = ' num2str(dxy^2*dz)]);
+        p_log(log_file, ['   image bit depth: ' num2str(info.bit_depth)]);
+        p_log(log_file, ' ');
+        p_log(log_file, 'imageing system parameters ...')
+        p_log(log_file, ['   focal length of cylinder lens (mm): ' num2str(fcyl)]);
+        p_log(log_file, ['   width of slit aperture (mm): ' num2str(slitwidth)]);
+        p_log(log_file, ['   numerical aperture: ' num2str(NA)]);
+        p_log(log_file, ['   excitation wavelength (nm): ' num2str(lambda_ex)]);
+        p_log(log_file, ['   emission wavelength (nm): ' num2str(lambda_em)]);
+        p_log(log_file, ['   refractive index: ' num2str(rf)]);
+        p_log(log_file, ' ');
+
+        % generate PSF
+        p_log(log_file, 'calculating PSF ...');
+        Rxy = 0.61 * lambda_em / NA;
+        dxy_corr = min(dxy, Rxy / 3);
+        [psf, FWHMxy, FWHMz] = LsMakePSF(dxy_corr, dz, NA, rf, lambda_ex, lambda_em, fcyl, slitwidth);
+        p_log(log_file, ['   size of PSF (pixel): ' num2str(size(psf, 1))  ' x ' num2str(size(psf, 2)) ' x ' num2str(size(psf, 3))]);
+        p_log(log_file, ['   FWHHM of PSF lateral (nm): ' num2str(FWHMxy)]);
+        p_log(log_file, ['   FWHHM of PSF axial (nm): ' num2str(FWHMz)]);
+        p_log(log_file, ['   Rayleigh range of objective lateral (nm): ' num2str(Rxy)]);
+        p_log(log_file, ['   Rayleigh range of objective axial (nm): ' num2str((2 * lambda_em * rf) / NA^2)]);
+        clear Rxy dxy_corr FWHMxy FWHMz;
+
+        % plot_matrix(psf);
+        options.overwrite = true;
+        saveastiff(psf, 'psf.tif', options);
+        p_log(log_file, ' ');
+
+        % disp(psf)
+        % psf_file = Tiff(fullfile(inpath, 'deconvolved', 'psf.tif'), 'w');
+        % write(psf_file, psf);
+        % close(psf_file);
+
+        % get available resources
+        [ram_available, ram_total]  = get_memory();
+        p_log(log_file, 'system information ...');
+        p_log(log_file, ['   total RAM (GB): ' num2str(ram_total/1024^3)]);
+        p_log(log_file, ['   available RAM (GB): ' num2str(ram_available/1024^3)]);
+        p_log(log_file, ['   data processed on GPUs: ' num2str(unique(gpus(gpus>0)))]);
+        p_log(log_file, ['   data processed on CPUs: ' num2str(size(gpus(gpus<1), 2)) ' cores']);
+        p_log(log_file, ' ');
+
+        % split the image into smaller blocks
+        p_log(log_file, 'partitioning the image into blocks ...')
+        [block.nx, block.ny, block.nz, block.x, block.y, block.z, block.z_pad] = autosplit(info, size(psf), block_size_max, ram_available/2);
+        p_log(log_file, ['   block numbers: ' num2str(block.nx) 'x * ' num2str(block.ny) 'y * ' num2str(block.nz) 'z = ' num2str(block.nx * block.ny * block.nz) ' blocks.']);
+        p_log(log_file, ['   block size: ' num2str(block.x) 'x * ' num2str(block.y) 'y * ' num2str(block.z) 'z = ' num2str(block.x * block.y * block.z) ' voxels.']);
+        p_log(log_file, ['   padding on z: ' num2str(block.z_pad) ' steps.']);
+        p_log(log_file, ' ');
+
+        % start image processing
+        p_log(log_file, 'preprocessing params ...')
+        p_log(log_file, ['   gaussian sigma: ' num2str(sigma, 3)]);
+        p_log(log_file, ['   post gaussian dark subtraction: ' num2str(dark(sigma))]);
+        p_log(log_file, ' ');
+        p_log(log_file, 'deconvolution params ...')
+        p_log(log_file, ['   max. iterations: ' num2str(numit)]);
+        p_log(log_file, ' ');
+        p_log(log_file, 'postprocessing params ...')
+        p_log(log_file, ['   damping factor (%): ' num2str(damping)]);
+        p_log(log_file, ['   stop criterion (%): ' num2str(stop_criterion)]);
+        p_log(log_file, ['   histogram clipping value (%): ' num2str(clipval)]);
+        p_log(log_file, ['   signal amplification: ' num2str(amplification)]);
+        p_log(log_file, ['   post deconvolution dark subtraction: ' num2str(amplification)]);
+        p_log(log_file, ' ');
+        p_log(log_file, 'paths ...')
+        p_log(log_file, ['   source image: ' char(inpath)]);
+        p_log(log_file, ['   deconvolved image: ' char(outpath)]);
+        p_log(log_file, ['   blocks: ' char(cache_drive)]);
+        p_log(log_file, ['   logs: ' char(log_file_path)]);
+        p_log(log_file, ' ');
+        process(inpath, outpath, log_file, info, block, psf, numit, ...
+            damping, clipval, stop_criterion, gpus, cache_drive, ...
+            amplification, sigma, resume, starting_block);
+
+        fclose(log_file);
+        open(log_file_path);
 
         if isdeployed
             exit(0);
         end
     catch ME
-        %error handling
+        % error handling
         text = getReport(ME, 'extended', 'hyperlinks', 'off');
         disp(text);
         if isdeployed
@@ -120,256 +223,198 @@ function [] = LsDeconv(varargin)
     end
 end
 
-% function mem = getmemory(gpu, mem_percent)
-%     if gpu
-%         try
-%             check = gpuDevice;  % check if CUDA is available
-%             if (check.DeviceSupported == 1)
-%                 mem = check.TotalMemory;
-%             else
-%                 disp('Matlab does not support your GPU');
-%                 mem = 0;
-%             end
-%         catch
-%             disp('CUDA is not available');
-%             mem = 0;
-%         end
-%     else
-%         try
-%             [~, m] = memory;  % check if os supports memory function
-%             mem = m.PhysicalMemory.Available; % returns free memory not physical memory in bytes
-%         catch
-%             disp('Matlab is unable to get free RAM in your OS!')
-%             mem = 0;
-%         end
-%     end
-%
-%     if ~mem
-%         mem = input('Enter available free RAM or vRAM in GB?\n') * 1024^3;
-%     end
-%
-%     if gpu
-%         mem = mem * mem_percent / 100 / 5;
-%     else
-%         mem = mem * mem_percent / 100 / 3;
-%     end
-% end
-
-function showinfo()
-    disp('Usage: LsDeconv TIFDIR DELTAXY DELTAZ nITER NA RI LAMBDA_EX LAMBDA_EM FCYL SLITWIDTH DAMPING HISOCLIP STOP_CRIT MEM_PERCENT');
-    disp(' ');
-    disp('TIFFDIR: Directory containing the 2D-tiff files to be deconvolved(16-bit 0r 32bit float grayscale images supported).');
-    disp('The images are expected to be formated with numerical endings, as e.g. xx00001.tif, xx00002.tif, ... xx00010.tif....');
-    disp(' ');
-    disp('DELTAXY DELTAZ: xy- and z-Size of a voxel in nanometer. Choosing e.g. 250 500 means that a voxel is 250 nm x 250 nm wide in x- and y-direction');
-    disp('and 500 nm wide in z-direction (vertical direction). Values depend on the total magnification of the microscope and the camera chip.');
-    disp(' ');
-    disp('nITER: max. number of iterations for Lucy-Richardson algorithm. Deconvolution stops before if stop_crit is reached.');
-    disp(' ');
-    disp('NA: numerical aperture of the objective.');
-    disp(' ');
-    disp('RI: refractive index of imaging medium and sample');
-    disp(' ');
-    disp('LAMBDA_EX: fluorescence excitation wavelength in nanometer.');
-    disp(' ');
-    disp('LAMBDA_EM: fluorescence emmision wavelength in nanometer.');
-    disp(' ');
-    disp('FCYL: focal length f in millimeter of the cylinder lens used for light sheet generation.');
-    disp(' ');
-    disp('SLITWIDTH: full width w in millimeter of the slit aperture placed in front of the cylinder lens. The NA of the light sheet');
-    disp('generator system is calculated as NaLs = sin(arctan(w/(2*f))');
-    disp(' ');
-    disp('DAMPING: parameter between 0% and 10%. Increase value for images that are noisy. For images with');
-    disp('good signal to noise ratio the damping parameter should be set to zero (no damping at all)');
-    disp(' ');
-    disp('HISTOCLIP: percent value between 0 and 5 percent. If HISTOCLIP is set e.g. to 0.01% then the histogram of the deconvolved');
-    disp('stack is clipped at the 0.01 and the 99.99 percentile and the remaininginte intensity values are scaled to the full range (0...65535');
-    disp('in case of of 16 bit images, and 0...Imax in case of 32 bit float images, where Imax is the highest intensity value');
-    disp('occuring in the source stack');
-    disp(' ');
-    disp('STOP_CRIT: I the pecentual change to the last iteration step becomes lower than STOP_CRIT the deconvolution of the current');
-    disp('block is finished. If STOP_CRIT is e.g. set to 2% then the iteration stops, if there is less than 2% percent');
-    disp('change compared to the last iteration step.');
-    disp(' ');
-    disp('MEM_PERCENT: percent of RAM (or GPU memory, respectivbely, that can maximally by occopied by a data block. If the size of the image stack');
-    disp('is larger than MEM_PERCENT * RAMSIZE / 100, the data set is split into blocks that are deconvolved sequentially and then stitched.');
-    disp('A value of 4% usually is a good choice when working on CPU, a value of 50% when using the GPU. Decrease this value if other memory consuming');
-	disp('programs are active.');
-    disp(' ');
-    disp('GPU: 0 = peform convolutions on CPU, 1 = perform convolutions on GPU');
-end
-
-%determine the required number of blocks that are deconvolved sequentially
-function [tx, ty, tz] = autosplit(npix_x, npix_y, npix_z, maxblocksize)
-    tx = 0; ty = 0; tz = 0;
-    tz_max = max(floor(npix_z / 100), 1);
-
-    if maxblocksize == 0
-        return
+% calculate xy plan size based on z step size
+function [x, y] = calculate_xy_size(z, info, block_size_max)
+    x = floor(double(block_size_max / z)^(1/2));
+    y = x;
+    if x > info.x
+        x = info.x;
+    end
+    if y > info.y
+        y = info.y;
     end
 
-    while true
-        while true
-            if npix_x / tx >= npix_y / ty
-                tx = tx + 1;
-            else
-                ty = ty + 1;
-            end
+    if info.x > info.y
+        % first try to increase x then y
+        while x < info.x && (x+1) * y * z <= block_size_max
+            x = x + 1;
+        end
+        while y < info.y && x * (y+1) * z <= block_size_max
+            y = y + 1;
+        end
+    else
+        % first try to increase y then x
+        while y < info.y && x * (y+1) * z <= block_size_max
+            y = y + 1;
+        end
+        while x < info.x && (x+1) * y * z <= block_size_max
+            x = x + 1;
+        end
+    end
+end
 
-            %if tx >= 99 || tz_max >= 99
-            %    error('AutoTiles: error during splitting occured!');
-            %end
+% determine the required number of blocks that are deconvolved sequentially
+function [nx, ny, nz, x, y, z, z_pad] = autosplit(info, psf_size, block_size_max, ram_available)
+    if block_size_max <= 0
+        error(['block size should be larger than zero and smaller than ' num2str(intmax("int32")) ' for GPU computing']);
+    end
+    if block_size_max > intmax("int32")
+        warning(['block size should be smaller than ' num2str(intmax("int32")) ' for GPU computing']);
+    end
 
-            for tz = 1 : tz_max
-                bytes = ceil(npix_x / tx) * ceil(npix_y / ty) * ceil(npix_z / tz) * 8;
-                if bytes <= maxblocksize
-                    return
-                end
+    % image will be converted to single precision (8 bit) float during
+    % deconvolution
+    % z z-steps of the original image volume will be chuncked to
+    % smaller 3D blocks. After deconvolution the blocks will be
+    % reassembled to save deconvolved z-steps. Therefore, there should be
+    % enough ram to reassemble z z-steps in the end.
+    z_max = min(floor(ram_available / info.x / info.y / 8), info.z);
+    z = z_max;
+    [x, y] = calculate_xy_size(z, info, block_size_max);
+    while (x < z/2 || y < z/2) && z > psf_size(3)
+        z = z - 1;
+        [x, y] = calculate_xy_size(z, info, block_size_max);
+    end
+
+    % load extra z layers for each block to avoid generating artifacts on z
+    % for efficiency of FFT pad data in a way that the largest prime
+    % factor becomes <= 5
+    % for each end of the block
+    z_pad = 0;
+    if z < info.z
+        z_pad = ceil(0.5 * (findGoodFFTLength(z + psf_size(3)) - z));
+    end
+    % number of blocks on each axis considering z-pad
+    nx = ceil(info.x / x);
+    ny = ceil(info.y / y);
+    disp((info.z - z_pad) / (z - 2*z_pad));
+    disp((info.z - 2*z_pad) / (z - 2*z_pad));
+    nz = ceil((info.z - 2*z_pad) / (z - 2*z_pad));
+    % this loop is probably not necessary but is addes as a safegaurd
+    %while (z+1)<=z_max && nz>1 && (z-2*z_pad) > 0 && ...
+    %        ((nz-2)*(z-2*z_pad)+2*(z-z_pad)) < info.z
+    %    z = z + 1;
+    %    [x, y] = calculate_xy_size(z, info, block_size_max);
+    %    nz = ceil((info.z - 2*z_pad) / (z - 2*z_pad));
+    %end
+end
+
+%provides coordinates of sub-blocks after splitting
+function [p1, p2] = split(info, block)
+    % bounding box coordinate points
+    p1 = zeros(block.nx * block.ny * block.nz, 4);
+    p2 = zeros(block.nx * block.ny * block.nz, 3);
+
+    blnr = 0;
+    for nz = 0 : block.nz-1
+        % zs = nz * block.z + 1 - (2*nz-1) * block.z_pad;
+        zs = nz * (block.z - 2 * block.z_pad) + 1;
+        for ny = 0 : block.ny-1
+            ys = ny * block.y + 1;
+            for nx = 0 : block.nx-1
+                xs = nx * block.x + 1;
+
+                blnr = blnr + 1;
+                p1(blnr, 1) = xs;
+                p2(blnr, 1) = min([xs + block.x - 1, info.x]);
+
+                p1(blnr, 2) = ys;
+                p2(blnr, 2) = min([ys + block.y - 1, info.y]);
+
+                p1(blnr, 3) = zs;
+                p2(blnr, 3) = min([zs + block.z - 1, info.z]);
+
+                % imaged processed so far
+                p1(blnr, 4) = nz * block.z - max(2*nz-1, 0) * block.z_pad;
             end
         end
     end
 end
 
-function  process(inpath, tx, ty, tz, dxy, dz, numit, NA, rf, ...
-    lambda_ex, lambda_em, fcyl, slitwidth, damping, ...
-    clipval, stop_criterion, gpus, cache_drive, amplification, sigma, ...
-    resume, starting_block)
+function process(inpath, outpath, log_file, info, block, psf, numit, ...
+    damping, clipval, stop_criterion, gpus, cache_drive, amplification, ...
+    sigma, resume, starting_block)
 
-    tic;
-    %generate PSF
-    Rxy = 0.61 * lambda_em / NA;
-    dxy_corr = min(dxy, Rxy / 3);
-    [psf, nxy, nz, FWHMxy, FWHMz] = LsMakePSF(dxy_corr, dz, NA, rf, lambda_ex, lambda_em, fcyl, slitwidth);
-
-    % plot_matrix(psf);
-    options.overwrite = true;
-    saveastiff(psf, 'psf.tif', options);
+    % start_time = tic;
+    start_time = datetime('now');
 
     % get stack info and split it to chunks
-    [info.x, info.y, info.z, info.bit_depth] = getstackinfo(inpath);
-    [p1, p2] = split(info, tx, ty, tz);
-    if ~exist(cache_drive, 'dir')
-        mkdir(cache_drive);
-    elseif ~resume
-        delete(fullfile(cache_drive, "*.*"));
-    else
-        files = dir(fullfile(cache_drive, "bl_*"));
-        files = files(~[files.isdir]); % files only
-        for idx = 1:length(files)
-            file = files(idx);
-            if file.bytes < 10
-                try
-                    delete(fullfile(cache_drive, file.name));
-                catch
-                    warning('Cannot delete %s', file.name);
+    [p1, p2] = split(info, block);
+    block_bounding_box = [p1(:,3) p2(:,3)];
+    save('block_bounding_box.mat', 'block_bounding_box')
+    min_max_path = fullfile(cache_drive, "min_max.mat");
+    dark_threshold = dark(sigma);
+
+    % start deconvolution
+    num_blocks = block.nx * block.ny * block.nz;
+    remaining_blocks = num_blocks;
+    while remaining_blocks > 0
+        for i = starting_block : num_blocks
+            % skip blocks already worked on
+            block_path = fullfile(cache_drive, ['bl_' num2str(i) '_temp.mat']);
+            if exist(block_path, "file")
+                if dir(block_path).bytes > 10
+                    remaining_blocks = remaining_blocks - 1;
+                else
+                    delete(block_path);
                 end
             end
         end
-    end
-    min_max_path = fullfile(cache_drive, "min_max.mat");
-
-    % make folder for results and make sure the outpath is writable
-    outpath = fullfile(inpath, 'deconvolved');
-    if ~exist(outpath, 'dir')
-        mkdir(outpath);
-    elseif resume && numel(dir(fullfile(outpath, '*.tif'))) == numel(dir(fullfile(inpath, '*.tif')))
-        disp("it seems all the files are already deconvolved!");
-        return
-    elseif ~resume
-        delete(fullfile(outpath, '*.tif'));
-    end
-
-
-    % start deconvolution
-    num_blocks = tx * ty * tz;
-    gpus = gpus(1:min(size(gpus, 2), num_blocks));
-    if size(gpus, 2) > 1
-        pool = parpool('local', size(gpus, 2));
-        parallel_deconvolve(1 : size(gpus, 2)) = parallel.FevalFuture;
-        idx = 0;
-        for gpu = gpus
-            idx = idx + 1;
-            parallel_deconvolve(idx) = pool.parfeval(@deconvolve, 2, ...
-                inpath, psf, numit, damping, ...
-                tx, ty, tz, info, p1, p2, min_max_path, ...
-                stop_criterion, gpu, cache_drive, sigma, ...
-                resume, starting_block + idx - 1);
-            pause(30);
+        if remaining_blocks > 0
+            delete(gcp('nocreate'));
+            gpus = gpus(1:min(size(gpus, 2), remaining_blocks));
+            if size(gpus, 2) > 1
+                pool = parpool('local', size(gpus, 2));
+                parallel_deconvolve(1 : size(gpus, 2)) = parallel.FevalFuture;
+                idx = 0;
+                for gpu = gpus
+                    idx = idx + 1;
+                    parallel_deconvolve(idx) = pool.parfeval(@deconvolve, 0, ...
+                        inpath, psf, numit, damping, ...
+                        block, info, p1, p2, min_max_path, ...
+                        stop_criterion, gpu, cache_drive, ...
+                        sigma, dark_threshold, ...
+                        starting_block + idx - 1);
+                    pause(2);
+                end
+                for j = 1:idx
+                    %parallel_deconvolve(j).wait
+                    parallel_deconvolve(j).fetchOutputs;
+                end
+                delete(pool);
+            else
+                deconvolve( ...
+                    inpath, psf, numit, damping, ...
+                    block, info, p1, p2, min_max_path, ...
+                    stop_criterion, gpus(1), cache_drive, ...
+                    sigma, dark_threshold, ...
+                    starting_block);
+            end
+            % make sure all the blocks are processed
         end
-        rawmax = 0;
-        for j = idx:-1:1
-            parallel_deconvolve(j).wait
-            [rawmax_, blocklist] = parallel_deconvolve(j).fetchOutputs;
-            rawmax = max(rawmax, rawmax_);
-        end
-        delete(pool);
-    else
-        [rawmax, blocklist]  = deconvolve( ...
-            inpath, psf, numit, damping, ...
-            tx, ty, tz, info, p1, p2, min_max_path, ...
-            stop_criterion, gpus(1), cache_drive, sigma, ...
-            resume, starting_block);
+        starting_block = 1;
     end
 
     % postprocess and write tif files
     delete(gcp('nocreate'));
-    scal = postprocess_save(outpath, min_max_path, clipval, blocklist, p1, p2, info, resume, tx, ty, tz, rawmax, amplification);
+    postprocess_save(...
+        outpath, cache_drive, min_max_path, log_file, clipval, ...
+        p1, p2, info, resume, block, amplification);
 
-    %write parameter info file
-    disp('generating info file...');
-    fid = fopen(fullfile(inpath, 'deconvolved', 'DECONV_parameters.txt'),'w');
-    fprintf(fid, '%s\r\n',['deconvolution finished at ' datestr(now)]);
-    fprintf(fid, '%s\r\n',['data processed on GPU: ' num2str(gpus)]);
-    fprintf(fid, '%s\r\n',['elapsed time: ' datestr(datenum(0,0,0,0,0, toc),'HH:MM:SS')]);
-    fprintf(fid, '%s\r\n', '');
-    fprintf(fid, '%s\r\n',['highest intensity value in deconvolved data: ' num2str(scal)]);
-    fprintf(fid, '%s\r\n',['focal length of cylinder lens (mm): ' num2str(fcyl)]);
-    fprintf(fid, '%s\r\n',['width of slit aperture (mm): ' num2str(slitwidth)]);
-    fprintf(fid, '%s\r\n',['histogram clipping value (%): ' num2str(clipval)]);
-    fprintf(fid, '%s\r\n',['numerical aperture: ' num2str(NA)]);
-    fprintf(fid, '%s\r\n',['excitation wavelength (nm): ' num2str(lambda_ex)]);
-    fprintf(fid, '%s\r\n',['emission wavelength (nm): ' num2str(lambda_em)]);
-    fprintf(fid, '%s\r\n',['refractive index: ' num2str(rf)]);
-    fprintf(fid, '%s\r\n',['max. iterations: ' num2str(numit)]);
-    fprintf(fid, '%s\r\n',['damping factor (%): ' num2str(damping)]);
-    fprintf(fid, '%s\r\n',['stop criterion (%): ' num2str(stop_criterion)]);
-    fprintf(fid, '%s\r\n', '');
-    fprintf(fid, '%s\r\n',['source data folder: ' inpath]);
-    fprintf(fid, '%s\r\n',['number of blocks (x y z): ' num2str(tx)  ' x ' num2str(ty) ' x ' num2str(tz)]);
-    fprintf(fid, '%s\r\n', '');
-    fprintf(fid, '%s\r\n',['voxel size : ' num2str(dxy)  ' nm x ' num2str(dxy) ' nm x ' num2str(dz) ' nm']);
-    fprintf(fid, '%s\r\n',['size of PSF (pixel): ' num2str(nxy)  ' x ' num2str(nxy) ' x ' num2str(nz)]);
-    fprintf(fid, '%s\r\n',['FWHHM of PSF lateral (nm): ' num2str(FWHMxy)]);
-    fprintf(fid, '%s\r\n',['FWHHM of PSF axial (nm): ' num2str(FWHMz)]);
-    Rxy = 0.61 * lambda_em / NA;
-    Rz = (2 * lambda_em * rf) / NA^2;
-    fprintf(fid, '%s\r\n',['Rayleigh range of objective lateral (nm): ' num2str(Rxy)]);
-    fprintf(fid, '%s\r\n',['Rayleigh range of objective axial (nm): ' num2str(Rz)]);
-    fclose(fid);
-
-    disp(['deconvolution of: ' strrep(inpath, '\', '/') ' finished successfully']);
-    disp(['elapsed time: ' datestr(datenum(0,0,0,0,0, toc),'HH:MM:SS')]);
-    disp(datetime('now'));
+    p_log(log_file, ['deconvolution finished at ' char(datetime)]);
+    p_log(log_file, ['elapsed time: ' char(duration(datetime('now') - start_time, 'Format', 'dd:hh:mm:ss'))]);
     disp('----------------------------------------------------------------------------------------');
-
-    % disp(psf)
-    % psf_file = Tiff(fullfile(inpath, 'deconvolved', 'psf.tif'), 'w');
-    % write(psf_file, psf);
-    % close(psf_file);
+    delete(gcp('nocreate'));
 end
 
-function [rawmax, blocklist] = deconvolve(inpath, psf, numit, damping, ...
-    numxblocks, numyblocks, numzblocks, info, p1, p2, min_max_path, ...
+function deconvolve(inpath, psf, numit, damping, ...
+    block, info, p1, p2, min_max_path, ...
     stop_criterion, gpu, cache_drive, ...
-    sigma, resume, starting_block)
+    sigma, dark_threshold, starting_block)
 
     if gpu
         gpuDevice(gpu);
     end
-
-    % [info.x, info.y, info.z, info.bit_depth] = getstackinfo(inpath);
-    % [p1, p2] = split(info, numxblocks, numyblocks, numzblocks);
-    blocklist = strings(size(p1, 1), 1);
 
     if info.bit_depth == 8
         rawmax = 255;
@@ -382,112 +427,96 @@ function [rawmax, blocklist] = deconvolve(inpath, psf, numit, damping, ...
     deconvmax = 0; deconvmin = Inf;
     x = 1; y = 2; z = 3;
 
-    % save_path = cache_drive;
-    % if ~exist(save_path, 'dir')
-    %     mkdir(save_path);
-    % elseif ~resume
-    %     delete(fullfile(save_path, "*.*"))
-    % end
-    % min_max_path = fullfile(save_path, "min_max.mat");
+    num_blocks = block.nx * block.ny * block.nz;
+    num_blocks_str = num2str(num_blocks);
 
-    num_blocks = numxblocks * numyblocks * numzblocks;
-    num_blocks_str = num2str(size(blocklist, 1));
-    if num_blocks ~= size(blocklist, 1)
-        warning("warning blocklist size and num_blocks do not match!");
-    end
+    for blnr = starting_block : num_blocks
+        % skip blocks already worked on
+        block_path = fullfile(cache_drive, ['bl_' num2str(blnr) '_temp.mat']);
 
-    remaining_blocks = num_blocks - starting_block + 1;
-    while remaining_blocks > 0
-        for i = starting_block : size(blocklist, 1)
-            % skip blocks already worked on
-            block_path = fullfile(cache_drive, join(['bl_', num2str(i), '_temp.mat']));
-            try
-                if resume && num_blocks > 1 && exist(block_path, "file")
-                    % disp(['skipping block ' num2str(i) ' from ' num_blocks_str]);
-                    % save block path
-                    blocklist(i) = block_path;
-                    continue
-                else
-                    fclose(fopen(block_path, 'w'));
-                end
-
-                % begin processing next block
-                disp( ['loading block ' num2str(i) ' from ' num_blocks_str]);
-
-                % load next block of data
-                startp = p1(i, :); endp = p2(i, :);
-                %startpos(x), startpos(y), startps(z) : start coordinates of currrent block (i)
-                %endpos(x), endpos(y), endpos(z) : end coordinates of current block
-
-                % load next block into memory
-                x1 = startp(x); x2 = endp(x);
-                y1 = startp(y); y2 = endp(y);
-                z1 = startp(z); z2 = endp(z);
-                bl = load_block(inpath, x1, x2, y1, y2, z1, z2);
-
-                % find maximum value in processed data
-                if exist(min_max_path, "file")
-                    min_max = load(min_max_path);
-                    deconvmax = min_max.deconvmax;
-                    deconvmin = min_max.deconvmin;
-                    rawmax = min_max.rawmax;
-                end
-
-                % get min-max of raw data stack
-                if ~ismember(info.bit_depth, [8, 16])
-                    rawmax = max(max(bl(:)), rawmax);
-                end
-
-                % deconvolve current block of data
-                disp(['processing block ' num2str(i) ' from ' num_blocks_str]);
-                bl = process_block(bl, psf, numit, damping, stop_criterion, gpu, sigma);
-
-
-                deconvmax = max(max(bl(:)), deconvmax);
-                deconvmin = min(min(bl(:)), deconvmin);
-                save(min_max_path, "deconvmin", "deconvmax", "rawmax", "-v7.3", "-nocompression");
-
-                disp(['saving block ' num2str(i) ' from ' num_blocks_str]);
-                % save block to disk
-                blocklist(i) = block_path;
-                save(blocklist(i), 'bl', '-v7.3', '-nocompression');
-            catch error
-                % remove the placeholder file in case of error
-                fprintf(1,'The identifier was:\n%s', error.identifier);
-                fprintf(1,'There was an error! The message was:\n%s', error.message);
-                delete(block_path);
-                error(["deconvolution failed for block " num2str(i)]);
-            end
+        if num_blocks > 1 && exist(block_path, "file")
+            continue
+        else
+            fclose(fopen(block_path, 'w'));
         end
 
-        % make sure all the blocks are processed
-        for i = starting_block : size(blocklist, 1)
-            % skip blocks already worked on
-            block_path = fullfile(cache_drive, join(['bl_', num2str(i), '_temp.mat']));
-            if dir(block_path).bytes > 0
-                remaining_blocks = remaining_blocks - 1;
+        % begin processing next block
+        disp( ['loading block ' num2str(blnr) ' from ' num_blocks_str]);
+
+        % load next block of data into memory
+        startp = p1(blnr, :);
+        endp = p2(blnr, :);
+        x1 = startp(x); x2 = endp(x);
+        y1 = startp(y); y2 = endp(y);
+        z1 = startp(z); z2 = endp(z);
+        bl = load_block(inpath, x1, x2, y1, y2, z1, z2);
+
+        % find maximum value in processed data
+        if exist(min_max_path, "file")
+            min_max = load(min_max_path);
+            deconvmax = min_max.deconvmax;
+            deconvmin = min_max.deconvmin;
+            rawmax = min_max.rawmax;
+        end
+
+        % get min-max of raw data stack
+        if ~ismember(info.bit_depth, [8, 16])
+            rawmax = max(prctile(bl(:), 99.9, 'all'), rawmax);
+        end
+
+        % deconvolve current block of data
+        disp(['processing block ' num2str(blnr) ' from ' num_blocks_str]);
+
+        bl = process_block(bl, block, psf, numit, damping, stop_criterion, gpu, sigma, dark_threshold);
+
+        % delete block z_pad
+        if block.z_pad > 0 && block.nz > 1
+            disp(size(bl));
+            if  z1 == 1
+                bl = bl(:, :, 1:end - block.z_pad);
+            elseif z2 == info.z
+                bl = bl(:, :, 1 + block.z_pad:end);
             else
-                delete(block_path);
+                bl = bl(:, :, 1 + block.z_pad:end - block.z_pad);
             end
+            disp(size(bl));
+            disp(['z1=' num2str(z1) ' z2=' num2str(z2) ' info.z=' num2str(info.z)]);
         end
+
+        % get block stats
+        deconvmax = max(prctile(bl(:), 99.9, 'all'), deconvmax);
+        deconvmin = min(min(bl(:)), deconvmin);
+        save(min_max_path, "deconvmin", "deconvmax", "rawmax", "-v7.3", "-nocompression");
+
+        disp(['saving block ' num2str(blnr) ' from ' num_blocks_str]);
+        % save block to disk
+        save(block_path, 'bl', '-v7.3', '-nocompression');
     end
 end
 
-function value = my_load(fname)
-    data = load(fname);
-    value = data.bl;
-end
+function postprocess_save(...
+    outpath, cache_drive, min_max_path, log_file, clipval, ...
+    p1, p2, info, resume, block, amplification)
 
-function scal = postprocess_save(outpath, min_max_path, clipval, blocklist, p1, p2, info, resume, numxblocks, numyblocks, numzblocks, rawmax, amplification)
-    x = 1; y = 2; z = 3;
+    blocklist = strings(size(p1, 1), 1);
+    for i = 1 : size(p1, 1)
+        blocklist(i) = fullfile(cache_drive, ['bl_' num2str(i) '_temp.mat']);
+        if ~exist(blocklist(i), 'file')
+            warning(['missing block: bl_' num2str(i) '_temp.mat'])
+        end
+    end
+
+    x = 1; y = 2; z = 3; z_saved = 4;
     if exist(min_max_path, "file")
         min_max = load(min_max_path);
         deconvmin = min_max.deconvmin;
         deconvmax = min_max.deconvmax;
+        rawmax = min_max.rawmax;
     else
         warning("min_max.mat not found!")
         deconvmin = 0;
         deconvmax = 5.3374;
+        rawmax = 255;
     end
 
     % rescale deconvolved data
@@ -498,6 +527,12 @@ function scal = postprocess_save(outpath, min_max_path, clipval, blocklist, p1, 
     else
         scal = rawmax; % scale to maximum of input data
     end
+    p_log(log_file, 'image stats ...');
+    p_log(log_file, ['   max image value based on data type: ' num2str(scal)]);
+    p_log(log_file, ['   max block 99.9% percentile before deconvolution: ' num2str(rawmax)]);
+    p_log(log_file, ['   max block 99.9% percentile after deconvolution: ' num2str(deconvmax)]);
+    p_log(log_file, ['   min value in image after deconvolution: ' num2str(deconvmin)]);
+    p_log(log_file,  ' ');
 
     if clipval > 0
         %estimate the global histogram and upper and lower clipping values
@@ -528,7 +563,7 @@ function scal = postprocess_save(outpath, min_max_path, clipval, blocklist, p1, 
     num_tif_files = numel(dir(fullfile(outpath, '*.tif')));
     if resume && num_tif_files
         starting_z_block = 0;
-        while blnr <= length(p1) && p1(blnr, z)-1 <= num_tif_files
+        while blnr <= length(p1) && p1(blnr, z_saved) <= num_tif_files
             if p1(blnr, x) == 1 && p1(blnr, y) == 1
                 starting_block_number = blnr;
                 starting_z_block = starting_z_block + 1;
@@ -536,43 +571,55 @@ function scal = postprocess_save(outpath, min_max_path, clipval, blocklist, p1, 
             blnr = blnr + 1;
         end
         blnr = starting_block_number;
-        imagenr = p1(starting_block_number, z) - 1; % since imagenr starts from zero but z levels start from 1
-        disp(['number of existin tif files ' num2str(num_tif_files)]);
+        imagenr = p1(starting_block_number, z_saved); % since imagenr starts from zero but z levels start from 1
+        disp(['number of existing tif files ' num2str(num_tif_files)]);
         disp(['resuming from block ' num2str(blnr) ' and image number ' num2str(imagenr)]);
     end
     clear num_tif_files;
 
     pool = parpool('local', 3);
     pool.IdleTimeout = 120; % 120=2h
-    async_load(1 : numxblocks * numyblocks) = parallel.FevalFuture;
+    async_load(1 : block.nx * block.ny) = parallel.FevalFuture;
 
-    for i = starting_z_block : numzblocks
-        disp(['mounting layer ' num2str(i) ' from ' num2str(numzblocks)]);
+    for nz = starting_z_block : block.nz
+        disp(['mounting layer ' num2str(nz) ' from ' num2str(block.nz)]);
         %load and mount next layer of images
-        R = zeros(info.x, info.y, p2(blnr, z) - p1(blnr, z) + 1, 'single');
-        for j = 1 : numxblocks * numyblocks
+        if block.z_pad > 0 && block.nz > 1
+            if  nz == 1 || nz == block.nz
+                R = zeros(info.x, info.y, p2(blnr, z) - p1(blnr, z) + 1 - block.z_pad, 'single');
+            else
+                R = zeros(info.x, info.y, p2(blnr, z) - p1(blnr, z) + 1 - 2*block.z_pad, 'single');
+            end
+        end
+
+        for j = 1 : block.nx * block.ny
              async_load(j) = pool.parfeval(@my_load, 1, blocklist(blnr+j-1));
         end
-        for j = 1 : numxblocks * numyblocks
+        time_out = 120;
+        for j = 1 : block.nx * block.ny
             if ispc
                 file_path_parts = strsplit(blocklist(blnr), '\');
             else
                 file_path_parts = strsplit(blocklist(blnr), '/');
             end
-            file_name = string(file_path_parts(end));
-            disp(append('   loading block ', num2str(blnr), ' file ', file_name));
-        %    R( p1(blnr, x) : p2(blnr, x), p1(blnr, y) : p2(blnr, y), :) = my_load(blocklist(blnr));
-            async_load(j).wait('finished', 1200); % timeout in seconds
-            R( p1(blnr, x) : p2(blnr, x), p1(blnr, y) : p2(blnr, y), :) = async_load(j).fetchOutputs;
+            file_name = char(file_path_parts(end));
+            disp(['   loading block ' num2str(blnr) ' file ' file_name ' timeout=' num2str(time_out, 4)]);
+            % R( p1(blnr, x) : p2(blnr, x), p1(blnr, y) : p2(blnr, y), :) = my_load(blocklist(blnr));
+            time_out_start = tic;
+            async_load(j).wait('finished', time_out); % timeout in seconds
+            R(p1(blnr, x) : p2(blnr, x), p1(blnr, y) : p2(blnr, y), :) = async_load(j).fetchOutputs;
+            time_out = 0.9*time_out + 0.1*3*toc(time_out_start);
             blnr = blnr + 1;
         end
-        
+
         if clipval > 0
             %perform histogram clipping
-            R(R < low_clip) = low_clip;
-            R(R > high_clip) = high_clip;
+            % R(R < low_clip) = low_clip;
+            % R(R > high_clip) = high_clip;
+            R = clip_min_max(R, low_clip, high_clip);
             R = (R - low_clip) ./ (high_clip - low_clip) .* (scal .* amplification);
-            R(R>scal) = scal;
+            %R(R>scal) = scal;
+            R = min(R, scal);
         else
             %otherwise scale using min.max method
             if deconvmin > 0
@@ -580,9 +627,7 @@ function scal = postprocess_save(outpath, min_max_path, clipval, blocklist, p1, 
             else
                 R = R .* (scal .* amplification ./ deconvmax);
             end
-            R = R - amplification;
-            R(R<0) = 0;
-            R(R>scal) = scal;
+            R = clip_min_max(R - amplification, 0, scal);
         end
 
         %write images to output path
@@ -596,6 +641,16 @@ function scal = postprocess_save(outpath, min_max_path, clipval, blocklist, p1, 
     % for i = 1 : blnr
     %     delete(convertStringsToChars(blocklist(i)));
     % end
+end
+
+% return bounded value clipped between lower (lb) and upper bound (ub)
+function y = clip_min_max(x, lb, ub)
+  y=min(max(x, lb), ub);
+end
+
+function value = my_load(fname)
+    data = load(fname);
+    value = data.bl;
 end
 
 function save_image(R, outpath, imagenr_start, rawmax)
@@ -648,58 +703,50 @@ function bl = load_block(inpath, start_x, end_x, start_y, end_y, start_z, end_z)
     end
 end
 
-function block = process_block(block, psf, numit, damping, stopcrit, gpu, sigma)
-    %for efficiency of FFT pad data in a way that the largest prime factor becomes <= 5
-    blx = size(block, 1);
-    bly = size(block, 2);
-    blz = size(block, 3);
+function bl = process_block(bl, block, psf, numit, damping, stopcrit, gpu, sigma, dark_threshold)
+    if min(sigma(:)) > 0
+        if gpu
+            bl = gather(imgaussfilt3(gpuArray(bl), sigma, 'padding', 'circular'));
+        else
+            bl = imgaussfilt3(bl, sigma, 'padding', 'circular');
+        end
+
+        % flat = prctile(stack, 25, 3);
+        % flat = median(stack, 3);
+        % flat = imgaussfilt3(flat, 2, 'padding', 'circular');
+        % flat = flat./max(flat(:));
+        % stack = stack./flat;
+        % disp("flat applied");
+
+        bl = max(bl - dark_threshold, 0);
+        disp("3D Gaussian filter applied");
+    end
+
+    % for efficiency of FFT pad data in a way that the largest prime factor
+    % becomes <= 5
+    blx = size(bl, 1);
+    bly = size(bl, 2);
+    blz = size(bl, 3);
     pad_x = 0.5 * (findGoodFFTLength(blx + 4 * size(psf, 1)) - blx);
     pad_y = 0.5 * (findGoodFFTLength(bly + 4 * size(psf, 2)) - bly);
-    pad_z = 0.5 * (findGoodFFTLength(blz + 4 * size(psf, 3)) - blz);
+    if block.z_pad > 0
+        pad_z = 0.5 * (findGoodFFTLength(blz + 1) - blz);
+    else
+        pad_z = 0.5 * (findGoodFFTLength(blz + 4 * size(psf, 3)) - blz);
+    end
 
-    block = padarray(block, [floor(pad_x) floor(pad_y) floor(pad_z)], 'pre', 'symmetric');
-    block = padarray(block, [ceil(pad_x) ceil(pad_y) ceil(pad_z)], 'post', 'symmetric');
+    bl = padarray(bl, [floor(pad_x) floor(pad_y) floor(pad_z)], 'pre', 'symmetric');
+    bl = padarray(bl, [ceil(pad_x) ceil(pad_y) ceil(pad_z)], 'post', 'symmetric');
 
     %deconvolve block using Lucy-Richardson algorithm
     if gpu
-        block = deconGPU(block, psf, numit, damping, stopcrit, sigma);
+        bl = deconGPU(bl, psf, numit, damping, stopcrit);
     else
-        block = deconCPU(block, psf, numit, damping, stopcrit, sigma);
+        bl = deconCPU(bl, psf, numit, damping, stopcrit);
     end
 
     %remove padding
-    block = block(floor(pad_x) : end-ceil(pad_x)-1, floor(pad_y) : end-ceil(pad_y)-1, floor(pad_z) : end-ceil(pad_z)-1);
-end
-
-%provides coordinates of subblocks after splitting
-function [p1, p2] = split(info, nx, ny, nz)
-    xw = ceil(info.x / nx);
-    yw = ceil(info.y / ny);
-    zw = ceil(info.z / nz);
-
-    p1 = zeros(nx*ny*nz, 3);
-    p2 = zeros(nx*ny*nz, 3);
-
-    n = 0;
-    for i = 0 : nz-1
-        zs = i * zw + 1;
-        for j = 0 : ny-1
-            ys = j * yw + 1;
-            for k = 0 : nx-1
-                xs = k * xw + 1;
-                n = n + 1;
-                p1(n, 1) = xs;
-                p2(n, 1) = min([xs + xw - 1, info.x]);
-
-                p1(n, 2) = ys;
-                p2(n, 2) = min([ys + yw - 1, info.y]);
-
-                p1(n, 3) = zs;
-                p2(n, 3) = min([zs + zw - 1, info.z]);
-                % disp([xs + xw - 1, info.x, ys + yw - 1, info.y, zs + zw - 1, info.z])
-            end
-        end
-    end
+    bl = bl(floor(pad_x) : end-ceil(pad_x)-1, floor(pad_y) : end-ceil(pad_y)-1, floor(pad_z) : end-ceil(pad_z)-1);
 end
 
 %writes 32bit float tiff-imges
@@ -729,14 +776,11 @@ function x = findGoodFFTLength(x)
 end
 
 %Lucy-Richardson deconvolution
-function deconvolved = deconCPU(stack, psf, niter, lambda, stop_criterion, sigma)
-    if min(sigma>0)
-        stack = imgaussfilt3(stack, sigma);  % , 'padding', 'symmetric'
-        disp("3D Gaussian filter applied");
-    end
+function deconvolved = deconCPU(stack, psf, niter, lambda, stop_criterion)
     deconvolved = stack;
     OTF = single(psf2otf(psf, size(stack)));
-    R = 1/26 * ones(3, 3, 3, 'single'); R(2,2,2) = single(0);
+    R = 1/26 * ones(3, 3, 3, 'single');
+    R(2,2,2) = single(0);
 
     for i = 1 : niter
         denom = convFFT(deconvolved, OTF);
@@ -767,13 +811,14 @@ function deconvolved = deconCPU(stack, psf, niter, lambda, stop_criterion, sigma
                 break
             end
         else
+            start_t = tic;
             if lambda > 0
                 deconvolved = (1 - lambda) .* convFFT(stack ./ denom, conj(OTF)) .* deconvolved ...
                             + lambda .* convn(deconvolved, R, 'same');
             else
                 deconvolved = convFFT(stack ./ denom, conj(OTF)) .* deconvolved;
             end
-            disp(['iteration: ' num2str(i)]);
+            disp(['iteration: ' num2str(i) ' duration ' num2str(toc(start_t))]);
         end
     end
 
@@ -781,11 +826,7 @@ function deconvolved = deconCPU(stack, psf, niter, lambda, stop_criterion, sigma
     deconvolved = abs(deconvolved);
 end
 
-function deconvolved = deconGPU(stack, psf, niter, lambda, stop_criterion, sigma)
-    if min(sigma>0)
-        stack = gather(imgaussfilt3(gpuArray(stack), sigma));  % , 'padding', 'symmetric'
-        disp("3D Gaussian filter applied");
-    end
+function deconvolved = deconGPU(stack, psf, niter, lambda, stop_criterion)
     deconvolved = stack;
     psf_inv = psf(end:-1:1, end:-1:1, end:-1:1); % spatially reversed psf
     R = 1/26 * ones(3, 3, 3, 'single');
@@ -822,6 +863,7 @@ function deconvolved = deconGPU(stack, psf, niter, lambda, stop_criterion, sigma
                 break
             end
         else
+            start_t = tic;
             if lambda > 0
                 deconvolved = (1 - lambda) .* convGPU(stack ./ denom, psf_inv) .* deconvolved ...
                             + lambda .* convn(deconvolved, R, 'same');
@@ -832,7 +874,7 @@ function deconvolved = deconGPU(stack, psf, niter, lambda, stop_criterion, sigma
                 deconvolved = denom .* deconvolved;
             end
             % disp(['iteration: ' num2str(i) ' took ' datestr(datenum(0,0,0,0,0, toc),'HH:MM:SS')]);
-            disp(['iteration: ' num2str(i)]);
+            disp(['iteration: ' num2str(i) ' duration ' num2str(toc(start_t))]);
         end
     end
 
@@ -851,16 +893,14 @@ function R = convGPU(data, psf)
 end
 
 %calculates a theoretical point spread function
-function [psf, nxy, nz, FWHMxy, FWHMz] = LsMakePSF(dxy, dz, NA, nf, lambda_ex, lambda_em, fcyl,slitwidth)
-    disp('calculating PSF...');
+function [psf, FWHMxy, FWHMz] = LsMakePSF(dxy, dz, NA, nf, lambda_ex, lambda_em, fcyl,slitwidth)
     [nxy, nz, FWHMxy, FWHMz] = DeterminePSFsize(dxy, dz, NA, nf, lambda_ex, lambda_em, fcyl, slitwidth);
 
     %construct psf
     NAls = sin(atan(slitwidth / (2 * fcyl)));
     psf = samplePSF(dxy, dz, nxy, nz, NA, nf, lambda_ex, lambda_em, NAls);
-    disp('ok');
+    % disp('ok');
 end
-
 
 %determine the required grid size (xyz) for psf sampling
 function [nxy, nz, FWHMxy, FWHMz] = DeterminePSFsize(dxy, dz, NA, nf, lambda_ex, lambda_em, fcyl, slitwidth)
@@ -996,3 +1036,89 @@ end
 %     alpha(.1);
 %     drawnow;
 % end
+
+function [ram_available, ram_total]  = get_memory()
+%     if gpu
+%         try
+%             check = gpuDevice;  % check if CUDA is available
+%             if (check.DeviceSupported == 1)
+%                 mem = check.TotalMemory;
+%             else
+%                 disp('Matlab does not support your GPU');
+%                 mem = 0;
+%             end
+%         catch
+%             disp('CUDA is not available');
+%             mem = 0;
+%         end
+%     end
+    if ispc
+        [~, m] = memory;  % check if os supports memory function
+        ram_available = m.PhysicalMemory.Available; % returns free memory not physical memory in bytes
+        ram_total = m.PhysicalMemory.Total;
+    else
+        [~, w] = unix('free -b | grep Mem');
+        stats = str2double(regexp(w, '[0-9]*', 'match'));
+        ram_total = stats(1);
+        ram_available = stats(end);
+    end
+end
+
+function showinfo()
+    disp('Usage: LsDeconv TIFDIR DELTAXY DELTAZ nITER NA RI LAMBDA_EX LAMBDA_EM FCYL SLITWIDTH DAMPING HISOCLIP STOP_CRIT MEM_PERCENT');
+    disp(' ');
+    disp('TIFFDIR: Directory containing the 2D-tiff files to be deconvolved(16-bit 0r 32bit float grayscale images supported).');
+    disp('The images are expected to be formated with numerical endings, as e.g. xx00001.tif, xx00002.tif, ... xx00010.tif....');
+    disp(' ');
+    disp('DELTAXY DELTAZ: xy- and z-Size of a voxel in nanometer. Choosing e.g. 250 500 means that a voxel is 250 nm x 250 nm wide in x- and y-direction');
+    disp('and 500 nm wide in z-direction (vertical direction). Values depend on the total magnification of the microscope and the camera chip.');
+    disp(' ');
+    disp('nITER: max. number of iterations for Lucy-Richardson algorithm. Deconvolution stops before if stop_crit is reached.');
+    disp(' ');
+    disp('NA: numerical aperture of the objective.');
+    disp(' ');
+    disp('RI: refractive index of imaging medium and sample');
+    disp(' ');
+    disp('LAMBDA_EX: fluorescence excitation wavelength in nanometer.');
+    disp(' ');
+    disp('LAMBDA_EM: fluorescence emmision wavelength in nanometer.');
+    disp(' ');
+    disp('FCYL: focal length f in millimeter of the cylinder lens used for light sheet generation.');
+    disp(' ');
+    disp('SLITWIDTH: full width w in millimeter of the slit aperture placed in front of the cylinder lens. The NA of the light sheet');
+    disp('generator system is calculated as NaLs = sin(arctan(w/(2*f))');
+    disp(' ');
+    disp('DAMPING: parameter between 0% and 10%. Increase value for images that are noisy. For images with');
+    disp('good signal to noise ratio the damping parameter should be set to zero (no damping at all)');
+    disp(' ');
+    disp('HISTOCLIP: percent value between 0 and 5 percent. If HISTOCLIP is set e.g. to 0.01% then the histogram of the deconvolved');
+    disp('stack is clipped at the 0.01 and the 99.99 percentile and the remaininginte intensity values are scaled to the full range (0...65535');
+    disp('in case of of 16 bit images, and 0...Imax in case of 32 bit float images, where Imax is the highest intensity value');
+    disp('occuring in the source stack');
+    disp(' ');
+    disp('STOP_CRIT: I the pecentual change to the last iteration step becomes lower than STOP_CRIT the deconvolution of the current');
+    disp('block is finished. If STOP_CRIT is e.g. set to 2% then the iteration stops, if there is less than 2% percent');
+    disp('change compared to the last iteration step.');
+    disp(' ');
+    disp('MEM_PERCENT: percent of RAM (or GPU memory, respectivbely, that can maximally by occopied by a data block. If the size of the image stack');
+    disp('is larger than MEM_PERCENT * RAMSIZE / 100, the data set is split into blocks that are deconvolved sequentially and then stitched.');
+    disp('A value of 4% usually is a good choice when working on CPU, a value of 50% when using the GPU. Decrease this value if other memory consuming');
+	disp('programs are active.');
+    disp(' ');
+    disp('GPU: 0 = peform convolutions on CPU, 1 = perform convolutions on GPU');
+end
+
+function p_log(log_file, message)
+    disp(message);
+    fprintf(log_file, '%s\r\n', message);
+end
+
+function dark_threshold = dark(sigma)
+    %sigma=[0.5 0.5 0.5];
+    a=zeros(floor(sigma*20));
+    a(floor(sigma(1)*10), floor(sigma(2)*10), floor(sigma(3)*10))=1;
+    a=imgaussfilt3(a, sigma, 'padding', 'circular');
+    % a(:,:,sigma(3)*10)
+    % dark_threshold = prctile(a(a>0), 50);
+    dark_threshold = mean(a(a>0));
+end
