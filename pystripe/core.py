@@ -653,8 +653,10 @@ def read_filter_save(
                     threshold=threshold,
                     directions=directions
                 )
+            # dark subtraction is like baseline subtraction in Imaris
             if dark is not None and dark > 0:
                 img = where(img > dark, img - dark, 0)  # Subtract the dark offset
+            # lightsheet method is like background subtraction in Imaris
             if lightsheet:
                 img = correct_lightsheet(
                     img.reshape(img.shape[0], img.shape[1], 1),
