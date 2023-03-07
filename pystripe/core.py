@@ -796,7 +796,7 @@ class MultiProcessQueueRunner(Process):
         pool = ProcessPoolExecutor(max_workers=1)
         fun = self.function
         timeout = self.timeout
-        queue_timeout = 10
+        queue_timeout = 20
         while not self.die and not self.args_queue.qsize() == 0:
             try:
                 queue_start_time = time()
