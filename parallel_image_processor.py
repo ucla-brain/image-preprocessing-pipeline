@@ -11,6 +11,7 @@ from pathlib import Path
 from supplements.cli_interface import PrintColors
 from pystripe.core import imread_tif_raw_png, imsave_tif, progress_manager
 from tsv.volume import TSVVolume, VExtent
+from time import time
 
 os.environ['MKL_NUM_THREADS'] = '1'
 os.environ['NUMEXPR_NUM_THREADS'] = '1'
@@ -108,11 +109,13 @@ class MultiProcess(Process):
                     if is_ims:
                         img = images[idx]
                     else:
+                        start_time = time()
                         if is_tsv:
                             future = pool.submit(imread_tsv, images, VExtent(x0, x1, y0, y1, idx, idx + 1), dtype)
                         else:
                             future = pool.submit(imread_tif_raw_png, (Path(images[idx],)), {"dtype": dtype, "shape": shape})
                         img = future.result(timeout=timeout)
+                        timeout = 0.9 * timeout + 0.3 * (time() - start_time)
                         if is_tsv:
                             img = img[0]
                         if len(img.shape) == 3:
