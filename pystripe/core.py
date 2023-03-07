@@ -803,7 +803,8 @@ class MultiProcessQueueRunner(Process):
                     start_time = time()
                     future = pool.submit(fun, **args)
                     future.result(timeout=timeout)
-                    timeout = max(timeout, 0.9 * timeout + 0.3 * (time() - start_time))
+                    if timeout:
+                        timeout = max(timeout, 0.9 * timeout + 0.3 * (time() - start_time))
                 except (BrokenProcessPool, TimeoutError, ValueError) as inst:
                     if self.replace_timeout_with_dummy:
                         output_file: Path = args["output_file"]

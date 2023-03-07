@@ -115,7 +115,8 @@ class MultiProcess(Process):
                         else:
                             future = pool.submit(imread_tif_raw_png, (Path(images[idx],)), {"dtype": dtype, "shape": shape})
                         img = future.result(timeout=timeout)
-                        timeout = max(timeout, 0.9 * timeout + 0.3 * (time() - start_time))
+                        if timeout:
+                            timeout = max(timeout, 0.9 * timeout + 0.3 * (time() - start_time))
                         if is_tsv:
                             img = img[0]
                         if len(img.shape) == 3:

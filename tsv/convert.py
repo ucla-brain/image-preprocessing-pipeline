@@ -5,11 +5,10 @@ from os import path, environ, makedirs
 from argparse import ArgumentParser
 from itertools import product
 from multiprocessing import cpu_count, Pool
-from numpy import rot90, zeros, arange, minimum, dstack, uint16, float32
+from numpy import rot90, zeros, arange, minimum, dstack, uint16
 from tqdm import tqdm
 from tifffile import imwrite
 from .volume import VExtent, TSVVolume
-from pystripe.core import filter_streaks
 blockfs_present = False
 if platform != "win32":
     try:
