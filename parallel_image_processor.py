@@ -102,7 +102,7 @@ class MultiProcess(Process):
             try:
                 queue_start_time = time()
                 idx = self.args_queue.get(block=True, timeout=queue_time_out)
-                queue_time_out = 0.9 * queue_time_out + 0.3 * (time() - queue_start_time)
+                queue_time_out = max(queue_time_out, 0.9 * queue_time_out + 0.3 * (time() - queue_start_time))
                 tif_save_path = None
                 if isinstance(save_path, Path):
                     tif_save_path = save_path / f"{tif_prefix}_{idx:06}.tif"

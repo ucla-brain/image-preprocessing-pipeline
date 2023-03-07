@@ -801,7 +801,7 @@ class MultiProcessQueueRunner(Process):
             try:
                 queue_start_time = time()
                 args = self.args_queue.get(block=True, timeout=queue_timeout)
-                queue_timeout = 0.9 * queue_timeout + 0.3 * (time() - queue_start_time)
+                queue_timeout = max(queue_timeout, 0.9 * queue_timeout + 0.3 * (time() - queue_start_time))
                 try:
                     start_time = time()
                     future = pool.submit(fun, **args)
