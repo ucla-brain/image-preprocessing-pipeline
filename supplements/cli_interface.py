@@ -30,11 +30,11 @@ def select_among_multiple_options(
         raise RuntimeError
 
 
-def ask_true_false_question(message):
+def ask_true_false_question(prompt_message: str) -> bool:
     answer = ''
     while answer not in {"1", "2"}:
         answer = input(
-            f'\n\n{message}\n'
+            f'\n\n{prompt_message}\n'
             '\t1 = Yes\n'
             '\t2 = No\n').strip()
     return answer == "1"

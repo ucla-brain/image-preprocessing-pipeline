@@ -156,6 +156,12 @@ def get_destination_path(folder_name_prefix, what_for='tif', posix='', default_p
             input_path = input_path + "/"
         drive_path = Path(input_path)
         path_exists = drive_path.exists()
+        if not path_exists and ask_true_false_question('The path did not exist! Do you want to create it?'):
+            try:
+                drive_path.mkdir(parents=True, exist_ok=True)
+                path_exists = drive_path.exists()
+            except PermissionError:
+                print('did not have permission to creat the path!')
     if input_path == '':
         print(1)
         destination_path = default_path.absolute()
