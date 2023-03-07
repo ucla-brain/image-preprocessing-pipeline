@@ -163,10 +163,8 @@ def get_destination_path(folder_name_prefix, what_for='tif', posix='', default_p
             except PermissionError:
                 print('did not have permission to creat the path!')
     if input_path == '':
-        print(1)
         destination_path = default_path.absolute()
     else:
-        print(2)
         destination_path = drive_path / (folder_name_prefix + posix)
     continue_process = False
     if destination_path.exists():
