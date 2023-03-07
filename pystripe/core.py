@@ -10,7 +10,7 @@ from scipy.ndimage import gaussian_filter as gaussian_filter_nd
 from pywt import wavedec2, waverec2, Wavelet, dwt_max_level
 from argparse import RawDescriptionHelpFormatter, ArgumentParser
 from tqdm import tqdm
-from time import sleep
+from time import sleep, time
 from pathlib import Path
 from skimage.filters import threshold_otsu, gaussian
 from skimage.measure import block_reduce
@@ -795,12 +795,15 @@ class MultiProcessQueueRunner(Process):
         running = True
         pool = ProcessPoolExecutor(max_workers=1)
         fun = self.function
+        timeout = self.timeout
         while not self.die and not self.args_queue.qsize() == 0:
             try:
                 args = self.args_queue.get(block=True, timeout=10)
                 try:
+                    start_time = time()
                     future = pool.submit(fun, **args)
-                    future.result(timeout=self.timeout)
+                    future.result(timeout=timeout)
+                    timeout = 0.9 * timeout + 0.3 * (time() - start_time)
                 except (BrokenProcessPool, TimeoutError, ValueError) as inst:
                     if self.replace_timeout_with_dummy:
                         output_file: Path = args["output_file"]
