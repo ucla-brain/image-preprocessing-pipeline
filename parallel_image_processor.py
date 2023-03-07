@@ -97,9 +97,12 @@ class MultiProcess(Process):
         if is_ims:
             file = h5py.File(images)
             images = file[f"DataSet/ResolutionLevel 0/TimePoint 0/Channel {channel}/Data"]
+        queue_time_out = 20
         while not self.die and not self.args_queue.qsize() == 0:
             try:
-                idx = self.args_queue.get(block=True, timeout=20)
+                queue_start_time = time()
+                idx = self.args_queue.get(block=True, timeout=queue_time_out)
+                queue_time_out = 0.9 * queue_time_out + 0.3 * (time() - queue_start_time)
                 tif_save_path = None
                 if isinstance(save_path, Path):
                     tif_save_path = save_path / f"{tif_prefix}_{idx:06}.tif"
@@ -113,9 +116,10 @@ class MultiProcess(Process):
                         if is_tsv:
                             future = pool.submit(imread_tsv, images, VExtent(x0, x1, y0, y1, idx, idx + 1), dtype)
                         else:
-                            future = pool.submit(imread_tif_raw_png, (Path(images[idx],)), {"dtype": dtype, "shape": shape})
+                            future = pool.submit(imread_tif_raw_png, (Path(images[idx], )),
+                                                 {"dtype": dtype, "shape": shape})
                         img = future.result(timeout=timeout)
-                        if timeout:
+                        if timeout is not None:
                             timeout = max(timeout, 0.9 * timeout + 0.3 * (time() - start_time))
                         if is_tsv:
                             img = img[0]

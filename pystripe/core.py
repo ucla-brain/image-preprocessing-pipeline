@@ -796,14 +796,17 @@ class MultiProcessQueueRunner(Process):
         pool = ProcessPoolExecutor(max_workers=1)
         fun = self.function
         timeout = self.timeout
+        queue_timeout = 10
         while not self.die and not self.args_queue.qsize() == 0:
             try:
-                args = self.args_queue.get(block=True, timeout=10)
+                queue_start_time = time()
+                args = self.args_queue.get(block=True, timeout=queue_timeout)
+                queue_timeout = 0.9 * queue_timeout + 0.3 * (time() - queue_start_time)
                 try:
                     start_time = time()
                     future = pool.submit(fun, **args)
                     future.result(timeout=timeout)
-                    if timeout:
+                    if timeout is not None:
                         timeout = max(timeout, 0.9 * timeout + 0.3 * (time() - start_time))
                 except (BrokenProcessPool, TimeoutError, ValueError) as inst:
                     if self.replace_timeout_with_dummy:
