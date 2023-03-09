@@ -337,8 +337,8 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad] = autosplit(info, psf_size, 
     for z_ = psf_size(3):z_max
         [x_, y_, x_pad_, y_pad_] = calculate_xy_size(z_, z_pad, info, block_size_max, psf_size);
         z_pad_ = pad_size(z_, psf_size(3));
-        deconvolved_voxels = x_ * y_ * (z_ - 2*z_pad_);
-        block_size = (x_ + 2*x_pad_) * (y_ + 2 * y_pad_) * z;
+        deconvolved_voxels = x_ * y_ * (z_ - 2 * z_pad_);
+        block_size = (x_ + 2 * x_pad_) * (y_ + 2 * y_pad_) * z_;
         if mod(z_pad_, 1)==0 && deconvolved_voxels > max_deconvolved_voxels && block_size < block_size_max
             x = x_;
             y = y_;
