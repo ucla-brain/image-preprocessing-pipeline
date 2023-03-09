@@ -31,7 +31,7 @@ function [] = LsDeconv(varargin)
         disp(datetime('now'));
         disp(' ');
 
-        if nargin < 19
+        if nargin < 20
             showinfo();
             if isdeployed
                 exit(1);
@@ -59,9 +59,10 @@ function [] = LsDeconv(varargin)
         sigma = varargin{17};
         resume = varargin{18};
         starting_block = varargin{19};
+        flip_upside_down = varargin{20};
         cache_drive = tempdir;
-        if nargin > 19
-            cache_drive=varargin{20};
+        if nargin > 20
+            cache_drive=varargin{21};
             if ~exist(cache_drive, "dir")
                 mkdir(cache_drive);
             end
@@ -86,11 +87,15 @@ function [] = LsDeconv(varargin)
             amplification = str2double(strrep(amplification, ',', '.'));
             resume = str2double(strrep(resume, ',', '.'));
             starting_block = str2double(strrep(starting_block, ',', '.'));
+            flip_upside_down = str2double(strrep(flip_upside_down, ',', '.'));
         end
 
         if isfolder(inpath)
             % make folder for results and make sure the outpath is writable
-            outpath = fullfile(inpath, 'deconvolved_fliped_upside_down');
+            outpath = fullfile(inpath, 'deconvolved');
+            if flip_upside_down
+                outpath = fullfile(inpath, 'deconvolved_fliped_upside_down');
+            end
             if ~exist(outpath, 'dir')
                 mkdir(outpath);
             end
@@ -108,6 +113,7 @@ function [] = LsDeconv(varargin)
 
             p_log(log_file, 'image stack info ...');
             [info.x, info.y, info.z, info.bit_depth] = getstackinfo(inpath); % n is volume dimension
+            info.flip_upside_down = flip_upside_down;
 
             if resume && numel(dir(fullfile(outpath, '*.tif'))) == info.z
                 disp("it seems all the files are already deconvolved!");
@@ -842,7 +848,7 @@ function postprocess_save(...
 
         %write images to output path
         disp(['saving ' num2str(size(R, 3)) ' images...']);
-        save_image(R, outpath, imagenr, rawmax);
+        save_image(R, outpath, imagenr, rawmax, info.flip_upside_down);
         imagenr = imagenr + size(R, 3);
         clear R;
     end
@@ -1139,12 +1145,15 @@ function value = my_load(fname)
     value = data.bl;
 end
 
-function save_image(R, outpath, imagenr_start, rawmax)
+function save_image(R, outpath, imagenr_start, rawmax, flip_upside_down)
     for k = 1 : size(R, 3)
         tic;
 
         % select tile
-        im = flip(squeeze(R(:,:,k)'));
+        im = squeeze(R(:,:,k)');
+        if flip_upside_down
+            im = flip(im);
+        end
 
         % file path
         s = num2str(imagenr_start + k - 1);
