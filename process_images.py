@@ -519,21 +519,22 @@ def process_channel(
         memory_needed_per_thread //= 1024 ** 3
 
         alignment_cores: int = 1
+        min_subvolume_depth = 100
         if memory_needed_per_thread <= memory_ram:
             alignment_cores = cpu_physical_core_count
             if memory_needed_per_thread > 0:
                 alignment_cores = min(floor(memory_ram / memory_needed_per_thread), cpu_physical_core_count)
             if num_gpus > 0 and sys.platform.lower() == 'linux':
-                while alignment_cores < 6*num_gpus and subvolume_depth > 10:
+                while alignment_cores < 6*num_gpus and subvolume_depth > min_subvolume_depth:
                     subvolume_depth //= 2
                     alignment_cores *= 2
             else:
-                while alignment_cores < cpu_physical_core_count and subvolume_depth > 10:
+                while alignment_cores < cpu_physical_core_count and subvolume_depth > min_subvolume_depth:
                     subvolume_depth //= 2
                     alignment_cores *= 2
         else:
             memory_needed_per_thread //= subvolume_depth
-            while memory_needed_per_thread * subvolume_depth > memory_ram and subvolume_depth > 10:
+            while memory_needed_per_thread * subvolume_depth > memory_ram and subvolume_depth > min_subvolume_depth:
                 subvolume_depth //= 2
             memory_needed_per_thread *= subvolume_depth
 
@@ -578,7 +579,7 @@ def process_channel(
                 f"--subvoldim={subvolume_depth}",
                 # used in the pairwise displacements computation step.
                 # dimension of layers obtained by dividing the volume along D
-                "--threshold=0.65",  # threshold between 0.55 and 0.7 is good. Higher values block alignment.
+                "--threshold=0.6",  # threshold between 0.55 and 0.7 is good. Higher values block alignment.
                 f"--projin={proj_in}",
                 f"--projout={proj_out}",
                 # "--restoreSPIM",
