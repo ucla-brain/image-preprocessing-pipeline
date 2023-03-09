@@ -542,14 +542,12 @@ function deconvolve(inpath, psf, numit, damping, ...
     end
 end
 
-function [bl, lb, ub] = process_block(bl, block, psf, numit, damping, stopcrit, gpu, sigma, dark_threshold)
+function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criterion, gpu, sigma, dark_threshold)
     if gpu
-        gpuDevice(gpu);
+        gpu_device = gpuDevice(gpu);
+        bl = gpuArray(bl);
     end
     if min(sigma(:)) > 0
-        if gpu
-            bl = gpuArray(bl);
-        end
         bl = imgaussfilt3(bl, sigma, 'padding', 'circular');
         bl = max(bl - dark_threshold, 0);
 
@@ -605,14 +603,18 @@ function [bl, lb, ub] = process_block(bl, block, psf, numit, damping, stopcrit, 
     bl = padarray(bl, [ceil(pad_x) ceil(pad_y) ceil(pad_z)], 'post', 'symmetric');
 
     % deconvolve block using Lucy-Richardson algorithm
-    % since bl will be changed in deconGPU function it will be copied there
-    % therefore an unused copy stays here in this function. To optimize GPU
-    % vRAM usage, bl is gathered to the RAM before deconvolution.
-    bl = gather(bl);
     if gpu
-        bl = deconGPU(bl, psf, numit, damping, stopcrit);
+    % GPU accelerated deconvolution needs 4*block_size_max vRAM = 48 GB
+    % GPUs having >80 GB of vRAM can handle 6*block_size_max. To deconvolve
+    % two blocks on one GPU, bl is gathered, which only decelerats 
+    % denom = bl ./ denom part of deconvolution that is computationaly 
+    % least expensive.
+        if gpu_device.TotalMemory > 80e9
+            bl = gather(bl);
+        end
+        bl = deconGPU(bl, psf, niter, lambda, stop_criterion);
     else
-        bl = deconCPU(bl, psf, numit, damping, stopcrit);
+        bl = deconCPU(bl, psf, niter, lambda, stop_criterion);
     end
 
     %remove padding
