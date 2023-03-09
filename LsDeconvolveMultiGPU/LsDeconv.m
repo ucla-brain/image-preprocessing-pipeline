@@ -409,7 +409,7 @@ function process(inpath, outpath, log_file, info, block, psf, numit, ...
             delete(gcp('nocreate'));
             gpus = gpus(1:min(size(gpus, 2), remaining_blocks));
             if size(gpus, 2) > 1
-                pool = parpool('local', size(gpus, 2));
+                pool = parpool('local', size(gpus, 2), 'IdleTimeout', Inf);
                 parallel_deconvolve(1 : size(gpus, 2)) = parallel.FevalFuture;
                 idx = 0;
                 for gpu = gpus
@@ -790,8 +790,7 @@ function postprocess_save(...
     end
     clear num_tif_files;
 
-    pool = parpool('Threads', 3);
-    pool.IdleTimeout = Inf;
+    pool = parpool('local', 3, 'IdleTimeout', Inf);
     async_load(1 : block.nx * block.ny) = parallel.FevalFuture;
 
     for nz = starting_z_block : block.nz
@@ -822,7 +821,7 @@ function postprocess_save(...
             time_out_start = tic;
             async_load(j).wait('finished', time_out); % timeout in seconds
             R(p1(blnr, x) : p2(blnr, x), p1(blnr, y) : p2(blnr, y), :) = async_load(j).fetchOutputs;
-            time_out = 0.9*time_out + 0.1*3*toc(time_out_start);
+            time_out = 0.9*time_out + 0.3*toc(time_out_start);
             blnr = blnr + 1;
         end
 
