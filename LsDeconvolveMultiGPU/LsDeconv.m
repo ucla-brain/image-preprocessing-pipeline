@@ -14,7 +14,6 @@
 % <http://www.gnu.org/licenses/>.
 
 % TODO: save both flipped and non-flipped
-% TODO: option to enable flipping
 % TODO: Test SmartSPIM PSF
 % TODO: resume saving consider images saved already in save_image function
 % TODO: Update showinfo function
