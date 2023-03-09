@@ -193,7 +193,7 @@ function [] = LsDeconv(varargin)
         if resume && exist(block_path, 'file')
             block = load(block_path).block;
         else
-            [block.nx, block.ny, block.nz, block.x, block.y, block.z, block.x_pad, block.y_pad, block.z_pad] = autosplit(info, size(psf), block_size_max, ram_available/2);
+            [block.nx, block.ny, block.nz, block.x, block.y, block.z, block.x_pad, block.y_pad, block.z_pad] = autosplit(info, size(psf), block_size_max, ram_available);
             save(block_path, "block");
         end
 
@@ -339,7 +339,8 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad] = autosplit(info, psf_size, 
         [x_, y_, x_pad_, y_pad_] = calculate_xy_size(z_, z_pad, info, block_size_max, psf_size);
         z_pad_ = pad_size(z_, psf_size(3));
         deconvolved_voxels = x_ * y_ * (z_ - 2*z_pad_);
-        if mod(z_pad_, 2) == 0 && deconvolved_voxels > max_deconvolved_voxels
+        block_size = (x_ + 2*x_pad_) * (y_ + 2 * y_pad_) * z;
+        if deconvolved_voxels > max_deconvolved_voxels && block_size < block_size_max
             x = x_;
             y = y_;
             z = z_;
