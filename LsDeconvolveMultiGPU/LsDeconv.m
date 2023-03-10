@@ -222,9 +222,9 @@ function [] = LsDeconv(varargin)
         p_log(log_file, ['   signal amplification: ' num2str(amplification)]);
         p_log(log_file, ['   post deconvolution dark subtraction: ' num2str(amplification)]);
         if flip_upside_down
-        p_log(log_file, ['   flip the image upside down (y-axis): yes']);
+        p_log(log_file, '   flip the image upside down (y-axis): yes');
         else
-        p_log(log_file, ['   flip the image upside down (y-axis): no']);
+        p_log(log_file, '   flip the image upside down (y-axis): no');
         end
         p_log(log_file, ' ');
 
