@@ -563,12 +563,11 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
     end
 
     if niter > 0
-
-        % for efficiency of FFT pad data in a way that the largest prime factor
-        % becomes <= 5
-        % z_padding comes from image, which is different from x and y pad that
-        % are interpolated based on image. In case z_pad was small for FFT
-        % efficiency it will be interpolated slightly
+        % for efficiency of FFT pad data in a way that the largest prime
+        % factor becomes <= 5. z_padding comes from image, which is
+        % different from x and y pad that are interpolated based on image.
+        % In case z_pad was small for FFT efficiency it will be
+        % interpolated slightly
         blx = size(bl, 1);
         bly = size(bl, 2);
         blz = size(bl, 3);
@@ -597,8 +596,8 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
         elseif blz > block.z
             warning('image block on z-axis exceeds the maximum allowed!')
         else
-            % FFT optimized z pad is already loaded from the actual image stack
-            % no z pad interpolation is needed
+            % FFT optimized z pad is already loaded from the actual image
+            % stack no z pad interpolation is needed
             pad_z = 0;
         end
     
@@ -930,9 +929,9 @@ function psf = samplePSF(dxy, dz, nxy, nz, NA_obj, rf, lambda_ex, lambda_em, NA_
         end
     end
 
-    %Since the PSF is symmetrical around all axes only the first Octand
-    %is calculated for computation efficiency. The other 7 Octands are obtained by mirroring around
-    %the respective axes
+    %Since the PSF is symmetrical around all axes only the first Octand is
+    %calculated for computation efficiency. The other 7 Octands are
+    %obtained by mirroring around the respective axes
     psf = mirror8(psf);
 
     %normalize psf to integral one
