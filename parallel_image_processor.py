@@ -127,6 +127,10 @@ class MultiProcess(Process):
                             img = img[:, :, channel]
                     if function is not None:
                         img = function(img, *args, **kwargs)
+                    if img.shape != shape or img.dtype != dtype:
+                        shape = self.shape = img.shape
+                        dtype = self.dtype = img.dtype
+                        self.default_img = zeros(shape, dtype=dtype)
                     if img_sum is not None:
                         img_sum += img
                         counter += 1
