@@ -543,6 +543,7 @@ function deconvolve(inpath, psf, numit, damping, ...
 end
 
 function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criterion, gpu, sigma, dark_threshold)
+    gaussian_start = tic;
     if gpu
         gpu_device = gpuDevice(gpu);
         bl = gpuArray(bl);
@@ -558,7 +559,7 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
         % stack = stack./flat;
         % disp("flat applied");
 
-        disp("3D Gaussian filter applied");
+        disp(['3D Gaussian filter applied in ' num2str(toc(gaussian_start)) 's']);
     end
 
     % for efficiency of FFT pad data in a way that the largest prime factor
