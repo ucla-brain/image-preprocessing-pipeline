@@ -222,9 +222,9 @@ function [] = LsDeconv(varargin)
         p_log(log_file, ['   signal amplification: ' num2str(amplification)]);
         p_log(log_file, ['   post deconvolution dark subtraction: ' num2str(amplification)]);
         if flip_upside_down
-        p_log(log_file, ['   flip the image upside down (y-axis): yes']);
+        p_log(log_file, '   flip the image upside down (y-axis): yes');
         else
-        p_log(log_file, ['   flip the image upside down (y-axis): no']);
+        p_log(log_file, '   flip the image upside down (y-axis): no');
         end
         p_log(log_file, ' ');
 
@@ -656,6 +656,7 @@ function deconvolved = deconCPU(bl, psf, niter, lambda, stop_criterion)
             deconvolved = deconvolved .* denom;
         end
         clear denom; % for 25% reduction in RAM memory usage
+        deconvolved = abs(deconvolved); % get rid of imaginary artifacts
 
         if stop_criterion > 0
             % estimate quality criterion
@@ -677,7 +678,6 @@ function deconvolved = deconCPU(bl, psf, niter, lambda, stop_criterion)
             disp(['iteration: ' num2str(i) ' duration: ' num2str(toc(start_time))]);
         end
     end
-    deconvolved = abs(deconvolved); % get rid of imaginary artifacts
 end
 
 function deconvolved = deconGPU(bl, psf, niter, lambda, stop_criterion)
@@ -702,6 +702,7 @@ function deconvolved = deconGPU(bl, psf, niter, lambda, stop_criterion)
             deconvolved = deconvolved .* denom;
         end
         clear denom; % for 25% reduction in GPU memory usage
+        deconvolved = abs(deconvolved); % get rid of imaginary artifacts
 
         if stop_criterion > 0
             % estimate quality criterion
@@ -723,7 +724,6 @@ function deconvolved = deconGPU(bl, psf, niter, lambda, stop_criterion)
             disp(['iteration: ' num2str(i) ' duration: ' num2str(toc(start_time))]);
         end
     end
-    deconvolved = abs(deconvolved); % get rid of imaginary artifacts
 end
 
 function postprocess_save(...
