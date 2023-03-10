@@ -15,8 +15,8 @@ def main(args: Namespace):
                   f"Please delete ano, apo or eswc files if reconversion is needed.")
             continue
 
-        swc_df = read_csv(swc_file, sep=" ", comment="#", names=("id", "type_id", "x", "y", "z", "radius", "parent_id"),
-                          index_col=0)
+        swc_df = read_csv(swc_file, sep=r"\s+", comment="#", index_col=0,
+                          names=("id", "type_id", "x", "y", "z", "radius", "parent_id"))
         for col_name, value in (("seg_id", 0), ("level", 1), ("mode", 0), ("timestamp", 1), ("TFresindex", 1)):
             swc_df[col_name] = value
         print(swc_df.head())

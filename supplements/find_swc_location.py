@@ -37,8 +37,8 @@ class DotDict(dict):
 def get_soma_locations(reconstructions: Path, y_axis_length: float):
     soma_coordinates = []
     for swc_file in reconstructions.rglob("*.swc"):
-        swc_df = read_csv(swc_file, sep=" ", comment="#", names=("id", "type_id", "x", "y", "z", "radius", "parent_id"),
-                          nrows=1)
+        swc_df = read_csv(swc_file, sep=r"\s+", comment="#", nrows=1,
+                          names=("id", "type_id", "x", "y", "z", "radius", "parent_id"))
         if swc_df.type_id[0] != 1 and swc_df.parent_id[0] != -1:
             print(f"Warning: skipping {swc_file} --> undetermined soma")
         else:
@@ -102,6 +102,6 @@ if __name__ == '__main__':
                         help="Path folder containing all swc files.")
     parser.add_argument("--surfaces", "-s", type=str, required=True,
                         help="Path folder containing all surface files.")
-    parser.add_argument("--y_axis_length", "-y", type=float, default=0.0,
-                        help="Y-axis length in voxels. Default is 0.")
+    parser.add_argument("--y_axis_length", "-y", type=float, default=0.0, required=True,
+                        help="Y-axis length of image in voxels. Default is 0.")
     main(parser.parse_args())
