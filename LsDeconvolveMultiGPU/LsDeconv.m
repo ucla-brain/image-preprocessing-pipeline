@@ -607,12 +607,12 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
     
         % deconvolve block using Lucy-Richardson algorithm
         if gpu
-        % GPU accelerated deconvolution needs 4*block_size_max vRAM = 48 GB
-        % GPUs having >80 GB of vRAM can handle 6*block_size_max. To deconvolve
-        % two blocks on one GPU, bl is gathered, which only decelerats 
-        % denom = bl ./ denom part of deconvolution that is computationaly 
-        % least expensive.
-            if gpu_device.TotalMemory > 80e9
+        % GPU accelerated deconvolution needs 4*block_size_max vRAM > 32 GB
+        % GPUs having >80 GB of vRAM can handle >6*block_size_max. 
+        % To deconvolve two blocks on one GPU, bl is gathered, which only 
+        % decelerats denom = bl ./ denom part of deconvolution that is 
+        % computationaly least expensive.
+            if gpu_device.TotalMemory > 80e9 || gpu_device.TotalMemory < 32e9
                 bl = gather(bl);
             end
             bl = deconGPU(bl, psf, niter, lambda, stop_criterion);
