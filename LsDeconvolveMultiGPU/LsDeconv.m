@@ -562,70 +562,76 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
         disp(['3D Gaussian filter applied in ' num2str(toc(gaussian_start)) 's']);
     end
 
-    % for efficiency of FFT pad data in a way that the largest prime factor
-    % becomes <= 5
-    % z_padding comes from image, which is different from x and y pad that
-    % are interpolated based on image. In case z_pad was small for FFT
-    % efficiency it will be interpolated slightly
-    blx = size(bl, 1);
-    bly = size(bl, 2);
-    blz = size(bl, 3);
+    if niter > 0
 
-    if blx ~= block.x || block.x_pad <= 0
-        pad_x = pad_size(blx, size(psf, 1));
-    else
-        pad_x = block.x_pad;
-    end
-    if bly ~= block.y || block.y_pad <= 0
-        pad_y = pad_size(bly, size(psf, 2));
-    else
-        pad_y = block.y_pad;
-    end
-
-    if blz < block.z
-        if block.z_pad <= 0
-            pad_z = pad_size(blz, size(psf, 3));
+        % for efficiency of FFT pad data in a way that the largest prime factor
+        % becomes <= 5
+        % z_padding comes from image, which is different from x and y pad that
+        % are interpolated based on image. In case z_pad was small for FFT
+        % efficiency it will be interpolated slightly
+        blx = size(bl, 1);
+        bly = size(bl, 2);
+        blz = size(bl, 3);
+    
+        if blx ~= block.x || block.x_pad <= 0
+            pad_x = pad_size(blx, size(psf, 1));
         else
-            % add minimum pad to make sure FFT is optimized
-            pad_z = pad_size(blz, 1);
+            pad_x = block.x_pad;
         end
-        if blz + 2*pad_z > block.z
-            pad_z = (block.z - blz)/2;
+        if bly ~= block.y || block.y_pad <= 0
+            pad_y = pad_size(bly, size(psf, 2));
+        else
+            pad_y = block.y_pad;
         end
-    elseif blz > block.z
-        warning('image block on z-axis exceeds the maximum allowed!')
-    else
-        % FFT optimized z pad is already loaded from the actual image stack
-        % no z pad interpolation is needed
-        pad_z = 0;
-    end
-
-    bl = padarray(bl, [floor(pad_x) floor(pad_y) floor(pad_z)], 'pre', 'symmetric');
-    bl = padarray(bl, [ceil(pad_x) ceil(pad_y) ceil(pad_z)], 'post', 'symmetric');
-
-    % deconvolve block using Lucy-Richardson algorithm
-    if gpu
-    % GPU accelerated deconvolution needs 4*block_size_max vRAM = 48 GB
-    % GPUs having >80 GB of vRAM can handle 6*block_size_max. To deconvolve
-    % two blocks on one GPU, bl is gathered, which only decelerats 
-    % denom = bl ./ denom part of deconvolution that is computationaly 
-    % least expensive.
-        if gpu_device.TotalMemory > 80e9
-            bl = gather(bl);
+    
+        if blz < block.z
+            if block.z_pad <= 0
+                pad_z = pad_size(blz, size(psf, 3));
+            else
+                % add minimum pad to make sure FFT is optimized
+                pad_z = pad_size(blz, 1);
+            end
+            if blz + 2*pad_z > block.z
+                pad_z = (block.z - blz)/2;
+            end
+        elseif blz > block.z
+            warning('image block on z-axis exceeds the maximum allowed!')
+        else
+            % FFT optimized z pad is already loaded from the actual image stack
+            % no z pad interpolation is needed
+            pad_z = 0;
         end
-        bl = deconGPU(bl, psf, niter, lambda, stop_criterion);
-    else
-        bl = deconCPU(bl, psf, niter, lambda, stop_criterion);
+    
+        bl = padarray(bl, [floor(pad_x) floor(pad_y) floor(pad_z)], 'pre', 'symmetric');
+        bl = padarray(bl, [ceil(pad_x) ceil(pad_y) ceil(pad_z)], 'post', 'symmetric');
+    
+        % deconvolve block using Lucy-Richardson algorithm
+        if gpu
+        % GPU accelerated deconvolution needs 4*block_size_max vRAM = 48 GB
+        % GPUs having >80 GB of vRAM can handle 6*block_size_max. To deconvolve
+        % two blocks on one GPU, bl is gathered, which only decelerats 
+        % denom = bl ./ denom part of deconvolution that is computationaly 
+        % least expensive.
+            if gpu_device.TotalMemory > 80e9
+                bl = gather(bl);
+            end
+            bl = deconGPU(bl, psf, niter, lambda, stop_criterion);
+        else
+            bl = deconCPU(bl, psf, niter, lambda, stop_criterion);
+        end
+    
+        %remove padding
+        if pad_z > 0
+            bl = bl(floor(pad_x) : end-ceil(pad_x)-1, floor(pad_y) : end-ceil(pad_y)-1, floor(pad_z) : end-ceil(pad_z)-1);
+        else
+            bl = bl(floor(pad_x) : end-ceil(pad_x)-1, floor(pad_y) : end-ceil(pad_y)-1, :);
+        end
     end
-
-    %remove padding
-    if pad_z > 0
-        bl = bl(floor(pad_x) : end-ceil(pad_x)-1, floor(pad_y) : end-ceil(pad_y)-1, floor(pad_z) : end-ceil(pad_z)-1);
-    else
-        bl = bl(floor(pad_x) : end-ceil(pad_x)-1, floor(pad_y) : end-ceil(pad_y)-1, :);
-    end
+    
     [lb, ub] = deconvolved_stats(bl);
-    bl = gather(bl);
+    if isgpuarray(bl)
+        bl = gather(bl);
+    end
 end
 
 %Lucy-Richardson deconvolution
