@@ -571,15 +571,17 @@ def process_channel(
                 f"--oH={tile_overlap_x}",
                 # Overlap (in pixels) between two adjacent tiles along V.
                 f"--oV={0 if objective == '40x' else tile_overlap_y}",
-                f"--sH={tile_overlap_x - 1}",  # Displacements search radius along H (in pixels). Default value is 25!
-                f"--sV={tile_overlap_y - 1}",  # Displacements search radius along V (in pixels). Default value is 25!
+                # Displacements search radius along H (in pixels). Default value is 25!
+                f"--sH={max(200, tile_overlap_x - 1)}",
+                # Displacements search radius along V (in pixels). Default value is 25!
+                f"--sV={max(200, tile_overlap_y - 1)}",
                 # Displacements search radius along D (in pixels).
                 f"--sD={0 if (objective == '40x' or stitch_mip) else min(200, subvolume_depth - 1)}",
                 # Number of slices per subvolume partition
                 f"--subvoldim={subvolume_depth}",
                 # used in the pairwise displacements computation step.
                 # dimension of layers obtained by dividing the volume along D
-                "--threshold=0.6",  # threshold between 0.55 and 0.7 is good. Higher values block alignment.
+                "--threshold=0.55",  # threshold between 0.55 and 0.7 is good. Higher values block alignment.
                 f"--projin={proj_in}",
                 f"--projout={proj_out}",
                 # "--restoreSPIM",
