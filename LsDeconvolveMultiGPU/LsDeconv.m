@@ -543,20 +543,26 @@ function deconvolve(inpath, psf, numit, damping, ...
 end
 
 function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criterion, gpu, sigma, dark_threshold)
-    gaussian_start = tic;
+    need_vram_conservation = false;
     if gpu
         gpu_device = gpuDevice(gpu);
+        if gpu_device.TotalMemory < 32e9 || gpu_device.TotalMemory > 80e9
+            need_vram_conservation = true;
+        end
         bl = gpuArray(bl);
     end
+    gaussian_start = tic;
     if min(sigma(:)) > 0
         bl = imgaussfilt3(bl, sigma, 'padding', 'circular');
-        bl = max(bl - dark_threshold, 0);
+        bl = bl - dark_threshold;
+        bl = max(bl, 0);
 
-        % flat = prctile(stack, 25, 3);
-        % flat = median(stack, 3);
+        % flat = prctile(bl, 25, 3);
+        % flat = median(bl, 3);
         % flat = imgaussfilt3(flat, 2, 'padding', 'circular');
         % flat = flat./max(flat(:));
-        % stack = stack./flat;
+        % bl = bl ./ flat;
+        % clear flat;
         % disp("flat applied");
 
         disp(['3D Gaussian filter applied in ' num2str(toc(gaussian_start)) 's']);
@@ -611,7 +617,7 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
         % To deconvolve two blocks on one GPU, bl is gathered, which only 
         % decelerats denom = bl ./ denom part of deconvolution that is 
         % computationaly least expensive.
-            if gpu_device.TotalMemory > 80e9 || gpu_device.TotalMemory < 32e9
+            if need_vram_conservation
                 bl = gather(bl);
             end
             bl = deconGPU(bl, psf, niter, lambda, stop_criterion);
@@ -626,11 +632,13 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
             bl = bl(floor(pad_x) : end-ceil(pad_x)-1, floor(pad_y) : end-ceil(pad_y)-1, :);
         end
     end
-    
-    [lb, ub] = deconvolved_stats(bl);
+
+    % since prctile function needs high vram usage gather it to avoid low
+    % memory error
     if isgpuarray(bl)
         bl = gather(bl);
     end
+    [lb, ub] = deconvolved_stats(bl);
 end
 
 %Lucy-Richardson deconvolution
@@ -655,7 +663,7 @@ function deconvolved = deconCPU(bl, psf, niter, lambda, stop_criterion)
         else
             deconvolved = deconvolved .* denom;
         end
-        clear denom; % for 25% reduction in RAM memory usage
+        % clear denom; % for 25% temporarily reduction in RAM memory usage
         deconvolved = abs(deconvolved); % get rid of imaginary artifacts
 
         if stop_criterion > 0
@@ -701,7 +709,7 @@ function deconvolved = deconGPU(bl, psf, niter, lambda, stop_criterion)
         else
             deconvolved = deconvolved .* denom;
         end
-        clear denom; % for 25% reduction in GPU memory usage
+        % clear denom; % for 25% temporarily reduction in GPU memory usage
         deconvolved = abs(deconvolved); % get rid of imaginary artifacts
 
         if stop_criterion > 0
@@ -1140,12 +1148,8 @@ end
 
 function [lb, ub] = deconvolved_stats(deconvolved)
     stats = prctile(deconvolved(:), [0.1 99.9], "all");
-    if isgpuarray(stats)
-        [lb, ub] = gather(stats(1), stats(2));
-    else
-        lb = stats(1);
-        ub = stats(2);
-    end
+    lb = stats(1);
+    ub = stats(2);
 end
 
 % return bounded value clipped between lower (lb) and upper bound (ub)
