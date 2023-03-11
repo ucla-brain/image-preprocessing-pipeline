@@ -431,7 +431,7 @@ def process_channel(
             source_path / channel,
             preprocessed_path / channel,
             files_list=files_list,
-            workers=cpu_physical_core_count + int(0.1 * cpu_physical_core_count),
+            workers=cpu_physical_core_count + int(0.2 * cpu_physical_core_count),
             # chunks=128,  # is calculated automatically now
             sigma=sigma,
             level=0,
