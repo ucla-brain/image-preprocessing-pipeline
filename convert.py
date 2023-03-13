@@ -43,7 +43,7 @@ def main(args: Namespace):
         raise RuntimeError
 
     tif_2d_folder = Path(args.tif)
-    if not args.tif:
+    if not tif_2d_folder.exists():
         tif_2d_folder.mkdir(exist_ok=True, parents=True)
 
     dir_tera_fly = Path(args.teraFly)
