@@ -480,8 +480,8 @@ def process_channel(
         command = [
             f"{terastitcher}",
             "-1",
-            f"--ref1={'V' if objective == '40x' else 'H'}",  # x horizontal?
-            f"--ref2={'H' if objective == '40x' else 'V'}",  # y vertical?
+            f"--ref1={'V' if objective == '40x' else 'H'}",  # x horizontal
+            f"--ref2={'H' if objective == '40x' else 'V'}",  # y vertical
             "--ref3=D",  # z depth?
             f"--vxl1={voxel_size_y if objective == '40x' else voxel_size_x}",
             f"--vxl2={voxel_size_x if objective == '40x' else voxel_size_y}",
