@@ -260,7 +260,7 @@ function [x, y, x_pad, y_pad] = calculate_xy_size(z, z_pad, info, block_size_max
     % x_max is max_value_allowed_by_block_size_and_z - 2 * min_pad
     x_max_in_ram = floor(nthroot(double(block_size_max/ z), 2));
     x_max_deconvolved = x_max_in_ram - psf_size(1);
-    x_min_deconvolved = x_max_deconvolved - 4*psf_size(1);
+    x_min_deconvolved = x_max_deconvolved - 5*psf_size(1);
     x = x_min_deconvolved;
     x_pad = pad_size(x, psf_size(1));
     z_deconvolved = z - 2*z_pad;
@@ -269,7 +269,7 @@ function [x, y, x_pad, y_pad] = calculate_xy_size(z, z_pad, info, block_size_max
         x_pad_ = pad_size(x_, psf_size(1));
         voxel_count_in_ram = (x_+2*x_pad_)^2 * z;
         deconvolved_voxels = x_^2 * z_deconvolved;
-        if voxel_count_in_ram < block_size_max && deconvolved_voxels > max_deconvolved_voxels
+        if voxel_count_in_ram <= block_size_max && deconvolved_voxels > max_deconvolved_voxels
             x = x_;
             x_pad = x_pad_;
             max_deconvolved_voxels = deconvolved_voxels;
@@ -320,26 +320,29 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad] = autosplit(info, psf_size, 
         warning(['block size should be smaller than ' num2str(intmax("int32")) ' for GPU computing']);
     end
 
+    % psf half width was not enouph to eliminate artifacts on z
+    psf_size(3) = psf_size(3) .* 2;
+
     % image will be converted to single precision (8 bit) float during
-    % deconvolution
+    % deconvolution but two copies are needed
     % z z-steps of the original image volume will be chunked to
     % smaller 3D blocks. After deconvolution the blocks will be
     % reassembled to save deconvolved z-steps. Therefore, there should be
     % enough ram to reassemble z z-steps in the end.
-    z_max = min(floor(ram_available / info.x / info.y / 8), info.z);
+    z_max = min(floor(ram_available / info.x / info.y / 16), info.z);
     z = z_max;
     % load extra z layers for each block to avoid generating artifacts on z
     % for efficiency of FFT pad data in a way that the largest prime
     % factor becomes <= 5 for each end of the block
     z_pad = ceil(pad_size(z, psf_size(3)));
     [x, y, x_pad, y_pad] = calculate_xy_size(z, z_pad, info, block_size_max, psf_size);
-    max_deconvolved_voxels = x * y * (z - 2 * z_pad);
+    max_deconvolved_voxels = 0;
     for z_ = psf_size(3):z_max
-        [x_, y_, x_pad_, y_pad_] = calculate_xy_size(z_, z_pad, info, block_size_max, psf_size);
         z_pad_ = pad_size(z_, psf_size(3));
+        [x_, y_, x_pad_, y_pad_] = calculate_xy_size(z_, z_pad_, info, block_size_max, psf_size);
         deconvolved_voxels = x_ * y_ * (z_ - 2 * z_pad_);
         block_size = (x_ + 2 * x_pad_) * (y_ + 2 * y_pad_) * z_;
-        if mod(z_pad_, 1)==0 && deconvolved_voxels > max_deconvolved_voxels && block_size < block_size_max
+        if mod(z_pad_, 1)==0 && deconvolved_voxels > max_deconvolved_voxels && block_size <= block_size_max
             x = x_;
             y = y_;
             z = z_;
@@ -843,7 +846,7 @@ function postprocess_save(...
                 file_path_parts = strsplit(blocklist(blnr), '/');
             end
             file_name = char(file_path_parts(end));
-            disp(['   loading block ' num2str(blnr) ' file ' file_name ' timeout=' num2str(time_out, 4)]);
+            disp(['   loading block ' num2str(blnr) ':' num2str(block.nx * block.ny) ' file ' file_name]);
             % R( p1(blnr, x) : p2(blnr, x), p1(blnr, y) : p2(blnr, y), :) = my_load(blocklist(blnr));
             time_out_start = tic;
             async_load(j).wait('finished', time_out); % timeout in seconds
@@ -851,20 +854,25 @@ function postprocess_save(...
             time_out = 0.9*time_out + 0.3*toc(time_out_start);
             blnr = blnr + 1;
         end
-
+        
+        % since R can be a very large matrix memory mangement is important.
+        % combining operations should be avoided to save RAM.
         if clipval > 0
             %perform histogram clipping
             R = clip_min_max(R, low_clip, high_clip);
-            R = (R - low_clip) ./ (high_clip - low_clip) .* (scal .* amplification);
+            R = R - low_clip;
+            R = R .* (scal .* amplification ./ (high_clip - low_clip));
             R = min(R, scal);
         else
             %otherwise scale using min.max method
             if deconvmin > 0
-                R = (R - deconvmin) ./ (deconvmax - deconvmin) .* (scal .* amplification);
+                R = R - deconvmin;
+                R = R .* (scal .* amplification ./ (deconvmax - deconvmin));
             else
                 R = R .* (scal .* amplification ./ deconvmax);
             end
-            R = clip_min_max(R - amplification, 0, scal);
+            R = R - amplification;
+            R = clip_min_max(R, 0, scal);
         end
 
         %write images to output path
