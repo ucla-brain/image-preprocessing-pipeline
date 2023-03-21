@@ -859,10 +859,9 @@ function postprocess_save(...
         % combining operations should be avoided to save RAM.
         if clipval > 0
             %perform histogram clipping
-            R = clip_min_max(R, low_clip, high_clip);
             R = R - low_clip;
+            R = min(R, high_clip - low_clip);
             R = R .* (scal .* amplification ./ (high_clip - low_clip));
-            R = min(R, scal);
         else
             %otherwise scale using min.max method
             if deconvmin > 0
@@ -871,9 +870,10 @@ function postprocess_save(...
             else
                 R = R .* (scal .* amplification ./ deconvmax);
             end
-            R = R - amplification;
-            R = clip_min_max(R, 0, scal);
         end
+        R = R - amplification;
+        R = min(R, scal);
+        R = max(R, 0);
 
         %write images to output path
         disp(['saving ' num2str(size(R, 3)) ' images...']);
@@ -1158,11 +1158,6 @@ function [lb, ub] = deconvolved_stats(deconvolved)
     stats = prctile(deconvolved(:), [0.1 99.9], "all");
     lb = stats(1);
     ub = stats(2);
-end
-
-% return bounded value clipped between lower (lb) and upper bound (ub)
-function y = clip_min_max(x, lb, ub)
-    y=min(max(x, lb), ub);
 end
 
 function value = my_load(fname)
