@@ -26,7 +26,7 @@ from numpy import percentile as np_percentile
 
 def correct_lightsheet(
         source,
-        percentile=0.25,
+        percentile: float = 0.25,
         mask=None,
         lightsheet=dict(selem=(150, 1, 1)),
         background=dict(selem=(200, 200, 1),
@@ -41,15 +41,12 @@ def correct_lightsheet(
     """Removes lightsheet artifacts.
 
     The routine implements a fast but efficient way to remove lightsheet artifacts.
-    Effectively the percentile in an elongated structural element along the
-    lightsheet direction centered around each pixel is calculated and then
-    compared to the percentile in a symmetrical box like structural element
-    at the same pixel. The former is an estimate of the lightsheet artifact
-    the latter of the background. The background is multiplied by the factor
-    lightsheet_vs_background and then the minimum of both results is subtracted
-    from the source.
-    Adding an overall background estimate helps to not accidentally remove
-    vessel like structures along the light-sheet direction.
+    Effectively the percentile in an elongated structural element along the lightsheet direction centered around each
+    pixel is calculated and then compared to the percentile in a symmetrical box like structural element at the same
+    pixel. The former is an estimate of the lightsheet artifact the latter of the background. The background is
+    multiplied by the factor lightsheet_vs_background and then the minimum of both results is subtracted from the
+    source. Adding an overall background estimate helps to not accidentally remove vessel like structures along the
+    light-sheet direction.
 
     Arguments
     ---------
@@ -102,7 +99,7 @@ def correct_lightsheet(
 
 def apply_local_function(source, function, selem=(50, 50), spacing=None, step=None, interpolate=2, mask=None,
                          fshape=None, dtype=None, return_centers=False):
-    """Calculate local histograms on a sub-grid, apply a scalar valued function and resmaple to original image shape.
+    """Calculate local histograms on a sub-grid, apply a scalar valued function and resample to original image shape.
 
     Arguments
     ---------
@@ -152,12 +149,12 @@ def apply_local_function(source, function, selem=(50, 50), spacing=None, step=No
     if len(spacing) != ndim or len(step) != ndim:
         raise ValueError('Dimension mismatch in the parameters!')
 
-        # histogram centers
+    # histogram centers
     n_centers = tuple(s // h for s, h in zip(shape, spacing))
     left = tuple((s - (n - 1) * h) // 2 for s, n, h in zip(shape, n_centers, spacing))
 
     # center points
-    centers = array(meshgrid(*[range(l, s, h) for l, s, h in zip(left, shape, spacing)], indexing='ij'))
+    centers = array(meshgrid(*[range(le, s, h) for le, s, h in zip(left, shape, spacing)], indexing='ij'))
     # centers = reshape(moveaxis(centers, 0, -1),(-1,len(shape)))
     centers = moveaxis(centers, 0, -1)
 

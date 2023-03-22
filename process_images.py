@@ -13,7 +13,7 @@ from cpufeature.extension import CPUFeature
 from re import compile, match, findall, IGNORECASE, MULTILINE
 from psutil import cpu_count, virtual_memory
 from tqdm import tqdm
-from numpy import ndarray, zeros, rot90, uint8
+from numpy import ndarray, zeros, rot90, uint8, float32
 from pathlib import Path
 from flat import create_flat_img
 from datetime import timedelta
@@ -21,7 +21,7 @@ from time import time, sleep
 from platform import uname
 from tsv.volume import TSVVolume
 from pystripe.core import batch_filter, imread_tif_raw_png, imsave_tif, MultiProcessQueueRunner, progress_manager, \
-    glob_re
+    glob_re, correct_lightsheet
 from queue import Empty
 from multiprocessing import freeze_support, Queue, Process
 from supplements.cli_interface import select_among_multiple_options, ask_true_false_question, PrintColors
@@ -331,7 +331,27 @@ def run_command(command, need_progress_dot=True):
     p_log("")
 
 
-def process_stitched_tif(img: ndarray, rotation: int = 0):
+def process_stitched_tif(
+        img: ndarray,
+        rotation: int = 0,
+        need_lightsheet_cleaning: bool = False,
+):
+    if need_lightsheet_cleaning:
+        artifact_length: int = 150
+        background_window_size: int = 200
+        img = correct_lightsheet(
+            img.reshape(img.shape[0], img.shape[1], 1),
+            percentile=0.25,
+            lightsheet=dict(selem=(1, artifact_length, 1)),
+            background=dict(
+                selem=(background_window_size, background_window_size, 1),
+                spacing=(25, 25, 1),
+                interpolate=1,
+                dtype=float32,
+                step=(2, 2, 1)),
+            lightsheet_vs_background=2.0
+        ).reshape(img.shape[0], img.shape[1]).astype(img.dtype)
+
     if rotation == 90:
         img = rot90(img, 1)
     elif rotation == 180:
@@ -359,7 +379,6 @@ def process_channel(
         image_classes_training_data_path=None,
         need_raw_png_to_tiff_conversion: bool = False,
         need_lightsheet_cleaning: bool = True,
-        artifact_length: int = 150,
         need_destriping: bool = False,
         need_gaussian_filter_2d: bool = True,
         need_compression: bool = False,
@@ -379,7 +398,7 @@ def process_channel(
     # preprocess each tile as needed using PyStripe --------------------------------------------------------------------
 
     assert source_path.joinpath(channel).exists()
-    if need_lightsheet_cleaning or need_destriping or need_flat_image_application or \
+    if need_destriping or need_flat_image_application or \
             need_raw_png_to_tiff_conversion or need_16bit_to_8bit_conversion or need_compression or \
             down_sampling_factor not in (None, (1, 1)) or new_tile_size is not None:
         img_flat = None
@@ -433,20 +452,19 @@ def process_channel(
             files_list=files_list,
             workers=cpu_physical_core_count + 2,
             # chunks=128,  # is calculated automatically now
+            flat=img_flat,
+            gaussian_filter_2d=need_gaussian_filter_2d,
+            dark=dark,
             sigma=sigma,
             level=0,
             wavelet="db9" if objective == "40x" else "db10",
             crossover=10,
             threshold=-1,
             directions='vh' if objective == "40x" else "v",
-            compression=('ADOBE_DEFLATE', 1) if need_compression else None,  # ('ZSTD', 1) conda install imagecodecs
-            flat=img_flat,
-            dark=dark,
             # z_step=voxel_size_z,  # z-step in micron. Only used for DCIMG files.
             # rotate=False,
-            lightsheet=need_lightsheet_cleaning,
-            artifact_length=artifact_length,
-            gaussian_filter_2d=need_gaussian_filter_2d,
+            lightsheet=False,  # need_lightsheet_cleaning
+            # artifact_length=artifact_length,
             # percentile=0.25,
             # convert_to_16bit=False,  # defaults to False
             convert_to_8bit=need_16bit_to_8bit_conversion,
@@ -457,7 +475,8 @@ def process_channel(
             tile_size=tile_size,
             new_size=new_tile_size,
             print_input_file_names=print_input_file_names,
-            timeout=600.0
+            timeout=600.0,
+            compression=('ADOBE_DEFLATE', 1) if need_compression else None,  # ('ZSTD', 1) conda install imagecodecs
         )
 
         if return_code != 0:
@@ -615,12 +634,16 @@ def process_channel(
     memory_ram = virtual_memory().available / 1024 ** 3  # in GB
     merge_step_cores = min(floor(memory_ram / memory_needed_per_thread), cpu_physical_core_count)
 
+    # need_lightsheet_cleaning
     return_code = parallel_image_processor(
         process_stitched_tif,
         source=tsv_volume,
         destination=stitched_tif_path,
         args=(),
-        kwargs={"rotation": 90 if need_rotation_stitched_tif else 0},
+        kwargs={
+            "rotation": 90 if need_rotation_stitched_tif else 0,
+            "need_lightsheet_cleaning": need_lightsheet_cleaning,
+        },
         timeout=None,
         max_processors=merge_step_cores,
         progress_bar_name="TSV",
@@ -1109,7 +1132,6 @@ def main(source_path):
             image_classes_training_data_path=image_classes_training_data_path,
             need_raw_png_to_tiff_conversion=need_raw_png_to_tiff_conversion,
             need_lightsheet_cleaning=channel in channels_need_lightsheet_cleaning,
-            artifact_length=150,
             need_destriping=need_destriping,
             need_gaussian_filter_2d=need_gaussian_filter_2d,
             need_compression=need_compression,

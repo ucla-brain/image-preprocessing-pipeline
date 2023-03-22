@@ -489,15 +489,15 @@ def filter_streaks(
 def read_filter_save(
         input_file: Path = None,
         output_file: Path = None,
+        flat: ndarray = None,
+        gaussian_filter_2d: bool = False,
+        dark: float = 0,
         sigma: Tuple[int, int] = (0, 0),
         level: int = 0,
         wavelet: str = 'db3',
         crossover: float = 10,
         threshold: float = -1,
         directions: str = 'v',
-        compression: Tuple[str, int] = ('ADOBE_DEFLATE', 1),
-        flat: ndarray = None,
-        dark: float = 0,
         z_idx: int = None,
         rotate: bool = False,
         flip_upside_down: bool = False,
@@ -506,7 +506,6 @@ def read_filter_save(
         background_window_size: int = 200,
         percentile: float = 0.25,
         lightsheet_vs_background: float = 2.0,
-        gaussian_filter_2d: bool = False,
         convert_to_16bit: bool = False,
         convert_to_8bit: bool = True,
         bit_shift_to_right: int = 8,
@@ -515,7 +514,8 @@ def read_filter_save(
         tile_size: Tuple[int, int] = None,
         down_sample: Tuple[int, int] = None,  # (2, 2),
         new_size: Tuple[int, int] = None,
-        print_input_file_names: bool = False
+        print_input_file_names: bool = False,
+        compression: Tuple[str, int] = ('ADOBE_DEFLATE', 1)
 ):
     """Convenience wrapper around filter streaks. Takes in a path to an image rather than an image array
 
@@ -659,7 +659,7 @@ def read_filter_save(
             # lightsheet method is like background subtraction in Imaris
             if lightsheet:
                 img = correct_lightsheet(
-                    img.reshape(img.shape[0], img.shape[1], 1),
+                    img.reshape((img.shape[0], img.shape[1], 1)),
                     percentile=percentile,
                     lightsheet=dict(selem=(1, artifact_length, 1)),
                     background=dict(
@@ -889,15 +889,15 @@ def batch_filter(
         output_path: Path,
         files_list: List[Path] = None,
         workers: int = cpu_count(),
+        flat: ndarray = None,
+        gaussian_filter_2d: bool = False,
+        dark: int = 0,
         sigma: Tuple[int, int] = (0, 0),
         level=0,
         wavelet: str = 'db9',
         crossover: int = 10,
         threshold: int = -1,
         directions: str = 'v',
-        compression: Tuple[str, int] = ('ADOBE_DEFLATE', 1),
-        flat: ndarray = None,
-        dark: int = 0,
         z_step: float = None,
         rotate: bool = False,
         flip_upside_down: bool = False,
@@ -906,7 +906,6 @@ def batch_filter(
         background_window_size: int = 200,
         percentile: float = .25,
         lightsheet_vs_background: float = 2.0,
-        gaussian_filter_2d: bool = False,
         convert_to_16bit: bool = False,
         convert_to_8bit: bool = False,
         bit_shift_to_right: int = 8,
@@ -916,7 +915,8 @@ def batch_filter(
         down_sample: Tuple[int, int] = None,  # (2, 2)
         new_size: Tuple[int, int] = None,
         print_input_file_names: bool = False,
-        timeout: float = None
+        timeout: float = None,
+        compression: Tuple[str, int] = ('ADOBE_DEFLATE', 1)
 ):
     """Applies `streak_filter` to all images in `input_path` and write the results to `output_path`.
 
@@ -1014,15 +1014,15 @@ def batch_filter(
         raise TypeError
 
     arg_dict_template = {
+        'flat': flat,
+        'gaussian_filter_2d': gaussian_filter_2d,
+        'dark': dark,
         'sigma': sigma,
         'level': level,
         'wavelet': wavelet,
         'crossover': crossover,
         'threshold': threshold,
         'directions': directions,
-        'compression': compression,
-        'flat': flat,
-        'dark': dark,
         'z_idx': None,
         'rotate': rotate,
         'flip_upside_down': flip_upside_down,
@@ -1031,7 +1031,6 @@ def batch_filter(
         'background_window_size': background_window_size,
         'percentile': percentile,
         'lightsheet_vs_background': lightsheet_vs_background,
-        'gaussian_filter_2d': gaussian_filter_2d,
         'convert_to_16bit': convert_to_16bit,
         'convert_to_8bit': convert_to_8bit,
         'bit_shift_to_right': bit_shift_to_right,
@@ -1040,7 +1039,8 @@ def batch_filter(
         'tile_size': tile_size,
         'down_sample': None if isinstance(down_sample, tuple) and down_sample == (1, 1) else down_sample,
         'new_size': new_size,
-        'print_input_file_names': print_input_file_names
+        'print_input_file_names': print_input_file_names,
+        'compression': compression
     }
     # print(arg_dict_template)
 
