@@ -846,7 +846,7 @@ function postprocess_save(...
                 file_path_parts = strsplit(blocklist(blnr), '/');
             end
             file_name = char(file_path_parts(end));
-            disp(['   loading block ' num2str(blnr) ':' num2str(block.nx * block.ny) ' file ' file_name]);
+            disp(['   loading block ' num2str(j) ':' num2str(block.nx * block.ny) ' file ' file_name]);
             % R( p1(blnr, x) : p2(blnr, x), p1(blnr, y) : p2(blnr, y), :) = my_load(blocklist(blnr));
             time_out_start = tic;
             async_load(j).wait('finished', time_out); % timeout in seconds
