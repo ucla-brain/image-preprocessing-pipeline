@@ -25,7 +25,7 @@ function [] = LsDeconv(varargin)
         disp('LsDeconv: Deconvolution tool for Light Sheet Microscopy.');
         disp('TU Wien, 2019: This program was was initially written in MATLAB V2018b by klaus.becker@tuwien.ac.at');
         disp('Keivan Moradi, 2023: Patched it in MATLAB V2022b. kmoradi@mednet.ucla.edu. UCLA B.R.A.I.N (Dong lab)');
-        disp('Main changes: Multi-GPU and Multi-CPU Parallel processing, Resume, Flip Y axis, and 3D gaussian filter support');
+        disp('Main changes: Multi-GPU and Multi-CPU parallel processing, Resume, Flip Y axis, and 3D gaussian filter support');
         disp(' ');
         disp(datetime('now'));
         disp(' ');
@@ -55,8 +55,8 @@ function [] = LsDeconv(varargin)
         block_size_max = varargin{14};
         gpus = varargin{15};
         amplification = varargin{16};
-        sigma = varargin{17};
-        filter_size = varargin{18};
+        filter.sigma = varargin{17};
+        filter.size = varargin{18};
         resume = varargin{19};
         starting_block = varargin{20};
         flip_upside_down = varargin{21};
@@ -192,7 +192,7 @@ function [] = LsDeconv(varargin)
         if resume && exist(block_path, 'file')
             block = load(block_path).block;
         else
-            [block.nx, block.ny, block.nz, block.x, block.y, block.z, block.x_pad, block.y_pad, block.z_pad] = autosplit(info, size(psf), block_size_max, ram_available);
+            [block.nx, block.ny, block.nz, block.x, block.y, block.z, block.x_pad, block.y_pad, block.z_pad] = autosplit(info, size(psf), filter, block_size_max, ram_available);
             save(block_path, "block");
         end
 
@@ -206,17 +206,17 @@ function [] = LsDeconv(varargin)
         p_log(log_file, ' ');
 
         % start image processing
+        filter.dark = dark(filter);
         p_log(log_file, 'preprocessing params ...')
-        p_log(log_file, ['   3D gaussian filter sigma: ' num2str(sigma, 3)]);
-        p_log(log_file, ['   3D gaussian filter size: ' num2str(filter_size, 3)]);
-        p_log(log_file, ['   post filter baseline subtraction (denoising): ' num2str(dark(sigma))]);
+        p_log(log_file, ['   3D gaussian filter sigma: ' num2str(filter.sigma, 3)]);
+        p_log(log_file, ['   3D gaussian filter size: ' num2str(filter.size, 3)]);
+        p_log(log_file, ['   post filter baseline subtraction (denoising): ' num2str(filter.dark)]);
         p_log(log_file, ' ');
 
         p_log(log_file, 'deconvolution params ...')
         p_log(log_file, ['   max. iterations: ' num2str(numit)]);
         p_log(log_file, ' ');
         
-     
         p_log(log_file, 'postprocessing params ...')
         p_log(log_file, ['   damping factor (%): ' num2str(damping)]);
         p_log(log_file, ['   stop criterion (%): ' num2str(stop_criterion)]);
@@ -238,7 +238,7 @@ function [] = LsDeconv(varargin)
         p_log(log_file, ' ');
         process(inpath, outpath, log_file, info, block, psf, numit, ...
             damping, clipval, stop_criterion, gpus, cache_drive, ...
-            amplification, sigma, resume, starting_block);
+            amplification, filter, resume, starting_block);
 
         fclose(log_file);
         open(log_file_path);
@@ -257,7 +257,17 @@ function [] = LsDeconv(varargin)
 end
 
 % calculate xy plan size based on z step size
-function [x, y, x_pad, y_pad] = calculate_xy_size(z, z_pad, info, block_size_max, psf_size)
+function [x, y, x_pad, y_pad] = calculate_xy_size(z, z_pad, info, block_size_max, psf_size, filter)
+    function size = max_pad_size(x, psf_size, filter_size)
+        size = max(pad_size(x, psf_size), gaussian_pad_size(x, filter_size));
+    end
+    z_max = z + 2 * gaussian_pad_size(z, filter.size(3));
+    function size = block_size(x, y)
+        size = ...
+            (x + 2 * max_pad_size(x, psf_size(1), filter.size(1))) * ...
+            (y + 2 * max_pad_size(y, psf_size(2), filter.size(2))) * z_max;
+    end
+
     % min pad size is half the psf size on the axis
     % x_max is max_value_allowed_by_block_size_and_z - 2 * min_pad
     x_max_in_ram = floor(nthroot(double(block_size_max/ z), 2));
@@ -269,10 +279,8 @@ function [x, y, x_pad, y_pad] = calculate_xy_size(z, z_pad, info, block_size_max
     max_deconvolved_voxels = x^2 * z_deconvolved;
     for x_ = x_min_deconvolved+1:x_max_deconvolved
         x_pad_ = pad_size(x_, psf_size(1));
-        gaussian_pad_size(x,)
-        voxel_count_in_ram = (x_+ 2 * x_pad_)^2 * z;
         deconvolved_voxels = x_^2 * z_deconvolved;
-        if voxel_count_in_ram < block_size_max && deconvolved_voxels > max_deconvolved_voxels
+        if block_size(x_, x_) <= block_size_max && deconvolved_voxels > max_deconvolved_voxels
             x = x_;
             x_pad = x_pad_;
             max_deconvolved_voxels = deconvolved_voxels;
@@ -289,24 +297,24 @@ function [x, y, x_pad, y_pad] = calculate_xy_size(z, z_pad, info, block_size_max
 
     if info.x > info.y
         % first try to increase x then y
-        while x < info.x && (x+1+2*pad_size(x+1, psf_size(1))) * (y+2*y_pad) * z < block_size_max && (x+1)*y*z_deconvolved > max_deconvolved_voxels
+        while x < info.x && block_size(x+1, y) <= block_size_max && (x+1)*y*z_deconvolved > max_deconvolved_voxels
             x = x + 1;
             x_pad = pad_size(x, psf_size(1));
             max_deconvolved_voxels = x*y*z_deconvolved;
         end
-        while y < info.y && (x+2*x_pad) * (y+1+2*pad_size(y+1, psf_size(2))) * z < block_size_max && x*(y+1)*z_deconvolved > max_deconvolved_voxels
+        while y < info.y && block_size(x, y+1) <= block_size_max && x*(y+1)*z_deconvolved > max_deconvolved_voxels
             y = y + 1;
             y_pad = pad_size(y, psf_size(2));
             max_deconvolved_voxels = x*y*z_deconvolved;
         end
     else
         % first try to increase y then x
-        while y < info.y && (x+2*x_pad) * (y+1+2*pad_size(y+1, psf_size(2))) * z < block_size_max && x*(y+1)*z_deconvolved > max_deconvolved_voxels
+        while y < info.y && block_size(x, y+1) <= block_size_max && x*(y+1)*z_deconvolved > max_deconvolved_voxels
             y = y + 1;
             y_pad = pad_size(y, psf_size(2));
             max_deconvolved_voxels = x*y*z_deconvolved;
         end
-        while x < info.x && (x+1+2*pad_size(x+1, psf_size(1))) * (y+2*y_pad) * z < block_size_max && (x+1)*y*z_deconvolved > max_deconvolved_voxels
+        while x < info.x && block_size(x+1, y) <= block_size_max && (x+1)*y*z_deconvolved > max_deconvolved_voxels
             x = x + 1;
             x_pad = pad_size(x, psf_size(1));
             max_deconvolved_voxels = x*y*z_deconvolved;
@@ -315,7 +323,7 @@ function [x, y, x_pad, y_pad] = calculate_xy_size(z, z_pad, info, block_size_max
 end
 
 % determine the required number of blocks that are deconvolved sequentially
-function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad] = autosplit(info, psf_size, block_size_max, ram_available)
+function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad] = autosplit(info, psf_size, filter, block_size_max, ram_available)
     if block_size_max <= 0
         error(['block size should be larger than zero and smaller than ' num2str(intmax("int32")) ' for GPU computing']);
     end
@@ -338,14 +346,23 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad] = autosplit(info, psf_size, 
     % for efficiency of FFT pad data in a way that the largest prime
     % factor becomes <= 5 for each end of the block
     z_pad = ceil(pad_size(z, psf_size(3)));
-    [x, y, x_pad, y_pad] = calculate_xy_size(z, z_pad, info, block_size_max, psf_size);
+    [x, y, x_pad, y_pad] = calculate_xy_size(z, z_pad, info, block_size_max, psf_size, filter);
     max_deconvolved_voxels = 0;
+    
+    % gaussian filter padding cannot be disabled and the added z_pad should
+    % be considred in calculating block size
+    function size = block_size(x, y, z, x_pad, y_pad)
+        size = ...
+            (x + 2 * max(x_pad, gaussian_pad_size(x, filter.size(1)))) * ...
+            (y + 2 * max(y_pad, gaussian_pad_size(y, filter.size(2)))) * ...
+            (z + 2 *            gaussian_pad_size(z, filter.size(3)));
+    end
+
     for z_ = psf_size(3):z_max
         z_pad_ = pad_size(z_, psf_size(3));
-        [x_, y_, x_pad_, y_pad_] = calculate_xy_size(z_, z_pad_, info, block_size_max, psf_size);
+        [x_, y_, x_pad_, y_pad_] = calculate_xy_size(z_, z_pad_, info, block_size_max, psf_size, filter);
         deconvolved_voxels = x_ * y_ * (z_ - 2 * z_pad_);
-        block_size = (x_ + 2 * x_pad_) * (y_ + 2 * y_pad_) * z_;
-        if mod(z_pad_, 1)==0 && deconvolved_voxels > max_deconvolved_voxels && block_size < block_size_max
+        if mod(z_pad_, 1)==0 && deconvolved_voxels > max_deconvolved_voxels && block_size(x_, y_, z_, x_pad_, y_pad_) <= block_size_max
             x = x_;
             y = y_;
             z = z_;
@@ -396,7 +413,7 @@ end
 
 function process(inpath, outpath, log_file, info, block, psf, numit, ...
     damping, clipval, stop_criterion, gpus, cache_drive, amplification, ...
-    sigma, resume, starting_block)
+    filter, resume, starting_block)
 
     start_time = datetime('now');
 
@@ -405,7 +422,6 @@ function process(inpath, outpath, log_file, info, block, psf, numit, ...
 
     % intermediate variables needed for interprocess communication
     min_max_path = fullfile(cache_drive, "min_max.mat");
-    dark_threshold = dark(sigma);
 
     % start deconvolution
     num_blocks = block.nx * block.ny * block.nz;
@@ -435,7 +451,7 @@ function process(inpath, outpath, log_file, info, block, psf, numit, ...
                         inpath, psf, numit, damping, ...
                         block, info, p1, p2, min_max_path, ...
                         stop_criterion, gpu, cache_drive, ...
-                        sigma, dark_threshold, ...
+                        filter, ...
                         starting_block + idx - 1);
                     pause(10);
                 end
@@ -450,7 +466,7 @@ function process(inpath, outpath, log_file, info, block, psf, numit, ...
                     inpath, psf, numit, damping, ...
                     block, info, p1, p2, min_max_path, ...
                     stop_criterion, gpus(1), cache_drive, ...
-                    sigma, dark_threshold, ...
+                    filter, ...
                     starting_block);
             end
             % make sure all the blocks are processed
@@ -473,7 +489,7 @@ end
 function deconvolve(inpath, psf, numit, damping, ...
     block, info, p1, p2, min_max_path, ...
     stop_criterion, gpu, cache_drive, ...
-    sigma, dark_threshold, starting_block)
+    filter, starting_block)
 
     if info.bit_depth == 8
         rawmax = 255;
@@ -518,7 +534,7 @@ function deconvolve(inpath, psf, numit, damping, ...
         % deconvolve current block of data
         disp(['processing block ' num2str(blnr) ' from ' num_blocks_str]);
 
-        [bl, lb, ub] = process_block(bl, block, psf, numit, damping, stop_criterion, gpu, sigma, dark_threshold);
+        [bl, lb, ub] = process_block(bl, block, psf, numit, damping, stop_criterion, gpu, filter);
 
         % delete block z_pad
         if block.z_pad > 0 && block.nz > 1
@@ -549,7 +565,7 @@ function deconvolve(inpath, psf, numit, damping, ...
     end
 end
 
-function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criterion, gpu, sigma, dark_threshold)
+function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criterion, gpu, filter)
     need_vram_conservation = false;
     if gpu
         gpu_device = gpuDevice(gpu);
@@ -559,14 +575,14 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
         bl = gpuArray(bl);
     end
     gaussian_start = tic;
-    if min(sigma(:)) > 0
-        bl = imgaussfilt3(bl, sigma, 'padding', 'circular');
-        bl = bl - dark_threshold;
+    if min(filter.sigma(:)) > 0
+        bl = imgaussfilt3(bl, filter.sigma, 'FilterSize', filter.size, 'Padding', 'circular');
+        bl = bl - filter.dark;
         bl = max(bl, 0);
 
         % flat = prctile(bl, 25, 3);
         % flat = median(bl, 3);
-        % flat = imgaussfilt3(flat, 2, 'padding', 'circular');
+        % flat = imgaussfilt3(flat, 2, 'Padding', 'circular');
         % flat = flat./max(flat(:));
         % bl = bl ./ flat;
         % clear flat;
@@ -1118,14 +1134,11 @@ function p_log(log_file, message)
     fprintf(log_file, '%s\r\n', message);
 end
 
-function dark_threshold = dark(sigma)
-    %sigma=[0.5 0.5 0.5];
-    a=zeros(floor(sigma*20));
-    a(floor(sigma(1)*10), floor(sigma(2)*10), floor(sigma(3)*10))=1;
-    a=imgaussfilt3(a, sigma, 'padding', 'circular');
-    % a(:,:,sigma(3)*10)
-    % dark_threshold = prctile(a(a>0), 50);
-    dark_threshold = mean(a(a>0));
+function dark_ = dark(filter)
+    a=zeros(floor(filter.sigma*20));
+    a(floor(filter.sigma(1)*10), floor(filter.sigma(2)*10), floor(filter.sigma(3)*10))=1;
+    a=imgaussfilt3(a, filter.sigma, 'FilterSize', filter.size, 'Padding', 'circular');
+    dark_ = mean(a(a>0));
 end
 
 %writes 32bit float tiff-imges
