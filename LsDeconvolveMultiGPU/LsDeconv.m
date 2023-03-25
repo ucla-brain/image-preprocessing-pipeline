@@ -25,7 +25,7 @@ function [] = LsDeconv(varargin)
         disp('LsDeconv: Deconvolution tool for Light Sheet Microscopy.');
         disp('TU Wien, 2019: This program was was initially written in MATLAB V2018b by klaus.becker@tuwien.ac.at');
         disp('Keivan Moradi, 2023: Patched it in MATLAB V2022b. kmoradi@mednet.ucla.edu. UCLA B.R.A.I.N (Dong lab)');
-        disp('Main changes: Multi-GPU and Multi-CPU parallel processing, Resume, Flip Y axis, and 3D gaussian filter support');
+        disp('Main changes: Improved block size calculareon and Multi-GPU and Multi-CPU parallel processing, Resume, Flip Y axis, and 3D gaussian filter support');
         disp(' ');
         disp(datetime('now'));
         disp(' ');
@@ -340,14 +340,14 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad] = autosplit(info, psf_size, 
     % smaller 3D blocks. After deconvolution the blocks will be
     % reassembled to save deconvolved z-steps. Therefore, there should be
     % enough ram to reassemble z z-steps in the end.
-    z_max = min(floor(ram_available / info.x / info.y / 16), info.z);
+    z_max = min(floor(ram_available / info.x / info.y / 8), info.z);
     z = z_max;
     % load extra z layers for each block to avoid generating artifacts on z
     % for efficiency of FFT pad data in a way that the largest prime
     % factor becomes <= 5 for each end of the block
     z_pad = ceil(pad_size(z, psf_size(3)));
     [x, y, x_pad, y_pad] = calculate_xy_size(z, z_pad, info, block_size_max, psf_size, filter);
-    max_deconvolved_voxels = 0;
+    max_deconvolved_voxels = x * y * (z - 2 * z_pad);
     
     % gaussian filter padding cannot be disabled and the added z_pad should
     % be considred in calculating block size
@@ -358,7 +358,7 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad] = autosplit(info, psf_size, 
             (z + 2 *            gaussian_pad_size(z, filter.size(3)));
     end
 
-    for z_ = psf_size(3):z_max
+    for z_ = z_max:-1:psf_size(3)
         z_pad_ = pad_size(z_, psf_size(3));
         [x_, y_, x_pad_, y_pad_] = calculate_xy_size(z_, z_pad_, info, block_size_max, psf_size, filter);
         deconvolved_voxels = x_ * y_ * (z_ - 2 * z_pad_);
