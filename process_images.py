@@ -21,7 +21,7 @@ from time import time, sleep
 from platform import uname
 from tsv.volume import TSVVolume
 from pystripe.core import batch_filter, imread_tif_raw_png, imsave_tif, MultiProcessQueueRunner, progress_manager, \
-    glob_re, correct_lightsheet
+    glob_re, correct_lightsheet, convert_to_8bit_fun
 from queue import Empty
 from multiprocessing import freeze_support, Queue, Process
 from supplements.cli_interface import select_among_multiple_options, ask_true_false_question, PrintColors
@@ -335,7 +335,9 @@ def process_stitched_tif(
         img: ndarray,
         rotation: int = 0,
         need_lightsheet_cleaning: bool = False,
-):
+        convert_to_8bit: bool = False,
+        bit_shift_to_right: int = 8
+) -> ndarray:
     if need_lightsheet_cleaning:
         artifact_length: int = 150
         background_window_size: int = 200
@@ -351,6 +353,9 @@ def process_stitched_tif(
                 step=(2, 2, 1)),
             lightsheet_vs_background=2.0
         ).reshape(img.shape[0], img.shape[1]).astype(img.dtype)
+
+    if convert_to_8bit and img.dtype != uint8:
+        img = convert_to_8bit_fun(img, bit_shift_to_right=bit_shift_to_right)
 
     if rotation == 90:
         img = rot90(img, 1)
@@ -399,7 +404,7 @@ def process_channel(
 
     assert source_path.joinpath(channel).exists()
     if need_destriping or need_flat_image_application or \
-            need_raw_png_to_tiff_conversion or need_16bit_to_8bit_conversion or need_compression or \
+            need_raw_png_to_tiff_conversion or need_compression or \
             down_sampling_factor not in (None, (1, 1)) or new_tile_size is not None:
         img_flat = None
         if need_flat_image_application:
@@ -467,7 +472,7 @@ def process_channel(
             # artifact_length=artifact_length,
             # percentile=0.25,
             # convert_to_16bit=False,  # defaults to False
-            convert_to_8bit=need_16bit_to_8bit_conversion,
+            convert_to_8bit=False,  # need_16bit_to_8bit_conversion
             bit_shift_to_right=right_bit_shift,
             continue_process=continue_process_pystripe,
             down_sample=down_sampling_factor,
@@ -629,7 +634,7 @@ def process_channel(
         shape = (shape[0], shape[2], shape[1])
 
     memory_needed_per_thread = 32 * shape[1] * shape[2] / 1024 ** 3
-    if need_16bit_to_8bit_conversion or tsv_volume.dtype in (uint8, "uint8"):
+    if tsv_volume.dtype in (uint8, "uint8"):
         memory_needed_per_thread /= 2
     memory_ram = virtual_memory().available / 1024 ** 3  # in GB
     merge_step_cores = min(floor(memory_ram / memory_needed_per_thread), cpu_physical_core_count)
@@ -643,6 +648,8 @@ def process_channel(
         kwargs={
             "rotation": 90 if need_rotation_stitched_tif else 0,
             "need_lightsheet_cleaning": need_lightsheet_cleaning,
+            "convert_to_8bit": need_16bit_to_8bit_conversion,
+            "bit_shift_to_right": right_bit_shift
         },
         timeout=None,
         max_processors=merge_step_cores,
