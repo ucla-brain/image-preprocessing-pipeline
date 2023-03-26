@@ -340,7 +340,7 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad] = autosplit(info, psf_size, 
     % smaller 3D blocks. After deconvolution the blocks will be
     % reassembled to save deconvolved z-steps. Therefore, there should be
     % enough ram to reassemble z z-steps in the end.
-    z_max = min(floor(ram_available / info.x / info.y / 8), info.z);
+    z_max = min(floor(ram_available * 0.75 / info.x / info.y / 8), info.z);
     z = z_max;
     % load extra z layers for each block to avoid generating artifacts on z
     % for efficiency of FFT pad data in a way that the largest prime
