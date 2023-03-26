@@ -342,7 +342,7 @@ def process_stitched_tif(
         artifact_length: int = 150
         background_window_size: int = 200
         img = correct_lightsheet(
-            img.reshape(img.shape[0], img.shape[1], 1),
+            img.reshape((img.shape[0], img.shape[1], 1)),
             percentile=0.25,
             lightsheet=dict(selem=(1, artifact_length, 1)),
             background=dict(
