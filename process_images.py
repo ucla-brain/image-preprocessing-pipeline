@@ -42,7 +42,7 @@ VoxelSizeX_4x, VoxelSizeY_4x = (1.809,) * 2  # old stage --> 1.835
 VoxelSizeX_8x, VoxelSizeY_8x = (0.8,) * 2
 VoxelSizeX_10x, VoxelSizeY_10x = (0.661,) * 2  # new stage --> 0.6, 0.6
 VoxelSizeX_15x, VoxelSizeY_15x = (0.422,) * 2
-VoxelSizeX_15x_new, VoxelSizeY_15x_new = (0.4,) * 2
+VoxelSizeX_15x_new, VoxelSizeY_15x_new = (0.41,) * 2
 VoxelSizeX_40x, VoxelSizeY_40x = (0.14, 0.14)  # 0.143, 0.12
 
 
@@ -592,17 +592,17 @@ def process_channel(
             command += [
                 f"-{step}",
                 # Overlap (in pixels) between two adjacent tiles along H.
-                f"--oH={tile_overlap_x}",
+                # f"--oH={tile_overlap_x}",
                 # Overlap (in pixels) between two adjacent tiles along V.
-                f"--oV={0 if objective == '40x' else tile_overlap_y}",
+                # f"--oV={0 if objective == '40x' else tile_overlap_y}",
                 # Displacements search radius along H (in pixels). Default value is 25!
-                f"--sH={max(200, tile_overlap_x - 1)}",
+                f"--sH={max(25, tile_overlap_x - 1)}",
                 # Displacements search radius along V (in pixels). Default value is 25!
-                f"--sV={max(200, tile_overlap_y - 1)}",
+                f"--sV={max(25, tile_overlap_y - 1)}",
                 # Displacements search radius along D (in pixels).
-                f"--sD={0 if (objective == '40x' or stitch_mip) else min(200, subvolume_depth - 1)}",
+                f"--sD={0 if (objective == '40x' or stitch_mip) else min(min_subvolume_depth, subvolume_depth - 1)}",
                 # Number of slices per subvolume partition
-                f"--subvoldim={subvolume_depth}",
+                f"--subvoldim={min_subvolume_depth}",
                 # used in the pairwise displacements computation step.
                 # dimension of layers obtained by dividing the volume along D
                 "--threshold=0.6",  # threshold between 0.55 and 0.7 is good. Higher values block alignment.
@@ -944,14 +944,11 @@ def main(source_path):
         return new_name
 
     new_destination_name = destination_name(source_path.name)
-    down_sampling_factor = (int(voxel_size_z // voxel_size_y), int(voxel_size_z // voxel_size_x))
+    down_sampling_factor = None
     need_down_sampling = False
     need_up_sizing = False
     new_tile_size = None
-    if down_sampling_factor < (1, 1):
-        # Down-sampling makes sense if x-axis and y-axis voxel sizes were smaller than z axis voxel size
-        # Down-sampling is disabled.
-        down_sampling_factor = None
+    if voxel_size_z < voxel_size_x or voxel_size_z < voxel_size_y:
         need_up_sizing = ask_true_false_question(
             "Do you need to upsize images for isotropic voxel generation before stitching?")
         if need_up_sizing:
@@ -962,12 +959,10 @@ def main(source_path):
                 int(round(tile_size[1] * voxel_size_x / voxel_size_z, 0))
             )
             voxel_size_x = voxel_size_y = voxel_size_z
-    elif down_sampling_factor > (1, 1):
+    elif voxel_size_z > voxel_size_x or voxel_size_z > voxel_size_y:
         need_down_sampling = ask_true_false_question(
-            "Do you need to down-sample images for isotropic voxel generation before stitching?")
-        if not need_down_sampling:
-            down_sampling_factor = None
-        else:
+            "Do you need to down-sample and resize images for isotropic voxel generation before stitching?")
+        if need_down_sampling:
             de_striped_posix += "_downsampled"
             what_for += "down-sampling "
             new_tile_size = (
@@ -975,6 +970,11 @@ def main(source_path):
                 int(round(tile_size[1] * voxel_size_x / voxel_size_z, 0))
             )
             voxel_size_x = voxel_size_y = voxel_size_z
+            down_sampling_factor = (int(voxel_size_z // voxel_size_y), int(voxel_size_z // voxel_size_x))
+            if down_sampling_factor == (1, 1):
+                down_sampling_factor = None
+    else:
+        print(f'{PrintColors.WARNING}make sure voxel sizes are really equal!{PrintColors.ENDC}')
 
     need_destriping = ask_true_false_question("Do you need to remove stripes from images?")
     if need_destriping:
