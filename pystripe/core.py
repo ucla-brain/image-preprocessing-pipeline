@@ -371,7 +371,7 @@ def apply_flat(img, flat):
 
 def filter_streaks(
         img: ndarray,
-        sigma: Tuple[int, int],
+        sigma: Tuple[int, int] = (256, 256),
         level: int = 0,
         wavelet: str = 'db9',
         crossover: float = 10,
@@ -499,7 +499,7 @@ def read_filter_save(
         threshold: float = -1,
         directions: str = 'v',
         z_idx: int = None,
-        rotate: bool = False,
+        rotate: int = 0,
         flip_upside_down: bool = False,
         lightsheet: bool = False,
         artifact_length: int = 150,
@@ -549,8 +549,8 @@ def read_filter_save(
         Intensity to subtract from the images for dark offset. Default is 0.
     z_idx : int
         z index of DCIMG slice. Only applicable to DCIMG files.
-    rotate : bool
-        rotate x and y if true
+    rotate : int
+        Rotate the image. One of 0, 90, 180 or 270 degree values are accepted. Default is 0.
     flip_upside_down : bool
         flip the image parallel to y-axis. Default is false.
     lightsheet : bool
@@ -646,7 +646,7 @@ def read_filter_save(
             if not sigma[0] == sigma[1] == 0:
                 img = filter_streaks(
                     img,
-                    sigma,
+                    sigma=sigma,
                     level=level,
                     wavelet=wavelet,
                     crossover=crossover,
@@ -673,8 +673,13 @@ def read_filter_save(
         if new_size is not None and tile_size > new_size:
             img = resize(img, new_size, preserve_range=True, anti_aliasing=True).astype(d_type)
 
-        if rotate:
-            img = rot90(img)
+        if rotate == 90:
+            img = rot90(img, 1)
+        elif rotate == 180:
+            img = rot90(img, 2)
+        elif rotate == 270:
+            img = rot90(img, 3)
+
         if flip_upside_down:
             img = flipud(img)
         if convert_to_16bit and img.dtype != uint16:
@@ -899,7 +904,7 @@ def batch_filter(
         threshold: int = -1,
         directions: str = 'v',
         z_step: float = None,
-        rotate: bool = False,
+        rotate: int = 0,
         flip_upside_down: bool = False,
         lightsheet: bool = False,
         artifact_length: int = 150,
@@ -957,8 +962,8 @@ def batch_filter(
         Intensity to subtract from the images for dark offset. Default is 0.
     z_step : int
         z-step in tenths of micron. only used for DCIMG files.
-    rotate : bool
-        Flag for 90-degree rotation.
+    rotate : int
+        Rotate the image. One of 0, 90, 180 or 270 degree values are accepted. Default is 0.
     flip_upside_down : bool
         flip the image parallel to y-axis. Default is false.
     lightsheet : bool
@@ -1137,8 +1142,8 @@ def _parse_args():
                         help="Intensity of dark offset in flat-field correction")
     parser.add_argument("--zstep", "-z", type=float, default=None,
                         help="Z-step in micron. Only used for DCIMG files.")
-    parser.add_argument("--rotate", "-r", action='store_false',
-                        help="Rotate output images 90 degrees counter-clockwise")
+    parser.add_argument("--rotate", "-r", type=int, default=0,
+                        help="Rotate the image. One of 0, 90, 180 or 270 degree values are accepted. Default is 0.")
     parser.add_argument("--flip_upside_down", "-flup", action='store_false',
                         help="Flip the image upside down along the y-axis. Default is false")
     parser.add_argument("--lightsheet", action="store_true",

@@ -11,7 +11,7 @@ from numpy import max as np_max
 from numpy import min as np_min
 from pathlib import Path
 from pystripe.core import convert_to_8bit_fun
-from process_images import get_imaris_command, MultiProcessCommandRunner, commands_progress_manger
+from process_images import get_imaris_command, MultiProcessCommandRunner, commands_progress_manger, process_img
 from argparse import RawDescriptionHelpFormatter, ArgumentParser, Namespace, BooleanOptionalAction
 from parallel_image_processor import parallel_image_processor
 from supplements.cli_interface import PrintColors
@@ -25,15 +25,15 @@ os.environ['NUMEXPR_NUM_THREADS'] = '1'
 os.environ['OMP_NUM_THREADS'] = '1'
 
 
-def process_img(image: ndarray, dark: int = 0, bit_shift: int = 8, gaussian_filter_2d=True):
-    # image = filter_streaks(image, (128, 256), wavelet='db2')
-    if np_min(image) < np_max(image):
-        if dark > 0:
-            image = where(image > dark, image - dark, 0)
-        if gaussian_filter_2d:
-            image = gaussian(image, sigma=1, preserve_range=True, truncate=2).astype(image.dtype)
-    image = convert_to_8bit_fun(image, bit_shift_to_right=bit_shift)
-    return image
+# def process_img(image: ndarray, dark: int = 0, bit_shift: int = 8, gaussian_filter_2d=True):
+#     # image = filter_streaks(image, (128, 256), wavelet='db2')
+#     if np_min(image) < np_max(image):
+#         if dark > 0:
+#             image = where(image > dark, image - dark, 0)
+#         if gaussian_filter_2d:
+#             image = gaussian(image, sigma=1, preserve_range=True, truncate=2).astype(image.dtype)
+#     image = convert_to_8bit_fun(image, bit_shift_to_right=bit_shift)
+#     return image
 
 
 def main(args: Namespace):
@@ -60,7 +60,14 @@ def main(args: Namespace):
             input_path,
             tif_2d_folder,
             (),
-            {"dark": args.dark, "bit_shift": args.bit_shift, "gaussian_filter_2d": args.gaussian},
+            {
+                "gaussian_filter_2d": args.gaussian,
+                "need_de_striping": args.de_stripe,
+                "dark": args.dark,
+                "need_lightsheet_cleaning": args.background_subtraction,
+                "bit_shift": args.bit_shift,
+                "rotation": args.rotation,
+            },
             max_processors=args.nthreads,
             channel=args.channel,
             compression=("ADOBE_DEFLATE", args.compression_level) if args.compression_level > 0 else None
@@ -74,7 +81,7 @@ def main(args: Namespace):
             tif_2d_folder,
             workers=args.nthreads,
             # sigma=[foreground, background] Default is [0, 0], indicating no de-striping.
-            sigma=(0, 0),
+            sigma=(256, 256) if args.de_stripe else (0, 0),
             # level=0,
             wavelet="db10",
             crossover=10,
@@ -84,19 +91,20 @@ def main(args: Namespace):
             dark=args.dark,
             # z_step=voxel_size_z,  # z-step in micron. Only used for DCIMG files.
             # rotate=False,
-            lightsheet=False,
+            lightsheet=args.background_subtraction,
             artifact_length=150,
             # percentile=0.25,
             gaussian_filter_2d=args.gaussian,
             # convert_to_16bit=False,  # defaults to False
             convert_to_8bit=args.convert_to_8bit,
             bit_shift_to_right=args.bit_shift,
+            rotate=args.rotation,
             continue_process=True,
             dtype='uint16',
             tile_size=None,
             down_sample=None,
             new_size=None,
-            timeout=None
+            timeout=None,
         )
     elif input_path.is_dir():
         tif_2d_folder = input_path
@@ -227,14 +235,22 @@ if __name__ == '__main__':
                         help="number of threads. default is 12.")
     parser.add_argument("--channel", "-c", type=int, default=0,
                         help="channel to be converted. Default is 0.")
-    parser.add_argument("--dark", "-d", type=int, default=0,
-                        help="background vs foreground threshold. Default is 0.")
     parser.add_argument("--gaussian", "-g", default=False, action=BooleanOptionalAction,
                         help="apply Gaussian filter to denoise. Default is --no-gaussian.")
+    parser.add_argument("--de_stripe", default=False, action=BooleanOptionalAction,
+                        help="Apply de-striping algorithm. Default is --no-de_stripe")
+    parser.add_argument("--dark", "-d", type=int, default=0,
+                        help="background vs foreground threshold. Default is 0.")
+    parser.add_argument("--background_subtraction", default=False, action=BooleanOptionalAction,
+                        help="Apply lightsheet cleaning algorithm. Default is --no-background_subtraction")
     parser.add_argument("--convert_to_8bit", default=False, action=BooleanOptionalAction,
                         help="convert to 8-bit. Default is --no-convert_to_8bit")
     parser.add_argument("--bit_shift", "-b", type=int, default=8,
-                        help="bit_shift for 8-bit conversion. An number between 0 and 8. Smaller values make images brighter compared with he original image. Default is 8 (no change in brightness).")
+                        help="bit_shift for 8-bit conversion. An number between 0 and 8. "
+                             "Smaller values make images brighter compared with he original image. "
+                             "Default is 8 (no change in brightness).")
+    parser.add_argument("--rotation", "-r", type=int, default=0,
+                        help="Rotate the image. One of 0, 90, 180 or 270 degree values are accepted. Default is 0.")
     parser.add_argument("--compression_level", "-z", type=int, default=1,
                         help="compression level for tif files. Default is 1.")
     parser.add_argument("--movie_start", type=int, default=0,

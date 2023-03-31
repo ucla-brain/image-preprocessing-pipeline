@@ -13,7 +13,10 @@ from cpufeature.extension import CPUFeature
 from re import compile, match, findall, IGNORECASE, MULTILINE
 from psutil import cpu_count, virtual_memory
 from tqdm import tqdm
-from numpy import ndarray, zeros, rot90, uint8, float32
+from numpy import ndarray, zeros, rot90, uint8, float32, where
+from numpy import max as np_max
+from numpy import min as np_min
+from skimage.filters import gaussian
 from pathlib import Path
 from flat import create_flat_img
 from datetime import timedelta
@@ -21,7 +24,7 @@ from time import time, sleep
 from platform import uname
 from tsv.volume import TSVVolume
 from pystripe.core import batch_filter, imread_tif_raw_png, imsave_tif, MultiProcessQueueRunner, progress_manager, \
-    glob_re, correct_lightsheet, convert_to_8bit_fun
+    glob_re, correct_lightsheet, convert_to_8bit_fun, filter_streaks
 from queue import Empty
 from multiprocessing import freeze_support, Queue, Process
 from supplements.cli_interface import select_among_multiple_options, ask_true_false_question, PrintColors
@@ -331,28 +334,46 @@ def run_command(command, need_progress_dot=True):
     p_log("")
 
 
-def process_stitched_tif(
+def process_img(
         img: ndarray,
-        rotation: int = 0,
+        gaussian_filter_2d: float = False,
+        need_de_striping: float = False,
+        dark: int = 0,
         need_lightsheet_cleaning: bool = False,
         convert_to_8bit: bool = False,
-        bit_shift_to_right: int = 8
+        bit_shift_to_right: int = 8,
+        rotation: int = 0
 ) -> ndarray:
-    if need_lightsheet_cleaning:
-        artifact_length: int = 150
-        background_window_size: int = 200
-        img = correct_lightsheet(
-            img.reshape((img.shape[0], img.shape[1], 1)),
-            percentile=0.25,
-            lightsheet=dict(selem=(1, artifact_length, 1)),
-            background=dict(
-                selem=(background_window_size, background_window_size, 1),
-                spacing=(25, 25, 1),
-                interpolate=1,
-                dtype=float32,
-                step=(2, 2, 1)),
-            lightsheet_vs_background=2.0
-        ).reshape(img.shape[0], img.shape[1]).astype(img.dtype)
+    if np_min(img) < np_max(img):
+        if gaussian_filter_2d:
+            img = gaussian(img, sigma=1, preserve_range=True, truncate=2).astype(img.dtype)
+        if need_de_striping:
+            img = filter_streaks(
+                img,
+                sigma=(256, 256),
+                level=0,
+                wavelet="db10",
+                crossover=10,
+                threshold=-1,
+                directions="v"
+            )
+        if dark > 0:
+            img = where(img > dark, img - dark, 0)
+        if need_lightsheet_cleaning:
+            artifact_length: int = 150
+            background_window_size: int = 200
+            img = correct_lightsheet(
+                img.reshape((img.shape[0], img.shape[1], 1)),
+                percentile=0.25,
+                lightsheet=dict(selem=(1, artifact_length, 1)),
+                background=dict(
+                    selem=(background_window_size, background_window_size, 1),
+                    spacing=(25, 25, 1),
+                    interpolate=1,
+                    dtype=float32,
+                    step=(2, 2, 1)),
+                lightsheet_vs_background=2.0
+            ).reshape(img.shape[0], img.shape[1]).astype(img.dtype)
 
     if convert_to_8bit and img.dtype != uint8:
         img = convert_to_8bit_fun(img, bit_shift_to_right=bit_shift_to_right)
@@ -641,7 +662,7 @@ def process_channel(
 
     # need_lightsheet_cleaning
     return_code = parallel_image_processor(
-        process_stitched_tif,
+        process_img,
         source=tsv_volume,
         destination=stitched_tif_path,
         args=(),
