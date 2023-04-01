@@ -559,8 +559,7 @@ def process_channel(
                     memory_needed_per_thread *= resolution
         else:
             memory_needed_per_thread *= 2048 * 2048
-        if need_16bit_to_8bit_conversion or \
-                TifStack(glob_re(r"\.tiff?$", preprocessed_path.joinpath(channel)).__next__().parent).dtype == uint8:
+        if TifStack(glob_re(r"\.tiff?$", preprocessed_path.joinpath(channel)).__next__().parent).dtype == uint8:
             memory_needed_per_thread /= 2
         memory_ram = virtual_memory().available // 1024 ** 3  # in GB
         memory_needed_per_thread //= 1024 ** 3
@@ -614,9 +613,9 @@ def process_channel(
                 command = [f"{terastitcher}"]
             command += [
                 f"-{step}",
-                # Overlap (in pixels) between two adjacent tiles along H.
+                # Overlap (in pixels) between two adjacent tiles along H. Providing oH is harmful sometimes.
                 # f"--oH={tile_overlap_x}",
-                # Overlap (in pixels) between two adjacent tiles along V.
+                # Overlap (in pixels) between two adjacent tiles along V. Providing oV is harmful sometimes.
                 # f"--oV={0 if objective == '40x' else tile_overlap_y}",
                 # Displacements search radius along H (in pixels). Default value is 25!
                 f"--sH={max(25, tile_overlap_x - 1)}",
