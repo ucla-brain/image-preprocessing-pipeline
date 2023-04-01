@@ -424,7 +424,7 @@ def process_channel(
     # preprocess each tile as needed using PyStripe --------------------------------------------------------------------
 
     assert source_path.joinpath(channel).exists()
-    if need_destriping or need_flat_image_application or \
+    if (need_destriping and objective == "40x") or need_flat_image_application or \
             need_raw_png_to_tiff_conversion or need_compression or \
             down_sampling_factor not in (None, (1, 1)) or new_tile_size is not None:
         img_flat = None
@@ -464,13 +464,15 @@ def process_channel(
 
         # sigma=(foreground, background) Default is (0, 0), indicating no de-striping.
         sigma = (0, 0)
-        if need_destriping:
-            if objective == "4x":
-                sigma = (32, 32)
-            elif objective == "40x":
-                sigma = (128, 256)
-            else:
-                sigma = (256, 256)
+        # if need_destriping:
+        #     if objective == "4x":
+        #         sigma = (32, 32)
+        #     elif objective == "40x":
+        #         sigma = (128, 256)
+        #     else:
+        #         sigma = (256, 256)
+        if need_destriping and objective == "40x":
+            sigma = (128, 256)
 
         return_code = batch_filter(
             source_path / channel,
@@ -667,10 +669,11 @@ def process_channel(
         destination=stitched_tif_path,
         args=(),
         kwargs={
-            "rotation": 90 if need_rotation_stitched_tif else 0,
+            "need_de_striping": need_destriping,
             "need_lightsheet_cleaning": need_lightsheet_cleaning,
             "convert_to_8bit": need_16bit_to_8bit_conversion,
-            "bit_shift_to_right": right_bit_shift
+            "bit_shift_to_right": right_bit_shift,
+            "rotation": 90 if need_rotation_stitched_tif else 0,
         },
         timeout=None,
         max_processors=merge_step_cores,
