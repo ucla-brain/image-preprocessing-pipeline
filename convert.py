@@ -232,7 +232,7 @@ if __name__ == '__main__':
     parser.add_argument("--movie", "-m", type=str, required=False, default='',
                         help="Path to mp4 output file")
     parser.add_argument("--nthreads", "-n", type=int, default=psutil.cpu_count(logical=False),
-                        help="number of threads. default is 12.")
+                        help="number of threads. default is all physical cores for tif conversion and 12 for terafly.")
     parser.add_argument("--channel", "-c", type=int, default=0,
                         help="channel to be converted. Default is 0.")
     parser.add_argument("--gaussian", "-g", default=False, action=BooleanOptionalAction,
