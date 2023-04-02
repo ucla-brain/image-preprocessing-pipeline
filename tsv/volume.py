@@ -356,6 +356,7 @@ class TSVStack(TSVStackBase):
                 my_paths.append((ordering, os.path.join(directory, filename)))
             my_paths = [_[1] for _ in sorted(my_paths)]
             self.__paths = []
+            redo_path = False
             for idx in self.__idxs_to_keep:
                 try:
                     self.__paths += [my_paths[idx]]
@@ -368,6 +369,10 @@ class TSVStack(TSVStackBase):
                                   f"\t\t\t{file}")
                             imwrite(file, zeros(self.shape[1:3], dtype=self.dtype))
                     # raise RuntimeError
+                    redo_path = True
+            if redo_path:
+                for idx in self.__idxs_to_keep:
+                    self.__paths += [my_paths[idx]]
 
         return self.__paths
 
