@@ -10,14 +10,15 @@ else:
 import itertools
 import numpy as np
 import os
-import pathlib
 import re
+from pathlib import Path
 from xml.etree import ElementTree
 from .raw import raw_imread
 from numpy import ndarray, zeros, hstack
 from supplements.cli_interface import PrintColors
 from tifffile import imread, imwrite
 from typing import List, Union
+from pystripe.core import glob_re
 
 
 def get_dim_tuple(element):
@@ -283,7 +284,7 @@ class TSVStackBase(VExtentBase):
 
 
 class TSVStack(TSVStackBase):
-    def __init__(self, element, offset: Location, root_dir,
+    def __init__(self, element, offset: Location, root_dir: str,
                  ordering_pattern=None,
                  input_plugin=None,
                  z_step: int = None):
@@ -336,6 +337,7 @@ class TSVStack(TSVStackBase):
             ordering_pattern = "[^0-9]*(\\d+).*\\.raw" if input_plugin == "raw" else "[^0-9]*(\\d+).*\\.tiff?"
         self.ordering_pattern = ordering_pattern
         self.__paths = None
+        self.suffix: str = glob_re(ordering_pattern, Path(root_dir)).__next__().suffix
 
     @property
     def paths(self):
@@ -360,7 +362,7 @@ class TSVStack(TSVStackBase):
                 except IndexError:
                     print(f"{PrintColors.WARNING}missing tif files in:\n\t{directory}{PrintColors.ENDC}")
                     for i in range(self.__idxs_to_keep[-1]):
-                        file = os.path.join(directory, f"{int(i*self.z_step[0]*10):06}.tif")
+                        file = os.path.join(directory, f"{int(i*self.z_step[0]*10):06}{self.suffix}")
                         if not os.path.exists(file):
                             print(f"\t\tthe following missing files is replaced with a dummy (zeros) image:\n"
                                   f"\t\t\t{file}")
@@ -378,7 +380,7 @@ class TSVSimpleStack(TSVStackBase):
         self._x0 = x0
         self._y0 = y0
         self._z0 = z0
-        self.root = root
+        self.root: Path = root
         self.__paths = None
         self.z0slice = 0
 
@@ -640,7 +642,7 @@ class TSVVolume(TSVVolumeBase):
         self.ignore_z_offsets = ignore_z_offsets
         root = tree.getroot()
         assert root.tag == "TeraStitcher"
-        self.voxel_dims = get_dim_tuple(root.find("voxel_dims")) # zyx order
+        self.voxel_dims = get_dim_tuple(root.find("voxel_dims"))  # zyx order
         dims = root.find("dimensions")
         self.stack_rows = int(dims.attrib["stack_rows"])
         self.origin = get_dim_tuple(root.find("origin"))
@@ -772,7 +774,7 @@ class TSVSimpleVolume(TSVVolumeBase):
         :param voxel_size_z: The size of a voxel in the Z direction
         """
         self.voxel_dims = (voxel_size_y, voxel_size_y, voxel_size_z)
-        root_path = pathlib.Path(root_dir)
+        root_path = Path(root_dir)
         xdirs = sorted([_ for _ in root_path.glob("*")
                         if _.is_dir() and re.match("[0-9]+", _.name)])
         ydirs = [sorted([__ for __ in _.glob("*")
