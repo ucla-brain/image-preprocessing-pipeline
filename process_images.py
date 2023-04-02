@@ -1072,9 +1072,9 @@ def main(source_path):
     stitched_path = source_path.parent / (source_path.name + "_stitched")
     print_input_file_names = False
 
-    if need_destriping or need_flat_image_application or need_raw_png_to_tiff_conversion or \
+    if (need_destriping and objective == '40x') or need_flat_image_application or need_raw_png_to_tiff_conversion or \
             need_16bit_to_8bit_conversion or need_down_sampling or need_compression or need_gaussian_filter_2d or \
-            need_lightsheet_cleaning or need_baseline_subtraction:
+            need_baseline_subtraction:
 
         print_input_file_names = False  # ask_true_false_question(
         # "Do you need to print raw or tif file names to find corrupt files during preprocessing stage?")
