@@ -371,6 +371,7 @@ class TSVStack(TSVStackBase):
                     # raise RuntimeError
                     redo_path = True
             if redo_path:
+                self.__paths = []
                 for idx in self.__idxs_to_keep:
                     self.__paths += [my_paths[idx]]
 
