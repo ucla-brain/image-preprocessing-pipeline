@@ -17,6 +17,8 @@ from numpy import ndarray, zeros, rot90, uint8, float32, where
 from numpy import max as np_max
 from numpy import min as np_min
 from skimage.filters import gaussian
+from skimage.measure import block_reduce
+from skimage.transform import resize
 from pathlib import Path
 from flat import create_flat_img
 from datetime import timedelta
@@ -29,7 +31,7 @@ from queue import Empty
 from multiprocessing import freeze_support, Queue, Process
 from supplements.cli_interface import select_among_multiple_options, ask_true_false_question, PrintColors
 from supplements.cli_interface import ask_for_a_number_in_range, date_time_now
-from typing import List, Tuple, Dict, Union
+from typing import List, Tuple, Dict, Union, Callable
 from supplements.downsampling import TifStack
 from parallel_image_processor import parallel_image_processor
 from math import floor
@@ -338,13 +340,22 @@ def process_img(
         img: ndarray,
         gaussian_filter_2d: float = False,
         need_de_striping: float = False,
+        down_sample: Tuple[int, int] = None,
+        down_sample_method: Callable = np_max,
+        new_size: Tuple[int, int] = None,
         dark: int = 0,
         need_lightsheet_cleaning: bool = False,
         convert_to_8bit: bool = False,
         bit_shift_to_right: int = 8,
         rotation: int = 0
 ) -> ndarray:
-    if np_min(img) < np_max(img):
+    img_min = np_min(img)
+    img_max = np_max(img)
+    d_type = img.dtype
+    tile_size = img.shape
+
+    # de-noising
+    if img_min < img_max:
         if gaussian_filter_2d:
             img = gaussian(img, sigma=1, preserve_range=True, truncate=2).astype(img.dtype)
         if need_de_striping:
@@ -357,6 +368,15 @@ def process_img(
                 threshold=-1,
                 directions="v"
             )
+
+    # down-sizing
+    if down_sample is not None:
+        img = block_reduce(img, block_size=down_sample, func=down_sample_method).astype(d_type)
+    if new_size is not None and tile_size < new_size:
+        img = resize(img, new_size, preserve_range=True, anti_aliasing=False).astype(d_type)
+
+    # background cleaning
+    if img_min < img_max:
         if dark > 0:
             img = where(img > dark, img - dark, 0)
         if need_lightsheet_cleaning:
@@ -374,6 +394,10 @@ def process_img(
                     step=(2, 2, 1)),
                 lightsheet_vs_background=2.0
             ).reshape(img.shape[0], img.shape[1]).astype(img.dtype)
+
+    # up-sizing
+    if new_size is not None and tile_size > new_size:
+        img = resize(img, new_size, preserve_range=True, anti_aliasing=True).astype(d_type)
 
     if convert_to_8bit and img.dtype != uint8:
         img = convert_to_8bit_fun(img, bit_shift_to_right=bit_shift_to_right)

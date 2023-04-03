@@ -6,11 +6,11 @@ from pystripe.core import batch_filter
 from time import time
 from platform import uname
 from multiprocessing import freeze_support, Queue
-from numpy import ndarray, where
 from numpy import max as np_max
 from numpy import min as np_min
+from numpy import mean as np_mean
+from numpy import median as np_median
 from pathlib import Path
-from pystripe.core import convert_to_8bit_fun
 from process_images import get_imaris_command, MultiProcessCommandRunner, commands_progress_manger, process_img
 from argparse import RawDescriptionHelpFormatter, ArgumentParser, Namespace, BooleanOptionalAction
 from parallel_image_processor import parallel_image_processor
@@ -18,22 +18,10 @@ from supplements.cli_interface import PrintColors
 from cpufeature.extension import CPUFeature
 from tqdm import tqdm
 from re import compile
-from skimage.filters import gaussian
 
 os.environ['MKL_NUM_THREADS'] = '1'
 os.environ['NUMEXPR_NUM_THREADS'] = '1'
 os.environ['OMP_NUM_THREADS'] = '1'
-
-
-# def process_img(image: ndarray, dark: int = 0, bit_shift: int = 8, gaussian_filter_2d=True):
-#     # image = filter_streaks(image, (128, 256), wavelet='db2')
-#     if np_min(image) < np_max(image):
-#         if dark > 0:
-#             image = where(image > dark, image - dark, 0)
-#         if gaussian_filter_2d:
-#             image = gaussian(image, sigma=1, preserve_range=True, truncate=2).astype(image.dtype)
-#     image = convert_to_8bit_fun(image, bit_shift_to_right=bit_shift)
-#     return image
 
 
 def main(args: Namespace):
@@ -51,10 +39,37 @@ def main(args: Namespace):
         dir_tera_fly.mkdir(exist_ok=True, parents=True)
 
     return_code = 0
+
+    down_sample = None
+    if args.downsample_y > 0 or args.downsample_x > 0:
+        down_sample = (
+            args.downsample_y if args.downsample_y else 1,
+            args.downsample_x if args.downsample_x else 1,
+        )
+    if args.downsample_method.lower() == 'min':
+        downsample_method = np_min
+    elif args.downsample_method.lower() == 'max':
+        downsample_method = np_max
+    elif args.downsample_method.lower() == 'mean':
+        downsample_method = np_mean
+    elif args.downsample_method.lower() == 'median':
+        downsample_method = np_median
+    else:
+        print(f"{PrintColors.FAIL}unsupported down-sampling method: {args.downsample_method}{PrintColors.ENDC}")
+        raise RuntimeError
+
+    new_size = None
+    if args.new_size_y and args.new_size_x:
+        new_size = (args.new_size_y, args.new_size_x)
+    elif args.new_size_y or args.new_size_x:
+        print(f"{PrintColors.FAIL}both new_size_x and new_size_y are needed!{PrintColors.ENDC}")
+        raise RuntimeError
+
     if input_path.is_file() and input_path.suffix.lower() == ".ims":
         if not args.tif:
             print(f"{PrintColors.FAIL} tif path is needed for ims to any format{PrintColors.ENDC}")
             raise RuntimeError
+
         return_code = parallel_image_processor(
             process_img,
             input_path,
@@ -63,6 +78,9 @@ def main(args: Namespace):
             {
                 "gaussian_filter_2d": args.gaussian,
                 "need_de_striping": args.de_stripe,
+                "down_sample": down_sample,
+                "down_sample_method": downsample_method,
+                "new_size": new_size,
                 "dark": args.dark,
                 "need_lightsheet_cleaning": args.background_subtraction,
                 "bit_shift": args.bit_shift,
@@ -72,7 +90,9 @@ def main(args: Namespace):
             channel=args.channel,
             compression=("ADOBE_DEFLATE", args.compression_level) if args.compression_level > 0 else None
         )
-    elif input_path.is_dir() and (args.dark > 0 or args.convert_to_8bit):
+    elif input_path.is_dir() and (
+            args.dark > 0 or args.convert_to_8bit or new_size or down_sample or args.rotation or args.gaussian or
+            args.background_subtraction or args.de_stripe):
         if not args.tif:
             print(f"{PrintColors.FAIL} tif path is needed for processing 2D tif series{PrintColors.ENDC}")
             raise RuntimeError
@@ -102,8 +122,8 @@ def main(args: Namespace):
             continue_process=True,
             dtype='uint16',
             tile_size=None,
-            down_sample=None,
-            new_size=None,
+            down_sample=down_sample,
+            new_size=new_size,
             timeout=None,
         )
     elif input_path.is_dir():
@@ -239,6 +259,16 @@ if __name__ == '__main__':
                         help="apply Gaussian filter to denoise. Default is --no-gaussian.")
     parser.add_argument("--de_stripe", default=False, action=BooleanOptionalAction,
                         help="Apply de-striping algorithm. Default is --no-de_stripe")
+    parser.add_argument("--downsample_x", "-dsx", type=int, default=0,
+                        help="Downsampling factor for x-axis. Default is 0.")
+    parser.add_argument("--downsample_y", "-dsy", type=int, default=0,
+                        help="Downsampling factor for y-axis. Default is 0.")
+    parser.add_argument("--downsample_method", "-dsm", type=str, default='max',
+                        help="Downsampling method. options are max, min, mean, median. Default is max.")
+    parser.add_argument("--new_size_x", "-nsx", type=int, default=0,
+                        help="new size of x-axis. Default is 0.")
+    parser.add_argument("--new_size_y", "-nsy", type=int, default=0,
+                        help="new size of y-axis. Default is 0.")
     parser.add_argument("--dark", "-d", type=int, default=0,
                         help="background vs foreground threshold. Default is 0.")
     parser.add_argument("--background_subtraction", default=False, action=BooleanOptionalAction,

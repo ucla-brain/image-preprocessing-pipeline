@@ -3,6 +3,8 @@ from re import compile, IGNORECASE
 from warnings import filterwarnings
 from numpy import max as np_max
 from numpy import min as np_min
+from numpy import mean as np_mean
+from numpy import median as np_median
 from numpy import uint8, uint16, float32, float64, ndarray, generic, zeros, broadcast_to, exp, log, \
     cumsum, arange, unique, interp, pad, clip, where, rot90, flipud
 from scipy.fftpack import rfft, fftshift, irfft
@@ -513,6 +515,7 @@ def read_filter_save(
         dtype: str = None,
         tile_size: Tuple[int, int] = None,
         down_sample: Tuple[int, int] = None,  # (2, 2),
+        down_sample_method: str = 'max',
         new_size: Tuple[int, int] = None,
         print_input_file_names: bool = False,
         compression: Tuple[str, int] = ('ADOBE_DEFLATE', 1)
@@ -580,6 +583,8 @@ def read_filter_save(
         optional. If given will reduce the raw to tif conversion time.
     down_sample : tuple (int, int)
         Sets down sample factor. Down_sample (3, 2) means 3 pixels in y-axis, and 2 pixels in x-axis merges into 1.
+    down_sample_method: str
+        down-sampling method. options are max, min, mean, median. Default is max.
     new_size : tuple (int, int) or None
         resize the image after down-sampling
     print_input_file_names : bool
@@ -639,7 +644,19 @@ def read_filter_save(
             if gaussian_filter_2d:
                 img = gaussian(img, sigma=1, preserve_range=True, truncate=2).astype(d_type)
         if down_sample is not None:
-            img = block_reduce(img, block_size=down_sample, func=np_max)
+            downsample_method = down_sample_method.lower()
+            if downsample_method == 'min':
+                downsample_method = np_min
+            elif downsample_method == 'max':
+                downsample_method = np_max
+            elif downsample_method == 'mean':
+                downsample_method = np_mean
+            elif downsample_method == 'median':
+                downsample_method = np_median
+            else:
+                print(f"{PrintColors.FAIL}unsupported down-sampling method: {down_sample_method}{PrintColors.ENDC}")
+                raise RuntimeError
+            img = block_reduce(img, block_size=down_sample, func=downsample_method)
         if new_size is not None and tile_size < new_size:
             img = resize(img, new_size, preserve_range=True, anti_aliasing=False)
         if img_min < img_max:
