@@ -71,7 +71,7 @@ def main(args: Namespace):
     ) or (
             input_path.is_dir() and (
             args.dark > 0 or args.convert_to_8bit or new_size or down_sample or args.rotation or args.gaussian or
-            args.background_subtraction or args.de_stripe)
+            args.background_subtraction or args.de_stripe or args.flip_upside_down)
     ):
         if not args.tif:
             print(f"{PrintColors.FAIL}tif path is needed to continue.{PrintColors.ENDC}")
