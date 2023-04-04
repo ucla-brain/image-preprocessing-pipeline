@@ -256,7 +256,7 @@ def parallel_image_processor(
     progress_queue = Queue()
     workers = min(max_processors, num_images)
     print("starting workers ...")
-    for worker in tqdm(range(workers), desc='workers'):
+    for worker in tqdm(range(workers), desc=' workers'):
         MultiProcess(
             progress_queue, args_queue, fun, images, destination, tif_prefix, args, kwargs, shape, dtype,
             channel=channel, timeout=timeout, compression=compression, resume=resume).start()
