@@ -948,6 +948,7 @@ def progress_manager(progress_queue: Queue, workers: int, total: int,
     print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
           f"using {workers} workers. {total} images need to be processed.")
     progress_bar = tqdm(total=total, ascii=True, smoothing=0.01, mininterval=1.0, unit=" images", desc=desc)
+    progress_bar.refresh()
 
     while workers > 0:
         try:

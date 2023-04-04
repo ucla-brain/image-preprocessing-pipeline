@@ -12,6 +12,7 @@ from supplements.cli_interface import PrintColors
 from pystripe.core import imread_tif_raw_png, imsave_tif, progress_manager
 from tsv.volume import TSVVolume, VExtent
 from time import time
+from tqdm import tqdm
 
 os.environ['MKL_NUM_THREADS'] = '1'
 os.environ['NUMEXPR_NUM_THREADS'] = '1'
@@ -254,7 +255,8 @@ def parallel_image_processor(
 
     progress_queue = Queue()
     workers = min(max_processors, num_images)
-    for worker in range(workers):
+    print("starting workers ...")
+    for worker in tqdm(range(workers), desc='workers'):
         MultiProcess(
             progress_queue, args_queue, fun, images, destination, tif_prefix, args, kwargs, shape, dtype,
             channel=channel, timeout=timeout, compression=compression, resume=resume).start()

@@ -33,7 +33,7 @@ def correct_lightsheet(
         background=dict(selem=(200, 200, 1),
                         spacing=(25, 25, 1),
                         interpolate=1,
-                        dtype=float32,
+                        dtype=None,
                         step=(2, 2, 1)),
         lightsheet_vs_background: float = 2.0,
         return_lightsheet=False,
@@ -83,7 +83,13 @@ def correct_lightsheet(
     # background estimate
     bg = local_percentile(img, percentile=percentile, mask=mask, **background)
     # corrected image
-    img -= minimum(img, minimum(ls, bg * lightsheet_vs_background)).astype(img.dtype)
+    if isinstance(lightsheet_vs_background, float) and \
+            img.dtype in ('uint8', 'uint16') and \
+            ls.dtype in ('uint8', 'uint16') and \
+            bg.dtype in ('uint8', 'uint16'):
+        img -= minimum(img, minimum(ls, bg * int(lightsheet_vs_background)))
+    else:
+        img -= minimum(img, minimum(ls, bg * lightsheet_vs_background)).astype(img.dtype)
 
     # result
     img = img.reshape(shape[0], shape[1])
