@@ -257,7 +257,7 @@ def parallel_image_processor(
     workers = min(max_processors, num_images)
     print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}starting workers ...")
     for worker in tqdm(range(workers), desc=' workers'):
-        if progress_queue.qsize() < num_images - worker:
+        if progress_queue.qsize() < num_images - worker - 1:
             MultiProcess(
                 progress_queue, args_queue, fun, images, destination, tif_prefix, args, kwargs, shape, dtype,
                 channel=channel, timeout=timeout, compression=compression, resume=resume).start()
