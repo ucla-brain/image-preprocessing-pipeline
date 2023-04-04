@@ -361,16 +361,6 @@ def filter_subband(img, sigma, level, wavelet):
     return exp(img_log_filtered) - 1
 
 
-def apply_flat(img, flat):
-    if img.shape == flat.shape:
-        return (img / flat).astype(img.dtype)
-    else:
-        print(f"{PrintColors.WARNING}"
-              f"warning: image and flat arrays had different shapes"
-              f"{PrintColors.ENDC}")
-        return img
-
-
 def filter_streaks(
         img: ndarray,
         sigma: Tuple[int, int] = (256, 256),
@@ -488,21 +478,135 @@ def filter_streaks(
     return f_img
 
 
+def process_img(
+        img,
+        flat: ndarray = None,
+        gaussian_filter_2d: bool = False,
+        down_sample: Tuple[int, int] = None,  # (2, 2),
+        downsample_method: str = 'max',
+        tile_size: Tuple[int, int] = None,
+        new_size: Tuple[int, int] = None,
+        dark: float = 0,
+        sigma: Tuple[int, int] = (0, 0),
+        level: int = 0,
+        wavelet: str = 'db10',
+        crossover: float = 10,
+        threshold: float = -1,
+        directions: str = 'v',
+        lightsheet: bool = False,
+        artifact_length: int = 150,
+        background_window_size: int = 200,
+        percentile: float = 0.25,
+        lightsheet_vs_background: float = 2.0,
+        rotate: int = 0,
+        flip_upside_down: bool = False,
+        convert_to_16bit: bool = False,
+        convert_to_8bit: bool = True,
+        bit_shift_to_right: int = 8,
+        d_type: str = None
+) -> ndarray:
+
+    img_min = np_min(img)
+    img_max = np_max(img)
+    if tile_size is None:
+        tile_size = img.shape
+    if img_min < img_max:
+        if flat is not None:
+            if tile_size == flat.shape:
+                img /= flat
+            else:
+                print(f"{PrintColors.WARNING}"
+                      f"warning: image and flat arrays had different shapes"
+                      f"{PrintColors.ENDC}")
+        if gaussian_filter_2d:
+            img = gaussian(img, sigma=1, preserve_range=True, truncate=2)
+    if down_sample is not None:
+        downsample_method = downsample_method.lower()
+        if downsample_method == 'min':
+            downsample_method = np_min
+        elif downsample_method == 'max':
+            downsample_method = np_max
+        elif downsample_method == 'mean':
+            downsample_method = np_mean
+        elif downsample_method == 'median':
+            downsample_method = np_median
+        else:
+            print(f"{PrintColors.FAIL}unsupported down-sampling method: {downsample_method}{PrintColors.ENDC}")
+            raise RuntimeError
+        img = block_reduce(img, block_size=down_sample, func=downsample_method)
+    if new_size is not None and tile_size < new_size:
+        img = resize(img, new_size, preserve_range=True, anti_aliasing=False)
+    if img_min < img_max:
+        if not sigma[0] == sigma[1] == 0:
+            img = filter_streaks(
+                img,
+                sigma=sigma,
+                level=level,
+                wavelet=wavelet,
+                crossover=crossover,
+                threshold=threshold,
+                directions=directions
+            )
+        # dark subtraction is like baseline subtraction in Imaris
+        if dark is not None and dark > 0:
+            img = where(img > dark, img - dark, 0)  # Subtract the dark offset
+        # lightsheet method is like background subtraction in Imaris
+        if lightsheet:
+            img = correct_lightsheet(
+                img.reshape((img.shape[0], img.shape[1], 1)),
+                percentile=percentile,
+                lightsheet=dict(selem=(1, artifact_length, 1)),
+                background=dict(
+                    selem=(background_window_size, background_window_size, 1),
+                    spacing=(25, 25, 1),
+                    interpolate=1,
+                    dtype=float32,
+                    step=(2, 2, 1)),
+                lightsheet_vs_background=lightsheet_vs_background
+            ).reshape(img.shape[0], img.shape[1]).astype(d_type)
+    if new_size is not None and tile_size > new_size:
+        img = resize(img, new_size, preserve_range=True, anti_aliasing=True)
+
+    if rotate == 90:
+        img = rot90(img, 1)
+    elif rotate == 180:
+        img = rot90(img, 2)
+    elif rotate == 270:
+        img = rot90(img, 3)
+
+    if flip_upside_down:
+        img = flipud(img)
+
+    if img.dtype != d_type:
+        img = img.astype(d_type)
+
+    if convert_to_16bit and img.dtype != uint16:
+        clip(img, 0, 65535, out=img)  # Clip to 16-bit [0, 2 ** 16 - 1] unsigned range
+        img = img.astype(uint16)
+    elif convert_to_8bit and img.dtype != uint8:
+        img = convert_to_8bit_fun(img, bit_shift_to_right=bit_shift_to_right)
+
+    return img
+
+
 def read_filter_save(
         input_file: Path = None,
         output_file: Path = None,
+        z_idx: int = None,
+        continue_process: bool = False,
+        dtype: str = None,
+        tile_size: Tuple[int, int] = None,
+        print_input_file_names: bool = False,
+        compression: Tuple[str, int] = ('ADOBE_DEFLATE', 1),
         flat: ndarray = None,
         gaussian_filter_2d: bool = False,
         dark: float = 0,
         sigma: Tuple[int, int] = (0, 0),
         level: int = 0,
-        wavelet: str = 'db3',
+        wavelet: str = 'db10',
         crossover: float = 10,
         threshold: float = -1,
         directions: str = 'v',
-        z_idx: int = None,
-        rotate: int = 0,
-        flip_upside_down: bool = False,
         lightsheet: bool = False,
         artifact_length: int = 150,
         background_window_size: int = 200,
@@ -511,14 +615,11 @@ def read_filter_save(
         convert_to_16bit: bool = False,
         convert_to_8bit: bool = True,
         bit_shift_to_right: int = 8,
-        continue_process: bool = False,
-        dtype: str = None,
-        tile_size: Tuple[int, int] = None,
         down_sample: Tuple[int, int] = None,  # (2, 2),
         down_sample_method: str = 'max',
         new_size: Tuple[int, int] = None,
-        print_input_file_names: bool = False,
-        compression: Tuple[str, int] = ('ADOBE_DEFLATE', 1)
+        rotate: int = 0,
+        flip_upside_down: bool = False,
 ):
     """Convenience wrapper around filter streaks. Takes in a path to an image rather than an image array
 
@@ -636,76 +737,35 @@ def read_filter_save(
         d_type = img.dtype
         if not output_file.parent.exists():
             output_file.parent.mkdir(parents=True, exist_ok=True)
-        img_min = np_min(img)
-        img_max = np_max(img)
-        if img_min < img_max:
-            if flat is not None:
-                img = apply_flat(img, flat)
-            if gaussian_filter_2d:
-                img = gaussian(img, sigma=1, preserve_range=True, truncate=2).astype(d_type)
-        if down_sample is not None:
-            downsample_method = down_sample_method.lower()
-            if downsample_method == 'min':
-                downsample_method = np_min
-            elif downsample_method == 'max':
-                downsample_method = np_max
-            elif downsample_method == 'mean':
-                downsample_method = np_mean
-            elif downsample_method == 'median':
-                downsample_method = np_median
-            else:
-                print(f"{PrintColors.FAIL}unsupported down-sampling method: {down_sample_method}{PrintColors.ENDC}")
-                raise RuntimeError
-            img = block_reduce(img, block_size=down_sample, func=downsample_method)
-        if new_size is not None and tile_size < new_size:
-            img = resize(img, new_size, preserve_range=True, anti_aliasing=False)
-        if img_min < img_max:
-            if not sigma[0] == sigma[1] == 0:
-                img = filter_streaks(
-                    img,
-                    sigma=sigma,
-                    level=level,
-                    wavelet=wavelet,
-                    crossover=crossover,
-                    threshold=threshold,
-                    directions=directions
-                )
-            # dark subtraction is like baseline subtraction in Imaris
-            if dark is not None and dark > 0:
-                img = where(img > dark, img - dark, 0)  # Subtract the dark offset
-            # lightsheet method is like background subtraction in Imaris
-            if lightsheet:
-                img = correct_lightsheet(
-                    img.reshape((img.shape[0], img.shape[1], 1)),
-                    percentile=percentile,
-                    lightsheet=dict(selem=(1, artifact_length, 1)),
-                    background=dict(
-                        selem=(background_window_size, background_window_size, 1),
-                        spacing=(25, 25, 1),
-                        interpolate=1,
-                        dtype=float32,
-                        step=(2, 2, 1)),
-                    lightsheet_vs_background=lightsheet_vs_background
-                ).reshape(img.shape[0], img.shape[1]).astype(d_type)
-        if new_size is not None and tile_size > new_size:
-            img = resize(img, new_size, preserve_range=True, anti_aliasing=True).astype(d_type)
 
-        if rotate == 90:
-            img = rot90(img, 1)
-        elif rotate == 180:
-            img = rot90(img, 2)
-        elif rotate == 270:
-            img = rot90(img, 3)
+        img = process_img(
+            img,
+            flat=flat,
+            gaussian_filter_2d=gaussian_filter_2d,
+            down_sample=down_sample,
+            downsample_method=down_sample_method,
+            tile_size=tile_size,
+            new_size=new_size,
+            dark=dark,
+            sigma=sigma,
+            level=level,
+            wavelet=wavelet,
+            crossover=crossover,
+            threshold=threshold,
+            directions=directions,
+            lightsheet=lightsheet,
+            artifact_length=artifact_length,
+            background_window_size=background_window_size,
+            percentile=percentile,
+            lightsheet_vs_background=lightsheet_vs_background,
+            rotate=rotate,
+            flip_upside_down=flip_upside_down,
+            convert_to_16bit=convert_to_16bit,
+            convert_to_8bit=convert_to_8bit,
+            bit_shift_to_right=bit_shift_to_right,
+            d_type=d_type,
+        )
 
-        if flip_upside_down:
-            img = flipud(img)
-        if convert_to_16bit and img.dtype != uint16:
-            clip(img, 0, 65535, out=img)  # Clip to 16-bit [0, 2 ** 16 - 1] unsigned range
-            img = img.astype(uint16)
-        elif convert_to_8bit and img.dtype != uint8:
-            img = convert_to_8bit_fun(img, bit_shift_to_right=bit_shift_to_right)
-        elif img.dtype != d_type:
-            img = img.astype(d_type)
         imsave_tif(output_file, img, compression=compression)
 
     except (OSError, IndexError, TypeError, RuntimeError, TiffFileError) as inst:

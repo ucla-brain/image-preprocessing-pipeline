@@ -2,7 +2,7 @@ import os
 import sys
 import psutil
 import subprocess
-from pystripe.core import batch_filter
+from pystripe.core import process_img
 from time import time
 from platform import uname
 from multiprocessing import freeze_support, Queue
@@ -11,7 +11,7 @@ from numpy import min as np_min
 from numpy import mean as np_mean
 from numpy import median as np_median
 from pathlib import Path
-from process_images import get_imaris_command, MultiProcessCommandRunner, commands_progress_manger, process_img
+from process_images import get_imaris_command, MultiProcessCommandRunner, commands_progress_manger
 from argparse import RawDescriptionHelpFormatter, ArgumentParser, Namespace, BooleanOptionalAction
 from parallel_image_processor import parallel_image_processor
 from supplements.cli_interface import PrintColors
@@ -64,10 +64,17 @@ def main(args: Namespace):
     elif args.new_size_y or args.new_size_x:
         print(f"{PrintColors.FAIL}both new_size_x and new_size_y are needed!{PrintColors.ENDC}")
         raise RuntimeError
+    compression = ("ADOBE_DEFLATE", args.compression_level) if args.compression_level > 0 else None
 
-    if input_path.is_file() and input_path.suffix.lower() == ".ims":
+    if (
+            input_path.is_file() and input_path.suffix.lower() == ".ims"
+    ) or (
+            input_path.is_dir() and (
+            args.dark > 0 or args.convert_to_8bit or new_size or down_sample or args.rotation or args.gaussian or
+            args.background_subtraction or args.de_stripe)
+    ):
         if not args.tif:
-            print(f"{PrintColors.FAIL} tif path is needed for ims to any format{PrintColors.ENDC}")
+            print(f"{PrintColors.FAIL}tif path is needed to continue.{PrintColors.ENDC}")
             raise RuntimeError
 
         return_code = parallel_image_processor(
@@ -77,55 +84,43 @@ def main(args: Namespace):
             (),
             {
                 "gaussian_filter_2d": args.gaussian,
-                "need_de_striping": args.de_stripe,
                 "down_sample": down_sample,
-                "down_sample_method": downsample_method,
+                "downsample_method": downsample_method,
                 "new_size": new_size,
+                "sigma": (256, 256) if args.de_stripe else (0, 0),
                 "dark": args.dark,
-                "need_lightsheet_cleaning": args.background_subtraction,
-                "bit_shift": args.bit_shift,
-                "rotation": args.rotation,
+                "lightsheet": args.background_subtraction,
+                "rotate": args.rotation,
+                "flip_upside_down": args.flip_upside_down,
+                "convert_to_8bit": args.convert_to_8bit,
+                "bit_shift_to_right": args.bit_shift
             },
             max_processors=args.nthreads,
             channel=args.channel,
-            compression=("ADOBE_DEFLATE", args.compression_level) if args.compression_level > 0 else None
+            compression=compression
         )
-    elif input_path.is_dir() and (
-            args.dark > 0 or args.convert_to_8bit or new_size or down_sample or args.rotation or args.gaussian or
-            args.background_subtraction or args.de_stripe):
-        if not args.tif:
-            print(f"{PrintColors.FAIL} tif path is needed for processing 2D tif series{PrintColors.ENDC}")
-            raise RuntimeError
-        return_code = batch_filter(
-            input_path,
-            tif_2d_folder,
-            workers=args.nthreads,
-            # sigma=[foreground, background] Default is [0, 0], indicating no de-striping.
-            sigma=(256, 256) if args.de_stripe else (0, 0),
-            # level=0,
-            wavelet="db10",
-            crossover=10,
-            # threshold=-1,
-            compression=("ADOBE_DEFLATE", args.compression_level) if args.compression_level > 0 else None,
-            flat=None,
-            dark=args.dark,
-            # z_step=voxel_size_z,  # z-step in micron. Only used for DCIMG files.
-            # rotate=False,
-            lightsheet=args.background_subtraction,
-            artifact_length=150,
-            # percentile=0.25,
-            gaussian_filter_2d=args.gaussian,
-            # convert_to_16bit=False,  # defaults to False
-            convert_to_8bit=args.convert_to_8bit,
-            bit_shift_to_right=args.bit_shift,
-            rotate=args.rotation,
-            continue_process=True,
-            dtype='uint16',
-            tile_size=None,
-            down_sample=down_sample,
-            new_size=new_size,
-            timeout=None,
-        )
+    # elif input_path.is_dir() and (
+    #         args.dark > 0 or args.convert_to_8bit or new_size or down_sample or args.rotation or args.gaussian or
+    #         args.background_subtraction or args.de_stripe):
+    #     if not args.tif:
+    #         print(f"{PrintColors.FAIL} tif path is needed for processing 2D tif series{PrintColors.ENDC}")
+    #         raise RuntimeError
+    #     return_code = batch_filter(
+    #         input_path,
+    #         tif_2d_folder,
+    #         workers=args.nthreads,
+    #         sigma=(256, 256) if args.de_stripe else (0, 0),
+    #         compression=compression,
+    #         dark=args.dark,
+    #         lightsheet=args.background_subtraction,
+    #         gaussian_filter_2d=args.gaussian,
+    #         convert_to_8bit=args.convert_to_8bit,
+    #         bit_shift_to_right=args.bit_shift,
+    #         rotate=args.rotation,
+    #         continue_process=True,
+    #         down_sample=down_sample,
+    #         new_size=new_size,
+    #     )
     elif input_path.is_dir():
         tif_2d_folder = input_path
 
@@ -281,6 +276,8 @@ if __name__ == '__main__':
                              "Default is 8 (no change in brightness).")
     parser.add_argument("--rotation", "-r", type=int, default=0,
                         help="Rotate the image. One of 0, 90, 180 or 270 degree values are accepted. Default is 0.")
+    parser.add_argument("--flip_upside_down", default=False, action=BooleanOptionalAction,
+                        help="Flip the y-axis. Default is --no-flip_upside_down")
     parser.add_argument("--compression_level", "-z", type=int, default=1,
                         help="compression level for tif files. Default is 1.")
     parser.add_argument("--movie_start", type=int, default=0,

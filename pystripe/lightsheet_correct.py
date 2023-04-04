@@ -76,18 +76,18 @@ def correct_lightsheet(
     """
 
     # lightsheet artifact estimate
-    l = local_percentile(source, percentile=percentile, mask=mask, **lightsheet)
+    ls = local_percentile(source, percentile=percentile, mask=mask, **lightsheet)
     # background estimate
-    b = local_percentile(source, percentile=percentile, mask=mask, **background)
+    bg = local_percentile(source, percentile=percentile, mask=mask, **background)
     # combined estimate
-    lb = minimum(l, lightsheet_vs_background * b)
+    lb = minimum(ls, lightsheet_vs_background * bg)
     # corrected image
     c = source - minimum(source, lb)
     result = (c,)
     if return_lightsheet:
-        result += (l,)
+        result += (ls,)
     if return_background:
-        result += (b,)
+        result += (bg,)
     if len(result) == 1:
         result = result[0]
     return result
@@ -110,7 +110,7 @@ def apply_local_function(source, function, selem=(50, 50), spacing=None, step=No
       If the function does not return a scalar, fshape has to be given.
     selem : tuple or array or None
       The structural element to use to extract the local image data.
-      If tuple, use a rectangular region of this shape. If array, the array
+      If tuple, use a rectangular region of this shape. If is array, the array
       is assumed to be bool and acts as a local mask around the center point.
     spacing : tuple or None
       The spacing between sample points. If None, use shape of selem.
