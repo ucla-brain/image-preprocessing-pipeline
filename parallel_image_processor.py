@@ -8,7 +8,7 @@ from concurrent.futures.process import BrokenProcessPool
 from typing import List, Tuple, Union, Callable
 from numpy import zeros, ulonglong
 from pathlib import Path
-from supplements.cli_interface import PrintColors
+from supplements.cli_interface import PrintColors, date_time_now
 from pystripe.core import imread_tif_raw_png, imsave_tif, progress_manager
 from tsv.volume import TSVVolume, VExtent
 from time import time
@@ -255,8 +255,8 @@ def parallel_image_processor(
 
     progress_queue = Queue()
     workers = min(max_processors, num_images)
-    print("starting workers ...")
-    for worker in tqdm(range(workers), desc=' workers'):
+    print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}starting workers ...")
+    for _ in tqdm(range(workers), desc=' workers'):
         MultiProcess(
             progress_queue, args_queue, fun, images, destination, tif_prefix, args, kwargs, shape, dtype,
             channel=channel, timeout=timeout, compression=compression, resume=resume).start()
