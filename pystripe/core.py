@@ -501,7 +501,7 @@ def process_img(
         rotate: int = 0,
         flip_upside_down: bool = False,
         convert_to_16bit: bool = False,
-        convert_to_8bit: bool = True,
+        convert_to_8bit: bool = False,
         bit_shift_to_right: int = 8,
         d_type: str = None
 ) -> ndarray:
@@ -510,6 +510,8 @@ def process_img(
     img_max = np_max(img)
     if tile_size is None:
         tile_size = img.shape
+    if d_type is None:
+        d_type = img.dtype
     if img_min < img_max:
         if flat is not None:
             if tile_size == flat.shape:
@@ -519,7 +521,8 @@ def process_img(
                       f"warning: image and flat arrays had different shapes"
                       f"{PrintColors.ENDC}")
         if gaussian_filter_2d:
-            img = gaussian(img, sigma=1, preserve_range=True, truncate=2)
+            img = gaussian(img, sigma=1, preserve_range=True, truncate=2).astype(d_type)
+            # img = (img / img.max() * img_max)
     if down_sample is not None:
         downsample_method = downsample_method.lower()
         if downsample_method == 'min':
@@ -553,17 +556,17 @@ def process_img(
         # lightsheet method is like background subtraction in Imaris
         if lightsheet:
             img = correct_lightsheet(
-                img.reshape((img.shape[0], img.shape[1], 1)),
+                img,
                 percentile=percentile,
                 lightsheet=dict(selem=(1, artifact_length, 1)),
                 background=dict(
                     selem=(background_window_size, background_window_size, 1),
                     spacing=(25, 25, 1),
                     interpolate=1,
-                    dtype=float32,
+                    dtype=d_type,  # float32?
                     step=(2, 2, 1)),
                 lightsheet_vs_background=lightsheet_vs_background
-            ).reshape(img.shape[0], img.shape[1]).astype(d_type)
+            )
     if new_size is not None and tile_size > new_size:
         img = resize(img, new_size, preserve_range=True, anti_aliasing=True)
 
@@ -580,10 +583,10 @@ def process_img(
     if img.dtype != d_type:
         img = img.astype(d_type)
 
-    if convert_to_16bit and img.dtype != uint16:
+    if convert_to_16bit and img.dtype not in (uint16, 'uint16'):
         clip(img, 0, 65535, out=img)  # Clip to 16-bit [0, 2 ** 16 - 1] unsigned range
         img = img.astype(uint16)
-    elif convert_to_8bit and img.dtype != uint8:
+    elif convert_to_8bit and img.dtype not in (uint8, 'uint8'):
         img = convert_to_8bit_fun(img, bit_shift_to_right=bit_shift_to_right)
 
     return img
