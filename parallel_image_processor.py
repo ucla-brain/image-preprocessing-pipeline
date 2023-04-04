@@ -99,7 +99,7 @@ class MultiProcess(Process):
             file = h5py.File(images)
             images = file[f"DataSet/ResolutionLevel 0/TimePoint 0/Channel {channel}/Data"]
         queue_time_out = 20
-        while not self.die and not self.args_queue.qsize() == 0:
+        while not self.die and self.args_queue.qsize() > 0:
             try:
                 queue_start_time = time()
                 idx = self.args_queue.get(block=True, timeout=queue_time_out)
@@ -163,7 +163,7 @@ class MultiProcess(Process):
                         f"\n\texception: {inst}"
                         f"{PrintColors.ENDC}")
                 self.progress_queue.put(running)
-            except Empty:
+            except (Empty, TimeoutError):
                 self.die = True
         pool.shutdown()
         if is_ims and isinstance(file, h5py.File):
@@ -256,10 +256,15 @@ def parallel_image_processor(
     progress_queue = Queue()
     workers = min(max_processors, num_images)
     print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}starting workers ...")
-    for _ in tqdm(range(workers), desc=' workers'):
-        MultiProcess(
-            progress_queue, args_queue, fun, images, destination, tif_prefix, args, kwargs, shape, dtype,
-            channel=channel, timeout=timeout, compression=compression, resume=resume).start()
+    for worker in tqdm(range(workers), desc=' workers'):
+        if progress_queue.qsize() < num_images - worker:
+            MultiProcess(
+                progress_queue, args_queue, fun, images, destination, tif_prefix, args, kwargs, shape, dtype,
+                channel=channel, timeout=timeout, compression=compression, resume=resume).start()
+        else:
+            print('the existing workers finished the job! no more worker is needed.')
+            workers = worker
+            break
 
     return_code_or_img_list = progress_manager(progress_queue, workers, num_images, desc=progress_bar_name)
     args_queue.cancel_join_thread()
