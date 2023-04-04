@@ -521,8 +521,7 @@ def process_img(
                       f"warning: image and flat arrays had different shapes"
                       f"{PrintColors.ENDC}")
         if gaussian_filter_2d:
-            img = gaussian(img, sigma=1, preserve_range=True, truncate=2).astype(d_type)
-            # img = (img / img.max() * img_max)
+            img = gaussian(img, sigma=1, preserve_range=True, truncate=2)
     if down_sample is not None:
         downsample_method = downsample_method.lower()
         if downsample_method == 'min':
@@ -558,12 +557,15 @@ def process_img(
             img = correct_lightsheet(
                 img,
                 percentile=percentile,
-                lightsheet=dict(selem=(1, artifact_length, 1)),
+                lightsheet=dict(
+                    selem=(1, artifact_length, 1),
+                    dtype=d_type,
+                ),
                 background=dict(
                     selem=(background_window_size, background_window_size, 1),
                     spacing=(25, 25, 1),
                     interpolate=1,
-                    dtype=d_type,  # float32?
+                    dtype=d_type,
                     step=(2, 2, 1)),
                 lightsheet_vs_background=lightsheet_vs_background
             )

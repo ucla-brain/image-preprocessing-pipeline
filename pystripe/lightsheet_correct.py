@@ -18,6 +18,7 @@ https://doi.org/10.1016/j.cell.2016.05.007
 from scipy.ndimage import zoom as ndi_zoom
 from numpy import array, ndarray, meshgrid, minimum, moveaxis, reshape, zeros, logical_and
 from numpy import percentile as np_percentile
+from numpy import float32
 
 
 ###############################################################################
@@ -25,16 +26,16 @@ from numpy import percentile as np_percentile
 ###############################################################################
 
 def correct_lightsheet(
-        source,
+        img,
         percentile: float = 0.25,
         mask=None,
         lightsheet=dict(selem=(150, 1, 1)),
         background=dict(selem=(200, 200, 1),
                         spacing=(25, 25, 1),
                         interpolate=1,
-                        dtype=float,
+                        dtype=float32,
                         step=(2, 2, 1)),
-        lightsheet_vs_background=2,
+        lightsheet_vs_background: float = 2.0,
         return_lightsheet=False,
         return_background=False
 ):
@@ -50,8 +51,8 @@ def correct_lightsheet(
 
     Arguments
     ---------
-    source : array
-      The source to correct.
+    img : array
+      The source image to correct.
     percentile : float in [0,1]
       The percentile to base the lightsheet correction on.
     mask : array or None
@@ -75,30 +76,37 @@ def correct_lightsheet(
       Lightsheet artifact corrected image.
     """
 
+    shape = img.shape
+    img = img.reshape((shape[0], shape[1], 1))
     # lightsheet artifact estimate
-    ls = local_percentile(source, percentile=percentile, mask=mask, **lightsheet)
+    ls = local_percentile(img, percentile=percentile, mask=mask, **lightsheet)
     # background estimate
-    bg = local_percentile(source, percentile=percentile, mask=mask, **background)
-    # combined estimate
-    lb = minimum(ls, lightsheet_vs_background * bg)
+    bg = local_percentile(img, percentile=percentile, mask=mask, **background)
     # corrected image
-    c = source - minimum(source, lb)
-    result = (c,)
-    if return_lightsheet:
-        result += (ls,)
-    if return_background:
-        result += (bg,)
-    if len(result) == 1:
-        result = result[0]
-    return result
+    img -= minimum(img, minimum(ls, bg * lightsheet_vs_background)).astype(img.dtype)
+
+    # result
+    img = img.reshape(shape[0], shape[1])
+    if return_lightsheet and return_background:
+        return img, ls, bg
+    elif return_lightsheet:
+        return img, ls
+    elif return_background:
+        return img, bg
+    else:
+        return img
 
 
 ###############################################################################
 # Local image processing for Local Statistics
 ###############################################################################
 
-def apply_local_function(source, function, selem=(50, 50), spacing=None, step=None, interpolate=2, mask=None,
-                         fshape=None, dtype=None, return_centers=False):
+def apply_local_function(
+        source, function,
+        selem=(50, 50),
+        spacing=None, step=None, interpolate=2, mask=None,
+        fshape=None, dtype=None,
+) -> ndarray:
     """Calculate local histograms on a sub-grid, apply a scalar valued function and resample to original image shape.
 
     Arguments
@@ -127,8 +135,6 @@ def apply_local_function(source, function, selem=(50, 50), spacing=None, step=No
       If None assumed to be (1,).
     dtype : dtype or None
       Optional data type for the result.
-    return_centers : bool
-      If True, additionally return the centers of the sampling.
 
     Returns
     -------
@@ -215,10 +221,10 @@ def apply_local_function(source, function, selem=(50, 50), spacing=None, step=No
     if fshape is None:
         results.shape = results.shape[:-1]
 
-    if return_centers:
-        return results, centers
-    else:
-        return results
+    # if return_centers:
+    #     return results, centers
+    # else:
+    return results
 
 
 def local_percentile(
@@ -230,7 +236,6 @@ def local_percentile(
         interpolate=1,
         mask=None,
         dtype=None,
-        return_centers=False
 ):
     """Calculate local percentile.
 
@@ -254,16 +259,12 @@ def local_percentile(
       order of interpolation. If None, return the results on the sub-grid.
     mask : array or None
       Optional mask to use.
-    dtype : None,
-    return_centers : bool
-      If True, additionally return the centers of the sampling.
+    dtype : None
 
     Returns
     -------
     percentiles : array
       The local percentiles.
-    cetners : array
-      Optional centers of the sampling.
     """
     if isinstance(percentile, (tuple, list)):
         percentile = array([100 * p for p in percentile])
@@ -291,6 +292,5 @@ def local_percentile(
         interpolate=interpolate,
         mask=mask,
         dtype=dtype,
-        return_centers=return_centers,
         function=_percentile,
         fshape=fshape)
