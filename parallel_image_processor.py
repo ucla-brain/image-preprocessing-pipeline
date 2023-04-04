@@ -262,7 +262,7 @@ def parallel_image_processor(
                 progress_queue, args_queue, fun, images, destination, tif_prefix, args, kwargs, shape, dtype,
                 channel=channel, timeout=timeout, compression=compression, resume=resume).start()
         else:
-            print('the existing workers finished the job! no more worker is needed.')
+            print('\n the existing workers finished the job! no more worker is needed.')
             workers = worker
             break
 
