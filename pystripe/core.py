@@ -346,16 +346,16 @@ def foreground_fraction(img: ndarray, center: float, crossover: float, smoothing
 
 
 @jit
-def expm1_jit(img_log_filtered):
+def expm1_jit(img_log_filtered: ndarray) -> ndarray:
     return expm1(img_log_filtered)
 
 
 @jit
-def log1p_jit(img_log_filtered):
+def log1p_jit(img_log_filtered: ndarray) -> ndarray:
     return log1p(img_log_filtered)
 
 
-def filter_subband(img, sigma, level, wavelet):
+def filter_subband(img: ndarray, sigma: int, level: int, wavelet: str) -> ndarray:
     img_log = log1p_jit(img)
     coeffs = wavedec2(img_log, wavelet, mode='symmetric', level=None if level == 0 else level, axes=(-2, -1))
     approx = coeffs[0]
