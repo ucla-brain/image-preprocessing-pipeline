@@ -34,7 +34,6 @@ from functools import reduce
 from supplements.cli_interface import PrintColors, date_time_now
 from numba import njit, jit
 from numexpr import evaluate
-# from signal import signal, SIG_IGN, SIGINT
 
 filterwarnings("ignore")
 supported_extensions = ['.png', '.tif', '.tiff', '.raw', '.dcimg']
