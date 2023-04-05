@@ -382,7 +382,7 @@ def filter_streaks(
         wavelet: str = 'db9',
         crossover: float = 10,
         threshold: float = -1,
-        directions: str = 'v'):
+        directions: str = 'v') -> ndarray:
     """Filter horizontal streaks using wavelet-FFT filter
 
     Parameters
@@ -502,10 +502,22 @@ def filter_streaks(
 
     return f_img
 
+# @jit
+def correct_lightsheet_bleaching(img: ndarray, correction: float):
+    y_axis_length: int = img.shape[0]
+    correction -= 1
+    correction /= y_axis_length
+    d_type = img.dtype
+    img = img.astype(float32)
+    for idx in range(y_axis_length):
+        img[idx] *= (1 + correction * idx)
+    return img.astype(d_type)
+
 
 def process_img(
-        img,
+        img: ndarray,
         flat: ndarray = None,
+        lightsheet_bleach_correction: float = None,
         gaussian_filter_2d: bool = False,
         down_sample: Tuple[int, int] = None,  # (2, 2),
         downsample_method: str = 'max',
@@ -545,6 +557,8 @@ def process_img(
                 print(f"{PrintColors.WARNING}"
                       f"warning: image and flat arrays had different shapes"
                       f"{PrintColors.ENDC}")
+        if lightsheet_bleach_correction and lightsheet_bleach_correction > 1:
+            img = correct_lightsheet_bleaching(img, lightsheet_bleach_correction)
         if gaussian_filter_2d:
             img = gaussian(img, sigma=1, preserve_range=True, truncate=2)
     if down_sample is not None:
