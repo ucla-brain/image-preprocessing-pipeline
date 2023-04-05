@@ -5,7 +5,7 @@ from numpy import max as np_max
 from numpy import min as np_min
 from numpy import mean as np_mean
 from numpy import median as np_median
-from numpy import uint8, uint16, float32, float64, ndarray, generic, zeros, broadcast_to, exp, log, log1p, expm1, \
+from numpy import uint8, uint16, float32, float64, ndarray, generic, zeros, broadcast_to, exp, expm1, log1p, \
     cumsum, arange, unique, interp, pad, clip, where, rot90, flipud
 from scipy.fftpack import rfft, fftshift, irfft
 from scipy.ndimage import gaussian_filter as gaussian_filter_nd
@@ -41,6 +41,7 @@ num_retries = 40
 environ['MKL_NUM_THREADS'] = '1'
 environ['NUMEXPR_NUM_THREADS'] = '1'
 environ['OMP_NUM_THREADS'] = '1'
+use_numexpr: bool = True
 
 
 def imread_tif_raw_png(path: Path, dtype: str = None, shape: Tuple[int, int] = None):
@@ -445,23 +446,31 @@ def filter_streaks(
                     foreground_filtered = filter_subband(foreground, sigma1, level, wavelet)
                     # Smoothed homotopy
                     f = foreground_fraction(img, threshold, crossover, smoothing)
-                    # f_img = foreground_filtered * f + background_filtered * (1 - f)
-                    f_img = evaluate("foreground_filtered * f + background_filtered * (1 - f)")
+                    if use_numexpr:
+                        f_img = evaluate("foreground_filtered * f + background_filtered * (1 - f)")
+                    else:
+                        f_img = foreground_filtered * f + background_filtered * (1 - f)
             else:  # Foreground filter only
                 foreground = clip(img, threshold, None)
                 foreground_filtered = filter_subband(foreground, sigma1, level, wavelet)
                 # Smoothed homotopy
                 f = foreground_fraction(img, threshold, crossover, smoothing)
-                # f_img = foreground_filtered * f + img * (1 - f)
-                f_img = evaluate("foreground_filtered * f + img * (1 - f)")
+                if use_numexpr:
+                    f_img = evaluate("foreground_filtered * f + img * (1 - f)")
+                else:
+                    f_img = foreground_filtered * f + img * (1 - f)
+
         else:
             if sigma2 > 0:  # Background filter only
                 background = clip(img, None, threshold)
                 background_filtered = filter_subband(background, sigma2, level, wavelet)
                 # Smoothed homotopy
                 f = foreground_fraction(img, threshold, crossover, smoothing)
-                # f_img = img * f + background_filtered * (1 - f)
-                f_img = evaluate("img * f + background_filtered * (1 - f)")
+
+                if use_numexpr:
+                    f_img = evaluate("img * f + background_filtered * (1 - f)")
+                else:
+                    f_img = img * f + background_filtered * (1 - f)
             else:
                 # sigma1 and sigma2 are both 0, so skip the destriping
                 f_img = img
