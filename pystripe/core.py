@@ -5,7 +5,7 @@ from numpy import max as np_max
 from numpy import min as np_min
 from numpy import mean as np_mean
 from numpy import median as np_median
-from numpy import uint8, uint16, float32, float64, ndarray, generic, zeros, broadcast_to, exp, log, \
+from numpy import uint8, uint16, float32, float64, ndarray, generic, zeros, broadcast_to, exp, log, log1p, expm1, \
     cumsum, arange, unique, interp, pad, clip, where, rot90, flipud
 from scipy.fftpack import rfft, fftshift, irfft
 from scipy.ndimage import gaussian_filter as gaussian_filter_nd
@@ -32,6 +32,8 @@ from queue import Empty
 from operator import iconcat
 from functools import reduce
 from supplements.cli_interface import PrintColors, date_time_now
+from numba import njit, jit
+from numexpr import evaluate
 # from signal import signal, SIG_IGN, SIGINT
 
 filterwarnings("ignore")
@@ -163,7 +165,8 @@ def convert_to_8bit_fun(img: ndarray, bit_shift_to_right: int = 8):
         print("right shift should be between 0 and 8")
         raise RuntimeError
     clip(img, 0, 255, out=img)  # Clip to 8-bit [0, 2 ** 8 - 1] unsigned range
-    return img.astype(uint8)
+    img = img.astype(uint8)
+    return img
 
 
 def imsave_tif(path: Path, img: ndarray, compression: Tuple[str, int] = ('ADOBE_DEFLATE', 1)):
@@ -238,7 +241,7 @@ def fft(data, axis=-1, shift=True):
     return fdata
 
 
-def notch(n, sigma):
+def notch(n: int, sigma: float) -> ndarray:
     """Generates a 1D gaussian notch filter `n` pixels long
 
     Parameters
@@ -261,11 +264,10 @@ def notch(n, sigma):
     if sigma <= 0:
         raise ValueError('sigma must be positive')
     x = arange(n)
-    g = 1 - exp(-x ** 2 / (2 * sigma ** 2))
-    return g
+    return 1 - exp(-x ** 2 / (2 * sigma ** 2))
 
 
-def gaussian_filter(shape, sigma):
+def gaussian_filter(shape: tuple, sigma: float) -> ndarray:
     """Create a gaussian notch filter
 
     Parameters
@@ -331,18 +333,30 @@ def max_level(min_len, wavelet):
     return dwt_max_level(min_len, w.dec_len)
 
 
-def sigmoid(x):
+@njit
+def sigmoid(x: ndarray) -> ndarray:
     return 1 / (1 + exp(-x))
 
 
-def foreground_fraction(img, center, crossover, smoothing):
+@njit
+def foreground_fraction(img: ndarray, center: float, crossover: float, smoothing: int):
     z = (img - center) / crossover
     f = sigmoid(z)
     return gaussian_filter_nd(f, sigma=smoothing)
 
 
+@jit
+def expm1_jit(img_log_filtered):
+    return expm1(img_log_filtered)
+
+
+@jit
+def log1p_jit(img_log_filtered):
+    return log1p(img_log_filtered)
+
+
 def filter_subband(img, sigma, level, wavelet):
-    img_log = log(1 + img)
+    img_log = log1p_jit(img)
     coeffs = wavedec2(img_log, wavelet, mode='symmetric', level=None if level == 0 else level, axes=(-2, -1))
     approx = coeffs[0]
     detail = coeffs[1:]
@@ -358,7 +372,7 @@ def filter_subband(img, sigma, level, wavelet):
         coeffs_filt.append((ch_filt, cv, cd))
 
     img_log_filtered = waverec2(coeffs_filt, wavelet, mode='symmetric', axes=(-2, -1))
-    return exp(img_log_filtered) - 1
+    return expm1_jit(img_log_filtered)
 
 
 def filter_streaks(
@@ -398,7 +412,7 @@ def filter_streaks(
     if sigma1 == sigma2 == 0:
         return img
     dtype = img.dtype
-    smoothing = 1
+    smoothing: int = 1
     # Need to pad image to multiple of 2
     pad_y, pad_x = [_ % 2 for _ in img.shape]
     if pad_y == 1 or pad_x == 1:
@@ -431,21 +445,24 @@ def filter_streaks(
                     background_filtered = filter_subband(background, sigma2, level, wavelet)
                     foreground_filtered = filter_subband(foreground, sigma1, level, wavelet)
                     # Smoothed homotopy
-                    f = foreground_fraction(img, threshold, crossover, smoothing=smoothing)
-                    f_img = foreground_filtered * f + background_filtered * (1 - f)
+                    f = foreground_fraction(img, threshold, crossover, smoothing)
+                    # f_img = foreground_filtered * f + background_filtered * (1 - f)
+                    f_img = evaluate("foreground_filtered * f + background_filtered * (1 - f)")
             else:  # Foreground filter only
                 foreground = clip(img, threshold, None)
                 foreground_filtered = filter_subband(foreground, sigma1, level, wavelet)
                 # Smoothed homotopy
-                f = foreground_fraction(img, threshold, crossover, smoothing=smoothing)
-                f_img = foreground_filtered * f + img * (1 - f)
+                f = foreground_fraction(img, threshold, crossover, smoothing)
+                # f_img = foreground_filtered * f + img * (1 - f)
+                f_img = evaluate("foreground_filtered * f + img * (1 - f)")
         else:
             if sigma2 > 0:  # Background filter only
                 background = clip(img, None, threshold)
                 background_filtered = filter_subband(background, sigma2, level, wavelet)
                 # Smoothed homotopy
-                f = foreground_fraction(img, threshold, crossover, smoothing=smoothing)
-                f_img = img * f + background_filtered * (1 - f)
+                f = foreground_fraction(img, threshold, crossover, smoothing)
+                # f_img = img * f + background_filtered * (1 - f)
+                f_img = evaluate("img * f + background_filtered * (1 - f)")
             else:
                 # sigma1 and sigma2 are both 0, so skip the destriping
                 f_img = img
