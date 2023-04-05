@@ -6,6 +6,9 @@ Module to remove lightsheet artifacts in images.
 
 Adapted from https://github.com/ChristophKirst/ClearMap2
 
+Keivan Moradi, 2023
+performance enhancements
+
 Kirst, et al. "Mapping the Fine-Scale Organization and Plasticity of the Brain Vasculature."
 Cell 180.4 (2020): 780-795.
 https://doi.org/10.1016/j.cell.2020.01.028
@@ -18,15 +21,15 @@ https://doi.org/10.1016/j.cell.2016.05.007
 from scipy.ndimage import zoom as ndi_zoom
 from numpy import array, ndarray, meshgrid, minimum, moveaxis, reshape, zeros, logical_and
 from numpy import percentile as np_percentile
-from numpy import float32
+from typing import Callable, Tuple, Union
+from numba import njit
 
 
 ###############################################################################
 # Lightsheet correction
 ###############################################################################
-
 def correct_lightsheet(
-        img,
+        img: ndarray,
         percentile: float = 0.25,
         mask=None,
         lightsheet=dict(selem=(150, 1, 1)),
@@ -36,8 +39,8 @@ def correct_lightsheet(
                         dtype=None,
                         step=(2, 2, 1)),
         lightsheet_vs_background: float = 2.0,
-        return_lightsheet=False,
-        return_background=False
+        return_lightsheet: bool = False,
+        return_background: bool = False
 ):
     """Removes lightsheet artifacts.
 
@@ -108,8 +111,9 @@ def correct_lightsheet(
 ###############################################################################
 
 def apply_local_function(
-        source, function,
-        selem=(50, 50),
+        source: ndarray,
+        function: Callable,
+        selem: Tuple[int, int] = (50, 50),
         spacing=None, step=None, interpolate=2, mask=None,
         fshape=None, dtype=None,
 ) -> ndarray:
@@ -233,6 +237,11 @@ def apply_local_function(
     return results
 
 
+@njit
+def prctl(data: ndarray, percentile: Union[float, ndarray]):
+    return np_percentile(data, percentile)
+
+
 def local_percentile(
         source,
         percentile,
@@ -279,8 +288,8 @@ def local_percentile(
         def _percentile(data):
             if len(data) == 0:
                 return array((0,) * len(percentile))
-            return np_percentile(data, percentile, axis=None)
-
+            # return np_percentile(data, percentile, axis=None)
+            return prctl(data, percentile)
     else:
         percentile = 100 * percentile
         fshape = None
@@ -288,7 +297,8 @@ def local_percentile(
         def _percentile(data):
             if len(data) == 0:
                 return 0
-            return np_percentile(data, percentile, axis=None)
+            # return np_percentile(data, percentile, axis=None)
+            return prctl(data, percentile)
 
     return apply_local_function(
         source,
