@@ -502,6 +502,7 @@ def filter_streaks(
 
     return f_img
 
+
 # @jit
 def correct_lightsheet_bleaching(img: ndarray, correction: float):
     y_axis_length: int = img.shape[0]
@@ -510,7 +511,7 @@ def correct_lightsheet_bleaching(img: ndarray, correction: float):
     d_type = img.dtype
     img = img.astype(float32)
     for idx in range(y_axis_length):
-        img[idx] *= (1 + correction * idx)
+        img[idx] *= (1 + (idx - y_axis_length) * correction)
     return img.astype(d_type)
 
 
