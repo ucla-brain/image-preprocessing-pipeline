@@ -1,20 +1,21 @@
 """volume.py - representation of a Terastitcher volume"""
-
+import os
+import re
 import abc
 import sys
-
+import itertools
 if sys.version_info.major >= 3 and sys.version_info.minor >= 6:
     import enum
 else:
     import aenum as enum
-import itertools
-import numpy as np
-import os
-import re
 from pathlib import Path
 from xml.etree import ElementTree
 from .raw import raw_imread
-from numpy import ndarray, zeros, hstack
+from numpy import ndarray, zeros, hstack, inf, arange, arctan2, sin, isinf, ones, float32, newaxis, minimum, finfo, \
+    iinfo, around, clip, int32, uint32, uint8, uint16
+from numpy import max as np_max
+from numpy import min as np_min
+from numpy import dtype as np_d_type
 from supplements.cli_interface import PrintColors
 from tifffile import imread, imwrite
 from typing import List, Union
@@ -70,8 +71,8 @@ class VExtentBase(abc.ABC):
         :returns: True if the volumes intersect
         """
         return self.x0 < other.x1 and self.x1 > other.x0 and \
-               self.y0 < other.y1 and self.y1 > other.y0 and \
-               self.z0 < other.z1 and self.z1 > other.z0
+            self.y0 < other.y1 and self.y1 > other.y0 and \
+            self.z0 < other.z1 and self.z1 > other.z0
 
     def intersection(self, other):
         """Return the intersection volume of two extents"""
@@ -85,8 +86,8 @@ class VExtentBase(abc.ABC):
         :param other: a VExtentBase volume extent
         """
         return self.x0 <= other.x0 and self.x1 >= other.x1 and \
-               self.y0 <= other.y0 and self.y1 >= other.y1 and \
-               self.z0 <= other.z0 and self.z1 >= other.z1
+            self.y0 <= other.y0 and self.y1 >= other.y1 and \
+            self.z0 <= other.z0 and self.z1 >= other.z1
 
     @property
     @abc.abstractmethod
@@ -329,7 +330,7 @@ class TSVStack(TSVStackBase):
                 if not z_ranges.endswith(")"):
                     z1 += 1
                 self.__idxs_to_keep = \
-                    hstack([self.__idxs_to_keep, np.arange(z0, z1)])
+                    hstack([self.__idxs_to_keep, arange(z0, z1)])
             self.z0slice = 0
             self.z1slice = len(self.__idxs_to_keep)
         self.img_regex = element.attrib["IMG_REGEX"]
@@ -363,7 +364,7 @@ class TSVStack(TSVStackBase):
                 except IndexError:
                     print(f"{PrintColors.WARNING}missing tif files in:\n\t{directory}{PrintColors.ENDC}")
                     for i in range(self.__idxs_to_keep[-1]):
-                        file = os.path.join(directory, f"{int(i*self.z_step[0]*10):06}{self.suffix}")
+                        file = os.path.join(directory, f"{int(i * self.z_step[0] * 10):06}{self.suffix}")
                         if not os.path.exists(file):
                             print(f"\t\tthe following missing files is replaced with a dummy (zeros) image:\n"
                                   f"\t\t\t{file}")
@@ -425,22 +426,22 @@ def compute_cosine(volume: VExtentBase, stack: TSVStack, ostack: TSVStack, img: 
     #
     d = get_distance_from_edge(iv, stack, ostack)
     od = get_distance_from_edge(iv, ostack, stack)
-    if np.min(d) == np.inf:
-        d[:] = np.max(od)
-    elif np.min(od) == np.inf:
-        od[:] = np.max(d)
+    if np_min(d) == inf:
+        d[:] = np_max(od)
+    elif np_min(od) == inf:
+        od[:] = np_max(d)
     #
     # Use the ratio of the two distances to get an "angle". The angle will
     # be 45 degrees if the voxels are the same distance away from the edge
     # and the two stacks will be equally blended. If there is a big difference
     # then the blending will favor the volume that is further away.
     #
-    angle = np.arctan2(d, od)
-    blending = np.sin(angle) ** 2
+    angle = arctan2(d, od)
+    blending = sin(angle) ** 2
     img[
-        iv.z0 - volume.z0:iv.z1 - volume.z0,
-        iv.y0 - volume.y0:iv.y1 - volume.y0,
-        iv.x0 - volume.x0:iv.x1 - volume.x0
+    iv.z0 - volume.z0:iv.z1 - volume.z0,
+    iv.y0 - volume.y0:iv.y1 - volume.y0,
+    iv.x0 - volume.x0:iv.x1 - volume.x0
     ] *= blending.astype(img.dtype)
 
 
@@ -466,7 +467,7 @@ class Edge(enum.Flag):
     ZMAX = enum.auto()
 
 
-def get_distance_from_edge(tgt: VExtentBase, stack: VExtentBase, ostack: VExtentBase) -> np.ndarray:
+def get_distance_from_edge(tgt: VExtentBase, stack: VExtentBase, ostack: VExtentBase) -> ndarray:
     """For the volume, get the distance per voxel to the nearest edge
 
     tgt:
@@ -493,7 +494,7 @@ def get_distance_from_edge(tgt: VExtentBase, stack: VExtentBase, ostack: VExtent
     #
     # Start out with all voxels maximally far from the edge
     #
-    max_distance = np.inf
+    max_distance = inf
     if ostack.x1 != stack.x1 and ostack.x0 != stack.x0:
         max_distance = volume.shape[2]
     if ostack.y1 != stack.y1 and ostack.y0 != stack.y0:
@@ -502,35 +503,35 @@ def get_distance_from_edge(tgt: VExtentBase, stack: VExtentBase, ostack: VExtent
     # Blend z edges if and only if the x and y extents are the
     # entire range
     #
-    if np.isinf(max_distance) and ostack.z1 != stack.z1 and ostack.z0 != stack.z0:
+    if isinf(max_distance) and ostack.z1 != stack.z1 and ostack.z0 != stack.z0:
         max_distance = min(max_distance, volume.shape[0])
         if ostack.z1 > stack.z0 > ostack.z0:
             edges = edges | Edge.ZMIN
         if ostack.z0 < stack.z1 < ostack.z1:
             edges = edges | Edge.ZMAX
-    result = np.ones(tgt.shape, np.float32) * max_distance
+    result = ones(tgt.shape, float32) * max_distance
     #
     # Process the starting edges
     #
     for idx, flag in enumerate((Edge.ZMIN, Edge.YMIN, Edge.XMIN)):
         if edges & flag:
-            slices = [np.newaxis] * 3
+            slices = [newaxis] * 3
             slices[idx] = slice(0, tgt.shape[idx])
-            result = np.minimum(
+            result = minimum(
                 result,
-                np.arange(tgt.start(idx) - volume.start(idx) + 1,
-                          tgt.end(idx) - volume.start(idx) + 1)[tuple(slices)])
+                arange(tgt.start(idx) - volume.start(idx) + 1,
+                       tgt.end(idx) - volume.start(idx) + 1)[tuple(slices)])
     #
     # Process the ending edges
     #
     for idx, flag in enumerate((Edge.ZMAX, Edge.YMAX, Edge.XMAX)):
         if edges & flag:
-            slices = [np.newaxis] * 3
+            slices = [newaxis] * 3
             slices[idx] = slice(0, tgt.shape[idx])
-            result = np.minimum(
+            result = minimum(
                 result,
-                np.arange(volume.end(idx) - tgt.start(idx),
-                          volume.end(idx) - tgt.end(idx), -1)[tuple(slices)])
+                arange(volume.end(idx) - tgt.start(idx),
+                       volume.end(idx) - tgt.end(idx), -1)[tuple(slices)])
     return result
 
 
@@ -553,16 +554,16 @@ class TSVVolumeBase:
         returns:
             the array corresponding to the volume (with zeros for data outside the array).
         """
-        result = zeros(volume.shape, np.float32)
-        multiplier = zeros(volume.shape, np.float32)
+        result = zeros(volume.shape, float32)
+        multiplier = zeros(volume.shape, float32)
         intersections = []
         for stack in self.flattened_stacks():
             if stack.intersects(volume):
                 intersections.append((stack, stack.intersection(volume)))
 
         for stack, intersection in intersections:
-            part = stack.imread(intersection).astype(np.float32)
-            mpart = np.ones(intersection.shape, np.float32)
+            part = stack.imread(intersection).astype(float32)
+            mpart = ones(intersection.shape, float32)
             #
             # Look for overlaps and perform a cosine blending
             #
@@ -577,20 +578,20 @@ class TSVVolumeBase:
                     compute_cosine(intersection, stack, ostack, part)
                     compute_cosine(intersection, stack, ostack, mpart)
             result[
-                intersection.z0 - volume.z0:intersection.z1 - volume.z0,
-                intersection.y0 - volume.y0:intersection.y1 - volume.y0,
-                intersection.x0 - volume.x0:intersection.x1 - volume.x0
+            intersection.z0 - volume.z0:intersection.z1 - volume.z0,
+            intersection.y0 - volume.y0:intersection.y1 - volume.y0,
+            intersection.x0 - volume.x0:intersection.x1 - volume.x0
             ] += part
             multiplier[
-                intersection.z0 - volume.z0:intersection.z1 - volume.z0,
-                intersection.y0 - volume.y0:intersection.y1 - volume.y0,
-                intersection.x0 - volume.x0:intersection.x1 - volume.x0
+            intersection.z0 - volume.z0:intersection.z1 - volume.z0,
+            intersection.y0 - volume.y0:intersection.y1 - volume.y0,
+            intersection.x0 - volume.x0:intersection.x1 - volume.x0
             ] += mpart
-        result = result / (multiplier + np.finfo(np.float32).eps)
-        if np.dtype(dtype).kind in ("u", "i"):
-            result = np.clip(np.around(result, 0),
-                             np.iinfo(dtype).min,
-                             np.iinfo(dtype).max)
+        result = result / (multiplier + finfo(float32).eps)
+        if np_d_type(dtype).kind in ("u", "i"):
+            result = clip(around(result, 0),
+                          iinfo(dtype).min,
+                          iinfo(dtype).max)
         return result.astype(dtype)
 
     def make_diagnostic_img(self, volume: VExtentBase):
@@ -609,17 +610,17 @@ class TSVVolumeBase:
             intersection = stack.intersection(volume)
             img = stack.imread(intersection)
             result[
-                intersection.z0 - volume.z0:intersection.z1 - volume.z0,
-                intersection.y0 - volume.y0:intersection.y1 - volume.y0,
-                intersection.x0 - volume.x0:intersection.x1 - volume.x0,
-                idx
+            intersection.z0 - volume.z0:intersection.z1 - volume.z0,
+            intersection.y0 - volume.y0:intersection.y1 - volume.y0,
+            intersection.x0 - volume.x0:intersection.x1 - volume.x0,
+            idx
             ] = img.astype(result.dtype)
         return result
 
     @property
     def volume(self) -> VExtent:
         """The VExtent of the volume"""
-        x0 = y0 = z0 = np.iinfo(np.int32).max
+        x0 = y0 = z0 = iinfo(int32).max
         x1 = y1 = z1 = 0
         for stack in sum(self.stacks, []):
             x0 = min(x0, stack.x0)
@@ -712,7 +713,7 @@ class TSVVolume(TSVVolumeBase):
         #
         # Find the minimum absolute offset for x, y, z
         #
-        min_x = min_y = min_z = np.iinfo(np.uint32).max
+        min_x = min_y = min_z = iinfo(uint32).max
         for offset in sum(self.offsets, []):
             min_x = min(min_x, offset.x)
             min_y = min(min_y, offset.y)
@@ -740,11 +741,11 @@ class TSVVolume(TSVVolumeBase):
     def dtype(self):
         """The dtype inferred from the stack's bit-depth"""
         if self.stacks[0][0].bytes_per_chan == 1:
-            return np.uint8
+            return uint8
         elif self.stacks[0][0].bytes_per_chan < 9:
-            return np.uint16
+            return uint16
         else:
-            return np.uint32
+            return uint32
 
     @staticmethod
     def load(path, ignore_z_offsets=False, alt_stack_dir=None):
@@ -818,4 +819,4 @@ class TSVSimpleVolume(TSVVolumeBase):
 
     @property
     def dtype(self):
-        return np.uint16
+        return uint16
