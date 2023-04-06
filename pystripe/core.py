@@ -9,6 +9,7 @@ from numpy import uint8, uint16, float32, float64, ndarray, generic, zeros, broa
     cumsum, arange, unique, interp, pad, clip, where, rot90, flipud
 from scipy.fftpack import rfft, fftshift, irfft
 from scipy.ndimage import gaussian_filter as gaussian_filter_nd
+from scipy.signal import butter, sosfiltfilt
 from pywt import wavedec2, waverec2, Wavelet, dwt_max_level
 from argparse import RawDescriptionHelpFormatter, ArgumentParser
 from tqdm import tqdm
@@ -503,22 +504,36 @@ def filter_streaks(
     return f_img
 
 
-# @jit
-def correct_lightsheet_bleaching(img: ndarray, correction: float) -> ndarray:
-    y_axis_length: int = img.shape[0]
-    correction -= 1
-    correction /= y_axis_length
+def butter_lowpass_filter(data: ndarray, cutoff_frequency: float, order: int = 1) -> ndarray:
+    sos = butter(order, cutoff_frequency, output='sos')
+    return sosfiltfilt(sos, data)
+
+
+def lightsheet_bleach_correction(img: ndarray, axis: int) -> ndarray:
+    data = np_max(img, axis=axis)
+    data_min = np_min(data)
+    data -= data_min
+    data_low_pas = data_min + butter_lowpass_filter(data, 0.0025)
+    return data_low_pas
+
+
+def correct_lightsheet_bleaching(img: ndarray) -> ndarray:
+    img_max = np_max(img)
     d_type = img.dtype
     img = img.astype(float32)
-    for idx in range(y_axis_length):
-        img[idx] *= (1 + (y_axis_length - idx) * correction)
+    y_correction = lightsheet_bleach_correction(img, 0)
+    img /= y_correction[:, None]
+    x_correction = lightsheet_bleach_correction(img, 1)
+    img /= x_correction[None, :]
+    # img = (img / y_correction[:, None] + img / x_correction[None, :]) * (np_max(img) / 2)
+    img *= img_max
     return img.astype(d_type)
 
 
 def process_img(
         img: ndarray,
         flat: ndarray = None,
-        lightsheet_bleach_correction: bool = False,
+        correct_bleaching: bool = False,
         gaussian_filter_2d: bool = False,
         down_sample: Tuple[int, int] = None,  # (2, 2),
         downsample_method: str = 'max',
@@ -558,8 +573,8 @@ def process_img(
                 print(f"{PrintColors.WARNING}"
                       f"warning: image and flat arrays had different shapes"
                       f"{PrintColors.ENDC}")
-        if lightsheet_bleach_correction and lightsheet_bleach_correction > 1:
-            img = correct_lightsheet_bleaching(img, lightsheet_bleach_correction)
+        if correct_bleaching:
+            img = correct_lightsheet_bleaching(img)
         if gaussian_filter_2d:
             img = gaussian(img, sigma=1, preserve_range=True, truncate=2)
     if down_sample is not None:
