@@ -504,21 +504,21 @@ def filter_streaks(
 
 
 # @jit
-def correct_lightsheet_bleaching(img: ndarray, correction: float):
+def correct_lightsheet_bleaching(img: ndarray, correction: float) -> ndarray:
     y_axis_length: int = img.shape[0]
     correction -= 1
     correction /= y_axis_length
     d_type = img.dtype
     img = img.astype(float32)
     for idx in range(y_axis_length):
-        img[idx] *= (1 + (idx - y_axis_length) * correction)
+        img[idx] *= (1 + (y_axis_length - idx) * correction)
     return img.astype(d_type)
 
 
 def process_img(
         img: ndarray,
         flat: ndarray = None,
-        lightsheet_bleach_correction: float = None,
+        lightsheet_bleach_correction: bool = False,
         gaussian_filter_2d: bool = False,
         down_sample: Tuple[int, int] = None,  # (2, 2),
         downsample_method: str = 'max',
