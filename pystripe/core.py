@@ -509,24 +509,26 @@ def butter_lowpass_filter(data: ndarray, cutoff_frequency: float, order: int = 1
     return sosfiltfilt(sos, data)
 
 
-def lightsheet_bleach_correction(img: ndarray, axis: int) -> ndarray:
-    data = np_max(img, axis=axis)
-    data_min = np_min(data)
-    data -= data_min
-    data_low_pas = data_min + butter_lowpass_filter(data, 0.0025)
-    return data_low_pas
+def lightsheet_bleach_correction(img: ndarray, axis: int = None) -> ndarray:
+    if axis is not None:
+        img = np_max(img, axis=axis)
+    img_min = np_min(img)
+    img -= img_min
+    img = img_min + butter_lowpass_filter(img, 0.00005)
+    img /= np_max(img)
+    return img
 
 
-def correct_lightsheet_bleaching(img: ndarray) -> ndarray:
-    img_max = np_max(img)
+def correct_lightsheet_bleaching(img: ndarray, axis: int = None) -> ndarray:
     d_type = img.dtype
     img = img.astype(float32)
-    y_correction = lightsheet_bleach_correction(img, 0)
-    img /= y_correction[:, None]
-    x_correction = lightsheet_bleach_correction(img, 1)
-    img /= x_correction[None, :]
-    # img = (img / y_correction[:, None] + img / x_correction[None, :]) * (np_max(img) / 2)
-    img *= img_max
+    img_correction = lightsheet_bleach_correction(img, axis=axis)
+    if axis is not None and axis == 0:
+        img /= img_correction[:, None]
+    elif axis is not None and axis == 1:
+        img /= img_correction[None, :]
+    else:
+        img /= img_correction
     return img.astype(d_type)
 
 
@@ -558,7 +560,6 @@ def process_img(
         bit_shift_to_right: int = 8,
         d_type: str = None
 ) -> ndarray:
-
     img_min = np_min(img)
     img_max = np_max(img)
     if tile_size is None:
@@ -573,10 +574,10 @@ def process_img(
                 print(f"{PrintColors.WARNING}"
                       f"warning: image and flat arrays had different shapes"
                       f"{PrintColors.ENDC}")
-        if correct_bleaching:
-            img = correct_lightsheet_bleaching(img)
         if gaussian_filter_2d:
             img = gaussian(img, sigma=1, preserve_range=True, truncate=2)
+        if correct_bleaching:
+            img = correct_lightsheet_bleaching(img)
     if down_sample is not None:
         downsample_method = downsample_method.lower()
         if downsample_method == 'min':

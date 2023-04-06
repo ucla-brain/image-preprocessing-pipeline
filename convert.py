@@ -71,7 +71,7 @@ def main(args: Namespace):
     ) or (
             input_path.is_dir() and (
             args.dark > 0 or args.convert_to_8bit or new_size or down_sample or args.rotation or args.gaussian or
-            args.background_subtraction or args.de_stripe or args.flip_upside_down)
+            args.background_subtraction or args.de_stripe or args.flip_upside_down or args.bleach_correction)
     ):
         if not args.tif:
             print(f"{PrintColors.FAIL}tif path is needed to continue.{PrintColors.ENDC}")
@@ -90,6 +90,7 @@ def main(args: Namespace):
                 "sigma": (256, 256) if args.de_stripe else (0, 0),
                 "dark": args.dark,
                 "lightsheet": args.background_subtraction,
+                "correct_bleaching": args.bleach_correction,
                 "rotate": args.rotation,
                 "flip_upside_down": args.flip_upside_down,
                 "convert_to_8bit": args.convert_to_8bit,
@@ -99,28 +100,6 @@ def main(args: Namespace):
             channel=args.channel,
             compression=compression
         )
-    # elif input_path.is_dir() and (
-    #         args.dark > 0 or args.convert_to_8bit or new_size or down_sample or args.rotation or args.gaussian or
-    #         args.background_subtraction or args.de_stripe):
-    #     if not args.tif:
-    #         print(f"{PrintColors.FAIL} tif path is needed for processing 2D tif series{PrintColors.ENDC}")
-    #         raise RuntimeError
-    #     return_code = batch_filter(
-    #         input_path,
-    #         tif_2d_folder,
-    #         workers=args.nthreads,
-    #         sigma=(256, 256) if args.de_stripe else (0, 0),
-    #         compression=compression,
-    #         dark=args.dark,
-    #         lightsheet=args.background_subtraction,
-    #         gaussian_filter_2d=args.gaussian,
-    #         convert_to_8bit=args.convert_to_8bit,
-    #         bit_shift_to_right=args.bit_shift,
-    #         rotate=args.rotation,
-    #         continue_process=True,
-    #         down_sample=down_sample,
-    #         new_size=new_size,
-    #     )
     elif input_path.is_dir():
         tif_2d_folder = input_path
 
@@ -268,6 +247,8 @@ if __name__ == '__main__':
                         help="background vs foreground threshold. Default is 0.")
     parser.add_argument("--background_subtraction", default=False, action=BooleanOptionalAction,
                         help="Apply lightsheet cleaning algorithm. Default is --no-background_subtraction")
+    parser.add_argument("--bleach_correction", default=False, action=BooleanOptionalAction,
+                        help="correct image bleaching. Default is --no-bleach_correction.")
     parser.add_argument("--convert_to_8bit", default=False, action=BooleanOptionalAction,
                         help="convert to 8-bit. Default is --no-convert_to_8bit")
     parser.add_argument("--bit_shift", "-b", type=int, default=8,

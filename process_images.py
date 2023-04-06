@@ -331,81 +331,6 @@ def run_command(command, need_progress_dot=True):
     p_log("")
 
 
-# def process_img(
-#         img: ndarray,
-#         gaussian_filter_2d: float = False,
-#         need_de_striping: float = False,
-#         down_sample: Tuple[int, int] = None,
-#         down_sample_method: Callable = np_max,
-#         new_size: Tuple[int, int] = None,
-#         dark: int = 0,
-#         need_lightsheet_cleaning: bool = False,
-#         convert_to_8bit: bool = False,
-#         bit_shift_to_right: int = 8,
-#         rotation: int = 0
-# ) -> ndarray:
-#     img_min = np_min(img)
-#     img_max = np_max(img)
-#     d_type = img.dtype
-#     tile_size = img.shape
-#
-#     # de-noising
-#     if img_min < img_max:
-#         if gaussian_filter_2d:
-#             img = gaussian(img, sigma=1, preserve_range=True, truncate=2).astype(img.dtype)
-#         if need_de_striping:
-#             img = filter_streaks(
-#                 img,
-#                 sigma=(256, 256),
-#                 level=0,
-#                 wavelet="db10",
-#                 crossover=10,
-#                 threshold=-1,
-#                 directions="v"
-#             )
-#
-#     # down-sizing
-#     if down_sample is not None:
-#         img = block_reduce(img, block_size=down_sample, func=down_sample_method).astype(d_type)
-#     if new_size is not None and tile_size < new_size:
-#         img = resize(img, new_size, preserve_range=True, anti_aliasing=False).astype(d_type)
-#
-#     # background cleaning
-#     if img_min < img_max:
-#         if dark > 0:
-#             img = where(img > dark, img - dark, 0)
-#         if need_lightsheet_cleaning:
-#             artifact_length: int = 150
-#             background_window_size: int = 200
-#             img = correct_lightsheet(
-#                 img.reshape((img.shape[0], img.shape[1], 1)),
-#                 percentile=0.25,
-#                 lightsheet=dict(selem=(1, artifact_length, 1)),
-#                 background=dict(
-#                     selem=(background_window_size, background_window_size, 1),
-#                     spacing=(25, 25, 1),
-#                     interpolate=1,
-#                     dtype=float32,
-#                     step=(2, 2, 1)),
-#                 lightsheet_vs_background=2.0
-#             ).reshape(img.shape[0], img.shape[1]).astype(img.dtype)
-#
-#     # up-sizing
-#     if new_size is not None and tile_size > new_size:
-#         img = resize(img, new_size, preserve_range=True, anti_aliasing=True).astype(d_type)
-#
-#     if convert_to_8bit and img.dtype != uint8:
-#         img = convert_to_8bit_fun(img, bit_shift_to_right=bit_shift_to_right)
-#
-#     if rotation == 90:
-#         img = rot90(img, 1)
-#     elif rotation == 180:
-#         img = rot90(img, 2)
-#     elif rotation == 270:
-#         img = rot90(img, 3)
-#     return img
-
-
 def process_channel(
         source_path: Path,
         channel: str,
@@ -685,6 +610,7 @@ def process_channel(
         destination=stitched_tif_path,
         args=(),
         kwargs={
+            "correct_bleaching": False,
             "sigma": (256, 256) if need_destriping else (0, 0),
             "lightsheet": need_lightsheet_cleaning,
             "rotate": 90 if need_rotation_stitched_tif else 0,
