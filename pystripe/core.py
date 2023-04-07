@@ -380,7 +380,7 @@ def filter_streaks(
         img: ndarray,
         sigma: Tuple[int, int] = (256, 256),
         level: int = 0,
-        wavelet: str = 'db9',
+        wavelet: str = 'db10',
         crossover: float = 10,
         threshold: float = -1,
         directions: str = 'v') -> ndarray:
@@ -560,6 +560,7 @@ def process_img(
         bit_shift_to_right: int = 8,
         d_type: str = None
 ) -> ndarray:
+
     img_min = np_min(img)
     img_max = np_max(img)
     if tile_size is None:
