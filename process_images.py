@@ -128,8 +128,8 @@ def get_voxel_sizes(is_mip):
         f"{PrintColors.BLUE}hint: for SmartSPIM typically 10, for the other microscope 16.2{PrintColors.ENDC}",
         (0, 100), float)
     # For tile overlap in smartSPIM is 1 percent higher than the requested value
-    if objective != "40x":
-        tile_overlap_percent += 1
+    # if objective != "40x":
+    #     tile_overlap_percent += 1
     p_log(
         f"Objective is {objective} so voxel sizes are:\n"
         f"\tx = {voxel_size_x} µm,\n"
