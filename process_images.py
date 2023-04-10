@@ -488,8 +488,9 @@ def process_channel(
             p_log(f"{PrintColors.FAIL}{channel}: importing tif files failed.{PrintColors.ENDC}")
             raise RuntimeError
 
-        # each alignment thread needs about 16GB of RAM in 16bit and 8GB in 8bit
-        subvolume_depth = int(10 if objective == '40x' else subvolume_depth)
+        max_subvolume_depth = 100
+        subvolume_depth = int(10 if objective == '40x' else min(subvolume_depth, max_subvolume_depth))
+        alignment_cores: int = 1
         memory_needed_per_thread = 64 * subvolume_depth
         if isinstance(new_tile_size, tuple):
             for resolution in new_tile_size:
@@ -508,23 +509,21 @@ def process_channel(
         memory_ram = virtual_memory().available // 1024 ** 3  # in GB
         memory_needed_per_thread //= 1024 ** 3
 
-        alignment_cores: int = 1
-        min_subvolume_depth = 100
         if memory_needed_per_thread <= memory_ram:
             alignment_cores = cpu_physical_core_count
             if memory_needed_per_thread > 0:
                 alignment_cores = min(floor(memory_ram / memory_needed_per_thread), cpu_physical_core_count)
             if num_gpus > 0 and sys.platform.lower() == 'linux':
-                while alignment_cores < 6*num_gpus and subvolume_depth > min_subvolume_depth:
+                while alignment_cores < 6*num_gpus and subvolume_depth > max_subvolume_depth:
                     subvolume_depth //= 2
                     alignment_cores *= 2
             else:
-                while alignment_cores < cpu_physical_core_count and subvolume_depth > min_subvolume_depth:
+                while alignment_cores < cpu_physical_core_count and subvolume_depth > max_subvolume_depth:
                     subvolume_depth //= 2
                     alignment_cores *= 2
         else:
             memory_needed_per_thread //= subvolume_depth
-            while memory_needed_per_thread * subvolume_depth > memory_ram and subvolume_depth > min_subvolume_depth:
+            while memory_needed_per_thread * subvolume_depth > memory_ram and subvolume_depth > max_subvolume_depth:
                 subvolume_depth //= 2
             memory_needed_per_thread *= subvolume_depth
 
@@ -562,16 +561,16 @@ def process_channel(
                 # Overlap (in pixels) between two adjacent tiles along V. Providing oV is harmful sometimes.
                 # f"--oV={0 if objective == '40x' else tile_overlap_y}",
                 # Displacements search radius along H (in pixels). Default value is 25!
-                f"--sH={max(25, tile_overlap_x - 1)}",
+                f"--sH={min(25, tile_overlap_x - 1)}",
                 # Displacements search radius along V (in pixels). Default value is 25!
-                f"--sV={max(25, tile_overlap_y - 1)}",
+                f"--sV={min(25, tile_overlap_y - 1)}",
                 # Displacements search radius along D (in pixels).
-                f"--sD={0 if (objective == '40x' or stitch_mip) else min(min_subvolume_depth, subvolume_depth - 1)}",
+                f"--sD={0 if (objective == '40x' or stitch_mip) else min(max_subvolume_depth, subvolume_depth - 1)}",
                 # Number of slices per subvolume partition
-                f"--subvoldim={min_subvolume_depth}",
+                f"--subvoldim={subvolume_depth}",
                 # used in the pairwise displacements computation step.
                 # dimension of layers obtained by dividing the volume along D
-                "--threshold=0.6",  # threshold between 0.55 and 0.7 is good. Higher values block alignment.
+                "--threshold=0.7",  # threshold between 0.55 and 0.7 is good. Higher values block alignment.
                 f"--projin={proj_in}",
                 f"--projout={proj_out}",
                 # "--restoreSPIM",
