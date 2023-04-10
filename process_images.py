@@ -529,9 +529,9 @@ def process_channel(
 
         if num_gpus > 0 and sys.platform.lower() == 'linux':
             if memory_needed_per_thread > 0:
-                alignment_cores = min(alignment_cores, num_gpus * 6)
+                alignment_cores = min(alignment_cores, num_gpus * 12)
             else:
-                alignment_cores = max(alignment_cores, num_gpus * 6)
+                alignment_cores = max(alignment_cores, num_gpus * 12)
         p_log(f"memory_needed_per_thread = {memory_needed_per_thread} GB\n"
               f"memory_ram = {memory_ram} GB")
         # while alignment_cores < cpu_physical_core_count and subvolume_depth > 600:
@@ -570,7 +570,7 @@ def process_channel(
                 f"--subvoldim={subvolume_depth}",
                 # used in the pairwise displacements computation step.
                 # dimension of layers obtained by dividing the volume along D
-                "--threshold=0.7",  # threshold between 0.55 and 0.7 is good. Higher values block alignment.
+                "--threshold=0.65",  # threshold between 0.55 and 0.7 is good. Higher values block alignment.
                 f"--projin={proj_in}",
                 f"--projout={proj_out}",
                 # "--restoreSPIM",
