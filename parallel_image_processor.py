@@ -221,8 +221,15 @@ def parallel_image_processor(
     args_queue = Queue()
     if isinstance(source, TSVVolume):
         images = source
-        for idx in range(source.volume.z0, source.volume.z1, 1):
+        # to test stitching quality first a sample from every 100 z-step will be stitched
+        top_list = []
+        for idx in range(source.volume.z0, source.volume.z1, 100):
             args_queue.put(idx)
+            top_list += [idx]
+        for idx in range(source.volume.z0, source.volume.z1, 1):
+            if idx not in top_list:
+                args_queue.put(idx)
+        del top_list
         num_images = source.volume.z1 - source.volume.z0
         shape = source.volume.shape[1:3]
         dtype = source.dtype
