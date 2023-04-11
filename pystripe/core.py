@@ -10,6 +10,7 @@ from numpy import uint8, uint16, float32, float64, ndarray, generic, zeros, broa
 from scipy.fftpack import rfft, fftshift, irfft
 from scipy.ndimage import gaussian_filter as gaussian_filter_nd
 from scipy.signal import butter, sosfiltfilt
+from scipy.special import expit as sigmoid
 from pywt import wavedec2, waverec2, Wavelet, dwt_max_level
 from argparse import RawDescriptionHelpFormatter, ArgumentParser
 from tqdm import tqdm
@@ -38,11 +39,11 @@ from numexpr import evaluate
 
 filterwarnings("ignore")
 supported_extensions = ['.png', '.tif', '.tiff', '.raw', '.dcimg']
-num_retries = 40
+num_retries: int = 40
+use_numexpr: bool = True
 environ['MKL_NUM_THREADS'] = '1'
 environ['NUMEXPR_NUM_THREADS'] = '1'
 environ['OMP_NUM_THREADS'] = '1'
-use_numexpr: bool = True
 
 
 def imread_tif_raw_png(path: Path, dtype: str = None, shape: Tuple[int, int] = None):
@@ -285,8 +286,7 @@ def gaussian_filter(shape: tuple, sigma: float) -> ndarray:
 
     """
     g = notch(n=shape[-1], sigma=sigma)
-    g_mask = broadcast_to(g, shape).copy()
-    return g_mask
+    return broadcast_to(g, shape).copy()
 
 
 def hist_match(source, template):
@@ -334,9 +334,9 @@ def max_level(min_len, wavelet):
     return dwt_max_level(min_len, w.dec_len)
 
 
-@njit
-def sigmoid(x: ndarray) -> ndarray:
-    return 1 / (1 + exp(-x))
+# @njit
+# def sigmoid(x: ndarray) -> ndarray:
+#     return 1 / (1 + exp(-x))
 
 
 @njit
@@ -514,7 +514,7 @@ def lightsheet_bleach_correction(img: ndarray, axis: int = None) -> ndarray:
         img = np_max(img, axis=axis)
     img_min = np_min(img)
     img -= img_min
-    img = img_min + butter_lowpass_filter(img, 0.00005)
+    img = img_min + butter_lowpass_filter(img, 0.0005)
     img /= np_max(img)
     return img
 
