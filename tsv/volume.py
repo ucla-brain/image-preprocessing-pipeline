@@ -322,7 +322,6 @@ class TSVStack(TSVStackBase):
         else:
             # format is [AAAA,BBBB);[AAAA,BBBB)
             # never seen (AAAA,BBBB], but it's coded
-            #
             for substr in z_ranges.split(";"):
                 z0, z1 = map(int, substr[1:-1].split(","))
                 if not substr.startswith("["):
