@@ -21,7 +21,7 @@ from time import time, sleep
 from platform import uname
 from tsv.volume import TSVVolume
 from pystripe.core import batch_filter, imread_tif_raw_png, imsave_tif, MultiProcessQueueRunner, progress_manager, \
-    glob_re, process_img
+    process_img
 from queue import Empty
 from multiprocessing import freeze_support, Queue, Process
 from supplements.cli_interface import select_among_multiple_options, ask_true_false_question, PrintColors
@@ -368,7 +368,7 @@ def process_channel(
     # preprocess each tile as needed using PyStripe --------------------------------------------------------------------
 
     assert source_path.joinpath(channel).exists()
-    if (need_destriping and objective == "40x") or need_flat_image_application or \
+    if need_destriping or need_flat_image_application or \
             need_raw_png_to_tiff_conversion or need_compression or \
             down_sampling_factor not in (None, (1, 1)) or new_tile_size is not None:
         img_flat = None
@@ -408,15 +408,13 @@ def process_channel(
 
         # sigma=(foreground, background) Default is (0, 0), indicating no de-striping.
         sigma = (0, 0)
-        # if need_destriping:
-        #     if objective == "4x":
-        #         sigma = (32, 32)
-        #     elif objective == "40x":
-        #         sigma = (128, 256)
-        #     else:
-        #         sigma = (256, 256)
-        if need_destriping and objective == "40x":
-            sigma = (128, 256)
+        if need_destriping:
+            if objective == "4x":
+                sigma = (32, 32)
+            elif objective == "40x":
+                sigma = (128, 256)
+            else:
+                sigma = (256, 256)
 
         return_code = batch_filter(
             source_path / channel,
@@ -488,10 +486,10 @@ def process_channel(
             p_log(f"{PrintColors.FAIL}{channel}: importing tif files failed.{PrintColors.ENDC}")
             raise RuntimeError
 
-        max_subvolume_depth = 100
+        max_subvolume_depth = 1000
         subvolume_depth = int(10 if objective == '40x' else min(subvolume_depth, max_subvolume_depth))
         alignment_cores: int = 1
-        memory_needed_per_thread = 64 * subvolume_depth
+        memory_needed_per_thread = 32 * subvolume_depth  # 64 or 32?
         if isinstance(new_tile_size, tuple):
             for resolution in new_tile_size:
                 memory_needed_per_thread *= resolution
@@ -504,8 +502,8 @@ def process_channel(
                     memory_needed_per_thread *= resolution
         else:
             memory_needed_per_thread *= 2048 * 2048
-        if TifStack(glob_re(r"\.tiff?$", preprocessed_path.joinpath(channel)).__next__().parent).dtype == uint8:
-            memory_needed_per_thread /= 2
+        # if TifStack(glob_re(r"\.tiff?$", preprocessed_path.joinpath(channel)).__next__().parent).dtype == uint8:
+        #     memory_needed_per_thread /= 2
         memory_ram = virtual_memory().available // 1024 ** 3  # in GB
         memory_needed_per_thread //= 1024 ** 3
 
@@ -565,7 +563,7 @@ def process_channel(
                 # Displacements search radius along V (in pixels). Default value is 25!
                 f"--sV={min(25, tile_overlap_y - 1)}",
                 # Displacements search radius along D (in pixels).
-                f"--sD={0 if (objective == '40x' or stitch_mip) else min(max_subvolume_depth, subvolume_depth - 1)}",
+                f"--sD={0 if (objective == '40x' or stitch_mip) else subvolume_depth}",
                 # Number of slices per subvolume partition
                 f"--subvoldim={subvolume_depth}",
                 # used in the pairwise displacements computation step.
@@ -610,7 +608,7 @@ def process_channel(
         args=(),
         kwargs={
             "correct_bleaching": False,
-            "sigma": (256, 256) if need_destriping else (0, 0),
+            "sigma": (0, 0),
             "lightsheet": need_lightsheet_cleaning,
             "rotate": 90 if need_rotation_stitched_tif else 0,
             "convert_to_8bit": need_16bit_to_8bit_conversion,
