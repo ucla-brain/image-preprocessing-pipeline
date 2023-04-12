@@ -6,7 +6,7 @@ from numpy import min as np_min
 from numpy import mean as np_mean
 from numpy import median as np_median
 from numpy import uint8, uint16, float32, float64, ndarray, generic, zeros, broadcast_to, exp, expm1, log1p, \
-    cumsum, arange, unique, interp, pad, clip, where, rot90, flipud
+    cumsum, arange, unique, interp, pad, clip, where, rot90, flipud, dot, reshape, iinfo
 from scipy.fftpack import rfft, fftshift, irfft
 from scipy.ndimage import gaussian_filter as gaussian_filter_nd
 from scipy.signal import butter, sosfiltfilt
@@ -34,7 +34,7 @@ from queue import Empty
 from operator import iconcat
 from functools import reduce
 from supplements.cli_interface import PrintColors, date_time_now
-from numba import njit, jit
+from numba import jit
 from numexpr import evaluate
 
 filterwarnings("ignore")
@@ -266,7 +266,11 @@ def notch(n: int, sigma: float) -> ndarray:
     if sigma <= 0:
         raise ValueError('sigma must be positive')
     x = arange(n)
-    return 1 - exp(-x ** 2 / (2 * sigma ** 2))
+    if use_numexpr:
+        x = evaluate("1 - exp(-x ** 2 / (2 * sigma ** 2))")
+    else:
+        x = 1 - exp(-x ** 2 / (2 * sigma ** 2))
+    return x
 
 
 def gaussian_filter(shape: tuple, sigma: float) -> ndarray:
@@ -334,16 +338,13 @@ def max_level(min_len, wavelet):
     return dwt_max_level(min_len, w.dec_len)
 
 
-# @njit
-# def sigmoid(x: ndarray) -> ndarray:
-#     return 1 / (1 + exp(-x))
-
-
-@njit
-def foreground_fraction(img: ndarray, center: float, crossover: float, smoothing: int):
-    z = (img - center) / crossover
-    f = sigmoid(z)
-    return gaussian_filter_nd(f, sigma=smoothing)
+def foreground_fraction(img: ndarray, center: float, crossover: float, smoothing: int) -> ndarray:
+    if use_numexpr:
+        img = evaluate("(img - center) / crossover")
+    else:
+        img = (img - center) / crossover
+    img = sigmoid(img)
+    return gaussian_filter_nd(img, sigma=smoothing)
 
 
 @jit
@@ -356,24 +357,60 @@ def log1p_jit(img_log_filtered: ndarray) -> ndarray:
     return log1p(img_log_filtered)
 
 
-def filter_subband(img: ndarray, sigma: int, level: int, wavelet: str) -> ndarray:
-    img_log = log1p_jit(img)
-    coeffs = wavedec2(img_log, wavelet, mode='symmetric', level=None if level == 0 else level, axes=(-2, -1))
-    approx = coeffs[0]
-    detail = coeffs[1:]
+def filter_subband(img: ndarray, sigma: int, level: int, wavelet: str, bidirectional: bool) -> ndarray:
+    coefficients = wavedec2(img, wavelet, mode='symmetric', level=None if level == 0 else level, axes=(-2, -1))
+    coefficients = list(map(list, coefficients))
+    width_frac_h = sigma / img.shape[0]
+    width_frac_v = sigma / img.shape[1]
+    for idx, coefficient in enumerate(coefficients):
+        if idx == 0:  # the first coefficient is unpackable to ch, cv, cd
+            continue
+        ch, cv, cd = coefficient  # horizontal, vertical and diagonal coefficients
+        sigma_h = ch.shape[0] * width_frac_h
+        ch_fft = fft(ch, shift=False)
+        g = gaussian_filter(shape=ch_fft.shape, sigma=sigma_h)
+        ch_fft *= g
+        ch_filt = irfft(ch_fft, axis=-1)
 
-    width_frac = sigma / img.shape[0]
-    coeffs_filt = [approx]
-    for ch, cv, cd in detail:
-        s = ch.shape[0] * width_frac
-        fch = fft(ch, shift=False)
-        g = gaussian_filter(shape=fch.shape, sigma=s)
-        fch_filt = fch * g
-        ch_filt = irfft(fch_filt, axis=-1)
-        coeffs_filt.append((ch_filt, cv, cd))
+        cv_filt = cv
+        if bidirectional:
+            sigma_v = cv.shape[0] * width_frac_v
+            cv_fft = fft(cv, shift=False)
+            if cv_fft.shape != ch_fft.shape or sigma_h != sigma_v:
+                g = gaussian_filter(shape=cv_fft.shape, sigma=sigma_v)
+            cv_fft *= g
+            cv_filt = irfft(cv_fft, axis=-1)
 
-    img_log_filtered = waverec2(coeffs_filt, wavelet, mode='symmetric', axes=(-2, -1))
-    return expm1_jit(img_log_filtered)
+        coefficients[idx][0] = ch_filt
+        coefficients[idx][1] = cv_filt
+
+    return waverec2(coefficients, wavelet, mode='symmetric', axes=(-2, -1))
+
+
+def butter_lowpass_filter(data: ndarray, cutoff_frequency: float, order: int = 1) -> ndarray:
+    sos = butter(order, cutoff_frequency, output='sos')
+    return sosfiltfilt(sos, data)
+
+
+def get_bleach_correction_filter(img: ndarray, frequency: float) -> ndarray:
+    """
+
+    Parameters
+    ----------
+    img: log1p filtered image
+    frequency: low pass fileter frequency. Usually 1/min(img.shape).
+
+    Returns
+    -------
+    max normalized filter values.
+    """
+    img_filter_y = np_max(img, axis=1)
+    img_filter_x = np_max(img, axis=0)
+    img_filter_y = reshape(butter_lowpass_filter(img_filter_y, frequency), (len(img_filter_y), 1))
+    img_filter_x = reshape(butter_lowpass_filter(img_filter_x, frequency), (1, len(img_filter_x)))
+    img_filter = dot(img_filter_y, img_filter_x)
+    img_filter /= np_max(img_filter)
+    return img_filter
 
 
 def filter_streaks(
@@ -382,8 +419,10 @@ def filter_streaks(
         level: int = 0,
         wavelet: str = 'db10',
         crossover: float = 10,
-        threshold: float = -1,
-        directions: str = 'v') -> ndarray:
+        threshold: float = None,
+        bidirectional: bool = False,
+        bleach_correction_frequency: float = None
+) -> ndarray:
     """Filter horizontal streaks using wavelet-FFT filter
 
     Parameters
@@ -400,142 +439,74 @@ def filter_streaks(
         intensity range to switch between filtered background and unfiltered foreground
     threshold : float
         intensity value to separate background from foreground. Default is Otsu
-    directions : str
-        destriping direction: 'v' means top-down, 'h' means left-to-right, 'vh' or 'hv' means both directions.
+    bidirectional : bool
+        by default (False) only stripes elongated along horizontal axis will be corrected.
+    bleach_correction_frequency: float
+        2D bleach correction frequency in Hz
 
     Returns
     -------
-    f_img : ndarray
+    img : ndarray
         filtered image
     """
     sigma1 = sigma[0]  # foreground
     sigma2 = sigma[1]  # background
-    if sigma1 == sigma2 == 0:
+    if sigma1 == sigma2 == 0 and bleach_correction_frequency is None:
         return img
-    dtype = img.dtype
+
     smoothing: int = 1
+    d_type = img.dtype
+    img = log1p_jit(img)
+    if img.dtype != float64:
+        img = img.astype(float64)
     # Need to pad image to multiple of 2
     pad_y, pad_x = [_ % 2 for _ in img.shape]
     if pad_y == 1 or pad_x == 1:
         img = pad(img, ((0, pad_y), (0, pad_x)), mode="edge")
-    # print(f"step 5-1: {img.dtype}, max={img.max()}")
-    img = img.astype(float64)
-    f_img = None
-    directions = directions.lower()
-    for idx, direction in enumerate(directions):
-        if (threshold == -1 or idx > 0) and sigma1 != sigma2:
-            try:
-                threshold = threshold_otsu(img)
-                # print(threshold)
-            except ValueError:
-                threshold = 1
 
-        if direction == 'h':
-            img = rot90(img, k=1)
+    if threshold is None:
+        try:
+            threshold = threshold_otsu(img)
+            # print(threshold)
+        except ValueError:
+            threshold = 2
 
-        # print(f"step 5-2: {img.dtype}, max={img.max()}")
-
-        # TODO: Clean up this logic with some dual-band CLI alternative
+    if sigma1 > 0 and sigma1 == sigma2:
+        img = filter_subband(img, sigma1, level, wavelet, bidirectional)
+    else:
+        f = foreground_fraction(img, threshold, crossover, smoothing)
+        foreground = img
         if sigma1 > 0:
-            if sigma2 > 0:
-                if sigma1 == sigma2:  # Single band
-                    f_img = filter_subband(img, sigma1, level, wavelet)
-                else:  # Dual-band
-                    background = clip(img, None, threshold)
-                    foreground = clip(img, threshold, None)
-                    background_filtered = filter_subband(background, sigma2, level, wavelet)
-                    foreground_filtered = filter_subband(foreground, sigma1, level, wavelet)
-                    # Smoothed homotopy
-                    f = foreground_fraction(img, threshold, crossover, smoothing)
-                    if use_numexpr:
-                        f_img = evaluate("foreground_filtered * f + background_filtered * (1 - f)")
-                    else:
-                        f_img = foreground_filtered * f + background_filtered * (1 - f)
-            else:  # Foreground filter only
-                foreground = clip(img, threshold, None)
-                foreground_filtered = filter_subband(foreground, sigma1, level, wavelet)
-                # Smoothed homotopy
-                f = foreground_fraction(img, threshold, crossover, smoothing)
-                if use_numexpr:
-                    f_img = evaluate("foreground_filtered * f + img * (1 - f)")
-                else:
-                    f_img = foreground_filtered * f + img * (1 - f)
+            foreground = clip(img, threshold, None)
+            foreground = filter_subband(foreground, sigma1, level, wavelet, bidirectional)
 
+        background = img
+        if sigma2 > 0:
+            background = clip(img, None, threshold)
+            background = filter_subband(background, sigma2, level, wavelet, bidirectional)
+
+        if use_numexpr:
+            img = evaluate("foreground * f + background * (1 - f)")
         else:
-            if sigma2 > 0:  # Background filter only
-                background = clip(img, None, threshold)
-                background_filtered = filter_subband(background, sigma2, level, wavelet)
-                # Smoothed homotopy
-                f = foreground_fraction(img, threshold, crossover, smoothing)
-
-                if use_numexpr:
-                    f_img = evaluate("img * f + background_filtered * (1 - f)")
-                else:
-                    f_img = img * f + background_filtered * (1 - f)
-            else:
-                # sigma1 and sigma2 are both 0, so skip the destriping
-                f_img = img
-
-        # print(f"step 5-4: {img.dtype}, max={img.max()}")
-
-        if direction == 'h':
-            f_img = rot90(f_img, k=-1)
-
-        if f_img is not None:
-            img = f_img
-        else:
-            print(f"{PrintColors.WARNING}Warning: filtered image (f_img) should not be None.")
+            img = foreground * f + background * (1 - f)
 
     if pad_x > 0:
-        f_img = f_img[:, :-pad_x]
+        img = img[:, :-pad_x]
     if pad_y > 0:
-        f_img = f_img[:-pad_y]
-    # print(f"step 5-3: {img.dtype}, max={img.max()}")
+        img = img[:-pad_y]
 
-    # Convert to 16 bit image
-    if dtype == uint16 or dtype in ["uint16", "float64"]:
-        f_img = convert_to_16bit_fun(f_img)
-    elif dtype == uint8 or dtype == "uint8":
-        f_img = convert_to_8bit_fun(f_img, bit_shift_to_right=0)
-    else:
-        print(f"unexpected image dtype {f_img.dtype}")
-        raise RuntimeError
+    if bleach_correction_frequency is not None:
+        bleach_correction_filter = get_bleach_correction_filter(img, bleach_correction_frequency)
+        img = where(img > threshold, img / bleach_correction_filter, img)
 
-    return f_img
-
-
-def butter_lowpass_filter(data: ndarray, cutoff_frequency: float, order: int = 1) -> ndarray:
-    sos = butter(order, cutoff_frequency, output='sos')
-    return sosfiltfilt(sos, data)
-
-
-def lightsheet_bleach_correction(img: ndarray, axis: int = None) -> ndarray:
-    if axis is not None:
-        img = np_max(img, axis=axis)
-    img_min = np_min(img)
-    img -= img_min
-    img = img_min + butter_lowpass_filter(img, 0.0005)
-    img /= np_max(img)
-    return img
-
-
-def correct_lightsheet_bleaching(img: ndarray, axis: int = None) -> ndarray:
-    d_type = img.dtype
-    img = img.astype(float32)
-    img_correction = lightsheet_bleach_correction(img, axis=axis)
-    if axis is not None and axis == 0:
-        img /= img_correction[:, None]
-    elif axis is not None and axis == 1:
-        img /= img_correction[None, :]
-    else:
-        img /= img_correction
+    img = expm1_jit(img)
+    clip(img, iinfo(d_type).min, iinfo(d_type).max, out=img)
     return img.astype(d_type)
 
 
 def process_img(
         img: ndarray,
         flat: ndarray = None,
-        correct_bleaching: bool = False,
         gaussian_filter_2d: bool = False,
         down_sample: Tuple[int, int] = None,  # (2, 2),
         downsample_method: str = 'max',
@@ -547,7 +518,8 @@ def process_img(
         wavelet: str = 'db10',
         crossover: float = 10,
         threshold: float = -1,
-        directions: str = 'v',
+        bidirectional: bool = False,
+        bleach_correction_frequency: float = None,
         lightsheet: bool = False,
         artifact_length: int = 150,
         background_window_size: int = 200,
@@ -577,8 +549,6 @@ def process_img(
                       f"{PrintColors.ENDC}")
         if gaussian_filter_2d:
             img = gaussian(img, sigma=1, preserve_range=True, truncate=2)
-        if correct_bleaching:
-            img = correct_lightsheet_bleaching(img)
     if down_sample is not None:
         downsample_method = downsample_method.lower()
         if downsample_method == 'min':
@@ -596,7 +566,7 @@ def process_img(
     if new_size is not None and tile_size < new_size:
         img = resize(img, new_size, preserve_range=True, anti_aliasing=False)
     if img_min < img_max:
-        if not sigma[0] == sigma[1] == 0:
+        if not sigma[0] == sigma[1] == 0 or bleach_correction_frequency is not None:
             img = filter_streaks(
                 img,
                 sigma=sigma,
@@ -604,7 +574,8 @@ def process_img(
                 wavelet=wavelet,
                 crossover=crossover,
                 threshold=threshold,
-                directions=directions
+                bidirectional=bidirectional,
+                bleach_correction_frequency=bleach_correction_frequency
             )
         # dark subtraction is like baseline subtraction in Imaris
         if dark is not None and dark > 0:
@@ -643,10 +614,12 @@ def process_img(
         img = img.astype(d_type)
 
     if convert_to_16bit and img.dtype not in (uint16, 'uint16'):
-        clip(img, 0, 65535, out=img)  # Clip to 16-bit [0, 2 ** 16 - 1] unsigned range
-        img = img.astype(uint16)
+        img = convert_to_16bit_fun(img)
     elif convert_to_8bit and img.dtype not in (uint8, 'uint8'):
         img = convert_to_8bit_fun(img, bit_shift_to_right=bit_shift_to_right)
+    else:
+        clip(img, iinfo(d_type).min, iinfo(d_type).max, out=img)
+        img = img.astype(d_type)
 
     return img
 
@@ -668,7 +641,8 @@ def read_filter_save(
         wavelet: str = 'db10',
         crossover: float = 10,
         threshold: float = -1,
-        directions: str = 'v',
+        bidirectional: bool = False,
+        bleach_correction_frequency: float = None,
         lightsheet: bool = False,
         artifact_length: int = 150,
         background_window_size: int = 200,
@@ -704,8 +678,10 @@ def read_filter_save(
     threshold : float
         intensity value to separate background from foreground.
         Default (-1) means automatic detection using Otsu method, otherwise uses the given positive value.
-    directions : str
-        destriping direction: 'v' means top-down, 'h' means left-to-right, 'vh' or 'hv' means both directions.
+    bidirectional : bool
+        by default (False) only stripes elongated along horizontal axis will be corrected.
+    bleach_correction_frequency : float
+        frequency of a low-pass filter that describes bleaching
     compression : tuple (str, int)
         The 1st argument is compression method the 2nd compression level for tiff files
         For example, ('ZSTD', 1) or ('ADOBE_DEFLATE', 1).
@@ -814,7 +790,8 @@ def read_filter_save(
             wavelet=wavelet,
             crossover=crossover,
             threshold=threshold,
-            directions=directions,
+            bidirectional=bidirectional,
+            bleach_correction_frequency=bleach_correction_frequency,
             lightsheet=lightsheet,
             artifact_length=artifact_length,
             background_window_size=background_window_size,
@@ -1042,7 +1019,8 @@ def batch_filter(
         wavelet: str = 'db9',
         crossover: int = 10,
         threshold: int = -1,
-        directions: str = 'v',
+        bidirectional: bool = False,
+        bleach_correction_frequency: float = None,
         z_step: float = None,
         rotate: int = 0,
         flip_upside_down: bool = False,
@@ -1091,8 +1069,10 @@ def batch_filter(
     threshold : float
         intensity value to separate background from foreground.
         Default (-1) means automatic detection using Otsu method, otherwise uses the given positive value.
-    directions : str
-        destriping direction: 'v' means top-down, 'h' means left-to-right, 'vh' or 'hv' means both directions.
+    bidirectional : bool
+        by default (False) only stripes elongated along horizontal axis will be corrected.
+    bleach_correction_frequency : float
+        frequency of a low-pass filter that describes bleaching
     compression : tuple (str, int)
         The 1st argument is compression method the 2nd compression level for tiff files
         For example, ('ZSTD', 1) or ('ADOBE_DEFLATE', 1).
@@ -1167,7 +1147,8 @@ def batch_filter(
         'wavelet': wavelet,
         'crossover': crossover,
         'threshold': threshold,
-        'directions': directions,
+        'bidirectional': bidirectional,
+        'bleach_correction_frequency': bleach_correction_frequency,
         'z_idx': None,
         'rotate': rotate,
         'flip_upside_down': flip_upside_down,
@@ -1261,11 +1242,9 @@ def _parse_args():
                         help="Name of the mother wavelet (Default: Daubechies 3 tap)")
     parser.add_argument("--threshold", "-t", type=float, default=-1,
                         help="Global threshold value (Default: -1, Otsu)")
-    parser.add_argument("--directions", "-dr", type=str, default='v',
+    parser.add_argument("--bidirectional", "-dr", type=bool, default=False,
                         help="destriping direction: "
-                             "\n\t'v' means top-down (default), "
-                             "\n\t'h' means left-to-right, "
-                             "\n\t'vh' means both directions.")
+                             "\n\tFalse means top-down (default), ")
     parser.add_argument("--crossover", "-x", type=float, default=10,
                         help="Intensity range to switch between foreground and background (Default: 10)")
     parser.add_argument("--workers", "-n", type=int, default=8,
@@ -1323,10 +1302,6 @@ def main():
     if args.flat is not None:
         flat = normalize_flat(imread_tif_raw_png(Path(args.flat)))
 
-    zstep = None
-    if args.zstep is not None:
-        zstep = int(args.zstep * 10)
-
     if args.dark < 0:
         raise ValueError('Only positive values for dark offset are allowed')
 
@@ -1339,64 +1314,41 @@ def main():
         else:
             output_path = Path(args.output)
             assert output_path.suffix in supported_extensions
-        read_filter_save(
-            input_path,
-            output_path,
-            sigma=sigma,
-            level=args.level,
-            wavelet=args.wavelet,
-            crossover=args.crossover,
-            threshold=args.threshold,
-            compression=(args.compression_method, args.compression_level),
-            flat=flat,
-            dark=args.dark,
-            rotate=args.rotate,  # Does not work on DCIMG files
-            flip_upside_down=args.flip_upside_down,
-            lightsheet=args.lightsheet,
-            artifact_length=args.artifact_length,
-            background_window_size=args.background_window_size,
-            percentile=args.percentile,
-            lightsheet_vs_background=args.lightsheet_vs_background,
-            convert_to_16bit=args.convert_to_16bit,
-            convert_to_8bit=args.convert_to_8bit,
-            bit_shift_to_right=args.bit_shift_to_right,
-            down_sample=args.down_sample,
-            new_size=new_size
-        )
+
     elif input_path.is_dir():  # batch processing
         if args.output == '':
             output_path = Path(input_path.parent).joinpath(str(input_path) + '_destriped')
         else:
             output_path = Path(args.output)
             assert output_path.suffix == ''
-        batch_filter(
-            input_path,
-            output_path,
-            workers=args.workers,
-            # chunks=args.chunks,
-            sigma=sigma,
-            level=args.level,
-            wavelet=args.wavelet,
-            crossover=args.crossover,
-            threshold=args.threshold,
-            compression=(args.compression_method, args.compression_level),
-            flat=flat,
-            dark=args.dark,
-            z_step=zstep,
-            rotate=args.rotate,
-            lightsheet=args.lightsheet,
-            artifact_length=args.artifact_length,
-            background_window_size=args.background_window_size,
-            percentile=args.percentile,
-            lightsheet_vs_background=args.lightsheet_vs_background,
-            convert_to_16bit=args.convert_to_16bit,
-            convert_to_8bit=args.convert_to_8bit,
-            bit_shift_to_right=args.bit_shift_to_right,
-            down_sample=args.down_sample,
-            new_size=new_size
-        )
     else:
-        print('Cannot find input file or directory. Exiting...')
+        raise RuntimeError('Cannot find input file or directory.')
+    read_filter_save(
+        input_path,
+        output_path,
+        z_idx=int(args.zstep * 10) if args.zstep is not None else None,
+        flat=flat,
+        down_sample=args.down_sample,
+        new_size=new_size,
+        sigma=sigma,
+        level=args.level,
+        wavelet=args.wavelet,
+        crossover=args.crossover,
+        threshold=args.threshold,
+        bidirectional=args.bidirectional,
+        dark=args.dark,
+        lightsheet=args.lightsheet,
+        artifact_length=args.artifact_length,
+        background_window_size=args.background_window_size,
+        percentile=args.percentile,
+        lightsheet_vs_background=args.lightsheet_vs_background,
+        convert_to_16bit=args.convert_to_16bit,
+        convert_to_8bit=args.convert_to_8bit,
+        bit_shift_to_right=args.bit_shift_to_right,
+        rotate=args.rotate,  # Does not work on DCIMG files
+        flip_upside_down=args.flip_upside_down,
+        compression=(args.compression_method, args.compression_level),
+    )
 
 
 if __name__ == "__main__":
