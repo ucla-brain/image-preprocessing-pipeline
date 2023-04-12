@@ -1,4 +1,4 @@
-from argparse import RawDescriptionHelpFormatter, ArgumentParser, Namespace, BooleanOptionalAction
+from argparse import RawDescriptionHelpFormatter, ArgumentParser, Namespace
 from pathlib import Path
 from pandas import read_csv
 
