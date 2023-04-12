@@ -430,7 +430,8 @@ def process_channel(
             wavelet="db9" if objective == "40x" else "db10",
             crossover=10,
             threshold=-1,
-            directions='vh' if objective == "40x" else "v",
+            bidirectional=True if objective == "40x" else False,
+            bleach_correction_frequency=0.001,
             # z_step=voxel_size_z,  # z-step in micron. Only used for DCIMG files.
             # rotate=False,
             lightsheet=False,  # need_lightsheet_cleaning
