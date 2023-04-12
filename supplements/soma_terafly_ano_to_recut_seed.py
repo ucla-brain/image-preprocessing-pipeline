@@ -37,9 +37,9 @@ def main(args: Namespace):
     annotations_df['z_in_voxel'] = annotations_df['z']
 
     # convert from voxel to um (recut marker files in um for further reconstruction, if proofread is done in Terafly)
-    annotations_df['x'] = annotations_df['x'] * voxel_size_x
-    annotations_df['y'] = annotations_df['y'] * voxel_size_y
-    annotations_df['z'] = annotations_df['z'] * voxel_size_z
+    annotations_df['x'] *= voxel_size_x
+    annotations_df['y'] *= voxel_size_y
+    annotations_df['z'] *= voxel_size_z
     annotations_df['volsize_um'] = annotations_df['volsize'] * voxel_size_x * voxel_size_y * voxel_size_z
 
     # convert to integer (in um)
