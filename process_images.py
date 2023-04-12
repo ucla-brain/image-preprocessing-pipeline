@@ -431,7 +431,7 @@ def process_channel(
             crossover=10,
             threshold=-1,
             bidirectional=True if objective == "40x" else False,
-            bleach_correction_frequency=0.001,
+            bleach_correction_frequency=0.00025,
             # z_step=voxel_size_z,  # z-step in micron. Only used for DCIMG files.
             # rotate=False,
             lightsheet=False,  # need_lightsheet_cleaning
@@ -608,7 +608,7 @@ def process_channel(
         destination=stitched_tif_path,
         args=(),
         kwargs={
-            "correct_bleaching": False,
+            "bleach_correction_frequency": 0.0005,
             "sigma": (0, 0),
             "lightsheet": need_lightsheet_cleaning,
             "rotate": 90 if need_rotation_stitched_tif else 0,
