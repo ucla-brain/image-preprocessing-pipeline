@@ -5,6 +5,7 @@ from numpy import max as np_max
 from numpy import min as np_min
 from numpy import mean as np_mean
 from numpy import median as np_median
+from numpy import dtype as np_d_type
 from numpy import uint8, uint16, float32, float64, ndarray, generic, zeros, broadcast_to, exp, expm1, log1p, \
     cumsum, arange, unique, interp, pad, clip, where, rot90, flipud, dot, reshape, iinfo
 from scipy.fftpack import rfft, fftshift, irfft
@@ -357,7 +358,7 @@ def log1p_jit(img_log_filtered: ndarray) -> ndarray:
     return log1p(img_log_filtered)
 
 
-def filter_subband(img: ndarray, sigma: int, level: int, wavelet: str, bidirectional: bool) -> ndarray:
+def filter_subband(img: ndarray, sigma: float, level: int, wavelet: str, bidirectional: bool) -> ndarray:
     coefficients = wavedec2(img, wavelet, mode='symmetric', level=None if level == 0 else level, axes=(-2, -1))
     coefficients = list(map(list, coefficients))
     width_frac_h = sigma / img.shape[0]
@@ -392,30 +393,38 @@ def butter_lowpass_filter(data: ndarray, cutoff_frequency: float, order: int = 1
     return sosfiltfilt(sos, data)
 
 
-def get_bleach_correction_filter(img: ndarray, frequency: float) -> ndarray:
+def get_bleach_correction_filter(img: ndarray, frequency: float, max_method: bool = False) -> ndarray:
     """
 
     Parameters
     ----------
     img: log1p filtered image
     frequency: low pass fileter frequency. Usually 1/min(img.shape).
+    max_method: use max value on x and y axes to create the filter. Max method is faster and smoother but less accurate
+                for large images.
 
     Returns
     -------
     max normalized filter values.
     """
-    img_filter_y = np_max(img, axis=1)
-    img_filter_x = np_max(img, axis=0)
-    img_filter_y = reshape(butter_lowpass_filter(img_filter_y, frequency), (len(img_filter_y), 1))
-    img_filter_x = reshape(butter_lowpass_filter(img_filter_x, frequency), (1, len(img_filter_x)))
-    img_filter = dot(img_filter_y, img_filter_x)
+    if max_method:
+        img_filter_y = np_max(img, axis=1)
+        img_filter_x = np_max(img, axis=0)
+        img_filter_y = butter_lowpass_filter(img_filter_y, frequency)
+        img_filter_x = butter_lowpass_filter(img_filter_x, frequency)
+        img_filter_y = reshape(img_filter_y, (len(img_filter_y), 1))
+        img_filter_x = reshape(img_filter_x, (1, len(img_filter_x)))
+        img_filter = dot(img_filter_y, img_filter_x)
+    else:
+        img_filter = butter_lowpass_filter(img, frequency)
+        img_filter = filter_subband(img_filter, 1/frequency, 0, "db10", False)
     img_filter /= np_max(img_filter)
     return img_filter
 
 
 def filter_streaks(
         img: ndarray,
-        sigma: Tuple[int, int] = (256, 256),
+        sigma: Tuple[float, float] = (256, 256),
         level: int = 0,
         wavelet: str = 'db10',
         crossover: float = 10,
@@ -442,7 +451,7 @@ def filter_streaks(
     bidirectional : bool
         by default (False) only stripes elongated along horizontal axis will be corrected.
     bleach_correction_frequency: float
-        2D bleach correction frequency in Hz
+        2D bleach correction frequency in Hz. For stitched tiled images 1/tile_size is a suggested value.
 
     Returns
     -------
@@ -459,10 +468,6 @@ def filter_streaks(
     img = log1p_jit(img)
     if img.dtype != float64:
         img = img.astype(float64)
-    # Need to pad image to multiple of 2
-    pad_y, pad_x = [_ % 2 for _ in img.shape]
-    if pad_y == 1 or pad_x == 1:
-        img = pad(img, ((0, pad_y), (0, pad_x)), mode="edge")
 
     if threshold is None:
         try:
@@ -470,6 +475,15 @@ def filter_streaks(
             # print(threshold)
         except ValueError:
             threshold = 2
+
+    if bleach_correction_frequency is not None and threshold > 3:
+        bleach_correction_filter = get_bleach_correction_filter(img, bleach_correction_frequency)
+        img = where(img > threshold, img / bleach_correction_filter, img)
+
+    # Need to pad image to multiple of 2
+    pad_y, pad_x = [_ % 2 for _ in img.shape]
+    if pad_y == 1 or pad_x == 1:
+        img = pad(img, ((0, pad_y), (0, pad_x)), mode="edge")
 
     if sigma1 > 0 and sigma1 == sigma2:
         img = filter_subband(img, sigma1, level, wavelet, bidirectional)
@@ -495,12 +509,9 @@ def filter_streaks(
     if pad_y > 0:
         img = img[:-pad_y]
 
-    if bleach_correction_frequency is not None:
-        bleach_correction_filter = get_bleach_correction_filter(img, bleach_correction_frequency)
-        img = where(img > threshold, img / bleach_correction_filter, img)
-
     img = expm1_jit(img)
-    clip(img, iinfo(d_type).min, iinfo(d_type).max, out=img)
+    if np_d_type(d_type).kind in ("u", "i"):
+        clip(img, iinfo(d_type).min, iinfo(d_type).max, out=img)
     return img.astype(d_type)
 
 
