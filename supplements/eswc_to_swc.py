@@ -17,7 +17,7 @@ def main(args: Namespace):
                            names=("id", "type", "x", "y", "z", "radius", "parent_id", "seg_id", "level", "mode",
                                   "timestamp", "TFresindex"))
 
-        swc_df = eswc_df[["type", "x", "y", "z", "radius", "parent_id"]].copy().sort_values(by="type", ascending=True)
+        swc_df = eswc_df[["type", "x", "y", "z", "radius", "parent_id"]].copy()
 
         swc_df['x'] /= args.voxel_size_x
         swc_df['y'] /= args.voxel_size_y
