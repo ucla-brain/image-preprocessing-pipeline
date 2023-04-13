@@ -463,7 +463,6 @@ def filter_streaks(
     if sigma1 == sigma2 == 0 and bleach_correction_frequency is None:
         return img
 
-    smoothing: int = 1
     d_type = img.dtype
     img = log1p_jit(img)
     if img.dtype != float64:
@@ -480,34 +479,36 @@ def filter_streaks(
         bleach_correction_filter = get_bleach_correction_filter(img, bleach_correction_frequency)
         img = where(img > threshold, img / bleach_correction_filter, img)
 
-    # Need to pad image to multiple of 2
-    pad_y, pad_x = [_ % 2 for _ in img.shape]
-    if pad_y == 1 or pad_x == 1:
-        img = pad(img, ((0, pad_y), (0, pad_x)), mode="edge")
+    if not sigma1 == sigma2 == 0:
+        smoothing: int = 1
+        # Need to pad image to multiple of 2
+        pad_y, pad_x = [_ % 2 for _ in img.shape]
+        if pad_y == 1 or pad_x == 1:
+            img = pad(img, ((0, pad_y), (0, pad_x)), mode="edge")
 
-    if sigma1 > 0 and sigma1 == sigma2:
-        img = filter_subband(img, sigma1, level, wavelet, bidirectional)
-    else:
-        f = foreground_fraction(img, threshold, crossover, smoothing)
-        foreground = img
-        if sigma1 > 0:
-            foreground = clip(img, threshold, None)
-            foreground = filter_subband(foreground, sigma1, level, wavelet, bidirectional)
-
-        background = img
-        if sigma2 > 0:
-            background = clip(img, None, threshold)
-            background = filter_subband(background, sigma2, level, wavelet, bidirectional)
-
-        if use_numexpr:
-            img = evaluate("foreground * f + background * (1 - f)")
+        if sigma1 > 0 and sigma1 == sigma2:
+            img = filter_subband(img, sigma1, level, wavelet, bidirectional)
         else:
-            img = foreground * f + background * (1 - f)
+            ff = foreground_fraction(img, threshold, crossover, smoothing)
+            foreground = img
+            if sigma1 > 0:
+                foreground = clip(img, threshold, None)
+                foreground = filter_subband(foreground, sigma1, level, wavelet, bidirectional)
 
-    if pad_x > 0:
-        img = img[:, :-pad_x]
-    if pad_y > 0:
-        img = img[:-pad_y]
+            background = img
+            if sigma2 > 0:
+                background = clip(img, None, threshold)
+                background = filter_subband(background, sigma2, level, wavelet, bidirectional)
+
+            if use_numexpr:
+                img = evaluate("foreground * ff + background * (1 - ff)")
+            else:
+                img = foreground * ff + background * (1 - ff)
+
+        if pad_x > 0:
+            img = img[:, :-pad_x]
+        if pad_y > 0:
+            img = img[:-pad_y]
 
     img = expm1_jit(img)
     if np_d_type(d_type).kind in ("u", "i"):
@@ -528,7 +529,7 @@ def process_img(
         level: int = 0,
         wavelet: str = 'db10',
         crossover: float = 10,
-        threshold: float = -1,
+        threshold: float = None,
         bidirectional: bool = False,
         bleach_correction_frequency: float = None,
         lightsheet: bool = False,
@@ -577,17 +578,16 @@ def process_img(
     if new_size is not None and tile_size < new_size:
         img = resize(img, new_size, preserve_range=True, anti_aliasing=False)
     if img_min < img_max:
-        if not sigma[0] == sigma[1] == 0 or bleach_correction_frequency is not None:
-            img = filter_streaks(
-                img,
-                sigma=sigma,
-                level=level,
-                wavelet=wavelet,
-                crossover=crossover,
-                threshold=threshold,
-                bidirectional=bidirectional,
-                bleach_correction_frequency=bleach_correction_frequency
-            )
+        img = filter_streaks(
+            img,
+            sigma=sigma,
+            level=level,
+            wavelet=wavelet,
+            crossover=crossover,
+            threshold=threshold,
+            bidirectional=bidirectional,
+            bleach_correction_frequency=bleach_correction_frequency
+        )
         # dark subtraction is like baseline subtraction in Imaris
         if dark is not None and dark > 0:
             img = where(img > dark, img - dark, 0)  # Subtract the dark offset
@@ -651,7 +651,7 @@ def read_filter_save(
         level: int = 0,
         wavelet: str = 'db10',
         crossover: float = 10,
-        threshold: float = -1,
+        threshold: float = None,
         bidirectional: bool = False,
         bleach_correction_frequency: float = None,
         lightsheet: bool = False,
@@ -796,13 +796,13 @@ def read_filter_save(
             tile_size=tile_size,
             new_size=new_size,
             dark=dark,
+            bleach_correction_frequency=bleach_correction_frequency,
             sigma=sigma,
             level=level,
             wavelet=wavelet,
             crossover=crossover,
             threshold=threshold,
             bidirectional=bidirectional,
-            bleach_correction_frequency=bleach_correction_frequency,
             lightsheet=lightsheet,
             artifact_length=artifact_length,
             background_window_size=background_window_size,
@@ -1025,13 +1025,13 @@ def batch_filter(
         flat: ndarray = None,
         gaussian_filter_2d: bool = False,
         dark: int = 0,
+        bleach_correction_frequency: float = None,
         sigma: Tuple[int, int] = (0, 0),
         level=0,
         wavelet: str = 'db9',
         crossover: int = 10,
-        threshold: int = -1,
+        threshold: int = None,
         bidirectional: bool = False,
-        bleach_correction_frequency: float = None,
         z_step: float = None,
         rotate: int = 0,
         flip_upside_down: bool = False,
@@ -1251,7 +1251,7 @@ def _parse_args():
                         help="Number of decomposition levels (Default: max possible)")
     parser.add_argument("--wavelet", "-w", type=str, default='db3',
                         help="Name of the mother wavelet (Default: Daubechies 3 tap)")
-    parser.add_argument("--threshold", "-t", type=float, default=-1,
+    parser.add_argument("--threshold", "-t", type=float, default=None,
                         help="Global threshold value (Default: -1, Otsu)")
     parser.add_argument("--bidirectional", "-dr", type=bool, default=False,
                         help="destriping direction: "

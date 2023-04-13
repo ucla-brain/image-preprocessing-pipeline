@@ -421,32 +421,29 @@ def process_channel(
             preprocessed_path / channel,
             files_list=files_list,
             workers=cpu_physical_core_count + 2,
-            # chunks=128,  # is calculated automatically now
+            continue_process=continue_process_pystripe,
+            print_input_file_names=print_input_file_names,
+            timeout=600.0,
             flat=img_flat,
             gaussian_filter_2d=need_gaussian_filter_2d,
             dark=dark,
+            bleach_correction_frequency=0.0005,
             sigma=sigma,
             level=0,
             wavelet="db9" if objective == "40x" else "db10",
             crossover=10,
-            threshold=-1,
+            threshold=None,
             bidirectional=True if objective == "40x" else False,
-            bleach_correction_frequency=0.00025,
-            # z_step=voxel_size_z,  # z-step in micron. Only used for DCIMG files.
-            # rotate=False,
-            lightsheet=False,  # need_lightsheet_cleaning
+            lightsheet=False,
             # artifact_length=artifact_length,
             # percentile=0.25,
+            down_sample=down_sampling_factor,
+            tile_size=tile_size,
+            new_size=new_tile_size,
+            dtype="uint16",
             # convert_to_16bit=False,  # defaults to False
             convert_to_8bit=False,  # need_16bit_to_8bit_conversion
             bit_shift_to_right=right_bit_shift,
-            continue_process=continue_process_pystripe,
-            down_sample=down_sampling_factor,
-            dtype="uint16",
-            tile_size=tile_size,
-            new_size=new_tile_size,
-            print_input_file_names=print_input_file_names,
-            timeout=600.0,
             compression=('ADOBE_DEFLATE', 1) if need_compression else None,  # ('ZSTD', 1) conda install imagecodecs
         )
 
@@ -566,7 +563,7 @@ def process_channel(
                 # Displacements search radius along D (in pixels).
                 f"--sD={0 if (objective == '40x' or stitch_mip) else subvolume_depth}",
                 # Number of slices per subvolume partition
-                f"--subvoldim={subvolume_depth}",
+                f"--subvoldim={1 if stitch_mip else subvolume_depth}",
                 # used in the pairwise displacements computation step.
                 # dimension of layers obtained by dividing the volume along D
                 "--threshold=0.65",  # threshold between 0.55 and 0.7 is good. Higher values block alignment.
@@ -608,7 +605,7 @@ def process_channel(
         destination=stitched_tif_path,
         args=(),
         kwargs={
-            "bleach_correction_frequency": 0.0005,
+            "bleach_correction_frequency": None,
             "sigma": (0, 0),
             "lightsheet": need_lightsheet_cleaning,
             "rotate": 90 if need_rotation_stitched_tif else 0,
