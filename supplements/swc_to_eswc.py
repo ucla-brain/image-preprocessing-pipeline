@@ -18,16 +18,18 @@ def main(args: Namespace):
         swc_df = read_csv(swc_file, sep=r"\s+", comment="#", index_col=0,
                           names=("id", "type", "x", "y", "z", "radius", "parent_id"))
 
+        # convert from um unit to voxel unit
+        swc_df['x'] *= args.voxel_size_x
+        swc_df['y'] *= args.voxel_size_y
+        swc_df['z'] *= args.voxel_size_z
+
+        # flipping operation should be in voxel unit
         if args.x_axis_length > 0:
             swc_df['x'] = args.x_axis_length - swc_df['x']
         if args.y_axis_length > 0:
             swc_df['y'] = args.y_axis_length - swc_df['y']
         if args.z_axis_length > 0:
             swc_df['z'] = args.z_axis_length - swc_df['z']
-
-        swc_df['x'] *= args.voxel_size_x
-        swc_df['y'] *= args.voxel_size_y
-        swc_df['z'] *= args.voxel_size_z
 
         for col_name, value in (("seg_id", 0), ("level", 1), ("mode", 0), ("timestamp", 1), ("TFresindex", 1)):
             swc_df[col_name] = value
@@ -48,7 +50,7 @@ def main(args: Namespace):
 
 if __name__ == '__main__':
     parser = ArgumentParser(
-        description="Convert swcs exported from Imaris to eswcs that can be read in y-flipped TeraFly images\n\n",
+        description="Convert swcs exported from Imaris to eswcs that can be read in TeraFly images\n\n",
         formatter_class=RawDescriptionHelpFormatter,
         epilog="Developed 2023 by Keivan Moradi at UCLA, Hongwei Dong Lab (B.R.A.I.N) \n"
     )
