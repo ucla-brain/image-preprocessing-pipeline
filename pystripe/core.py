@@ -393,14 +393,14 @@ def butter_lowpass_filter(data: ndarray, cutoff_frequency: float, order: int = 1
     return sosfiltfilt(sos, data)
 
 
-def get_bleach_correction_filter(img: ndarray, frequency: float, threshold: float, max_method: bool = False) -> ndarray:
+from pystripe.lightsheet_correct import prctl
+def get_bleach_correction_filter(img: ndarray, frequency: float, max_method: bool = False) -> ndarray:
     """
 
     Parameters
     ----------
     img: log1p filtered image
     frequency: low pass fileter frequency. Usually 1/min(img.shape).
-    threshold: foreground vs background threshold
     max_method: use max value on x and y axes to create the filter. Max method is faster and smoother but less accurate
                 for large images.
 
@@ -408,19 +408,16 @@ def get_bleach_correction_filter(img: ndarray, frequency: float, threshold: floa
     -------
     max normalized filter values.
     """
-
     if max_method:
         img_filter_y = np_max(img, axis=1)
         img_filter_x = np_max(img, axis=0)
-        img_filter_y = where(img_filter_y > threshold, img_filter_y - threshold, 0)
-        img_filter_x = where(img_filter_x > threshold, img_filter_x - threshold, 0)
         img_filter_y = butter_lowpass_filter(img_filter_y, frequency)
         img_filter_x = butter_lowpass_filter(img_filter_x, frequency)
         img_filter_y = reshape(img_filter_y, (len(img_filter_y), 1))
         img_filter_x = reshape(img_filter_x, (1, len(img_filter_x)))
         img_filter = dot(img_filter_y, img_filter_x)
     else:
-        img = where(img > threshold, img - threshold, 0)
+        clip(img, None, prctl(img, 99.9), out=img)
         img_filter = butter_lowpass_filter(img, frequency)
         img_filter = filter_subband(img_filter, 2000, 0, "db10", False)
     img_filter /= np_max(img_filter)
