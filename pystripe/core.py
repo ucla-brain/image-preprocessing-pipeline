@@ -422,7 +422,7 @@ def get_bleach_correction_filter(img: ndarray, frequency: float, threshold: floa
     else:
         img = where(img > threshold, img - threshold, 0)
         img_filter = butter_lowpass_filter(img, frequency)
-        img_filter = filter_subband(img_filter, 2000, "db10", False)
+        img_filter = filter_subband(img_filter, 2000, 0, "db10", False)
     img_filter /= np_max(img_filter)
     return img_filter
 
