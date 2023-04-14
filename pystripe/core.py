@@ -393,13 +393,14 @@ def butter_lowpass_filter(data: ndarray, cutoff_frequency: float, order: int = 1
     return sosfiltfilt(sos, data)
 
 
-def get_bleach_correction_filter(img: ndarray, frequency: float, max_method: bool = False) -> ndarray:
+def get_bleach_correction_filter(img: ndarray, frequency: float, threshold: float, max_method: bool = False) -> ndarray:
     """
 
     Parameters
     ----------
     img: log1p filtered image
     frequency: low pass fileter frequency. Usually 1/min(img.shape).
+    threshold: foreground vs background threshold
     max_method: use max value on x and y axes to create the filter. Max method is faster and smoother but less accurate
                 for large images.
 
@@ -407,17 +408,21 @@ def get_bleach_correction_filter(img: ndarray, frequency: float, max_method: boo
     -------
     max normalized filter values.
     """
+
     if max_method:
         img_filter_y = np_max(img, axis=1)
         img_filter_x = np_max(img, axis=0)
+        img_filter_y = where(img_filter_y > threshold, img_filter_y - threshold, 0)
+        img_filter_x = where(img_filter_x > threshold, img_filter_x - threshold, 0)
         img_filter_y = butter_lowpass_filter(img_filter_y, frequency)
         img_filter_x = butter_lowpass_filter(img_filter_x, frequency)
         img_filter_y = reshape(img_filter_y, (len(img_filter_y), 1))
         img_filter_x = reshape(img_filter_x, (1, len(img_filter_x)))
         img_filter = dot(img_filter_y, img_filter_x)
     else:
+        img = where(img > threshold, img - threshold, 0)
         img_filter = butter_lowpass_filter(img, frequency)
-        img_filter = filter_subband(img_filter, 1/frequency, 0, "db10", False)
+        img_filter = filter_subband(img_filter, 2000, "db10", False)
     img_filter /= np_max(img_filter)
     return img_filter
 
@@ -430,7 +435,8 @@ def filter_streaks(
         crossover: float = 10,
         threshold: float = None,
         bidirectional: bool = False,
-        bleach_correction_frequency: float = None
+        bleach_correction_frequency: float = None,
+        bleach_correction_max_method: bool = True
 ) -> ndarray:
     """Filter horizontal streaks using wavelet-FFT filter
 
@@ -452,6 +458,9 @@ def filter_streaks(
         by default (False) only stripes elongated along horizontal axis will be corrected.
     bleach_correction_frequency: float
         2D bleach correction frequency in Hz. For stitched tiled images 1/tile_size is a suggested value.
+    bleach_correction_max_method:
+        use max value on x and y axes to create the filter. Max method is faster and smoother but less accurate
+        for large images.
 
     Returns
     -------
@@ -463,6 +472,7 @@ def filter_streaks(
     if sigma1 == sigma2 == 0 and bleach_correction_frequency is None:
         return img
 
+    # smooth the image using log plus 1 function
     d_type = img.dtype
     img = log1p_jit(img)
     if img.dtype != float64:
@@ -475,17 +485,18 @@ def filter_streaks(
         except ValueError:
             threshold = 2
 
-    if bleach_correction_frequency is not None and threshold > 3:
-        bleach_correction_filter = get_bleach_correction_filter(img, bleach_correction_frequency)
-        img = where(img > threshold, img / bleach_correction_filter, img)
+    # Need to pad image to multiple of 2. It is needed even for bleach correction non-max method
+    pad_y, pad_x = [_ % 2 for _ in img.shape]
+    if pad_y == 1 or pad_x == 1:
+        img = pad(img, ((0, pad_y), (0, pad_x)), mode="edge")
+
+    if bleach_correction_frequency is not None and threshold >= 3:
+        bleach_correction_filter = get_bleach_correction_filter(img, bleach_correction_frequency,
+                                                                max_method=bleach_correction_max_method)
+        img = where(img > 3, img / bleach_correction_filter, img)
 
     if not sigma1 == sigma2 == 0:
         smoothing: int = 1
-        # Need to pad image to multiple of 2
-        pad_y, pad_x = [_ % 2 for _ in img.shape]
-        if pad_y == 1 or pad_x == 1:
-            img = pad(img, ((0, pad_y), (0, pad_x)), mode="edge")
-
         if sigma1 > 0 and sigma1 == sigma2:
             img = filter_subband(img, sigma1, level, wavelet, bidirectional)
         else:
@@ -505,11 +516,12 @@ def filter_streaks(
             else:
                 img = foreground * ff + background * (1 - ff)
 
-        if pad_x > 0:
-            img = img[:, :-pad_x]
-        if pad_y > 0:
-            img = img[:-pad_y]
-
+    # undo padding
+    if pad_x > 0:
+        img = img[:, :-pad_x]
+    if pad_y > 0:
+        img = img[:-pad_y]
+    # undo log plus 1
     img = expm1_jit(img)
     if np_d_type(d_type).kind in ("u", "i"):
         clip(img, iinfo(d_type).min, iinfo(d_type).max, out=img)
@@ -532,6 +544,7 @@ def process_img(
         threshold: float = None,
         bidirectional: bool = False,
         bleach_correction_frequency: float = None,
+        bleach_correction_max_method: bool = True,
         lightsheet: bool = False,
         artifact_length: int = 150,
         background_window_size: int = 200,
@@ -586,7 +599,8 @@ def process_img(
             crossover=crossover,
             threshold=threshold,
             bidirectional=bidirectional,
-            bleach_correction_frequency=bleach_correction_frequency
+            bleach_correction_frequency=bleach_correction_frequency,
+            bleach_correction_max_method=bleach_correction_max_method
         )
         # dark subtraction is like baseline subtraction in Imaris
         if dark is not None and dark > 0:
@@ -654,6 +668,7 @@ def read_filter_save(
         threshold: float = None,
         bidirectional: bool = False,
         bleach_correction_frequency: float = None,
+        bleach_correction_max_method: bool = True,
         lightsheet: bool = False,
         artifact_length: int = 150,
         background_window_size: int = 200,
@@ -693,6 +708,9 @@ def read_filter_save(
         by default (False) only stripes elongated along horizontal axis will be corrected.
     bleach_correction_frequency : float
         frequency of a low-pass filter that describes bleaching
+    bleach_correction_max_method: bool
+        use max value on x and y axes to create the filter. Max method is faster and smoother but less accurate
+        for large images.
     compression : tuple (str, int)
         The 1st argument is compression method the 2nd compression level for tiff files
         For example, ('ZSTD', 1) or ('ADOBE_DEFLATE', 1).
@@ -797,6 +815,7 @@ def read_filter_save(
             new_size=new_size,
             dark=dark,
             bleach_correction_frequency=bleach_correction_frequency,
+            bleach_correction_max_method=bleach_correction_max_method,
             sigma=sigma,
             level=level,
             wavelet=wavelet,
@@ -1026,6 +1045,7 @@ def batch_filter(
         gaussian_filter_2d: bool = False,
         dark: int = 0,
         bleach_correction_frequency: float = None,
+        bleach_correction_max_method: bool = True,
         sigma: Tuple[int, int] = (0, 0),
         level=0,
         wavelet: str = 'db9',
@@ -1084,6 +1104,9 @@ def batch_filter(
         by default (False) only stripes elongated along horizontal axis will be corrected.
     bleach_correction_frequency : float
         frequency of a low-pass filter that describes bleaching
+    bleach_correction_max_method: bool
+        use max value on x and y axes to create the filter. Max method is faster and smoother but less accurate
+        for large images.
     compression : tuple (str, int)
         The 1st argument is compression method the 2nd compression level for tiff files
         For example, ('ZSTD', 1) or ('ADOBE_DEFLATE', 1).
@@ -1160,6 +1183,7 @@ def batch_filter(
         'threshold': threshold,
         'bidirectional': bidirectional,
         'bleach_correction_frequency': bleach_correction_frequency,
+        'bleach_correction_max_method': bleach_correction_max_method,
         'z_idx': None,
         'rotate': rotate,
         'flip_upside_down': flip_upside_down,
@@ -1252,7 +1276,7 @@ def _parse_args():
     parser.add_argument("--wavelet", "-w", type=str, default='db3',
                         help="Name of the mother wavelet (Default: Daubechies 3 tap)")
     parser.add_argument("--threshold", "-t", type=float, default=None,
-                        help="Global threshold value (Default: -1, Otsu)")
+                        help="Global threshold value (Default: None --> Otsu)")
     parser.add_argument("--bidirectional", "-dr", type=bool, default=False,
                         help="destriping direction: "
                              "\n\tFalse means top-down (default), ")
