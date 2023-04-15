@@ -21,7 +21,7 @@ https://doi.org/10.1016/j.cell.2016.05.007
 from scipy.ndimage import zoom as ndi_zoom
 from numpy import array, ndarray, meshgrid, minimum, moveaxis, reshape, zeros, logical_and
 from numpy import percentile as np_percentile
-from typing import Callable, Tuple, Union
+from typing import Callable, Tuple, List, Union
 from numba import njit
 
 
@@ -238,7 +238,7 @@ def apply_local_function(
 
 
 @njit
-def prctl(data: ndarray, percentile: Union[float, ndarray]):
+def prctl(data: ndarray, percentile: Union[List, Tuple, float]):
     return np_percentile(data, percentile)
 
 

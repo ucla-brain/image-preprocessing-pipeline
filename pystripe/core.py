@@ -24,10 +24,10 @@ from imageio.v2 import imread as png_imread
 from tifffile import imread, imwrite
 from tifffile.tifffile import TiffFileError
 from dcimg import DCIMGFile
-from typing import Tuple, Iterator, List, Callable
+from typing import Tuple, Iterator, List, Callable, Union
 from types import GeneratorType
 from pystripe.raw import raw_imread
-from .lightsheet_correct import correct_lightsheet
+from pystripe.lightsheet_correct import prctl, correct_lightsheet
 from concurrent.futures import ProcessPoolExecutor, TimeoutError
 from concurrent.futures.process import BrokenProcessPool
 from multiprocessing import Process, Queue, cpu_count
@@ -42,9 +42,9 @@ filterwarnings("ignore")
 supported_extensions = ['.png', '.tif', '.tiff', '.raw', '.dcimg']
 num_retries: int = 40
 use_numexpr: bool = True
-environ['MKL_NUM_THREADS'] = '1'
-environ['NUMEXPR_NUM_THREADS'] = '1'
-environ['OMP_NUM_THREADS'] = '1'
+# environ['MKL_NUM_THREADS'] = '1'
+# environ['NUMEXPR_NUM_THREADS'] = '1'
+# environ['OMP_NUM_THREADS'] = '1'
 
 
 def imread_tif_raw_png(path: Path, dtype: str = None, shape: Tuple[int, int] = None):
@@ -349,7 +349,7 @@ def foreground_fraction(img: ndarray, center: float, crossover: float, smoothing
 
 
 @jit
-def expm1_jit(img_log_filtered: ndarray) -> ndarray:
+def expm1_jit(img_log_filtered: Union[ndarray, float, int]) -> ndarray:
     return expm1(img_log_filtered)
 
 
@@ -393,40 +393,56 @@ def butter_lowpass_filter(data: ndarray, cutoff_frequency: float, order: int = 1
     return sosfiltfilt(sos, data)
 
 
-from pystripe.lightsheet_correct import prctl
-def get_bleach_correction_filter(img: ndarray, frequency: float, max_method: bool = False) -> ndarray:
+def correct_bleaching(
+        img: ndarray, frequency: float, max_method: bool = False,
+        noise: float = 5, clip_min: float = 25, clip_max: float = 50
+) -> ndarray:
     """
-
     Parameters
     ----------
     img: log1p filtered image
     frequency: low pass fileter frequency. Usually 1/min(img.shape).
     max_method: use max value on x and y axes to create the filter. Max method is faster and smoother but less accurate
                 for large images.
+    noise: noise percentile of non-zero values. Only values above noise level will be corrected.
+    clip_min: min percentile of non-zero values for clipping the image before generating the filter
+    clip_max: max percentile of non-zero values for clipping the image before generating the filter
 
     Returns
     -------
     max normalized filter values.
     """
+    if clip_min is not None and clip_max is not None:
+        noise, clip_min, clip_max = prctl(img[img > 0], (noise, clip_min, clip_max))
+    elif clip_min is not None:
+        noise, clip_min = prctl(img[img > 0], (noise, clip_min))
+    elif clip_max is not None:
+        noise, clip_max = prctl(img[img > 0], (noise, clip_max))
+
     if max_method:
         img_filter_y = np_max(img, axis=1)
         img_filter_x = np_max(img, axis=0)
+        if clip_min is not None or clip_max is not None:
+            img_filter_y = clip(img_filter_y, clip_min, clip_max)
+            img_filter_x = clip(img_filter_x, clip_min, clip_max)
         img_filter_y = butter_lowpass_filter(img_filter_y, frequency)
         img_filter_x = butter_lowpass_filter(img_filter_x, frequency)
         img_filter_y = reshape(img_filter_y, (len(img_filter_y), 1))
         img_filter_x = reshape(img_filter_x, (1, len(img_filter_x)))
         img_filter = dot(img_filter_y, img_filter_x)
     else:
-        clip(img, None, prctl(img, 99.9), out=img)
-        img_filter = butter_lowpass_filter(img, frequency)
-        img_filter = filter_subband(img_filter, 2000, 0, "db10", False)
+        img_filter = clip(img, clip_min, clip_max)
+        img_filter = butter_lowpass_filter(img_filter, frequency)
+        img_filter = filter_subband(img_filter, 1/frequency, 0, "db10", False)
+
     img_filter /= np_max(img_filter)
-    return img_filter
+    img = where(img > noise, img / img_filter, img)
+    return img
 
 
 def filter_streaks(
         img: ndarray,
-        sigma: Tuple[float, float] = (256, 256),
+        sigma: Tuple[float, float] = (200, 200),
         level: int = 0,
         wavelet: str = 'db10',
         crossover: float = 10,
@@ -488,9 +504,7 @@ def filter_streaks(
         img = pad(img, ((0, pad_y), (0, pad_x)), mode="edge")
 
     if bleach_correction_frequency is not None and threshold >= 3:
-        bleach_correction_filter = get_bleach_correction_filter(img, bleach_correction_frequency,
-                                                                max_method=bleach_correction_max_method)
-        img = where(img > 3, img / bleach_correction_filter, img)
+        img = correct_bleaching(img, bleach_correction_frequency, max_method=bleach_correction_max_method)
 
     if not sigma1 == sigma2 == 0:
         smoothing: int = 1
@@ -541,7 +555,7 @@ def process_img(
         threshold: float = None,
         bidirectional: bool = False,
         bleach_correction_frequency: float = None,
-        bleach_correction_max_method: bool = True,
+        bleach_correction_max_method: bool = False,
         lightsheet: bool = False,
         artifact_length: int = 150,
         background_window_size: int = 200,

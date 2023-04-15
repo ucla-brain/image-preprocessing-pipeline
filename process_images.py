@@ -337,24 +337,25 @@ def process_channel(
         tile_overlap_percent: float,
         queue: Queue,
         stitch_mip: bool,
-        dark: int = 0,
         files_list: List[Path] = None,
         need_flat_image_application: bool = False,
         image_classes_training_data_path=None,
-        need_raw_png_to_tiff_conversion: bool = False,
-        need_lightsheet_cleaning: bool = True,
-        need_destriping: bool = False,
         need_gaussian_filter_2d: bool = True,
-        need_compression: bool = False,
-        need_compression_stitched_tif: bool = True,
-        need_rotation_stitched_tif: bool = False,
-        need_16bit_to_8bit_conversion: bool = False,
-        right_bit_shift=3,
-        continue_process_pystripe: bool = True,
-        continue_process_terastitcher: bool = True,
+        dark: int = 0,
         down_sampling_factor: Tuple[int, int] = None,
         tile_size: Tuple[int, int] = None,
         new_tile_size: Tuple[int, int] = None,
+        need_destriping: bool = False,
+        need_raw_png_to_tiff_conversion: bool = False,
+        need_compression: bool = False,
+        need_bleach_correction: bool = False,
+        need_lightsheet_cleaning: bool = True,
+        need_compression_stitched_tif: bool = True,
+        need_rotation_stitched_tif: bool = False,
+        need_16bit_to_8bit_conversion: bool = False,
+        right_bit_shift: int = 8,
+        continue_process_pystripe: bool = True,
+        continue_process_terastitcher: bool = True,
         need_tera_fly_conversion: bool = False,
         print_input_file_names: bool = False,
         subvolume_depth: int = 1
@@ -362,7 +363,7 @@ def process_channel(
     # preprocess each tile as needed using PyStripe --------------------------------------------------------------------
 
     assert source_path.joinpath(channel).exists()
-    if need_destriping or need_flat_image_application or \
+    if need_gaussian_filter_2d or need_destriping or need_flat_image_application or \
             need_raw_png_to_tiff_conversion or need_compression or \
             down_sampling_factor not in (None, (1, 1)) or new_tile_size is not None:
         img_flat = None
@@ -421,8 +422,8 @@ def process_channel(
             flat=img_flat,
             gaussian_filter_2d=need_gaussian_filter_2d,
             dark=dark,
-            bleach_correction_frequency=0.0002,
-            bleach_correction_max_method=True,
+            bleach_correction_frequency=None,  # 0.0005
+            bleach_correction_max_method=False,
             sigma=sigma,
             level=0,
             wavelet="db9" if objective == "40x" else "db10",
@@ -600,11 +601,12 @@ def process_channel(
         destination=stitched_tif_path,
         args=(),
         kwargs={
-            "bleach_correction_frequency": 0.00001,
+            "bleach_correction_frequency": 0.0005 if need_bleach_correction else None,
             "bleach_correction_max_method": False,
-            "threshold": 3,
+            "threshold": None,
             "sigma": (0, 0),
             "lightsheet": need_lightsheet_cleaning,
+            "percentile": 0.25,
             "rotate": 90 if need_rotation_stitched_tif else 0,
             "convert_to_8bit": need_16bit_to_8bit_conversion,
             "bit_shift_to_right": right_bit_shift,
@@ -850,11 +852,11 @@ def main(source_path):
 
     objective, voxel_size_x, voxel_size_y, voxel_size_z, tile_size, tile_overlap_percent = get_voxel_sizes(stitch_mip)
 
-    de_striped_posix, what_for = "", ""
+    posix, what_for = "", ""
     image_classes_training_data_path = source_path / FlatNonFlatTrainingData
-    need_flat_image_application = ask_true_false_question("Do you need to apply a flat image?")
+    need_flat_image_application = False  # ask_true_false_question("Do you need to apply a flat image?")
     if need_flat_image_application:
-        de_striped_posix += "_flat_applied"
+        posix += "_flat_applied"
         flat_img_not_exist = []
         for channel in all_channels:
             flat_img_created_already = source_path.joinpath(channel + '_flat.tif')
@@ -880,6 +882,9 @@ def main(source_path):
         f"Do you need to apply a 5x5 Gaussian filter to remove camera artifacts and "
         f"produce up to two times smaller files?"
     )
+    if need_gaussian_filter_2d:
+        posix += "_gaussian"
+        what_for += "noise reduction "
 
     def destination_name(name: str):
         new_name = name
@@ -914,7 +919,7 @@ def main(source_path):
         need_up_sizing = ask_true_false_question(
             "Do you need to upsize images for isotropic voxel generation before stitching?")
         if need_up_sizing:
-            de_striped_posix += "_upsized"
+            posix += "_upsized"
             what_for += "upsizing "
             new_tile_size = (
                 int(round(tile_size[0] * voxel_size_y / voxel_size_z, 0)),
@@ -925,7 +930,7 @@ def main(source_path):
         need_down_sampling = ask_true_false_question(
             "Do you need to down-sample and resize images for isotropic voxel generation before stitching?")
         if need_down_sampling:
-            de_striped_posix += "_downsampled"
+            posix += "_downsampled"
             what_for += "down-sampling "
             new_tile_size = (
                 int(round(tile_size[0] * voxel_size_y / voxel_size_z, 0)),
@@ -940,22 +945,34 @@ def main(source_path):
 
     need_destriping = ask_true_false_question("Do you need to remove stripes from images?")
     if need_destriping:
-        de_striped_posix += "_destriped"
+        posix += "_destriped"
         what_for += "destriped "
 
     dark_threshold: Dict[str, int] = {channel: 0 for channel in all_channels}
-    need_baseline_subtraction = ask_true_false_question("Do you need to remove baseline (dark) from images?")
+    need_baseline_subtraction = False  # ask_true_false_question("Do you need to remove baseline (dark) from images?")
     if need_baseline_subtraction:
         # pixel values smaller than the dark value (camera noise) will be set to 0 to increase compression and clarity
         for channel in all_channels:
             dark_threshold[channel] = ask_for_a_number_in_range(
                 f"Enter foreground vs background threshold (dark uint) for channel {channel}:", (0, 2 ** 16 - 1), int)
 
+    need_raw_png_to_tiff_conversion = ask_true_false_question(
+        "Are images in raw or png format that needs tif conversion before stitching?")
+    need_compression = ask_true_false_question(
+        "Do you need to compress un-stitched tif files?")
+    if need_raw_png_to_tiff_conversion or need_compression:
+        posix += "_tif"
+        what_for += "tif "
+
+    need_bleach_correction = ask_true_false_question(
+        "Do you need to apply bleach correction algorithm to stitched images?")
+
     channels_need_lightsheet_cleaning: List[str] = []
-    need_lightsheet_cleaning = ask_true_false_question("Do you need to apply lightsheet cleaning algorithm?")
+    need_lightsheet_cleaning = ask_true_false_question(
+        "Do you need to apply lightsheet cleaning (background subtraction) algorithm to stitched images?")
     if need_lightsheet_cleaning:
-        de_striped_posix += "_lightsheet_cleaned"
-        what_for += "lightsheet cleaning "
+        # posix += "_lightsheet_cleaned"
+        # what_for += "lightsheet cleaning "
         channels_need_lightsheet_cleaning = all_channels.copy()
         # if len(all_channels) == 1 or \
         #         ask_true_false_question(
@@ -969,10 +986,8 @@ def main(source_path):
         #         if ask_true_false_question(f"Do you need to apply lightsheet cleaning to {channel} channel?"):
         #             channels_need_lightsheet_cleaning += [channel]
 
-    need_raw_png_to_tiff_conversion = ask_true_false_question("Are images in raw or png format?")
-
     need_16bit_to_8bit_conversion = ask_true_false_question(
-        "Do you need to convert 16-bit images to 8-bit before stitching to reduce final file size?")
+        "Do you need to convert 16-bit images to 8-bit after stitching to reduce final file size?")
     right_bit_shift: Dict[str, int] = {channel: 8 for channel in all_channels}
     if need_16bit_to_8bit_conversion:
         for channel in all_channels:
@@ -995,32 +1010,26 @@ def main(source_path):
                 ],
                 return_index=True
             ))
-        de_striped_posix += "_bitshift." + ".".join(
-            [f"{channel_color_dict[channel]}{right_bit_shift[channel]}" for channel in all_channels])
+        # posix += "_bitshift." + ".".join(
+        #     [f"{channel_color_dict[channel]}{right_bit_shift[channel]}" for channel in all_channels])
 
-    need_compression = ask_true_false_question("Do you need to compress temporary tif files?")
-    if need_raw_png_to_tiff_conversion or need_compression:
-        de_striped_posix += "_tif"
-        what_for += "tif "
-
-    need_compression_stitched_tif = ask_true_false_question("Do you need to compress stitched tif files?")
     need_rotation_stitched_tif = ask_true_false_question("Do you need to rotate stitched tif files for 90 degrees?")
+    need_compression_stitched_tif = ask_true_false_question("Do you need to compress stitched tif files?")
 
-    preprocessed_path = source_path.parent / (source_path.name + de_striped_posix)
+    preprocessed_path = source_path.parent / (source_path.name + posix)
     continue_process_pystripe = False
     stitched_path = source_path.parent / (source_path.name + "_stitched")
     print_input_file_names = False
 
-    if (need_destriping and objective == '40x') or need_flat_image_application or need_raw_png_to_tiff_conversion or \
-            need_16bit_to_8bit_conversion or need_down_sampling or need_compression or need_gaussian_filter_2d or \
-            need_baseline_subtraction:
+    if need_destriping or need_flat_image_application or need_raw_png_to_tiff_conversion or \
+            need_down_sampling or need_compression or need_gaussian_filter_2d or need_baseline_subtraction:
 
         print_input_file_names = False  # ask_true_false_question(
         # "Do you need to print raw or tif file names to find corrupt files during preprocessing stage?")
         preprocessed_path, continue_process_pystripe = get_destination_path(
             new_destination_name if need_down_sampling or need_up_sizing else source_path.name,
             what_for=what_for + "files",
-            posix=de_striped_posix,
+            posix=posix,
             default_path=preprocessed_path)
     else:
         preprocessed_path = source_path
@@ -1094,25 +1103,26 @@ def main(source_path):
             tile_overlap_percent,
             queue,
             stitch_mip,
-            dark=dark_threshold[channel],
             files_list=file_list,
-            need_tera_fly_conversion=channel in channels_need_tera_fly_conversion,
             need_flat_image_application=need_flat_image_application,
             image_classes_training_data_path=image_classes_training_data_path,
-            need_raw_png_to_tiff_conversion=need_raw_png_to_tiff_conversion,
-            need_lightsheet_cleaning=channel in channels_need_lightsheet_cleaning,
-            need_destriping=need_destriping,
             need_gaussian_filter_2d=need_gaussian_filter_2d,
+            dark=dark_threshold[channel],
+            need_destriping=need_destriping,
+            down_sampling_factor=down_sampling_factor,
+            tile_size=tile_size,
+            new_tile_size=new_tile_size,
+            need_raw_png_to_tiff_conversion=need_raw_png_to_tiff_conversion,
             need_compression=need_compression,
+            need_lightsheet_cleaning=channel in channels_need_lightsheet_cleaning,
+            need_bleach_correction=need_bleach_correction,
             need_compression_stitched_tif=need_compression_stitched_tif,
             need_rotation_stitched_tif=need_rotation_stitched_tif,
             need_16bit_to_8bit_conversion=need_16bit_to_8bit_conversion,
             right_bit_shift=right_bit_shift[channel],
             continue_process_pystripe=continue_process_pystripe,
             continue_process_terastitcher=continue_process_terastitcher,
-            down_sampling_factor=down_sampling_factor,
-            tile_size=tile_size,
-            new_tile_size=new_tile_size,
+            need_tera_fly_conversion=channel in channels_need_tera_fly_conversion,
             print_input_file_names=print_input_file_names,
             subvolume_depth=subvolume_depth
         )
@@ -1224,11 +1234,13 @@ def main(source_path):
     p_log(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}done.\n\t"
           f"Time elapsed: {timedelta(seconds=time() - start_time)}")
 
+    stitched_path.joinpath(log_file.name).write_bytes(log_file.read_bytes())
+
 
 if __name__ == '__main__':
-    os.environ['MKL_NUM_THREADS'] = '1'
-    os.environ['NUMEXPR_NUM_THREADS'] = '1'
-    os.environ['OMP_NUM_THREADS'] = '1'
+    # os.environ['MKL_NUM_THREADS'] = '1'
+    # os.environ['NUMEXPR_NUM_THREADS'] = '1'
+    # os.environ['OMP_NUM_THREADS'] = '1'
     freeze_support()
     FlatNonFlatTrainingData = "image_classes.csv"
     cpu_physical_core_count = cpu_count(logical=False)
