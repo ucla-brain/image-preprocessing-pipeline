@@ -104,7 +104,7 @@ def main(args: Namespace):
         tif_2d_folder = input_path
 
     assert return_code == 0
-
+    progress_queue = Queue()
     if args.teraFly:
         command = [
             f"mpiexec -np {min(12, args.nthreads)} python -m mpi4py {paraconverter}",
@@ -122,9 +122,14 @@ def main(args: Namespace):
             f"-s={tif_2d_folder}",  # destination_folder
             f"-d={dir_tera_fly}",
         ]
-        start_time = time()
-        subprocess.call(" ".join(command), shell=True)
-        print(f"elapsed time = {round((time() - start_time) / 60, 1)}")
+        command = " ".join(command)
+
+        if args.imaris:
+            MultiProcessCommandRunner(progress_queue, command)
+        else:
+            start_time = time()
+            subprocess.call(command, shell=True)
+            print(f"elapsed time = {round((time() - start_time) / 60, 1)}")
 
     if args.imaris:
         ims_file = Path(args.imaris)
@@ -142,7 +147,7 @@ def main(args: Namespace):
             workers=args.nthreads
         )
         print(f"\t{PrintColors.BLUE}tiff to ims conversion command:{PrintColors.ENDC}\n\t\t{command}\n")
-        progress_queue = Queue()
+
         MultiProcessCommandRunner(progress_queue, command,
                                   pattern=r"(WriteProgress:)\s+(\d*.\d+)\s*$", position=0).start()
         progress_bars = [tqdm(total=100, ascii=True, position=0, unit=" %", smoothing=0.01, desc=f"imaris")]
