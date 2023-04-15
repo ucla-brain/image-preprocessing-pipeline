@@ -151,7 +151,7 @@ def main(args: Namespace):
         MultiProcessCommandRunner(progress_queue, command,
                                   pattern=r"(WriteProgress:)\s+(\d*.\d+)\s*$", position=0).start()
         progress_bars = [tqdm(total=100, ascii=True, position=0, unit=" %", smoothing=0.01, desc=f"imaris")]
-        commands_progress_manger(progress_queue, progress_bars, running_processes=1)
+        commands_progress_manger(progress_queue, progress_bars, running_processes=2 if args.teraFly else 1)
 
         if is_renamed:
             [file.rename(file.parent / file.name[1:]) for file in files]
