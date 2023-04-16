@@ -470,8 +470,8 @@ def process_channel(
             f"--ref1={'V' if objective == '40x' else 'H'}",  # x horizontal
             f"--ref2={'H' if objective == '40x' else 'V'}",  # y vertical
             "--ref3=D",  # z depth?
-            f"--vxl1={voxel_size_y if objective == '40x' else voxel_size_x + 0.01}",
-            f"--vxl2={voxel_size_x if objective == '40x' else voxel_size_y + 0.01}",
+            f"--vxl1={voxel_size_y if objective == '40x' else voxel_size_x + 0.01:.3f}",
+            f"--vxl2={voxel_size_x if objective == '40x' else voxel_size_y + 0.01:.3f}",
             f"--vxl3={voxel_size_z}",
             "--sparse_data",
             f"--volin={preprocessed_path / channel}",
@@ -487,7 +487,7 @@ def process_channel(
         max_subvolume_depth = 1000
         subvolume_depth = int(10 if objective == '40x' else min(subvolume_depth, max_subvolume_depth))
         alignment_cores: int = 1
-        memory_needed_per_thread = 32 * subvolume_depth  # 64 or 32?
+        memory_needed_per_thread = 24 * subvolume_depth  # 64 or 32 or 24
         if isinstance(new_tile_size, tuple):
             for resolution in new_tile_size:
                 memory_needed_per_thread *= resolution
@@ -531,7 +531,6 @@ def process_channel(
         # while alignment_cores < cpu_physical_core_count and subvolume_depth > 600:
         #     subvolume_depth //= 2
         #     alignment_cores *= 2
-        alignment_cores = int(alignment_cores + 1)  # one extra thread is needed for management
 
         steps_str = ["alignment", "z-displacement", "threshold-displacement", "optimal tiles placement"]
         for step in [2, 3, 4, 5]:
@@ -539,6 +538,7 @@ def process_channel(
                 f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
                 f"{channel}: starting step {step} of stitching ..." + (
                     f"\n\tmemory needed per thread = {memory_needed_per_thread} GB"
+                    f"\n\ttotal needed ram {alignment_cores * memory_needed_per_thread} GB"
                     f"\n\tavailable ram = {memory_ram} GB"
                 ) if step == 2 else ""
             )
@@ -549,8 +549,10 @@ def process_channel(
             if step == 2 and alignment_cores > 1:
                 os.environ["slots"] = f"{cpu_logical_core_count}"
                 command = [
-                    f"mpiexec{' --use-hwthread-cpus' if sys.platform.lower() == 'linux' else ''} -np {alignment_cores} "
-                    f"python -m mpi4py {parastitcher}"]
+                    f"mpiexec{' --use-hwthread-cpus' if sys.platform.lower() == 'linux' else ''} "
+                    f"-np {int(alignment_cores + 1)} "   # one extra thread is needed for management
+                    f"python -m mpi4py {parastitcher}"
+                ]
             else:
                 command = [f"{terastitcher}"]
             command += [
