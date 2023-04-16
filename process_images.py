@@ -537,7 +537,7 @@ def process_channel(
         for step in [2, 3, 4, 5]:
             p_log(
                 f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
-                f"{channel}: starting step {step} of stitching ..." + (
+                f"{channel}: starting step {step} of stitching ...\n" + (
                     f"\tmemory needed per thread = {memory_needed_per_thread} GB\n"
                     f"\tavailable ram = {memory_ram} GB"
                 ) if step == 2 else ""
