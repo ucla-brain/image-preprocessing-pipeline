@@ -1,4 +1,4 @@
-from typing import Tuple, Callable, Union
+from typing import Tuple, Callable, Union, List
 from math import inf
 from os import getenv
 from datetime import datetime
@@ -48,6 +48,17 @@ def ask_for_a_number_in_range(message: str, range_val: Union[Tuple[int, int], Tu
         except ValueError:
             answer = inf
     return answer
+
+
+def select_multiple_among_list(question: str, input_list: List[str]) -> List[str]:
+    output_list = []
+    if len(input_list) == 1:
+        output_list = input_list.copy()
+    else:
+        for item in input_list:
+            if ask_true_false_question(f"Do you need to apply {question} to {item} channel?"):
+                output_list += [item]
+    return output_list
 
 
 class PrintColors:

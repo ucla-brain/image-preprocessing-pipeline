@@ -394,8 +394,7 @@ def butter_lowpass_filter(data: ndarray, cutoff_frequency: float, order: int = 1
 
 
 def correct_bleaching(
-        img: ndarray, frequency: float, max_method: bool = False,
-        noise: float = 5, clip_min: float = 25, clip_max: float = 50
+        img: ndarray, frequency: float, noise: float, clip_min: float, clip_max: float, max_method: bool = False
 ) -> ndarray:
     """
     Parameters
@@ -412,12 +411,6 @@ def correct_bleaching(
     -------
     max normalized filter values.
     """
-    if clip_min is not None and clip_max is not None:
-        noise, clip_min, clip_max = prctl(img[img > 0], (noise, clip_min, clip_max))
-    elif clip_min is not None:
-        noise, clip_min = prctl(img[img > 0], (noise, clip_min))
-    elif clip_max is not None:
-        noise, clip_max = prctl(img[img > 0], (noise, clip_max))
 
     if max_method:
         img_filter_y = np_max(img, axis=1)
@@ -434,7 +427,6 @@ def correct_bleaching(
         img_filter = clip(img, clip_min, clip_max)
         img_filter = butter_lowpass_filter(img_filter, frequency)
         img_filter = filter_subband(img_filter, 1/frequency, 0, "db10", False)
-
     img_filter /= np_max(img_filter)
     img = where(img > noise, img / img_filter, img)
     return img
@@ -449,7 +441,7 @@ def filter_streaks(
         threshold: float = None,
         bidirectional: bool = False,
         bleach_correction_frequency: float = None,
-        bleach_correction_max_method: bool = True
+        bleach_correction_max_method: bool = False
 ) -> ndarray:
     """Filter horizontal streaks using wavelet-FFT filter
 
@@ -503,8 +495,11 @@ def filter_streaks(
     if pad_y == 1 or pad_x == 1:
         img = pad(img, ((0, pad_y), (0, pad_x)), mode="edge")
 
-    if bleach_correction_frequency is not None and threshold >= 3:
-        img = correct_bleaching(img, bleach_correction_frequency, max_method=bleach_correction_max_method)
+    if bleach_correction_frequency is not None:
+        noise, clip_min, clip_max = prctl(img[img > 0], (5, 25, 50))
+        if threshold >= noise:
+            img = correct_bleaching(img, bleach_correction_frequency, noise, clip_min, clip_max,
+                                    max_method=bleach_correction_max_method)
 
     if not sigma1 == sigma2 == 0:
         smoothing: int = 1
@@ -535,7 +530,8 @@ def filter_streaks(
     # undo log plus 1
     img = expm1_jit(img)
     if np_d_type(d_type).kind in ("u", "i"):
-        clip(img, iinfo(d_type).min, iinfo(d_type).max, out=img)
+        d_type_info = iinfo(d_type)
+        clip(img, d_type_info.min, d_type_info.max, out=img)
     return img.astype(d_type)
 
 
@@ -584,7 +580,7 @@ def process_img(
                       f"warning: image and flat arrays had different shapes"
                       f"{PrintColors.ENDC}")
         if gaussian_filter_2d:
-            img = gaussian(img, sigma=1, preserve_range=True, truncate=2)
+            img = gaussian(img, sigma=1.0, preserve_range=True, truncate=2)
     if down_sample is not None:
         downsample_method = downsample_method.lower()
         if downsample_method == 'min':
