@@ -87,7 +87,7 @@ def main(args: Namespace):
                 "down_sample": down_sample,
                 "downsample_method": downsample_method,
                 "new_size": new_size,
-                "sigma": (256, 256) if args.de_stripe else (0, 0),
+                "sigma": (200, 200) if args.de_stripe else (0, 0),
                 "dark": args.dark,
                 "lightsheet": args.background_subtraction,
                 "bleach_correction_frequency": 0.0005 if args.bleach_correction else None,
@@ -125,7 +125,7 @@ def main(args: Namespace):
         command = " ".join(command)
 
         if args.imaris:
-            MultiProcessCommandRunner(progress_queue, command)
+            MultiProcessCommandRunner(progress_queue, command).start()
         else:
             start_time = time()
             subprocess.call(command, shell=True)
@@ -260,15 +260,15 @@ if __name__ == '__main__':
                         help="bit_shift for 8-bit conversion. An number between 0 and 8. "
                              "Smaller values make images brighter compared with he original image. "
                              "Default is 8 (no change in brightness).\n"
-                             "0 any value larger than   255 will be set to 255 in 8 bit, values smaller than 255 will not change\n"
-                             "1 any value larger than   511 will be set to 255 in 8 bit, 0-  1 will be set to 0,   2-  3 to 1\n"
-                             "2 any value larger than  1023 will be set to 255 in 8 bit, 0-  3 will be set to 0,   4-  7 to 1\n"
-                             "3 any value larger than  2047 will be set to 255 in 8 bit, 0-  7 will be set to 0,   8- 15 to 1\n"
-                             "4 any value larger than  4095 will be set to 255 in 8 bit, 0- 15 will be set to 0,  16- 31 to 1\n"
-                             "5 any value larger than  8191 will be set to 255 in 8 bit, 0- 31 will be set to 0,  32- 63 to 1\n"
-                             "6 any value larger than 16383 will be set to 255 in 8 bit, 0- 63 will be set to 0,  64-127 to 1\n"
-                             "7 any value larger than 32767 will be set to 255 in 8 bit, 0-127 will be set to 0, 128-255 to 1\n"
-                             "8 any value larger than 65535 will be set to 255 in 8 bit, 0-255 will be set to 0, 256-511 to 1")
+                             "0 any value larger than   255 will be set to 255 in 8 bit, values smaller than 255 will not change.\n"
+                             "1 any value larger than   511 will be set to 255 in 8 bit, 0-  1 will be set to 0,   2-  3 to 1.\n"
+                             "2 any value larger than  1023 will be set to 255 in 8 bit, 0-  3 will be set to 0,   4-  7 to 1.\n"
+                             "3 any value larger than  2047 will be set to 255 in 8 bit, 0-  7 will be set to 0,   8- 15 to 1.\n"
+                             "4 any value larger than  4095 will be set to 255 in 8 bit, 0- 15 will be set to 0,  16- 31 to 1.\n"
+                             "5 any value larger than  8191 will be set to 255 in 8 bit, 0- 31 will be set to 0,  32- 63 to 1.\n"
+                             "6 any value larger than 16383 will be set to 255 in 8 bit, 0- 63 will be set to 0,  64-127 to 1.\n"
+                             "7 any value larger than 32767 will be set to 255 in 8 bit, 0-127 will be set to 0, 128-255 to 1.\n"
+                             "8 any value larger than 65535 will be set to 255 in 8 bit, 0-255 will be set to 0, 256-511 to 1.")
     parser.add_argument("--rotation", "-r", type=int, default=0,
                         help="Rotate the image. One of 0, 90, 180 or 270 degree values are accepted. Default is 0.")
     parser.add_argument("--flip_upside_down", default=False, action=BooleanOptionalAction,
