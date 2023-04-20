@@ -73,7 +73,7 @@ def get_voxel_sizes(is_mip):
         "What is the Objective?",
         [
             f" 4x: Voxel Size X = {VoxelSizeX_4x:.3f}, Y = {VoxelSizeY_4x:.3f}, tile_size = 1600 x 2000",
-            f"10x: Voxel Size X = {VoxelSizeX_10x:.3f}, Y = {VoxelSizeY_10x:.3f}, tile_size = 1850 x 1850",
+            f"10x: Voxel Size X = {VoxelSizeX_10x:.3f}, Y = {VoxelSizeY_10x:.3f}, tile_size = 2000 x 2000",
             f"15x: Voxel Size X = {VoxelSizeX_15x:.3f}, Y = {VoxelSizeY_15x:.3f}, tile_size = 2000 x 2000",
             f"40x: Voxel Size X = {VoxelSizeX_40x:.3f}, Y = {VoxelSizeY_40x:.3f}, tile_size = 2048 x 2048",
             f"other: allows entering custom voxel sizes for custom tile_size"
@@ -484,10 +484,10 @@ def process_channel(
             p_log(f"{PrintColors.FAIL}{channel}: importing tif files failed.{PrintColors.ENDC}")
             raise RuntimeError
 
-        max_subvolume_depth = 1000
+        max_subvolume_depth = 100
         subvolume_depth = int(10 if objective == '40x' else min(subvolume_depth, max_subvolume_depth))
         alignment_cores: int = 1
-        memory_needed_per_thread = 25 * subvolume_depth  # 64 or 32 or 25
+        memory_needed_per_thread = 32 * subvolume_depth  # 64 or 32 or 25
         if isinstance(new_tile_size, tuple):
             for resolution in new_tile_size:
                 memory_needed_per_thread *= resolution
@@ -561,11 +561,11 @@ def process_channel(
                 # Overlap (in pixels) between two adjacent tiles along V. Providing oV is harmful sometimes.
                 # f"--oV={0 if objective == '40x' else tile_overlap_y}",
                 # Displacements search radius along H (in pixels). Default value is 25!
-                f"--sH={min(25, tile_overlap_x - 1)}",
+                # f"--sH={min(25, tile_overlap_x - 1)}",
                 # Displacements search radius along V (in pixels). Default value is 25!
-                f"--sV={min(25, tile_overlap_y - 1)}",
+                # f"--sV={min(25, tile_overlap_y - 1)}",
                 # Displacements search radius along D (in pixels).
-                f"--sD={0 if (objective == '40x' or stitch_mip) else subvolume_depth}",
+                f"{'--sD=0' if (objective == '40x' or stitch_mip) else ''}",
                 # Number of slices per subvolume partition
                 f"--subvoldim={1 if stitch_mip else subvolume_depth}",
                 # used in the pairwise displacements computation step.
@@ -607,7 +607,7 @@ def process_channel(
             bleach_correction_frequency = 1 / min(new_tile_size) * min(down_sampling_factor)
         else:
             bleach_correction_frequency = 1 / min(tile_size)
-        bleach_correction_sigma = (1 / bleach_correction_frequency,) * 2
+        bleach_correction_sigma = (1 / bleach_correction_frequency * 2,) * 2
 
     p_log(
         f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
@@ -636,6 +636,7 @@ def process_channel(
         kwargs={
             "bleach_correction_frequency": bleach_correction_frequency,
             "bleach_correction_max_method": False,
+            "bleach_correction_y_slice_max": None,
             "threshold": None,
             "sigma": bleach_correction_sigma,
             "bidirectional": True if need_bleach_correction else False,
@@ -1011,7 +1012,8 @@ def main(source_path):
         what_for += "tif "
 
     need_bleach_correction = ask_true_false_question(
-        "Do you need to apply bleach correction algorithm to stitched images?")
+        f"Do you need to apply bleach correction algorithm to stitched images? \n"
+        f"{PrintColors.BLUE}TIP: Do not select sparely labeled channels.{PrintColors.ENDC}")
     channels_need_bleach_correction = []
     if need_bleach_correction:
         channels_need_bleach_correction = select_multiple_among_list("bleach correction", all_channels)
@@ -1031,7 +1033,8 @@ def main(source_path):
     if need_16bit_to_8bit_conversion:
         for channel in all_channels:
             right_bit_shift[channel] = int(select_among_multiple_options(
-                f"For {channel} channel, enter right bit shift [0 to 8] for 8-bit conversion: \n"
+                f"{PrintColors.BLUE}\tFor{PrintColors.ENDC} {PrintColors.GREEN}{channel}{PrintColors.ENDC} channel, "
+                f"{PrintColors.BLUE}enter right bit shift [0 to 8] for 8-bit conversion:{PrintColors.ENDC} \n"
                 "\tbitshift smaller than 8 will increase the pixel brightness. "
                 "The smaller the value the brighter the pixels.\n"
                 "\tA small bitshift is less destructive for dim (axons) pixels.\n"
@@ -1252,19 +1255,6 @@ def main(source_path):
 
     # waite for TeraFly and Imaris conversion to finish ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
     commands_progress_manger(queue, progress_bars, running_processes)
-    # while running_processes > 0:
-    #     try:
-    #         [percent_addition, position, return_code, command] = queue.get()
-    #         if return_code is not None:
-    #             if return_code > 0:
-    #                 p_log(f"\nFollowing command failed:\n\t{command}\n\treturn code: {return_code}\n")
-    #             else:
-    #                 p_log(f"\nFollowing command succeeded:\n\t{command}\n")
-    #             running_processes -= 1
-    #         if position is not None and 0 < len(progress_bar) <= position + 1:
-    #             progress_bar[position].update(percent_addition)
-    #     except Empty:
-    #         sleep(1)  # waite one second before checking the queue again
 
     if need_tera_fly_conversion:
         p_log(

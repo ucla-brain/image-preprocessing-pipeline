@@ -1,4 +1,4 @@
-from os import scandir, environ, DirEntry
+from os import scandir, DirEntry  # , environ
 from re import compile, IGNORECASE
 from warnings import filterwarnings
 from numpy import max as np_max
@@ -7,7 +7,7 @@ from numpy import mean as np_mean
 from numpy import median as np_median
 from numpy import dtype as np_d_type
 from numpy import uint8, uint16, float32, float64, ndarray, generic, zeros, broadcast_to, exp, expm1, log1p, \
-    cumsum, arange, unique, interp, pad, clip, where, rot90, flipud, dot, reshape, iinfo
+    cumsum, arange, unique, interp, pad, clip, where, rot90, flipud, dot, reshape, iinfo, nonzero, append
 from scipy.fftpack import rfft, fftshift, irfft
 from scipy.ndimage import gaussian_filter as gaussian_filter_nd
 from scipy.signal import butter, sosfiltfilt
@@ -27,7 +27,7 @@ from dcimg import DCIMGFile
 from typing import Tuple, Iterator, List, Callable, Union
 from types import GeneratorType
 from pystripe.raw import raw_imread
-from pystripe.lightsheet_correct import prctl, correct_lightsheet
+from pystripe.lightsheet_correct import correct_lightsheet, prctl
 from concurrent.futures import ProcessPoolExecutor, TimeoutError
 from concurrent.futures.process import BrokenProcessPool
 from multiprocessing import Process, Queue, cpu_count
@@ -37,6 +37,7 @@ from functools import reduce
 from supplements.cli_interface import PrintColors, date_time_now
 from numba import jit
 from numexpr import evaluate
+from math import ceil
 
 filterwarnings("ignore")
 supported_extensions = ['.png', '.tif', '.tiff', '.raw', '.dcimg']
@@ -393,8 +394,42 @@ def butter_lowpass_filter(data: ndarray, cutoff_frequency: float, order: int = 1
     return sosfiltfilt(sos, data)
 
 
+@jit(nopython=True)
+def min_max_1d(arr: ndarray) -> (int, int):
+    n = len(arr)
+    if n <= 0:
+        return None, None
+    odd = n % 2
+    if not odd:
+        n -= 1
+    max_val = min_val = arr[0]
+    i = 1
+    while i < n:
+        x = arr[i]
+        y = arr[i + 1]
+        if x > y:
+            x, y = y, x
+        min_val = min(x, min_val)
+        max_val = max(y, max_val)
+        i += 2
+    if not odd:
+        x = arr[n]
+        min_val = min(x, min_val)
+        max_val = max(x, max_val)
+    return min_val, max_val
+
+
+def slice_non_zero_box(img_axis: ndarray, noise: int, filter_frequency: int = 1/1000) -> (int, int):
+    return min_max_1d(nonzero(butter_lowpass_filter(img_axis, filter_frequency).astype(uint16) > noise)[0])
+
+
 def correct_bleaching(
-        img: ndarray, frequency: float, noise: float, clip_min: float, clip_max: float, max_method: bool = False
+        img: ndarray, frequency: float, clip_min: float, clip_max: float,
+        max_method: bool = False,
+        y_slice_min: int = None,
+        y_slice_max: int = None,
+        x_slice_min: int = None,
+        x_slice_max: int = None,
 ) -> ndarray:
     """
     Parameters
@@ -402,19 +437,25 @@ def correct_bleaching(
     img: log1p filtered image
     frequency: low pass fileter frequency. Usually 1/min(img.shape).
     max_method: use max value on x and y axes to create the filter. Max method is faster and smoother but less accurate
-                for large images.
-    noise: noise percentile of non-zero values. Only values above noise level will be corrected.
-    clip_min: min percentile of non-zero values for clipping the image before generating the filter
-    clip_max: max percentile of non-zero values for clipping the image before generating the filter
+    clip_min: background vs foreground threshold
+    clip_max: max allowed foreground
+    y_slice_min: exclude bleach correction for image regions for which y-axis is smaller than y_slice_min.
+    y_slice_max: exclude bleach correction for image regions for which y-axis is larger than y_slice_max.
+    x_slice_min: exclude bleach correction for image regions for which x-axis is smaller than x_slice_min.
+    x_slice_max: exclude bleach correction for image regions for which x-axis is larger than x_slice_max.
 
     Returns
     -------
     max normalized filter values.
     """
 
+    # slice image
+    img_sliced = img[y_slice_min:y_slice_max, x_slice_min:x_slice_max]
+
+    # creat the filter
     if max_method:
-        img_filter_y = np_max(img, axis=1)
-        img_filter_x = np_max(img, axis=0)
+        img_filter_y = np_max(img_sliced, axis=1)
+        img_filter_x = np_max(img_sliced, axis=0)
         if clip_min is not None or clip_max is not None:
             img_filter_y = clip(img_filter_y, clip_min, clip_max)
             img_filter_x = clip(img_filter_x, clip_min, clip_max)
@@ -424,12 +465,21 @@ def correct_bleaching(
         img_filter_x = reshape(img_filter_x, (1, len(img_filter_x)))
         img_filter = dot(img_filter_y, img_filter_x)
     else:
-        img_filter = clip(img, clip_min, clip_max)
+        img_filter = clip(img_sliced, clip_min, clip_max)
         img_filter = butter_lowpass_filter(img_filter, frequency)
-        img_filter = filter_subband(img_filter, 1/frequency, 0, "db10", False)
+        img_filter = filter_subband(img_filter, 1/frequency, 0, "db10", True)
+
+    # apply the filter
     img_filter /= np_max(img_filter)
-    img = where(img > noise, img / img_filter, img)
+    img[y_slice_min:y_slice_max, x_slice_min:x_slice_max] = where(img_sliced > 0, img_sliced/img_filter, 0)
     return img
+
+
+def otsu_threshold(img: ndarray) -> float:
+    try:
+        return threshold_otsu(img)
+    except ValueError:
+        return 2
 
 
 def filter_streaks(
@@ -441,7 +491,12 @@ def filter_streaks(
         threshold: float = None,
         bidirectional: bool = False,
         bleach_correction_frequency: float = None,
-        bleach_correction_max_method: bool = False
+        bleach_correction_max_method: bool = False,
+        bleach_correction_clip_max: float = None,
+        bleach_correction_y_slice_min: int = None,
+        bleach_correction_y_slice_max: int = None,
+        bleach_correction_x_slice_min: int = None,
+        bleach_correction_x_slice_max: int = None,
 ) -> ndarray:
     """Filter horizontal streaks using wavelet-FFT filter
 
@@ -461,11 +516,21 @@ def filter_streaks(
         intensity value to separate background from foreground. Default is Otsu
     bidirectional : bool
         by default (False) only stripes elongated along horizontal axis will be corrected.
-    bleach_correction_frequency: float
+    bleach_correction_frequency : float
         2D bleach correction frequency in Hz. For stitched tiled images 1/tile_size is a suggested value.
-    bleach_correction_max_method:
+    bleach_correction_max_method : bool
         use max value on x and y axes to create the filter. Max method is faster and smoother but less accurate
         for large images.
+    bleach_correction_clip_max: float
+        background max value
+    bleach_correction_y_slice_min: int
+        from 0 to leach_correction_y_slice_min of the image on y-axis that will not be corrected.
+    bleach_correction_y_slice_max: int
+        from bleach_correction_y_slice_max to max of the image on y-axis that will not be corrected.
+    bleach_correction_x_slice_min: int
+        from 0 to leach_correction_x_slice_min of the image on x-axis that will not be corrected.
+    bleach_correction_x_slice_max: int
+        from bleach_correction_x_slice_max to max of the image on x-axis that will not be corrected.
 
     Returns
     -------
@@ -480,15 +545,6 @@ def filter_streaks(
     # smooth the image using log plus 1 function
     d_type = img.dtype
     img = log1p_jit(img)
-    if img.dtype != float64:
-        img = img.astype(float64)
-
-    if threshold is None:
-        try:
-            threshold = threshold_otsu(img)
-            # print(threshold)
-        except ValueError:
-            threshold = 2
 
     # Need to pad image to multiple of 2. It is needed even for bleach correction non-max method
     pad_y, pad_x = [_ % 2 for _ in img.shape]
@@ -496,16 +552,29 @@ def filter_streaks(
         img = pad(img, ((0, pad_y), (0, pad_x)), mode="edge")
 
     if bleach_correction_frequency is not None:
-        noise, clip_min, clip_max = prctl(img[img > 0], (5, 25, 50))
-        if threshold >= noise:
-            img = correct_bleaching(img, bleach_correction_frequency, noise, clip_min, clip_max,
-                                    max_method=bleach_correction_max_method)
+        clip_min = otsu_threshold(img)
+        clip_max = log1p(bleach_correction_clip_max) if bleach_correction_clip_max is not None else None
+        if clip_max is None or (clip_max is not None and clip_min < clip_max):
+            img = correct_bleaching(
+                img, bleach_correction_frequency, clip_min, clip_max,
+                max_method=bleach_correction_max_method,
+                y_slice_min=bleach_correction_y_slice_min,
+                y_slice_max=bleach_correction_y_slice_max,
+                x_slice_min=bleach_correction_x_slice_min,
+                x_slice_max=bleach_correction_x_slice_max,
+            )
+        else:
+            print(f"{PrintColors.WARNING}skipped bleach correction because of "
+                  f"clip_min={clip_min} and clip_max={clip_max} values!{PrintColors.ENDC}")
 
     if not sigma1 == sigma2 == 0:
-        smoothing: int = 1
         if sigma1 > 0 and sigma1 == sigma2:
             img = filter_subband(img, sigma1, level, wavelet, bidirectional)
         else:
+            smoothing: int = 1
+            img_max = np_max(img)
+            if threshold is None:
+                threshold = otsu_threshold(img)
             ff = foreground_fraction(img, threshold, crossover, smoothing)
             foreground = img
             if sigma1 > 0:
@@ -521,6 +590,7 @@ def filter_streaks(
                 img = evaluate("foreground * ff + background * (1 - ff)")
             else:
                 img = foreground * ff + background * (1 - ff)
+            img *= (img_max / np_max(img))
 
     # undo padding
     if pad_x > 0:
@@ -532,6 +602,7 @@ def filter_streaks(
     if np_d_type(d_type).kind in ("u", "i"):
         d_type_info = iinfo(d_type)
         clip(img, d_type_info.min, d_type_info.max, out=img)
+
     return img.astype(d_type)
 
 
@@ -543,6 +614,7 @@ def process_img(
         downsample_method: str = 'max',
         tile_size: Tuple[int, int] = None,
         new_size: Tuple[int, int] = None,
+        exclude_dark_edges_set_them_to_zero: bool = False,
         dark: float = 0,
         sigma: Tuple[int, int] = (0, 0),
         level: int = 0,
@@ -551,7 +623,12 @@ def process_img(
         threshold: float = None,
         bidirectional: bool = False,
         bleach_correction_frequency: float = None,
+        bleach_correction_clip_max: int = None,
         bleach_correction_max_method: bool = False,
+        bleach_correction_y_slice_min: int = None,
+        bleach_correction_y_slice_max: int = None,
+        bleach_correction_x_slice_min: int = None,
+        bleach_correction_x_slice_max: int = None,
         lightsheet: bool = False,
         artifact_length: int = 150,
         background_window_size: int = 200,
@@ -562,25 +639,64 @@ def process_img(
         convert_to_16bit: bool = False,
         convert_to_8bit: bool = False,
         bit_shift_to_right: int = 8,
-        d_type: str = None
+        d_type: str = None,
+        verbose: bool = False
 ) -> ndarray:
 
-    img_min = np_min(img)
-    img_max = np_max(img)
     if tile_size is None:
         tile_size = img.shape
     if d_type is None:
         d_type = img.dtype
-    if img_min < img_max:
-        if flat is not None:
-            if tile_size == flat.shape:
-                img /= flat
-            else:
-                print(f"{PrintColors.WARNING}"
-                      f"warning: image and flat arrays had different shapes"
-                      f"{PrintColors.ENDC}")
-        if gaussian_filter_2d:
-            img = gaussian(img, sigma=1.0, preserve_range=True, truncate=2)
+
+    if flat is not None:
+        if tile_size == flat.shape:
+            img = img / flat
+        else:
+            print(f"{PrintColors.WARNING}"
+                  f"warning: image and flat arrays had different shapes"
+                  f"{PrintColors.ENDC}")
+
+    y_slice_min = y_slice_max = x_slice_min = x_slice_max = None
+    img_fg = None
+    if bleach_correction_frequency is not None or exclude_dark_edges_set_them_to_zero:
+        noise_percentile = 5
+        foreground_percentile = 50
+        img_x_max = np_max(img, axis=0)
+        img_y_max = np_max(img, axis=1)
+        img_x_max_min, img_x_max_max = min_max_1d(img_x_max)
+        img_y_max_min, img_y_max_max = min_max_1d(img_y_max)
+        img_max = max(img_x_max_max, img_y_max_max)
+        img_min = np_min(img)
+        img_x_noise, img_x_fg = prctl(img_x_max, (noise_percentile, foreground_percentile))
+        img_y_noise, img_y_fg = prctl(img_y_max, (noise_percentile, foreground_percentile))
+        img_noise = min(img_x_noise, img_y_noise)
+        # img_noise = min(img_y_max_min, img_x_max_min)
+        img_fg = bleach_correction_clip_max
+        if bleach_correction_clip_max is None:
+            img_fg = int(np_mean(append(img_x_max[img_x_max < img_x_fg], img_y_max[img_y_max < img_y_fg])))
+        if verbose:
+            print(f"min={img_min}, x_max_min={img_x_max_min}, y_max_min={img_y_max_min}, \n"
+                  f"noise={img_noise}, x_noise={img_x_noise}, y_noise={img_y_noise}, \n"
+                  f"foreground={img_fg}, x_foreground={img_x_fg}, y_foreground {img_y_fg}, \n"
+                  f"max={img_max}, x_max_max={img_x_max_max}, y_max_max={img_y_max_max}.")
+        if exclude_dark_edges_set_them_to_zero:
+            y_slice_min, y_slice_max = slice_non_zero_box(img_y_max, noise=img_x_noise)
+            x_slice_min, x_slice_max = slice_non_zero_box(img_x_max, noise=img_y_noise)
+            if verbose:
+                print(f"slicing: y: {y_slice_min} to {y_slice_max} and x: {x_slice_min} to {x_slice_max},  "
+                      f"performance enhancement: "
+                      f"{100 - (x_slice_max - x_slice_min) * (y_slice_max - y_slice_min) / (img.shape[0] * img.shape[1])*100:.1f}%")
+            img = img[y_slice_min:y_slice_max, x_slice_min:x_slice_max]
+
+        if bleach_correction_frequency is not None and (dark is None or dark <= 0):
+            dark = img_noise
+
+    else:
+        img_min, img_max = min_max_1d(img.flatten())
+
+    if gaussian_filter_2d:
+        img = gaussian(img, sigma=1.0, preserve_range=True, truncate=2)
+
     if down_sample is not None:
         downsample_method = downsample_method.lower()
         if downsample_method == 'min':
@@ -595,23 +711,70 @@ def process_img(
             print(f"{PrintColors.FAIL}unsupported down-sampling method: {downsample_method}{PrintColors.ENDC}")
             raise RuntimeError
         img = block_reduce(img, block_size=down_sample, func=downsample_method)
-    if new_size is not None and tile_size < new_size:
-        img = resize(img, new_size, preserve_range=True, anti_aliasing=False)
+        if isinstance(down_sample, (int, float)):
+            tile_size = (ceil(size / down_sample) for size in tile_size)
+        elif isinstance(down_sample, (tuple, list)):
+            tile_size = list(tile_size)
+            for idx, down_sample_factor in enumerate(down_sample):
+                if down_sample_factor is not None:
+                    tile_size[idx] = ceil(tile_size[idx] / down_sample_factor)
+
     if img_min < img_max:
-        img = filter_streaks(
-            img,
-            sigma=sigma,
-            level=level,
-            wavelet=wavelet,
-            crossover=crossover,
-            threshold=threshold,
-            bidirectional=bidirectional,
-            bleach_correction_frequency=bleach_correction_frequency,
-            bleach_correction_max_method=bleach_correction_max_method
-        )
         # dark subtraction is like baseline subtraction in Imaris
         if dark is not None and dark > 0:
             img = where(img > dark, img - dark, 0)  # Subtract the dark offset
+            if verbose:
+                print(f"dark value of {dark} is subtracted.")
+
+        def correct_slice_value(user_value: [int, None], auto_estimated_min: [int, None],
+                                auto_estimated_max: [int, None]):
+            if user_value is None:
+                return None
+            else:
+                correction = 0
+                if auto_estimated_min is not None:
+                    if user_value > auto_estimated_min:
+                        correction = auto_estimated_min
+                    else:
+                        # user_value is min and slicing amount requested by user is already taken care of
+                        return None
+
+                if auto_estimated_max is not None and user_value > auto_estimated_max:
+                    correction += user_value - auto_estimated_max
+                return user_value - correction
+
+        if bleach_correction_frequency is not None or sigma > (0, 0):
+            img = filter_streaks(
+                img,
+                sigma=sigma,
+                level=level,
+                wavelet=wavelet,
+                crossover=crossover,
+                threshold=threshold,
+                bidirectional=bidirectional,
+                bleach_correction_frequency=bleach_correction_frequency,
+                bleach_correction_max_method=bleach_correction_max_method,
+                bleach_correction_clip_max=img_fg - dark,
+                bleach_correction_y_slice_min=correct_slice_value(bleach_correction_y_slice_min, y_slice_min, None),
+                bleach_correction_y_slice_max=correct_slice_value(bleach_correction_y_slice_max, y_slice_min, y_slice_max),
+                bleach_correction_x_slice_min=correct_slice_value(bleach_correction_x_slice_min, x_slice_min, None),
+                bleach_correction_x_slice_max=correct_slice_value(bleach_correction_x_slice_max, x_slice_min, x_slice_max),
+            )
+            if verbose and bleach_correction_frequency is not None:
+                print(f"bleach correction is applied: frequency={bleach_correction_frequency}, "
+                      f"max_method={bleach_correction_max_method}, clip_max={img_fg - dark}, \n"
+                      f"y_slice_min: requested={bleach_correction_y_slice_min} "
+                      f"corrected={correct_slice_value(bleach_correction_y_slice_min, y_slice_min, None)}, "
+                      f"y_slice_max: requested={bleach_correction_y_slice_max} "
+                      f"corrected={correct_slice_value(bleach_correction_y_slice_max, y_slice_min, y_slice_max)}\n"
+                      f"x_slice_min: requested={bleach_correction_x_slice_min} "
+                      f"corrected={correct_slice_value(bleach_correction_x_slice_min, x_slice_min, None)}, "
+                      f"x_slice_max: requested={bleach_correction_x_slice_max} "
+                      f"corrected={correct_slice_value(bleach_correction_x_slice_max, x_slice_min, x_slice_max)}")
+            if sigma > (0, 0):
+                print(f"de-striping applied: sigma={sigma}, level={level}, wavelet={wavelet}, crossover{crossover}, "
+                      f"threshold={threshold}, bidirectional={bidirectional}.")
+
         # lightsheet method is like background subtraction in Imaris
         if lightsheet:
             img = correct_lightsheet(
@@ -629,8 +792,29 @@ def process_img(
                     step=(2, 2, 1)),
                 lightsheet_vs_background=lightsheet_vs_background
             )
-    if new_size is not None and tile_size > new_size:
+
+    if exclude_dark_edges_set_them_to_zero:
+        img_zero = zeros(shape=tile_size, dtype=d_type)
+        img_zero[y_slice_min:y_slice_max, x_slice_min:x_slice_max] = img.astype(d_type)
+        img = img_zero
+
+    if new_size is not None and tile_size < new_size:
         img = resize(img, new_size, preserve_range=True, anti_aliasing=True)
+    elif new_size is not None and tile_size > new_size:
+        img = resize(img, new_size, preserve_range=True, anti_aliasing=False)
+
+    if convert_to_16bit and img.dtype not in (uint16, 'uint16'):
+        img = convert_to_16bit_fun(img)
+    elif convert_to_8bit and img.dtype not in (uint8, 'uint8'):
+        img = convert_to_8bit_fun(img, bit_shift_to_right=bit_shift_to_right)
+    elif np_d_type(d_type).kind in ("u", "i"):
+        clip(img, iinfo(d_type).min, iinfo(d_type).max, out=img)
+        img = img.astype(d_type)
+    else:
+        img = img.astype(d_type)
+
+    if flip_upside_down:
+        img = flipud(img)
 
     if rotate == 90:
         img = rot90(img, 1)
@@ -638,20 +822,6 @@ def process_img(
         img = rot90(img, 2)
     elif rotate == 270:
         img = rot90(img, 3)
-
-    if flip_upside_down:
-        img = flipud(img)
-
-    if img.dtype != d_type:
-        img = img.astype(d_type)
-
-    if convert_to_16bit and img.dtype not in (uint16, 'uint16'):
-        img = convert_to_16bit_fun(img)
-    elif convert_to_8bit and img.dtype not in (uint8, 'uint8'):
-        img = convert_to_8bit_fun(img, bit_shift_to_right=bit_shift_to_right)
-    else:
-        clip(img, iinfo(d_type).min, iinfo(d_type).max, out=img)
-        img = img.astype(d_type)
 
     return img
 
@@ -676,6 +846,10 @@ def read_filter_save(
         bidirectional: bool = False,
         bleach_correction_frequency: float = None,
         bleach_correction_max_method: bool = True,
+        bleach_correction_y_slice_min: int = None,
+        bleach_correction_y_slice_max: int = None,
+        bleach_correction_x_slice_min: int = None,
+        bleach_correction_x_slice_max: int = None,
         lightsheet: bool = False,
         artifact_length: int = 150,
         background_window_size: int = 200,
@@ -718,6 +892,14 @@ def read_filter_save(
     bleach_correction_max_method: bool
         use max value on x and y axes to create the filter. Max method is faster and smoother but less accurate
         for large images.
+    bleach_correction_y_slice_min: int
+        from 0 to leach_correction_y_slice_min of the image on y-axis that will not be corrected.
+    bleach_correction_y_slice_max: int
+        from bleach_correction_y_slice_max to max of the image on y-axis that will not be corrected.
+    bleach_correction_x_slice_min: int
+        from 0 to leach_correction_x_slice_min of the image on x-axis that will not be corrected.
+    bleach_correction_x_slice_max: int
+        from bleach_correction_x_slice_max to max of the image on x-axis that will not be corrected.
     compression : tuple (str, int)
         The 1st argument is compression method the 2nd compression level for tiff files
         For example, ('ZSTD', 1) or ('ADOBE_DEFLATE', 1).
@@ -823,6 +1005,10 @@ def read_filter_save(
             dark=dark,
             bleach_correction_frequency=bleach_correction_frequency,
             bleach_correction_max_method=bleach_correction_max_method,
+            bleach_correction_y_slice_min=bleach_correction_y_slice_min,
+            bleach_correction_y_slice_max=bleach_correction_y_slice_max,
+            bleach_correction_x_slice_min=bleach_correction_x_slice_min,
+            bleach_correction_x_slice_max=bleach_correction_x_slice_max,
             sigma=sigma,
             level=level,
             wavelet=wavelet,

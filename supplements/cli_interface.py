@@ -56,7 +56,10 @@ def select_multiple_among_list(question: str, input_list: List[str]) -> List[str
         output_list = input_list.copy()
     else:
         for item in input_list:
-            if ask_true_false_question(f"Do you need to apply {question} to {item} channel?"):
+            if ask_true_false_question(
+                    f"{PrintColors.BLUE}\tDo you need to apply {question} to {PrintColors.ENDC}"
+                    f"{PrintColors.GREEN}{item}{PrintColors.ENDC} "
+                    f"{PrintColors.BLUE}channel?{PrintColors.ENDC}"):
                 output_list += [item]
     return output_list
 

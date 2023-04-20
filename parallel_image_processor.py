@@ -6,7 +6,7 @@ from queue import Empty
 from concurrent.futures import ProcessPoolExecutor, TimeoutError
 from concurrent.futures.process import BrokenProcessPool
 from typing import List, Tuple, Union, Callable
-from numpy import zeros, ulonglong
+from numpy import zeros
 from pathlib import Path
 from supplements.cli_interface import PrintColors, date_time_now
 from pystripe.core import imread_tif_raw_png, imsave_tif, progress_manager
@@ -19,8 +19,8 @@ os.environ['NUMEXPR_NUM_THREADS'] = '1'
 os.environ['OMP_NUM_THREADS'] = '1'
 
 
-def imread_tsv(tsv_volume: TSVVolume, extent, volume):
-    return tsv_volume.imread(extent, volume)
+def imread_tsv(tsv_volume: TSVVolume, extent: VExtent, d_type: str):
+    return tsv_volume.imread(extent, d_type)[0]
 
 
 class MultiProcess(Process):
@@ -64,14 +64,13 @@ class MultiProcess(Process):
         self.kwargs = kwargs
         self.die = False
         self.timeout = timeout
-        self.default_img = zeros(shape, dtype=dtype)
         self.shape = shape
-        self.dtype = dtype
+        self.d_type = dtype
         self.resume = resume
         self.compression = compression
 
     def run(self):
-        running = True
+        running: bool = True
         pool = ProcessPoolExecutor(max_workers=1)
         function = self.function
         images = self.images
@@ -83,15 +82,13 @@ class MultiProcess(Process):
         save_path = self.save_path
         tif_prefix = self.tif_prefix
         shape = self.shape
-        dtype = self.dtype
+        post_processed_shape = self.shape
+        d_type = self.d_type
+        post_processed_d_type = self.d_type
         channel = self.channel
         resume = self.resume
         compression = self.compression
         file = None
-        img_sum = None
-        counter = 0
-        if save_path is None:
-            img_sum = zeros(shape, ulonglong)
         x0, x1, y0, y1 = 0, 0, 0, 0
         if is_tsv:
             x0, x1, y0, y1 = images.volume.x0, images.volume.x1, images.volume.y0, images.volume.y1
@@ -115,33 +112,29 @@ class MultiProcess(Process):
                     else:
                         start_time = time()
                         if is_tsv:
-                            future = pool.submit(imread_tsv, images, VExtent(x0, x1, y0, y1, idx, idx + 1), dtype)
+                            future = pool.submit(imread_tsv, images, VExtent(x0, x1, y0, y1, idx, idx + 1), d_type)
                         else:
-                            future = pool.submit(imread_tif_raw_png, (Path(images[idx], )),
-                                                 {"dtype": dtype, "shape": shape})
+                            future = pool.submit(
+                                imread_tif_raw_png,
+                                (Path(images[idx]), ),
+                                {"dtype": d_type, "shape": shape}
+                            )
                         img = future.result(timeout=timeout)
                         if timeout is not None:
                             timeout = max(timeout, 0.9 * timeout + 0.3 * (time() - start_time))
-                        if is_tsv:
-                            img = img[0]
                         if len(img.shape) == 3:
                             img = img[:, :, channel]
                     if function is not None:
                         img = function(img, *args, **kwargs)
-                    if img.shape != shape or img.dtype != dtype:
-                        shape = self.shape = img.shape
-                        dtype = self.dtype = img.dtype
-                        self.default_img = zeros(shape, dtype=dtype)
-                    if img_sum is not None:
-                        img_sum += img
-                        counter += 1
-                    else:
-                        imsave_tif(tif_save_path, img, compression=compression)
+                        if img.shape != post_processed_shape or img.dtype != post_processed_d_type:
+                            post_processed_shape = img.shape
+                            post_processed_d_type = img.dtype
+                    imsave_tif(tif_save_path, img, compression=compression)
                 except (BrokenProcessPool, TimeoutError):
                     message = f"\nwarning: {timeout}s timeout reached for processing input file number: {idx}\n"
                     if tif_save_path is not None and not tif_save_path.exists():
                         message += f"\ta dummy (zeros) image is saved as output instead:\n\t\t{tif_save_path}\n"
-                        imsave_tif(tif_save_path, self.default_img)
+                        imsave_tif(tif_save_path, zeros(post_processed_shape, dtype=post_processed_d_type))
                     print(f"{PrintColors.WARNING}{message}{PrintColors.ENDC}")
                     pool.shutdown()
                     pool = ProcessPoolExecutor(max_workers=1)
@@ -168,10 +161,7 @@ class MultiProcess(Process):
         pool.shutdown()
         if is_ims and isinstance(file, h5py.File):
             file.close()
-        if counter > 0:
-            running = (img_sum / counter).astype(dtype)
-        else:
-            running = False
+        running = False
         self.progress_queue.put(running)
 
 
@@ -223,12 +213,12 @@ def parallel_image_processor(
         images = source
         # to test stitching quality first a sample from every 100 z-step will be stitched
         top_list = []
-        for idx in range(source.volume.z0, source.volume.z1, 100):
-            args_queue.put(idx)
-            top_list += [idx]
-        for idx in range(source.volume.z0, source.volume.z1, 1):
-            if idx not in top_list:
-                args_queue.put(idx)
+        for step in (1000, 100, 10, 1):
+            for idx in range(source.volume.z0, source.volume.z1, step):
+                if idx not in top_list:
+                    args_queue.put(idx)
+                if step > 1:
+                    top_list += [idx]
         del top_list
         num_images = source.volume.z1 - source.volume.z0
         shape = source.volume.shape[1:3]
