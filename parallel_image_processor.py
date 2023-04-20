@@ -116,7 +116,7 @@ class MultiProcess(Process):
                         else:
                             future = pool.submit(
                                 imread_tif_raw_png,
-                                (Path(images[idx]), ),
+                                (Path(images[idx], )),
                                 {"dtype": d_type, "shape": shape}
                             )
                         img = future.result(timeout=timeout)
