@@ -497,6 +497,7 @@ def filter_streaks(
         bleach_correction_y_slice_max: int = None,
         bleach_correction_x_slice_min: int = None,
         bleach_correction_x_slice_max: int = None,
+        verbose: bool = False
 ) -> ndarray:
     """Filter horizontal streaks using wavelet-FFT filter
 
@@ -567,6 +568,15 @@ def filter_streaks(
             print(f"{PrintColors.WARNING}skipped bleach correction because of "
                   f"clip_min={clip_min} and clip_max={clip_max} values!{PrintColors.ENDC}")
 
+        if verbose:
+            print(f"bleach correction is applied: frequency={bleach_correction_frequency}, "
+                  f"max_method={bleach_correction_max_method},\n"
+                  f"clip_min={expm1(clip_min)}, clip_max={expm1(clip_max)},\n"
+                  f"y_slice_min={bleach_correction_y_slice_min}, \n"
+                  f"y_slice_max={bleach_correction_y_slice_max}, \n"
+                  f"x_slice_min={bleach_correction_x_slice_min}, \n"
+                  f"x_slice_max={bleach_correction_x_slice_max}, \n")
+
     if not sigma1 == sigma2 == 0:
         if sigma1 > 0 and sigma1 == sigma2:
             img = filter_subband(img, sigma1, level, wavelet, bidirectional)
@@ -591,6 +601,10 @@ def filter_streaks(
             else:
                 img = foreground * ff + background * (1 - ff)
             img *= (img_max / np_max(img))
+
+        if verbose:
+            print(f"de-striping applied: sigma={sigma}, level={level}, wavelet={wavelet}, crossover{crossover}, "
+                  f"threshold={threshold}, bidirectional={bidirectional}.")
 
     # undo padding
     if pad_x > 0:
@@ -759,21 +773,8 @@ def process_img(
                 bleach_correction_y_slice_max=correct_slice_value(bleach_correction_y_slice_max, y_slice_min, y_slice_max),
                 bleach_correction_x_slice_min=correct_slice_value(bleach_correction_x_slice_min, x_slice_min, None),
                 bleach_correction_x_slice_max=correct_slice_value(bleach_correction_x_slice_max, x_slice_min, x_slice_max),
+                verbose=verbose,
             )
-            if verbose and bleach_correction_frequency is not None:
-                print(f"bleach correction is applied: frequency={bleach_correction_frequency}, "
-                      f"max_method={bleach_correction_max_method}, clip_max={img_fg - dark}, \n"
-                      f"y_slice_min: requested={bleach_correction_y_slice_min} "
-                      f"corrected={correct_slice_value(bleach_correction_y_slice_min, y_slice_min, None)}, "
-                      f"y_slice_max: requested={bleach_correction_y_slice_max} "
-                      f"corrected={correct_slice_value(bleach_correction_y_slice_max, y_slice_min, y_slice_max)}\n"
-                      f"x_slice_min: requested={bleach_correction_x_slice_min} "
-                      f"corrected={correct_slice_value(bleach_correction_x_slice_min, x_slice_min, None)}, "
-                      f"x_slice_max: requested={bleach_correction_x_slice_max} "
-                      f"corrected={correct_slice_value(bleach_correction_x_slice_max, x_slice_min, x_slice_max)}")
-            if sigma > (0, 0):
-                print(f"de-striping applied: sigma={sigma}, level={level}, wavelet={wavelet}, crossover{crossover}, "
-                      f"threshold={threshold}, bidirectional={bidirectional}.")
 
         # lightsheet method is like background subtraction in Imaris
         if lightsheet:
