@@ -419,6 +419,19 @@ def min_max_1d(arr: ndarray) -> (int, int):
     return min_val, max_val
 
 
+@jit(nopython=True)
+def min_max_2d(arr: ndarray) -> (int, int):
+    n = len(arr)
+    if n <= 0:
+        return None, None
+    min_val, max_val = min_max_1d(arr[0])
+    for i in range(1, n):
+        x, y = min_max_1d(arr[i])
+        min_val = min(x, min_val)
+        max_val = max(y, max_val)
+    return min_val, max_val
+
+
 def slice_non_zero_box(img_axis: ndarray, noise: int, filter_frequency: int = 1/1000) -> (int, int):
     return min_max_1d(nonzero(butter_lowpass_filter(img_axis, filter_frequency).astype(uint16) > noise)[0])
 
@@ -676,7 +689,7 @@ def process_img(
     img_fg = None
     if bleach_correction_frequency is not None or exclude_dark_edges_set_them_to_zero:
         noise_percentile = 5
-        foreground_percentile = 50
+        foreground_percentile = 25
         img_x_max = np_max(img, axis=0)
         img_y_max = np_max(img, axis=1)
         img_x_max_min, img_x_max_max = min_max_1d(img_x_max)
@@ -708,8 +721,7 @@ def process_img(
             dark = img_noise
 
     else:
-        img_min = np_min(img)
-        img_max = np_max(img)
+        img_min, img_max = min_max_2d(img)
 
     if gaussian_filter_2d:
         img = gaussian(img, sigma=1.0, preserve_range=True, truncate=2)
@@ -801,6 +813,7 @@ def process_img(
         img_zero = zeros(shape=tile_size, dtype=d_type)
         img_zero[y_slice_min:y_slice_max, x_slice_min:x_slice_max] = img.astype(d_type)
         img = img_zero
+        del img_zero
 
     if new_size is not None and tile_size < new_size:
         img = resize(img, new_size, preserve_range=True, anti_aliasing=True)
