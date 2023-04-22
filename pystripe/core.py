@@ -399,10 +399,10 @@ def min_max_1d(arr: ndarray) -> (int, int):
     n = len(arr)
     if n <= 0:
         return None, None
+    max_val = min_val = arr[0]
     odd = n % 2
     if not odd:
         n -= 1
-    max_val = min_val = arr[0]
     i = 1
     while i < n:
         x = arr[i]
@@ -532,6 +532,8 @@ def filter_streaks(
         from 0 to leach_correction_x_slice_min of the image on x-axis that will not be corrected.
     bleach_correction_x_slice_max: int
         from bleach_correction_x_slice_max to max of the image on x-axis that will not be corrected.
+    verbose:
+        if true explain to user what's going on
 
     Returns
     -------
@@ -706,7 +708,8 @@ def process_img(
             dark = img_noise
 
     else:
-        img_min, img_max = min_max_1d(img.flatten())
+        img_min = np_min(img)
+        img_max = np_max(img)
 
     if gaussian_filter_2d:
         img = gaussian(img, sigma=1.0, preserve_range=True, truncate=2)
@@ -768,7 +771,7 @@ def process_img(
                 bidirectional=bidirectional,
                 bleach_correction_frequency=bleach_correction_frequency,
                 bleach_correction_max_method=bleach_correction_max_method,
-                bleach_correction_clip_max=img_fg - dark,
+                bleach_correction_clip_max=img_fg - dark if img_fg is not None and dark is not None and dark > 0 else None,
                 bleach_correction_y_slice_min=correct_slice_value(bleach_correction_y_slice_min, y_slice_min, None),
                 bleach_correction_y_slice_max=correct_slice_value(bleach_correction_y_slice_max, y_slice_min, y_slice_max),
                 bleach_correction_x_slice_min=correct_slice_value(bleach_correction_x_slice_min, x_slice_min, None),
