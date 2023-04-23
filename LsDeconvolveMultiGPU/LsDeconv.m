@@ -1168,7 +1168,7 @@ function x = findGoodFFTLength(x)
 end
 
 function pad = pad_size(x, psf_size)
-    pad = 0.5 * (findGoodFFTLength(x + psf_size) - x);
+    pad = floor(0.5 * (findGoodFFTLength(x + psf_size) - x));
 end
 
 function pad_size = gaussian_pad_size(image_size, filter_size)
