@@ -395,6 +395,36 @@ def butter_lowpass_filter(data: ndarray, cutoff_frequency: float, order: int = 1
 
 
 @jit(nopython=True)
+def is_uniform_1d(arr: ndarray) -> Union[bool, None]:
+    n = len(arr)
+    if n <= 0:
+        return None
+    y = arr[0]
+    for x in arr:
+        if x != y:
+            return False
+    return True
+
+
+@jit(nopython=True)
+def is_uniform_2d(arr: ndarray) -> Union[bool, None]:
+    n = len(arr)
+    if n <= 0:
+        return None
+    is_uniform: bool = is_uniform_1d(arr[0])
+    if not is_uniform:
+        return False
+    val = arr[0, 0]
+    for i in range(1, n):
+        is_uniform = is_uniform_1d(arr[i])
+        if not is_uniform:
+            return False
+        elif val != arr[i, 0]:
+            return False
+    return is_uniform
+
+
+@jit(nopython=True)
 def min_max_1d(arr: ndarray) -> (int, int):
     n = len(arr)
     if n <= 0:
@@ -696,6 +726,7 @@ def process_img(
         img_y_max_min, img_y_max_max = min_max_1d(img_y_max)
         img_max = max(img_x_max_max, img_y_max_max)
         img_min = np_min(img)
+        img_uniform = False if img_max > img_min else True
         img_x_noise, img_x_fg = prctl(img_x_max, (noise_percentile, foreground_percentile))
         img_y_noise, img_y_fg = prctl(img_y_max, (noise_percentile, foreground_percentile))
         img_noise = min(img_x_noise, img_y_noise)
@@ -721,7 +752,7 @@ def process_img(
             dark = img_noise
 
     else:
-        img_min, img_max = min_max_2d(img)
+        img_uniform = is_uniform_2d(img)
 
     if gaussian_filter_2d:
         img = gaussian(img, sigma=1.0, preserve_range=True, truncate=2)
@@ -748,7 +779,7 @@ def process_img(
                 if down_sample_factor is not None:
                     tile_size[idx] = ceil(tile_size[idx] / down_sample_factor)
 
-    if img_min < img_max:
+    if not img_uniform:
         # dark subtraction is like baseline subtraction in Imaris
         if dark is not None and dark > 0:
             img = where(img > dark, img - dark, 0)  # Subtract the dark offset
