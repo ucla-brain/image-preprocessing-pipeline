@@ -617,7 +617,13 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
                 pad_z = pad_size(blz, size(psf, 3));
             else
                 % add minimum pad to make sure FFT is optimized
-                pad_z = pad_size(blz, 1);
+                min_pad_size = 1;
+                pad_z = pad_size(blz, min_pad_size);
+                while floor(pad_z) == 0
+                    min_pad_size = min_pad_size + 1;
+                    pad_z = pad_size(blz, min_pad_size);
+                end
+                clear min_pad_size;
             end
             if blz + 2*pad_z > block.z
                 pad_z = (block.z - blz)/2;
@@ -1168,7 +1174,7 @@ function x = findGoodFFTLength(x)
 end
 
 function pad = pad_size(x, psf_size)
-    pad = floor(0.5 * (findGoodFFTLength(x + psf_size) - x));
+    pad = 0.5 * (findGoodFFTLength(x + psf_size) - x);
 end
 
 function pad_size = gaussian_pad_size(image_size, filter_size)
