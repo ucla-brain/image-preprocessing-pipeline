@@ -105,6 +105,7 @@ class MultiProcess(Process):
                 if isinstance(save_path, Path):
                     tif_save_path = save_path / f"{tif_prefix}_{idx:06}.tif"
                     if resume and tif_save_path.exists():
+                        self.progress_queue.put(running)
                         continue
                 try:
                     if is_ims:
