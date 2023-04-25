@@ -192,7 +192,7 @@ function [] = LsDeconv(varargin)
         if resume && exist(block_path, 'file')
             block = load(block_path).block;
         else
-            [block.nx, block.ny, block.nz, block.x, block.y, block.z, block.x_pad, block.y_pad, block.z_pad] = autosplit(info, size(psf), filter, block_size_max, ram_available);
+            [block.nx, block.ny, block.nz, block.x, block.y, block.z, block.x_pad, block.y_pad, block.z_pad, block.block_size_max] = autosplit(info, size(psf), filter, double(block_size_max), ram_available);
             save(block_path, "block");
         end
 
@@ -444,6 +444,7 @@ function process(inpath, outpath, log_file, info, block, psf, numit, ...
             if size(gpus, 2) > 1
                 pool = parpool('local', size(gpus, 2), 'IdleTimeout', Inf);
                 parallel_deconvolve(1 : size(gpus, 2)) = parallel.FevalFuture;
+                num_gpus = size(unique(gpus(gpus>0)), 2);
                 idx = 0;
                 for gpu = gpus
                     idx = idx + 1;
@@ -453,7 +454,9 @@ function process(inpath, outpath, log_file, info, block, psf, numit, ...
                         stop_criterion, gpu, cache_drive, ...
                         filter, ...
                         starting_block + idx - 1);
-                    pause(10);
+                    if mod(idx, num_gpus) == 0
+                        pause(60 * num_gpus);
+                    end
                 end
                 for j = idx:-1:1
                     %parallel_deconvolve(j).wait
@@ -566,13 +569,15 @@ function deconvolve(inpath, psf, numit, damping, ...
 end
 
 function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criterion, gpu, filter)
-    need_vram_conservation = false;
+    block_size = numel(bl);
     if gpu
         gpu_device = gpuDevice(gpu);
-        if gpu_device.TotalMemory < 32e9 || gpu_device.TotalMemory > 80e9
-            need_vram_conservation = true;
+        % only if free gpu memory was available use GPU otherwise use CPU
+        % for gaussian filter 
+        % ~40 GB is needed for block_size = intmax('int32')
+        if gpu_device.AvailableMemory > 19 * block_size  
+            bl = gpuArray(bl);
         end
-        bl = gpuArray(bl);
     end
     gaussian_start = tic;
     if min(filter.sigma(:)) > 0
@@ -641,15 +646,27 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
     
         % deconvolve block using Lucy-Richardson algorithm
         if gpu
-        % GPU accelerated deconvolution needs 4*block_size_max vRAM > 32 GB
-        % GPUs having >80 GB of vRAM can handle >6*block_size_max. 
-        % To deconvolve two blocks on one GPU, bl is gathered, which only 
-        % decelerats denom = bl ./ denom part of deconvolution that is 
-        % computationaly least expensive.
-            if need_vram_conservation
-                bl = gather(bl);
+            if gpu_device.AvailableMemory > 19 * numel(bl)  % ~40e9 Bytes
+                % Fully GPU accelerated deconvolution 
+                % ~40 GB is needed for block_size = intmax('int32')
+                bl = gpuArray(bl);
+                bl = deconGPU(bl, psf, niter, lambda, stop_criterion);
+            elseif gpu_device.AvailableMemory > 15 * numel(bl) % ~32e9 Bytes
+                % semi-GPU accelerated deconvolution 
+                % ~32 GB is needed for block_size = intmax('int32')
+                if isgpuarray(bl)
+                    bl = gather(bl);
+                end
+                bl = deconGPU(bl, psf, niter, lambda, stop_criterion);
+            else
+                % GPU acceleration is requested by the user but the GPU
+                % cannot handle the block at the time of the request
+                if isgpuarray(bl)
+                    bl = gather(bl);
+                    gpuDevice(gpu);  % to free gpu memory
+                end
+                bl = deconCPU(bl, psf, niter, lambda, stop_criterion);
             end
-            bl = deconGPU(bl, psf, niter, lambda, stop_criterion);
         else
             bl = deconCPU(bl, psf, niter, lambda, stop_criterion);
         end
@@ -666,6 +683,7 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
     % memory error
     if isgpuarray(bl)
         bl = gather(bl);
+        gpuDevice(gpu);  % to free gpu memory
     end
     [lb, ub] = deconvolved_stats(bl);
 end
