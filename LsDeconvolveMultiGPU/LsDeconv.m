@@ -236,6 +236,7 @@ function [] = LsDeconv(varargin)
         p_log(log_file, ['   blocks: ' char(cache_drive)]);
         p_log(log_file, ['   logs: ' char(log_file_path)]);
         p_log(log_file, ' ');
+        
         process(inpath, outpath, log_file, info, block, psf, numit, ...
             damping, clipval, stop_criterion, gpus, cache_drive, ...
             amplification, filter, resume, starting_block);
@@ -248,8 +249,7 @@ function [] = LsDeconv(varargin)
         end
     catch ME
         % error handling
-        text = getReport(ME, 'extended', 'hyperlinks', 'off');
-        disp(text);
+        p_log(log_file, getReport(ME, 'extended', 'hyperlinks', 'off'));
         if isdeployed
             exit(1);
         end
@@ -455,7 +455,7 @@ function process(inpath, outpath, log_file, info, block, psf, numit, ...
                         filter, ...
                         starting_block + idx - 1);
                     if mod(idx, num_gpus) == 0
-                        pause(60 * num_gpus);
+                        pause(30 * num_gpus);
                     end
                 end
                 for j = idx:-1:1
@@ -519,7 +519,8 @@ function deconvolve(inpath, psf, numit, damping, ...
         end
 
         % begin processing next block
-        disp( ['loading block ' num2str(blnr) ' from ' num_blocks_str]);
+        disp([num2str(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' is loading ...']);
+        loading_start = tic;
 
         % load next block of data into memory
         startp = p1(blnr, :);
@@ -528,17 +529,21 @@ function deconvolve(inpath, psf, numit, damping, ...
         y1 = startp(y); y2 = endp(y);
         z1 = startp(z); z2 = endp(z);
         bl = load_block(inpath, x1, x2, y1, y2, z1, z2);
+        disp([num2str(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' is loaded in ' num2str(toc(loading_start))]);
 
         % get min-max of raw data stack
         if ~ismember(info.bit_depth, [8, 16])
+            rawmax_start = tic;
             rawmax = max(prctile(bl(:), 99.9, 'all'), rawmax);
+            disp([num2str(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' rawmax calculated in ' num2str(toc(rawmax_start))]);
         end
 
         % deconvolve current block of data
-        disp(['processing block ' num2str(blnr) ' from ' num_blocks_str]);
-
+        block_processing_start = tic;
         [bl, lb, ub] = process_block(bl, block, psf, numit, damping, stop_criterion, gpu, filter);
-
+        disp([num2str(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' filters applied in ' num2str(toc(block_processing_start))]);
+        
+        save_start = tic;
         % delete block z_pad
         if block.z_pad > 0 && block.nz > 1
             if  z1 == 1
@@ -562,9 +567,9 @@ function deconvolve(inpath, psf, numit, damping, ...
         deconvmin = min(lb, deconvmin);
         save(min_max_path, "deconvmin", "deconvmax", "rawmax", "-v7.3", "-nocompression");
 
-        disp(['saving block ' num2str(blnr) ' from ' num_blocks_str]);
         % save block to disk
         save(block_path, 'bl', '-v7.3', '-nocompression');
+        disp([num2str(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' saved in ' num2str(toc(save_start))]);
     end
 end
 
@@ -579,7 +584,7 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
             bl = gpuArray(bl);
         end
     end
-    gaussian_start = tic;
+
     if min(filter.sigma(:)) > 0
         bl = imgaussfilt3(bl, filter.sigma, 'FilterSize', filter.size, 'Padding', 'circular');
         bl = bl - filter.dark;
@@ -592,8 +597,6 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
         % bl = bl ./ flat;
         % clear flat;
         % disp("flat applied");
-
-        disp(['3D Gaussian filter applied in ' num2str(toc(gaussian_start)) 's']);
     end
 
     if niter > 0
@@ -646,26 +649,34 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
     
         % deconvolve block using Lucy-Richardson algorithm
         if gpu
-            if gpu_device.AvailableMemory > 19 * numel(bl)  % ~40e9 Bytes
-                % Fully GPU accelerated deconvolution 
-                % ~40 GB is needed for block_size = intmax('int32')
-                bl = gpuArray(bl);
-                bl = deconGPU(bl, psf, niter, lambda, stop_criterion);
-            elseif gpu_device.AvailableMemory > 15 * numel(bl) % ~32e9 Bytes
-                % semi-GPU accelerated deconvolution 
-                % ~32 GB is needed for block_size = intmax('int32')
-                if isgpuarray(bl)
-                    bl = gather(bl);
-                end
+            if isgpuarray(bl)
+                % block is already on GPU and no GPU allocation is needed
                 bl = deconGPU(bl, psf, niter, lambda, stop_criterion);
             else
-                % GPU acceleration is requested by the user but the GPU
-                % cannot handle the block at the time of the request
-                if isgpuarray(bl)
-                    bl = gather(bl);
-                    gpuDevice(gpu);  % to free gpu memory
+                % wiate a while until GPU memory becomes available
+                % on A100 iteration time is 11.5s and on A6000 it is 22s
+                max_waite_time = niter * 30;
+                waite_time = 0;
+                while gpu_device.AvailableMemory <= 15 * block_size && waite_time < max_waite_time
+                    pause(1);
+                    waite_time = waite_time + 1;
                 end
-                bl = deconCPU(bl, psf, niter, lambda, stop_criterion);
+                disp([num2str(gpu) ': max waite time for GPU availability was ' num2str(waite_time) 's']);
+                pause(5); % give time to GPU to free memory fully
+                if gpu_device.AvailableMemory > 19 * block_size  % ~40e9 Bytes
+                    % fully GPU accelerated deconvolution 
+                    % ~40 GB is needed for block_size = intmax('int32')
+                    bl = gpuArray(bl);
+                    bl = deconGPU(bl, psf, niter, lambda, stop_criterion);
+                elseif gpu_device.AvailableMemory > 15 * block_size % ~32e9 Bytes
+                    % semi-GPU accelerated deconvolution 
+                    % ~32 GB is needed for block_size = intmax('int32')
+                    bl = deconGPU(bl, psf, niter, lambda, stop_criterion);
+                else
+                    % GPU acceleration is requested by the user but the GPU
+                    % cannot handle the block at the time of the request
+                    bl = deconCPU(bl, psf, niter, lambda, stop_criterion);
+                end
             end
         else
             bl = deconCPU(bl, psf, niter, lambda, stop_criterion);
