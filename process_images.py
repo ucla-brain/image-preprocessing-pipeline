@@ -751,7 +751,6 @@ def merge_channels_by_file_name(
 def merge_all_channels(
         stitched_tif_paths: List[Path],
         merged_tif_path: Path,
-        channel_volume_shapes: list = None,
         order_of_colors: str = "gbr",
         workers: int = cpu_count(),
         resume: bool = True,
@@ -760,23 +759,27 @@ def merge_all_channels(
     """
     file names should be identical for each z-step of each channel
     """
-    num_files_in_each_path = list(map(lambda p: len(list(p.glob("*.tif"))), stitched_tif_paths))
-
-    if channel_volume_shapes is None:
-        channel_volume_shapes = [TifStack(path).shape for path in stitched_tif_paths]
-
-    x, y = 0, 0
-    for path, n, shape in zip(stitched_tif_paths, num_files_in_each_path, channel_volume_shapes):
-        if n != shape[0]:
-            p_log(f"{PrintColors.WARNING}warning: path {path} has {shape[0] - n} missing tiles!{PrintColors.ENDC}")
-
-        y, x = max(y, shape[1]), max(x, shape[2])
+    channel_volume_shapes, num_files_in_each_path = [], []
+    img_suffix = ""
+    x, y, z = 0, 0, 0
+    reference_channel = None
+    for path in stitched_tif_paths:
+        img_stack = TifStack(path)
+        # print(img_stack.shape, img_stack.suffix)
+        if not img_suffix:
+            img_suffix = img_stack.suffix
+        elif img_suffix != img_stack.suffix:
+            print("folders containing different file suffixes is not supported!")
+            raise RuntimeError
+        if img_stack.shape[0] > z:
+            reference_channel = path
+            z = img_stack.shape[0]
+        y, x = max(y, img_stack.shape[1]), max(x, img_stack.shape[2])
 
     merged_tif_path.mkdir(exist_ok=True)
 
-    num_images = max(num_files_in_each_path)
-    args_queue = Queue(maxsize=num_images)
-    for file in stitched_tif_paths[num_files_in_each_path.index(num_images)].glob("*.tif"):
+    args_queue = Queue(maxsize=z)
+    for file in reference_channel.glob("*"+img_suffix):
         args_queue.put({
             "file_name": file.name,
             "stitched_tif_paths": stitched_tif_paths,
@@ -787,13 +790,13 @@ def merge_all_channels(
             "compression": compression
         })
 
-    workers = min(workers, num_images)
+    workers = min(workers, z)
     progress_queue = Queue()
     for worker_ in range(workers):
         MultiProcessQueueRunner(progress_queue, args_queue,
                                 fun=merge_channels_by_file_name, replace_timeout_with_dummy=False).start()
 
-    return_code = progress_manager(progress_queue, workers, num_images, desc="RGB")
+    return_code = progress_manager(progress_queue, workers, z, desc="RGB")
     args_queue.cancel_join_thread()
     args_queue.close()
     progress_queue.cancel_join_thread()
@@ -1209,7 +1212,6 @@ def main(source_path):
         if 1 < len(stitched_tif_paths) < 4:
             merge_all_channels(
                 stitched_tif_paths, merged_tif_paths[0],
-                channel_volume_shapes=channel_volume_shapes,
                 order_of_colors=order_of_colors,
                 workers=merge_channels_cores,
                 resume=continue_process_terastitcher,
@@ -1220,7 +1222,6 @@ def main(source_path):
                   "merging the first 3 channels instead.")
             merge_all_channels(
                 stitched_tif_paths[0:3], merged_tif_paths[0],
-                channel_volume_shapes=channel_volume_shapes,
                 order_of_colors=order_of_colors,
                 workers=merge_channels_cores,
                 resume=continue_process_terastitcher,
