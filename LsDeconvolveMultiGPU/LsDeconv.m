@@ -655,14 +655,14 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
             else
                 % wiate a while until GPU memory becomes available
                 % on A100 iteration time is 11.5s and on A6000 it is 22s
-                %max_waite_time = niter * 30;
-                %waite_time = 0;
-                while gpu_device.AvailableMemory <= 15 * block_size %&& waite_time < max_waite_time
-                    pause(1);
-                    %waite_time = waite_time + 10;
+                while gpu_device.AvailableMemory <= 15 * block_size
+                    pause(10);
                 end
-                %disp([num2str(gpu) ': max waite time for GPU availability was ' num2str(waite_time) 's']);
-                %pause(10); % give time to GPU to free vRAM fully
+                attempt = 0;
+                while gpu_device.AvailableMemory <= 19 * block_size && attempt < 5
+                    pause(1); % give time to GPU to fully free vRAM
+                    attempt = attempt + 1;
+                end
                 if gpu_device.AvailableMemory > 19 * block_size  % ~40e9 Bytes
                     % fully GPU accelerated deconvolution 
                     % ~40 GB is needed for block_size = intmax('int32')
