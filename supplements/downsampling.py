@@ -251,6 +251,7 @@ class TifStack:
         elif not self.files and pattern.lower() == '*.tiff':
             self.files = list(input_directory.glob(pattern[:-1]))
         self.files.sort()
+        self.suffix = self.files[0].suffix
         img = imread(self.files[0])
         self.dtype = img.dtype
         self.nyx = img.shape

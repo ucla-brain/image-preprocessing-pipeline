@@ -134,6 +134,7 @@ def main(args: Namespace):
     if args.imaris:
         ims_file = Path(args.imaris)
         files = list(tif_2d_folder.glob("*.tif"))
+        files += list(tif_2d_folder.glob("*.tiff"))
         is_renamed: bool = False
         if compile(r"^\d+$").findall(files[0].name[:-len(files[0].suffix)]):
             files = [file.rename(file.parent / ("_" + file.name)) for file in files]
