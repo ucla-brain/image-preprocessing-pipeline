@@ -455,7 +455,7 @@ function process(inpath, outpath, log_file, info, block, psf, numit, ...
                         filter, ...
                         starting_block + idx - 1);
                     if mod(idx, num_gpus) == 0
-                        pause(90 * num_gpus);
+                        pause(10);
                     end
                 end
                 for j = idx:-1:1
@@ -575,14 +575,18 @@ end
 
 function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criterion, gpu, filter)
     block_size = numel(bl);
+    
     if gpu
         gpu_device = gpuDevice(gpu);
+        gpu_lock_path = fullfile(tempdir, ['gpu_' num2str(gpu)]);
         % only if free gpu memory was available use GPU otherwise use CPU
         % for gaussian filter 
         % ~40 GB is needed for block_size = intmax('int32')
-        if gpu_device.AvailableMemory > 19 * block_size  
+        if gpu_device.AvailableMemory > 19 * block_size && ~exist(gpu_lock_path, "file")
+            fclose(fopen(gpu_lock_path, "w"));
             bl = gpuArray(bl);
         end
+        
     end
 
     if min(filter.sigma(:)) > 0
@@ -663,9 +667,10 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
                     pause(1); % give time to GPU to fully free vRAM
                     attempt = attempt + 1;
                 end
-                if gpu_device.AvailableMemory > 19 * block_size  % ~40e9 Bytes
+                if gpu_device.AvailableMemory > 19 * block_size && ~exist(gpu_lock_path, "file") % ~40e9 Bytes
                     % fully GPU accelerated deconvolution 
                     % ~40 GB is needed for block_size = intmax('int32')
+                    fclose(fopen(gpu_lock_path, "w"));
                     bl = gpuArray(bl);
                     bl = deconGPU(bl, psf, niter, lambda, stop_criterion);
                 elseif gpu_device.AvailableMemory > 15 * block_size % ~32e9 Bytes
@@ -695,6 +700,9 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
     if isgpuarray(bl)
         bl = gather(bl);
         gpuDevice(gpu);  % to free gpu memory
+        if exist(gpu_lock_path, "file")
+            delete(gpu_lock_path);
+        end
     end
     [lb, ub] = deconvolved_stats(bl);
 end
