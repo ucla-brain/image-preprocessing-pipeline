@@ -455,7 +455,10 @@ function process(inpath, outpath, log_file, info, block, psf, numit, ...
                     if exist(gpu_lock_path_semi, 'file')
                         delete(gpu_lock_path_semi)
                     end
-                    semaphore('destroy', gpu);
+                    try
+                        semaphore('destroy', gpu);
+                    catch
+                    end
                     semaphore('create', gpu, 1);
                     semaphore('post', gpu);
                 end
