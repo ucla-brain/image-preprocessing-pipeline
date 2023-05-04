@@ -444,7 +444,18 @@ function process(inpath, outpath, log_file, info, block, psf, numit, ...
             if size(gpus, 2) > 1
                 pool = parpool('local', size(gpus, 2), 'IdleTimeout', Inf);
                 parallel_deconvolve(1 : size(gpus, 2)) = parallel.FevalFuture;
-                num_gpus = size(unique(gpus(gpus>0)), 2);
+                unique_gpus = unique(gpus(gpus>0));
+                num_gpus = size(unique_gpus, 2);
+                for gpu = unique_gpus
+                    gpu_lock_path_full = fullfile(tempdir, ['gpu_full_' num2str(gpu)]);
+                    gpu_lock_path_semi = fullfile(tempdir, ['gpu_semi_' num2str(gpu)]);
+                    if exist(gpu_lock_path_full, 'file')
+                        delete(gpu_lock_path_full)
+                    end
+                    if exist(gpu_lock_path_semi, 'file')
+                        delete(gpu_lock_path_semi)
+                    end
+                end
                 idx = 0;
                 for gpu = gpus
                     idx = idx + 1;
@@ -455,7 +466,7 @@ function process(inpath, outpath, log_file, info, block, psf, numit, ...
                         filter, ...
                         starting_block + idx - 1);
                     if mod(idx, num_gpus) == 0
-                        pause(10);
+                        pause(20);
                     end
                 end
                 for j = idx:-1:1
@@ -573,17 +584,24 @@ function deconvolve(inpath, psf, numit, damping, ...
     end
 end
 
-function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criterion, gpu, filter)
-    block_size = numel(bl);
-    
+function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criterion, gpu, filter)   
     if gpu
         gpu_device = gpuDevice(gpu);
-        gpu_lock_path = fullfile(tempdir, ['gpu_' num2str(gpu)]);
+        memory_needed_for_full_acceleration = 43e9;
+        memory_needed_for_semi_acceleration = 35e9;
+        num_full_accelerated_blocks = floor(gpu_device.TotalMemory / memory_needed_for_full_acceleration);
+        if num_full_accelerated_blocks > 0
+            num_semi_accelerated_blocks = floor(mod(gpu_device.TotalMemory, memory_needed_for_full_acceleration) / memory_needed_for_semi_acceleration);
+        else
+            num_semi_accelerated_blocks = floor(gpu_device.TotalMemory / memory_needed_for_semi_acceleration);
+        end
+        gpu_lock_path_full = fullfile(tempdir, ['gpu_full_' num2str(gpu)]);
+        gpu_lock_path_semi = fullfile(tempdir, ['gpu_semi_' num2str(gpu)]);
         % only if free gpu memory was available use GPU otherwise use CPU
         % for gaussian filter 
         % ~40 GB is needed for block_size = intmax('int32')
-        if gpu_device.AvailableMemory > 19 * block_size && ~exist(gpu_lock_path, "file")
-            fclose(fopen(gpu_lock_path, "w"));
+        if gpu_device.AvailableMemory > memory_needed_for_full_acceleration && num_full_accelerated_blocks > 0 && ~exist(gpu_lock_path_full, "file")
+            fclose(fopen(gpu_lock_path_full, "w"));
             bl = gpuArray(bl);
         end
         
@@ -653,30 +671,41 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
     
         % deconvolve block using Lucy-Richardson algorithm
         if gpu
-            if isgpuarray(bl)
+            if gpu_device.AvailableMemory > memory_needed_for_full_acceleration && isgpuarray(bl)
                 % block is already on GPU and no GPU allocation is needed
                 bl = deconGPU(bl, psf, niter, lambda, stop_criterion);
             else
-                % wiate a while until GPU memory becomes available
+                % wiate until GPU memory becomes available
                 % on A100 iteration time is 11.5s and on A6000 it is 22s
-                while gpu_device.AvailableMemory <= 15 * block_size
-                    pause(10);
+                if num_full_accelerated_blocks > 0 && num_semi_accelerated_blocks > 0
+                    while exist(gpu_lock_path_full, "file") && exist(gpu_lock_path_semi, 'file')
+                        pause(20);
+                    end
+                elseif num_full_accelerated_blocks > 0
+                    while exist(gpu_lock_path_full, "file")
+                        pause(20);
+                    end
+                elseif num_semi_accelerated_blocks > 0
+                    while exist(gpu_lock_path_semi, 'file')
+                        pause(20);
+                    end
                 end
-                attempt = 0;
-                while gpu_device.AvailableMemory <= 19 * block_size && attempt < 5
-                    pause(1); % give time to GPU to fully free vRAM
-                    attempt = attempt + 1;
-                end
-                if gpu_device.AvailableMemory > 19 * block_size && ~exist(gpu_lock_path, "file") % ~40e9 Bytes
+                if gpu_device.AvailableMemory > memory_needed_for_full_acceleration && num_full_accelerated_blocks > 0 && ~exist(gpu_lock_path_full, "file")  % ~43e9 Bytes
                     % fully GPU accelerated deconvolution 
                     % ~40 GB is needed for block_size = intmax('int32')
-                    fclose(fopen(gpu_lock_path, "w"));
+                    fclose(fopen(gpu_lock_path_full, "w"));
                     bl = gpuArray(bl);
                     bl = deconGPU(bl, psf, niter, lambda, stop_criterion);
-                elseif gpu_device.AvailableMemory > 15 * block_size % ~32e9 Bytes
+                elseif gpu_device.AvailableMemory > memory_needed_for_semi_acceleration && num_semi_accelerated_blocks > 0 && ~exist(gpu_lock_path_semi, 'file')  % ~35e9 Bytes
                     % semi-GPU accelerated deconvolution 
                     % ~32 GB is needed for block_size = intmax('int32')
+                    fclose(fopen(gpu_lock_path_semi, "w"));
                     bl = deconGPU(bl, psf, niter, lambda, stop_criterion);
+                    if isgpuarray(bl)
+                        bl = gather(bl);
+                    end
+                    gpuDevice(gpu);
+                    delete(gpu_lock_path_semi);
                 else
                     % GPU acceleration is requested by the user but the GPU
                     % cannot handle the block at the time of the request
@@ -686,7 +715,7 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
         else
             bl = deconCPU(bl, psf, niter, lambda, stop_criterion);
         end
-    
+
         %remove padding
         if pad_z > 0
             bl = bl(floor(pad_x) : end-ceil(pad_x)-1, floor(pad_y) : end-ceil(pad_y)-1, floor(pad_z) : end-ceil(pad_z)-1);
@@ -700,10 +729,11 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
     if isgpuarray(bl)
         bl = gather(bl);
         gpuDevice(gpu);  % to free gpu memory
-        if exist(gpu_lock_path, "file")
-            delete(gpu_lock_path);
+        if exist(gpu_lock_path_full, "file")
+            delete(gpu_lock_path_full);
         end
     end
+
     [lb, ub] = deconvolved_stats(bl);
 end
 
