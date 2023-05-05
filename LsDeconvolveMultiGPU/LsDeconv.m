@@ -691,7 +691,7 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
     
         % deconvolve block using Lucy-Richardson algorithm
         if gpu
-            if gpu_device.AvailableMemory > memory_needed_for_full_acceleration && isgpuarray(bl)
+            if isgpuarray(bl)
                 % block is already on GPU and no GPU allocation is needed
                 bl = deconGPU(bl, psf, niter, lambda, stop_criterion);
             else
