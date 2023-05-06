@@ -446,7 +446,7 @@ function process(inpath, outpath, log_file, info, block, psf, numit, ...
                 parallel_deconvolve(1 : size(gpus, 2)) = parallel.FevalFuture;
                 unique_gpus = unique(gpus(gpus>0));
                 num_gpus = size(unique_gpus, 2);
-                for gpu = unique_gpus
+                parfor gpu = unique_gpus
                     gpu_lock_path_full = fullfile(tempdir, ['gpu_full_' num2str(gpu)]);
                     gpu_lock_path_semi = fullfile(tempdir, ['gpu_semi_' num2str(gpu)]);
                     if exist(gpu_lock_path_full, 'file')
@@ -459,8 +459,16 @@ function process(inpath, outpath, log_file, info, block, psf, numit, ...
                         semaphore('destroy', gpu);
                     catch
                     end
-                    semaphore('create', gpu, 1);
-                    semaphore('post', gpu);
+                    memory_needed_for_full_acceleration = 43e9;
+                    memory_needed_for_semi_acceleration = 35e9;
+                    gpu_device = gpuDevice(gpu);
+                    num_full_accelerated_blocks = floor(gpu_device.TotalMemory / memory_needed_for_full_acceleration);
+                    if num_full_accelerated_blocks > 0
+                        num_semi_accelerated_blocks = floor(mod(gpu_device.TotalMemory, memory_needed_for_full_acceleration) / memory_needed_for_semi_acceleration);
+                    else
+                        num_semi_accelerated_blocks = floor(gpu_device.TotalMemory / memory_needed_for_semi_acceleration);
+                    end
+                    semaphore('create', gpu, num_full_accelerated_blocks + num_semi_accelerated_blocks);
                 end
                 idx = 0;
                 for gpu = gpus
@@ -618,10 +626,10 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
         % only if free gpu memory was available use GPU otherwise use CPU
         % for gaussian filter 
         % ~40 GB is needed for block_size = intmax('int32')
-        if gpu_device.AvailableMemory > memory_needed_for_full_acceleration && ...
-                num_full_accelerated_blocks > 0 && ...
-                ~islock_gpu(gpu_lock_path_full, gpu)
-            lock_gpu(gpu_lock_path_full, gpu);
+        if num_full_accelerated_blocks > 0 && ...
+                ~islock_gpu(gpu_lock_path_full, gpu, gpu_device, memory_needed_for_full_acceleration, true)
+            % semaphore('wait', gpu) is insdie islock_gpu
+            lock_gpu(gpu_lock_path_full);
             bl = gpuArray(bl);
         end
         
@@ -697,37 +705,26 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
             else
                 % wiate until GPU memory becomes available
                 % on A100 iteration time is 11.5s and on A6000 it is 22s
-                if num_full_accelerated_blocks > 0 && num_semi_accelerated_blocks > 0
-                    while islock_gpu(gpu_lock_path_full, gpu) && islock_gpu(gpu_lock_path_semi, gpu)
-                        pause(1);
-                    end
-                elseif num_full_accelerated_blocks > 0
-                    while islock_gpu(gpu_lock_path_full, gpu)
-                        pause(1);
-                    end
-                elseif num_semi_accelerated_blocks > 0
-                    while islock_gpu(gpu_lock_path_semi, gpu)
-                        pause(1);
-                    end
-                end
-                if gpu_device.AvailableMemory > memory_needed_for_full_acceleration && ...
-                        num_full_accelerated_blocks > 0 && ...
-                        ~islock_gpu(gpu_lock_path_full, gpu)  % ~43e9 Bytes
+                
+                if num_full_accelerated_blocks > 0 && ...
+                        ~islock_gpu(gpu_lock_path_full, gpu, gpu_device, memory_needed_for_full_acceleration, false)
                     % fully GPU accelerated deconvolution 
                     % ~40 GB is needed for block_size = intmax('int32')
-                    lock_gpu(gpu_lock_path_full, gpu);
+                    % semaphore('wait', gpu) is insdie islock_gpu
+                    lock_gpu(gpu_lock_path_full);
                     bl = gpuArray(bl);
                     bl = deconGPU(bl, psf, niter, lambda, stop_criterion);
-                elseif gpu_device.AvailableMemory > memory_needed_for_semi_acceleration && ...
-                        num_semi_accelerated_blocks > 0 && ...
-                        ~islock_gpu(gpu_lock_path_semi, gpu)  % ~35e9 Bytes
+                elseif num_semi_accelerated_blocks > 0 && ...
+                        ~islock_gpu(gpu_lock_path_semi, gpu, gpu_device, memory_needed_for_semi_acceleration, true) 
                     % semi-GPU accelerated deconvolution 
                     % ~32 GB is needed for block_size = intmax('int32')
-                    lock_gpu(gpu_lock_path_semi, gpu);
+                    % semaphore('wait', gpu) is insdie islock_gpu
+                    lock_gpu(gpu_lock_path_semi);
                     bl = deconGPU(bl, psf, niter, lambda, stop_criterion);
                     bl = gather(bl);
                     gpuDevice(gpu);
-                    unlock_gpu(gpu_lock_path_semi, gpu);
+                    unlock_gpu(gpu_lock_path_semi);
+                    semaphore('post', gpu);
                 else
                     % GPU acceleration is requested by the user but the GPU
                     % cannot handle the block at the time of the request
@@ -751,7 +748,8 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
     if isgpuarray(bl)
         bl = gather(bl);
         gpuDevice(gpu);  % to free gpu memory
-        unlock_gpu(gpu_lock_path_full, gpu);
+        unlock_gpu(gpu_lock_path_full);
+        semaphore('post', gpu);
     end
 
     [lb, ub] = deconvolved_stats(bl);
@@ -1011,27 +1009,24 @@ function [psf, FWHMxy, FWHMz] = LsMakePSF(dxy, dz, NA, nf, lambda_ex, lambda_em,
     % disp('ok');
 end
 
-function lock_gpu(lock_path, gpu)
-    semaphore('wait', gpu);
+function lock_gpu(lock_path)
     fclose(fopen(lock_path, "w"));
-    semaphore('post', gpu);
 end
 
-function unlock_gpu(lock_path, gpu)
-    semaphore('wait', gpu);
+function unlock_gpu(lock_path)
     if exist(lock_path, 'file')
         delete(lock_path)
     end
-    semaphore('post', gpu);
 end
 
-function status = islock_gpu(lock_path, gpu)
+function status = islock_gpu(lock_path, gpu, gpu_device, memory_needed, release_semaphore_if_gpu_was_locked)
     semaphore('wait', gpu);
-    status = false;
-    if exist(lock_path, 'file')
-        status = true;
+    status = true;
+    if ~exist(lock_path, 'file') && gpu_device.AvailableMemory > memory_needed
+        status = false;
+    elseif release_semaphore_if_gpu_was_locked
+        semaphore('post', gpu);
     end
-    semaphore('post', gpu);
 end
 
 %determine the required grid size (xyz) for psf sampling
