@@ -21,7 +21,7 @@ from time import time, sleep
 from platform import uname
 from tsv.volume import TSVVolume
 from pystripe.core import batch_filter, imread_tif_raw_png, imsave_tif, MultiProcessQueueRunner, progress_manager, \
-    process_img
+    process_img, convert_to_8bit_fun
 from queue import Empty
 from multiprocessing import freeze_support, Queue, Process
 from supplements.cli_interface import select_among_multiple_options, ask_true_false_question, PrintColors
@@ -704,7 +704,8 @@ def merge_channels_by_file_name(
         merged_tif_path: Path = None,
         shape: Tuple[int, int] = None,
         resume: bool = True,
-        compression: Tuple[str, int] = ("ADOBE_DEFLATE", 1)
+        compression: Union[Tuple[str, int], None] = ("ADOBE_DEFLATE", 1),
+        right_bit_shift: Union[Tuple[int, ...], None] = None
 ):
     rgb_file = merged_tif_path / file_name
     if resume and rgb_file.exists():
@@ -716,6 +717,8 @@ def merge_channels_by_file_name(
         file_path = path / file_name
         if file_path.exists():
             image = imread_tif_raw_png(file_path)
+            if right_bit_shift is not None:
+                image = convert_to_8bit_fun(image, bit_shift_to_right=right_bit_shift[idx])
             images.update({order_of_colors[idx]: image})
             dtypes += [image.dtype]
         else:
@@ -752,14 +755,14 @@ def merge_all_channels(
         stitched_tif_paths: List[Path],
         merged_tif_path: Path,
         order_of_colors: str = "gbr",
-        workers: int = cpu_count(),
+        workers: int = cpu_count(logical=False),
         resume: bool = True,
-        compression: Tuple[str, int] = ("ADOBE_DEFLATE", 1)
+        compression: Union[Tuple[str, int], None] = ("ADOBE_DEFLATE", 1),
+        right_bit_shift: Union[Tuple[int, ...], None] = None
 ):
     """
     file names should be identical for each z-step of each channel
     """
-    channel_volume_shapes, num_files_in_each_path = [], []
     img_suffix = ""
     x, y, z = 0, 0, 0
     reference_channel = None
@@ -787,7 +790,8 @@ def merge_all_channels(
             "merged_tif_path": merged_tif_path,
             "shape": (y, x),
             "resume": resume,
-            "compression": compression
+            "compression": compression,
+            "right_bit_shift": right_bit_shift
         })
 
     workers = min(workers, z)
