@@ -16,6 +16,9 @@ Python code for stitching and image enhancement of Light Sheet data
     
    `pip install dcimg cpufeature`
 
+* For running LsDeconvolveMultiGPU deconvolution software you need to install latest version of MATLAB, image processing and parallel computing toolboxes. Then change the folder to LsDeconvolveMultiGPU folder and run the following command from MATLAB.
+
+  `mex -O -v semaphore.c`
    
    **Note:** The last time I checked, Microsoft MPI installed fom conda-forge was functional. However, if mpi4py was not functional on Windows, try installing the latest [Microsoft MPI from GitHub](https://github.com/microsoft/Microsoft-MPI).
    
