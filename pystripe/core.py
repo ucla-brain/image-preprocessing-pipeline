@@ -173,7 +173,7 @@ def convert_to_8bit_fun(img: ndarray, bit_shift_to_right: int = 8):
     return img
 
 
-def imsave_tif(path: Path, img: ndarray, compression: Tuple[str, int] = ('ADOBE_DEFLATE', 1)):
+def imsave_tif(path: Path, img: ndarray, compression: Union[Tuple[str, int], None] = ('ADOBE_DEFLATE', 1)):
     """Save an array as a tiff or raw image
 
     The file format will be inferred from the file extension in `path`
