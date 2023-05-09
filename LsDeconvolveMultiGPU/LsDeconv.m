@@ -436,7 +436,7 @@ function process(inpath, outpath, log_file, info, block, psf, numit, ...
     semaphore_create(semkey_single, 1);
     for gpu = unique_gpus
         semaphore_create(gpu, 1);
-        semaphore_create(gpu + semkey_single, 4);
+        semaphore_create(gpu + semkey_single, 5);
         unlock_gpu(fullfile(tempdir, ['gpu_full_' num2str(gpu)]));
         unlock_gpu(fullfile(tempdir, ['gpu_semi_' num2str(gpu)]));
     end
@@ -728,6 +728,8 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
         end
     end
 
+    [lb, ub] = deconvolved_stats(bl);
+
     % since prctile function needs high vram usage gather it to avoid low
     % memory error
     if isgpuarray(bl)
@@ -736,8 +738,6 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
         unlock_gpu(gpu_lock_path_full);
         semaphore('post', gpu);
     end
-
-    [lb, ub] = deconvolved_stats(bl);
 end
 
 %Lucy-Richardson deconvolution
@@ -1300,6 +1300,9 @@ end
 
 function [lb, ub] = deconvolved_stats(deconvolved)
     stats = prctile(deconvolved(:), [0.1 99.9], "all");
+    if isgpuarray(stats)
+        stats = gather(stats);
+    end
     lb = stats(1);
     ub = stats(2);
 end
