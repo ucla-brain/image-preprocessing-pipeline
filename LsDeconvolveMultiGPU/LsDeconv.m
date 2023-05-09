@@ -4,7 +4,7 @@
 % lab) patched it in MATLAB V2022b. kmoradi@mednet.ucla.edu. Main changes
 % by Keivan Moradi: Multi-GPU, resume, and 3D gaussian filter support
 % LsDeconv is free software: you can redistribute it and/or modify it under
-% the terms of the GNU General Public License as published by the Free
+% the terms of the GNU General Publ`ic License as published by the Free
 % Software Foundation, either version 3 of the License, or at your option)
 % any later version. LsDeconv is distributed in the hope that it will be
 % useful, but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -52,7 +52,7 @@ function [] = LsDeconv(varargin)
         damping = varargin{11};
         clipval = varargin{12};
         stop_criterion = varargin{13};
-        block_size_max = varargin{14};
+        block_size_max = double(varargin{14});
         gpus = varargin{15};
         amplification = varargin{16};
         filter.sigma = varargin{17};
@@ -192,7 +192,7 @@ function [] = LsDeconv(varargin)
         if resume && exist(block_path, 'file')
             block = load(block_path).block;
         else
-            [block.nx, block.ny, block.nz, block.x, block.y, block.z, block.x_pad, block.y_pad, block.z_pad] = autosplit(info, size(psf), filter, double(block_size_max), ram_available);
+            [block.nx, block.ny, block.nz, block.x, block.y, block.z, block.x_pad, block.y_pad, block.z_pad] = autosplit(info, size(psf), filter, block_size_max, ram_available);
             save(block_path, "block");
         end
 
@@ -206,7 +206,7 @@ function [] = LsDeconv(varargin)
         p_log(log_file, ' ');
 
         % start image processing
-        filter.dark = dark(filter);
+        filter.dark = dark(filter, info.bit_depth);
         p_log(log_file, 'preprocessing params ...')
         p_log(log_file, ['   3D gaussian filter sigma: ' num2str(filter.sigma, 3)]);
         p_log(log_file, ['   3D gaussian filter size: ' num2str(filter.size, 3)]);
@@ -270,9 +270,9 @@ function [x, y, x_pad, y_pad] = calculate_xy_size(z, z_pad, info, block_size_max
 
     % min pad size is half the psf size on the axis
     % x_max is max_value_allowed_by_block_size_and_z - 2 * min_pad
-    x_max_in_ram = floor(nthroot(double(block_size_max/ z), 2));
+    x_max_in_ram = floor(nthroot(block_size_max / z, 2));
     x_max_deconvolved = x_max_in_ram - psf_size(1);
-    x_min_deconvolved = x_max_deconvolved - 5*psf_size(1);
+    x_min_deconvolved = x_max_deconvolved - 5 * psf_size(1);
     x = x_min_deconvolved;
     x_pad = pad_size(x, psf_size(1));
     z_deconvolved = z - 2*z_pad;
@@ -345,7 +345,7 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad] = autosplit(info, psf_size, 
     % load extra z layers for each block to avoid generating artifacts on z
     % for efficiency of FFT pad data in a way that the largest prime
     % factor becomes <= 5 for each end of the block
-    z_pad = ceil(pad_size(z, psf_size(3)));
+    z_pad = pad_size(z, psf_size(3));
     [x, y, x_pad, y_pad] = calculate_xy_size(z, z_pad, info, block_size_max, psf_size, filter);
     max_deconvolved_voxels = x * y * (z - 2 * z_pad);
     
@@ -416,12 +416,30 @@ function process(inpath, outpath, log_file, info, block, psf, numit, ...
     filter, resume, starting_block)
 
     start_time = datetime('now');
-
+    
     % split it to chunks
     [p1, p2] = split(info, block);
 
+    % flatten the gpus array
+    gpus = gpus(:)';
+    
     % intermediate variables needed for interprocess communication
+    % NOTE: semaphore keys should be more than zero values.
+    % all the existing processes should be killed first before creating a
+    % sechamore
+    delete(gcp("nocreate"));
     min_max_path = fullfile(cache_drive, "min_max.mat");
+    unique_gpus = sort(unique(gpus(gpus>0)));
+    
+    % initiate locks and semaphors
+    semkey_single = 1e3;
+    semaphore_create(semkey_single, 1);
+    for gpu = unique_gpus
+        semaphore_create(gpu, 1);
+        semaphore_create(gpu + semkey_single, 3);
+        unlock_gpu(fullfile(tempdir, ['gpu_full_' num2str(gpu)]));
+        unlock_gpu(fullfile(tempdir, ['gpu_semi_' num2str(gpu)]));
+    end
 
     % start deconvolution
     num_blocks = block.nx * block.ny * block.nz;
@@ -429,7 +447,7 @@ function process(inpath, outpath, log_file, info, block, psf, numit, ...
     while remaining_blocks > 0
         for i = starting_block : num_blocks
             % skip blocks already worked on
-            block_path = fullfile(cache_drive, ['bl_' num2str(i) '_temp.mat']);
+            block_path = fullfile(cache_drive, ['bl_' num2str(i) '.mat']);
             if exist(block_path, "file")
                 if dir(block_path).bytes > 10
                     remaining_blocks = remaining_blocks - 1;
@@ -439,78 +457,30 @@ function process(inpath, outpath, log_file, info, block, psf, numit, ...
             end
         end
         if remaining_blocks > 0
-            delete(gcp('nocreate'));
-            gpus = gpus(1:min(size(gpus, 2), remaining_blocks));
-            if size(gpus, 2) > 1
-                pool = parpool('local', size(gpus, 2), 'IdleTimeout', Inf);
-                parallel_deconvolve(1 : size(gpus, 2)) = parallel.FevalFuture;
-                unique_gpus = unique(gpus(gpus>0));
-                num_gpus = size(unique_gpus, 2);
-                parfor gpu = unique_gpus
-                    gpu_lock_path_full = fullfile(tempdir, ['gpu_full_' num2str(gpu)]);
-                    gpu_lock_path_semi = fullfile(tempdir, ['gpu_semi_' num2str(gpu)]);
-                    if exist(gpu_lock_path_full, 'file')
-                        delete(gpu_lock_path_full)
-                    end
-                    if exist(gpu_lock_path_semi, 'file')
-                        delete(gpu_lock_path_semi)
-                    end
-                    try
-                        semaphore('destroy', gpu);
-                    catch
-                    end
-                    memory_needed_for_full_acceleration = 43e9;
-                    memory_needed_for_semi_acceleration = 35e9;
-                    gpu_device = gpuDevice(gpu);
-                    num_full_accelerated_blocks = floor(gpu_device.TotalMemory / memory_needed_for_full_acceleration);
-                    if num_full_accelerated_blocks > 0
-                        num_semi_accelerated_blocks = floor(mod(gpu_device.TotalMemory, memory_needed_for_full_acceleration) / memory_needed_for_semi_acceleration);
-                    else
-                        num_semi_accelerated_blocks = floor(gpu_device.TotalMemory / memory_needed_for_semi_acceleration);
-                    end
-                    semaphore('create', gpu, num_full_accelerated_blocks + num_semi_accelerated_blocks);
-                end
-                idx = 0;
-                for gpu = gpus
-                    idx = idx + 1;
-                    parallel_deconvolve(idx) = pool.parfeval(@deconvolve, 0, ...
-                        inpath, psf, numit, damping, ...
-                        block, info, p1, p2, min_max_path, ...
-                        stop_criterion, gpu, cache_drive, ...
-                        filter, ...
-                        starting_block + idx - 1);
-                    if mod(idx, num_gpus) == 0
-                        pause(20);
-                    end
-                end
-                for j = idx:-1:1
-                    %parallel_deconvolve(j).wait
-                    %parallel_deconvolve(j).State
-                    parallel_deconvolve(j).fetchOutputs;
-                end
-                for gpu = unique_gpus
-                    gpu_lock_path_full = fullfile(tempdir, ['gpu_full_' num2str(gpu)]);
-                    gpu_lock_path_semi = fullfile(tempdir, ['gpu_semi_' num2str(gpu)]);
-                    if exist(gpu_lock_path_full, 'file')
-                        delete(gpu_lock_path_full)
-                    end
-                    if exist(gpu_lock_path_semi, 'file')
-                        delete(gpu_lock_path_semi)
-                    end
-                    semaphore('destroy', gpu);
-                end
-                delete(pool);
-            else
+            gpus = gpus(1:min(numel(gpus), remaining_blocks));
+            pool = parpool('local', numel(gpus), 'IdleTimeout', Inf);
+            queue = parallel.pool.DataQueue;
+            afterEach(queue, @disp);
+            parfor idx = 1 : numel(gpus)
                 deconvolve( ...
                     inpath, psf, numit, damping, ...
                     block, info, p1, p2, min_max_path, ...
-                    stop_criterion, gpus(1), cache_drive, ...
+                    stop_criterion, gpus(idx), cache_drive, ...
                     filter, ...
-                    starting_block);
+                    starting_block + idx - 1, queue);
             end
-            % make sure all the blocks are processed
+            delete(pool);
         end
         starting_block = 1;
+    end
+
+    % clear locks and semaphors
+    semaphore_destroy(semkey_single);
+    for gpu = unique_gpus
+        semaphore_destroy(gpu);
+        semaphore_destroy(gpu + semkey_single);
+        unlock_gpu(fullfile(tempdir, ['gpu_full_' num2str(gpu)]));
+        unlock_gpu(fullfile(tempdir, ['gpu_semi_' num2str(gpu)]));
     end
 
     % postprocess and write tif files
@@ -528,7 +498,10 @@ end
 function deconvolve(inpath, psf, numit, damping, ...
     block, info, p1, p2, min_max_path, ...
     stop_criterion, gpu, cache_drive, ...
-    filter, starting_block)
+    filter, starting_block, queue)
+    
+    semkey_single = 1e3;
+    semkey_multi = semkey_single + gpu;
 
     if info.bit_depth == 8
         rawmax = 255;
@@ -546,38 +519,39 @@ function deconvolve(inpath, psf, numit, damping, ...
 
     for blnr = starting_block : num_blocks
         % skip blocks already worked on
-        block_path = fullfile(cache_drive, ['bl_' num2str(blnr) '_temp.mat']);
-
+        block_path = fullfile(cache_drive, ['bl_' num2str(blnr) '.mat']);
+        semaphore('wait', semkey_single);
         if num_blocks > 1 && exist(block_path, "file")
+            semaphore('post', semkey_single);
             continue
-        else
-            fclose(fopen(block_path, 'w'));
         end
+        fclose(fopen(block_path, 'w'));
+        semaphore('post', semkey_single);
 
-        % begin processing next block
-        disp([num2str(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' is loading ...']);
-        loading_start = tic;
-
-        % load next block of data into memory
+        % begin processing next block and load next block of data into memory
         startp = p1(blnr, :);
         endp = p2(blnr, :);
         x1 = startp(x); x2 = endp(x);
         y1 = startp(y); y2 = endp(y);
         z1 = startp(z); z2 = endp(z);
+        semaphore('wait', semkey_multi);
+        send(queue, ['GPU' num2str(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' is loading ...']);
+        loading_start = tic;
         bl = load_block(inpath, x1, x2, y1, y2, z1, z2);
-        disp([num2str(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' is loaded in ' num2str(toc(loading_start))]);
+        send(queue, ['GPU' num2str(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' is loaded in ' num2str(toc(loading_start))]);
+        semaphore('post', semkey_multi);
 
         % get min-max of raw data stack
         if ~ismember(info.bit_depth, [8, 16])
             rawmax_start = tic;
-            rawmax = max(prctile(bl(:), 99.9, 'all'), rawmax);
-            disp([num2str(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' rawmax calculated in ' num2str(toc(rawmax_start))]);
+            rawmax = max(max(bl(:)), rawmax);
+            send(queue, ['GPU' num2str(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' rawmax calculated in ' num2str(toc(rawmax_start))]);
         end
 
         % deconvolve current block of data
         block_processing_start = tic;
         [bl, lb, ub] = process_block(bl, block, psf, numit, damping, stop_criterion, gpu, filter);
-        disp([num2str(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' filters applied in ' num2str(toc(block_processing_start))]);
+        send(queue, ['GPU' num2str(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' filters applied in ' num2str(toc(block_processing_start))]);
         
         save_start = tic;
         % delete block z_pad
@@ -592,20 +566,28 @@ function deconvolve(inpath, psf, numit, damping, ...
         end
 
         % find maximum value in other blocks
+        semaphore('wait', semkey_single);
         if exist(min_max_path, "file")
             min_max = load(min_max_path);
-            deconvmax = gather(min_max.deconvmax);
-            deconvmin = gather(min_max.deconvmin);
-            rawmax = gather(min_max.rawmax);
+            if isgpuarray(min_max.deconvmax)
+                deconvmax = gather(min_max.deconvmax);
+                deconvmin = gather(min_max.deconvmin);
+                rawmax = gather(min_max.rawmax);
+            else
+                deconvmax = min_max.deconvmax;
+                deconvmin = min_max.deconvmin;
+                rawmax = min_max.rawmax;
+            end
         end
         % consolidate and save block stats
         deconvmax = max(ub, deconvmax);
         deconvmin = min(lb, deconvmin);
         save(min_max_path, "deconvmin", "deconvmax", "rawmax", "-v7.3", "-nocompression");
+        semaphore('post', semkey_single);
 
         % save block to disk
         save(block_path, 'bl', '-v7.3', '-nocompression');
-        disp([num2str(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' saved in ' num2str(toc(save_start))]);
+        send(queue, ['GPU' num2str(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' saved in ' num2str(toc(save_start))]);
     end
 end
 
@@ -613,7 +595,7 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
     if gpu
         gpu_device = gpuDevice(gpu);
         memory_needed_for_full_acceleration = 43e9;
-        memory_needed_for_semi_acceleration = 35e9;
+        memory_needed_for_semi_acceleration = 32e9;
         num_full_accelerated_blocks = floor(gpu_device.TotalMemory / memory_needed_for_full_acceleration);
         if num_full_accelerated_blocks > 0
             num_semi_accelerated_blocks = floor(mod(gpu_device.TotalMemory, memory_needed_for_full_acceleration) / memory_needed_for_semi_acceleration);
@@ -627,7 +609,7 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
         % for gaussian filter 
         % ~40 GB is needed for block_size = intmax('int32')
         if num_full_accelerated_blocks > 0 && ...
-                ~islock_gpu(gpu_lock_path_full, gpu, gpu_device, memory_needed_for_full_acceleration, true)
+                ~islock_gpu(gpu_lock_path_full, gpu, gpu_device, memory_needed_for_full_acceleration)
             % semaphore('wait', gpu) is insdie islock_gpu
             lock_gpu(gpu_lock_path_full);
             bl = gpuArray(bl);
@@ -649,7 +631,7 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
         % disp("flat applied");
     end
 
-    if niter > 0
+    if niter > 0 && max(bl(:)) > eps('single')
         % for efficiency of FFT pad data in a way that the largest prime
         % factor becomes <= 5. z_padding comes from image, which is
         % different from x and y pad that are interpolated based on image.
@@ -685,6 +667,7 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
             end
             if blz + 2*pad_z > block.z
                 pad_z = (block.z - blz)/2;
+                disp([9 pad_z]);
             end
         elseif blz > block.z
             warning('image block on z-axis exceeds the maximum allowed!')
@@ -701,26 +684,28 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
         if gpu
             if isgpuarray(bl)
                 % block is already on GPU and no GPU allocation is needed
-                bl = deconGPU(bl, psf, niter, lambda, stop_criterion);
+                bl = deconGPU(bl, psf, niter, lambda, stop_criterion, gpu);
             else
                 % wiate until GPU memory becomes available
                 % on A100 iteration time is 11.5s and on A6000 it is 22s
                 
                 if num_full_accelerated_blocks > 0 && ...
-                        ~islock_gpu(gpu_lock_path_full, gpu, gpu_device, memory_needed_for_full_acceleration, false)
+                        ~islock_gpu(gpu_lock_path_full, gpu, gpu_device, memory_needed_for_full_acceleration)
                     % fully GPU accelerated deconvolution 
                     % ~40 GB is needed for block_size = intmax('int32')
                     % semaphore('wait', gpu) is insdie islock_gpu
+
                     lock_gpu(gpu_lock_path_full);
                     bl = gpuArray(bl);
-                    bl = deconGPU(bl, psf, niter, lambda, stop_criterion);
+                    bl = deconGPU(bl, psf, niter, lambda, stop_criterion, gpu);
                 elseif num_semi_accelerated_blocks > 0 && ...
-                        ~islock_gpu(gpu_lock_path_semi, gpu, gpu_device, memory_needed_for_semi_acceleration, true) 
+                        ~islock_gpu(gpu_lock_path_semi, gpu, gpu_device, memory_needed_for_semi_acceleration)
                     % semi-GPU accelerated deconvolution 
                     % ~32 GB is needed for block_size = intmax('int32')
                     % semaphore('wait', gpu) is insdie islock_gpu
+
                     lock_gpu(gpu_lock_path_semi);
-                    bl = deconGPU(bl, psf, niter, lambda, stop_criterion);
+                    bl = deconGPU(bl, psf, niter, lambda, stop_criterion, gpu);
                     bl = gather(bl);
                     gpuDevice(gpu);
                     unlock_gpu(gpu_lock_path_semi);
@@ -790,19 +775,19 @@ function deconvolved = deconCPU(bl, psf, niter, lambda, stop_criterion)
             end
             deltaL = delta;
 
-            disp(['iteration: ' num2str(i) ' duration: ' num2str(toc(start_time)) ' delta: ' num2str(delta_rel, 3)]);
+            disp(['CPU: iteration: ' num2str(i) ' duration: ' num2str(toc(start_time)) ' delta: ' num2str(delta_rel, 3)]);
 
             if i > 1 && delta_rel <= stop_criterion
                 disp('stop criterion reached. finishing iterations.');
                 break
             end
         else
-            disp(['iteration: ' num2str(i) ' duration: ' num2str(toc(start_time))]);
+            disp(['CPU: iteration: ' num2str(i) ' duration: ' num2str(toc(start_time))]);
         end
     end
 end
 
-function deconvolved = deconGPU(bl, psf, niter, lambda, stop_criterion)
+function deconvolved = deconGPU(bl, psf, niter, lambda, stop_criterion, gpu)
     deconvolved = gpuArray(bl);
     psf_inv = psf(end:-1:1, end:-1:1, end:-1:1); % spatially reversed psf
     R = 1/26 * ones(3, 3, 3, 'single');
@@ -836,14 +821,14 @@ function deconvolved = deconGPU(bl, psf, niter, lambda, stop_criterion)
             end
             deltaL = delta;
 
-            disp(['iteration: ' num2str(i) ' duration: ' num2str(toc(start_time)) ' delta: ' num2str(delta_rel, 3)]);
+            disp(['GPU' num2str(gpu) ': iteration: ' num2str(i) ' duration: ' num2str(toc(start_time)) ' delta: ' num2str(delta_rel, 3)]);
 
             if i > 1 && delta_rel <= stop_criterion
                 disp('stop criterion reached. Finishing iterations.');
                 break
             end
         else
-            disp(['iteration: ' num2str(i) ' duration: ' num2str(toc(start_time))]);
+            disp(['GPU' num2str(gpu) ': iteration: ' num2str(i) ' duration: ' num2str(toc(start_time))]);
         end
     end
 end
@@ -854,9 +839,9 @@ function postprocess_save(...
 
     blocklist = strings(size(p1, 1), 1);
     for i = 1 : size(p1, 1)
-        blocklist(i) = fullfile(cache_drive, ['bl_' num2str(i) '_temp.mat']);
+        blocklist(i) = fullfile(cache_drive, ['bl_' num2str(i) '.mat']);
         if ~exist(blocklist(i), 'file')
-            warning(['missing block: bl_' num2str(i) '_temp.mat'])
+            warning(['missing block: bl_' num2str(i) '.mat'])
         end
     end
 
@@ -1009,6 +994,19 @@ function [psf, FWHMxy, FWHMz] = LsMakePSF(dxy, dz, NA, nf, lambda_ex, lambda_em,
     % disp('ok');
 end
 
+function semaphore_destroy(semkey)
+    try
+        semaphore('destroy', semkey);
+    catch
+    end
+end
+
+function semaphore_create(semkey, value)
+    disp(['semaphore ' num2str(semkey) ' is created with the initial value of ' num2str(value)]);
+    semaphore_destroy(semkey);
+    semaphore('create', semkey, value);
+end
+
 function lock_gpu(lock_path)
     fclose(fopen(lock_path, "w"));
 end
@@ -1019,12 +1017,12 @@ function unlock_gpu(lock_path)
     end
 end
 
-function status = islock_gpu(lock_path, gpu, gpu_device, memory_needed, release_semaphore_if_gpu_was_locked)
+function status = islock_gpu(lock_path, gpu, gpu_device, memory_needed)
     semaphore('wait', gpu);
     status = true;
     if ~exist(lock_path, 'file') && gpu_device.AvailableMemory > memory_needed
         status = false;
-    elseif release_semaphore_if_gpu_was_locked
+    else
         semaphore('post', gpu);
     end
 end
@@ -1245,11 +1243,20 @@ function p_log(log_file, message)
     fprintf(log_file, '%s\r\n', message);
 end
 
-function dark_ = dark(filter)
-    a=zeros(floor(filter.sigma*20));
-    a(floor(filter.sigma(1)*10), floor(filter.sigma(2)*10), floor(filter.sigma(3)*10))=1;
+function dark_ = dark(filter, bit_depth)
+    % dark is a value greater than 1 surrounded by zeros
+    if bit_depth == 8
+        a=zeros(filter.size, "uint8");
+    elseif bit_depth == 16
+        a=zeros(filter.size, "uint16");
+    else
+        warning('unsupported image bit depth');
+        a=zeros(filter.size);
+    end
+    a(ceil(filter.size(1)/2), ceil(filter.size(2)/2), ceil(filter.size(3)/2))=1;
+    a=im2single(a);
     a=imgaussfilt3(a, filter.sigma, 'FilterSize', filter.size, 'Padding', 'circular');
-    dark_ = mean(a(a>0));
+    dark_ = max(a(:));
 end
 
 %writes 32bit float tiff-imges
@@ -1350,7 +1357,7 @@ function bl = load_block(inpath, start_x, end_x, start_y, end_y, start_z, end_z)
         path{k} = fullfile(inpath, filelist((k-1)+start_z).name);
     end
     for k = 1 : nz+1
-        im = im2single((imread(path{k}, 'PixelRegion', {[start_y, end_y],[start_x, end_x]})));
+        im = im2single((imread(path{k}, 'PixelRegion', {[start_y, end_y], [start_x, end_x]})));
         bl(:, :, k) = im';
     end
 end
