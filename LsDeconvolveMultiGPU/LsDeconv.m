@@ -436,7 +436,7 @@ function process(inpath, outpath, log_file, info, block, psf, numit, ...
     semaphore_create(semkey_single, 1);
     for gpu = unique_gpus
         semaphore_create(gpu, 1);
-        semaphore_create(gpu + semkey_single, 3);
+        semaphore_create(gpu + semkey_single, 4);
         unlock_gpu(fullfile(tempdir, ['gpu_full_' num2str(gpu)]));
         unlock_gpu(fullfile(tempdir, ['gpu_semi_' num2str(gpu)]));
     end
