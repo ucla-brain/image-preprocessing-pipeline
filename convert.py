@@ -19,9 +19,9 @@ from cpufeature.extension import CPUFeature
 from tqdm import tqdm
 from re import compile
 
-os.environ['MKL_NUM_THREADS'] = '1'
-os.environ['NUMEXPR_NUM_THREADS'] = '1'
-os.environ['OMP_NUM_THREADS'] = '1'
+# os.environ['MKL_NUM_THREADS'] = '1'
+# os.environ['NUMEXPR_NUM_THREADS'] = '1'
+# os.environ['OMP_NUM_THREADS'] = '1'
 
 
 def main(args: Namespace):
@@ -64,7 +64,7 @@ def main(args: Namespace):
     elif args.new_size_y or args.new_size_x:
         print(f"{PrintColors.FAIL}both new_size_x and new_size_y are needed!{PrintColors.ENDC}")
         raise RuntimeError
-    compression = ("ADOBE_DEFLATE", args.compression_level) if args.compression_level > 0 else None
+    compression = (args.compression_method, args.compression_level) if args.compression_level > 0 else None
 
     if (
             input_path.is_file() and input_path.suffix.lower() == ".ims"
@@ -275,8 +275,11 @@ if __name__ == '__main__':
                         help="Rotate the image. One of 0, 90, 180 or 270 degree values are accepted. Default is 0.")
     parser.add_argument("--flip_upside_down", default=False, action=BooleanOptionalAction,
                         help="Flip the y-axis. Default is --no-flip_upside_down")
-    parser.add_argument("--compression_level", "-z", type=int, default=0,
+    parser.add_argument("--compression_level", "-zl", type=int, default=0,
                         help="compression level for tif files. Default is 0.")
+    parser.add_argument("--compression_method", "-zm", type=str, default="ADOBE_DEFLATE",
+                        help="compression method for tif files. Default is ADOBE_DEFLATE. "
+                             "LZW and packbits are also supported.")
     parser.add_argument("--movie_start", type=int, default=0,
                         help="start frame counting from 0. Default is 0.")
     parser.add_argument("--movie_end", type=int, default=None,
