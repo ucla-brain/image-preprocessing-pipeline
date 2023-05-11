@@ -71,7 +71,8 @@ def main(args: Namespace):
     ) or (
             input_path.is_dir() and (
             args.dark > 0 or args.convert_to_8bit or new_size or down_sample or args.rotation or args.gaussian or
-            args.background_subtraction or args.de_stripe or args.flip_upside_down or args.bleach_correction)
+            args.background_subtraction or args.de_stripe or args.flip_upside_down or args.bleach_correction or
+            args.compression_level > 0)
     ):
         if not args.tif:
             print(f"{PrintColors.FAIL}tif path is needed to continue.{PrintColors.ENDC}")
@@ -274,8 +275,8 @@ if __name__ == '__main__':
                         help="Rotate the image. One of 0, 90, 180 or 270 degree values are accepted. Default is 0.")
     parser.add_argument("--flip_upside_down", default=False, action=BooleanOptionalAction,
                         help="Flip the y-axis. Default is --no-flip_upside_down")
-    parser.add_argument("--compression_level", "-z", type=int, default=1,
-                        help="compression level for tif files. Default is 1.")
+    parser.add_argument("--compression_level", "-z", type=int, default=0,
+                        help="compression level for tif files. Default is 0.")
     parser.add_argument("--movie_start", type=int, default=0,
                         help="start frame counting from 0. Default is 0.")
     parser.add_argument("--movie_end", type=int, default=None,
