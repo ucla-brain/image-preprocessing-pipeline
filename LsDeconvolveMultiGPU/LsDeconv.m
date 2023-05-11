@@ -429,14 +429,17 @@ function process(inpath, outpath, log_file, info, block, psf, numit, ...
     % sechamore
     delete(gcp("nocreate"));
     min_max_path = fullfile(cache_drive, "min_max.mat");
-    unique_gpus = sort(unique(gpus(gpus>0)));
+    [unique_gpus, ~, gpus_vertical] = unique(sort(gpus(gpus>0)));
+    gpu_count = accumarray(gpus_vertical, 1).';
+    clear gpus_vertical;
     
     % initiate locks and semaphors
     semkey_single = 1e3;
     semaphore_create(semkey_single, 1);
-    for gpu = unique_gpus
+    for idx = 1 : numel(unique_gpus)
+        gpu = unique_gpus(idx);
         semaphore_create(gpu, 1);
-        semaphore_create(gpu + semkey_single, 5);
+        semaphore_create(gpu + semkey_single, max(1, gpu_count(idx) - 1));
         unlock_gpu(fullfile(tempdir, ['gpu_full_' num2str(gpu)]));
         unlock_gpu(fullfile(tempdir, ['gpu_semi_' num2str(gpu)]));
     end
@@ -468,6 +471,7 @@ function process(inpath, outpath, log_file, info, block, psf, numit, ...
                     stop_criterion, gpus(idx), cache_drive, ...
                     filter, ...
                     starting_block + idx - 1, queue);
+                pause(5);
             end
             delete(pool);
         end
