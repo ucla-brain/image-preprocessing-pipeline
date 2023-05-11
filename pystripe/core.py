@@ -201,7 +201,8 @@ def imsave_tif(path: Path, img: ndarray, compression: Union[Tuple[str, int], Non
             return
         except KeyboardInterrupt:
             print(f"{PrintColors.WARNING}\ndying from imsave_tif{PrintColors.ENDC}")
-            # imwrite(path, data=img, compression=compression_method, compressionargs={'level': compression_level})
+            # imwrite(path, data=img, compression=compression_method, compressionargs={'level': compression_level},
+            # predictor=True, tile=(256,256))
             imwrite(path, data=img, compression=compression)
             die = True
         except (OSError, TypeError, PermissionError) as inst:
