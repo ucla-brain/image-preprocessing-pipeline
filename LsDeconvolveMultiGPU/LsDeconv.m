@@ -735,14 +735,19 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
             bl = bl(floor(pad_x) : end-ceil(pad_x)-1, floor(pad_y) : end-ceil(pad_y)-1, :);
         end
     end
-
+    
+    if isgpuarray(bl) && gpu_device.TotalMemory < 60e9
+        bl = gather(bl);
+        reset(gpu_device);
+        bl = gpuArray(bl);
+    end
     [lb, ub] = deconvolved_stats(bl);
 
     % since prctile function needs high vram usage gather it to avoid low
     % memory error
     if isgpuarray(bl)
         bl = gather(bl);
-        gpuDevice(gpu);  % to free gpu memory
+        reset(gpu_device);  % to free gpu memory
         unlock_gpu(gpu_lock_path_full);
         semaphore('post', gpu);
     end
@@ -1003,6 +1008,14 @@ function [psf, FWHMxy, FWHMz] = LsMakePSF(dxy, dz, NA, nf, lambda_ex, lambda_em,
 end
 
 function semaphore_destroy(semkey)
+    if ispc
+        try
+            while true
+                sephamore('post', semkey);
+            end
+        catch
+        end
+    end
     try
         semaphore('destroy', semkey);
     catch
