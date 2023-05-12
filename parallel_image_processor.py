@@ -1,18 +1,25 @@
 import os
 import h5py
 import hdf5plugin
-from multiprocessing import Queue, Process, Manager, freeze_support, cpu_count
+from multiprocessing import Queue, Process, Manager, freeze_support
+from concurrent.futures import ThreadPoolExecutor
+from psutil import cpu_count
 from queue import Empty
 from concurrent.futures import ProcessPoolExecutor, TimeoutError
 from concurrent.futures.process import BrokenProcessPool
 from typing import List, Tuple, Union, Callable
-from numpy import zeros
+from numpy import zeros, float32, dstack, rollaxis, savez, array
+from numpy import max as np_max
+from numpy import mean as np_mean
 from pathlib import Path
 from supplements.cli_interface import PrintColors, date_time_now
 from pystripe.core import imread_tif_raw_png, imsave_tif, progress_manager
 from tsv.volume import TSVVolume, VExtent
 from time import time
 from tqdm import tqdm
+from math import ceil, floor, sqrt
+from skimage.measure import block_reduce
+from skimage.transform import resize
 
 os.environ['MKL_NUM_THREADS'] = '1'
 os.environ['NUMEXPR_NUM_THREADS'] = '1'
@@ -36,6 +43,9 @@ class MultiProcess(Process):
             kwargs: dict,
             shape: Tuple[int, int],
             dtype: str,
+            source_voxel: Union[Tuple[float, float, float], None] = None,
+            target_voxel: Union[int, float, None] = None,
+            down_sampled_path: Union[Path, None] = None,
             channel: int = 0,
             timeout: Union[float, None] = 1800,
             resume: bool = True,
@@ -68,6 +78,9 @@ class MultiProcess(Process):
         self.d_type = dtype
         self.resume = resume
         self.compression = compression
+        self.source_voxel = source_voxel
+        self.target_voxel = target_voxel
+        self.down_sampled_path = down_sampled_path
 
     def run(self):
         running: bool = True
@@ -88,6 +101,31 @@ class MultiProcess(Process):
         channel = self.channel
         resume = self.resume
         compression = self.compression
+        down_sampled_path = self.down_sampled_path
+
+        need_down_sampling = False
+        down_sampling_methods, target_shape, down_sampling_method_z = None, None, None
+        if self.source_voxel is not None and self.target_voxel is not None and shape is not None:
+            need_down_sampling = True
+            source_dz, source_dy, source_dx = self.source_voxel
+            target_voxel = self.target_voxel
+            reduction_times_y, reduction_times_x = target_voxel / source_dy, target_voxel / source_dx
+            reduction_factor_y, reduction_factor_x = floor(sqrt(reduction_times_y)), floor(sqrt(reduction_times_x))
+            target_shape = (round(shape[0] / reduction_times_y), round(shape[1] / reduction_times_x))
+            down_sampling_method_y = [np_max if i % 2 == 0 else np_mean for i in range(reduction_factor_y)]
+            down_sampling_method_x = [np_mean if i % 2 == 0 else np_max for i in range(reduction_factor_x)]
+            if reduction_factor_y > reduction_factor_x:
+                down_sampling_method_x += [None, ] * (reduction_factor_y - reduction_factor_x)
+            elif reduction_factor_y < reduction_factor_x:
+                down_sampling_method_y += [None, ] * (reduction_factor_x - reduction_factor_y)
+            down_sampling_methods = zip(down_sampling_method_y, down_sampling_method_x)
+            reduction_factor_z = ceil(sqrt(target_voxel / source_dz))
+            # the last down-sampling for z step should be based on np_max to ensure max brightness
+            if reduction_factor_z % 2 == 0:
+                down_sampling_method_z = (np_mean if i % 2 == 0 else np_max for i in range(reduction_factor_z))
+            else:
+                down_sampling_method_z = (np_max if i % 2 == 0 else np_mean for i in range(reduction_factor_z))
+
         file = None
         x0, x1, y0, y1 = 0, 0, 0, 0
         if is_tsv:
@@ -99,64 +137,91 @@ class MultiProcess(Process):
         while not self.die and self.args_queue.qsize() > 0:
             try:
                 queue_start_time = time()
-                idx = self.args_queue.get(block=True, timeout=queue_time_out)
-                queue_time_out = max(queue_time_out, 0.9 * queue_time_out + 0.3 * (time() - queue_start_time))
-                tif_save_path = None
-                if isinstance(save_path, Path):
+                ds_z_idx, indices = self.args_queue.get(block=True, timeout=queue_time_out)
+                z_stack = None
+                down_sampled_tif_path = Path()
+                if need_down_sampling and down_sampled_path is not None:
+                    down_sampled_tif_path = down_sampled_path / f"{tif_prefix}_{ds_z_idx:06}.tif"
+                    z_stack = zeros((len(indices),) + target_shape, dtype=float32)
+                for idx_z, idx in enumerate(indices):
+                    queue_time_out = max(queue_time_out, 0.9 * queue_time_out + 0.3 * (time() - queue_start_time))
                     tif_save_path = save_path / f"{tif_prefix}_{idx:06}.tif"
                     if resume and tif_save_path.exists():
-                        self.progress_queue.put(running)
-                        continue
-                try:
-                    if is_ims:
-                        img = images[idx]
-                    else:
-                        start_time = time()
-                        if is_tsv:
-                            future = pool.submit(imread_tsv, images, VExtent(x0, x1, y0, y1, idx, idx + 1), d_type)
+                        if need_down_sampling and down_sampled_tif_path.exists():
+                            self.progress_queue.put(running)
+                            continue
                         else:
-                            future = pool.submit(
-                                imread_tif_raw_png,
-                                (Path(images[idx], )),
-                                {"dtype": d_type, "shape": shape}
-                            )
-                        img = future.result(timeout=timeout)
-                        if timeout is not None:
-                            timeout = max(timeout, 0.9 * timeout + 0.3 * (time() - start_time))
-                        if len(img.shape) == 3:
-                            img = img[:, :, channel]
-                    if function is not None:
-                        img = function(img, *args, **kwargs)
-                        if img.shape != post_processed_shape or img.dtype != post_processed_d_type:
-                            post_processed_shape = img.shape
-                            post_processed_d_type = img.dtype
-                    imsave_tif(tif_save_path, img, compression=compression)
-                except (BrokenProcessPool, TimeoutError):
-                    message = f"\nwarning: {timeout}s timeout reached for processing input file number: {idx}\n"
-                    if tif_save_path is not None and not tif_save_path.exists():
-                        message += f"\ta dummy (zeros) image is saved as output instead:\n\t\t{tif_save_path}\n"
-                        imsave_tif(tif_save_path, zeros(post_processed_shape, dtype=post_processed_d_type))
-                    print(f"{PrintColors.WARNING}{message}{PrintColors.ENDC}")
-                    pool.shutdown()
-                    pool = ProcessPoolExecutor(max_workers=1)
-                except KeyboardInterrupt:
-                    self.die = True
-                    # while not self.args_queue.qsize() == 0:
-                    #     try:
-                    #         self.args_queue.get(block=True, timeout=10)
-                    #     except Empty:
-                    #         continue
-                except Exception as inst:
-                    print(
-                        f"{PrintColors.WARNING}"
-                        f"\nwarning: process failed for image index {idx}."
-                        f"\n\targs: {(tif_save_path, *args)}"
-                        f"\n\tkwargs: {kwargs}"
-                        f"\n\texception instance: {type(inst)}"
-                        f"\n\texception arguments: {inst.args}"
-                        f"\n\texception: {inst}"
-                        f"{PrintColors.ENDC}")
-                self.progress_queue.put(running)
+                            self.progress_queue.put(running)
+                            continue
+                    try:
+                        if is_ims:
+                            img = images[idx]
+                        else:
+                            start_time = time()
+                            if is_tsv:
+                                future = pool.submit(imread_tsv, images, VExtent(x0, x1, y0, y1, idx, idx + 1), d_type)
+                            else:
+                                future = pool.submit(
+                                    imread_tif_raw_png,
+                                    (Path(images[idx], )),
+                                    {"dtype": d_type, "shape": shape}
+                                )
+                            img = future.result(timeout=timeout)
+                            if timeout is not None:
+                                timeout = max(timeout, 0.9 * timeout + 0.3 * (time() - start_time))
+                            if len(img.shape) == 3:
+                                img = img[:, :, channel]
+                        if function is not None:
+                            img = function(img, *args, **kwargs)
+                            if img.shape != post_processed_shape or img.dtype != post_processed_d_type:
+                                post_processed_shape = img.shape
+                                post_processed_d_type = img.dtype
+                        imsave_tif(tif_save_path, img, compression=compression)
+
+                        img = img.astype(float32)
+                        if need_down_sampling and down_sampling_methods is not None and target_shape is not None:
+                            for y_method, x_method in down_sampling_methods:
+                                if y_method is not None and img.shape[0] > 1:
+                                    img = block_reduce(img, block_size=(2, 1), func=y_method)
+                                if x_method is not None and img.shape[1] > 1:
+                                    img = block_reduce(img, block_size=(1, 2), func=x_method)
+                            img = resize(img, target_shape, preserve_range=True, anti_aliasing=False)
+                            z_stack[idx_z] = img.astype(float32)
+
+                    except (BrokenProcessPool, TimeoutError):
+                        message = f"\nwarning: {timeout}s timeout reached for processing input file number: {idx}\n"
+                        if tif_save_path is not None and not tif_save_path.exists():
+                            message += f"\ta dummy (zeros) image is saved as output instead:\n\t\t{tif_save_path}\n"
+                            imsave_tif(tif_save_path, zeros(post_processed_shape, dtype=post_processed_d_type))
+                        print(f"{PrintColors.WARNING}{message}{PrintColors.ENDC}")
+                        pool.shutdown()
+                        pool = ProcessPoolExecutor(max_workers=1)
+                    except KeyboardInterrupt:
+                        self.die = True
+                        # while not self.args_queue.qsize() == 0:
+                        #     try:
+                        #         self.args_queue.get(block=True, timeout=10)
+                        #     except Empty:
+                        #         continue
+                    except Exception as inst:
+                        print(
+                            f"{PrintColors.WARNING}"
+                            f"\nwarning: process failed for image index {idx}."
+                            f"\n\targs: {(tif_save_path, *args)}"
+                            f"\n\tkwargs: {kwargs}"
+                            f"\n\texception instance: {type(inst)}"
+                            f"\n\texception arguments: {inst.args}"
+                            f"\n\texception: {inst}"
+                            f"{PrintColors.ENDC}")
+                    self.progress_queue.put(running)
+
+                if need_down_sampling and down_sampling_method_z is not None and z_stack is not None:
+                    for z_method in down_sampling_method_z:
+                        if z_method is not None and z_stack.shape[0] > 1:
+                            z_stack = block_reduce(z_stack, block_size=(2, 1, 1), func=z_method)
+
+                    imsave_tif(down_sampled_tif_path, z_stack, compression=compression)
+
             except (Empty, TimeoutError):
                 self.die = True
         pool.shutdown()
@@ -164,6 +229,17 @@ class MultiProcess(Process):
             file.close()
         running = False
         self.progress_queue.put(running)
+
+
+def calculate_downsampling_z_ranges(start, end, steps):
+    z_list_list = []
+    for idx in range(start, end, steps):
+        z_range = list(range(idx, idx + steps))
+        if z_range[-1] > end:
+            while z_range[-1] > end:
+                del z_range[-1]
+        z_list_list += [z_range]
+    return z_list_list
 
 
 def parallel_image_processor(
@@ -174,8 +250,10 @@ def parallel_image_processor(
         kwargs: dict = None,
         tif_prefix: str = "img",
         channel: int = 0,
+        source_voxel: Union[Tuple[float, float, float], None] = None,
+        target_voxel: Union[int, float, None] = None,
         timeout: Union[float, None] = 1800,
-        max_processors: int = cpu_count(),
+        max_processors: int = cpu_count(logical=False),
         progress_bar_name: str = " ImgProc",
         compression: Tuple[str, int] = ("ADOBE_DEFLATE", 1),
         resume: bool = True
@@ -209,21 +287,39 @@ def parallel_image_processor(
     if isinstance(destination, str):
         destination = Path(destination)
 
+    if destination is not None:
+        Path(destination).mkdir(exist_ok=True)
+
+    down_sampling_z_steps = 1
+    down_sampled_path = None
+    if source_voxel is not None and target_voxel is not None:
+        down_sampling_z_steps = floor(target_voxel / source_voxel[0])
+        down_sampled_path = destination / f"down_sampled_" \
+                                          f"z{down_sampling_z_steps * source_voxel[0]:.1f}_" \
+                                          f"yz{target_voxel:.1f}um"
+        down_sampled_path.mkdir(exist_ok=True)
+
     args_queue = Queue()
     if isinstance(source, TSVVolume):
         images = source
-        # to test stitching quality first a sample from every 100 z-step will be stitched
-        top_list = []
-        for step in (1000, 100, 10, 1):
-            for idx in range(source.volume.z0, source.volume.z1, step):
-                if idx not in top_list:
-                    args_queue.put(idx)
-                if step > 1:
-                    top_list += [idx]
-        del top_list
         num_images = source.volume.z1 - source.volume.z0
         shape = source.volume.shape[1:3]
         dtype = source.dtype
+        # to test stitching quality first a sample from every 100 z-step will be stitched
+        if down_sampling_z_steps > 1:
+            for ds_z_idx, z_range in enumerate(
+                    calculate_downsampling_z_ranges(source.volume.z0, source.volume.z1, down_sampling_z_steps)):
+                args_queue.put((ds_z_idx, z_range))
+        else:
+            top_list = []
+            for step in (1000, 100, 10, 1):
+                for idx in range(source.volume.z0, source.volume.z1, step):
+                    if idx not in top_list:
+                        args_queue.put([idx])
+                    if step > 1:
+                        top_list += [idx]
+            del top_list
+
     elif source.is_file() and source.suffix.lower() == ".ims":
         print(f"ims file detected. hdf5plugin=v{hdf5plugin.version}")
         with h5py.File(source) as ims_file:
@@ -231,26 +327,32 @@ def parallel_image_processor(
             num_images = img.shape[0]
             shape = img.shape[1:3]
             dtype = img.dtype
-        for idx in range(num_images):
-            args_queue.put(idx)
+        if down_sampling_z_steps > 1:
+            for ds_z_idx, z_range in enumerate(calculate_downsampling_z_ranges(0, num_images, down_sampling_z_steps)):
+                args_queue.put((ds_z_idx, z_range))
+        else:
+            for idx in range(num_images):
+                args_queue.put((idx, [idx]))
         images = str(source)
     elif source.is_dir():
-        images = [str(f) for f in source.iterdir() if f.is_file() and f.suffix.lower() in (".tif", ".tiff", ".raw")]
+        images = [str(f) for f in source.iterdir() if f.is_file() and f.suffix.lower() in (
+            ".tif", ".tiff", ".raw", ".png")]
         num_images = len(images)
         assert num_images > 0
-        for idx in range(num_images):
-            args_queue.put(idx)
+        if down_sampling_z_steps > 1:
+            for ds_z_idx, z_range in enumerate(calculate_downsampling_z_ranges(0, num_images, down_sampling_z_steps)):
+                args_queue.put((ds_z_idx, z_range))
+        else:
+            for idx in range(num_images):
+                args_queue.put((idx, [idx]))
         img = imread_tif_raw_png(Path(images[0]))
         shape = img.shape
         dtype = img.dtype
         manager = Manager()
         images = manager.list(images)
     else:
-        print("source can be either a tsv volume, a ims file path, or 2D tif series folder")
+        print("source can be either a tsv volume, an ims file path, or a 2D tiff series folder")
         raise RuntimeError
-
-    if destination is not None:
-        Path(destination).mkdir(exist_ok=True)
 
     progress_queue = Queue()
     workers = min(max_processors, num_images)
@@ -259,6 +361,7 @@ def parallel_image_processor(
         if progress_queue.qsize() < num_images - worker:
             MultiProcess(
                 progress_queue, args_queue, fun, images, destination, tif_prefix, args, kwargs, shape, dtype,
+                source_voxel=source_voxel, target_voxel=target_voxel, down_sampled_path=down_sampled_path,
                 channel=channel, timeout=timeout, compression=compression, resume=resume).start()
         else:
             print('\n the existing workers finished the job! no more worker is needed.')
@@ -270,6 +373,29 @@ def parallel_image_processor(
     args_queue.close()
     progress_queue.cancel_join_thread()
     progress_queue.close()
+
+    # down-sample on z accurately
+    if down_sampling_z_steps > 1:
+        target_shape_3d = (
+            round(num_images / (target_voxel / source_voxel[0])),
+            round(shape[0] / (target_voxel / source_voxel[1])),
+            round(shape[1] / (target_voxel / source_voxel[2]))
+        )
+        files = sorted(down_sampled_path.glob("*.tif"))
+        with ThreadPoolExecutor(max_processors) as executor:
+            img_stack = tqdm(executor.map(imread_tif_raw_png, files),
+                             total=len(files), desc="loading-down-sampled", unit="img")
+            img_stack = dstack(img_stack)  # yxz format
+            img_stack = rollaxis(img_stack, -1)  # zyx format
+            print("resizing the z-axis ...")
+            img_stack = resize(img_stack, target_shape_3d, preserve_range=True, anti_aliasing=False)
+            print("saving the down-sampled image.")
+            savez(
+                destination / f"down_sampled_zyx{target_voxel:.1f}um.npz",
+                I=img_stack,
+                # xI=array(xId, dtype='object')
+            )  # note specify object to avoid "ragged" warning
+
     return return_code_or_img_list
 
 
