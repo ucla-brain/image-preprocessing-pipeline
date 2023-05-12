@@ -4,6 +4,7 @@ import time
 from numpy import ndarray
 from pathlib import Path
 from tifffile import imread
+from typing import Union
 
 
 def draw_slices(image: ndarray, n=5, channel_ax=0, fig=None, vmin=None, vmax=None, **kwargs):
@@ -242,7 +243,9 @@ class TifStack:
     We assume 16-bit images
     """
 
-    def __init__(self, input_directory: Path, pattern='*.tif'):
+    def __init__(self, input_directory: Union[Path, str], pattern='*.tif'):
+        if isinstance(input_directory, str):
+            input_directory = Path(input_directory)
         self.input_directory = input_directory
         self.pattern = pattern
         self.files = list(input_directory.glob(pattern))
@@ -308,7 +311,7 @@ def downsample_2d_tif_series(
 
     xId = [downsample(x, [d]) for x, d in zip(xI, down)]
     dId = [x[1] - x[0] for x in xId]
-    print(f"output voxel sizes {dId:.2f}")
+    print(f"output voxel sizes {dId}")
 
     # iterate over the dataset
     # we need to save intermediate outputs (each slice) in case of errors

@@ -629,10 +629,10 @@ def process_channel(
     )
     # need_lightsheet_cleaning
     return_code = parallel_image_processor(
-        process_img,
         source=tsv_volume,
         destination=stitched_tif_path,
-        args=(),
+        fun=process_img,
+        # args=(),
         kwargs={
             "bleach_correction_frequency": bleach_correction_frequency,
             "bleach_correction_max_method": False,

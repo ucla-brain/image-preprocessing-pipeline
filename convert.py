@@ -79,11 +79,10 @@ def main(args: Namespace):
             raise RuntimeError
 
         return_code = parallel_image_processor(
-            process_img,
-            input_path,
-            tif_2d_folder,
-            (),
-            {
+            source=input_path,
+            destination=tif_2d_folder,
+            fun=process_img,
+            kwargs={
                 "gaussian_filter_2d": args.gaussian,
                 "down_sample": down_sample,
                 "downsample_method": downsample_method,

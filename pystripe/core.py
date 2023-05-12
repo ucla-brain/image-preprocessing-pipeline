@@ -197,13 +197,11 @@ def imsave_tif(path: Path, img: ndarray, compression: Union[Tuple[str, int], Non
     for attempt in range(1, num_retries):
         try:
             # imwrite(path, data=img, compression=compression_method, compressionargs={'level': compression_level})
-            imwrite(path, data=img, compression=compression)
+            imwrite(path, data=img, compression=compression, predictor=False, tile=(256, 256))
             return
         except KeyboardInterrupt:
             print(f"{PrintColors.WARNING}\ndying from imsave_tif{PrintColors.ENDC}")
-            # imwrite(path, data=img, compression=compression_method, compressionargs={'level': compression_level},
-            # predictor=True, tile=(256,256))
-            imwrite(path, data=img, compression=compression)
+            imwrite(path, data=img, compression=compression, predictor=False, tile=(256, 256))
             die = True
         except (OSError, TypeError, PermissionError) as inst:
             if attempt == num_retries:
@@ -421,6 +419,24 @@ def is_uniform_2d(arr: ndarray) -> Union[bool, None]:
         if not is_uniform:
             return False
         elif val != arr[i, 0]:
+            return False
+    return is_uniform
+
+
+@jit(nopython=True)
+def is_uniform_3d(arr: ndarray) -> Union[bool, None]:
+    n = len(arr)
+    if n <= 0:
+        return None
+    is_uniform: bool = is_uniform_2d(arr[0])
+    if not is_uniform:
+        return False
+    val = arr[0, 0, 0]
+    for i in range(1, n):
+        is_uniform = is_uniform_2d(arr[i])
+        if not is_uniform:
+            return False
+        elif val != arr[i, 0, 0]:
             return False
     return is_uniform
 
@@ -744,9 +760,10 @@ def process_img(
             y_slice_min, y_slice_max = slice_non_zero_box(img_y_max, noise=img_x_noise)
             x_slice_min, x_slice_max = slice_non_zero_box(img_x_max, noise=img_y_noise)
             if verbose:
+                speedup = 100 - (x_slice_max - x_slice_min) * (y_slice_max - y_slice_min) / (
+                        img.shape[0] * img.shape[1]) * 100
                 print(f"slicing: y: {y_slice_min} to {y_slice_max} and x: {x_slice_min} to {x_slice_max},  "
-                      f"performance enhancement: "
-                      f"{100 - (x_slice_max - x_slice_min) * (y_slice_max - y_slice_min) / (img.shape[0] * img.shape[1])*100:.1f}%")
+                      f"performance enhancement: {speedup:.1f}%")
             img = img[y_slice_min:y_slice_max, x_slice_min:x_slice_max]
 
         if bleach_correction_frequency is not None and (dark is None or dark <= 0):
@@ -815,11 +832,16 @@ def process_img(
                 bidirectional=bidirectional,
                 bleach_correction_frequency=bleach_correction_frequency,
                 bleach_correction_max_method=bleach_correction_max_method,
-                bleach_correction_clip_max=img_fg - dark if img_fg is not None and dark is not None and dark > 0 else None,
-                bleach_correction_y_slice_min=correct_slice_value(bleach_correction_y_slice_min, y_slice_min, None),
-                bleach_correction_y_slice_max=correct_slice_value(bleach_correction_y_slice_max, y_slice_min, y_slice_max),
-                bleach_correction_x_slice_min=correct_slice_value(bleach_correction_x_slice_min, x_slice_min, None),
-                bleach_correction_x_slice_max=correct_slice_value(bleach_correction_x_slice_max, x_slice_min, x_slice_max),
+                bleach_correction_clip_max=(img_fg - dark) if (
+                        img_fg is not None and dark is not None and dark > 0) else None,
+                bleach_correction_y_slice_min=correct_slice_value(
+                    bleach_correction_y_slice_min, y_slice_min, None),
+                bleach_correction_y_slice_max=correct_slice_value(
+                    bleach_correction_y_slice_max, y_slice_min, y_slice_max),
+                bleach_correction_x_slice_min=correct_slice_value(
+                    bleach_correction_x_slice_min, x_slice_min, None),
+                bleach_correction_x_slice_max=correct_slice_value(
+                    bleach_correction_x_slice_max, x_slice_min, x_slice_max),
                 verbose=verbose,
             )
 
@@ -1252,7 +1274,8 @@ def progress_manager(progress_queue: Queue, workers: int, total: int,
     return_code = 0
     list_of_outputs = []
     print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
-          f"using {workers} workers. {total} images need to be processed.")
+          f"using {workers} workers. {total} images need to be processed.", flush=True)
+    sleep(1)
     progress_bar = tqdm(total=total, ascii=True, smoothing=0.01, mininterval=1.0, unit=" images", desc=desc)
     progress_bar.refresh()
 
