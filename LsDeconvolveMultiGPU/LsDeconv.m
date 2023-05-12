@@ -429,17 +429,21 @@ function process(inpath, outpath, log_file, info, block, psf, numit, ...
     % sechamore
     delete(gcp("nocreate"));
     min_max_path = fullfile(cache_drive, "min_max.mat");
-    [unique_gpus, ~, gpus_vertical] = unique(sort(gpus(gpus>0)));
-    gpu_count = accumarray(gpus_vertical, 1).';
+    [unique_gpus, ~, ~] = unique(sort(gpus(:)));
+    % [unique_gpus, ~, gpus_vertical] = unique(sort(gpus(gpus>0)));
+    % gpu_count = accumarray(gpus_vertical, 1).';
     clear gpus_vertical;
     
     % initiate locks and semaphors
     semkey_single = 1e3;
+    semkey_loading_base = 1e4;
+
     semaphore_create(semkey_single, 1);
     for idx = 1 : numel(unique_gpus)
         gpu = unique_gpus(idx);
         semaphore_create(gpu, 1);
-        semaphore_create(gpu + semkey_single, max(1, gpu_count(idx) - 1));
+        % semaphore_create(gpu + semkey_single, max(1, gpu_count(idx) - 1));
+        semaphore_create(gpu + semkey_loading_base, 3);
         unlock_gpu(fullfile(tempdir, ['gpu_full_' num2str(gpu)]));
         unlock_gpu(fullfile(tempdir, ['gpu_semi_' num2str(gpu)]));
     end
@@ -471,7 +475,6 @@ function process(inpath, outpath, log_file, info, block, psf, numit, ...
                     stop_criterion, gpus(idx), cache_drive, ...
                     filter, ...
                     starting_block + idx - 1, queue);
-                pause(5);
             end
             delete(pool);
         end
@@ -482,7 +485,7 @@ function process(inpath, outpath, log_file, info, block, psf, numit, ...
     semaphore_destroy(semkey_single);
     for gpu = unique_gpus
         semaphore_destroy(gpu);
-        semaphore_destroy(gpu + semkey_single);
+        semaphore_destroy(gpu + semkey_loading_base);
         unlock_gpu(fullfile(tempdir, ['gpu_full_' num2str(gpu)]));
         unlock_gpu(fullfile(tempdir, ['gpu_semi_' num2str(gpu)]));
     end
@@ -505,7 +508,8 @@ function deconvolve(inpath, psf, numit, damping, ...
     filter, starting_block, queue)
     
     semkey_single = 1e3;
-    semkey_multi = semkey_single + gpu;
+    semkey_loading_base = 1e4;
+    semkey_loading = semkey_loading_base + gpu;
 
     if info.bit_depth == 8
         rawmax = 255;
@@ -538,24 +542,24 @@ function deconvolve(inpath, psf, numit, damping, ...
         x1 = startp(x); x2 = endp(x);
         y1 = startp(y); y2 = endp(y);
         z1 = startp(z); z2 = endp(z);
-        semaphore('wait', semkey_multi);
-        send(queue, ['GPU' num2str(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' is loading ...']);
+        semaphore('wait', semkey_loading);
+        send(queue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' is loading ...']);
         loading_start = tic;
         bl = load_block(inpath, x1, x2, y1, y2, z1, z2);
-        send(queue, ['GPU' num2str(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' is loaded in ' num2str(toc(loading_start))]);
-        semaphore('post', semkey_multi);
+        send(queue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' is loaded in ' num2str(toc(loading_start))]);
+        semaphore('post', semkey_loading);
 
         % get min-max of raw data stack
         if ~ismember(info.bit_depth, [8, 16])
             rawmax_start = tic;
             rawmax = max(max(bl(:)), rawmax);
-            send(queue, ['GPU' num2str(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' rawmax calculated in ' num2str(toc(rawmax_start))]);
+            send(queue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' rawmax calculated in ' num2str(toc(rawmax_start))]);
         end
 
         % deconvolve current block of data
         block_processing_start = tic;
         [bl, lb, ub] = process_block(bl, block, psf, numit, damping, stop_criterion, gpu, filter);
-        send(queue, ['GPU' num2str(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' filters applied in ' num2str(toc(block_processing_start))]);
+        send(queue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' filters applied in ' num2str(toc(block_processing_start))]);
         
         save_start = tic;
         % delete block z_pad
@@ -591,7 +595,7 @@ function deconvolve(inpath, psf, numit, damping, ...
 
         % save block to disk
         save(block_path, 'bl', '-v7.3', '-nocompression');
-        send(queue, ['GPU' num2str(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' saved in ' num2str(toc(save_start))]);
+        send(queue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' saved in ' num2str(toc(save_start))]);
     end
 end
 
@@ -1028,6 +1032,14 @@ function status = islock_gpu(lock_path, gpu, gpu_device, memory_needed)
         status = false;
     else
         semaphore('post', gpu);
+    end
+end
+
+
+function device = current_device(gpu)
+    device = 'CPU';
+    if gpu > 0
+        device = ['GPU' num2str(gpu)];
     end
 end
 
