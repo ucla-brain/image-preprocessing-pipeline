@@ -422,7 +422,7 @@ def process_channel(
             workers=cpu_physical_core_count + 2,
             continue_process=continue_process_pystripe,
             print_input_file_names=print_input_file_names,
-            timeout=600.0,
+            timeout=None,  # 600.0,
             flat=img_flat,
             gaussian_filter_2d=need_gaussian_filter_2d,
             dark=dark,
@@ -632,7 +632,6 @@ def process_channel(
         source=tsv_volume,
         destination=stitched_tif_path,
         fun=process_img,
-        # args=(),
         kwargs={
             "bleach_correction_frequency": bleach_correction_frequency,
             "bleach_correction_max_method": False,
@@ -648,6 +647,8 @@ def process_channel(
             "tile_size": shape[1:3],
             "d_type": tsv_volume.dtype
         },
+        source_voxel=(voxel_size_z, voxel_size_y, voxel_size_x),
+        target_voxel=None if stitch_mip else 20,
         timeout=None,
         max_processors=merge_step_cores,
         progress_bar_name="TSV",

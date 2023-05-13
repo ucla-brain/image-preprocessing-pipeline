@@ -28,7 +28,7 @@ from typing import Tuple, Iterator, List, Callable, Union
 from types import GeneratorType
 from pystripe.raw import raw_imread
 from pystripe.lightsheet_correct import correct_lightsheet, prctl
-from concurrent.futures import ProcessPoolExecutor, TimeoutError
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, TimeoutError
 from concurrent.futures.process import BrokenProcessPool
 from multiprocessing import Process, Queue, cpu_count
 from queue import Empty
@@ -1207,10 +1207,13 @@ class MultiProcessQueueRunner(Process):
         self.replace_timeout_with_dummy = replace_timeout_with_dummy
 
     def run(self):
-        running = True
-        pool = ProcessPoolExecutor(max_workers=1)
-        fun = self.function
+        running_next = True
         timeout = self.timeout
+        if timeout:
+            pool = ProcessPoolExecutor(max_workers=1)
+        else:
+            pool = ThreadPoolExecutor(max_workers=1)
+        function = self.function
         queue_timeout = 20
         while not self.die and not self.args_queue.qsize() == 0:
             try:
@@ -1219,7 +1222,7 @@ class MultiProcessQueueRunner(Process):
                 queue_timeout = max(queue_timeout, 0.9 * queue_timeout + 0.3 * (time() - queue_start_time))
                 try:
                     start_time = time()
-                    future = pool.submit(fun, **args)
+                    future = pool.submit(function, **args)
                     future.result(timeout=timeout)
                     if timeout is not None:
                         timeout = max(timeout, 0.9 * timeout + 0.3 * (time() - start_time))
@@ -1244,8 +1247,9 @@ class MultiProcessQueueRunner(Process):
                               f"\nwarning: timeout reached for processing input file:\n\t{args['file_name']}\n\t"
                               f"\nexception instance: {type(inst)}"
                               f"{PrintColors.ENDC}")
-                    pool.shutdown()
-                    pool = ProcessPoolExecutor(max_workers=1)
+                    if isinstance(pool, ProcessPoolExecutor):
+                        pool.shutdown()
+                        pool = ProcessPoolExecutor(max_workers=1)
                 except KeyboardInterrupt:
                     self.die = True
                     # while not self.args_queue.qsize() == 0:
@@ -1261,12 +1265,12 @@ class MultiProcessQueueRunner(Process):
                         f"\nexception arguments: {inst.args}"
                         f"\nexception: {inst}"
                         f"{PrintColors.ENDC}")
-                self.progress_queue.put(running)
+                self.progress_queue.put(running_next)
             except Empty:
                 self.die = True
-        pool.shutdown()
-        running = False
-        self.progress_queue.put(running)
+        if isinstance(pool, ProcessPoolExecutor):
+            pool.shutdown()
+        self.progress_queue.put(not running_next)
 
 
 def progress_manager(progress_queue: Queue, workers: int, total: int,
