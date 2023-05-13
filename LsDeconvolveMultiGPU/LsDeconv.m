@@ -430,6 +430,7 @@ function process(inpath, outpath, log_file, info, block, psf, numit, ...
     delete(gcp("nocreate"));
     min_max_path = fullfile(cache_drive, "min_max.mat");
     [unique_gpus, ~, ~] = unique(sort(gpus(:)));
+    unique_gpus = unique_gpus.';
     % [unique_gpus, ~, gpus_vertical] = unique(sort(gpus(gpus>0)));
     % gpu_count = accumarray(gpus_vertical, 1).';
     clear gpus_vertical;
