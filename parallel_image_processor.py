@@ -230,7 +230,7 @@ class MultiProcess(Process):
                         print(
                             f"{PrintColors.WARNING}"
                             f"\nwarning: process failed for image index {idx}."
-                            f"\n\targs: {(tif_save_path, *args)}"
+                            f"\n\targs: {tif_save_path if args is None else (tif_save_path, *args)}"
                             f"\n\tkwargs: {kwargs}"
                             f"\n\texception instance: {type(inst)}"
                             f"\n\texception arguments: {inst.args}"

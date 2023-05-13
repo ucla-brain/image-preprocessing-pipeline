@@ -591,7 +591,8 @@ function deconvolve(inpath, psf, numit, damping, ...
         % consolidate and save block stats
         deconvmax = max(ub, deconvmax);
         deconvmin = min(lb, deconvmin);
-        save(min_max_path, "deconvmin", "deconvmax", "rawmax", "-v7.3", "-nocompression");
+        % save(min_max_path, "deconvmin", "deconvmax", "rawmax", "-v7.3", "-nocompression");
+        save(min_max_path, "deconvmin", "deconvmax", "rawmax", "-v7.3", "–compress");
         semaphore('post', semkey_single);
 
         % save block to disk
@@ -930,7 +931,7 @@ function postprocess_save(...
     end
     clear num_tif_files;
 
-    pool = parpool('local', 3, 'IdleTimeout', Inf);
+    pool = parpool('local', 16, 'IdleTimeout', Inf);
     async_load(1 : block.nx * block.ny) = parallel.FevalFuture;
 
     for nz = starting_z_block : block.nz
@@ -1048,7 +1049,6 @@ function status = islock_gpu(lock_path, gpu, gpu_device, memory_needed)
         semaphore('post', gpu);
     end
 end
-
 
 function device = current_device(gpu)
     device = 'CPU';
@@ -1337,9 +1337,9 @@ function [lb, ub] = deconvolved_stats(deconvolved)
     ub = stats(2);
 end
 
-function value = my_load(fname)
+function bl = my_load(fname)
     data = load(fname);
-    value = data.bl;
+    bl = data.bl;
 end
 
 function save_image(R, outpath, imagenr_start, rawmax, flip_upside_down)

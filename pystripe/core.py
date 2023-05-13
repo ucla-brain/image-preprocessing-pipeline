@@ -7,7 +7,7 @@ from numpy import mean as np_mean
 from numpy import median as np_median
 from numpy import dtype as np_d_type
 from numpy import uint8, uint16, float32, float64, ndarray, generic, zeros, broadcast_to, exp, expm1, log1p, \
-    cumsum, arange, unique, interp, pad, clip, where, rot90, flipud, dot, reshape, iinfo, nonzero, append
+    cumsum, arange, unique, interp, pad, clip, where, rot90, flipud, dot, reshape, iinfo, nonzero, append, isnan
 from scipy.fftpack import rfft, fftshift, irfft
 from scipy.ndimage import gaussian_filter as gaussian_filter_nd
 from scipy.signal import butter, sosfiltfilt
@@ -682,6 +682,34 @@ def filter_streaks(
     return img.astype(d_type)
 
 
+def calculate_down_sampled_size(tile_size, down_sample):
+    if isinstance(down_sample, (int, float)):
+        tile_size = (ceil(size / down_sample) for size in tile_size)
+    elif isinstance(down_sample, (tuple, list)):
+        tile_size = list(tile_size)
+        for idx, down_sample_factor in enumerate(down_sample):
+            if down_sample_factor is not None:
+                tile_size[idx] = ceil(tile_size[idx] / down_sample_factor)
+    return tile_size
+
+
+def correct_slice_value(user_value: [int, None], auto_estimated_min: [int, None], auto_estimated_max: [int, None]):
+    if user_value is None:
+        return None
+    else:
+        correction = 0
+        if auto_estimated_min is not None:
+            if user_value > auto_estimated_min:
+                correction = auto_estimated_min
+            else:
+                # user_value is min and slicing amount requested by user is already taken care of
+                return None
+
+        if auto_estimated_max is not None and user_value > auto_estimated_max:
+            correction += user_value - auto_estimated_max
+        return user_value - correction
+
+
 def process_img(
         img: ndarray,
         flat: ndarray = None,
@@ -724,102 +752,96 @@ def process_img(
     if d_type is None:
         d_type = img.dtype
 
-    if flat is not None:
-        if tile_size == flat.shape:
-            img = img / flat
-        else:
-            print(f"{PrintColors.WARNING}"
-                  f"warning: image and flat arrays had different shapes"
-                  f"{PrintColors.ENDC}")
+    if is_uniform_2d(img):
+        if new_size is not None:
+            tile_size = new_size
+        elif down_sample is not None:
+            tile_size = calculate_down_sampled_size(tile_size, down_sample)
+        if rotate in (90, 270):
+            tile_size = (tile_size[1], tile_size[0])
 
-    y_slice_min = y_slice_max = x_slice_min = x_slice_max = None
-    img_fg = None
-    if bleach_correction_frequency is not None or exclude_dark_edges_set_them_to_zero:
-        noise_percentile = 5
-        foreground_percentile = 25
-        img_x_max = np_max(img, axis=0)
-        img_y_max = np_max(img, axis=1)
-        img_x_max_min, img_x_max_max = min_max_1d(img_x_max)
-        img_y_max_min, img_y_max_max = min_max_1d(img_y_max)
-        img_max = max(img_x_max_max, img_y_max_max)
-        img_min = np_min(img)
-        img_uniform = False if img_max > img_min else True
-        img_x_noise, img_x_fg = prctl(img_x_max, (noise_percentile, foreground_percentile))
-        img_y_noise, img_y_fg = prctl(img_y_max, (noise_percentile, foreground_percentile))
-        img_noise = min(img_x_noise, img_y_noise)
-        # img_noise = min(img_y_max_min, img_x_max_min)
-        img_fg = bleach_correction_clip_max
-        if bleach_correction_clip_max is None:
-            img_fg = int(np_mean(append(img_x_max[img_x_max < img_x_fg], img_y_max[img_y_max < img_y_fg])))
-        if verbose:
-            print(f"min={img_min}, x_max_min={img_x_max_min}, y_max_min={img_y_max_min}, \n"
-                  f"noise={img_noise}, x_noise={img_x_noise}, y_noise={img_y_noise}, \n"
-                  f"foreground={img_fg}, x_foreground={img_x_fg}, y_foreground {img_y_fg}, \n"
-                  f"max={img_max}, x_max_max={img_x_max_max}, y_max_max={img_y_max_max}.")
-        if exclude_dark_edges_set_them_to_zero:
-            y_slice_min, y_slice_max = slice_non_zero_box(img_y_max, noise=img_x_noise)
-            x_slice_min, x_slice_max = slice_non_zero_box(img_x_max, noise=img_y_noise)
-            if verbose:
-                speedup = 100 - (x_slice_max - x_slice_min) * (y_slice_max - y_slice_min) / (
-                        img.shape[0] * img.shape[1]) * 100
-                print(f"slicing: y: {y_slice_min} to {y_slice_max} and x: {x_slice_min} to {x_slice_max},  "
-                      f"performance enhancement: {speedup:.1f}%")
-            img = img[y_slice_min:y_slice_max, x_slice_min:x_slice_max]
+        if convert_to_16bit:
+            d_type = uint16
+        elif convert_to_8bit:
+            d_type = uint8
 
-        if bleach_correction_frequency is not None and (dark is None or dark <= 0):
-            dark = img_noise
-
+        img = zeros(shape=tile_size, dtype=d_type)
     else:
-        img_uniform = is_uniform_2d(img)
+        if flat is not None:
+            if tile_size == flat.shape:
+                img = img / flat
+            else:
+                print(f"{PrintColors.WARNING}"
+                      f"warning: image and flat arrays had different shapes"
+                      f"{PrintColors.ENDC}")
 
-    if gaussian_filter_2d:
-        img = gaussian(img, sigma=1.0, preserve_range=True, truncate=2)
+        img_fg = y_slice_min = y_slice_max = x_slice_min = x_slice_max = None
+        if bleach_correction_frequency is not None or exclude_dark_edges_set_them_to_zero:
+            noise_percentile = 5
+            foreground_percentile = 25
+            img_x_max = np_max(img, axis=0)
+            img_y_max = np_max(img, axis=1)
+            img_x_max_min, img_x_max_max = min_max_1d(img_x_max)
+            img_y_max_min, img_y_max_max = min_max_1d(img_y_max)
+            img_max = max(img_x_max_max, img_y_max_max)
+            img_min = np_min(img)
+            img_x_noise, img_x_fg = prctl(img_x_max, (noise_percentile, foreground_percentile))
+            img_y_noise, img_y_fg = prctl(img_y_max, (noise_percentile, foreground_percentile))
+            img_noise = min(img_x_noise, img_y_noise)
+            # img_noise = min(img_y_max_min, img_x_max_min)
+            img_fg = bleach_correction_clip_max
+            if bleach_correction_clip_max is None:
+                img_fg = append(img_x_max[img_x_max < img_x_fg], img_y_max[img_y_max < img_y_fg])
+                img_fg = np_mean(img_fg[~isnan(img_fg)])
+                if img_fg:
+                    img_fg = int(img_fg)
+                else:
+                    bleach_correction_frequency = None
+                    print(f"{PrintColors.WARNING}"
+                          f"could not calculate img_fg. bleach correction is disabled."
+                          f"{PrintColors.ENDC}")
+            if verbose:
+                print(f"min={img_min}, x_max_min={img_x_max_min}, y_max_min={img_y_max_min}, \n"
+                      f"noise={img_noise}, x_noise={img_x_noise}, y_noise={img_y_noise}, \n"
+                      f"foreground={img_fg}, x_foreground={img_x_fg}, y_foreground {img_y_fg}, \n"
+                      f"max={img_max}, x_max_max={img_x_max_max}, y_max_max={img_y_max_max}.")
+            if exclude_dark_edges_set_them_to_zero:
+                y_slice_min, y_slice_max = slice_non_zero_box(img_y_max, noise=img_x_noise)
+                x_slice_min, x_slice_max = slice_non_zero_box(img_x_max, noise=img_y_noise)
+                if verbose:
+                    speedup = 100 - (x_slice_max - x_slice_min) * (y_slice_max - y_slice_min) / (
+                            img.shape[0] * img.shape[1]) * 100
+                    print(f"slicing: y: {y_slice_min} to {y_slice_max} and x: {x_slice_min} to {x_slice_max},  "
+                          f"performance enhancement: {speedup:.1f}%")
+                img = img[y_slice_min:y_slice_max, x_slice_min:x_slice_max]
 
-    if down_sample is not None:
-        downsample_method = downsample_method.lower()
-        if downsample_method == 'min':
-            downsample_method = np_min
-        elif downsample_method == 'max':
-            downsample_method = np_max
-        elif downsample_method == 'mean':
-            downsample_method = np_mean
-        elif downsample_method == 'median':
-            downsample_method = np_median
-        else:
-            print(f"{PrintColors.FAIL}unsupported down-sampling method: {downsample_method}{PrintColors.ENDC}")
-            raise RuntimeError
-        img = block_reduce(img, block_size=down_sample, func=downsample_method)
-        if isinstance(down_sample, (int, float)):
-            tile_size = (ceil(size / down_sample) for size in tile_size)
-        elif isinstance(down_sample, (tuple, list)):
-            tile_size = list(tile_size)
-            for idx, down_sample_factor in enumerate(down_sample):
-                if down_sample_factor is not None:
-                    tile_size[idx] = ceil(tile_size[idx] / down_sample_factor)
+            if bleach_correction_frequency is not None and (dark is None or dark <= 0):
+                dark = img_noise
 
-    if not img_uniform:
-        # dark subtraction is like baseline subtraction in Imaris
+        if gaussian_filter_2d:
+            img = gaussian(img, sigma=0.5, preserve_range=True, truncate=2)
+
+        if down_sample is not None:
+            downsample_method = downsample_method.lower()
+            if downsample_method == 'min':
+                downsample_method = np_min
+            elif downsample_method == 'max':
+                downsample_method = np_max
+            elif downsample_method == 'mean':
+                downsample_method = np_mean
+            elif downsample_method == 'median':
+                downsample_method = np_median
+            else:
+                print(f"{PrintColors.FAIL}unsupported down-sampling method: {downsample_method}{PrintColors.ENDC}")
+                raise RuntimeError
+            img = block_reduce(img, block_size=down_sample, func=downsample_method)
+            tile_size = calculate_down_sampled_size(tile_size, down_sample)
+
+            # dark subtraction is like baseline subtraction in Imaris
         if dark is not None and dark > 0:
             img = where(img > dark, img - dark, 0)  # Subtract the dark offset
             if verbose:
                 print(f"dark value of {dark} is subtracted.")
-
-        def correct_slice_value(user_value: [int, None], auto_estimated_min: [int, None],
-                                auto_estimated_max: [int, None]):
-            if user_value is None:
-                return None
-            else:
-                correction = 0
-                if auto_estimated_min is not None:
-                    if user_value > auto_estimated_min:
-                        correction = auto_estimated_min
-                    else:
-                        # user_value is min and slicing amount requested by user is already taken care of
-                        return None
-
-                if auto_estimated_max is not None and user_value > auto_estimated_max:
-                    correction += user_value - auto_estimated_max
-                return user_value - correction
 
         if bleach_correction_frequency is not None or sigma > (0, 0):
             img = filter_streaks(
@@ -863,36 +885,36 @@ def process_img(
                 lightsheet_vs_background=lightsheet_vs_background
             )
 
-    if exclude_dark_edges_set_them_to_zero:
-        img_zero = zeros(shape=tile_size, dtype=d_type)
-        img_zero[y_slice_min:y_slice_max, x_slice_min:x_slice_max] = img.astype(d_type)
-        img = img_zero
-        del img_zero
+        if exclude_dark_edges_set_them_to_zero:
+            img_zero = zeros(shape=tile_size, dtype=d_type)
+            img_zero[y_slice_min:y_slice_max, x_slice_min:x_slice_max] = img.astype(d_type)
+            img = img_zero
+            del img_zero
 
-    if new_size is not None and tile_size < new_size:
-        img = resize(img, new_size, preserve_range=True, anti_aliasing=True)
-    elif new_size is not None and tile_size > new_size:
-        img = resize(img, new_size, preserve_range=True, anti_aliasing=False)
+        if new_size is not None and tile_size < new_size:
+            img = resize(img, new_size, preserve_range=True, anti_aliasing=True)
+        elif new_size is not None and tile_size > new_size:
+            img = resize(img, new_size, preserve_range=True, anti_aliasing=False)
 
-    if convert_to_16bit and img.dtype not in (uint16, 'uint16'):
-        img = convert_to_16bit_fun(img)
-    elif convert_to_8bit and img.dtype not in (uint8, 'uint8'):
-        img = convert_to_8bit_fun(img, bit_shift_to_right=bit_shift_to_right)
-    elif np_d_type(d_type).kind in ("u", "i"):
-        clip(img, iinfo(d_type).min, iinfo(d_type).max, out=img)
-        img = img.astype(d_type)
-    else:
-        img = img.astype(d_type)
+        if convert_to_16bit and img.dtype not in (uint16, 'uint16'):
+            img = convert_to_16bit_fun(img)
+        elif convert_to_8bit and img.dtype not in (uint8, 'uint8'):
+            img = convert_to_8bit_fun(img, bit_shift_to_right=bit_shift_to_right)
+        elif np_d_type(d_type).kind in ("u", "i"):
+            clip(img, iinfo(d_type).min, iinfo(d_type).max, out=img)
+            img = img.astype(d_type)
+        else:
+            img = img.astype(d_type)
 
-    if flip_upside_down:
-        img = flipud(img)
+        if flip_upside_down:
+            img = flipud(img)
 
-    if rotate == 90:
-        img = rot90(img, 1)
-    elif rotate == 180:
-        img = rot90(img, 2)
-    elif rotate == 270:
-        img = rot90(img, 3)
+        if rotate == 90:
+            img = rot90(img, 1)
+        elif rotate == 180:
+            img = rot90(img, 2)
+        elif rotate == 270:
+            img = rot90(img, 3)
 
     return img
 

@@ -487,7 +487,7 @@ def process_channel(
         max_subvolume_depth = 100
         subvolume_depth = int(10 if objective == '40x' else min(subvolume_depth, max_subvolume_depth))
         alignment_cores: int = 1
-        memory_needed_per_thread = 32 * subvolume_depth  # 64 or 32 or 25
+        memory_needed_per_thread = 64 * subvolume_depth  # 64 or 32 or 25
         if isinstance(new_tile_size, tuple):
             for resolution in new_tile_size:
                 memory_needed_per_thread *= resolution
@@ -636,6 +636,7 @@ def process_channel(
             "bleach_correction_frequency": bleach_correction_frequency,
             "bleach_correction_max_method": False,
             "bleach_correction_y_slice_max": None,
+            "exclude_dark_edges_set_them_to_zero": True,
             "threshold": None,
             "sigma": bleach_correction_sigma,
             "bidirectional": True if need_bleach_correction else False,
