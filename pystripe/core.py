@@ -1005,7 +1005,7 @@ def read_filter_save(
     z_idx : int
         z index of DCIMG slice. Only applicable to DCIMG files.
     rotate : int
-        Rotate the image. One of 0, 90, 180 or 270 degree values are accepted. Default is 0.
+        Rotate the image. One of 0, 90, 180 or 270 degree values are accepted. Default is 0 (no rotation).
     flip_upside_down : bool
         flip the image parallel to y-axis. Default is false.
     lightsheet : bool

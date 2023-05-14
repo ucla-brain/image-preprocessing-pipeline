@@ -1,4 +1,3 @@
-import os
 import h5py
 import hdf5plugin
 from multiprocessing import Queue, Process, Manager, freeze_support
@@ -8,9 +7,11 @@ from queue import Empty
 from concurrent.futures import ProcessPoolExecutor, TimeoutError
 from concurrent.futures.process import BrokenProcessPool
 from typing import List, Tuple, Union, Callable
-from numpy import zeros, float32, dstack, rollaxis, savez_compressed, array, maximum
+from numpy import zeros, float32, dstack, rollaxis, savez_compressed, array, maximum, rot90
 from numpy import max as np_max
 from numpy import mean as np_mean
+from numpy import sqrt as np_sqrt
+from numpy import floor as np_floor
 from pathlib import Path
 from supplements.cli_interface import PrintColors, date_time_now
 from pystripe.core import imread_tif_raw_png, imsave_tif, progress_manager, is_uniform_2d, is_uniform_3d
@@ -20,7 +21,7 @@ from tqdm import tqdm
 from math import ceil, floor, sqrt
 from skimage.measure import block_reduce
 from skimage.transform import resize
-
+# import os
 # os.environ['MKL_NUM_THREADS'] = '1'
 # os.environ['NUMEXPR_NUM_THREADS'] = '1'
 # os.environ['OMP_NUM_THREADS'] = '1'
@@ -46,6 +47,7 @@ class MultiProcess(Process):
             source_voxel: Union[Tuple[float, float, float], None] = None,
             target_voxel: Union[int, float, None] = None,
             down_sampled_path: Union[Path, None] = None,
+            rotation: int = 0,
             channel: int = 0,
             timeout: Union[float, None] = 1800,
             resume: bool = True,
@@ -65,7 +67,7 @@ class MultiProcess(Process):
             assert images.suffix.lower() == ".ims"
             self.is_ims = True
         else:
-            assert Path(images[0]).suffix.lower() in (".tif", ".tiff", ".raw")
+            assert Path(images[0]).suffix.lower() in (".tif", ".tiff", ".raw", ".png")
         self.channel = channel
         self.images = images
         self.save_path = save_path
@@ -81,6 +83,37 @@ class MultiProcess(Process):
         self.source_voxel = source_voxel
         self.target_voxel = target_voxel
         self.down_sampled_path = down_sampled_path
+        self.target_shape = None
+        self.down_sampling_methods = None
+        self.calculate_down_sampling_target(shape, rotation in (90, 270))
+        self.rotation = rotation
+
+    def calculate_down_sampling_target(self, new_shape: Tuple[int, int], is_rotated: bool):
+        # calculate voxel size change
+        new_shape: array = array(new_shape)
+        new_voxel_size: tuple = self.source_voxel
+        if is_rotated:
+            new_voxel_size[1] *= self.shape[0] / new_shape[1]
+            new_voxel_size[2] *= self.shape[1] / new_shape[0]
+            new_voxel_size[1], new_voxel_size[2] = new_voxel_size[2], new_voxel_size[1]
+        else:
+            new_voxel_size[1] *= self.shape[0] / new_shape[0]
+            new_voxel_size[2] *= self.shape[1] / new_shape[1]
+
+        if new_voxel_size != self.source_voxel:
+            print(f"image processing function changed the voxel size: {new_voxel_size}")
+
+        reduction_times = self.target_voxel / array(new_voxel_size[1:3])
+        target_shape = new_shape / reduction_times
+        self.target_shape = target_shape.round().tolist()
+        reduction_factors = np_floor(np_sqrt(reduction_times))
+        down_sampling_method_y = list(np_max if i % 2 == 0 else np_mean for i in range(reduction_factors[0]))
+        down_sampling_method_x = list(np_mean if i % 2 == 0 else np_max for i in range(reduction_factors[1]))
+        if reduction_factors[0] > reduction_factors[1]:
+            down_sampling_method_x += [None, ] * (reduction_factors[0] - reduction_factors[1])
+        elif reduction_factors[0] < reduction_factors[1]:
+            down_sampling_method_y += [None, ] * (reduction_factors[1] - reduction_factors[0])
+        self.down_sampling_methods = tuple(zip(down_sampling_method_y, down_sampling_method_x))
 
     def run(self):
         running_next: bool = True
@@ -106,24 +139,13 @@ class MultiProcess(Process):
         resume = self.resume
         compression = self.compression
         down_sampled_path = self.down_sampled_path
+        rotation = self.rotation
 
         need_down_sampling = False
-        down_sampling_methods, target_shape, down_sampling_method_z = None, None, None
+        down_sampling_method_z = None
         if self.source_voxel is not None and self.target_voxel is not None and shape is not None:
             need_down_sampling = True
-            source_dz, source_dy, source_dx = self.source_voxel
-            target_voxel = self.target_voxel
-            reduction_times_y, reduction_times_x = target_voxel / source_dy, target_voxel / source_dx
-            target_shape = (round(shape[0] / reduction_times_y), round(shape[1] / reduction_times_x))
-            reduction_factor_y, reduction_factor_x = floor(sqrt(reduction_times_y)), floor(sqrt(reduction_times_x))
-            down_sampling_method_y = list(np_max if i % 2 == 0 else np_mean for i in range(reduction_factor_y))
-            down_sampling_method_x = list(np_mean if i % 2 == 0 else np_max for i in range(reduction_factor_x))
-            if reduction_factor_y > reduction_factor_x:
-                down_sampling_method_x += [None, ] * (reduction_factor_y - reduction_factor_x)
-            elif reduction_factor_y < reduction_factor_x:
-                down_sampling_method_y += [None, ] * (reduction_factor_x - reduction_factor_y)
-            down_sampling_methods = tuple(zip(down_sampling_method_y, down_sampling_method_x))
-            reduction_factor_z = ceil(sqrt(target_voxel / source_dz))
+            reduction_factor_z = ceil(sqrt(self.target_voxel / self.source_voxel[0]))
             # the last down-sampling for z step should be based on np_max to ensure max brightness
             if reduction_factor_z % 2 == 0:
                 down_sampling_method_z = tuple(np_mean if i % 2 == 0 else np_max for i in range(reduction_factor_z))
@@ -151,7 +173,7 @@ class MultiProcess(Process):
                         for _ in range(len(indices)):
                             self.progress_queue.put(running_next)
                         continue
-                    z_stack = zeros((len(indices),) + target_shape, dtype=float32)
+                    z_stack = zeros((len(indices),) + self.target_shape, dtype=float32)
 
                 for idx_z, idx in enumerate(indices):
                     tif_save_path = save_path / f"{tif_prefix}_{idx:06}.tif"
@@ -191,24 +213,36 @@ class MultiProcess(Process):
                                     img = function(img, **kwargs)
                                 else:
                                     img = function(img)
-                                if img.shape != post_processed_shape or img.dtype != post_processed_d_type:
-                                    post_processed_shape = img.shape
-                                    post_processed_d_type = img.dtype
+
+                            if rotation == 90:
+                                img = rot90(img, 1)
+                            elif rotation == 180:
+                                img = rot90(img, 2)
+                            elif rotation == 270:
+                                img = rot90(img, 3)
+
+                            if is_tsv or is_ims or function is not None or rotation in (90, 180, 270):
                                 imsave_tif(tif_save_path, img, compression=compression)
 
+                            if img.shape != post_processed_shape or img.dtype != post_processed_d_type or \
+                                    rotation in (90, 270):
+                                post_processed_shape = img.shape
+                                post_processed_d_type = img.dtype
+                                self.calculate_down_sampling_target(post_processed_shape, rotation in (90, 270))
+
                         # down-sampling on xy
-                        if need_down_sampling and target_shape is not None and down_sampling_methods is not None:
+                        if need_down_sampling and self.target_shape is not None and self.down_sampling_methods is not None:
                             if is_uniform_2d(img):
-                                z_stack[idx_z] = zeros(target_shape, dtype=float32)
+                                z_stack[idx_z] = zeros(self.target_shape, dtype=float32)
                             else:
                                 img = img.astype(float32)
-                                for y_method, x_method in down_sampling_methods:
-                                    if y_method is not None and ceil(img.shape[0] / 2) >= target_shape[0]:
+                                for y_method, x_method in self.down_sampling_methods:
+                                    if y_method is not None and ceil(img.shape[0] / 2) >= self.target_shape[0]:
                                         img = block_reduce(img, block_size=(2, 1), func=y_method)
-                                    if x_method is not None and ceil(img.shape[1] / 2) >= target_shape[1]:
+                                    if x_method is not None and ceil(img.shape[1] / 2) >= self.target_shape[1]:
                                         img = block_reduce(img, block_size=(1, 2), func=x_method)
                                 # print(img.shape, end='')
-                                img = resize(img, target_shape, preserve_range=True, anti_aliasing=True)
+                                img = resize(img, self.target_shape, preserve_range=True, anti_aliasing=True)
                                 z_stack[idx_z] = img.astype(float32)
 
                     except (BrokenProcessPool, TimeoutError):
@@ -243,7 +277,8 @@ class MultiProcess(Process):
                 # approximate down-sampling on the z-axis
                 if need_down_sampling and down_sampling_method_z is not None and z_stack is not None:
                     if is_uniform_3d(z_stack):
-                        imsave_tif(down_sampled_tif_path, zeros(target_shape, dtype=float32), compression=compression)
+                        imsave_tif(down_sampled_tif_path, zeros(self.target_shape, dtype=float32),
+                                   compression=compression)
                     else:
                         for z_method in down_sampling_method_z:
                             if z_method is not None and z_stack.shape[0] > 1:
@@ -281,6 +316,7 @@ def parallel_image_processor(
         channel: int = 0,
         source_voxel: Union[Tuple[float, float, float], None] = None,
         target_voxel: Union[int, float, None] = None,
+        rotation: int = 0,
         timeout: Union[float, None] = 1800,
         max_processors: int = cpu_count(logical=False),
         progress_bar_name: str = " ImgProc",
@@ -289,7 +325,9 @@ def parallel_image_processor(
 ):
     """
     fun: Callable
-        is a function that process images
+        is a function that process images.
+        Note: the function should not rotate the image if down-sampling by parallel image processor is required.
+        Use rotate option of parallel image processor instead, which is safe for down-sampling.
     source: Path or str
         path to a folder contacting 2d tif or raw series or path to an ims file. Hierarchical model is not supported.
     destination: Path, str or None
@@ -306,8 +344,11 @@ def parallel_image_processor(
         voxel sizes of the image in um and zyx order.
     target_voxel: float
         down-sampled isotropic voxel size in um.
+    rotation: int
+        Rotate the image. One of 0, 90, 180 or 270 degree values are accepted. Default is 0 (no rotation).
     timeout: float
-        max time in seconds to waite for each image to be processed not including the save time
+        max time in seconds to waite for each image to be processed not including the save time.
+        Note: requesting timeout has some computational overhead in the current implementation.
     max_processors: int
         maximum number of processors
     chunks: int
@@ -387,17 +428,23 @@ def parallel_image_processor(
     down_sampled_path = None
     if need_down_sampling:
         shape_3d = array((num_images, ) + shape)
-        reduction_times = target_voxel / array(source_voxel)
+        new_source_voxel = source_voxel
+        if rotation in (90, 270):
+            shape_3d = array((num_images, shape[1], shape[0]))
+            new_source_voxel = (source_voxel[0], source_voxel[2], source_voxel[1])
+
+        reduction_times = target_voxel / array(new_source_voxel)
         target_shape = shape_3d / reduction_times
         target_shape_remainder = target_shape - target_shape.round()
-        target_voxel_actual = maximum(target_voxel + target_shape_remainder / target_shape.round(), source_voxel)
+        target_voxel_actual = maximum(target_voxel + target_shape_remainder / target_shape.round(), new_source_voxel)
         print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
-              f"{PrintColors.BLUE}down-sampling: {PrintColors.ENDC}"
-              f"actual voxel sizes zyx: {' '.join(target_voxel_actual.round(3).astype(str))}")
+              f"{PrintColors.BLUE}down-sampling: {PrintColors.ENDC}\n"
+              f"\tpost-processed shape zyx: {' '.join(target_shape.round(0).astype(str))}\n"
+              f"\tactual voxel sizes zyx: {' '.join(target_voxel_actual.round(3).astype(str))}")
 
         down_sampled_path = destination / f"down_sampled_" \
-                                          f"z{down_sampling_z_steps * source_voxel[0]:.1f}_" \
-                                          f"yz{target_voxel:.1f}um"
+                                          f"z{down_sampling_z_steps * new_source_voxel[0]:.1f}_" \
+                                          f"yx{target_voxel:.1f}um"
         down_sampled_path.mkdir(exist_ok=True)
 
     progress_queue = Queue()
@@ -408,7 +455,7 @@ def parallel_image_processor(
             MultiProcess(
                 progress_queue, args_queue, fun, images, destination, tif_prefix, args, kwargs, shape, dtype,
                 source_voxel=source_voxel, target_voxel=target_voxel, down_sampled_path=down_sampled_path,
-                channel=channel, timeout=timeout, compression=compression, resume=resume).start()
+                rotation=rotation, channel=channel, timeout=timeout, compression=compression, resume=resume).start()
         else:
             print('\n the existing workers can finish the job! no more workers are needed.')
             workers = worker
@@ -429,6 +476,8 @@ def parallel_image_processor(
             round(shape[0] / (target_voxel / source_voxel[1])),
             round(shape[1] / (target_voxel / source_voxel[2]))
         )
+        if rotation in (90, 270):
+            target_shape_3d[1], target_shape_3d[2] = target_shape_3d[2], target_shape_3d[1]
         files = sorted(down_sampled_path.glob("*.tif"))
         with ThreadPoolExecutor(max_processors) as pool:
             img_stack = pool.map(imread_tif_raw_png, tqdm(files, desc="loading", unit="images"))
