@@ -931,9 +931,8 @@ function postprocess_save(...
     end
     clear num_tif_files;
 
-    pool = parpool('local', 16, 'IdleTimeout', Inf);
+    pool = parpool('local', 8, 'IdleTimeout', Inf);
     async_load(1 : block.nx * block.ny) = parallel.FevalFuture;
-
     for nz = starting_z_block : block.nz
         disp(['mounting layer ' num2str(nz) ' from ' num2str(block.nz)]);
 
@@ -945,7 +944,7 @@ function postprocess_save(...
                 R = zeros(info.x, info.y, p2(blnr, z) - p1(blnr, z) + 1 - 2*block.z_pad, 'single');
             end
         end
-
+        
         for j = 1 : block.nx * block.ny
              async_load(j) = pool.parfeval(@my_load, 1, blocklist(blnr+j-1));
         end
