@@ -592,7 +592,7 @@ function deconvolve(inpath, psf, numit, damping, ...
         deconvmax = max(ub, deconvmax);
         deconvmin = min(lb, deconvmin);
         % save(min_max_path, "deconvmin", "deconvmax", "rawmax", "-v7.3", "-nocompression");
-        save(min_max_path, "deconvmin", "deconvmax", "rawmax", "-v7.3", "–compress");
+        save(min_max_path, "deconvmin", "deconvmax", "rawmax", "-v7.3");
         semaphore('post', semkey_single);
 
         % save block to disk
@@ -957,12 +957,16 @@ function postprocess_save(...
                 file_path_parts = strsplit(blocklist(blnr), '/');
             end
             file_name = char(file_path_parts(end));
-            disp(['   loading block ' num2str(j) ':' num2str(block.nx * block.ny) ' file ' file_name]);
+            
             % R( p1(blnr, x) : p2(blnr, x), p1(blnr, y) : p2(blnr, y), :) = my_load(blocklist(blnr));
             time_out_start = tic;
             async_load(j).wait('finished', time_out); % timeout in seconds
-            R(p1(blnr, x) : p2(blnr, x), p1(blnr, y) : p2(blnr, y), :) = async_load(j).fetchOutputs;
-            time_out = 0.9*time_out + 0.3*toc(time_out_start);
+            bl = async_load(j).fetchOutputs;
+            loading_time = toc(time_out_start);
+            time_out = 0.9 * time_out + 0.3 * loading_time;
+            asigment_time_start = tic;
+            R(p1(blnr, x) : p2(blnr, x), p1(blnr, y) : p2(blnr, y), :) = bl;
+            disp(['   block ' num2str(j) ':' num2str(block.nx * block.ny) ' file: ' file_name ' loaded in ' num2str(loading_time) ' asinged in ' num2str(toc(asigment_time_start))]);
             blnr = blnr + 1;
         end
         

@@ -205,7 +205,7 @@ def inspect_for_missing_tiles_get_files_list(channel_path: Path):
         total=len(folders_list),
         desc="inspection",
         mininterval=1.0,
-        unit="tile",
+        unit=" tiles",
         ascii=True,
         smoothing=0.05
     ))
@@ -592,7 +592,7 @@ def process_channel(
     tsv_volume = TSVVolume.load(stitched_path / f'{channel}_xml_import_step_5.xml')
     shape: Tuple[int, int, int] = tsv_volume.volume.shape  # shape is in z y x format
 
-    memory_needed_per_thread = 16 * shape[1] * shape[2] / 1024 ** 3
+    memory_needed_per_thread = 64 * shape[1] * shape[2] / 1024 ** 3
     if tsv_volume.dtype in (uint8, "uint8"):
         memory_needed_per_thread /= 2
     memory_ram = virtual_memory().available / 1024 ** 3  # in GB
@@ -635,8 +635,9 @@ def process_channel(
         kwargs={
             "bleach_correction_frequency": bleach_correction_frequency,
             "bleach_correction_max_method": False,
+            "bleach_correction_clip_max": 255,
             "bleach_correction_y_slice_max": None,
-            "exclude_dark_edges_set_them_to_zero": True,
+            "exclude_dark_edges_set_them_to_zero": True if need_bleach_correction or need_lightsheet_cleaning else False,
             "threshold": None,
             "sigma": bleach_correction_sigma,
             "bidirectional": True if need_bleach_correction else False,
@@ -649,7 +650,7 @@ def process_channel(
             "d_type": tsv_volume.dtype
         },
         source_voxel=(voxel_size_z, voxel_size_y, voxel_size_x),
-        target_voxel=None if stitch_mip else 20,
+        target_voxel=None if (not need_bleach_correction or stitch_mip) else 20,
         timeout=None,
         max_processors=merge_step_cores,
         progress_bar_name="TSV",

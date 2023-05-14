@@ -197,11 +197,11 @@ def imsave_tif(path: Path, img: ndarray, compression: Union[Tuple[str, int], Non
     for attempt in range(1, num_retries):
         try:
             # imwrite(path, data=img, compression=compression_method, compressionargs={'level': compression_level})
-            imwrite(path, data=img, compression=compression, predictor=False, tile=(256, 256))
+            imwrite(path, data=img, compression=compression)
             return
         except KeyboardInterrupt:
             print(f"{PrintColors.WARNING}\ndying from imsave_tif{PrintColors.ENDC}")
-            imwrite(path, data=img, compression=compression, predictor=False, tile=(256, 256))
+            imwrite(path, data=img, compression=compression)
             die = True
         except (OSError, TypeError, PermissionError) as inst:
             if attempt == num_retries:
@@ -792,9 +792,9 @@ def process_img(
             img_fg = bleach_correction_clip_max
             if bleach_correction_clip_max is None:
                 img_fg = append(img_x_max[img_x_max < img_x_fg], img_y_max[img_y_max < img_y_fg])
-                img_fg = np_mean(img_fg[~isnan(img_fg)])
-                if img_fg:
-                    img_fg = int(img_fg)
+                img_fg = img_fg[~isnan(img_fg)]
+                if img_fg.shape[0] > 0:
+                    img_fg = int(np_mean(img_fg))
                 else:
                     bleach_correction_frequency = None
                     print(f"{PrintColors.WARNING}"

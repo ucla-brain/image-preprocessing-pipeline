@@ -160,40 +160,41 @@ class MultiProcess(Process):
                         if need_down_sampling and down_sampled_tif_path.exists():
                             self.progress_queue.put(running_next)
                             continue
-                        else:
-                            self.progress_queue.put(running_next)
-                            continue
-
                     try:
-                        if is_ims:
-                            img = images[idx]
+                        if resume and tif_save_path.exists():
+                            img = imread_tif_raw_png(tif_save_path)
                         else:
-                            # the pool protects the process in case of timeout errors in imread_* functions
-                            start_time = time()
-                            if is_tsv:
-                                future = pool.submit(imread_tsv, images, VExtent(x0, x1, y0, y1, idx, idx + 1), d_type)
+                            if is_ims:
+                                img = images[idx]
                             else:
-                                future = pool.submit(imread_tif_raw_png, Path(images[idx]), dtype=d_type, shape=shape)
-                            img = future.result(timeout=timeout)
-                            if timeout is not None:
-                                timeout = max(timeout, 0.9 * timeout + 0.3 * (time() - start_time))
-                            if len(img.shape) == 3:
-                                img = img[:, :, channel]
+                                # the pool protects the process in case of timeout errors in imread_* functions
+                                start_time = time()
+                                if is_tsv:
+                                    future = pool.submit(
+                                        imread_tsv, images, VExtent(x0, x1, y0, y1, idx, idx + 1), d_type)
+                                else:
+                                    future = pool.submit(
+                                        imread_tif_raw_png, Path(images[idx]), dtype=d_type, shape=shape)
+                                img = future.result(timeout=timeout)
+                                if timeout is not None:
+                                    timeout = max(timeout, 0.9 * timeout + 0.3 * (time() - start_time))
+                                if len(img.shape) == 3:
+                                    img = img[:, :, channel]
 
-                        # apply function
-                        if function is not None:
-                            if args is not None and kwargs is not None:
-                                img = function(img, *args, **kwargs)
-                            elif args is not None:
-                                img = function(img, *args)
-                            elif kwargs is not None:
-                                img = function(img, **kwargs)
-                            else:
-                                img = function(img)
-                            if img.shape != post_processed_shape or img.dtype != post_processed_d_type:
-                                post_processed_shape = img.shape
-                                post_processed_d_type = img.dtype
-                            imsave_tif(tif_save_path, img, compression=compression)
+                            # apply function
+                            if function is not None:
+                                if args is not None and kwargs is not None:
+                                    img = function(img, *args, **kwargs)
+                                elif args is not None:
+                                    img = function(img, *args)
+                                elif kwargs is not None:
+                                    img = function(img, **kwargs)
+                                else:
+                                    img = function(img)
+                                if img.shape != post_processed_shape or img.dtype != post_processed_d_type:
+                                    post_processed_shape = img.shape
+                                    post_processed_d_type = img.dtype
+                                imsave_tif(tif_save_path, img, compression=compression)
 
                         # down-sampling on xy
                         if need_down_sampling and target_shape is not None and down_sampling_methods is not None:
