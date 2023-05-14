@@ -91,7 +91,7 @@ def main(args: Namespace):
                 "dark": args.dark,
                 "lightsheet": args.background_subtraction,
                 "bleach_correction_frequency": 0.0005 if args.bleach_correction else None,
-                "rotate": args.rotation,
+                "rotate": 0,
                 "flip_upside_down": args.flip_upside_down,
                 "convert_to_8bit": args.convert_to_8bit,
                 "bit_shift_to_right": args.bit_shift
@@ -101,7 +101,8 @@ def main(args: Namespace):
             compression=compression,
             timeout=args.timeout,
             source_voxel=(args.voxel_size_z, args.voxel_size_y, args.voxel_size_x),
-            target_voxel=args.voxel_size_target
+            target_voxel=args.voxel_size_target,
+            rotation=args.rotation,
         )
     elif input_path.is_dir():
         tif_2d_folder = input_path
