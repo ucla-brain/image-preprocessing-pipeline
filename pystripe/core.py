@@ -757,6 +757,7 @@ def process_img(
             tile_size = new_size
         elif down_sample is not None:
             tile_size = calculate_down_sampled_size(tile_size, down_sample)
+
         if rotate in (90, 270):
             tile_size = (tile_size[1], tile_size[0])
 
@@ -838,6 +839,7 @@ def process_img(
             tile_size = calculate_down_sampled_size(tile_size, down_sample)
 
             # dark subtraction is like baseline subtraction in Imaris
+
         if dark is not None and dark > 0:
             img = where(img > dark, img - dark, 0)  # Subtract the dark offset
             if verbose:
