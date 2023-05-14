@@ -19,9 +19,9 @@ if platform != "win32":
     except:
         blockfs_present = False
 
-environ['MKL_NUM_THREADS'] = '1'
-environ['NUMEXPR_NUM_THREADS'] = '1'
-environ['OMP_NUM_THREADS'] = '1'
+# environ['MKL_NUM_THREADS'] = '1'
+# environ['NUMEXPR_NUM_THREADS'] = '1'
+# environ['OMP_NUM_THREADS'] = '1'
 
 
 def calculate_cores_and_chunk_size(num_images: int, cores: int, pool_can_handle_more_than_61_cores: bool = False):
