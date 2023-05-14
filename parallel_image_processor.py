@@ -21,9 +21,9 @@ from math import ceil, floor, sqrt
 from skimage.measure import block_reduce
 from skimage.transform import resize
 
-os.environ['MKL_NUM_THREADS'] = '1'
-os.environ['NUMEXPR_NUM_THREADS'] = '1'
-os.environ['OMP_NUM_THREADS'] = '1'
+# os.environ['MKL_NUM_THREADS'] = '1'
+# os.environ['NUMEXPR_NUM_THREADS'] = '1'
+# os.environ['OMP_NUM_THREADS'] = '1'
 
 
 def imread_tsv(tsv_volume: TSVVolume, extent: VExtent, d_type: str):
