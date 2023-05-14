@@ -67,16 +67,25 @@ def main(args: Namespace):
     compression = (args.compression_method, args.compression_level) if args.compression_level > 0 else None
 
     if (
-            input_path.is_file() and input_path.suffix.lower() == ".ims"
+            input_path.is_file() and input_path.suffix.lower() in (".ims", ".xml")
     ) or (
             input_path.is_dir() and (
-            args.dark > 0 or args.convert_to_8bit or new_size or down_sample or args.rotation or args.gaussian or
-            args.background_subtraction or args.de_stripe or args.flip_upside_down or args.bleach_correction or
+            args.dark > 0 or args.convert_to_8bit or
+            new_size or down_sample or args.voxel_size_target or
+            args.rotation or args.flip_upside_down or
+            args.gaussian or args.background_subtraction or args.de_stripe or args.bleach_correction or
             args.compression_level > 0)
     ):
         if not args.tif:
             print(f"{PrintColors.FAIL}tif path is needed to continue.{PrintColors.ENDC}")
             raise RuntimeError
+
+        de_striping_sigma = (0, 0)
+        if args.de_stripe:
+            if args.bleach_correction:
+                de_striping_sigma = (4000, 4000)
+            elif args.de_stripe:
+                de_striping_sigma = (100, 100)
 
         return_code = parallel_image_processor(
             source=input_path,
@@ -85,12 +94,17 @@ def main(args: Namespace):
             kwargs={
                 "gaussian_filter_2d": args.gaussian,
                 "down_sample": down_sample,
-                "downsample_method": downsample_method,
+                "down_sample_method": downsample_method,
                 "new_size": new_size,
-                "sigma": (200, 200) if args.de_stripe else (0, 0),
+                "sigma": de_striping_sigma,
+                "bidirectional": True if args.bleach_correction else False,
                 "dark": args.dark,
                 "lightsheet": args.background_subtraction,
                 "bleach_correction_frequency": 0.0005 if args.bleach_correction else None,
+                "bleach_correction_max_method": False,
+                "bleach_correction_clip_max": 255,
+                "exclude_dark_edges_set_them_to_zero": True if (
+                        args.bleach_correction or args.background_subtraction) else False,
                 "rotate": 0,
                 "flip_upside_down": args.flip_upside_down,
                 "convert_to_8bit": args.convert_to_8bit,
@@ -226,17 +240,18 @@ if __name__ == '__main__':
         epilog="Developed 2022 by Keivan Moradi, Hongwei Dong Lab (B.R.A.I.N) at UCLA\n"
     )
     parser.add_argument("--input", "-i", type=str, required=True,
-                        help="Path to input image or path.")
+                        help="Path to input image or path. Input path can be: a tera-stitcher stage 5 volume (xml) file"
+                             ", Imaris (ims) image, or a 2D tif[f]?, png, raw series.")
     parser.add_argument("--tif", "-t", type=str, required=False, default='',
                         help="Path to tif output path.")
     parser.add_argument("--teraFly", "-f", type=str, required=False, default='',
                         help="Path to output teraFly path.")
     parser.add_argument("--imaris", "-o", type=str, required=False, default='',
-                        help="Path to 8-bit imaris output file.")
+                        help="Path to imaris output file.")
     parser.add_argument("--movie", "-m", type=str, required=False, default='',
                         help="Path to mp4 output file")
     parser.add_argument("--nthreads", "-n", type=int, default=psutil.cpu_count(logical=False),
-                        help="number of threads. default is all physical cores for tif conversion and 12 for terafly.")
+                        help="number of threads. default is all physical cores for tif conversion and 12 for TeraFly.")
     parser.add_argument("--channel", "-c", type=int, default=0,
                         help="channel to be converted. Default is 0.")
     parser.add_argument("--gaussian", "-g", default=False, action=BooleanOptionalAction,
@@ -244,9 +259,9 @@ if __name__ == '__main__':
     parser.add_argument("--de_stripe", default=False, action=BooleanOptionalAction,
                         help="image pre-processing: apply de-striping algorithm. Default is --no-de_stripe")
     parser.add_argument("--downsample_x", "-dsx", type=int, default=0,
-                        help="image pre-processing: down-sampling factor for x-axis. Default is 0.")
+                        help="image pre-processing: 2D down-sampling factor for x-axis. Default is 0.")
     parser.add_argument("--downsample_y", "-dsy", type=int, default=0,
-                        help="image pre-processing: down-sampling factor for y-axis. Default is 0.")
+                        help="image pre-processing: 2D down-sampling factor for y-axis. Default is 0.")
     parser.add_argument("--downsample_method", "-dsm", type=str, default='max',
                         help="image pre-processing: down-sampling method. "
                              "options are max, min, mean, median. Default is max.")
@@ -308,9 +323,8 @@ if __name__ == '__main__':
     parser.add_argument("--voxel_size_z", "-dz", type=float, default=1,
                         help="z voxel size in µm. Default is 1.")
     parser.add_argument("--voxel_size_target", "-dt", type=float, default=None,
-                        help="target voxel size in µm for down-sampling.")
+                        help="target voxel size in µm for 3D down-sampling.")
     parser.add_argument("--timeout", type=float, default=None,
                         help="timeout in seconds for image reading. applies to image series and tsv volumes (not ims). "
-                             "adds 30% overhead for copying the data from one process to another.")
-
+                             "adds up to 30 percent overhead for copying the data from one process to another.")
     main(parser.parse_args())

@@ -636,7 +636,6 @@ def process_channel(
             "bleach_correction_frequency": bleach_correction_frequency,
             "bleach_correction_max_method": False,
             "bleach_correction_clip_max": 255,
-            "bleach_correction_y_slice_max": None,
             "exclude_dark_edges_set_them_to_zero": True if need_bleach_correction or need_lightsheet_cleaning else False,
             "threshold": None,
             "sigma": bleach_correction_sigma,

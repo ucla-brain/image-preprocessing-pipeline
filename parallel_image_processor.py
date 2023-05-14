@@ -85,13 +85,16 @@ class MultiProcess(Process):
         self.down_sampled_path = down_sampled_path
         self.target_shape = None
         self.down_sampling_methods = None
-        self.calculate_down_sampling_target(shape, rotation in (90, 270))
+        if rotation in (90, 270):
+            self.calculate_down_sampling_target((shape[1], shape[0]), True)
+        else:
+            self.calculate_down_sampling_target(shape, False)
         self.rotation = rotation
 
     def calculate_down_sampling_target(self, new_shape: Tuple[int, int], is_rotated: bool):
         # calculate voxel size change
         new_shape: array = array(new_shape)
-        new_voxel_size: tuple = self.source_voxel
+        new_voxel_size: list = list(self.source_voxel)
         if is_rotated:
             new_voxel_size[1] *= self.shape[0] / new_shape[1]
             new_voxel_size[2] *= self.shape[1] / new_shape[0]
@@ -100,13 +103,15 @@ class MultiProcess(Process):
             new_voxel_size[1] *= self.shape[0] / new_shape[0]
             new_voxel_size[2] *= self.shape[1] / new_shape[1]
 
+        new_voxel_size: tuple = tuple(new_voxel_size)
+
         if new_voxel_size != self.source_voxel:
-            print(f"image processing function changed the voxel size: {new_voxel_size}")
+            print(f"image processing function changed the voxel size from {self.source_voxel} to {new_voxel_size}")
 
         reduction_times = self.target_voxel / array(new_voxel_size[1:3])
         target_shape = new_shape / reduction_times
-        self.target_shape = target_shape.round().tolist()
-        reduction_factors = np_floor(np_sqrt(reduction_times))
+        self.target_shape = tuple(target_shape.round().astype(int))
+        reduction_factors = np_floor(np_sqrt(reduction_times)).astype(int)
         down_sampling_method_y = list(np_max if i % 2 == 0 else np_mean for i in range(reduction_factors[0]))
         down_sampling_method_x = list(np_mean if i % 2 == 0 else np_max for i in range(reduction_factors[1]))
         if reduction_factors[0] > reduction_factors[1]:
@@ -131,16 +136,17 @@ class MultiProcess(Process):
         kwargs = self.kwargs
         save_path = self.save_path
         tif_prefix = self.tif_prefix
-        shape = self.shape
-        post_processed_shape = self.shape
-        d_type = self.d_type
-        post_processed_d_type = self.d_type
         channel = self.channel
         resume = self.resume
         compression = self.compression
         down_sampled_path = self.down_sampled_path
+        d_type = self.d_type
+        post_processed_d_type = self.d_type
+        shape = self.shape
         rotation = self.rotation
-
+        post_processed_shape = self.shape
+        if rotation in (90, 270):
+            post_processed_shape = (shape[1], shape[0])
         need_down_sampling = False
         down_sampling_method_z = None
         if self.source_voxel is not None and self.target_voxel is not None and shape is not None:
@@ -224,11 +230,15 @@ class MultiProcess(Process):
                             if is_tsv or is_ims or function is not None or rotation in (90, 180, 270):
                                 imsave_tif(tif_save_path, img, compression=compression)
 
-                            if img.shape != post_processed_shape or img.dtype != post_processed_d_type or \
-                                    rotation in (90, 270):
-                                post_processed_shape = img.shape
+                            if img.dtype != post_processed_d_type:
                                 post_processed_d_type = img.dtype
+
+                            if img.shape != post_processed_shape or rotation in (90, 270):
+                                post_processed_shape = img.shape
                                 self.calculate_down_sampling_target(post_processed_shape, rotation in (90, 270))
+                                z_stack = zeros((len(indices),) + self.target_shape, dtype=float32)
+
+
 
                         # down-sampling on xy
                         if need_down_sampling and self.target_shape is not None and self.down_sampling_methods is not None:
@@ -470,12 +480,13 @@ def parallel_image_processor(
     # down-sample on z accurately
     if need_down_sampling:
         print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
-              f"{PrintColors.BLUE}down-sampling: {PrintColors.ENDC} resizing on the z-axis accurately ...")
-        target_shape_3d = (
+              f"{PrintColors.BLUE}down-sampling: {PrintColors.ENDC}"
+              f"resizing on the z-axis accurately ...")
+        target_shape_3d = [
             round(num_images / (target_voxel / source_voxel[0])),
             round(shape[0] / (target_voxel / source_voxel[1])),
             round(shape[1] / (target_voxel / source_voxel[2]))
-        )
+        ]
         if rotation in (90, 270):
             target_shape_3d[1], target_shape_3d[2] = target_shape_3d[2], target_shape_3d[1]
         files = sorted(down_sampled_path.glob("*.tif"))
@@ -484,10 +495,12 @@ def parallel_image_processor(
             img_stack = dstack(img_stack)  # yxz format
             img_stack = rollaxis(img_stack, -1)  # zyx format
             print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
-                  f"{PrintColors.BLUE}down-sampling: {PrintColors.ENDC} resizing the z-axis ...")
+                  f"{PrintColors.BLUE}down-sampling: {PrintColors.ENDC}"
+                  f"resizing the z-axis ...")
             img_stack = resize(img_stack, target_shape_3d, preserve_range=True, anti_aliasing=True)
-            print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
-                  f"{PrintColors.BLUE}down-sampling: {PrintColors.ENDC} saving as npz.")
+            print(f"{PrintColors.GREEN}{date_time_now()}:{PrintColors.ENDC}"
+                  f"{PrintColors.BLUE} down-sampling: {PrintColors.ENDC}"
+                  f"saving as npz.")
             savez_compressed(
                 destination / f"down_sampled_zyx{target_voxel:.1f}um.npz",
                 I=img_stack,

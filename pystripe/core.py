@@ -715,7 +715,7 @@ def process_img(
         flat: ndarray = None,
         gaussian_filter_2d: bool = False,
         down_sample: Tuple[int, int] = None,  # (2, 2),
-        downsample_method: str = 'max',
+        down_sample_method: str = 'max',
         tile_size: Tuple[int, int] = None,
         new_size: Tuple[int, int] = None,
         exclude_dark_edges_set_them_to_zero: bool = False,
@@ -823,19 +823,19 @@ def process_img(
             img = gaussian(img, sigma=0.5, preserve_range=True, truncate=2)
 
         if down_sample is not None:
-            downsample_method = downsample_method.lower()
-            if downsample_method == 'min':
-                downsample_method = np_min
-            elif downsample_method == 'max':
-                downsample_method = np_max
-            elif downsample_method == 'mean':
-                downsample_method = np_mean
-            elif downsample_method == 'median':
-                downsample_method = np_median
+            down_sample_method = down_sample_method.lower()
+            if down_sample_method == 'min':
+                down_sample_method = np_min
+            elif down_sample_method == 'max':
+                down_sample_method = np_max
+            elif down_sample_method == 'mean':
+                down_sample_method = np_mean
+            elif down_sample_method == 'median':
+                down_sample_method = np_median
             else:
-                print(f"{PrintColors.FAIL}unsupported down-sampling method: {downsample_method}{PrintColors.ENDC}")
+                print(f"{PrintColors.FAIL}unsupported down-sampling method: {down_sample_method}{PrintColors.ENDC}")
                 raise RuntimeError
-            img = block_reduce(img, block_size=down_sample, func=downsample_method)
+            img = block_reduce(img, block_size=down_sample, func=down_sample_method)
             tile_size = calculate_down_sampled_size(tile_size, down_sample)
 
             # dark subtraction is like baseline subtraction in Imaris
@@ -1094,7 +1094,7 @@ def read_filter_save(
             flat=flat,
             gaussian_filter_2d=gaussian_filter_2d,
             down_sample=down_sample,
-            downsample_method=down_sample_method,
+            down_sample_method=down_sample_method,
             tile_size=tile_size,
             new_size=new_size,
             dark=dark,
