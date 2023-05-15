@@ -2,34 +2,36 @@
 # Version 2 by Keivan Moradi on July 2022
 # Please read the readme file for more information:
 # https://github.com/ucla-brain/image-preprocessing-pipeline/blob/main/README.md
-import os
-import sys
-import mpi4py
-import platform
 import logging as log
-import psutil
-from subprocess import check_output, call, Popen, PIPE, CalledProcessError
-from cpufeature.extension import CPUFeature
+import os
+import platform
+import sys
+from datetime import timedelta
+from math import floor
+from multiprocessing import freeze_support, Queue, Process
+from pathlib import Path
+from platform import uname
+from queue import Empty
 from re import compile, match, findall, IGNORECASE, MULTILINE
+from subprocess import check_output, call, Popen, PIPE, CalledProcessError
+from time import time, sleep
+from typing import List, Tuple, Dict, Union
+
+import mpi4py
+import psutil
+from cpufeature.extension import CPUFeature
+from numpy import ndarray, zeros, uint8
 from psutil import cpu_count, virtual_memory
 from tqdm import tqdm
-from numpy import ndarray, zeros, uint8
-from pathlib import Path
+
 from flat import create_flat_img
-from datetime import timedelta
-from time import time, sleep
-from platform import uname
-from tsv.volume import TSVVolume
+from parallel_image_processor import parallel_image_processor
 from pystripe.core import batch_filter, imread_tif_raw_png, imsave_tif, MultiProcessQueueRunner, progress_manager, \
     process_img, convert_to_8bit_fun
-from queue import Empty
-from multiprocessing import freeze_support, Queue, Process
-from supplements.cli_interface import select_among_multiple_options, ask_true_false_question, PrintColors
 from supplements.cli_interface import ask_for_a_number_in_range, date_time_now, select_multiple_among_list
-from typing import List, Tuple, Dict, Union
+from supplements.cli_interface import select_among_multiple_options, ask_true_false_question, PrintColors
 from supplements.downsampling import TifStack
-from parallel_image_processor import parallel_image_processor
-from math import floor
+from tsv.volume import TSVVolume
 
 # experiment setup: user needs to set them right
 # AllChannels = [(channel folder name, rgb color)]
@@ -655,6 +657,7 @@ def process_channel(
         max_processors=merge_step_cores,
         progress_bar_name="TSV",
         compression=("ADOBE_DEFLATE", 1) if need_compression_stitched_tif else None,
+        needed_memory=memory_needed_per_thread * 1024**3
     )
     if need_rotation_stitched_tif:
         shape = (shape[0], shape[2], shape[1])

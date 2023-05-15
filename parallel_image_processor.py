@@ -1,26 +1,31 @@
+from concurrent.futures import ProcessPoolExecutor, TimeoutError
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
+from math import ceil, floor, sqrt
+from multiprocessing import Queue, Process, Manager, freeze_support
+from pathlib import Path
+from queue import Empty
+from threading import Semaphore
+from time import time, sleep
+from typing import List, Tuple, Union, Callable
+
 import h5py
 import hdf5plugin
-from multiprocessing import Queue, Process, Manager, freeze_support
-from concurrent.futures import ThreadPoolExecutor
-from psutil import cpu_count
-from queue import Empty
-from concurrent.futures import ProcessPoolExecutor, TimeoutError
-from concurrent.futures.process import BrokenProcessPool
-from typing import List, Tuple, Union, Callable
-from numpy import zeros, float32, dstack, rollaxis, savez_compressed, array, maximum, rot90
+from numpy import floor as np_floor
 from numpy import max as np_max
 from numpy import mean as np_mean
 from numpy import sqrt as np_sqrt
-from numpy import floor as np_floor
-from pathlib import Path
-from supplements.cli_interface import PrintColors, date_time_now
-from pystripe.core import imread_tif_raw_png, imsave_tif, progress_manager, is_uniform_2d, is_uniform_3d
-from tsv.volume import TSVVolume, VExtent
-from time import time
-from tqdm import tqdm
-from math import ceil, floor, sqrt
+from numpy import zeros, float32, dstack, rollaxis, savez_compressed, array, maximum, rot90
+from psutil import cpu_count, virtual_memory
 from skimage.measure import block_reduce
 from skimage.transform import resize
+from tqdm import tqdm
+
+from pystripe.core import imread_tif_raw_png, imsave_tif, progress_manager, is_uniform_2d, is_uniform_3d
+from supplements.cli_interface import PrintColors, date_time_now
+from tsv.volume import TSVVolume, VExtent
+
+
 # import os
 # os.environ['MKL_NUM_THREADS'] = '1'
 # os.environ['NUMEXPR_NUM_THREADS'] = '1'
@@ -36,6 +41,7 @@ class MultiProcess(Process):
             self,
             progress_queue: Queue,
             args_queue: Queue,
+            semaphore: Semaphore,
             function: Callable,
             images: Union[List[str], str],
             save_path: Path,
@@ -51,12 +57,15 @@ class MultiProcess(Process):
             channel: int = 0,
             timeout: Union[float, None] = 1800,
             resume: bool = True,
-            compression: Tuple[str, int] = ("ADOBE_DEFLATE", 1)
+            compression: Tuple[str, int] = ("ADOBE_DEFLATE", 1),
+            needed_memory: int = None
     ):
         Process.__init__(self)
         self.daemon = False
         self.progress_queue = progress_queue
         self.args_queue = args_queue
+        self.semaphore = semaphore
+        self.needed_memory = needed_memory
         self.function = function
         self.is_ims = False
         self.is_tsv = False
@@ -120,6 +129,14 @@ class MultiProcess(Process):
             down_sampling_method_y += [None, ] * (reduction_factors[1] - reduction_factors[0])
         self.down_sampling_methods = tuple(zip(down_sampling_method_y, down_sampling_method_x))
 
+    def is_memory_enough(self) -> bool:
+        memory_is_available: bool = True
+        if self.needed_memory is not None:
+            self.semaphore.acquire(blocking=True)
+            memory_is_available = virtual_memory().available > self.needed_memory
+            self.semaphore.release()
+        return memory_is_available
+
     def run(self):
         running_next: bool = True
         function = self.function
@@ -167,6 +184,8 @@ class MultiProcess(Process):
             images = file[f"DataSet/ResolutionLevel 0/TimePoint 0/Channel {channel}/Data"]
         queue_time_out = 20
         while not self.die and self.args_queue.qsize() > 0:
+            while not self.is_memory_enough():
+                sleep(60)
             try:
                 queue_start_time = time()
                 idx_down_sampled, indices = self.args_queue.get(block=True, timeout=queue_time_out)
@@ -329,7 +348,8 @@ def parallel_image_processor(
         max_processors: int = cpu_count(logical=False),
         progress_bar_name: str = " ImgProc",
         compression: Tuple[str, int] = ("ADOBE_DEFLATE", 1),
-        resume: bool = True
+        resume: bool = True,
+        needed_memory: int = None
 ):
     """
     fun: Callable
@@ -361,8 +381,10 @@ def parallel_image_processor(
         maximum number of processors
     chunks: int
         the number images from the list each process handles
-    progress_bar_name: str (optional)
+    progress_bar_name: str
         the name next to the progress bar
+    needed_memory: int
+        needed_memory in bytes to run the function. if provided the workers try to avoid out of memory condition.
     """
     if isinstance(source, str):
         source = Path(source)
@@ -456,14 +478,16 @@ def parallel_image_processor(
         down_sampled_path.mkdir(exist_ok=True)
 
     progress_queue = Queue()
+    semaphore = Semaphore()
     workers = min(max_processors, args_queue.qsize())
     print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}starting workers ...")
     for worker in tqdm(range(workers), desc='workers'):
         if progress_queue.qsize() + worker < num_images:
             MultiProcess(
-                progress_queue, args_queue, fun, images, destination, tif_prefix, args, kwargs, shape, dtype,
+                progress_queue, args_queue, semaphore, fun, images, destination, tif_prefix, args, kwargs, shape, dtype,
                 source_voxel=source_voxel, target_voxel=target_voxel, down_sampled_path=down_sampled_path,
-                rotation=rotation, channel=channel, timeout=timeout, compression=compression, resume=resume).start()
+                rotation=rotation, channel=channel, timeout=timeout, compression=compression, resume=resume,
+                needed_memory=needed_memory).start()
         else:
             print('\n the existing workers can finish the job! no more workers are needed.')
             workers = worker
