@@ -128,13 +128,6 @@ class MultiProcess(Process):
             down_sampling_method_y += [None, ] * (reduction_factors[1] - reduction_factors[0])
         self.down_sampling_methods = tuple(zip(down_sampling_method_y, down_sampling_method_x))
 
-    def is_memory_enough(self) -> bool:
-        self.semaphore.get(block=True)
-        memory_is_available: bool = True
-        if self.needed_memory is not None:
-            memory_is_available = virtual_memory().available > self.needed_memory
-        return memory_is_available
-
     def run(self):
         running_next: bool = True
         function = self.function
@@ -182,12 +175,14 @@ class MultiProcess(Process):
             images = file[f"DataSet/ResolutionLevel 0/TimePoint 0/Channel {channel}/Data"]
         queue_time_out = 20
         while not self.die and self.args_queue.qsize() > 0:
-            if self.is_memory_enough():
-                self.semaphore.put(1)
-            else:
-                sleep(600)
-                self.semaphore.put(1)
-                continue  # to make sure args_queue has not emptied during sleep
+            if self.needed_memory is not None:
+                self.semaphore.get(block=True)
+                if virtual_memory().available > self.needed_memory:
+                    self.semaphore.put(1)
+                else:
+                    sleep(600)
+                    self.semaphore.put(1)
+                    continue  # to make sure args_queue has not emptied during sleep
             try:
                 queue_start_time = time()
                 idx_down_sampled, indices = self.args_queue.get(block=True, timeout=queue_time_out)
