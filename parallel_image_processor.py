@@ -238,8 +238,6 @@ class MultiProcess(Process):
                                 self.calculate_down_sampling_target(post_processed_shape, rotation in (90, 270))
                                 z_stack = zeros((len(indices),) + self.target_shape, dtype=float32)
 
-
-
                         # down-sampling on xy
                         if need_down_sampling and self.target_shape is not None and self.down_sampling_methods is not None:
                             if is_uniform_2d(img):
