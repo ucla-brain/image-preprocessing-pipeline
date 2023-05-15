@@ -362,6 +362,7 @@ def log1p_jit(img_log_filtered: ndarray) -> ndarray:
     return log1p(img_log_filtered)
 
 
+@jit
 def filter_subband(img: ndarray, sigma: float, level: int, wavelet: str, bidirectional: bool) -> ndarray:
     coefficients = wavedec2(img, wavelet, mode='symmetric', level=None if level == 0 else level, axes=(-2, -1))
     coefficients = list(map(list, coefficients))
