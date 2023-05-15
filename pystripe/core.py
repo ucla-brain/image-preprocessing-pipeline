@@ -1,48 +1,52 @@
+from argparse import RawDescriptionHelpFormatter, ArgumentParser
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, TimeoutError
+from concurrent.futures.process import BrokenProcessPool
+from functools import reduce
+from math import ceil
+from multiprocessing import Process, Queue, cpu_count
+from operator import iconcat
 from os import scandir, DirEntry  # , environ
+from pathlib import Path
+from queue import Empty
 from re import compile, IGNORECASE
+from time import sleep, time
+from types import GeneratorType
+from typing import Tuple, Iterator, List, Callable, Union
 from warnings import filterwarnings
+
+from dcimg import DCIMGFile
+from imageio.v2 import imread as png_imread
+from numba import jit
+from numexpr import evaluate
+from numpy import dtype as np_d_type
 from numpy import max as np_max
-from numpy import min as np_min
 from numpy import mean as np_mean
 from numpy import median as np_median
-from numpy import dtype as np_d_type
+from numpy import min as np_min
 from numpy import uint8, uint16, float32, float64, ndarray, generic, zeros, broadcast_to, exp, expm1, log1p, \
     cumsum, arange, unique, interp, pad, clip, where, rot90, flipud, dot, reshape, iinfo, nonzero, append, isnan
+from pywt import wavedec2, waverec2, Wavelet, dwt_max_level
 from scipy.fftpack import rfft, fftshift, irfft
 from scipy.ndimage import gaussian_filter as gaussian_filter_nd
 from scipy.signal import butter, sosfiltfilt
 from scipy.special import expit as sigmoid
-from pywt import wavedec2, waverec2, Wavelet, dwt_max_level
-from argparse import RawDescriptionHelpFormatter, ArgumentParser
-from tqdm import tqdm
-from time import sleep, time
-from pathlib import Path
 from skimage.filters import threshold_otsu, gaussian
 from skimage.measure import block_reduce
 from skimage.transform import resize
-from imageio.v2 import imread as png_imread
 from tifffile import imread, imwrite
 from tifffile.tifffile import TiffFileError
-from dcimg import DCIMGFile
-from typing import Tuple, Iterator, List, Callable, Union
-from types import GeneratorType
-from pystripe.raw import raw_imread
+from tqdm import tqdm
+
 from pystripe.lightsheet_correct import correct_lightsheet, prctl
-from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, TimeoutError
-from concurrent.futures.process import BrokenProcessPool
-from multiprocessing import Process, Queue, cpu_count
-from queue import Empty
-from operator import iconcat
-from functools import reduce
+from pystripe.raw import raw_imread
 from supplements.cli_interface import PrintColors, date_time_now
-from numba import jit
-from numexpr import evaluate
-from math import ceil
 
 filterwarnings("ignore")
 supported_extensions = ['.png', '.tif', '.tiff', '.raw', '.dcimg']
 num_retries: int = 40
 use_numexpr: bool = True
+
+
 # environ['MKL_NUM_THREADS'] = '1'
 # environ['NUMEXPR_NUM_THREADS'] = '1'
 # environ['OMP_NUM_THREADS'] = '1'
@@ -155,10 +159,10 @@ def convert_to_16bit_fun(img: ndarray):
 
 
 def convert_to_8bit_fun(img: ndarray, bit_shift_to_right: int = 8):
-    if img.dtype == 'uint8':
+    if img.dtype in ('uint8', uint8):
         return img
-    else:
-        img = img.astype(uint16)
+    elif img.dtype not in ('uint16', uint16):
+        img = convert_to_16bit_fun(img)
     # bit shift then change the type to avoid floating point operations
     # img >> 8 is equivalent to img / 256
     if 0 <= bit_shift_to_right < 9:
@@ -479,7 +483,7 @@ def min_max_2d(arr: ndarray) -> (int, int):
     return min_val, max_val
 
 
-def slice_non_zero_box(img_axis: ndarray, noise: int, filter_frequency: int = 1/1000) -> (int, int):
+def slice_non_zero_box(img_axis: ndarray, noise: int, filter_frequency: int = 1 / 1000) -> (int, int):
     return min_max_1d(nonzero(butter_lowpass_filter(img_axis, filter_frequency).astype(uint16) > noise)[0])
 
 
@@ -527,11 +531,11 @@ def correct_bleaching(
     else:
         img_filter = clip(img_sliced, clip_min, clip_max)
         img_filter = butter_lowpass_filter(img_filter, frequency)
-        img_filter = filter_subband(img_filter, 1/frequency, 0, "db10", True)
+        img_filter = filter_subband(img_filter, 1 / frequency, 0, "db10", True)
 
     # apply the filter
     img_filter /= np_max(img_filter)
-    img[y_slice_min:y_slice_max, x_slice_min:x_slice_max] = where(img_sliced > 0, img_sliced/img_filter, 0)
+    img[y_slice_min:y_slice_max, x_slice_min:x_slice_max] = where(img_sliced > 0, img_sliced / img_filter, 0)
     return img
 
 
@@ -746,7 +750,6 @@ def process_img(
         d_type: str = None,
         verbose: bool = False
 ) -> ndarray:
-
     if tile_size is None:
         tile_size = img.shape
     if d_type is None:
