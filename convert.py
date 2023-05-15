@@ -1,23 +1,27 @@
 import os
-import sys
-import psutil
 import subprocess
-from pystripe.core import process_img
-from time import time
-from platform import uname
+import sys
+from argparse import RawDescriptionHelpFormatter, ArgumentParser, Namespace, BooleanOptionalAction
 from multiprocessing import freeze_support, Queue
+from pathlib import Path
+from platform import uname
+from re import compile
+from time import time
+
+import psutil
+from cpufeature.extension import CPUFeature
+from numpy import uint16
 from numpy import max as np_max
-from numpy import min as np_min
 from numpy import mean as np_mean
 from numpy import median as np_median
-from pathlib import Path
-from process_images import get_imaris_command, MultiProcessCommandRunner, commands_progress_manger
-from argparse import RawDescriptionHelpFormatter, ArgumentParser, Namespace, BooleanOptionalAction
-from parallel_image_processor import parallel_image_processor
-from supplements.cli_interface import PrintColors
-from cpufeature.extension import CPUFeature
+from numpy import min as np_min
 from tqdm import tqdm
-from re import compile
+
+from parallel_image_processor import parallel_image_processor
+from process_images import get_imaris_command, MultiProcessCommandRunner, commands_progress_manger
+from pystripe.core import process_img, imread_tif_raw_png
+from supplements.cli_interface import PrintColors
+
 
 # os.environ['MKL_NUM_THREADS'] = '1'
 # os.environ['NUMEXPR_NUM_THREADS'] = '1'
@@ -47,13 +51,13 @@ def main(args: Namespace):
             args.downsample_x if args.downsample_x else 1,
         )
     if args.downsample_method.lower() == 'min':
-        downsample_method = np_min
+        down_sample_method = np_min
     elif args.downsample_method.lower() == 'max':
-        downsample_method = np_max
+        down_sample_method = np_max
     elif args.downsample_method.lower() == 'mean':
-        downsample_method = np_mean
+        down_sample_method = np_mean
     elif args.downsample_method.lower() == 'median':
-        downsample_method = np_median
+        down_sample_method = np_median
     else:
         print(f"{PrintColors.FAIL}unsupported down-sampling method: {args.downsample_method}{PrintColors.ENDC}")
         raise RuntimeError
@@ -94,7 +98,7 @@ def main(args: Namespace):
             kwargs={
                 "gaussian_filter_2d": args.gaussian,
                 "down_sample": down_sample,
-                "down_sample_method": downsample_method,
+                "down_sample_method": down_sample_method,
                 "new_size": new_size,
                 "sigma": de_striping_sigma,
                 "bidirectional": True if args.bleach_correction else False,
@@ -153,6 +157,13 @@ def main(args: Namespace):
         ims_file = Path(args.imaris)
         files = list(tif_2d_folder.glob("*.tif"))
         files += list(tif_2d_folder.glob("*.tiff"))
+        assert len(files) > 0
+
+        n_threads = args.nthreads
+        if sys.platform.lower() == 'linux' and 'microsoft' not in uname().release.lower():
+            if imread_tif_raw_png(files[0]).dtype in ('uint16', uint16):
+                n_threads = 1
+
         is_renamed: bool = False
         if compile(r"^\d+$").findall(files[0].name[:-len(files[0].suffix)]):
             files = [file.rename(file.parent / ("_" + file.name)) for file in files]
@@ -163,7 +174,7 @@ def main(args: Namespace):
             voxel_size_x=args.voxel_size_x,
             voxel_size_y=args.voxel_size_y,
             voxel_size_z=args.voxel_size_z,
-            workers=args.nthreads
+            workers=n_threads
         )
         print(f"\t{PrintColors.BLUE}tiff to ims conversion command:{PrintColors.ENDC}\n\t\t{command}\n")
 
