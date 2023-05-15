@@ -1263,13 +1263,15 @@ class MultiProcessQueueRunner(Process):
                               f"\nexception instance: {type(inst)}"
                               f"{PrintColors.ENDC}")
                         if not output_file.exists():
-                            imsave_tif(
+                            die = imsave_tif(
                                 output_file,
                                 zeros(
                                     shape=args["new_size"] if args["new_size"] else args["tile_size"],
                                     dtype=uint8 if args["convert_to_8bit"] else uint16
                                 )
                             )
+                            if die:
+                                self.die = True
                     else:
                         print(f"{PrintColors.WARNING}"
                               f"\nwarning: timeout reached for processing input file:\n\t{args['file_name']}\n\t"
@@ -1280,11 +1282,6 @@ class MultiProcessQueueRunner(Process):
                         pool = ProcessPoolExecutor(max_workers=1)
                 except KeyboardInterrupt:
                     self.die = True
-                    # while not self.args_queue.qsize() == 0:
-                    #     try:
-                    #         self.args_queue.get(block=True, timeout=10)
-                    #     except Empty:
-                    #         continue
                 except Exception as inst:
                     print(
                         f"{PrintColors.WARNING}"
