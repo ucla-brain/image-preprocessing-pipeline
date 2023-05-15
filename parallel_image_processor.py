@@ -191,7 +191,7 @@ class MultiProcess(Process):
                 down_sampled_tif_path = Path()
                 if need_down_sampling and down_sampled_path is not None:
                     down_sampled_tif_path = down_sampled_path / f"{tif_prefix}_{idx_down_sampled:06}.tif"
-                    if resume and function is None and down_sampled_tif_path.exists():
+                    if resume and down_sampled_tif_path.exists():
                         for _ in range(len(indices)):
                             self.progress_queue.put(running_next)
                         continue
