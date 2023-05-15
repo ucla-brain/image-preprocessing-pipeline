@@ -220,8 +220,9 @@ def imsave_tif(path: Path, img: ndarray, compression: Union[Tuple[str, int], Non
             else:
                 sleep(0.1)
             continue
-    if die:
-        raise KeyboardInterrupt
+    # if die:
+    #     raise KeyboardInterrupt
+    return die
 
 
 def fft(data, axis=-1, shift=True):

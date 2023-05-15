@@ -128,6 +128,11 @@ class MultiProcess(Process):
             down_sampling_method_y += [None, ] * (reduction_factors[1] - reduction_factors[0])
         self.down_sampling_methods = tuple(zip(down_sampling_method_y, down_sampling_method_x))
 
+    def imsave_tif(self, path, img, compression=None):
+        die = imsave_tif(path, img, compression=compression)
+        if die:
+            self.die = True
+
     def run(self):
         running_next: bool = True
         function = self.function
@@ -244,7 +249,7 @@ class MultiProcess(Process):
                                 img = rot90(img, 3)
 
                             if is_tsv or is_ims or function is not None or rotation in (90, 180, 270):
-                                imsave_tif(tif_save_path, img, compression=compression)
+                                self.imsave_tif(tif_save_path, img, compression=compression)
 
                             if img.dtype != post_processed_d_type:
                                 post_processed_d_type = img.dtype
@@ -275,18 +280,14 @@ class MultiProcess(Process):
                         message = f"\nwarning: {timeout}s timeout reached for processing input file number: {idx}\n"
                         if tif_save_path is not None and not tif_save_path.exists():
                             message += f"\ta dummy (zeros) image is saved as output instead:\n\t\t{tif_save_path}\n"
-                            imsave_tif(tif_save_path, zeros(post_processed_shape, dtype=post_processed_d_type))
+                            self.imsave_tif(tif_save_path, zeros(post_processed_shape, dtype=post_processed_d_type))
                         print(f"{PrintColors.WARNING}{message}{PrintColors.ENDC}")
                         if isinstance(pool, ProcessPoolExecutor):
                             pool.shutdown()
                             pool = ProcessPoolExecutor(max_workers=1)
                     except KeyboardInterrupt:
                         self.die = True
-                        # while not self.args_queue.qsize() == 0:
-                        #     try:
-                        #         self.args_queue.get(block=True, timeout=10)
-                        #     except Empty:
-                        #         continue
+                        break
                     except Exception as inst:
                         print(
                             f"{PrintColors.WARNING}"
@@ -304,14 +305,14 @@ class MultiProcess(Process):
                 if need_down_sampling and down_sampling_method_z is not None and z_stack is not None and \
                         not down_sampled_tif_path.exists():
                     if is_uniform_3d(z_stack):
-                        imsave_tif(down_sampled_tif_path, zeros(self.target_shape, dtype=float32),
-                                   compression=compression)
+                        self.imsave_tif(down_sampled_tif_path, zeros(self.target_shape, dtype=float32),
+                                        compression=compression)
                     else:
                         for z_method in down_sampling_method_z:
                             if z_method is not None and z_stack.shape[0] > 1:
                                 z_stack = block_reduce(z_stack, block_size=(2, 1, 1), func=z_method)
                         assert z_stack.shape[0] == 1
-                        imsave_tif(down_sampled_tif_path, z_stack[0], compression=compression)
+                        self.imsave_tif(down_sampled_tif_path, z_stack[0], compression=compression)
 
             except (Empty, TimeoutError):
                 self.die = True
@@ -457,7 +458,7 @@ def parallel_image_processor(
 
     down_sampled_path = None
     if need_down_sampling:
-        shape_3d = array((num_images, ) + shape)
+        shape_3d = array((num_images,) + shape)
         new_source_voxel = source_voxel
         if rotation in (90, 270):
             shape_3d = array((num_images, shape[1], shape[0]))
