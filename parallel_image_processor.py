@@ -184,7 +184,9 @@ class MultiProcess(Process):
         queue_time_out = 20
         while not self.die and self.args_queue.qsize() > 0:
             if not self.is_memory_enough():
+                self.semaphore.get(block=True)
                 sleep(600)
+                self.semaphore.put(1)
                 continue  # to make sure args_queue has not emptied during sleep
             try:
                 queue_start_time = time()
