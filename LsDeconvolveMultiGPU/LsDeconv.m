@@ -1277,7 +1277,7 @@ function p_log(log_file, message)
 end
 
 function dark_ = dark(filter, bit_depth)
-    % dark is a value greater than 1 surrounded by zeros
+    % dark is a value greater than 5 surrounded by zeros
     if bit_depth == 8
         a=zeros(filter.size, "uint8");
     elseif bit_depth == 16
@@ -1286,7 +1286,7 @@ function dark_ = dark(filter, bit_depth)
         warning('unsupported image bit depth');
         a=zeros(filter.size);
     end
-    a(ceil(filter.size(1)/2), ceil(filter.size(2)/2), ceil(filter.size(3)/2))=1;
+    a(ceil(filter.size(1)/2), ceil(filter.size(2)/2), ceil(filter.size(3)/2)) = 5;
     a=im2single(a);
     a=imgaussfilt3(a, filter.sigma, 'FilterSize', filter.size, 'Padding', 'circular');
     dark_ = max(a(:));
