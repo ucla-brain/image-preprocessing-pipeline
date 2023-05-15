@@ -93,7 +93,7 @@ class MultiProcess(Process):
         self.down_sampled_path = down_sampled_path
         self.target_shape = None
         self.down_sampling_methods = None
-        if self.target_voxel is not None and self.source_voxel is not None:
+        if self.target_voxel is not None and self.source_voxel is not None and shape is not None:
             if rotation in (90, 270):
                 self.calculate_down_sampling_target((shape[1], shape[0]), True)
             else:
@@ -111,9 +111,7 @@ class MultiProcess(Process):
         else:
             new_voxel_size[1] *= self.shape[0] / new_shape[0]
             new_voxel_size[2] *= self.shape[1] / new_shape[1]
-
         new_voxel_size: tuple = tuple(new_voxel_size)
-
         if new_voxel_size != self.source_voxel:
             print(f"image processing function changed the voxel size from {self.source_voxel} to {new_voxel_size}")
 
