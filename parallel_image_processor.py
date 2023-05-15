@@ -5,7 +5,6 @@ from math import ceil, floor, sqrt
 from multiprocessing import Queue, Process, Manager, freeze_support
 from pathlib import Path
 from queue import Empty
-from threading import Semaphore
 from time import time, sleep
 from typing import List, Tuple, Union, Callable
 
@@ -41,7 +40,7 @@ class MultiProcess(Process):
             self,
             progress_queue: Queue,
             args_queue: Queue,
-            semaphore: Semaphore,
+            semaphore: Queue,
             function: Callable,
             images: Union[List[str], str],
             save_path: Path,
@@ -133,9 +132,9 @@ class MultiProcess(Process):
     def is_memory_enough(self) -> bool:
         memory_is_available: bool = True
         if self.needed_memory is not None:
-            self.semaphore.acquire(blocking=True)
+            self.semaphore.get(block=True)
             memory_is_available = virtual_memory().available > self.needed_memory
-            self.semaphore.release()
+            self.semaphore.put(1)
         return memory_is_available
 
     def run(self):
@@ -259,7 +258,8 @@ class MultiProcess(Process):
                                 z_stack = zeros((len(indices),) + self.target_shape, dtype=float32)
 
                         # down-sampling on xy
-                        if need_down_sampling and self.target_shape is not None and self.down_sampling_methods is not None:
+                        if need_down_sampling and self.target_shape is not None and \
+                                self.down_sampling_methods is not None:
                             if is_uniform_2d(img):
                                 z_stack[idx_z] = zeros(self.target_shape, dtype=float32)
                             else:
@@ -479,7 +479,8 @@ def parallel_image_processor(
         down_sampled_path.mkdir(exist_ok=True)
 
     progress_queue = Queue()
-    semaphore = Semaphore()
+    semaphore = Queue()
+    semaphore.put(1)
     workers = min(max_processors, args_queue.qsize())
     print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}starting workers ...")
     for worker in tqdm(range(workers), desc='workers'):
