@@ -118,6 +118,7 @@ class MultiProcess(Process):
         reduction_times = self.target_voxel / array(new_voxel_size[1:3])
         target_shape = new_shape / reduction_times
         self.target_shape = tuple(target_shape.round().astype(int))
+
         reduction_factors = np_floor(np_sqrt(reduction_times)).astype(int)
         down_sampling_method_y = list(np_max if i % 2 == 0 else np_mean for i in range(reduction_factors[0]))
         down_sampling_method_x = list(np_mean if i % 2 == 0 else np_max for i in range(reduction_factors[1]))
