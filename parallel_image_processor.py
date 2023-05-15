@@ -94,10 +94,11 @@ class MultiProcess(Process):
         self.down_sampled_path = down_sampled_path
         self.target_shape = None
         self.down_sampling_methods = None
-        if rotation in (90, 270):
-            self.calculate_down_sampling_target((shape[1], shape[0]), True)
-        else:
-            self.calculate_down_sampling_target(shape, False)
+        if self.target_shape is not None and self.source_voxel is not None:
+            if rotation in (90, 270):
+                self.calculate_down_sampling_target((shape[1], shape[0]), True)
+            else:
+                self.calculate_down_sampling_target(shape, False)
         self.rotation = rotation
 
     def calculate_down_sampling_target(self, new_shape: Tuple[int, int], is_rotated: bool):
