@@ -254,7 +254,7 @@ class MultiProcess(Process):
                             if img.dtype != post_processed_d_type:
                                 post_processed_d_type = img.dtype
 
-                            if img.shape != post_processed_shape or rotation in (90, 270):
+                            if rotation in (90, 270) or img.shape != post_processed_shape:
                                 post_processed_shape = img.shape
                                 if need_down_sampling:
                                     self.calculate_down_sampling_target(post_processed_shape, rotation in (90, 270))
