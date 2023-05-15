@@ -183,8 +183,9 @@ class MultiProcess(Process):
             images = file[f"DataSet/ResolutionLevel 0/TimePoint 0/Channel {channel}/Data"]
         queue_time_out = 20
         while not self.die and self.args_queue.qsize() > 0:
-            while not self.is_memory_enough():
-                sleep(60)
+            if not self.is_memory_enough():
+                sleep(600)
+                continue  # to make sure args_queue has not emptied during sleep
             try:
                 queue_start_time = time()
                 idx_down_sampled, indices = self.args_queue.get(block=True, timeout=queue_time_out)
