@@ -302,8 +302,7 @@ class MultiProcess(Process):
                     self.progress_queue.put(running_next)
 
                 # approximate down-sampling on the z-axis
-                if need_down_sampling and down_sampling_method_z is not None and z_stack is not None and \
-                        not down_sampled_tif_path.exists():
+                if need_down_sampling and down_sampling_method_z is not None and z_stack is not None:
                     if is_uniform_3d(z_stack):
                         self.imsave_tif(down_sampled_tif_path, zeros(self.target_shape, dtype=float32),
                                         compression=compression)
