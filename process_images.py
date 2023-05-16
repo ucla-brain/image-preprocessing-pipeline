@@ -594,7 +594,7 @@ def process_channel(
     tsv_volume = TSVVolume.load(stitched_path / f'{channel}_xml_import_step_5.xml')
     shape: Tuple[int, int, int] = tsv_volume.volume.shape  # shape is in z y x format
 
-    memory_needed_per_thread = 64 * shape[1] * shape[2] / 1024 ** 3
+    memory_needed_per_thread = 48 * shape[1] * shape[2] / 1024 ** 3
     if tsv_volume.dtype in (uint8, "uint8"):
         memory_needed_per_thread /= 2
     memory_ram = virtual_memory().available / 1024 ** 3  # in GB
