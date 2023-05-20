@@ -439,20 +439,21 @@ function process(inpath, outpath, log_file, info, block, psf, numit, ...
     semkey_single = 1e3;
     semkey_loading_base = 1e4;
 
-    semaphore_create(semkey_single, 1);
-    for idx = 1 : numel(unique_gpus)
-        gpu = unique_gpus(idx);
-        semaphore_create(gpu, 1);
-        % semaphore_create(gpu + semkey_single, max(1, gpu_count(idx) - 1));
-        semaphore_create(gpu + semkey_loading_base, 3);
-        unlock_gpu(fullfile(tempdir, ['gpu_full_' num2str(gpu)]));
-        unlock_gpu(fullfile(tempdir, ['gpu_semi_' num2str(gpu)]));
-    end
-
     % start deconvolution
     num_blocks = block.nx * block.ny * block.nz;
     remaining_blocks = num_blocks;
     while remaining_blocks > 0
+
+        semaphore_create(semkey_single, 1);
+        for idx = 1 : numel(unique_gpus)
+            gpu = unique_gpus(idx);
+            semaphore_create(gpu, 1);
+            % semaphore_create(gpu + semkey_single, max(1, gpu_count(idx) - 1));
+            semaphore_create(gpu + semkey_loading_base, 3);
+            unlock_gpu(fullfile(tempdir, ['gpu_full_' num2str(gpu)]));
+            unlock_gpu(fullfile(tempdir, ['gpu_semi_' num2str(gpu)]));
+        end
+
         for i = starting_block : num_blocks
             % skip blocks already worked on
             block_path = fullfile(cache_drive, ['bl_' num2str(i) '.mat']);
@@ -492,7 +493,7 @@ function process(inpath, outpath, log_file, info, block, psf, numit, ...
     end
 
     % postprocess and write tif files
-    delete(gcp('nocreate'));
+    % delete(gcp('nocreate'));
     postprocess_save(...
         outpath, cache_drive, min_max_path, log_file, clipval, ...
         p1, p2, info, resume, block, amplification);
@@ -930,9 +931,9 @@ function postprocess_save(...
         disp(['resuming from block ' num2str(blnr) ' and image number ' num2str(imagenr)]);
     end
     clear num_tif_files;
-
-    pool = parpool('local', 8, 'IdleTimeout', Inf);
-    async_load(1 : block.nx * block.ny) = parallel.FevalFuture;
+    
+    %pool = parpool('local', 8, 'IdleTimeout', Inf);
+    %async_load(1 : block.nx * block.ny) = parallel.FevalFuture;
     for nz = starting_z_block : block.nz
         disp(['mounting layer ' num2str(nz) ' from ' num2str(block.nz)]);
 
@@ -944,11 +945,13 @@ function postprocess_save(...
                 R = zeros(info.x, info.y, p2(blnr, z) - p1(blnr, z) + 1 - 2*block.z_pad, 'single');
             end
         end
-        
+        delete(gcp('nocreate'));
+        pool = parpool('local', 16, 'IdleTimeout', Inf);
+        async_load(1 : block.nx * block.ny) = parallel.FevalFuture;
         for j = 1 : block.nx * block.ny
              async_load(j) = pool.parfeval(@my_load, 1, blocklist(blnr+j-1));
         end
-        time_out = 120;
+        %time_out = 120;
         for j = 1 : block.nx * block.ny
             if ispc
                 file_path_parts = strsplit(blocklist(blnr), '\');
@@ -956,13 +959,12 @@ function postprocess_save(...
                 file_path_parts = strsplit(blocklist(blnr), '/');
             end
             file_name = char(file_path_parts(end));
-            
-            % R( p1(blnr, x) : p2(blnr, x), p1(blnr, y) : p2(blnr, y), :) = my_load(blocklist(blnr));
             time_out_start = tic;
-            async_load(j).wait('finished', time_out); % timeout in seconds
+            %async_load(j).wait('finished', time_out); % timeout in seconds
             bl = async_load(j).fetchOutputs;
+            %bl = my_load(blocklist(blnr));
             loading_time = toc(time_out_start);
-            time_out = 0.9 * time_out + 0.3 * loading_time;
+            %time_out = 0.9 * time_out + 0.3 * loading_time;
             asigment_time_start = tic;
             R(p1(blnr, x) : p2(blnr, x), p1(blnr, y) : p2(blnr, y), :) = bl;
             disp(['   block ' num2str(j) ':' num2str(block.nx * block.ny) ' file: ' file_name ' loaded in ' num2str(loading_time) ' asinged in ' num2str(toc(asigment_time_start))]);
@@ -993,7 +995,7 @@ function postprocess_save(...
         disp(['saving ' num2str(size(R, 3)) ' images...']);
         save_image(R, outpath, imagenr, rawmax, info.flip_upside_down);
         imagenr = imagenr + size(R, 3);
-        clear R;
+        % clearvars R;
     end
 
     % delte tmp files

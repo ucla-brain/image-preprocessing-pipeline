@@ -31,7 +31,7 @@ from pystripe.core import batch_filter, imread_tif_raw_png, imsave_tif, MultiPro
 from supplements.cli_interface import ask_for_a_number_in_range, date_time_now, select_multiple_among_list
 from supplements.cli_interface import select_among_multiple_options, ask_true_false_question, PrintColors
 from supplements.downsampling import TifStack
-from tsv.volume import TSVVolume
+from tsv.volume import TSVVolume, VExtent
 
 # experiment setup: user needs to set them right
 # AllChannels = [(channel folder name, rgb color)]
@@ -593,8 +593,15 @@ def process_channel(
 
     tsv_volume = TSVVolume.load(stitched_path / f'{channel}_xml_import_step_5.xml')
     shape: Tuple[int, int, int] = tsv_volume.volume.shape  # shape is in z y x format
+    # TODO: find threshold, bleach_correction_clip_max, bleach_correction_clip_min for all images
+    # img = tsv_volume.imread(
+    #     VExtent(
+    #         tsv_volume.volume.x0, tsv_volume.volume.x1,
+    #         tsv_volume.volume.y0, tsv_volume.volume.y1,
+    #         tsv_volume.volume.z0 + shape[0]//2, tsv_volume.volume.z0 + shape[0]//2 + 1),
+    #     tsv_volume.dtype)[0]
 
-    memory_needed_per_thread = 48 * shape[1] * shape[2] / 1024 ** 3
+    memory_needed_per_thread = 64 * shape[1] * shape[2] / 1024 ** 3
     if tsv_volume.dtype in (uint8, "uint8"):
         memory_needed_per_thread /= 2
     memory_ram = virtual_memory().available / 1024 ** 3  # in GB

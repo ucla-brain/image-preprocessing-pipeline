@@ -4,6 +4,7 @@ import re
 import abc
 import sys
 import itertools
+
 if sys.version_info.major >= 3 and sys.version_info.minor >= 6:
     import enum
 else:
@@ -577,21 +578,21 @@ class TSVVolumeBase:
                     compute_cosine(intersection, stack, ostack, part)
                     compute_cosine(intersection, stack, ostack, mpart)
             result[
-            intersection.z0 - volume.z0:intersection.z1 - volume.z0,
-            intersection.y0 - volume.y0:intersection.y1 - volume.y0,
-            intersection.x0 - volume.x0:intersection.x1 - volume.x0
+                intersection.z0 - volume.z0:intersection.z1 - volume.z0,
+                intersection.y0 - volume.y0:intersection.y1 - volume.y0,
+                intersection.x0 - volume.x0:intersection.x1 - volume.x0
             ] += part
             multiplier[
-            intersection.z0 - volume.z0:intersection.z1 - volume.z0,
-            intersection.y0 - volume.y0:intersection.y1 - volume.y0,
-            intersection.x0 - volume.x0:intersection.x1 - volume.x0
+                intersection.z0 - volume.z0:intersection.z1 - volume.z0,
+                intersection.y0 - volume.y0:intersection.y1 - volume.y0,
+                intersection.x0 - volume.x0:intersection.x1 - volume.x0
             ] += mpart
         result = result / (multiplier + finfo(float32).eps)
-        if np_d_type(dtype).kind in ("u", "i"):
-            result = clip(around(result, 0),
-                          iinfo(dtype).min,
-                          iinfo(dtype).max)
-        return result.astype(dtype)
+        if result.dtype != dtype and np_d_type(dtype).kind in ("u", "i"):
+            result = around(result, 0)
+            clip(iinfo(dtype).min, iinfo(dtype).max, out=result)
+            result = result.astype(dtype)
+        return result
 
     def make_diagnostic_img(self, volume: VExtentBase):
         """Create a diagnostic image with separate channels for each stack
