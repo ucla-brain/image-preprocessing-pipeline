@@ -106,8 +106,8 @@ def main(args: Namespace):
                 "lightsheet": args.background_subtraction,
                 "bleach_correction_frequency": 0.0005 if args.bleach_correction else None,
                 "bleach_correction_max_method": False,
-                "bleach_correction_clip_min": 20,
-                "bleach_correction_clip_max": 255,
+                "bleach_correction_clip_min": args.bleach_correction_clip_min,
+                "bleach_correction_clip_max": args.bleach_correction_clip_max,
                 "exclude_dark_edges_set_them_to_zero": True if (
                         args.bleach_correction or args.background_subtraction) else False,
                 "rotate": 0,
@@ -288,6 +288,10 @@ if __name__ == '__main__':
                              "Default is --no-background_subtraction")
     parser.add_argument("--bleach_correction", default=False, action=BooleanOptionalAction,
                         help="image pre-processing: correct image bleaching. Default is --no-bleach_correction.")
+    parser.add_argument("--bleach_correction_clip_min", type=float, default=20,
+                        help="Foreground vs background threshold.")
+    parser.add_argument("--bleach_correction_clip_max", type=float, default=255,
+                        help="max of the image without outliers.")
     parser.add_argument("--convert_to_8bit", default=False, action=BooleanOptionalAction,
                         help="image pre-processing: convert to 8-bit. Default is --no-convert_to_8bit")
     parser.add_argument("--bit_shift", "-b", type=int, default=8,
