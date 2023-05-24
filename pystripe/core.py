@@ -813,7 +813,7 @@ def process_img(
                 if verbose:
                     speedup = 100 - (x_slice_max - x_slice_min) * (y_slice_max - y_slice_min) / (
                             img.shape[0] * img.shape[1]) * 100
-                    print(f"slicing: y: {y_slice_min} to {y_slice_max} and x: {x_slice_min} to {x_slice_max},  "
+                    print(f"slicing: y: {y_slice_min} to {y_slice_max} and x: {x_slice_min} to {x_slice_max}, "
                           f"performance enhancement: {speedup:.1f}%")
                 img = img[y_slice_min:y_slice_max, x_slice_min:x_slice_max]
 

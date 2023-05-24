@@ -252,16 +252,16 @@ if __name__ == '__main__':
         epilog="Developed 2022 by Keivan Moradi, Hongwei Dong Lab (B.R.A.I.N) at UCLA\n"
     )
     parser.add_argument("--input", "-i", type=str, required=True,
-                        help="Path to input image or path. Input path can be: a tera-stitcher stage 5 volume (xml) file"
+                        help="path to input image or path. Input path can be: a tera-stitcher stage 5 volume (xml) file"
                              ", Imaris (ims) image, or a 2D tif[f]?, png, raw series.")
     parser.add_argument("--tif", "-t", type=str, required=False, default='',
-                        help="Path to tif output path.")
+                        help="path to tif output path.")
     parser.add_argument("--teraFly", "-f", type=str, required=False, default='',
-                        help="Path to output teraFly path.")
+                        help="path to output teraFly path.")
     parser.add_argument("--imaris", "-o", type=str, required=False, default='',
-                        help="Path to imaris output file.")
+                        help="path to imaris output file.")
     parser.add_argument("--movie", "-m", type=str, required=False, default='',
-                        help="Path to mp4 output file")
+                        help="path to mp4 output file")
     parser.add_argument("--nthreads", "-n", type=int, default=psutil.cpu_count(logical=False),
                         help="number of threads. default is all physical cores for tif conversion and 12 for TeraFly.")
     parser.add_argument("--channel", "-c", type=int, default=0,
@@ -289,11 +289,11 @@ if __name__ == '__main__':
     parser.add_argument("--bleach_correction", default=False, action=BooleanOptionalAction,
                         help="image pre-processing: correct image bleaching. Default is --no-bleach_correction.")
     parser.add_argument("--bleach_correction_clip_min", type=float, default=20,
-                        help="Foreground vs background threshold.")
+                        help="foreground vs background threshold. Default is 20.")
     parser.add_argument("--bleach_correction_clip_max", type=float, default=255,
-                        help="max of the image without outliers.")
+                        help="max of the image without outliers. Default is 255.")
     parser.add_argument("--convert_to_8bit", default=False, action=BooleanOptionalAction,
-                        help="image pre-processing: convert to 8-bit. Default is --no-convert_to_8bit")
+                        help="Image pre-processing: convert to 8-bit. Default is --no-convert_to_8bit")
     parser.add_argument("--bit_shift", "-b", type=int, default=8,
                         help="bit_shift for 8-bit conversion. An number between 0 and 8. "
                              "Smaller values make images brighter compared with he original image. "
