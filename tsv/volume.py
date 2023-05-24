@@ -590,7 +590,7 @@ class TSVVolumeBase:
         result = result / (multiplier + finfo(float32).eps)
         if result.dtype != dtype and np_d_type(dtype).kind in ("u", "i"):
             result = around(result, 0)
-            clip(iinfo(dtype).min, iinfo(dtype).max, out=result)
+            clip(result, iinfo(dtype).min, iinfo(dtype).max, out=result)
             result = result.astype(dtype)
         return result
 
