@@ -27,7 +27,7 @@ from tqdm import tqdm
 from flat import create_flat_img
 from parallel_image_processor import parallel_image_processor
 from pystripe.core import batch_filter, imread_tif_raw_png, imsave_tif, MultiProcessQueueRunner, progress_manager, \
-    process_img, convert_to_8bit_fun
+    process_img, convert_to_8bit_fun, log1p_jit, expm1_jit, otsu_threshold, prctl
 from supplements.cli_interface import ask_for_a_number_in_range, date_time_now, select_multiple_among_list
 from supplements.cli_interface import select_among_multiple_options, ask_true_false_question, PrintColors
 from supplements.downsampling import TifStack
@@ -593,13 +593,16 @@ def process_channel(
 
     tsv_volume = TSVVolume.load(stitched_path / f'{channel}_xml_import_step_5.xml')
     shape: Tuple[int, int, int] = tsv_volume.volume.shape  # shape is in z y x format
-    # TODO: find threshold, bleach_correction_clip_max, bleach_correction_clip_min for all images
-    # img = tsv_volume.imread(
-    #     VExtent(
-    #         tsv_volume.volume.x0, tsv_volume.volume.x1,
-    #         tsv_volume.volume.y0, tsv_volume.volume.y1,
-    #         tsv_volume.volume.z0 + shape[0]//2, tsv_volume.volume.z0 + shape[0]//2 + 1),
-    #     tsv_volume.dtype)[0]
+    img = tsv_volume.imread(
+        VExtent(
+            tsv_volume.volume.x0, tsv_volume.volume.x1,
+            tsv_volume.volume.y0, tsv_volume.volume.y1,
+            tsv_volume.volume.z0 + shape[0]//2, tsv_volume.volume.z0 + shape[0]//2 + 1),
+        tsv_volume.dtype)[0]
+    img = log1p_jit(img)
+    bleach_correction_clip_min = expm1_jit(otsu_threshold(img))
+    bleach_correction_clip_max = expm1_jit(prctl(img, 99))
+    del img
 
     memory_needed_per_thread = 64 * shape[1] * shape[2] / 1024 ** 3
     if tsv_volume.dtype in (uint8, "uint8"):
@@ -629,6 +632,8 @@ def process_channel(
         f"\tavailable ram = {memory_ram:.1f} GB\n"
         f"\tbleach correction frequency: {bleach_correction_frequency}\n"
         f"\tbleach correction sigma: {bleach_correction_sigma}\n"
+        f"\tbleach correction clip min: {bleach_correction_clip_min}\n"
+        f"\tbleach correction clip max: {bleach_correction_clip_max}\n"
         f"\tbackground subtraction: {need_lightsheet_cleaning}\n"
         f"\trotate: {90 if need_rotation_stitched_tif else 0}\n"
         f"\ttsv volume shape (zyx): {shape}\n"
@@ -644,8 +649,10 @@ def process_channel(
         kwargs={
             "bleach_correction_frequency": bleach_correction_frequency,
             "bleach_correction_max_method": False,
-            "bleach_correction_clip_max": 255,
-            "exclude_dark_edges_set_them_to_zero": True if need_bleach_correction or need_lightsheet_cleaning else False,
+            "bleach_correction_clip_min": bleach_correction_clip_min,
+            "bleach_correction_clip_max": bleach_correction_clip_max,
+            "exclude_dark_edges_set_them_to_zero": True if (
+                    need_bleach_correction or need_lightsheet_cleaning) else False,
             "threshold": None,
             "sigma": bleach_correction_sigma,
             "bidirectional": True if need_bleach_correction else False,

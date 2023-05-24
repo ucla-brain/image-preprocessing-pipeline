@@ -557,6 +557,7 @@ def filter_streaks(
         bidirectional: bool = False,
         bleach_correction_frequency: float = None,
         bleach_correction_max_method: bool = False,
+        bleach_correction_clip_min: float = None,
         bleach_correction_clip_max: float = None,
         bleach_correction_y_slice_min: int = None,
         bleach_correction_y_slice_max: int = None,
@@ -564,7 +565,7 @@ def filter_streaks(
         bleach_correction_x_slice_max: int = None,
         verbose: bool = False
 ) -> ndarray:
-    """Filter horizontal streaks using wavelet-FFT filter
+    """Filter horizontal streaks using wavelet-FFT filter and apply bleach correction
 
     Parameters
     ----------
@@ -587,8 +588,10 @@ def filter_streaks(
     bleach_correction_max_method : bool
         use max value on x and y axes to create the filter. Max method is faster and smoother but less accurate
         for large images.
+    bleach_correction_clip_min: float
+        background vs foreground threshold.
     bleach_correction_clip_max: float
-        background max value
+        foreground max value
     bleach_correction_y_slice_min: int
         from 0 to leach_correction_y_slice_min of the image on y-axis that will not be corrected.
     bleach_correction_y_slice_max: int
@@ -620,8 +623,8 @@ def filter_streaks(
         img = pad(img, ((0, pad_y), (0, pad_x)), mode="edge")
 
     if bleach_correction_frequency is not None:
-        clip_min = otsu_threshold(img)
-        clip_max = log1p(bleach_correction_clip_max) if bleach_correction_clip_max is not None else None
+        clip_min = log1p(bleach_correction_clip_min) if bleach_correction_clip_min is not None else otsu_threshold(img)
+        clip_max = log1p(bleach_correction_clip_max) if bleach_correction_clip_max is not None else prctl(img, 99)
         if clip_max is None or (clip_max is not None and clip_min < clip_max):
             img = correct_bleaching(
                 img, bleach_correction_frequency, clip_min, clip_max,
@@ -732,7 +735,8 @@ def process_img(
         threshold: float = None,
         bidirectional: bool = False,
         bleach_correction_frequency: float = None,
-        bleach_correction_clip_max: int = None,
+        bleach_correction_clip_min: float = None,
+        bleach_correction_clip_max: float = None,
         bleach_correction_max_method: bool = False,
         bleach_correction_y_slice_min: int = None,
         bleach_correction_y_slice_max: int = None,
@@ -780,35 +784,28 @@ def process_img(
                       f"warning: image and flat arrays had different shapes"
                       f"{PrintColors.ENDC}")
 
-        img_fg = y_slice_min = y_slice_max = x_slice_min = x_slice_max = None
+        y_slice_min = y_slice_max = x_slice_min = x_slice_max = None
         if bleach_correction_frequency is not None or exclude_dark_edges_set_them_to_zero:
-            noise_percentile = 5
-            foreground_percentile = 25
             img_x_max = np_max(img, axis=0)
             img_y_max = np_max(img, axis=1)
             img_x_max_min, img_x_max_max = min_max_1d(img_x_max)
             img_y_max_min, img_y_max_max = min_max_1d(img_y_max)
             img_max = max(img_x_max_max, img_y_max_max)
             img_min = np_min(img)
-            img_x_noise, img_x_fg = prctl(img_x_max, (noise_percentile, foreground_percentile))
-            img_y_noise, img_y_fg = prctl(img_y_max, (noise_percentile, foreground_percentile))
+            noise_percentile = 5
+            img_x_noise = prctl(img_x_max, noise_percentile)
+            img_y_noise = prctl(img_y_max, noise_percentile)
             img_noise = min(img_x_noise, img_y_noise)
-            # img_noise = min(img_y_max_min, img_x_max_min)
-            img_fg = bleach_correction_clip_max
-            if bleach_correction_clip_max is None:
-                img_fg = append(img_x_max[img_x_max < img_x_fg], img_y_max[img_y_max < img_y_fg])
-                img_fg = img_fg[~isnan(img_fg)]
-                if img_fg.shape[0] > 0:
-                    img_fg = int(np_mean(img_fg))
-                else:
-                    bleach_correction_frequency = None
-                    print(f"{PrintColors.WARNING}"
-                          f"could not calculate img_fg. bleach correction is disabled."
-                          f"{PrintColors.ENDC}")
+            if dark is not None and dark > 0:
+                if bleach_correction_clip_max is not None:
+                    bleach_correction_clip_max = max(0.0, bleach_correction_clip_max - dark)
+                if bleach_correction_clip_min is not None:
+                    bleach_correction_clip_min = max(0.0, bleach_correction_clip_min - dark)
             if verbose:
-                print(f"min={img_min}, x_max_min={img_x_max_min}, y_max_min={img_y_max_min}, \n"
-                      f"noise={img_noise}, x_noise={img_x_noise}, y_noise={img_y_noise}, \n"
-                      f"foreground={img_fg}, x_foreground={img_x_fg}, y_foreground {img_y_fg}, \n"
+                print(f"min={img_min}, x_max_min={img_x_max_min}, y_max_min={img_y_max_min},\n"
+                      f"noise={img_noise}, x_noise={img_x_noise}, y_noise={img_y_noise},\n"
+                      f"bleach_correction_clip_min={bleach_correction_clip_min}, "
+                      f"bleach_correction_clip_max={bleach_correction_clip_max},\n"
                       f"max={img_max}, x_max_max={img_x_max_max}, y_max_max={img_y_max_max}.")
             if exclude_dark_edges_set_them_to_zero:
                 y_slice_min, y_slice_max = slice_non_zero_box(img_y_max, noise=img_x_noise)
@@ -860,8 +857,8 @@ def process_img(
                 bidirectional=bidirectional,
                 bleach_correction_frequency=bleach_correction_frequency,
                 bleach_correction_max_method=bleach_correction_max_method,
-                bleach_correction_clip_max=(img_fg - dark) if (
-                        img_fg is not None and dark is not None and dark > 0) else None,
+                bleach_correction_clip_min=bleach_correction_clip_min,
+                bleach_correction_clip_max=bleach_correction_clip_max,
                 bleach_correction_y_slice_min=correct_slice_value(
                     bleach_correction_y_slice_min, y_slice_min, None),
                 bleach_correction_y_slice_max=correct_slice_value(
