@@ -106,6 +106,7 @@ def main(args: Namespace):
                 "lightsheet": args.background_subtraction,
                 "bleach_correction_frequency": 0.0005 if args.bleach_correction else None,
                 "bleach_correction_max_method": False,
+                "bleach_correction_clip_min": 20,
                 "bleach_correction_clip_max": 255,
                 "exclude_dark_edges_set_them_to_zero": True if (
                         args.bleach_correction or args.background_subtraction) else False,
