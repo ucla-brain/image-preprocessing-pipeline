@@ -593,16 +593,6 @@ def process_channel(
 
     tsv_volume = TSVVolume.load(stitched_path / f'{channel}_xml_import_step_5.xml')
     shape: Tuple[int, int, int] = tsv_volume.volume.shape  # shape is in z y x format
-    img = tsv_volume.imread(
-        VExtent(
-            tsv_volume.volume.x0, tsv_volume.volume.x1,
-            tsv_volume.volume.y0, tsv_volume.volume.y1,
-            tsv_volume.volume.z0 + shape[0]//2, tsv_volume.volume.z0 + shape[0]//2 + 1),
-        tsv_volume.dtype)[0]
-    img = log1p_jit(img)
-    bleach_correction_clip_min = expm1_jit(otsu_threshold(img))
-    bleach_correction_clip_max = expm1_jit(prctl(img, 99))
-    del img
 
     memory_needed_per_thread = 64 * shape[1] * shape[2] / 1024 ** 3
     if tsv_volume.dtype in (uint8, "uint8"):
@@ -610,7 +600,7 @@ def process_channel(
     memory_ram = virtual_memory().available / 1024 ** 3  # in GB
     merge_step_cores = min(floor(memory_ram / memory_needed_per_thread), cpu_physical_core_count)
 
-    bleach_correction_frequency = None
+    bleach_correction_clip_min = bleach_correction_clip_max = bleach_correction_frequency = None
     bleach_correction_sigma = (0, 0)
     if need_bleach_correction:
         if new_tile_size is not None:
@@ -620,6 +610,17 @@ def process_channel(
         else:
             bleach_correction_frequency = 1 / min(tile_size)
         bleach_correction_sigma = (1 / bleach_correction_frequency * 2,) * 2
+
+        img = tsv_volume.imread(
+            VExtent(
+                tsv_volume.volume.x0, tsv_volume.volume.x1,
+                tsv_volume.volume.y0, tsv_volume.volume.y1,
+                tsv_volume.volume.z0 + shape[0] // 2, tsv_volume.volume.z0 + shape[0] // 2 + 1),
+            tsv_volume.dtype)[0]
+        img = log1p_jit(img)
+        bleach_correction_clip_min = expm1_jit(otsu_threshold(img))
+        bleach_correction_clip_max = expm1_jit(prctl(img, 99))
+        del img
 
     p_log(
         f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
