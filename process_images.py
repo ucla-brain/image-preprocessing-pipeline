@@ -21,6 +21,7 @@ import mpi4py
 import psutil
 from cpufeature.extension import CPUFeature
 from numpy import ndarray, zeros, uint8
+from numpy import round as np_round
 from psutil import cpu_count, virtual_memory
 from tqdm import tqdm
 
@@ -455,10 +456,10 @@ def process_channel(
     inspect_for_missing_tiles_get_files_list(preprocessed_path / channel)
 
     # stitching: align the tiles GPU accelerated & parallel ------------------------------------------------------------
-    p_log(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
-          f"{channel}: aligning tiles using parastitcher ...")
-
     if not stitched_path.joinpath(f"{channel}_xml_import_step_5.xml").exists() or not continue_process_terastitcher:
+        p_log(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
+              f"{channel}: aligning tiles using parastitcher ...")
+
         # tile_overlap_y = int(tile_size[0] * tile_overlap_percent / 100)
         # tile_overlap_x = int(tile_size[1] * tile_overlap_percent / 100)
         # if new_tile_size is not None:
@@ -603,6 +604,8 @@ def process_channel(
     bleach_correction_clip_min = bleach_correction_clip_max = bleach_correction_frequency = None
     bleach_correction_sigma = (0, 0)
     if need_bleach_correction:
+        p_log(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
+              f"{channel}: calculating clip_min and clip_max values for bleach correction ...")
         if new_tile_size is not None:
             bleach_correction_frequency = 1 / min(new_tile_size)
         elif down_sampling_factor is not None:
@@ -618,8 +621,8 @@ def process_channel(
                 tsv_volume.volume.z0 + shape[0] // 2, tsv_volume.volume.z0 + shape[0] // 2 + 1),
             tsv_volume.dtype)[0]
         img = log1p_jit(img)
-        bleach_correction_clip_min = expm1_jit(otsu_threshold(img))
-        bleach_correction_clip_max = expm1_jit(prctl(img, 99))
+        bleach_correction_clip_min = np_round(expm1_jit(otsu_threshold(img)))
+        bleach_correction_clip_max = np_round(expm1_jit(prctl(img, 99)))
         del img
 
     p_log(
@@ -631,16 +634,16 @@ def process_channel(
         f"\tmemory needed per thread = {memory_needed_per_thread:.1f} GB\n"
         f"\tmemory needed total = {memory_needed_per_thread * merge_step_cores:.1f} GB\n"
         f"\tavailable ram = {memory_ram:.1f} GB\n"
+        f"\ttsv volume shape (zyx): {shape}\n"
+        f"\ttsv volume data type: {tsv_volume.dtype}\n"
+        f"\t8-bit conversion: {need_16bit_to_8bit_conversion}\n"
+        f"\tbit-shift to right: {right_bit_shift}"
         f"\tbleach correction frequency: {bleach_correction_frequency}\n"
         f"\tbleach correction sigma: {bleach_correction_sigma}\n"
         f"\tbleach correction clip min: {bleach_correction_clip_min}\n"
         f"\tbleach correction clip max: {bleach_correction_clip_max}\n"
         f"\tbackground subtraction: {need_lightsheet_cleaning}\n"
         f"\trotate: {90 if need_rotation_stitched_tif else 0}\n"
-        f"\ttsv volume shape (zyx): {shape}\n"
-        f"\ttsv volume data type: {tsv_volume.dtype}\n"
-        f"\t8-bit conversion: {need_16bit_to_8bit_conversion}\n"
-        f"\tbit-shift to right: {right_bit_shift}"
     )
     # need_lightsheet_cleaning
     return_code = parallel_image_processor(
