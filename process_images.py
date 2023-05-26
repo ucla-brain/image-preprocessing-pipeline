@@ -622,7 +622,7 @@ def process_channel(
             tsv_volume.dtype)[0]
         img = log1p_jit(img)
         bleach_correction_clip_min = np_round(expm1_jit(otsu_threshold(img)))
-        bleach_correction_clip_max = np_round(expm1_jit(prctl(img, 99)))
+        bleach_correction_clip_max = np_round(expm1_jit(prctl(img[img > log1p_jit(bleach_correction_clip_min)], 99.9)))
         del img
 
     p_log(
@@ -637,13 +637,13 @@ def process_channel(
         f"\ttsv volume shape (zyx): {shape}\n"
         f"\ttsv volume data type: {tsv_volume.dtype}\n"
         f"\t8-bit conversion: {need_16bit_to_8bit_conversion}\n"
-        f"\tbit-shift to right: {right_bit_shift}"
+        f"\tbit-shift to right: {right_bit_shift}\n"
         f"\tbleach correction frequency: {bleach_correction_frequency}\n"
         f"\tbleach correction sigma: {bleach_correction_sigma}\n"
         f"\tbleach correction clip min: {bleach_correction_clip_min}\n"
         f"\tbleach correction clip max: {bleach_correction_clip_max}\n"
         f"\tbackground subtraction: {need_lightsheet_cleaning}\n"
-        f"\trotate: {90 if need_rotation_stitched_tif else 0}\n"
+        f"\trotate: {90 if need_rotation_stitched_tif else 0}"
     )
     # need_lightsheet_cleaning
     return_code = parallel_image_processor(
