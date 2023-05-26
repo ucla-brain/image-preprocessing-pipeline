@@ -134,7 +134,7 @@ def main(args: Namespace):
             "--sfmt=\"TIFF (series, 2D)\"",
             "--dfmt=\"TIFF (tiled, 3D)\"",
             "--resolutions=\"012345\"",
-            "--clist=0",
+            f"--clist={args.channel}",
             "--halve=mean",
             # "--noprogressbar",
             # "--sparse_data",
