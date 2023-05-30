@@ -821,7 +821,7 @@ def process_img(
                 dark = img_noise
 
         if gaussian_filter_2d:
-            img = gaussian(img, sigma=0.5, preserve_range=True, truncate=2)
+            img = gaussian(img, sigma=1, preserve_range=True, truncate=2)
 
         if down_sample is not None:
             down_sample_method = down_sample_method.lower()
