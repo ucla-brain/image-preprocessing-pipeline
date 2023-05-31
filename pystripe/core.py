@@ -942,6 +942,8 @@ def read_filter_save(
         bidirectional: bool = False,
         bleach_correction_frequency: float = None,
         bleach_correction_max_method: bool = True,
+        bleach_correction_clip_min: float = None,
+        bleach_correction_clip_max: float = None,
         bleach_correction_y_slice_min: int = None,
         bleach_correction_y_slice_max: int = None,
         bleach_correction_x_slice_min: int = None,
@@ -992,6 +994,10 @@ def read_filter_save(
         from 0 to leach_correction_y_slice_min of the image on y-axis that will not be corrected.
     bleach_correction_y_slice_max: int
         from bleach_correction_y_slice_max to max of the image on y-axis that will not be corrected.
+    bleach_correction_clip_max: float
+        max values in the image omitting outliers
+    bleach_correction_clip_min: float
+        foreground vs background threshold
     bleach_correction_x_slice_min: int
         from 0 to leach_correction_x_slice_min of the image on x-axis that will not be corrected.
     bleach_correction_x_slice_max: int
@@ -1101,6 +1107,8 @@ def read_filter_save(
             dark=dark,
             bleach_correction_frequency=bleach_correction_frequency,
             bleach_correction_max_method=bleach_correction_max_method,
+            bleach_correction_clip_min=bleach_correction_clip_min,
+            bleach_correction_clip_max=bleach_correction_clip_max,
             bleach_correction_y_slice_min=bleach_correction_y_slice_min,
             bleach_correction_y_slice_max=bleach_correction_y_slice_max,
             bleach_correction_x_slice_min=bleach_correction_x_slice_min,
@@ -1337,6 +1345,8 @@ def batch_filter(
         dark: int = 0,
         bleach_correction_frequency: float = None,
         bleach_correction_max_method: bool = True,
+        bleach_correction_clip_min: float = None,
+        bleach_correction_clip_max: float = None,
         sigma: Tuple[int, int] = (0, 0),
         level=0,
         wavelet: str = 'db9',
@@ -1398,6 +1408,10 @@ def batch_filter(
     bleach_correction_max_method: bool
         use max value on x and y axes to create the filter. Max method is faster and smoother but less accurate
         for large images.
+    bleach_correction_clip_max: float
+        max values in the image omitting outliers
+    bleach_correction_clip_min: float
+        foreground vs background threshold
     compression : tuple (str, int)
         The 1st argument is compression method the 2nd compression level for tiff files
         For example, ('ZSTD', 1) or ('ADOBE_DEFLATE', 1).
@@ -1475,6 +1489,8 @@ def batch_filter(
         'bidirectional': bidirectional,
         'bleach_correction_frequency': bleach_correction_frequency,
         'bleach_correction_max_method': bleach_correction_max_method,
+        'bleach_correction_clip_min': bleach_correction_clip_min,
+        'bleach_correction_clip_max': bleach_correction_clip_max,
         'z_idx': None,
         'rotate': rotate,
         'flip_upside_down': flip_upside_down,
