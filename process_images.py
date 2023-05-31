@@ -603,7 +603,7 @@ def process_channel(
 
     bleach_correction_clip_min = bleach_correction_clip_max = bleach_correction_frequency = None
     bleach_correction_sigma = (0, 0)
-    if need_bleach_correction:
+    if need_bleach_correction or need_16bit_to_8bit_conversion:
         p_log(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
               f"{channel}: calculating clip_min and clip_max values for bleach correction ...")
         if new_tile_size is not None:
@@ -624,6 +624,10 @@ def process_channel(
         bleach_correction_clip_min = np_round(expm1_jit(otsu_threshold(img)))
         bleach_correction_clip_max = np_round(expm1_jit(prctl(img[img > log1p_jit(bleach_correction_clip_min)], 99.9)))
         del img
+        for b in range(0, 9):
+            if 256 * 2 ** b > bleach_correction_clip_max:
+                right_bit_shift = b
+                break
 
     p_log(
         f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
@@ -1061,31 +1065,31 @@ def main(source_path):
         "Do you need to convert 16-bit images to 8-bit after stitching to reduce final file size?")
     p_log(f"conversion to 8-bit: {need_16bit_to_8bit_conversion}")
     right_bit_shift: Dict[str, int] = {channel: 8 for channel in all_channels}
-    if need_16bit_to_8bit_conversion:
-        for channel in all_channels:
-            right_bit_shift[channel] = int(select_among_multiple_options(
-                f"{PrintColors.BLUE}\tFor{PrintColors.ENDC} {PrintColors.GREEN}{channel}{PrintColors.ENDC} channel, "
-                f"{PrintColors.BLUE}enter right bit shift [0 to 8] for 8-bit conversion:{PrintColors.ENDC} \n"
-                "\tbitshift smaller than 8 will increase the pixel brightness. "
-                "The smaller the value the brighter the pixels.\n"
-                "\tA small bitshift is less destructive for dim (axons) pixels.\n"
-                "\tWe suggest 0-4 for 3D images and 8 for max projection. \n",
-                [
-                    "any value larger than   255 will be set to 255 in 8 bit, values smaller than 255 will not change",
-                    "any value larger than   511 will be set to 255 in 8 bit, 0-  1 will be set to 0,   2-  3 to 1,...",
-                    "any value larger than  1023 will be set to 255 in 8 bit, 0-  3 will be set to 0,   4-  7 to 1,...",
-                    "any value larger than  2047 will be set to 255 in 8 bit, 0-  7 will be set to 0,   8- 15 to 1,...",
-                    "any value larger than  4095 will be set to 255 in 8 bit, 0- 15 will be set to 0,  16- 31 to 1,...",
-                    "any value larger than  8191 will be set to 255 in 8 bit, 0- 31 will be set to 0,  32- 63 to 1,...",
-                    "any value larger than 16383 will be set to 255 in 8 bit, 0- 63 will be set to 0,  64-127 to 1,...",
-                    "any value larger than 32767 will be set to 255 in 8 bit, 0-127 will be set to 0, 128-255 to 1,...",
-                    "any value larger than 65535 will be set to 255 in 8 bit, 0-255 will be set to 0, 256-511 to 1,...",
-                ],
-                return_index=True
-            ))
-        # posix += "_bitshift." + ".".join(
-        #     [f"{channel_color_dict[channel]}{right_bit_shift[channel]}" for channel in all_channels])
-    p_log(f"bit shift: {right_bit_shift}")
+    # if need_16bit_to_8bit_conversion:
+    #     for channel in all_channels:
+    #         right_bit_shift[channel] = int(select_among_multiple_options(
+    #             f"{PrintColors.BLUE}\tFor{PrintColors.ENDC} {PrintColors.GREEN}{channel}{PrintColors.ENDC} channel, "
+    #             f"{PrintColors.BLUE}enter right bit shift [0 to 8] for 8-bit conversion:{PrintColors.ENDC} \n"
+    #             "\tbitshift smaller than 8 will increase the pixel brightness. "
+    #             "The smaller the value the brighter the pixels.\n"
+    #             "\tA small bitshift is less destructive for dim (axons) pixels.\n"
+    #             "\tWe suggest 0-4 for 3D images and 8 for max projection. \n",
+    #             [
+    #                 "any value larger than   255 will be set to 255 in 8 bit, values smaller than 255 will not change",
+    #                 "any value larger than   511 will be set to 255 in 8 bit, 0-  1 will be set to 0,   2-  3 to 1,...",
+    #                 "any value larger than  1023 will be set to 255 in 8 bit, 0-  3 will be set to 0,   4-  7 to 1,...",
+    #                 "any value larger than  2047 will be set to 255 in 8 bit, 0-  7 will be set to 0,   8- 15 to 1,...",
+    #                 "any value larger than  4095 will be set to 255 in 8 bit, 0- 15 will be set to 0,  16- 31 to 1,...",
+    #                 "any value larger than  8191 will be set to 255 in 8 bit, 0- 31 will be set to 0,  32- 63 to 1,...",
+    #                 "any value larger than 16383 will be set to 255 in 8 bit, 0- 63 will be set to 0,  64-127 to 1,...",
+    #                 "any value larger than 32767 will be set to 255 in 8 bit, 0-127 will be set to 0, 128-255 to 1,...",
+    #                 "any value larger than 65535 will be set to 255 in 8 bit, 0-255 will be set to 0, 256-511 to 1,...",
+    #             ],
+    #             return_index=True
+    #         ))
+    #     # posix += "_bitshift." + ".".join(
+    #     #     [f"{channel_color_dict[channel]}{right_bit_shift[channel]}" for channel in all_channels])
+    # p_log(f"bit shift: {right_bit_shift}")
 
     need_rotation_stitched_tif = ask_true_false_question("Do you need to rotate stitched tif files for 90 degrees?")
     p_log(f"rotation: {need_rotation_stitched_tif}")
