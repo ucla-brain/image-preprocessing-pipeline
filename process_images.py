@@ -592,7 +592,10 @@ def process_channel(
     stitched_tif_path = stitched_path / f"{channel}_tif"
     stitched_tif_path.mkdir(exist_ok=True)
 
-    tsv_volume = TSVVolume.load(stitched_path / f'{channel}_xml_import_step_5.xml')
+    tsv_volume = TSVVolume.load(
+        stitched_path / f'{channel}_xml_import_step_5.xml',
+        alt_stack_dir=preprocessed_path / channel
+    )
     shape: Tuple[int, int, int] = tsv_volume.volume.shape  # shape is in z y x format
 
     memory_needed_per_thread = 32 * shape[1] * shape[2] / 1024 ** 3
@@ -605,15 +608,7 @@ def process_channel(
     bleach_correction_sigma = (0, 0)
     if need_bleach_correction or need_16bit_to_8bit_conversion:
         p_log(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
-              f"{channel}: calculating clip_min and clip_max values for bleach correction ...")
-        if new_tile_size is not None:
-            bleach_correction_frequency = 1 / min(new_tile_size)
-        elif down_sampling_factor is not None:
-            bleach_correction_frequency = 1 / min(new_tile_size) * min(down_sampling_factor)
-        else:
-            bleach_correction_frequency = 1 / min(tile_size)
-        bleach_correction_sigma = (1 / bleach_correction_frequency * 2,) * 2
-
+              f"{channel}: calculating clip_min, clip_max, and right bit shift values ...")
         img = tsv_volume.imread(
             VExtent(
                 tsv_volume.volume.x0, tsv_volume.volume.x1,
@@ -628,6 +623,15 @@ def process_channel(
             if 256 * 2 ** b > bleach_correction_clip_max:
                 right_bit_shift = b
                 break
+
+    if need_bleach_correction:
+        if new_tile_size is not None:
+            bleach_correction_frequency = 1 / min(new_tile_size)
+        elif down_sampling_factor is not None:
+            bleach_correction_frequency = 1 / min(new_tile_size) * min(down_sampling_factor)
+        else:
+            bleach_correction_frequency = 1 / min(tile_size)
+        bleach_correction_sigma = (1 / bleach_correction_frequency * 2,) * 2
 
     p_log(
         f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
