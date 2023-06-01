@@ -595,7 +595,7 @@ def process_channel(
     tsv_volume = TSVVolume.load(stitched_path / f'{channel}_xml_import_step_5.xml')
     shape: Tuple[int, int, int] = tsv_volume.volume.shape  # shape is in z y x format
 
-    memory_needed_per_thread = 64 * shape[1] * shape[2] / 1024 ** 3
+    memory_needed_per_thread = 32 * shape[1] * shape[2] / 1024 ** 3
     if tsv_volume.dtype in (uint8, "uint8"):
         memory_needed_per_thread /= 2
     memory_ram = virtual_memory().available / 1024 ** 3  # in GB
@@ -747,6 +747,7 @@ def merge_channels_by_file_name(
             image = imread_tif_raw_png(file_path)
             if right_bit_shift is not None:
                 image = convert_to_8bit_fun(image, bit_shift_to_right=right_bit_shift[idx])
+            # image = process_img(image, gaussian_filter_2d=True)
             images.update({order_of_colors[idx]: image})
             dtypes += [image.dtype]
         else:
