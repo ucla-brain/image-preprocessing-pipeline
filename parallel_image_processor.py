@@ -211,7 +211,8 @@ class MultiProcess(Process):
                             continue
                     try:
                         if resume and tif_save_path.exists():
-                            img = imread_tif_raw_png(tif_save_path)
+                            if need_down_sampling:
+                                img = imread_tif_raw_png(tif_save_path)
                         else:
                             if is_ims:
                                 img = images[idx]
