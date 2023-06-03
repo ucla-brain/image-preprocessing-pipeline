@@ -203,14 +203,17 @@ class MultiProcess(Process):
                     z_stack = zeros((len(indices),) + self.target_shape, dtype=float32)
 
                 for idx_z, idx in enumerate(indices):
+                    if self.needed_memory is not None:
+                        while virtual_memory().available < self.needed_memory:
+                            sleep(600)
                     tif_save_path = save_path / f"{tif_prefix}_{idx:06}.tif"
-
                     if resume and function is not None and tif_save_path.exists():
                         if need_down_sampling and down_sampled_tif_path.exists():
                             self.progress_queue.put(running_next)
                             continue
                     try:
                         if resume and tif_save_path.exists():
+                            img = None
                             if need_down_sampling:
                                 img = imread_tif_raw_png(tif_save_path)
                         else:
@@ -263,7 +266,7 @@ class MultiProcess(Process):
 
                         # down-sampling on xy
                         if need_down_sampling and self.target_shape is not None and \
-                                self.down_sampling_methods is not None:
+                                self.down_sampling_methods is not None and img is not None:
                             if is_uniform_2d(img):
                                 z_stack[idx_z] = zeros(self.target_shape, dtype=float32)
                             else:
