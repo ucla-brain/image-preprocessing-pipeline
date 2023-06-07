@@ -621,7 +621,7 @@ def process_channel(
         bleach_correction_clip_max = np_round(expm1_jit(prctl(img[img > log1p_jit(bleach_correction_clip_min)], 99.9)))
         del img
         for b in range(0, 9):
-            if 256 * 2 ** b > bleach_correction_clip_max:
+            if 256 * 2 ** b >= bleach_correction_clip_max:
                 right_bit_shift = b
                 break
 
