@@ -402,7 +402,7 @@ def process_channel(
             elif objective == "40x":
                 sigma = (128, 256)
             else:
-                sigma = (100, 100)
+                sigma = (250, 250)
         p_log(
             f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
             f"{channel}: started preprocessing images and converting them to tif.\n"
