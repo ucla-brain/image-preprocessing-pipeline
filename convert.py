@@ -89,7 +89,7 @@ def main(args: Namespace):
             if args.bleach_correction:
                 de_striping_sigma = (4000, 4000)
             elif args.de_stripe:
-                de_striping_sigma = (100, 100)
+                de_striping_sigma = (250, 250)
 
         return_code = parallel_image_processor(
             source=input_path,
