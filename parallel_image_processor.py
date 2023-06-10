@@ -486,7 +486,7 @@ def parallel_image_processor(
     semaphore.put(1)
     workers = min(max_processors, args_queue.qsize())
     print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}starting workers ...")
-    for worker in tqdm(range(workers), desc='workers'):
+    for worker in tqdm(range(workers), desc=' workers'):
         if progress_queue.qsize() + worker < num_images:
             MultiProcess(
                 progress_queue, args_queue, semaphore, fun, images, destination, tif_prefix, args, kwargs, shape, dtype,
