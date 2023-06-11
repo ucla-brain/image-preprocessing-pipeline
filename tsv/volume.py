@@ -260,7 +260,10 @@ class TSVStackBase(VExtentBase):
             return raw_imread(path)
         else:
             try:
-                return imread(path)
+                img = imread(path)
+                if img is None:
+                    raise
+                return img
             except:
                 print("Bad file: %s" % path)
                 raise

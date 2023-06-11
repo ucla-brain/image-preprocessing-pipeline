@@ -598,7 +598,7 @@ def process_channel(
     )
     shape: Tuple[int, int, int] = tsv_volume.volume.shape  # shape is in z y x format
 
-    memory_needed_per_thread = 32 if need_bleach_correction else 16
+    memory_needed_per_thread = 48 if need_bleach_correction else 16
     memory_needed_per_thread *= shape[1] * shape[2] / 1024 ** 3
     if tsv_volume.dtype in (uint8, "uint8"):
         memory_needed_per_thread /= 2
@@ -664,8 +664,8 @@ def process_channel(
             "bleach_correction_max_method": False,
             "bleach_correction_clip_min": bleach_correction_clip_min,
             "bleach_correction_clip_max": bleach_correction_clip_max,
-            "exclude_dark_edges_set_them_to_zero": True if (
-                    need_bleach_correction or need_lightsheet_cleaning) else False,
+            # "exclude_dark_edges_set_them_to_zero": True if (
+            #         need_bleach_correction or need_lightsheet_cleaning) else False,
             "threshold": None,
             "sigma": bleach_correction_sigma,
             "bidirectional": True if need_bleach_correction else False,
