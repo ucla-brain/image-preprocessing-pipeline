@@ -367,7 +367,7 @@ def process_channel(
 
     assert source_path.joinpath(channel).exists()
     if need_gaussian_filter_2d or need_destriping or need_flat_image_application or \
-            need_raw_png_to_tiff_conversion or need_compression or \
+            need_raw_png_to_tiff_conversion or \
             down_sampling_factor not in (None, (1, 1)) or new_tile_size is not None:
         img_flat = None
         if need_flat_image_application:
@@ -598,7 +598,7 @@ def process_channel(
     )
     shape: Tuple[int, int, int] = tsv_volume.volume.shape  # shape is in z y x format
 
-    memory_needed_per_thread = 48 if need_bleach_correction else 16
+    memory_needed_per_thread = 40 if need_bleach_correction else 16
     memory_needed_per_thread *= shape[1] * shape[2] / 1024 ** 3
     if tsv_volume.dtype in (uint8, "uint8"):
         memory_needed_per_thread /= 2
@@ -678,7 +678,7 @@ def process_channel(
             "d_type": tsv_volume.dtype
         },
         source_voxel=(voxel_size_z, voxel_size_y, voxel_size_x),
-        target_voxel=None if (not need_bleach_correction or stitch_mip) else 20,
+        target_voxel=None if stitch_mip else 10,
         rotation=90 if need_rotation_stitched_tif else 0,
         timeout=None,
         max_processors=merge_step_cores,
@@ -1045,10 +1045,9 @@ def main(source_path):
     need_raw_png_to_tiff_conversion = ask_true_false_question(
         "Are images in raw or png format that needs tif conversion before stitching?")
     p_log(f"tif conversion requested: {need_raw_png_to_tiff_conversion}")
-    need_compression = ask_true_false_question(
-        "Do you need to compress un-stitched tif tiles?")
+    need_compression = True  # ask_true_false_question("Do you need to compress un-stitched tif tiles?")
     p_log(f"tile tif compression: {need_compression}")
-    if need_raw_png_to_tiff_conversion or need_compression:
+    if need_raw_png_to_tiff_conversion:
         posix += "_tif"
         what_for += "tif "
 
@@ -1100,7 +1099,7 @@ def main(source_path):
     need_rotation_stitched_tif = ask_true_false_question("Do you need to rotate stitched tif files for 90 degrees?")
     p_log(f"rotation: {need_rotation_stitched_tif}")
 
-    need_compression_stitched_tif = ask_true_false_question("Do you need to compress stitched tif files?")
+    need_compression_stitched_tif = True  # ask_true_false_question("Do you need to compress stitched tif files?")
     p_log(f"compress stitched files: {need_compression_stitched_tif}")
 
     preprocessed_path = source_path.parent / (source_path.name + posix)
@@ -1109,7 +1108,7 @@ def main(source_path):
     print_input_file_names = False
 
     if need_destriping or need_flat_image_application or need_raw_png_to_tiff_conversion or \
-            need_down_sampling or need_compression or need_gaussian_filter_2d or need_baseline_subtraction:
+            need_down_sampling or need_gaussian_filter_2d or need_baseline_subtraction:
 
         print_input_file_names = False  # ask_true_false_question(
         # "Do you need to print raw or tif file names to find corrupt files during preprocessing stage?")
@@ -1145,11 +1144,11 @@ def main(source_path):
               f"channel{'s' if len(channels_need_tera_fly_conversion) > 1 else ''}"
               f" will be converted to TeraFly format.\n")
     need_merged_channels = False
-    need_compression_merged_channels = False
+    need_compression_merged_channels = True
     if len(all_channels) > 1:
         need_merged_channels = ask_true_false_question("Do you need to merge channels to RGB color tiff?")
-        if need_merged_channels:
-            need_compression_merged_channels = ask_true_false_question("Do you need to compress RGB color tif files?")
+        # if need_merged_channels:
+        #     need_compression_merged_channels = ask_true_false_question("Do you need to compress RGB color tif files?")
     need_imaris_conversion = ask_true_false_question("Do you need to convert to Imaris format?")
     # Start ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
