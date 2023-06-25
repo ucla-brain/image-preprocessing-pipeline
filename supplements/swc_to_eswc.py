@@ -18,11 +18,6 @@ def main(args: Namespace):
         swc_df = read_csv(swc_file, sep=r"\s+", comment="#", index_col=0,
                           names=("id", "type", "x", "y", "z", "radius", "parent_id"))
 
-        # convert from um unit to voxel unit
-        swc_df['x'] *= args.voxel_size_x
-        swc_df['y'] *= args.voxel_size_y
-        swc_df['z'] *= args.voxel_size_z
-
         # flipping operation should be in voxel unit
         if args.x_axis_length > 0:
             swc_df['x'] = args.x_axis_length - swc_df['x']
@@ -30,6 +25,11 @@ def main(args: Namespace):
             swc_df['y'] = args.y_axis_length - swc_df['y']
         if args.z_axis_length > 0:
             swc_df['z'] = args.z_axis_length - swc_df['z']
+
+        # convert from um unit to voxel unit
+        swc_df['x'] *= args.voxel_size_x_source / args.voxel_size_x_target
+        swc_df['y'] *= args.voxel_size_y_source / args.voxel_size_y_target
+        swc_df['z'] *= args.voxel_size_z_source / args.voxel_size_z_target
 
         for col_name, value in (("seg_id", 0), ("level", 1), ("mode", 0), ("timestamp", 1), ("TFresindex", 1)):
             swc_df[col_name] = value
@@ -56,12 +56,24 @@ if __name__ == '__main__':
     )
     parser.add_argument("--reconstructions", "-r", type=str, required=True,
                         help="Path folder containing all swc files.")
-    parser.add_argument("--voxel_size_x", "-dx", type=float, required=False, default=1.0,
-                        help="voxel size on the x-axis. Default value is 1, i.e. no for voxel size.")
-    parser.add_argument("--voxel_size_y", "-dy", type=float, required=False, default=1.0,
-                        help="voxel size on the y-axis. Default value is 1, i.e. no for voxel size.")
-    parser.add_argument("--voxel_size_z", "-dz", type=float, required=False, default=1.0,
-                        help="voxel size on the z-axis. Default value is 1, i.e. no for voxel size.")
+    parser.add_argument("--voxel_size_x_source", "-dxs", type=float, required=False, default=1.0,
+                        help="The voxel size on the x-axis of the image used for reconstruction. "
+                             "Default value is 1.")
+    parser.add_argument("--voxel_size_y_source", "-dys", type=float, required=False, default=1.0,
+                        help="The voxel size on the y-axis of the image used for reconstruction. "
+                             "Default value is 1.")
+    parser.add_argument("--voxel_size_z_source", "-dzs", type=float, required=False, default=1.0,
+                        help="The voxel size on the z-axis of the image used for reconstruction. "
+                             "Default value is 1.")
+    parser.add_argument("--voxel_size_x_target", "-dxt", type=float, required=False, default=1.0,
+                        help="The voxel size on the x-axis of the target image. "
+                             "Default value is 1.")
+    parser.add_argument("--voxel_size_y_target", "-dyt", type=float, required=False, default=1.0,
+                        help="The voxel size on the y-axis of the target image. "
+                             "Default value is 1.")
+    parser.add_argument("--voxel_size_z_target", "-dzt", type=float, required=False, default=1.0,
+                        help="The voxel size on the z-axis of the target image. "
+                             "Default value is 1.")
     parser.add_argument("--x_axis_length", "-x", type=int, required=False, default=0,
                         help="The length of x-axis in pixels. "
                              "If x>0 is provided x-axis will be flipped. Default is 0 --> no x-axis flipping")

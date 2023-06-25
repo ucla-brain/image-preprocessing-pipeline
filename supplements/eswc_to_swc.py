@@ -26,9 +26,9 @@ def main(args: Namespace):
         if args.z_axis_length > 0:
             swc_df['z'] = args.z_axis_length - swc_df['z']
 
-        swc_df['x'] *= args.voxel_size_x
-        swc_df['y'] *= args.voxel_size_y
-        swc_df['z'] *= args.voxel_size_z
+        swc_df['x'] *= args.voxel_size_x_source / args.voxel_size_x_target
+        swc_df['y'] *= args.voxel_size_y_source / args.voxel_size_y_target
+        swc_df['z'] *= args.voxel_size_z_source / args.voxel_size_z_target
 
         # swc_df['x'] = swc_df['x'].astype(int)
         # swc_df['y'] = swc_df['y'].astype(int)
@@ -49,14 +49,23 @@ if __name__ == '__main__':
     )
     parser.add_argument("--reconstructions", "-r", type=str, required=True,
                         help="Path folder containing all swc files.")
-    parser.add_argument("--voxel_size_x", "-dx", type=float, required=False, default=1.0,
+    parser.add_argument("--voxel_size_x_source", "-dxs", type=float, required=False, default=1.0,
                         help="The voxel size on the x-axis of the image used for reconstruction. "
                              "Default value is 1.")
-    parser.add_argument("--voxel_size_y", "-dy", type=float, required=False, default=1.0,
+    parser.add_argument("--voxel_size_y_source", "-dys", type=float, required=False, default=1.0,
                         help="The voxel size on the y-axis of the image used for reconstruction. "
                              "Default value is 1.")
-    parser.add_argument("--voxel_size_z", "-dz", type=float, required=False, default=1.0,
+    parser.add_argument("--voxel_size_z_source", "-dzs", type=float, required=False, default=1.0,
                         help="The voxel size on the z-axis of the image used for reconstruction. "
+                             "Default value is 1.")
+    parser.add_argument("--voxel_size_x_target", "-dxt", type=float, required=False, default=1.0,
+                        help="The voxel size on the x-axis of the target image. "
+                             "Default value is 1.")
+    parser.add_argument("--voxel_size_y_target", "-dyt", type=float, required=False, default=1.0,
+                        help="The voxel size on the y-axis of the target image. "
+                             "Default value is 1.")
+    parser.add_argument("--voxel_size_z_target", "-dzt", type=float, required=False, default=1.0,
+                        help="The voxel size on the z-axis of the target image. "
                              "Default value is 1.")
     parser.add_argument("--x_axis_length", "-x", type=int, required=False, default=0,
                         help="The length of x-axis in pixels of the image used for reconstruction. "
