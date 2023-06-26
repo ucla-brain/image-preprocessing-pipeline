@@ -166,10 +166,7 @@ class MultiProcess(Process):
             need_down_sampling = True
             reduction_factor_z = ceil(sqrt(self.target_voxel / self.source_voxel[0]))
             # the last down-sampling for z step should be based on np_max to ensure max brightness
-            if reduction_factor_z % 2 == 0:
-                down_sampling_method_z = tuple(np_mean if i % 2 == 0 else np_max for i in range(reduction_factor_z))
-            else:
-                down_sampling_method_z = tuple(np_max if i % 2 == 0 else np_mean for i in range(reduction_factor_z))
+            down_sampling_method_z = tuple(np_max if i % 2 == 0 else np_mean for i in range(reduction_factor_z))
 
         file = None
         x0, x1, y0, y1 = 0, 0, 0, 0
