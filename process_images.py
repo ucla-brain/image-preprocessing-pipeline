@@ -568,7 +568,7 @@ def process_channel(
                 # Displacements search radius along V (in pixels). Default value is 25!
                 # f"--sV={min(25, tile_overlap_y - 1)}",
                 # Displacements search radius along D (in pixels).
-                f"{'--sD=0' if (objective == '40x' or stitch_mip) else ''}",
+                f"{'--sD=0' if (objective == '40x' or stitch_mip) else '--sD=5'}",
                 # Number of slices per subvolume partition
                 f"--subvoldim={1 if stitch_mip else subvolume_depth}",
                 # used in the pairwise displacements computation step.
@@ -967,7 +967,8 @@ def main(source_path):
     )
     channels_need_gaussian_filter_application = []
     if need_gaussian_filter_2d:
-        channels_need_gaussian_filter_application = select_multiple_among_list("gaussian", all_channels)
+        channels_need_gaussian_filter_application = all_channels
+        # channels_need_gaussian_filter_application = select_multiple_among_list("gaussian", all_channels)
         p_log(f"gaussian: {channels_need_gaussian_filter_application}")
 
     def destination_name(name: str):
