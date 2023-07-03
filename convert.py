@@ -112,6 +112,7 @@ def main(args: Namespace):
                         args.bleach_correction or args.background_subtraction) else False,
                 "rotate": 0,
                 "flip_upside_down": args.flip_upside_down,
+                "convert_to_16bit": args.convert_to_16bit,
                 "convert_to_8bit": args.convert_to_8bit,
                 "bit_shift_to_right": args.bit_shift
             },
@@ -292,6 +293,8 @@ if __name__ == '__main__':
                         help="foreground vs background threshold. Default is 20.")
     parser.add_argument("--bleach_correction_clip_max", type=float, default=255,
                         help="max of the image without outliers. Default is 255.")
+    parser.add_argument("--convert_to_16bit", default=False, action=BooleanOptionalAction,
+                        help="Image pre-processing: convert to 16-bit. Default is --no-convert_to_16bit")
     parser.add_argument("--convert_to_8bit", default=False, action=BooleanOptionalAction,
                         help="Image pre-processing: convert to 8-bit. Default is --no-convert_to_8bit")
     parser.add_argument("--bit_shift", "-b", type=int, default=8,
