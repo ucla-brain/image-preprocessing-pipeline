@@ -1075,7 +1075,7 @@ def read_filter_save(
                 f"{PrintColors.WARNING}"
                 f"\nimread function returned None. Possible damaged input file:"
                 f"\n\t{input_file}."
-                f"\n\toutput file could be replaced with a dummy tile of zeros if shape and dtype were provided."
+                f"\n\toutput file could be replaced with a dummy tile of zeros if shape and d_type were provided."
                 f"{PrintColors.ENDC}"
             )
             return
