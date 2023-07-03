@@ -15,7 +15,7 @@ from typing import Tuple, Iterator, List, Callable, Union
 from warnings import filterwarnings
 
 from dcimg import DCIMGFile
-from imageio.v2 import imread as png_imread
+from imageio.v3 import imread as png_imread
 from numba import jit
 from numexpr import evaluate
 from numpy import dtype as np_d_type
@@ -79,7 +79,7 @@ def imread_tif_raw_png(path: Path, dtype: str = None, shape: Tuple[int, int] = N
             if extension == '.raw':
                 img = raw_imread(path, dtype=dtype, shape=shape)
             elif extension == '.png':
-                img = png_imread(path)
+                img = png_imread(path, extension='.png', plugin='PNG-FI')
             elif extension in ['.tif', '.tiff']:
                 img = imread(path.__str__())
             else:
