@@ -1036,7 +1036,7 @@ def read_filter_save(
         Bit shifts smaller than 8 bit, enhances the signal brightness.
     continue_process: bool
         If true do not process images if the output file is already exist
-    dtype: str or None,
+    d_type: str or None,
         optional. data type of the input file. If given will reduce the raw to tif conversion time.
     tile_size : tuple (int, int) or None
         optional. If given will reduce the raw to tif conversion time.
