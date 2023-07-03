@@ -443,7 +443,7 @@ def process_channel(
             down_sample=down_sampling_factor,
             tile_size=tile_size,
             new_size=new_tile_size,
-            dtype="uint16",
+            d_type="uint16",
             # convert_to_16bit=False,  # defaults to False
             convert_to_8bit=False,  # need_16bit_to_8bit_conversion
             bit_shift_to_right=right_bit_shift,

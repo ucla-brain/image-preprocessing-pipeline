@@ -1367,7 +1367,7 @@ def batch_filter(
         convert_to_8bit: bool = False,
         bit_shift_to_right: int = 8,
         continue_process: bool = False,
-        dtype: str = None,
+        d_type: str = None,
         tile_size: Tuple[int, int] = None,
         down_sample: Tuple[int, int] = None,  # (2, 2)
         new_size: Tuple[int, int] = None,
@@ -1444,7 +1444,7 @@ def batch_filter(
         Bit shifts smaller than 8 bit, enhances the signal brightness.
     continue_process : bool
         True means only process the remaining images.
-    dtype: str or None,
+    d_type: str or None,
         optional. data type of input files (uint8, uint16, or etc.). If given reduces the raw to tif conversion time.
     tile_size : tuple (int, int) or None
         optional. If given will reduce the raw to tif conversion time.
@@ -1505,7 +1505,7 @@ def batch_filter(
         'convert_to_8bit': convert_to_8bit,
         'bit_shift_to_right': bit_shift_to_right,
         'continue_process': continue_process,
-        'dtype': dtype,
+        'd_type': d_type,
         'tile_size': tile_size,
         'down_sample': None if isinstance(down_sample, tuple) and down_sample == (1, 1) else down_sample,
         'new_size': new_size,
