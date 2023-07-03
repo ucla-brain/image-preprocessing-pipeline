@@ -927,7 +927,7 @@ def read_filter_save(
         output_file: Path = None,
         z_idx: int = None,
         continue_process: bool = False,
-        dtype: str = None,
+        d_type: str = None,
         tile_size: Tuple[int, int] = None,
         print_input_file_names: bool = False,
         compression: Tuple[str, int] = ('ADOBE_DEFLATE', 1),
@@ -1057,19 +1057,19 @@ def read_filter_save(
         if print_input_file_names:
             print(f"\n{input_file}")
         if z_idx is None:
-            img = imread_tif_raw_png(input_file, dtype=dtype, shape=tile_size)  # file must be TIFF or RAW
+            img = imread_tif_raw_png(input_file, dtype=d_type, shape=tile_size)  # file must be TIFF or RAW
         else:
             img = imread_dcimg(input_file, z_idx)  # file must be DCIMG
-        if img is None and dtype is not None and tile_size is not None:
+        if img is None and d_type is not None and tile_size is not None:
             print(
                 f"{PrintColors.WARNING}"
                 f"\nimread function returned None. Possible damaged input file:"
                 f"\n\t{input_file}."
-                f"\n\toutput file is set to a dummy zeros tile of shape {tile_size} and type {dtype}, instead:"
+                f"\n\toutput file is set to a dummy zeros tile of shape {tile_size} and type {d_type}, instead:"
                 f"\n\t{output_file}"
                 f"{PrintColors.ENDC}"
             )
-            img = zeros(dtype=dtype, shape=tile_size)
+            img = zeros(dtype=d_type, shape=tile_size)
         elif img is None:
             print(
                 f"{PrintColors.WARNING}"
@@ -1092,7 +1092,9 @@ def read_filter_save(
         else:
             tile_size = img.shape
 
-        d_type = img.dtype
+        if d_type is None:
+            d_type = img.dtype
+
         if not output_file.parent.exists():
             output_file.parent.mkdir(parents=True, exist_ok=True)
 
