@@ -24,7 +24,7 @@ function [] = LsDeconv(varargin)
         disp(' ');
         disp('LsDeconv: Deconvolution tool for Light Sheet Microscopy.');
         disp('TU Wien, 2019: This program was was initially written in MATLAB V2018b by klaus.becker@tuwien.ac.at');
-        disp('Keivan Moradi, 2023: Patched it in MATLAB V2022b. kmoradi@mednet.ucla.edu. UCLA B.R.A.I.N (Dong lab)');
+        disp('Keivan Moradi, 2023: Patched it in MATLAB V2023a. kmoradi@mednet.ucla.edu. UCLA B.R.A.I.N (Dong lab)');
         disp('Main changes: Improved block size calculareon and Multi-GPU and Multi-CPU parallel processing, Resume, Flip Y axis, and 3D gaussian filter support');
         disp(' ');
         disp(datetime('now'));
@@ -332,7 +332,7 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad] = autosplit(info, psf_size, 
     end
 
     % psf half width was not enouph to eliminate artifacts on z
-    psf_size(3) = psf_size(3) .* 2;
+    psf_size(3) = ceil(psf_size(3) .* 2);
 
     % image will be converted to single precision (8 bit) float during
     % deconvolution but two copies are needed
@@ -358,11 +358,15 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad] = autosplit(info, psf_size, 
             (z + 2 *            gaussian_pad_size(z, filter.size(3)));
     end
 
-    for z_ = z_max:-1:psf_size(3)
+    z_min = 2 * psf_size(3) + 1;
+    for z_ = z_max:-1:z_min
         z_pad_ = pad_size(z_, psf_size(3));
+        % if mod(z_pad_, 1)~=0
+        %     continue
+        % end
         [x_, y_, x_pad_, y_pad_] = calculate_xy_size(z_, z_pad_, info, block_size_max, psf_size, filter);
         deconvolved_voxels = x_ * y_ * (z_ - 2 * z_pad_);
-        if mod(z_pad_, 1)==0 && deconvolved_voxels > max_deconvolved_voxels && block_size(x_, y_, z_, x_pad_, y_pad_) <= block_size_max
+        if deconvolved_voxels > max_deconvolved_voxels && block_size(x_, y_, z_, x_pad_, y_pad_) <= block_size_max
             x = x_;
             y = y_;
             z = z_;
@@ -424,36 +428,33 @@ function process(inpath, outpath, log_file, info, block, psf, numit, ...
     gpus = gpus(:)';
     
     % intermediate variables needed for interprocess communication
-    % NOTE: semaphore keys should be more than zero values.
+    % NOTE: semaphore keys should be a more than zero values.
     % all the existing processes should be killed first before creating a
     % sechamore
     delete(gcp("nocreate"));
     min_max_path = fullfile(cache_drive, "min_max.mat");
-    [unique_gpus, ~, ~] = unique(sort(gpus(:)));
-    unique_gpus = unique_gpus.';
+    [unique_gpus, ~, ~] = unique(gpus(:));
+    unique_gpus = sort(unique_gpus, 'descend').';
     % [unique_gpus, ~, gpus_vertical] = unique(sort(gpus(gpus>0)));
     % gpu_count = accumarray(gpus_vertical, 1).';
     clear gpus_vertical;
     
     % initiate locks and semaphors
+    % semkeys are arbitrary non-zero values 
     semkey_single = 1e3;
     semkey_loading_base = 1e4;
+    semaphore_create(semkey_single, 1);
+    for gpu = unique_gpus
+        semaphore_create(gpu, 1);
+        semaphore_create(gpu + semkey_loading_base, 3);
+        unlock_gpu(fullfile(tempdir, ['gpu_full_' num2str(gpu)]));
+        unlock_gpu(fullfile(tempdir, ['gpu_semi_' num2str(gpu)]));
+    end
 
     % start deconvolution
     num_blocks = block.nx * block.ny * block.nz;
     remaining_blocks = num_blocks;
     while remaining_blocks > 0
-
-        semaphore_create(semkey_single, 1);
-        for idx = 1 : numel(unique_gpus)
-            gpu = unique_gpus(idx);
-            semaphore_create(gpu, 1);
-            % semaphore_create(gpu + semkey_single, max(1, gpu_count(idx) - 1));
-            semaphore_create(gpu + semkey_loading_base, 3);
-            unlock_gpu(fullfile(tempdir, ['gpu_full_' num2str(gpu)]));
-            unlock_gpu(fullfile(tempdir, ['gpu_semi_' num2str(gpu)]));
-        end
-
         for i = starting_block : num_blocks
             % skip blocks already worked on
             block_path = fullfile(cache_drive, ['bl_' num2str(i) '.mat']);
@@ -625,7 +626,6 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
             lock_gpu(gpu_lock_path_full);
             bl = gpuArray(bl);
         end
-        
     end
 
     if min(filter.sigma(:)) > 0
@@ -731,7 +731,7 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
             bl = deconCPU(bl, psf, niter, lambda, stop_criterion);
         end
 
-        %remove padding
+        % remove padding
         if pad_z > 0
             bl = bl(floor(pad_x) : end-ceil(pad_x)-1, floor(pad_y) : end-ceil(pad_y)-1, floor(pad_z) : end-ceil(pad_z)-1);
         else
@@ -1320,8 +1320,8 @@ function x = findGoodFFTLength(x)
     end
 end
 
-function pad = pad_size(x, psf_size)
-    pad = 0.5 * (findGoodFFTLength(x + psf_size) - x);
+function pad = pad_size(x, min_pad_size)
+    pad = 0.5 * (findGoodFFTLength(x + min_pad_size) - x);
 end
 
 function pad_size = gaussian_pad_size(image_size, filter_size)
