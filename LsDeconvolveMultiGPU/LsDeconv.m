@@ -192,7 +192,8 @@ function [] = LsDeconv(varargin)
         if resume && exist(block_path, 'file')
             block = load(block_path).block;
         else
-            [block.nx, block.ny, block.nz, block.x, block.y, block.z, block.x_pad, block.y_pad, block.z_pad] = autosplit(info, size(psf), filter, block_size_max, ram_available);
+            %[block.nx, block.ny, block.nz, block.x, block.y, block.z, block.x_pad, block.y_pad, block.z_pad] = autosplit(info, size(psf), filter, block_size_max, ram_available);
+            [block.nx, block.ny, block.nz, block.x, block.y, block.z, block.x_pad, block.y_pad, block.z_pad] = autosplit(info, size(psf), filter, block_size_max, 64*1024^3); %Keivan
             save(block_path, "block");
         end
 
@@ -409,7 +410,7 @@ function [p1, p2] = split(info, block)
                 p2(blnr, 3) = min([zs + block.z - 1, info.z]);
 
                 % imaged processed so far
-                p1(blnr, 4) = nz * block.z - max(2*nz-1, 0) * block.z_pad;
+                p1(blnr, 4) = nz * block.z - max(2*nz - 1, 0) * block.z_pad;
             end
         end
     end
@@ -423,6 +424,14 @@ function process(inpath, outpath, log_file, info, block, psf, numit, ...
     
     % split it to chunks
     [p1, p2] = split(info, block);
+
+    % load filelist
+    filelist = dir(fullfile(inpath, '*.tif'));
+    if numel(filelist) == 0
+        filelist = dir(fullfile(inpath, '*.tiff'));
+    end
+    filelist = natsortfiles(filelist);
+    filelist = fullfile(inpath, {filelist.name});
 
     % flatten the gpus array
     gpus = gpus(:)';
@@ -473,7 +482,7 @@ function process(inpath, outpath, log_file, info, block, psf, numit, ...
             afterEach(queue, @disp);
             parfor idx = 1 : numel(gpus)
                 deconvolve( ...
-                    inpath, psf, numit, damping, ...
+                    filelist, psf, numit, damping, ...
                     block, info, p1, p2, min_max_path, ...
                     stop_criterion, gpus(idx), cache_drive, ...
                     filter, ...
@@ -505,7 +514,7 @@ function process(inpath, outpath, log_file, info, block, psf, numit, ...
     delete(gcp('nocreate'));
 end
 
-function deconvolve(inpath, psf, numit, damping, ...
+function deconvolve(filelist, psf, numit, damping, ...
     block, info, p1, p2, min_max_path, ...
     stop_criterion, gpu, cache_drive, ...
     filter, starting_block, queue)
@@ -548,7 +557,7 @@ function deconvolve(inpath, psf, numit, damping, ...
         semaphore('wait', semkey_loading);
         send(queue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' is loading ...']);
         loading_start = tic;
-        bl = load_block(inpath, x1, x2, y1, y2, z1, z2);
+        bl = load_block(filelist, x1, x2, y1, y2, z1, z2);
         send(queue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' is loaded in ' num2str(toc(loading_start))]);
         semaphore('post', semkey_loading);
 
@@ -568,11 +577,11 @@ function deconvolve(inpath, psf, numit, damping, ...
         % delete block z_pad
         if block.z_pad > 0 && block.nz > 1
             if  z1 == 1
-                bl = bl(:, :, 1:end - block.z_pad);
+                bl = bl(:, :,                 1 : end - floor(block.z_pad) - 1);
             elseif z2 == info.z
-                bl = bl(:, :, 1 + block.z_pad:end);
+                bl = bl(:, :, ceil(block.z_pad) : end);
             else
-                bl = bl(:, :, 1 + block.z_pad:end - block.z_pad);
+                bl = bl(:, :, ceil(block.z_pad) : end - floor(block.z_pad) - 1);
             end
         end
 
@@ -593,12 +602,11 @@ function deconvolve(inpath, psf, numit, damping, ...
         % consolidate and save block stats
         deconvmax = max(ub, deconvmax);
         deconvmin = min(lb, deconvmin);
-        % save(min_max_path, "deconvmin", "deconvmax", "rawmax", "-v7.3", "-nocompression");
-        save(min_max_path, "deconvmin", "deconvmax", "rawmax", "-v7.3");
+        save(min_max_path, "deconvmin", "deconvmax", "rawmax", "-v7.3", "-nocompression");
         semaphore('post', semkey_single);
 
         % save block to disk
-        save(block_path, 'bl', '-v7.3', '-nocompression');
+        save(block_path, 'bl', '-v7.3');  % , '-nocompression'
         send(queue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' saved in ' num2str(toc(save_start))]);
     end
 end
@@ -643,49 +651,31 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
     end
 
     if niter > 0 && max(bl(:)) > eps('single')
+        blx = size(bl, 1); pad_x = block.x_pad;
+        bly = size(bl, 2); pad_y = block.y_pad;
+        blz = size(bl, 3); pad_z = 0;
         % for efficiency of FFT pad data in a way that the largest prime
         % factor becomes <= 5. z_padding comes from image, which is
         % different from x and y pad that are interpolated based on image.
         % In case z_pad was small for FFT efficiency it will be
         % interpolated slightly
-        blx = size(bl, 1);
-        bly = size(bl, 2);
-        blz = size(bl, 3);
-    
         if blx ~= block.x || block.x_pad <= 0
             pad_x = pad_size(blx, size(psf, 1));
-        else
-            pad_x = block.x_pad;
+            if blx + 2 * pad_x > block.x
+                pad_x = (block.x - blx)/2;
+            end
         end
         if bly ~= block.y || block.y_pad <= 0
             pad_y = pad_size(bly, size(psf, 2));
-        else
-            pad_y = block.y_pad;
+            if bly + 2 * pad_y > block.y
+                pad_y = (block.y - bly)/2;
+            end
         end
-    
         if blz < block.z
-            if block.z_pad <= 0
-                pad_z = pad_size(blz, size(psf, 3));
-            else
-                % add minimum pad to make sure FFT is optimized
-                min_pad_size = 1;
-                pad_z = pad_size(blz, min_pad_size);
-                while floor(pad_z) == 0
-                    min_pad_size = min_pad_size + 1;
-                    pad_z = pad_size(blz, min_pad_size);
-                end
-                clear min_pad_size;
-            end
-            if blz + 2*pad_z > block.z
+            pad_z = pad_size(blz, pad_z);
+            if blz + 2 * pad_z > block.z
                 pad_z = (block.z - blz)/2;
-                disp([9 pad_z]);
             end
-        elseif blz > block.z
-            warning('image block on z-axis exceeds the maximum allowed!')
-        else
-            % FFT optimized z pad is already loaded from the actual image
-            % stack no z pad interpolation is needed
-            pad_z = 0;
         end
     
         bl = padarray(bl, [floor(pad_x) floor(pad_y) floor(pad_z)], 'pre', 'symmetric');
@@ -697,7 +687,7 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
                 % block is already on GPU and no GPU allocation is needed
                 bl = deconGPU(bl, psf, niter, lambda, stop_criterion, gpu);
             else
-                % wiate until GPU memory becomes available
+                % wait until GPU memory becomes available
                 % on A100 iteration time is 11.5s and on A6000 it is 22s
                 
                 if num_full_accelerated_blocks > 0 && ...
@@ -738,14 +728,12 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
             bl = bl(floor(pad_x) : end-ceil(pad_x)-1, floor(pad_y) : end-ceil(pad_y)-1, :);
         end
     end
-    
     if isgpuarray(bl) && gpu_device.TotalMemory < 60e9
         bl = gather(bl);
         reset(gpu_device);
         bl = gpuArray(bl);
     end
     [lb, ub] = deconvolved_stats(bl);
-
     % since prctile function needs high vram usage gather it to avoid low
     % memory error
     if isgpuarray(bl)
@@ -932,22 +920,24 @@ function postprocess_save(...
     end
     clear num_tif_files;
     
-    %pool = parpool('local', 8, 'IdleTimeout', Inf);
-    %async_load(1 : block.nx * block.ny) = parallel.FevalFuture;
+    pool = parpool('local', 16, 'IdleTimeout', Inf);
+    async_load(1 : block.nx * block.ny) = parallel.FevalFuture;
     for nz = starting_z_block : block.nz
         disp(['mounting layer ' num2str(nz) ' from ' num2str(block.nz)]);
 
         %load and mount next layer of images
         if block.z_pad > 0 && block.nz > 1
-            if  nz == 1 || nz == block.nz
-                R = zeros(info.x, info.y, p2(blnr, z) - p1(blnr, z) + 1 - block.z_pad, 'single');
+            if  nz == 1
+                R = zeros(info.x, info.y, p2(blnr, z) - p1(blnr, z) + 1 - ceil(block.z_pad), 'single');
+            elseif nz == block.nz
+                R = zeros(info.x, info.y, p2(blnr, z) - p1(blnr, z) + 1 - floor(block.z_pad), 'single');
             else
-                R = zeros(info.x, info.y, p2(blnr, z) - p1(blnr, z) + 1 - 2*block.z_pad, 'single');
+                R = zeros(info.x, info.y, p2(blnr, z) - p1(blnr, z) + 1 - floor(block.z_pad) - ceil(block.z_pad), 'single');
             end
         end
-        delete(gcp('nocreate'));
-        pool = parpool('local', 16, 'IdleTimeout', Inf);
-        async_load(1 : block.nx * block.ny) = parallel.FevalFuture;
+        % delete(gcp('nocreate'));
+        % pool = parpool('local', 16, 'IdleTimeout', Inf);
+        % async_load(1 : block.nx * block.ny) = parallel.FevalFuture;
         for j = 1 : block.nx * block.ny
              async_load(j) = pool.parfeval(@my_load, 1, blocklist(blnr+j-1));
         end
@@ -995,7 +985,6 @@ function postprocess_save(...
         disp(['saving ' num2str(size(R, 3)) ' images...']);
         save_image(R, outpath, imagenr, rawmax, info.flip_upside_down);
         imagenr = imagenr + size(R, 3);
-        % clearvars R;
     end
 
     % delte tmp files
@@ -1198,20 +1187,6 @@ end
 % end
 
 function [ram_available, ram_total]  = get_memory()
-%     if gpu
-%         try
-%             check = gpuDevice;  % check if CUDA is available
-%             if (check.DeviceSupported == 1)
-%                 mem = check.TotalMemory;
-%             else
-%                 disp('Matlab does not support your GPU');
-%                 mem = 0;
-%             end
-%         catch
-%             disp('CUDA is not available');
-%             mem = 0;
-%         end
-%     end
     if ispc
         [~, m] = memory;  % check if os supports memory function
         ram_available = m.PhysicalMemory.Available; % returns free memory not physical memory in bytes
@@ -1222,6 +1197,20 @@ function [ram_available, ram_total]  = get_memory()
         ram_total = stats(1);
         ram_available = stats(end);
     end
+    %     if gpu
+    %         try
+    %             check = gpuDevice;  % check if CUDA is available
+    %             if (check.DeviceSupported == 1)
+    %                 mem = check.TotalMemory;
+    %             else
+    %                 disp('Matlab does not support your GPU');
+    %                 mem = 0;
+    %             end
+    %         catch
+    %             disp('CUDA is not available');
+    %             mem = 0;
+    %         end
+    %     end
 end
 
 % function vram = available_gpu_memory(gpu)
@@ -1279,7 +1268,6 @@ function p_log(log_file, message)
 end
 
 function dark_ = dark(filter, bit_depth)
-    % dark is a value greater than 5 surrounded by zeros
     if bit_depth == 8
         a=zeros(filter.size, "uint8");
     elseif bit_depth == 16
@@ -1288,7 +1276,8 @@ function dark_ = dark(filter, bit_depth)
         warning('unsupported image bit depth');
         a=zeros(filter.size);
     end
-    a(ceil(filter.size(1)/2), ceil(filter.size(2)/2), ceil(filter.size(3)/2)) = 5;
+    % dark is a value greater than 10 surrounded by zeros
+    a(ceil(filter.size(1)/2), ceil(filter.size(2)/2), ceil(filter.size(3)/2)) = 10;
     a=im2single(a);
     a=imgaussfilt3(a, filter.sigma, 'FilterSize', filter.size, 'Padding', 'circular');
     dark_ = max(a(:));
@@ -1377,26 +1366,16 @@ function save_image(R, outpath, imagenr_start, rawmax, flip_upside_down)
     end
 end
 
-function bl = load_block(inpath, start_x, end_x, start_y, end_y, start_z, end_z)
-    filelist = dir(fullfile(inpath, '*.tif'));
-    if numel(filelist) == 0
-        filelist = dir(fullfile(inpath, '*.tiff'));
-    end
-
+function bl = load_block(filelist, start_x, end_x, start_y, end_y, start_z, end_z)
     nx = end_x - start_x;
     ny = end_y - start_y;
     nz = end_z - start_z;
-
-    %disp([start_x, end_x, start_y, end_y, start_z, end_z, nx+1, ny+1, nz+1])
     bl = zeros(nx+1, ny+1, nz+1, 'single');
-
-    path = repmat({''}, nz+1, 1);
     for k = 1 : nz+1
-        path{k} = fullfile(inpath, filelist((k-1)+start_z).name);
-    end
-    for k = 1 : nz+1
-        im = im2single((imread(path{k}, 'PixelRegion', {[start_y, end_y], [start_x, end_x]})));
-        bl(:, :, k) = im';
+        im = imread(filelist(start_z + k - 1), 'PixelRegion', {[start_y, end_y], [start_x, end_x]});
+        im = im2single(im);
+        im = im';
+        bl(:, :, k) = im;
     end
 end
 
