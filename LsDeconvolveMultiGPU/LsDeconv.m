@@ -192,8 +192,8 @@ function [] = LsDeconv(varargin)
         if resume && exist(block_path, 'file')
             block = load(block_path).block;
         else
-            %[block.nx, block.ny, block.nz, block.x, block.y, block.z, block.x_pad, block.y_pad, block.z_pad] = autosplit(info, size(psf), filter, block_size_max, ram_available);
-            [block.nx, block.ny, block.nz, block.x, block.y, block.z, block.x_pad, block.y_pad, block.z_pad] = autosplit(info, size(psf), filter, block_size_max, 64*1024^3); %Keivan
+            [block.nx, block.ny, block.nz, block.x, block.y, block.z, block.x_pad, block.y_pad, block.z_pad] = autosplit(info, size(psf), filter, block_size_max, ram_available);
+            %[block.nx, block.ny, block.nz, block.x, block.y, block.z, block.x_pad, block.y_pad, block.z_pad] = autosplit(info, size(psf), filter, block_size_max, 64*1024^3); %Keivan
             save(block_path, "block");
         end
 

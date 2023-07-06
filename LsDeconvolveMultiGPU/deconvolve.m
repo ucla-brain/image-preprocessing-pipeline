@@ -1,8 +1,8 @@
 LsDeconv(...
-    "/data/test_16bit", ...
-    400, ... % dxy (nm)
-    800, ... % dz (nm)
-    1,   ... % numit
+    "/data/20220605_SW220406_01_LS_6x_1000z/Ex_488_Em_525_tif", ...
+    1000, ... % dxy (nm)
+    1000, ... % dz (nm)
+    25,   ... % numit
     0.40, ... % NA
     1.52, ... % rf
     488,  ... % lambda_ex 488 561 642 647
@@ -20,5 +20,5 @@ LsDeconv(...
     0,    ... % 0 not resume, 1 = resume
     1,    ... % starting block should be greater than 0 for multiGPU processing
     0,    ... % 1 flip the deconvolved image upside down. 0 do not.
-    "/data/cache_deconvolution_test" ... % cache drive (optional)
+    "/data/cache_deconvolution_b_one" ... % cache drive (optional)
 );
