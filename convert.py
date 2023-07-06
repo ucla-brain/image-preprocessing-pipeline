@@ -161,11 +161,6 @@ def main(args: Namespace):
         files += list(tif_2d_folder.glob("*.tiff"))
         assert len(files) > 0
 
-        n_threads = args.nthreads
-        if sys.platform.lower() == 'linux' and 'microsoft' not in uname().release.lower():
-            if imread_tif_raw_png(files[0]).dtype in ('uint16', uint16):
-                n_threads = 1
-
         is_renamed: bool = False
         if compile(r"^\d+$").findall(files[0].name[:-len(files[0].suffix)]):
             files = [file.rename(file.parent / ("_" + file.name)) for file in files]
@@ -176,7 +171,8 @@ def main(args: Namespace):
             voxel_size_x=args.voxel_size_x,
             voxel_size_y=args.voxel_size_y,
             voxel_size_z=args.voxel_size_z,
-            workers=n_threads
+            workers=args.nthreads,
+            dtype=imread_tif_raw_png(files[0]).dtype
         )
         print(f"\t{PrintColors.BLUE}tiff to ims conversion command:{PrintColors.ENDC}\n\t\t{command}\n")
 
