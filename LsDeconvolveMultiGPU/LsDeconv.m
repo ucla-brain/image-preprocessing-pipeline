@@ -392,8 +392,7 @@ function [p1, p2] = split(info, block)
 
     blnr = 0;
     for nz = 0 : block.nz-1
-        % zs = nz * block.z + 1 - (2*nz-1) * block.z_pad;
-        zs = nz * (block.z - 2 * block.z_pad) + 1;
+        zs = nz * (block.z - floor(block.z_pad) - ceil(block.z_pad)) + 1;
         for ny = 0 : block.ny-1
             ys = ny * block.y + 1;
             for nx = 0 : block.nx-1
@@ -410,7 +409,13 @@ function [p1, p2] = split(info, block)
                 p2(blnr, 3) = min([zs + block.z - 1, info.z]);
 
                 % imaged processed so far
-                p1(blnr, 4) = nz * block.z - max(2*nz - 1, 0) * block.z_pad;
+                % p1(blnr, 4) = nz * block.z - max(2*nz - 1, 0) * block.z_pad;
+                if nz == 0
+                    p1(blnr, 4) = 0;
+                else
+                    % p1(blnr, 4) = nz * (block.z - floor(block.z_pad)) - 1;
+                    p1(blnr, 4) = zs + floor(block.z_pad) - 1;
+                end
             end
         end
     end
@@ -877,8 +882,8 @@ function postprocess_save(...
     p_log(log_file, ['   min value in image after deconvolution: ' num2str(deconvmin)]);
     p_log(log_file,  ' ');
 
+    %estimate the global histogram and upper and lower clipping values
     if clipval > 0
-        %estimate the global histogram and upper and lower clipping values
         nbins = 1e6;
         binwidth = deconvmax / nbins;
         bins = 0 : binwidth : deconvmax;
@@ -935,9 +940,6 @@ function postprocess_save(...
                 R = zeros(info.x, info.y, p2(blnr, z) - p1(blnr, z) + 1 - floor(block.z_pad) - ceil(block.z_pad), 'single');
             end
         end
-        % delete(gcp('nocreate'));
-        % pool = parpool('local', 16, 'IdleTimeout', Inf);
-        % async_load(1 : block.nx * block.ny) = parallel.FevalFuture;
         for j = 1 : block.nx * block.ny
              async_load(j) = pool.parfeval(@my_load, 1, blocklist(blnr+j-1));
         end
@@ -985,6 +987,9 @@ function postprocess_save(...
         disp(['saving ' num2str(size(R, 3)) ' images...']);
         save_image(R, outpath, imagenr, rawmax, info.flip_upside_down);
         imagenr = imagenr + size(R, 3);
+        % delete(gcp('nocreate'));
+        % pool = parpool('local', 16, 'IdleTimeout', Inf);
+        % async_load(1 : block.nx * block.ny) = parallel.FevalFuture;
     end
 
     % delte tmp files

@@ -2,7 +2,7 @@
 Python code for stitching and image enhancement of Light Sheet data
 
 # Installation:
-* Install [Imaris Viewer](https://viewer.imaris.com/download/ImarisViewer9_9_1w64.exe) (on Linux use [wine](https://vitux.com/how-to-install-wine-on-ubuntu/)).
+* Install [Imaris Viewer](https://viewer.imaris.com/download/ImarisViewer9_7_2w64.exe) (on Linux use [wine](https://vitux.com/how-to-install-wine-on-ubuntu/)).
 * Install 64 bit version of [Microsoft Visual C++ 2010 Service Pack 1 Redistributable Package](https://www.microsoft.com/en-us/download/confirmation.aspx?id=26999), specifically in Wine.
 * On Windows install [Microsoft C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/), which is required for installation of `cpufeature` python package.
 * On Linux make sure Java server (e.g., [openjdk](https://openjdk.java.net/install/)), and [Nvidia drivers and CUDA >10.1](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/index.html#ubuntu-installation) are installed.
@@ -30,11 +30,9 @@ Python code for stitching and image enhancement of Light Sheet data
 
 * For running LsDeconvolveMultiGPU deconvolution software you need to install latest version of MATLAB, image processing and parallel computing toolboxes. Then change the folder to LsDeconvolveMultiGPU folder and run the following command from MATLAB.
   
-  `MATLAB`
+  `MATLAB command line` -> `cd image-preprocessing-pipeline/LsDeconvolveMultiGPU` -> `mex -O -v semaphore.c`
 
-  `cd image-preprocessing-pipeline/LsDeconvolveMultiGPU`
-
-  `mex -O -v semaphore.c`
+  `MATLAB graphic interface` -> `HOME` -> `Parallel` -> disable `Shut down and delete a parallel pool after it is idle for:`
 
 ## Computer and Microscope Specific Configurations:
 
