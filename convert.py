@@ -78,7 +78,7 @@ def main(args: Namespace):
             new_size or down_sample or args.voxel_size_target or
             args.rotation or args.flip_upside_down or
             args.gaussian or args.background_subtraction or args.de_stripe or args.bleach_correction or
-            args.compression_level > 0)
+            args.compression_level > 0 or args.compression_method != "ADOBE_DEFLATE")
     ):
         if not args.tif:
             print(f"{PrintColors.FAIL}tif path is needed to continue.{PrintColors.ENDC}")
@@ -94,7 +94,7 @@ def main(args: Namespace):
         return_code = parallel_image_processor(
             source=input_path,
             destination=tif_2d_folder,
-            fun=process_img,
+            fun=process_img if args.channel >= 0 else lambda img: img,
             kwargs={
                 "gaussian_filter_2d": args.gaussian,
                 "down_sample": down_sample,
@@ -115,7 +115,7 @@ def main(args: Namespace):
                 "convert_to_16bit": args.convert_to_16bit,
                 "convert_to_8bit": args.convert_to_8bit,
                 "bit_shift_to_right": args.bit_shift
-            },
+            } if args.channel >= 0 else None,
             max_processors=args.nthreads,
             channel=args.channel,
             compression=compression,
@@ -262,7 +262,9 @@ if __name__ == '__main__':
     parser.add_argument("--nthreads", "-n", type=int, default=psutil.cpu_count(logical=False),
                         help="number of threads. default is all physical cores for tif conversion and 12 for TeraFly.")
     parser.add_argument("--channel", "-c", type=int, default=0,
-                        help="channel to be converted. Default is 0.")
+                        help="channel to be converted. Default is 0. "
+                             "negative vales mean RGB image. Most operations do not work on RGB. "
+                             "Only compression is tested for RGB.")
     parser.add_argument("--gaussian", "-g", default=False, action=BooleanOptionalAction,
                         help="image pre-processing: apply Gaussian filter to denoise. Default is --no-gaussian.")
     parser.add_argument("--de_stripe", default=False, action=BooleanOptionalAction,

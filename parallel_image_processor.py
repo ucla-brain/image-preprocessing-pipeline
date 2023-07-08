@@ -228,7 +228,7 @@ class MultiProcess(Process):
                                 img = future.result(timeout=timeout)
                                 if timeout is not None:
                                     timeout = max(timeout, 0.9 * timeout + 0.3 * (time() - start_time))
-                                if len(img.shape) == 3:
+                                if len(img.shape) == 3 and 0 <= channel < 3:
                                     img = img[:, :, channel]
 
                             # apply function

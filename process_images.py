@@ -306,7 +306,7 @@ class MultiProcessCommandRunner(Process):
                     return_code = process.poll()
                     m = match(pattern, process.stdout.readline())
                     if m:
-                        percent = int(float(m[2]) * 100)
+                        percent = float(m[2]) * 100
                         self.queue.put([percent - previous_percent, self.position, return_code, self.command])
                         previous_percent = percent
         except Exception as inst:
@@ -883,7 +883,8 @@ def get_imaris_command(imaris_path: Path, input_path: Path, output_path: Path = 
             ims_file_path = output_path
 
         command = [
-            f"{imaris_path}" if sys.platform == "win32" else f"WINEDEBUG=-all wine {imaris_path}",
+            f"" if sys.platform == "win32" else f"WINEDEBUG=-all WINE_LARGE_ADDRESS_AWARE=1 wine ",
+            f"{imaris_path}",
             f"--input {file}",
             f"--output {ims_file_path}",
         ]
