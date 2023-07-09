@@ -306,7 +306,7 @@ class MultiProcessCommandRunner(Process):
                     return_code = process.poll()
                     m = match(pattern, process.stdout.readline())
                     if m:
-                        percent = float(m[2]) * 100
+                        percent = round(float(m[2]) * 100, 1)
                         self.queue.put([percent - previous_percent, self.position, return_code, self.command])
                         previous_percent = percent
         except Exception as inst:
