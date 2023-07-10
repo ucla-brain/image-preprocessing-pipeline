@@ -883,7 +883,7 @@ def get_imaris_command(imaris_path: Path, input_path: Path, output_path: Path = 
             ims_file_path = output_path
 
         command = [
-            f"" if sys.platform == "win32" else f"WINEDEBUG=-all WINE_LARGE_ADDRESS_AWARE=1 wine ",
+            f"" if sys.platform == "win32" else f"WINEDEBUG=-all GLIBC_TUNABLES=glibc.malloc.hugetlb=2 wine",
             f"{imaris_path}",
             f"--input {file}",
             f"--output {ims_file_path}",
