@@ -1,4 +1,4 @@
-from supplements.downsampling import TifStack
+from supplements.tifstack import TifStack
 from scipy.ndimage import zoom
 from pathlib import Path
 from numpy import ndarray, zeros

@@ -31,7 +31,7 @@ from pystripe.core import batch_filter, imread_tif_raw_png, imsave_tif, MultiPro
     process_img, convert_to_8bit_fun, log1p_jit, expm1_jit, otsu_threshold, prctl
 from supplements.cli_interface import ask_for_a_number_in_range, date_time_now, select_multiple_among_list
 from supplements.cli_interface import select_among_multiple_options, ask_true_false_question, PrintColors
-from supplements.downsampling import TifStack
+from supplements.tifstack import TifStack
 from tsv.volume import TSVVolume, VExtent
 
 # experiment setup: user needs to set them right
