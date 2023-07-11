@@ -68,19 +68,19 @@ def read_ims(ims_path, zyx_offsets, zyx_extents=(-1, -1, -1), channel=0, resolut
         raise ValueError('zyx_offsets and zyx_extents should be of length 3')
     ims = h5py.File(ims_path, 'r')
     try:
-        multi_channel_datasets = ims['DataSet/ResolutionLevel {}/TimePoint 0'.format(resolution_level)]
+        multi_channel_datasets = ims[f'DataSet/ResolutionLevel {resolution_level}/TimePoint 0']
     except KeyError:
-        raise KeyError('requested resolution level {} does not exist'.format(resolution_level))
+        raise KeyError(f'requested resolution level {resolution_level} does not exist')
     if channel < 0 or channel >= len(multi_channel_datasets.keys()):
-        raise ValueError('{} is not a valid channel id'.format(channel))
+        raise ValueError(f'{channel} is not a valid channel id')
 
-    channel_dataset = multi_channel_datasets['Channel {}/Data'.format(channel)]
+    channel_dataset = multi_channel_datasets[f'Channel {channel}/Data']
     z_start, y_start, x_start = zyx_offsets
     z_stop = zyx_extents[0] + z_start if zyx_extents[0] > 0 else channel_dataset.shape[0]
     y_stop = zyx_extents[1] + y_start if zyx_extents[1] > 0 else channel_dataset.shape[1]
     x_stop = zyx_extents[2] + x_start if zyx_extents[2] > 0 else channel_dataset.shape[2]
     if z_start < 0 or y_start < 0 or x_start < 0:
-        raise ValueError('offset values must be non negative')
+        raise ValueError('offset values must be non-negative')
     if z_stop - z_start > channel_dataset.shape[0] or y_stop - y_start > channel_dataset.shape[1] or \
             x_stop - x_start > channel_dataset.shape[2]:
         raise ValueError('extent values out of range')
