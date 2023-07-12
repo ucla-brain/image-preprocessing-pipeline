@@ -182,10 +182,30 @@ Stitching starts by inspecting your images for missing tiles. If you saw a warni
 
 # Using converter module
 
-File converter supports the following file conversions:
+Parallel superfast image converter supports the following file conversions:
 
-`Imaris` or `TIF` --> preprocessed TIF (optional: 8bit conversion + right bit-shifting, baseline (dark) subtraction) --> Single channel `TeraFly`, `Imaris`, or `MP4`
+* `Imaris` or `TIF` --> preprocessed TIF (optional: 8bit conversion + right bit-shifting, baseline (dark) subtraction) --> Single channel `TeraFly`, `Imaris`, or `MP4`
+* Image downsampling to desired isotropic voxel size.
 
 Run the following command from the `image-preprocessing-pipeline` folder:
 
 `python convert.py --help`
+
+# reconops.py
+`reconops.py` is a python script that can help with batch transformations of the apo, swc and eswc files.
+reconops.py as of now does these operations:
+1. convert to/from swc/eswc in any combination;
+```bash:
+python reconops.py -i /path/to/input_folder -ie swc -o /path/to/output_folder -oe eswc
+python reconops.py -i /path/to/input_folder -ie swc -o /path/to/output_folder -oe swc
+python reconops.py -i /path/to/input_folder -ie eswc -o /path/to/output_folder -oe eswc
+python reconops.py -i /path/to/input_folder -ie eswc -o /path/to/output_folder -oe swc
+```
+2. convert apo files generated in TeraFly to swc format that is readable in neuTube and Fast Neurite Tracer.
+3. output path is optional. Where given will be used, otherwise the input path will be used as the output path.
+4. option to overwrite files by `--overwrite` switch.
+5. sorting by `--sort` switch.
+6. flipping (e)swc and apo files.
+7. Scaling (e)swc and apo files.
+
+run `python supplements\reconops.py --help` for more information.
