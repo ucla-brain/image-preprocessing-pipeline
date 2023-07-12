@@ -196,10 +196,10 @@ Run the following command from the `image-preprocessing-pipeline` folder:
 reconops.py as of now does these operations:
 1. convert to/from swc/eswc in any combination;
 ```bash:
-python reconops.py -i /path/to/input_folder -ie swc -o /path/to/output_folder -oe eswc
-python reconops.py -i /path/to/input_folder -ie swc -o /path/to/output_folder -oe swc
-python reconops.py -i /path/to/input_folder -ie eswc -o /path/to/output_folder -oe eswc
-python reconops.py -i /path/to/input_folder -ie eswc -o /path/to/output_folder -oe swc
+python supplements\reconops.py -i /path/to/input_folder -ie swc -o /path/to/output_folder -oe eswc
+python supplements\reconops.py -i /path/to/input_folder -ie swc -o /path/to/output_folder -oe swc
+python supplements\reconops.py -i /path/to/input_folder -ie eswc -o /path/to/output_folder -oe eswc
+python supplements\reconops.py -i /path/to/input_folder -ie eswc -o /path/to/output_folder -oe swc
 ```
 2. convert apo files generated in TeraFly to swc format that is readable in neuTube and Fast Neurite Tracer.
 3. output path is optional. Where given will be used, otherwise the input path will be used as the output path.
