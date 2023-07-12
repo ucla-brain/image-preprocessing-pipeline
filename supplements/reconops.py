@@ -1,6 +1,6 @@
 from argparse import RawDescriptionHelpFormatter, ArgumentParser, Namespace, BooleanOptionalAction
 from pathlib import Path
-from pandas import read_csv, DataFrame
+from pandas import read_csv, DataFrame, concat
 from numpy import where, empty, vstack, append
 SWC_COLUMNS = ["id", "type", "x", "y", "z", "radius", "parent_id"]
 
@@ -56,7 +56,9 @@ def sort_swc(swc_df: DataFrame) -> DataFrame:
 
 
 def main(args: Namespace):
-    assert args.input_extension in ("swc", "eswc")
+    assert args.input_extension in ("swc", "eswc", "apo")
+    if args.input_extension == "apo":
+        args.output_extension = "swc"
     if not args.output_extension:
         args.output_extension = "swc"
         if args.input_extension == "swc":
@@ -90,9 +92,16 @@ def main(args: Namespace):
             continue
 
         if args.input_extension == "eswc":
-            eswc_df = read_csv(input_file, sep=r"\s+", comment="#",
+            swc_df = read_csv(input_file, sep=r"\s+", comment="#",
                                names=SWC_COLUMNS + ["seg_id", "level", "mode", "timestamp", "TFresindex"])
-            swc_df = eswc_df[SWC_COLUMNS].copy()
+            if args.output_extension == "swc":
+                swc_df = swc_df[SWC_COLUMNS].copy()
+        elif args.input_extension == "apo":
+            swc_df = read_csv(input_file).drop_duplicates().reset_index(drop=True)
+            for col_name, value in (("type", 1), ("radius", 10), ("parent_id", -1)):
+                swc_df[col_name] = value
+            swc_df["id"] = swc_df.reset_index().index + 1
+            swc_df = swc_df[SWC_COLUMNS].copy()
         else:
             swc_df = read_csv(input_file, sep=r"\s+", comment="#", names=SWC_COLUMNS)
 
@@ -114,6 +123,24 @@ def main(args: Namespace):
             with open(output_file, 'a'):
                 output_file.write_text("#")
                 swc_df.to_csv(output_file, sep=" ", mode="a", index=False)
+
+            if args.input_extension == "apo":
+                i = 1
+                output_folder = output_file.parent / output_file.name[0:-len('.ano.swc')]
+                output_folder.mkdir(exist_ok=True)
+                for i in range(1, len(swc_df)):
+                    output_file_new = output_folder / f"{i:06n}.swc"
+                    if is_overwrite_needed(output_file_new, args.overwrite):
+                        with open(output_file_new, 'a'):
+                            output_file_new.write_text("#")
+                            df1: DataFrame = swc_df.iloc[[i]].copy()
+                            df2 = df1.copy()
+                            df1["id"] = 1
+                            df1["parent_id"] = 0
+                            df2["id"] = 2
+                            df2["type"] = 2
+                            df2["parent_id"] = 1
+                            concat([df1, df2]).to_csv(output_file_new, sep=" ", mode="a", index=False)
         else:
             apo_file = output_file.parent / (output_file.name[0:-len(".eswc")] + ".apo")
             ano_file = output_file.parent / (output_file.name[0:-len(".ano.eswc")] + ".ano")
@@ -129,8 +156,9 @@ def main(args: Namespace):
                         "##n,orderinfo,name,comment,z,x,y,pixmax,intensity,sdev,volsize,mass,,,, "
                         "color_r,color_g,color_b")
 
-            for col_name, value in (("seg_id", 0), ("level", 1), ("mode", 0), ("timestamp", 1), ("TFresindex", 1)):
-                swc_df[col_name] = value
+            if args.input_extension != "eswc":
+                for col_name, value in (("seg_id", 0), ("level", 1), ("mode", 0), ("timestamp", 1), ("TFresindex", 1)):
+                    swc_df[col_name] = value
             with open(output_file, 'a'):
                 output_file.write_text("#")
                 swc_df.to_csv(output_file, sep=" ", mode="a", index=False)
@@ -140,7 +168,7 @@ def main(args: Namespace):
 
 if __name__ == '__main__':
     parser = ArgumentParser(
-        description="Convert flip and scale swc and eswc files\n\n",
+        description="ReconOps, i.e. reconstruction operations, convert flip and scale swc and eswc files\n\n",
         formatter_class=RawDescriptionHelpFormatter,
         epilog="Developed 2023 by Keivan Moradi and Sumit Nanda at UCLA, Hongwei Dong Lab (B.R.A.I.N.) \n"
     )
@@ -149,10 +177,15 @@ if __name__ == '__main__':
     parser.add_argument("--output", "-o", type=str, required=False,
                         help="Output folder for converted files.")
     parser.add_argument("--input_extension", "-ie", type=str, required=False, default="eswc",
-                        help="Input extension options are eswc and swc. Default is eswc")
+                        help="Input extension options are eswc, swc, and apo. Default is eswc.")
     parser.add_argument("--output_extension", "-oe", type=str, required=False,
                         help="Output extension options are eswc and swc. "
-                             "Default is swc if input_extension is eswc and vice versa.")
+                             "Default is swc if input_extension is eswc and vice versa. "
+                             "Apo files can be converted to swc only at the moment. "
+                             "Two types of swc files are generated for each apo file. "
+                             "One of them has all the nodes and can be opened in neuTube. "
+                             "The other one is a folder containing one swc per node that can be opened in "
+                             "Fast Neurite Tracer (FNT).")
     parser.add_argument("--overwrite", default=False, action=BooleanOptionalAction,
                         help="Overwrite outputs. Default is --no-overwrite")
     parser.add_argument("--sort", default=False, action=BooleanOptionalAction,
