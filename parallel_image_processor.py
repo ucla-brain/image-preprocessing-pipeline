@@ -437,8 +437,8 @@ def parallel_image_processor(
                 args_queue.put((idx, [idx]))
         images = str(source)
     elif source.is_dir():
-        images = [str(f) for f in source.iterdir() if f.is_file() and f.suffix.lower() in (
-            ".tif", ".tiff", ".raw", ".png")]
+        images = sorted([str(f) for f in source.iterdir() if f.is_file() and f.suffix.lower() in (
+            ".tif", ".tiff", ".raw", ".png")])
         num_images = len(images)
         assert num_images > 0
         if need_down_sampling and down_sampling_z_steps > 1:
