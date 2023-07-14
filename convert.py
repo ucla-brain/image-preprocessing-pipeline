@@ -86,10 +86,9 @@ def main(args: Namespace):
 
         de_striping_sigma = (0, 0)
         if args.de_stripe:
-            if args.bleach_correction:
-                de_striping_sigma = (4000, 4000)
-            elif args.de_stripe:
-                de_striping_sigma = (250, 250)
+            de_striping_sigma = (250, 250)
+        if args.bleach_correction:
+            de_striping_sigma = (4000, 4000)
 
         return_code = parallel_image_processor(
             source=input_path,
@@ -108,8 +107,7 @@ def main(args: Namespace):
                 "bleach_correction_max_method": False,
                 "bleach_correction_clip_min": args.bleach_correction_clip_min,
                 "bleach_correction_clip_max": args.bleach_correction_clip_max,
-                "exclude_dark_edges_set_them_to_zero": True if (
-                        args.bleach_correction or args.background_subtraction) else False,
+                "exclude_dark_edges_set_them_to_zero": False,
                 "rotate": 0,
                 "flip_upside_down": args.flip_upside_down,
                 "convert_to_16bit": args.convert_to_16bit,
