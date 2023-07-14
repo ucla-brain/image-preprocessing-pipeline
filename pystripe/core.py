@@ -3,10 +3,11 @@ from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, TimeoutE
 from concurrent.futures.process import BrokenProcessPool
 from functools import reduce
 from math import ceil
-from multiprocessing import Process, Queue, cpu_count
+from multiprocessing import Process, Queue
 from operator import iconcat
 from os import scandir, DirEntry  # , environ
 from pathlib import Path
+from psutil import cpu_count
 from queue import Empty
 from re import compile, IGNORECASE
 from time import sleep, time
@@ -1341,7 +1342,7 @@ def batch_filter(
         input_path: Path,
         output_path: Path,
         files_list: List[Path] = None,
-        workers: int = cpu_count(),
+        workers: int = cpu_count(logical=False),
         flat: ndarray = None,
         gaussian_filter_2d: bool = False,
         dark: int = 0,

@@ -345,7 +345,7 @@ def parallel_image_processor(
         source_voxel: Union[Tuple[float, float, float], None] = None,
         target_voxel: Union[int, float, None] = None,
         rotation: int = 0,
-        timeout: Union[float, None] = 1800,
+        timeout: Union[float, None] = None,
         max_processors: int = cpu_count(logical=False),
         progress_bar_name: str = " ImgProc",
         compression: Tuple[str, int] = ("ADOBE_DEFLATE", 1),
