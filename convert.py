@@ -207,6 +207,7 @@ def main(args: Namespace):
 
 if __name__ == '__main__':
     freeze_support()
+    os.environ["GLIBC_TUNABLES"] = "glibc.malloc.hugetlb=2"
     cpu_instruction = "SSE2"
     for item in ["SSE2", "AVX", "AVX2", "AVX512f"]:
         cpu_instruction = item if CPUFeature[item] else cpu_instruction
