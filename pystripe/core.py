@@ -364,7 +364,7 @@ def log1p_jit(img_log_filtered: ndarray) -> ndarray:
     return log1p(img_log_filtered)
 
 
-def filter_subband(img: ndarray, sigma: float, level: int, wavelet: str, bidirectional: bool) -> ndarray:
+def filter_subband(img: ndarray, sigma: float, level: int, wavelet: str, bidirectional: bool = False) -> ndarray:
     coefficients = wavedec2(img, wavelet, mode='symmetric', level=None if level == 0 else level, axes=(-2, -1))
     coefficients = list(map(list, coefficients))
     width_frac_h = sigma / img.shape[0]
@@ -548,6 +548,33 @@ def otsu_threshold(img: ndarray) -> float:
         return 2
 
 
+def filter_streak_horizontally(img, sigma1, sigma2, level, wavelet, crossover, threshold):
+    if sigma1 > 0 and sigma1 == sigma2:
+        img = filter_subband(img, sigma1, level, wavelet)
+    else:
+        smoothing: int = 1
+        img_max = np_max(img)
+        if threshold is None:
+            threshold = otsu_threshold(img)
+        ff = foreground_fraction(img, threshold, crossover, smoothing)
+        foreground = img
+        if sigma1 > 0:
+            foreground = clip(img, threshold, None)
+            foreground = filter_subband(foreground, sigma1, level, wavelet)
+
+        background = img
+        if sigma2 > 0:
+            background = clip(img, None, threshold)
+            background = filter_subband(background, sigma2, level, wavelet)
+
+        if use_numexpr:
+            img = evaluate("foreground * ff + background * (1 - ff)")
+        else:
+            img = foreground * ff + background * (1 - ff)
+        img *= (img_max / np_max(img))
+    return img
+
+
 def filter_streaks(
         img: ndarray,
         sigma: Tuple[float, float] = (200, 200),
@@ -649,29 +676,11 @@ def filter_streaks(
                   f"x_slice_max={bleach_correction_x_slice_max}, \n")
 
     if not sigma1 == sigma2 == 0:
-        if sigma1 > 0 and sigma1 == sigma2:
-            img = filter_subband(img, sigma1, level, wavelet, bidirectional)
-        else:
-            smoothing: int = 1
-            img_max = np_max(img)
-            if threshold is None:
-                threshold = otsu_threshold(img)
-            ff = foreground_fraction(img, threshold, crossover, smoothing)
-            foreground = img
-            if sigma1 > 0:
-                foreground = clip(img, threshold, None)
-                foreground = filter_subband(foreground, sigma1, level, wavelet, bidirectional)
-
-            background = img
-            if sigma2 > 0:
-                background = clip(img, None, threshold)
-                background = filter_subband(background, sigma2, level, wavelet, bidirectional)
-
-            if use_numexpr:
-                img = evaluate("foreground * ff + background * (1 - ff)")
-            else:
-                img = foreground * ff + background * (1 - ff)
-            img *= (img_max / np_max(img))
+        img = filter_streak_horizontally(img, sigma1, sigma2, level, wavelet, crossover, threshold)
+        if bidirectional:
+            img = rot90(img, 1)
+            img = filter_streak_horizontally(img, sigma1, sigma2, level, wavelet, crossover, threshold)
+            img = rot90(img, -1)
 
         if verbose:
             print(f"de-striping applied: sigma={sigma}, level={level}, wavelet={wavelet}, crossover{crossover}, "
