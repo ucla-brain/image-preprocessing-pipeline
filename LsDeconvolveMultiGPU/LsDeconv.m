@@ -1322,9 +1322,9 @@ function pad_size = gaussian_pad_size(image_size, filter_size)
     rankA = numel(image_size);
     rankH = numel(filter_size);
     
-    filter_size = [filter_size ones(1,rankA-rankH)];
+    filter_size = [filter_size ones(1, rankA-rankH)];
     
-    pad_size = floor(filter_size/2);
+    pad_size = ceil(filter_size/2);
 end
 
 function [lb, ub] = deconvolved_stats(deconvolved)
