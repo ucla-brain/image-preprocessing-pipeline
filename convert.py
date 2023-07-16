@@ -114,6 +114,7 @@ def main(args: Namespace):
                 "convert_to_8bit": args.convert_to_8bit,
                 "bit_shift_to_right": args.bit_shift
             } if args.channel >= 0 else None,
+            rename=args.rename,
             max_processors=args.nthreads,
             channel=args.channel,
             compression=compression,
@@ -121,6 +122,7 @@ def main(args: Namespace):
             source_voxel=(args.voxel_size_z, args.voxel_size_y, args.voxel_size_x),
             target_voxel=args.voxel_size_target,
             rotation=args.rotation,
+            resume=args.resume
         )
     elif input_path.is_dir():
         tif_2d_folder = input_path
@@ -343,4 +345,10 @@ if __name__ == '__main__':
     parser.add_argument("--timeout", type=float, default=None,
                         help="timeout in seconds for image reading. applies to image series and tsv volumes (not ims). "
                              "adds up to 30 percent overhead for copying the data from one process to another.")
+    parser.add_argument("--rename", default=False, action=BooleanOptionalAction,
+                        help="applies to tif to tif conversion only. "
+                             "sorts input files and renumbers them like img_000000.tif. Default is --no-rename. ")
+    parser.add_argument("--resume", default=False, action=BooleanOptionalAction,
+                        help="applies to tif conversion only. "
+                             "resume processing remaining files. Default is --no-resume.")
     main(parser.parse_args())

@@ -44,11 +44,12 @@ class MultiProcess(Process):
             function: Callable,
             images: Union[List[str], str],
             save_path: Path,
-            tif_prefix: str,
             args: tuple,
             kwargs: dict,
             shape: Tuple[int, int],
             dtype: str,
+            rename: bool = False,
+            tif_prefix: str = 'img',
             source_voxel: Union[Tuple[float, float, float], None] = None,
             target_voxel: Union[int, float, None] = None,
             down_sampled_path: Union[Path, None] = None,
@@ -79,6 +80,7 @@ class MultiProcess(Process):
         self.channel = channel
         self.images = images
         self.save_path = save_path
+        self.rename = rename
         self.tif_prefix = tif_prefix
         self.args = args
         self.kwargs = kwargs
@@ -148,6 +150,7 @@ class MultiProcess(Process):
         args = self.args
         kwargs = self.kwargs
         save_path = self.save_path
+        rename = self.rename
         tif_prefix = self.tif_prefix
         channel = self.channel
         resume = self.resume
@@ -204,6 +207,8 @@ class MultiProcess(Process):
                         while virtual_memory().available < self.needed_memory:
                             sleep(600)
                     tif_save_path = save_path / f"{tif_prefix}_{idx:06}.tif"
+                    if not (is_tsv or is_ims or rename):
+                        tif_save_path = save_path / Path(images[idx]).name
                     if resume and function is not None and tif_save_path.exists():
                         if need_down_sampling and down_sampled_tif_path.exists():
                             self.progress_queue.put(running_next)
@@ -340,6 +345,7 @@ def parallel_image_processor(
         fun: Union[Callable, None] = None,
         args: tuple = None,
         kwargs: dict = None,
+        rename: bool = False,
         tif_prefix: str = "img",
         channel: int = 0,
         source_voxel: Union[Tuple[float, float, float], None] = None,
@@ -486,7 +492,8 @@ def parallel_image_processor(
     for worker in tqdm(range(workers), desc=' workers'):
         if progress_queue.qsize() + worker < num_images:
             MultiProcess(
-                progress_queue, args_queue, semaphore, fun, images, destination, tif_prefix, args, kwargs, shape, dtype,
+                progress_queue, args_queue, semaphore, fun, images, destination, args, kwargs, shape, dtype,
+                rename=rename, tif_prefix=tif_prefix,
                 source_voxel=source_voxel, target_voxel=target_voxel, down_sampled_path=down_sampled_path,
                 rotation=rotation, channel=channel, timeout=timeout, compression=compression, resume=resume,
                 needed_memory=needed_memory).start()
