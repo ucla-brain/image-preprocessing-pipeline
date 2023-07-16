@@ -531,13 +531,15 @@ def correct_bleaching(
         img_filter_x = reshape(img_filter_x, (1, len(img_filter_x)))
         img_filter = dot(img_filter_y, img_filter_x)
     else:
-        img_filter = clip(img_sliced, clip_min, clip_max)
+        img_filter = where(img_sliced < log1p(.99), clip_max if clip_max else np_max(img_sliced), img_sliced)
+        if clip_min is not None or clip_max is not None:
+            clip(img_filter, clip_min, clip_max, out=img_filter)
         img_filter = butter_lowpass_filter(img_filter, frequency)
-        img_filter = filter_subband(img_filter, 1 / frequency, 0, "db10", True)
+        img_filter = filter_subband(img_filter, 1 / frequency, 0, "db10", bidirectional=True)
 
     # apply the filter
     img_filter /= np_max(img_filter)
-    img[y_slice_min:y_slice_max, x_slice_min:x_slice_max] = where(img_sliced > 0, img_sliced / img_filter, 0)
+    img[y_slice_min:y_slice_max, x_slice_min:x_slice_max] = where(img_filter > 0, img_sliced / img_filter, img_sliced)
     return img
 
 
