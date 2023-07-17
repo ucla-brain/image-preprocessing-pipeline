@@ -256,13 +256,11 @@ function [] = LsDeconv(varargin)
     end
 end
 
-
-function size = max_pad_size(x, psf_size, filter_size)
-    size = max(pad_size(x, psf_size), gaussian_pad_size(x, filter_size));
-end
-
 % calculate xy plan size based on z step size
 function [x, y, x_pad, y_pad] = calculate_xy_size(z, z_pad, info, block_size_max, psf_size, filter)
+    function size = max_pad_size(x, psf_size, filter_size)
+        size = max(pad_size(x, psf_size), gaussian_pad_size(x, filter_size));
+    end
     z_max = z + 2 * gaussian_pad_size(z, filter.size(3));
     function size = block_size(x, y)
         size = ...
@@ -300,24 +298,24 @@ function [x, y, x_pad, y_pad] = calculate_xy_size(z, z_pad, info, block_size_max
 
     if info.x > info.y
         % first try to increase x then y
-        while x < info.x && block_size(x+1, y) < block_size_max && (x+1)*y*z_deconvolved > max_deconvolved_voxels
+        while x < info.x && block_size(x+1, y) <= block_size_max && (x+1)*y*z_deconvolved > max_deconvolved_voxels
             x = x + 1;
             x_pad = pad_size(x, psf_size(1));
             max_deconvolved_voxels = x*y*z_deconvolved;
         end
-        while y < info.y && block_size(x, y+1) < block_size_max && x*(y+1)*z_deconvolved > max_deconvolved_voxels
+        while y < info.y && block_size(x, y+1) <= block_size_max && x*(y+1)*z_deconvolved > max_deconvolved_voxels
             y = y + 1;
             y_pad = pad_size(y, psf_size(2));
             max_deconvolved_voxels = x*y*z_deconvolved;
         end
     else
         % first try to increase y then x
-        while y < info.y && block_size(x, y+1) < block_size_max && x*(y+1)*z_deconvolved > max_deconvolved_voxels
+        while y < info.y && block_size(x, y+1) <= block_size_max && x*(y+1)*z_deconvolved > max_deconvolved_voxels
             y = y + 1;
             y_pad = pad_size(y, psf_size(2));
             max_deconvolved_voxels = x*y*z_deconvolved;
         end
-        while x < info.x && block_size(x+1, y) < block_size_max && (x+1)*y*z_deconvolved > max_deconvolved_voxels
+        while x < info.x && block_size(x+1, y) <= block_size_max && (x+1)*y*z_deconvolved > max_deconvolved_voxels
             x = x + 1;
             x_pad = pad_size(x, psf_size(1));
             max_deconvolved_voxels = x*y*z_deconvolved;
@@ -363,13 +361,10 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad] = autosplit(info, psf_size, 
 
     z_min = 2 * psf_size(3) + 1;
     for z_ = z_max:-1:z_min
-        z_pad_ = max_pad_size(z_, psf_size(3), filter.size(3)); % pad_size(z_, psf_size(3));
-        % if mod(z_pad_, 1)~=0
-        %     continue
-        % end
+        z_pad_ = pad_size(z_, psf_size(3));
         [x_, y_, x_pad_, y_pad_] = calculate_xy_size(z_, z_pad_, info, block_size_max, psf_size, filter);
         deconvolved_voxels = x_ * y_ * (z_ - 2 * z_pad_);
-        if z_ > 2 * z_pad_ && deconvolved_voxels > max_deconvolved_voxels && block_size(x_, y_, z_, x_pad_, y_pad_) < block_size_max
+        if z_ > 2 * z_pad_ && deconvolved_voxels > max_deconvolved_voxels && block_size(x_, y_, z_, x_pad_, y_pad_) <= block_size_max
             x = x_;
             y = y_;
             z = z_;
