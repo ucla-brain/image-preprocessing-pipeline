@@ -210,7 +210,7 @@ class MultiProcess(Process):
                     if not (is_tsv or is_ims or rename):
                         tif_save_path = save_path / Path(images[idx]).name
                     if resume and function is not None and tif_save_path.exists():
-                        if need_down_sampling and down_sampled_tif_path.exists():
+                        if (need_down_sampling and down_sampled_tif_path.exists()) or not need_down_sampling:
                             self.progress_queue.put(running_next)
                             continue
                     try:
