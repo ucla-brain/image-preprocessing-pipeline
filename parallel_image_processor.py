@@ -18,6 +18,7 @@ from numpy import zeros, float32, dstack, rollaxis, savez_compressed, array, max
 from psutil import cpu_count, virtual_memory
 from skimage.measure import block_reduce
 from skimage.transform import resize
+from tifffile import natural_sorted
 from tqdm import tqdm
 
 from pystripe.core import imread_tif_raw_png, imsave_tif, progress_manager, is_uniform_2d, is_uniform_3d
@@ -442,7 +443,7 @@ def parallel_image_processor(
                 args_queue.put((idx, [idx]))
         images = str(source)
     elif source.is_dir():
-        images = sorted([str(f) for f in source.iterdir() if f.is_file() and f.suffix.lower() in (
+        images = natural_sorted([str(f) for f in source.iterdir() if f.is_file() and f.suffix.lower() in (
             ".tif", ".tiff", ".raw", ".png")])
         num_images = len(images)
         assert num_images > 0
