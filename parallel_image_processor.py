@@ -458,6 +458,7 @@ def parallel_image_processor(
         dtype = img.dtype
         manager = Manager()
         images = manager.list(images)
+        del img
     else:
         print("source can be either a tsv volume, an ims file path, or a 2D tiff series folder")
         raise RuntimeError
