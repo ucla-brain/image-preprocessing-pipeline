@@ -1340,6 +1340,8 @@ if __name__ == '__main__':
     # os.environ['NUMEXPR_NUM_THREADS'] = '1'
     # os.environ['OMP_NUM_THREADS'] = '1'
     freeze_support()
+    os.environ["GLIBC_TUNABLES"] = "glibc.malloc.hugetlb=2"
+    os.environ["NUMPY_MADVISE_HUGEPAGE"] = "1"
     FlatNonFlatTrainingData = "image_classes.csv"
     cpu_physical_core_count = cpu_count(logical=False)
     cpu_logical_core_count = cpu_count(logical=True)
@@ -1351,7 +1353,6 @@ if __name__ == '__main__':
     for item in ["SSE2", "AVX", "AVX2", "AVX512f"]:
         cpu_instruction = item if CPUFeature[item] else cpu_instruction
     PyScriptPath = Path(r".") / "TeraStitcher" / "pyscripts"
-    os.environ["GLIBC_TUNABLES"] = "glibc.malloc.hugetlb=2"
     if sys.platform.lower() == "win32":
         print("Windows is detected.")
         psutil.Process().nice(getattr(psutil, "IDLE_PRIORITY_CLASS"))
