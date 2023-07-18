@@ -178,7 +178,7 @@ def convert_to_8bit_fun(img: ndarray, bit_shift_to_right: int = 8):
     return img
 
 
-def imsave_tif(path: Path, img: ndarray, compression: Union[Tuple[str, int], None] = ('ADOBE_DEFLATE', 1)):
+def imsave_tif(path: Path, img: ndarray, compression: Union[Tuple[str, int], None] = ('ADOBE_DEFLATE', 1)) -> bool:
     """Save an array as a tiff or raw image
 
     The file format will be inferred from the file extension in `path`
@@ -192,6 +192,10 @@ def imsave_tif(path: Path, img: ndarray, compression: Union[Tuple[str, int], Non
     compression : Tuple[str, int]
         The 1st argument is compression method the 2nd compression level for tiff files
         For example, ('ZSTD', 1) or ('ADOBE_DEFLATE', 1).
+
+    Returns
+    ----------
+    True if the user interrupted the program, else False even if failed to save.
     """
     die = False
     # compression_method = enumarg(TIFF.COMPRESSION, "None")
@@ -203,11 +207,11 @@ def imsave_tif(path: Path, img: ndarray, compression: Union[Tuple[str, int], Non
         try:
             # imwrite(path, data=img, compression=compression_method, compressionargs={'level': compression_level})
             imwrite(path, data=img, compression=compression)
-            return
+            return False  # do not die
         except KeyboardInterrupt:
             print(f"{PrintColors.WARNING}\ndying from imsave_tif{PrintColors.ENDC}")
             imwrite(path, data=img, compression=compression)
-            die = True
+            return True  # die
         except (OSError, TypeError, PermissionError) as inst:
             if attempt == num_retries:
                 # f"Data size={img.size * img.itemsize} should be equal to the saved file's byte_count={byte_count}?"
@@ -218,12 +222,10 @@ def imsave_tif(path: Path, img: ndarray, compression: Union[Tuple[str, int], Non
                     f"\n{type(inst)}\n"
                     f"{inst.args}\n"
                     f"{inst}\n")
+                return False
             else:
                 sleep(0.1)
             continue
-    # if die:
-    #     raise KeyboardInterrupt
-    return die
 
 
 def fft(data, axis=-1, shift=True):
