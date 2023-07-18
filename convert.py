@@ -10,7 +10,7 @@ from time import time
 
 import psutil
 from cpufeature.extension import CPUFeature
-from numpy import uint16
+# from numpy import uint16
 from numpy import max as np_max
 from numpy import mean as np_mean
 from numpy import median as np_median
