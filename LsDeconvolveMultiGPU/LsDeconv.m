@@ -114,6 +114,8 @@ function [] = LsDeconv(varargin)
 
             p_log(log_file, 'image stack info ...');
             [info.x, info.y, info.z, info.bit_depth] = getstackinfo(inpath); % n is volume dimension
+            info.dxy = dxy;
+            info.dz = dz;
             info.flip_upside_down = flip_upside_down;
             info.convert_to_8bit = convert_to_8bit;
 
@@ -289,7 +291,7 @@ function [x, y, x_pad, y_pad] = calculate_xy_size(z, z_pad, info, block_size_max
     for x_ = x_min_deconvolved+1:x_max_deconvolved
         x_pad_ = pad_size(x_, psf_size(1));
         deconvolved_voxels = x_^2 * z_deconvolved;
-        if block_size(x_, x_) <= block_size_max && deconvolved_voxels > max_deconvolved_voxels
+        if block_size(x_, x_) < block_size_max && deconvolved_voxels > max_deconvolved_voxels
             x = x_;
             x_pad = x_pad_;
             max_deconvolved_voxels = deconvolved_voxels;
@@ -306,24 +308,24 @@ function [x, y, x_pad, y_pad] = calculate_xy_size(z, z_pad, info, block_size_max
 
     if info.x > info.y
         % first try to increase x then y
-        while x < info.x && block_size(x+1, y) <= block_size_max && (x+1)*y*z_deconvolved > max_deconvolved_voxels
+        while x < info.x && block_size(x+1, y) < block_size_max && (x+1)*y*z_deconvolved > max_deconvolved_voxels
             x = x + 1;
             x_pad = pad_size(x, psf_size(1));
             max_deconvolved_voxels = x*y*z_deconvolved;
         end
-        while y < info.y && block_size(x, y+1) <= block_size_max && x*(y+1)*z_deconvolved > max_deconvolved_voxels
+        while y < info.y && block_size(x, y+1) < block_size_max && x*(y+1)*z_deconvolved > max_deconvolved_voxels
             y = y + 1;
             y_pad = pad_size(y, psf_size(2));
             max_deconvolved_voxels = x*y*z_deconvolved;
         end
     else
         % first try to increase y then x
-        while y < info.y && block_size(x, y+1) <= block_size_max && x*(y+1)*z_deconvolved > max_deconvolved_voxels
+        while y < info.y && block_size(x, y+1) < block_size_max && x*(y+1)*z_deconvolved > max_deconvolved_voxels
             y = y + 1;
             y_pad = pad_size(y, psf_size(2));
             max_deconvolved_voxels = x*y*z_deconvolved;
         end
-        while x < info.x && block_size(x+1, y) <= block_size_max && (x+1)*y*z_deconvolved > max_deconvolved_voxels
+        while x < info.x && block_size(x+1, y) < block_size_max && (x+1)*y*z_deconvolved > max_deconvolved_voxels
             x = x + 1;
             x_pad = pad_size(x, psf_size(1));
             max_deconvolved_voxels = x*y*z_deconvolved;
@@ -341,7 +343,7 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad] = autosplit(info, psf_size, 
     end
 
     % psf half width was not enouph to eliminate artifacts on z
-    psf_size(3) = ceil(psf_size(3) .* 2);
+    psf_size(3) = ceil(psf_size(3) .* 2 / (info.dz / 1000));
 
     % image will be converted to single precision (8 bit) float during
     % deconvolution but two copies are needed
@@ -372,7 +374,7 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad] = autosplit(info, psf_size, 
         z_pad_ = pad_size(z_, psf_size(3));
         [x_, y_, x_pad_, y_pad_] = calculate_xy_size(z_, z_pad_, info, block_size_max, psf_size, filter);
         deconvolved_voxels = x_ * y_ * (z_ - 2 * z_pad_);
-        if z_ > 2 * z_pad_ && deconvolved_voxels > max_deconvolved_voxels && block_size(x_, y_, z_, x_pad_, y_pad_) <= block_size_max
+        if z_ > 2 * z_pad_ && deconvolved_voxels > max_deconvolved_voxels && block_size(x_, y_, z_, x_pad_, y_pad_) < block_size_max
             x = x_;
             y = y_;
             z = z_;
@@ -1002,12 +1004,9 @@ function postprocess_save(...
             R = uint16(R); % , 'Compression', 'none'
         end
 
-        tmp = whos('R');
-        needed_ram_per_thread = tmp.bytes / size(R, 3) * 2;
-
         %write images to output path
         disp(['saving ' num2str(size(R, 3)) ' images...']);
-        
+        needed_ram_per_thread = whos('R').bytes / size(R, 3) * 2;
         parfor k = 1 : size(R, 3)
             save_time = tic;
             % file path
@@ -1020,8 +1019,9 @@ function postprocess_save(...
                 continue
             end
             [ram_available, ~]  = get_memory();
+            
             while ram_available < needed_ram_per_thread
-                sleep(1);
+                pause(1);
                 [ram_available, ~]  = get_memory();
             end
             message = save_image_2d(R(:,:,k), save_path, s, rawmax, save_time);
