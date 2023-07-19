@@ -284,12 +284,12 @@ function [x, y, x_pad, y_pad] = calculate_xy_size(z, z_pad, info, block_size_max
     x_min_deconvolved = x_max_deconvolved - 5 * psf_size(1);
     x = x_min_deconvolved;
     x_pad = pad_size(x, psf_size(1));
-    z_deconvolved = z - 2*z_pad;
+    z_deconvolved = z - ceil(z_pad) - floor(z_pad);
     max_deconvolved_voxels = x^2 * z_deconvolved;
     for x_ = x_min_deconvolved+1:x_max_deconvolved
         x_pad_ = pad_size(x_, psf_size(1));
         deconvolved_voxels = x_^2 * z_deconvolved;
-        if block_size(x_, x_) < block_size_max && deconvolved_voxels > max_deconvolved_voxels
+        if block_size(x_, x_) <= block_size_max && deconvolved_voxels > max_deconvolved_voxels
             x = x_;
             x_pad = x_pad_;
             max_deconvolved_voxels = deconvolved_voxels;
@@ -973,7 +973,7 @@ function postprocess_save(...
             blnr = blnr + 1;
         end
         
-        % since R can be a very large matrix memory mangement is important.
+        % since R matrix can be very large memory mangement is important.
         % combining operations should be avoided to save RAM.
         if clipval > 0
             %perform histogram clipping
@@ -1002,6 +1002,9 @@ function postprocess_save(...
             R = uint16(R); % , 'Compression', 'none'
         end
 
+        tmp = whos('R');
+        needed_ram_per_thread = tmp.bytes / size(R, 3) * 2;
+
         %write images to output path
         disp(['saving ' num2str(size(R, 3)) ' images...']);
         
@@ -1015,6 +1018,11 @@ function postprocess_save(...
             save_path = fullfile(outpath, ['img_' s '.tif']);
             if exist(save_path, "file")
                 continue
+            end
+            [ram_available, ~]  = get_memory();
+            while ram_available < needed_ram_per_thread
+                sleep(1);
+                [ram_available, ~]  = get_memory();
             end
             message = save_image_2d(R(:,:,k), save_path, s, rawmax, save_time);
             disp(message);
@@ -1252,11 +1260,6 @@ function [ram_available, ram_total]  = get_memory()
     %     end
 end
 
-% function vram = available_gpu_memory(gpu)
-%     gpu_device = gpuDevice(gpu);
-%     vram = gpu_device.AvailableMemory;
-% end
-
 function showinfo()
     disp('Usage: LsDeconv TIFDIR DELTAXY DELTAZ nITER NA RI LAMBDA_EX LAMBDA_EM FCYL SLITWIDTH DAMPING HISOCLIP STOP_CRIT MEM_PERCENT');
     disp(' ');
@@ -1374,26 +1377,6 @@ function bl = my_load(fname)
     data = load(fname);
     bl = data.bl;
 end
-
-% function save_image(R, outpath, imagenr_start, rawmax)
-%     for k = 1 : size(R, 3)
-%         tic;
-% 
-%         % file path
-%         s = num2str(imagenr_start + k - 1);
-%         while length(s) < 6
-%             s = strcat('0', s);
-%         end
-%         path = fullfile(outpath, ['img_' s '.tif']);
-%         if exist(path, "file")
-%             continue
-%         end
-% 
-%         save_image_2d(R(:,:,k), path, rawmax);
-% 
-%         disp(['   saved img_' s ' in ' num2str(toc) ' seconds.'])
-%     end
-% end
 
 function message = save_image_2d(im, path, s, rawmax, save_time)
     im = im';
