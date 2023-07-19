@@ -30,7 +30,7 @@ function [] = LsDeconv(varargin)
         disp(datetime('now'));
         disp(' ');
 
-        if nargin < 21
+        if nargin < 22
             showinfo();
             if isdeployed
                 exit(1);
@@ -60,9 +60,10 @@ function [] = LsDeconv(varargin)
         resume = varargin{19};
         starting_block = varargin{20};
         flip_upside_down = varargin{21};
+        convert_to_8bit = varargin{22};
         cache_drive = tempdir;
-        if nargin > 21
-            cache_drive=varargin{22};
+        if nargin > 22
+            cache_drive=varargin{23};
             if ~exist(cache_drive, "dir")
                 mkdir(cache_drive);
             end
@@ -87,6 +88,7 @@ function [] = LsDeconv(varargin)
             resume = str2double(strrep(resume, ',', '.'));
             starting_block = str2double(strrep(starting_block, ',', '.'));
             flip_upside_down = str2double(strrep(flip_upside_down, ',', '.'));
+            convert_to_8bit = str2double(strrep(convert_to_8bit, ',', '.'));
         end
 
         if isfolder(inpath)
@@ -113,6 +115,7 @@ function [] = LsDeconv(varargin)
             p_log(log_file, 'image stack info ...');
             [info.x, info.y, info.z, info.bit_depth] = getstackinfo(inpath); % n is volume dimension
             info.flip_upside_down = flip_upside_down;
+            info.convert_to_8bit = convert_to_8bit;
 
             if resume && numel(dir(fullfile(outpath, '*.tif'))) == info.z
                 disp("it seems all the files are already deconvolved!");
@@ -227,6 +230,11 @@ function [] = LsDeconv(varargin)
         p_log(log_file, '   flip the image upside down (y-axis): yes');
         else
         p_log(log_file, '   flip the image upside down (y-axis): no');
+        end
+        if convert_to_8bit
+        p_log(log_file, '   convert to 8-bit: yes');
+        else
+        p_log(log_file, '   convert to 8-bit: no');
         end
         p_log(log_file, ' ');
 
@@ -346,7 +354,7 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad] = autosplit(info, psf_size, 
     % load extra z layers for each block to avoid generating artifacts on z
     % for efficiency of FFT pad data in a way that the largest prime
     % factor becomes <= 5 for each end of the block
-    z_pad = max_pad_size(z, psf_size(3), filter.size(3)); % pad_size(z, psf_size(3));
+    z_pad = pad_size(z, psf_size(3));
     [x, y, x_pad, y_pad] = calculate_xy_size(z, z_pad, info, block_size_max, psf_size, filter);
     max_deconvolved_voxels = x * y * (z - 2 * z_pad);
     
@@ -579,11 +587,11 @@ function deconvolve(filelist, psf, numit, damping, ...
         % delete block z_pad
         if block.z_pad > 0 && block.nz > 1
             if  z1 == 1
-                bl = bl(:, :,                 1 : end - floor(block.z_pad) - 1);
+                bl = bl(:, :,                     1 : end - floor(block.z_pad));
             elseif z2 == info.z
-                bl = bl(:, :, ceil(block.z_pad) : end);
+                bl = bl(:, :, ceil(block.z_pad) + 1 : end);
             else
-                bl = bl(:, :, ceil(block.z_pad) : end - floor(block.z_pad) - 1);
+                bl = bl(:, :, ceil(block.z_pad) + 1 : end - floor(block.z_pad));
             end
         end
 
@@ -869,6 +877,10 @@ function postprocess_save(...
         scal = 255;
     elseif rawmax <= 65535
         scal = 65535;
+        if info.convert_to_8bit
+            rawmax = 255;
+            scal = 255;
+        end
     else
         scal = rawmax; % scale to maximum of input data
     end
@@ -929,12 +941,13 @@ function postprocess_save(...
 
         %load and mount next layer of images
         if block.z_pad > 0 && block.nz > 1
+            bl_z = p2(blnr, z) - p1(blnr, z) + 1;
             if  nz == 1
-                R = zeros(info.x, info.y, p2(blnr, z) - p1(blnr, z) + 1 - ceil(block.z_pad), 'single');
+                R = zeros(info.x, info.y,                      bl_z - floor(block.z_pad), 'single');
             elseif nz == block.nz
-                R = zeros(info.x, info.y, p2(blnr, z) - p1(blnr, z) + 1 - floor(block.z_pad), 'single');
+                R = zeros(info.x, info.y, -ceil(block.z_pad) + bl_z                     , 'single');
             else
-                R = zeros(info.x, info.y, p2(blnr, z) - p1(blnr, z) + 1 - floor(block.z_pad) - ceil(block.z_pad), 'single');
+                R = zeros(info.x, info.y, -ceil(block.z_pad) + bl_z - floor(block.z_pad), 'single');
             end
         end
         for j = 1 : block.nx * block.ny
@@ -979,10 +992,34 @@ function postprocess_save(...
         R = R - amplification;
         R = min(R, scal);
         R = max(R, 0);
+        if info.flip_upside_down
+            R = flip(R, 2);
+        end
+
+        if rawmax <= 255       % 8bit data
+            R = uint8(R); % , 'Compression', 'none'
+        elseif rawmax <= 65535 % 16bit data
+            R = uint16(R); % , 'Compression', 'none'
+        end
 
         %write images to output path
         disp(['saving ' num2str(size(R, 3)) ' images...']);
-        save_image(R, outpath, imagenr, rawmax, info.flip_upside_down);
+        
+        parfor k = 1 : size(R, 3)
+            save_time = tic;
+            % file path
+            s = num2str(imagenr + k - 1);
+            while length(s) < 6
+                s = strcat('0', s);
+            end
+            save_path = fullfile(outpath, ['img_' s '.tif']);
+            if exist(save_path, "file")
+                continue
+            end
+            message = save_image_2d(R(:,:,k), save_path, s, rawmax, save_time);
+            disp(message);
+        end
+
         imagenr = imagenr + size(R, 3);
         % delete(gcp('nocreate'));
         % pool = parpool('local', 16, 'IdleTimeout', Inf);
@@ -1338,34 +1375,37 @@ function bl = my_load(fname)
     bl = data.bl;
 end
 
-function save_image(R, outpath, imagenr_start, rawmax, flip_upside_down)
-    for k = 1 : size(R, 3)
-        tic;
+% function save_image(R, outpath, imagenr_start, rawmax)
+%     for k = 1 : size(R, 3)
+%         tic;
+% 
+%         % file path
+%         s = num2str(imagenr_start + k - 1);
+%         while length(s) < 6
+%             s = strcat('0', s);
+%         end
+%         path = fullfile(outpath, ['img_' s '.tif']);
+%         if exist(path, "file")
+%             continue
+%         end
+% 
+%         save_image_2d(R(:,:,k), path, rawmax);
+% 
+%         disp(['   saved img_' s ' in ' num2str(toc) ' seconds.'])
+%     end
+% end
 
-        % select tile
-        im = squeeze(R(:,:,k)');
-        if flip_upside_down
-            im = flip(im);
-        end
-
-        % file path
-        s = num2str(imagenr_start + k - 1);
-        while length(s) < 6
-            s = strcat('0', s);
-        end
-        path = fullfile(outpath, ['img_' s '.tif']);
-
-        % save
-        if rawmax <= 255       % 8bit data
-            imwrite(uint8(im), path); % , 'Compression', 'none'
-        elseif rawmax <= 65535 % 16bit data
-            imwrite(uint16(im), path); % , 'Compression', 'none'
-        else                   % 32 bit data
-            writeTiff32(im, path) %im must be single;
-        end
-
-        disp(['   saved img_' s ' in ' num2str(toc) ' seconds.'])
+function message = save_image_2d(im, path, s, rawmax, save_time)
+    im = im';
+    im = squeeze(im);
+    if rawmax <= 255       % 8bit data
+        imwrite(im, path); % , 'Compression', 'none'
+    elseif rawmax <= 65535 % 16bit data
+        imwrite(im, path); % , 'Compression', 'none'
+    else                   % 32 bit data
+        writeTiff32(im, path) %im must be single;
     end
+    message = ['   saved img_' s ' in ' num2str(toc(save_time)) ' seconds.'];
 end
 
 function bl = load_block(filelist, start_x, end_x, start_y, end_y, start_z, end_z)
