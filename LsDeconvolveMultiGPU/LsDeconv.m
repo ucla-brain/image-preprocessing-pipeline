@@ -506,7 +506,6 @@ function process(inpath, outpath, log_file, info, block, psf, numit, ...
     end
 
     % clear locks and semaphors
-    semaphore_destroy(semkey_single);
     for gpu = unique_gpus
         semaphore_destroy(gpu);
         semaphore_destroy(gpu + semkey_loading_base);
@@ -519,6 +518,7 @@ function process(inpath, outpath, log_file, info, block, psf, numit, ...
     postprocess_save(...
         outpath, cache_drive, min_max_path, log_file, clipval, ...
         p1, p2, info, resume, block, amplification);
+    semaphore_destroy(semkey_single);
 
     p_log(log_file, ['deconvolution finished at ' char(datetime)]);
     p_log(log_file, ['elapsed time: ' char(duration(datetime('now') - start_time, 'Format', 'dd:hh:mm:ss'))]);
@@ -853,6 +853,8 @@ function postprocess_save(...
     outpath, cache_drive, min_max_path, log_file, clipval, ...
     p1, p2, info, resume, block, amplification)
 
+    semkey_single = 1e3;
+
     blocklist = strings(size(p1, 1), 1);
     for i = 1 : size(p1, 1)
         blocklist(i) = fullfile(cache_drive, ['bl_' num2str(i) '.mat']);
@@ -936,7 +938,7 @@ function postprocess_save(...
     end
     clear num_tif_files;
     
-    pool = parpool('local', 16, 'IdleTimeout', Inf);
+    pool = parpool('local', feature('numcores'), 'IdleTimeout', Inf);
     async_load(1 : block.nx * block.ny) = parallel.FevalFuture;
     for nz = starting_z_block : block.nz
         disp(['mounting layer ' num2str(nz) ' from ' num2str(block.nz)]);
@@ -1018,12 +1020,17 @@ function postprocess_save(...
             if exist(save_path, "file")
                 continue
             end
-            [ram_available, ~]  = get_memory();
             
+            % make sure there is enough ram before copying img to the
+            % process that saving the image
+            semaphore('wait', semkey_single);
+            [ram_available, ~]  = get_memory();
             while ram_available < needed_ram_per_thread
                 pause(1);
                 [ram_available, ~]  = get_memory();
             end
+            semaphore('post', semkey_single);
+            
             message = save_image_2d(R(:,:,k), save_path, s, rawmax, save_time);
             disp(message);
         end
@@ -1382,9 +1389,9 @@ function message = save_image_2d(im, path, s, rawmax, save_time)
     im = im';
     im = squeeze(im);
     if rawmax <= 255       % 8bit data
-        imwrite(im, path); % , 'Compression', 'none'
+        imwrite(im, path, 'Compression', 'Deflate');
     elseif rawmax <= 65535 % 16bit data
-        imwrite(im, path); % , 'Compression', 'none'
+        imwrite(im, path, 'Compression', 'Deflate');
     else                   % 32 bit data
         writeTiff32(im, path) %im must be single;
     end
