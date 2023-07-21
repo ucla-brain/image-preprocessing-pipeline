@@ -197,7 +197,6 @@ def imsave_tif(path: Path, img: ndarray, compression: Union[Tuple[str, int], Non
     ----------
     True if the user interrupted the program, else False even if failed to save.
     """
-    die = False
     # compression_method = enumarg(TIFF.COMPRESSION, "None")
     # compression_level: int = 0
     # if compression and isinstance(compression, tuple) and len(compression) >= 2 and \
@@ -595,6 +594,7 @@ def filter_streaks(
         bleach_correction_y_slice_max: int = None,
         bleach_correction_x_slice_min: int = None,
         bleach_correction_x_slice_max: int = None,
+        log1p_normalization_needed: bool = True,
         verbose: bool = False
 ) -> ndarray:
     """Filter horizontal streaks using wavelet-FFT filter and apply bleach correction
@@ -632,6 +632,8 @@ def filter_streaks(
         from 0 to leach_correction_x_slice_min of the image on x-axis that will not be corrected.
     bleach_correction_x_slice_max: int
         from bleach_correction_x_slice_max to max of the image on x-axis that will not be corrected.
+    log1p_normalization_needed: bool
+        It should be true in most cases except when img is already normalized with log1p function.
     verbose:
         if true explain to user what's going on
 
@@ -647,7 +649,8 @@ def filter_streaks(
 
     # smooth the image using log plus 1 function
     d_type = img.dtype
-    img = log1p_jit(img)
+    if log1p_normalization_needed:
+        img = log1p_jit(img)
 
     # Need to pad image to multiple of 2. It is needed even for bleach correction non-max method
     pad_y, pad_x = [_ % 2 for _ in img.shape]
@@ -741,7 +744,6 @@ def process_img(
         tile_size: Tuple[int, int] = None,
         new_size: Tuple[int, int] = None,
         exclude_dark_edges_set_them_to_zero: bool = False,
-        dark: float = 0,
         sigma: Tuple[int, int] = (0, 0),
         level: int = 0,
         wavelet: str = 'db10',
@@ -756,6 +758,8 @@ def process_img(
         bleach_correction_y_slice_max: int = None,
         bleach_correction_x_slice_min: int = None,
         bleach_correction_x_slice_max: int = None,
+        log1p_normalization_needed: bool = True,
+        dark: float = 0,
         lightsheet: bool = False,
         artifact_length: int = 150,
         background_window_size: int = 200,
@@ -810,11 +814,11 @@ def process_img(
             img_x_noise = prctl(img_x_max, noise_percentile)
             img_y_noise = prctl(img_y_max, noise_percentile)
             img_noise = min(img_x_noise, img_y_noise)
-            if dark is not None and dark > 0:
-                if bleach_correction_clip_max is not None:
-                    bleach_correction_clip_max = max(0.0, bleach_correction_clip_max - dark)
-                if bleach_correction_clip_min is not None:
-                    bleach_correction_clip_min = max(0.0, bleach_correction_clip_min - dark)
+            # if dark is not None and dark > 0:
+            #     if bleach_correction_clip_max is not None:
+            #         bleach_correction_clip_max = max(0.0, bleach_correction_clip_max - dark)
+            #     if bleach_correction_clip_min is not None:
+            #         bleach_correction_clip_min = max(0.0, bleach_correction_clip_min - dark)
             if verbose:
                 print(f"min={img_min}, x_max_min={img_x_max_min}, y_max_min={img_y_max_min},\n"
                       f"noise={img_noise}, x_noise={img_x_noise}, y_noise={img_y_noise},\n"
@@ -853,13 +857,6 @@ def process_img(
             img = block_reduce(img, block_size=down_sample, func=down_sample_method)
             tile_size = calculate_down_sampled_size(tile_size, down_sample)
 
-            # dark subtraction is like baseline subtraction in Imaris
-
-        if dark is not None and dark > 0:
-            img = where(img > dark, img - dark, 0)  # Subtract the dark offset
-            if verbose:
-                print(f"dark value of {dark} is subtracted.")
-
         if bleach_correction_frequency is not None or sigma > (0, 0):
             img = filter_streaks(
                 img,
@@ -881,8 +878,15 @@ def process_img(
                     bleach_correction_x_slice_min, x_slice_min, None),
                 bleach_correction_x_slice_max=correct_slice_value(
                     bleach_correction_x_slice_max, x_slice_min, x_slice_max),
+                log1p_normalization_needed=log1p_normalization_needed,
                 verbose=verbose,
             )
+
+        # dark subtraction is like baseline subtraction in Imaris
+        if dark is not None and dark > 0:
+            img = where(img > dark, img - dark, 0)  # Subtract the dark offset
+            if verbose:
+                print(f"dark value of {dark} is subtracted.")
 
         # lightsheet method is like background subtraction in Imaris
         if lightsheet:
@@ -947,7 +951,6 @@ def read_filter_save(
         compression: Tuple[str, int] = ('ADOBE_DEFLATE', 1),
         flat: ndarray = None,
         gaussian_filter_2d: bool = False,
-        dark: float = 0,
         sigma: Tuple[int, int] = (0, 0),
         level: int = 0,
         wavelet: str = 'db10',
@@ -962,6 +965,7 @@ def read_filter_save(
         bleach_correction_y_slice_max: int = None,
         bleach_correction_x_slice_min: int = None,
         bleach_correction_x_slice_max: int = None,
+        dark: float = 0,
         lightsheet: bool = False,
         artifact_length: int = 150,
         background_window_size: int = 200,
@@ -986,6 +990,23 @@ def read_filter_save(
         file path to the input image
     output_file : Path
         file path to the processed image
+    z_idx : int
+        z index of DCIMG slice. Only applicable to DCIMG files.
+    continue_process: bool
+        If true do not process images if the output file is already exist
+    d_type: str or None,
+        optional. data type of the input file. If given will reduce the raw to tif conversion time.
+    tile_size : tuple (int, int) or None
+        optional. If given will reduce the raw to tif conversion time.
+    print_input_file_names : bool
+        to find the corrupted files causing crash print the file names
+    compression : tuple (str, int)
+        The 1st argument is compression method the 2nd compression level for tiff files
+        For example, ('ZSTD', 1) or ('ADOBE_DEFLATE', 1).
+    flat : ndarray
+        reference image for illumination correction. Must be same shape as input images. Default is None
+    gaussian_filter_2d : bool
+        If true the image will be denoised using a 5x5 gaussian filer.
     sigma : tuple
         bandwidth of the stripe filter
     level : int
@@ -1016,19 +1037,8 @@ def read_filter_save(
         from 0 to leach_correction_x_slice_min of the image on x-axis that will not be corrected.
     bleach_correction_x_slice_max: int
         from bleach_correction_x_slice_max to max of the image on x-axis that will not be corrected.
-    compression : tuple (str, int)
-        The 1st argument is compression method the 2nd compression level for tiff files
-        For example, ('ZSTD', 1) or ('ADOBE_DEFLATE', 1).
-    flat : ndarray
-        reference image for illumination correction. Must be same shape as input images. Default is None
     dark : float
         Intensity to subtract from the images for dark offset. Default is 0.
-    z_idx : int
-        z index of DCIMG slice. Only applicable to DCIMG files.
-    rotate : int
-        Rotate the image. One of 0, 90, 180 or 270 degree values are accepted. Default is 0 (no rotation).
-    flip_upside_down : bool
-        flip the image parallel to y-axis. Default is false.
     lightsheet : bool
         if False, use wavelet method, if true use correct_lightsheet
     artifact_length : int
@@ -1039,8 +1049,6 @@ def read_filter_save(
         Take this percentile as background with lightsheet
     lightsheet_vs_background : float
         weighting factor to use background or lightsheet background
-    gaussian_filter_2d : bool
-        If true the image will be denoised using a 5x5 gaussian filer.
     convert_to_16bit : bool
         Flag for converting to 16-bit
     convert_to_8bit : bool
@@ -1048,20 +1056,16 @@ def read_filter_save(
     bit_shift_to_right : int [0 to 8]
         It works when converting to 8-bit. Correct 8 bit conversion needs 8 bit shift.
         Bit shifts smaller than 8 bit, enhances the signal brightness.
-    continue_process: bool
-        If true do not process images if the output file is already exist
-    d_type: str or None,
-        optional. data type of the input file. If given will reduce the raw to tif conversion time.
-    tile_size : tuple (int, int) or None
-        optional. If given will reduce the raw to tif conversion time.
     down_sample : tuple (int, int)
         Sets down sample factor. Down_sample (3, 2) means 3 pixels in y-axis, and 2 pixels in x-axis merges into 1.
     down_sample_method: str
         down-sampling method. options are max, min, mean, median. Default is max.
     new_size : tuple (int, int) or None
         resize the image after down-sampling
-    print_input_file_names : bool
-        to find the corrupted files causing crash print the file names
+    rotate : int
+        Rotate the image. One of 0, 90, 180 or 270 degree values are accepted. Default is 0 (no rotation).
+    flip_upside_down : bool
+        flip the image parallel to y-axis. Default is false.
     """
     try:
         # 1150 is 1850x1850 zeros image saved as compressed tif
