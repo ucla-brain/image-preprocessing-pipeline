@@ -142,6 +142,15 @@ class MultiProcess(Process):
         else:
             return self.save_path / Path(images[idx]).name
 
+    def free_ram_is_not_enough(self):
+        self.semaphore.get(block=True)
+        free_ram_is_not_enough = False
+        if self.needed_memory is not None and virtual_memory().available < self.needed_memory:
+            free_ram_is_not_enough = True
+            sleep(1)
+        self.semaphore.put(1)
+        return free_ram_is_not_enough
+
     def run(self):
         running_next: bool = True
         function = self.function
@@ -185,14 +194,8 @@ class MultiProcess(Process):
             images = file[f"DataSet/ResolutionLevel 0/TimePoint 0/Channel {channel}/Data"]
         queue_time_out = 20
         while not self.die and self.args_queue.qsize() > 0:
-            if self.needed_memory is not None:
-                self.semaphore.get(block=True)
-                if virtual_memory().available > self.needed_memory:
-                    self.semaphore.put(1)
-                else:
-                    sleep(600)
-                    self.semaphore.put(1)
-                    continue  # to make sure args_queue has not emptied during sleep
+            if self.free_ram_is_not_enough():
+                continue
             try:
                 queue_start_time = time()
                 idx_down_sampled, indices = self.args_queue.get(block=True, timeout=queue_time_out)
@@ -213,9 +216,12 @@ class MultiProcess(Process):
                     z_stack = zeros((len(indices),) + self.target_shape, dtype=float32)
 
                 for idx_z, idx in enumerate(indices):
-                    if self.needed_memory is not None:
-                        while virtual_memory().available < self.needed_memory:
-                            sleep(600)
+                    if self.die:
+                        break
+                    while self.free_ram_is_not_enough():
+                        continue
+                    if self.die:
+                        break
                     tif_save_path = self.tif_save_path(idx, images)
                     if resume and tif_save_path.exists() and not need_down_sampling:  # function is not None and
                         self.progress_queue.put(running_next)
@@ -510,14 +516,14 @@ def parallel_image_processor(
             workers = worker
             break
 
-    return_code_or_img_list = progress_manager(progress_queue, workers, num_images, desc=progress_bar_name)
+    return_code = progress_manager(progress_queue, workers, num_images, desc=progress_bar_name)
     args_queue.cancel_join_thread()
     args_queue.close()
     progress_queue.cancel_join_thread()
     progress_queue.close()
 
     # down-sample on z accurately
-    if need_down_sampling:
+    if return_code == 0 and need_down_sampling:
         print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
               f"{PrintColors.BLUE}down-sampling: {PrintColors.ENDC}"
               f"resizing on the z-axis accurately ...")
@@ -546,7 +552,7 @@ def parallel_image_processor(
                 # xI=array(xId, dtype='object')
             )  # note specify object to avoid "ragged" warning
 
-    return return_code_or_img_list
+    return return_code
 
 
 if __name__ == '__main__':
