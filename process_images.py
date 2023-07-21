@@ -628,8 +628,18 @@ def process_channel(
     memory_ram = virtual_memory().available / 1024 ** 3  # in GB
     merge_step_cores = min(floor(memory_ram / memory_needed_per_thread), cpu_physical_core_count)
 
-    bleach_correction_clip_min = bleach_correction_clip_max = bleach_correction_frequency = None
+    bleach_correction_frequency = None
     bleach_correction_sigma = (0, 0)
+    if need_bleach_correction:
+        if new_tile_size is not None:
+            bleach_correction_frequency = 1 / min(new_tile_size)
+        elif down_sampling_factor is not None:
+            bleach_correction_frequency = 1 / min(new_tile_size) * min(down_sampling_factor)
+        else:
+            bleach_correction_frequency = 1 / min(tile_size)
+        bleach_correction_sigma = (1 / bleach_correction_frequency * 2,) * 2
+
+    bleach_correction_clip_min = bleach_correction_clip_max = None
     if need_bleach_correction or need_16bit_to_8bit_conversion:
         p_log(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
               f"{channel}: calculating clip_min, clip_max, and right bit shift values ...")
@@ -642,20 +652,28 @@ def process_channel(
         img = log1p_jit(img)
         bleach_correction_clip_min = np_round(expm1_jit(otsu_threshold(img)))
         bleach_correction_clip_max = np_round(expm1_jit(prctl(img[img > log1p_jit(bleach_correction_clip_min)], 99.9)))
+        img_approximate_upper_bound = bleach_correction_clip_max
+        if need_bleach_correction and need_16bit_to_8bit_conversion:
+            img = process_img(
+                img,
+                exclude_dark_edges_set_them_to_zero=True,
+                sigma=bleach_correction_sigma,
+                bidirectional=True,
+                bleach_correction_frequency=bleach_correction_frequency,
+                bleach_correction_clip_min=bleach_correction_clip_min,
+                bleach_correction_clip_max=bleach_correction_clip_max,
+                log1p_normalization_needed=False,
+                lightsheet=need_lightsheet_cleaning,
+                tile_size=shape[1:3],
+                d_type=tsv_volume.dtype
+            )
+            img_approximate_upper_bound = np_round(
+                expm1_jit(prctl(img[img > log1p_jit(bleach_correction_clip_min)], 99.9)))
         del img
         for b in range(0, 9):
-            if 256 * 2 ** b >= bleach_correction_clip_max:
-                right_bit_shift = (b + 1) if need_bleach_correction and b < 8 else b
+            if 256 * 2 ** b >= img_approximate_upper_bound:
+                right_bit_shift = b
                 break
-
-    if need_bleach_correction:
-        if new_tile_size is not None:
-            bleach_correction_frequency = 1 / min(new_tile_size)
-        elif down_sampling_factor is not None:
-            bleach_correction_frequency = 1 / min(new_tile_size) * min(down_sampling_factor)
-        else:
-            bleach_correction_frequency = 1 / min(tile_size)
-        bleach_correction_sigma = (1 / bleach_correction_frequency * 2,) * 2
 
     p_log(
         f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
@@ -674,6 +692,7 @@ def process_channel(
         f"\tbleach correction sigma: {bleach_correction_sigma}\n"
         f"\tbleach correction clip min: {bleach_correction_clip_min}\n"
         f"\tbleach correction clip max: {bleach_correction_clip_max}\n"
+        f"\tdark: {bleach_correction_clip_min if need_bleach_correction else 0}\n"
         f"\tbackground subtraction: {need_lightsheet_cleaning}\n"
         f"\trotate: {90 if need_rotation_stitched_tif else 0}"
     )
@@ -692,6 +711,7 @@ def process_channel(
             "threshold": None,
             "sigma": bleach_correction_sigma,
             "bidirectional": True if need_bleach_correction else False,
+            "dark": bleach_correction_clip_min if need_bleach_correction else 0,
             "lightsheet": need_lightsheet_cleaning,
             "percentile": 0.25,
             "rotate": 0,
