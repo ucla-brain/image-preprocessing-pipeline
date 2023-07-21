@@ -136,6 +136,12 @@ class MultiProcess(Process):
         if die:
             self.die = True
 
+    def tif_save_path(self, idx: int, images: List[Path]):
+        if self.is_tsv or self.is_ims or self.rename:
+            return self.save_path / f"{self.tif_prefix}_{idx:06}.tif"
+        else:
+            return self.save_path / Path(images[idx]).name
+
     def run(self):
         running_next: bool = True
         function = self.function
@@ -150,8 +156,6 @@ class MultiProcess(Process):
             pool = ThreadPoolExecutor(max_workers=1)
         args = self.args
         kwargs = self.kwargs
-        save_path = self.save_path
-        rename = self.rename
         tif_prefix = self.tif_prefix
         channel = self.channel
         resume = self.resume
@@ -198,18 +202,21 @@ class MultiProcess(Process):
                 if need_down_sampling and down_sampled_path is not None:
                     down_sampled_tif_path = down_sampled_path / f"{tif_prefix}_{idx_down_sampled:06}.tif"
                     if resume and down_sampled_tif_path.exists():
-                        for _ in range(len(indices)):
-                            self.progress_queue.put(running_next)
-                        continue
+                        exist_count = 0
+                        for idx_z, idx in enumerate(indices):
+                            if self.tif_save_path(idx, images).exists():
+                                exist_count += 1
+                        if len(indices) == exist_count:
+                            for _ in range(exist_count):
+                                self.progress_queue.put(running_next)
+                            continue
                     z_stack = zeros((len(indices),) + self.target_shape, dtype=float32)
 
                 for idx_z, idx in enumerate(indices):
                     if self.needed_memory is not None:
                         while virtual_memory().available < self.needed_memory:
                             sleep(600)
-                    tif_save_path = save_path / f"{tif_prefix}_{idx:06}.tif"
-                    if not (is_tsv or is_ims or rename):
-                        tif_save_path = save_path / Path(images[idx]).name
+                    tif_save_path = self.tif_save_path(idx, images)
                     if resume and tif_save_path.exists() and not need_down_sampling:  # function is not None and
                         self.progress_queue.put(running_next)
                         continue

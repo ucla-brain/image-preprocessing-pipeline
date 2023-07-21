@@ -76,6 +76,7 @@ def main(args: Namespace):
 
     for input_file in input_path.rglob(f"*.{args.input_extension}"):
         output_file = output_path / input_file.relative_to(input_path)
+        output_file.parent.mkdir(exist_ok=True, parents=True)
         if args.input_extension == "eswc" and output_file.name.lower().endswith("ano.eswc"):
             output_file = output_file.parent / (output_file.name[0:-len("ano.eswc")] + "eswc")
         if args.sort:
