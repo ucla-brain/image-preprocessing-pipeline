@@ -621,7 +621,7 @@ def process_channel(
     )
     shape: Tuple[int, int, int] = tsv_volume.volume.shape  # shape is in z y x format
 
-    memory_needed_per_thread = 30 if need_bleach_correction else 16
+    memory_needed_per_thread = 31 if need_bleach_correction else 16
     memory_needed_per_thread *= shape[1] * shape[2] / 1024 ** 3
     if tsv_volume.dtype in (uint8, "uint8"):
         memory_needed_per_thread /= 2
