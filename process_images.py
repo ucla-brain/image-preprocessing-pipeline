@@ -1360,7 +1360,7 @@ if __name__ == '__main__':
     # os.environ['NUMEXPR_NUM_THREADS'] = '1'
     # os.environ['OMP_NUM_THREADS'] = '1'
     freeze_support()
-    os.environ["GLIBC_TUNABLES"] = "glibc.malloc.hugetlb=2"
+    # os.environ["GLIBC_TUNABLES"] = "glibc.malloc.hugetlb=2"
     os.environ["NUMPY_MADVISE_HUGEPAGE"] = "1"
     FlatNonFlatTrainingData = "image_classes.csv"
     cpu_physical_core_count = cpu_count(logical=False)
