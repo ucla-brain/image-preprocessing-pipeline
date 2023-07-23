@@ -941,7 +941,7 @@ function postprocess_save(...
     pool = parpool('local', feature('numcores'), 'IdleTimeout', Inf);
     async_load(1 : block.nx * block.ny) = parallel.FevalFuture;
     for nz = starting_z_block : block.nz
-        disp(['mounting layer ' num2str(nz) ' from ' num2str(block.nz)]);
+        disp(['layer ' num2str(nz) ' from ' num2str(block.nz) ': mounting blocks ...']);
 
         %load and mount next layer of images
         if block.z_pad > 0 && block.nz > 1
@@ -1007,7 +1007,7 @@ function postprocess_save(...
         end
 
         %write images to output path
-        disp(['saving ' num2str(size(R, 3)) ' images...']);
+        disp(['layer ' num2str(nz) ' from ' num2str(block.nz) ': saving ' num2str(size(R, 3)) ' images ...']);
         needed_ram_per_thread = whos('R').bytes / size(R, 3) * 2;
         parfor k = 1 : size(R, 3)
             save_time = tic;
@@ -1386,8 +1386,8 @@ function bl = my_load(fname)
 end
 
 function message = save_image_2d(im, path, s, rawmax, save_time)
-    im = im';
     im = squeeze(im);
+    im = im';
     if rawmax <= 255       % 8bit data
         imwrite(im, path, 'Compression', 'Deflate');
     elseif rawmax <= 65535 % 16bit data
