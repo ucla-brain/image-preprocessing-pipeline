@@ -510,10 +510,10 @@ def process_channel(
             p_log(f"{PrintColors.FAIL}{channel}: importing tif files failed.{PrintColors.ENDC}")
             raise RuntimeError
 
-        max_subvolume_depth = 120
+        max_subvolume_depth = 110
         subvolume_depth = int(10 if objective == '40x' else min(subvolume_depth, max_subvolume_depth))
         alignment_cores: int = 1
-        memory_needed_per_thread = 32 * subvolume_depth  # 48 or 32
+        memory_needed_per_thread = 33 * subvolume_depth  # 48 or 32
         if isinstance(new_tile_size, tuple):
             for resolution in new_tile_size:
                 memory_needed_per_thread *= resolution
@@ -591,7 +591,7 @@ def process_channel(
                 # Displacements search radius along V (in pixels). Default value is 25!
                 # f"--sV={min(25, tile_overlap_y - 1)}",
                 # Displacements search radius along D (in pixels).
-                f"{'--sD=0' if (objective == '40x' or stitch_mip) else '--sD=60'}",
+                f"{'--sD=0' if (objective == '40x' or stitch_mip) else '--sD=55'}",
                 # Number of slices per subvolume partition
                 f"--subvoldim={1 if stitch_mip else subvolume_depth}",
                 # used in the pairwise displacements computation step.
@@ -667,7 +667,7 @@ def process_channel(
                 tile_size=shape[1:3],
                 d_type=tsv_volume.dtype
             )
-            imsave_tif(stitched_tif_path/"test.tif", img)
+            # imsave_tif(stitched_tif_path/"test.tif", img)
             img_approximate_upper_bound = np_round(prctl(img[img > bleach_correction_clip_min], 99.9))
 
         del img
