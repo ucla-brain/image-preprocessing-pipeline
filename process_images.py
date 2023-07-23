@@ -621,7 +621,7 @@ def process_channel(
     )
     shape: Tuple[int, int, int] = tsv_volume.volume.shape  # shape is in z y x format
 
-    memory_needed_per_thread = 28 if need_bleach_correction else 16
+    memory_needed_per_thread = 30 if need_bleach_correction else 16
     memory_needed_per_thread *= shape[1] * shape[2] / 1024 ** 3
     if tsv_volume.dtype in (uint8, "uint8"):
         memory_needed_per_thread /= 2
@@ -656,7 +656,7 @@ def process_channel(
         if need_bleach_correction and need_16bit_to_8bit_conversion:
             img = process_img(
                 img,
-                exclude_dark_edges_set_them_to_zero=True,
+                exclude_dark_edges_set_them_to_zero=False,
                 sigma=bleach_correction_sigma,
                 bidirectional=True,
                 bleach_correction_frequency=bleach_correction_frequency,
@@ -667,8 +667,9 @@ def process_channel(
                 tile_size=shape[1:3],
                 d_type=tsv_volume.dtype
             )
-            img_approximate_upper_bound = np_round(
-                expm1_jit(prctl(img[img > log1p_jit(bleach_correction_clip_min)], 99.9)))
+            imsave_tif(stitched_tif_path/"test.tif", img)
+            img_approximate_upper_bound = np_round(prctl(img[img > bleach_correction_clip_min], 99.9))
+
         del img
         for b in range(0, 9):
             if 256 * 2 ** b >= img_approximate_upper_bound:
