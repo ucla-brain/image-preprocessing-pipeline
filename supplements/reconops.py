@@ -19,24 +19,30 @@ def is_overwrite_needed(file: Path, overwrite: bool) -> bool:
 
 
 def sort_swc(swc_df: DataFrame) -> DataFrame:
+    # print(swc_df.head())
     unsorted_swc = swc_df.to_numpy()
-
     sorted_swc = empty((0, 7), float)
-    Px = where(unsorted_swc[:, 6] == -1)
-    Px = list(Px[0])
-    while len(Px) > 0:
-        P = Px[0]
-        Px = Px[1:]
-        while P.size > 0:
-            P = int(P)
-            sorted_swc = vstack((sorted_swc, unsorted_swc[P, :]))
-            child = where(unsorted_swc[:, 6] == unsorted_swc[P, 0])
-            child = list(child[0])
+    root_nodes = where(unsorted_swc[:, 6] == -1)
+    if len(root_nodes) == 1 and len(root_nodes[0]) == 0:
+        root_nodes = where(unsorted_swc[:, 6] == 0)
+    if len(root_nodes) == 1 and len(root_nodes[0]) == 0:
+        root_nodes = where(unsorted_swc[:, 0] == 1)
+        unsorted_swc[0, 6] = -1
+    root_nodes = list(root_nodes[0])
+    # print(root_nodes)
+    while len(root_nodes) > 0:
+        parent = root_nodes[0]
+        root_nodes = root_nodes[1:]
+        while parent.size > 0:
+            sorted_swc = vstack((sorted_swc, unsorted_swc[int(parent), :]))
+            # print(len(sorted_swc))
+            child = list(where(unsorted_swc[:, 6] == unsorted_swc[int(parent), 0])[0])
+            # print(child)
             if len(child) == 0:
                 break
             if len(child) > 1:
-                Px = append(child[1:], Px)
-            P = child[0]
+                root_nodes = append(child[1:], root_nodes)
+            parent = child[0]
 
     sRe = sorted_swc[:, 6]
     Li = list(range(1, (len(sorted_swc[:, 1]) + 1)))
@@ -75,6 +81,8 @@ def main(args: Namespace):
         assert output_path.exists()
 
     for input_file in input_path.rglob(f"*.{args.input_extension}"):
+        if input_file.name.lower().endswith(("_sorted.swc", "_sorted.eswc")):
+            continue
         output_file = output_path / input_file.relative_to(input_path)
         output_file.parent.mkdir(exist_ok=True, parents=True)
         if args.input_extension == "eswc" and output_file.name.lower().endswith("ano.eswc"):
