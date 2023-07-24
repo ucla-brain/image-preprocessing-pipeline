@@ -510,10 +510,10 @@ def process_channel(
             p_log(f"{PrintColors.FAIL}{channel}: importing tif files failed.{PrintColors.ENDC}")
             raise RuntimeError
 
-        max_subvolume_depth = 110
+        max_subvolume_depth = 100
         subvolume_depth = int(10 if objective == '40x' else min(subvolume_depth, max_subvolume_depth))
         alignment_cores: int = 1
-        memory_needed_per_thread = 33 * subvolume_depth  # 48 or 32
+        memory_needed_per_thread = 34 * subvolume_depth  # 48 or 32
         if isinstance(new_tile_size, tuple):
             for resolution in new_tile_size:
                 memory_needed_per_thread *= resolution
@@ -534,7 +534,7 @@ def process_channel(
         if memory_needed_per_thread <= memory_ram:
             alignment_cores = cpu_physical_core_count
             if memory_needed_per_thread > 0:
-                alignment_cores = min(floor(memory_ram / memory_needed_per_thread), cpu_physical_core_count)
+                alignment_cores = min(floor(memory_ram / memory_needed_per_thread), alignment_cores)
             if num_gpus > 0 and sys.platform.lower() == 'linux':
                 while alignment_cores < 6 * num_gpus and subvolume_depth > max_subvolume_depth:
                     subvolume_depth //= 2
@@ -550,13 +550,7 @@ def process_channel(
             memory_needed_per_thread *= subvolume_depth
 
         if num_gpus > 0 and sys.platform.lower() == 'linux':
-            if memory_needed_per_thread > 0:
-                alignment_cores = min(alignment_cores, num_gpus * 18)
-            else:
-                alignment_cores = max(alignment_cores, num_gpus * 18)
-        # while alignment_cores < cpu_physical_core_count and subvolume_depth > 600:
-        #     subvolume_depth //= 2
-        #     alignment_cores *= 2
+            alignment_cores = min(alignment_cores, num_gpus * 16)
 
         steps_str = ["alignment", "z-displacement", "threshold-displacement", "optimal tiles placement"]
         for step in [2, 3, 4, 5]:
@@ -565,7 +559,9 @@ def process_channel(
                 f"{channel}: starting step {step} of stitching ..." + ((
                     f"\n\tmemory needed per thread = {memory_needed_per_thread} GB"
                     f"\n\ttotal needed ram {alignment_cores * memory_needed_per_thread} GB"
-                    f"\n\tavailable ram = {memory_ram} GB") if step == 2 else "")
+                    f"\n\tavailable ram = {memory_ram} GB"
+                    f"\n\tsubvolume depth = {subvolume_depth} z-steps"
+                ) if step == 2 else "")
             )
             proj_in = stitched_path / f"{channel}_xml_import_step_{step - 1}.xml"
             proj_out = stitched_path / f"{channel}_xml_import_step_{step}.xml"
@@ -575,7 +571,7 @@ def process_channel(
                 os.environ["slots"] = f"{cpu_logical_core_count}"
                 command = [
                     f"mpiexec{' --use-hwthread-cpus' if sys.platform.lower() == 'linux' else ''} "
-                    f"-np {int(alignment_cores + 1)} "   # one extra thread is needed for management
+                    f"--oversubscribe -np {int(alignment_cores + 1)} "   # one extra thread is needed for management
                     f"python -m mpi4py {parastitcher}"
                 ]
             else:
@@ -587,11 +583,11 @@ def process_channel(
                 # Overlap (in pixels) between two adjacent tiles along V. Providing oV is harmful sometimes.
                 # f"--oV={0 if objective == '40x' else tile_overlap_y}",
                 # Displacements search radius along H (in pixels). Default value is 25!
-                # f"--sH={min(25, tile_overlap_x - 1)}",
+                # f"--sH=0",
                 # Displacements search radius along V (in pixels). Default value is 25!
-                # f"--sV={min(25, tile_overlap_y - 1)}",
+                # f"--sV=0",
                 # Displacements search radius along D (in pixels).
-                f"{'--sD=0' if (objective == '40x' or stitch_mip) else '--sD=55'}",
+                f"--sD={0 if (objective == '40x' or stitch_mip) else 10}",
                 # Number of slices per subvolume partition
                 f"--subvoldim={1 if stitch_mip else subvolume_depth}",
                 # used in the pairwise displacements computation step.
@@ -621,7 +617,7 @@ def process_channel(
     )
     shape: Tuple[int, int, int] = tsv_volume.volume.shape  # shape is in z y x format
 
-    memory_needed_per_thread = 31 if need_bleach_correction else 16
+    memory_needed_per_thread = 32 if need_bleach_correction else 16
     memory_needed_per_thread *= shape[1] * shape[2] / 1024 ** 3
     if tsv_volume.dtype in (uint8, "uint8"):
         memory_needed_per_thread /= 2
