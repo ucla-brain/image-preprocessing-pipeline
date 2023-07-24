@@ -80,7 +80,11 @@ def main(args: Namespace):
         output_path.mkdir(exist_ok=True)
         assert output_path.exists()
 
-    for input_file in input_path.rglob(f"*.{args.input_extension}"):
+    if input_path.is_dir():
+        input_list = list(input_path.rglob(f"*.{args.input_extension}"))
+    else:
+        input_list = [input_path]
+    for input_file in input_list:
         if input_file.name.lower().endswith(("_sorted.swc", "_sorted.eswc")):
             continue
         output_file = output_path / input_file.relative_to(input_path)
