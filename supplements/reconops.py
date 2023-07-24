@@ -73,22 +73,36 @@ def main(args: Namespace):
 
     input_path = Path(args.input)
     assert input_path.exists()
+    if input_path.is_file():
+        input_list = [input_path]
+    else:
+        input_list = list(input_path.rglob(f"*.{args.input_extension}"))
 
     output_path = input_path
+    output_path_is_a_file: bool = False
     if args.output:
         output_path = Path(args.output)
-        output_path.mkdir(exist_ok=True)
-        assert output_path.exists()
+        if input_path.is_file() and output_path != input_path and (
+                args.output_extension == "swc" and output_path.name.lower().endswith(".swc") or
+                args.output_extension == "eswc" and output_path.name.lower().endswith(".eswc")
+        ):
+            output_path_is_a_file = True
+            output_path.parent.mkdir(exist_ok=True, parents=True)
+            assert output_path.parent.exists()
+        else:
+            output_path.mkdir(exist_ok=True, parents=True)
+            assert output_path.exists()
 
-    if input_path.is_dir():
-        input_list = list(input_path.rglob(f"*.{args.input_extension}"))
-    else:
-        input_list = [input_path]
     for input_file in input_list:
-        if input_file.name.lower().endswith(("_sorted.swc", "_sorted.eswc")):
-            continue
-        output_file = output_path / input_file.relative_to(input_path)
-        output_file.parent.mkdir(exist_ok=True, parents=True)
+        # if args.sort and input_file.name.lower().endswith(("_sorted.swc", "_sorted.eswc")):
+        #     continue
+        if output_path_is_a_file:
+            output_file = output_path
+        else:
+            output_file = output_path / input_file.relative_to(input_path)
+            output_file.parent.mkdir(exist_ok=True, parents=True)
+            if output_file == output_path:
+                output_file = output_path / input_file.name
         if args.input_extension == "eswc" and output_file.name.lower().endswith("ano.eswc"):
             output_file = output_file.parent / (output_file.name[0:-len("ano.eswc")] + "eswc")
         if args.sort:
