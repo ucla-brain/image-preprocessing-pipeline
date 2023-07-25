@@ -1008,7 +1008,7 @@ function postprocess_save(...
 
         %write images to output path
         disp(['layer ' num2str(nz) ' from ' num2str(block.nz) ': saving ' num2str(size(R, 3)) ' images ...']);
-        needed_ram_per_thread = whos('R').bytes / size(R, 3) * 2;
+        needed_ram_per_thread = whos('R').bytes / size(R, 3) * 3;
         parfor k = 1 : size(R, 3)
             save_time = tic;
             % file path
@@ -1029,6 +1029,7 @@ function postprocess_save(...
                 pause(1);
                 [ram_available, ~]  = get_memory();
             end
+            pause(10);
             semaphore('post', semkey_single);
             
             message = save_image_2d(R(:,:,k), save_path, s, rawmax, save_time);
