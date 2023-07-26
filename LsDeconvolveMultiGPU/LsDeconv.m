@@ -1026,13 +1026,13 @@ function postprocess_save(...
             semaphore('wait', semkey_single);
             [ram_available, ~]  = get_memory();
             while ram_available < needed_ram_per_thread
-                pause(1);
+                pause(10);
                 [ram_available, ~]  = get_memory();
             end
-            pause(10);
-            semaphore('post', semkey_single);
-            
-            message = save_image_2d(R(:,:,k), save_path, s, rawmax, save_time);
+            % semaphore will be released once the data copied to the
+            % save_image_2d process
+
+            message = save_image_2d(R(:,:,k), save_path, s, rawmax, save_time, semkey_single);
             disp(message);
         end
 
@@ -1386,7 +1386,8 @@ function bl = my_load(fname)
     bl = data.bl;
 end
 
-function message = save_image_2d(im, path, s, rawmax, save_time)
+function message = save_image_2d(im, path, s, rawmax, save_time, semkey_single)
+    semaphore('post', semkey_single);
     im = squeeze(im);
     im = im';
     if rawmax <= 255       % 8bit data
