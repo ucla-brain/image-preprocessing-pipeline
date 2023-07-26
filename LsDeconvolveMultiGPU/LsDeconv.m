@@ -1008,7 +1008,7 @@ function postprocess_save(...
 
         %write images to output path
         disp(['layer ' num2str(nz) ' from ' num2str(block.nz) ': saving ' num2str(size(R, 3)) ' images ...']);
-        needed_ram_per_thread = whos('R').bytes / size(R, 3) * 3;
+        needed_ram_per_thread = whos('R').bytes / size(R, 3) * 4;
         parfor k = 1 : size(R, 3)
             save_time = tic;
             % file path
@@ -1026,7 +1026,7 @@ function postprocess_save(...
             semaphore('wait', semkey_single);
             [ram_available, ~]  = get_memory();
             while ram_available < needed_ram_per_thread
-                pause(10);
+                pause(1);
                 [ram_available, ~]  = get_memory();
             end
             % semaphore will be released once the data copied to the
