@@ -1027,7 +1027,7 @@ function postprocess_save(...
             [ram_available, ~]  = get_memory();
             while ram_available < needed_ram_per_thread
                 pause(1);
-                [ram_available, ~]  = get_memory();
+                [ram_available, ~] = get_memory();
             end
             % semaphore will be released once the data copied to the
             % save_image_2d process
