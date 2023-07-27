@@ -50,15 +50,7 @@ def main(args: Namespace):
             args.downsample_y if args.downsample_y else 1,
             args.downsample_x if args.downsample_x else 1,
         )
-    if args.downsample_method.lower() == 'min':
-        down_sample_method = np_min
-    elif args.downsample_method.lower() == 'max':
-        down_sample_method = np_max
-    elif args.downsample_method.lower() == 'mean':
-        down_sample_method = np_mean
-    elif args.downsample_method.lower() == 'median':
-        down_sample_method = np_median
-    else:
+    if args.downsample_method.lower() not in ('min', 'max', 'mean', 'median'):
         print(f"{PrintColors.FAIL}unsupported down-sampling method: {args.downsample_method}{PrintColors.ENDC}")
         raise RuntimeError
 
@@ -97,7 +89,7 @@ def main(args: Namespace):
             kwargs={
                 "gaussian_filter_2d": args.gaussian,
                 "down_sample": down_sample,
-                "down_sample_method": down_sample_method,
+                "down_sample_method": args.downsample_method,
                 "new_size": new_size,
                 "sigma": de_striping_sigma,
                 "bidirectional": True if args.bleach_correction else False,
