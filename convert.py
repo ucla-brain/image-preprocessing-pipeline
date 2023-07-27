@@ -10,11 +10,6 @@ from time import time
 
 import psutil
 from cpufeature.extension import CPUFeature
-# from numpy import uint16
-from numpy import max as np_max
-from numpy import mean as np_mean
-from numpy import median as np_median
-from numpy import min as np_min
 from tqdm import tqdm
 
 from parallel_image_processor import parallel_image_processor
