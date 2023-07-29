@@ -351,7 +351,7 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad] = autosplit(info, psf_size, 
     % smaller 3D blocks. After deconvolution the blocks will be
     % reassembled to save deconvolved z-steps. Therefore, there should be
     % enough ram to reassemble z z-steps in the end.
-    z_max = min(floor(ram_available * 0.75 / info.x / info.y / 8), info.z);
+    z_max = min(floor(ram_available * 0.8 / info.x / info.y / 8), info.z);
     z = z_max;
     % load extra z layers for each block to avoid generating artifacts on z
     % for efficiency of FFT pad data in a way that the largest prime
@@ -963,7 +963,6 @@ function postprocess_save(...
         for j = 1 : block.nx * block.ny
              async_load(j) = pool.parfeval(@my_load, 1, blocklist(blnr+j-1));
         end
-        %time_out = 120;
         for j = 1 : block.nx * block.ny
             if ispc
                 file_path_parts = strsplit(blocklist(blnr), '\');
@@ -972,11 +971,8 @@ function postprocess_save(...
             end
             file_name = char(file_path_parts(end));
             time_out_start = tic;
-            %async_load(j).wait('finished', time_out); % timeout in seconds
             bl = async_load(j).fetchOutputs;
-            %bl = my_load(blocklist(blnr));
             loading_time = toc(time_out_start);
-            %time_out = 0.9 * time_out + 0.3 * loading_time;
             asigment_time_start = tic;
             R(p1(blnr, x) : p2(blnr, x), p1(blnr, y) : p2(blnr, y), :) = bl;
             disp(['   block ' num2str(j) ':' num2str(block.nx * block.ny) ' file: ' file_name ' loaded in ' num2str(loading_time) ' asinged in ' num2str(toc(asigment_time_start))]);
@@ -1333,7 +1329,7 @@ function dark_ = dark(filter, bit_depth)
         a=zeros(filter.size);
     end
     % dark is a value greater than 10 surrounded by zeros
-    a(ceil(filter.size(1)/2), ceil(filter.size(2)/2), ceil(filter.size(3)/2)) = 10;
+    a(ceil(filter.size(1)/2), ceil(filter.size(2)/2), ceil(filter.size(3)/2)) = 15;
     a=im2single(a);
     a=imgaussfilt3(a, filter.sigma, 'FilterSize', filter.size, 'Padding', 'circular');
     dark_ = max(a(:));
@@ -1379,7 +1375,7 @@ function pad_size = gaussian_pad_size(image_size, filter_size)
 end
 
 function [lb, ub] = deconvolved_stats(deconvolved)
-    stats = prctile(deconvolved(:), [0.1 99.9], "all");
+    stats = prctile(deconvolved, [0.1 99.9], "all");
     if isgpuarray(stats)
         stats = gather(stats);
     end
