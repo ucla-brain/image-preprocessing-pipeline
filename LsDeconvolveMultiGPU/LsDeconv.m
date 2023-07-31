@@ -57,13 +57,14 @@ function [] = LsDeconv(varargin)
         amplification = varargin{16};
         filter.sigma = varargin{17};
         filter.size = varargin{18};
-        resume = varargin{19};
-        starting_block = varargin{20};
-        flip_upside_down = varargin{21};
-        convert_to_8bit = varargin{22};
+        filter.dark = varargin{19};
+        resume = varargin{20};
+        starting_block = varargin{21};
+        flip_upside_down = varargin{22};
+        convert_to_8bit = varargin{23};
         cache_drive = tempdir;
-        if nargin > 22
-            cache_drive=varargin{23};
+        if nargin > 23
+            cache_drive=varargin{24};
             if ~exist(cache_drive, "dir")
                 mkdir(cache_drive);
             end
@@ -89,6 +90,7 @@ function [] = LsDeconv(varargin)
             starting_block = str2double(strrep(starting_block, ',', '.'));
             flip_upside_down = str2double(strrep(flip_upside_down, ',', '.'));
             convert_to_8bit = str2double(strrep(convert_to_8bit, ',', '.'));
+            filter.dark  = str2double(strrep(filter.dark, ',', '.'));
         end
 
         if isfolder(inpath)
@@ -1330,7 +1332,7 @@ function dark_ = dark(filter, bit_depth)
         a=zeros(filter.size);
     end
     % dark is a value greater than 10 surrounded by zeros
-    a(ceil(filter.size(1)/2), ceil(filter.size(2)/2), ceil(filter.size(3)/2)) = 15;
+    a(ceil(filter.size(1)/2), ceil(filter.size(2)/2), ceil(filter.size(3)/2)) = filter.dark;
     a=im2single(a);
     a=imgaussfilt3(a, filter.sigma, 'FilterSize', filter.size, 'Padding', 'circular');
     dark_ = max(a(:));
