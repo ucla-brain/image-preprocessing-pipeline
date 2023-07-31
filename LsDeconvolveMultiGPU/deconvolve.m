@@ -1,5 +1,5 @@
 LsDeconv(...
-    "/data/20230523_SW220510_02_3_1_sag_LS_15x_800z/c2", ...
+    "/data/20230624_SM230223_05_LS_15x_800z_Double_MORF_B4/Ex_488_Em_525_tif/", ...
     400,  ... % dxy (nm)
     800,  ... % dz (nm)
     25,   ... % numit
@@ -13,13 +13,13 @@ LsDeconv(...
     0,    ... % clipval
     0,    ... % stop_criterion
     intmax('int32'),... % block_size_max=max number of elements in the block. GPU arrays on MATLAB are limited to intmax('int32') as the max size.
-    [repmat(1:8, 1, 4)],  ... % [repmat(1:8, 1, 4) zeros(1, 64)] gpu index in gpuDeviceTable, 0 means CPU
+    [repmat(1:8, 1, 5) zeros(1, 72)],  ... % [repmat(1:8, 1, 4) zeros(1, 64)] gpu index in gpuDeviceTable, 0 means CPU
     1.0,  ... % signal amplification if clipval=0. clipval=1 means no amplification.
     [1, 1, 1.5], ... % x y z sigma of the 3D gaussian filter applied before deconvolution. filter_size = ceil(sigma * 4 + 1)
-    [7, 7, 9], ... % filter_size
+    [7, 7, 11], ... % filter_size
     1,    ... % 0 not resume, 1 = resume
     1,    ... % starting block should be greater than 0 for multiGPU processing
     0,    ... % 1 flip the deconvolved image upside down. 0 do not.
     1,    ... % 1 convert_to_8bit, 0 keep as is
-    "/data/cache_deconvolution_exp" ... % cache drive (optional)
+    "/data/cache_deconvolution_b4" ... % cache drive (optional)
 );

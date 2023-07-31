@@ -599,22 +599,31 @@ function deconvolve(filelist, psf, numit, damping, ...
 
         % find maximum value in other blocks
         semaphore('wait', semkey_single);
-        if exist(min_max_path, "file")
-            min_max = load(min_max_path);
-            if isgpuarray(min_max.deconvmax)
-                deconvmax = gather(min_max.deconvmax);
-                deconvmin = gather(min_max.deconvmin);
-                rawmax = gather(min_max.rawmax);
-            else
-                deconvmax = min_max.deconvmax;
-                deconvmin = min_max.deconvmin;
-                rawmax = min_max.rawmax;
+        could_not_save = true;
+        while could_not_save
+            try
+                if exist(min_max_path, "file")
+                    min_max = load(min_max_path);
+                    if isgpuarray(min_max.deconvmax)
+                        deconvmax = gather(min_max.deconvmax);
+                        deconvmin = gather(min_max.deconvmin);
+                        rawmax = gather(min_max.rawmax);
+                    else
+                        deconvmax = min_max.deconvmax;
+                        deconvmin = min_max.deconvmin;
+                        rawmax = min_max.rawmax;
+                    end
+                end
+                % consolidate and save block stats
+                deconvmax = max(ub, deconvmax);
+                deconvmin = min(lb, deconvmin);
+                save(min_max_path, "deconvmin", "deconvmax", "rawmax", "-v7.3", "-nocompression");
+                could_not_save = false;
+            catch
+                disp("could not load or save min_max file. Retrying ...")
+                pause(1);
             end
         end
-        % consolidate and save block stats
-        deconvmax = max(ub, deconvmax);
-        deconvmin = min(lb, deconvmin);
-        save(min_max_path, "deconvmin", "deconvmax", "rawmax", "-v7.3", "-nocompression");
         semaphore('post', semkey_single);
 
         % save block to disk
