@@ -515,9 +515,11 @@ function process(inpath, outpath, log_file, info, block, psf, numit, ...
 
     % postprocess and write tif files
     % delete(gcp('nocreate'));
-    postprocess_save(...
-        outpath, cache_drive, min_max_path, log_file, clipval, ...
-        p1, p2, info, resume, block, amplification);
+    if starting_block == 1
+        postprocess_save(...
+            outpath, cache_drive, min_max_path, log_file, clipval, ...
+            p1, p2, info, resume, block, amplification);
+    end
     semaphore_destroy(semkey_single);
 
     p_log(log_file, ['deconvolution finished at ' char(datetime)]);
@@ -658,17 +660,9 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
     end
 
     if min(filter.sigma(:)) > 0
-        bl = imgaussfilt3(bl, filter.sigma, 'FilterSize', filter.size, 'Padding', 'circular');
+        bl = imgaussfilt3(bl, filter.sigma, 'FilterSize', filter.size, 'Padding', 'symmetric'); %circular
         bl = bl - filter.dark;
         bl = max(bl, 0);
-
-        % flat = prctile(bl, 25, 3);
-        % flat = median(bl, 3);
-        % flat = imgaussfilt3(flat, 2, 'Padding', 'circular');
-        % flat = flat./max(flat(:));
-        % bl = bl ./ flat;
-        % clear flat;
-        % disp("flat applied");
     end
 
     if niter > 0 && max(bl(:)) > eps('single')
@@ -743,17 +737,10 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
         end
 
         % remove padding
-        if pad_z > 0
-            bl = bl(...
-                floor(pad_x) + 1 : end - ceil(pad_x), ...
-                floor(pad_y) + 1 : end - ceil(pad_y), ...
-                floor(pad_z) + 1 : end - ceil(pad_z));
-        else
-            bl = bl(...
-                floor(pad_x) + 1 : end - ceil(pad_x), ...
-                floor(pad_y) + 1 : end - ceil(pad_y), ...
-                :);
-        end
+        bl = bl(...
+            floor(pad_x) + 1 : end - ceil(pad_x), ...
+            floor(pad_y) + 1 : end - ceil(pad_y), ...
+            floor(pad_z) + 1 : end - ceil(pad_z));
     end
     if isgpuarray(bl) && gpu_device.TotalMemory < 60e9
         bl = gather(bl);
