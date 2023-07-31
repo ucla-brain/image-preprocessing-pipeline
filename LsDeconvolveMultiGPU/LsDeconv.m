@@ -433,6 +433,11 @@ function process(inpath, outpath, log_file, info, block, psf, numit, ...
     filter, resume, starting_block)
 
     start_time = datetime('now');
+
+    need_post_processing = false;
+    if starting_block == 1
+        need_post_processing = true;
+    end
     
     % split it to chunks
     [p1, p2] = split(info, block);
@@ -515,7 +520,7 @@ function process(inpath, outpath, log_file, info, block, psf, numit, ...
 
     % postprocess and write tif files
     % delete(gcp('nocreate'));
-    if starting_block == 1
+    if need_post_processing
         postprocess_save(...
             outpath, cache_drive, min_max_path, log_file, clipval, ...
             p1, p2, info, resume, block, amplification);
