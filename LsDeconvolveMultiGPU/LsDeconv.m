@@ -30,7 +30,7 @@ function [] = LsDeconv(varargin)
         disp(datetime('now'));
         disp(' ');
 
-        if nargin < 22
+        if nargin < 23
             showinfo();
             if isdeployed
                 exit(1);
@@ -115,13 +115,13 @@ function [] = LsDeconv(varargin)
             p_log(log_file, ' ');
 
             p_log(log_file, 'image stack info ...');
-            [info.x, info.y, info.z, info.bit_depth] = getstackinfo(inpath); % n is volume dimension
-            info.dxy = dxy;
-            info.dz = dz;
-            info.flip_upside_down = flip_upside_down;
-            info.convert_to_8bit = convert_to_8bit;
+            [stack_info.x, stack_info.y, stack_info.z, stack_info.bit_depth] = getstackinfo(inpath); % n is volume dimension
+            stack_info.dxy = dxy;
+            stack_info.dz = dz;
+            stack_info.flip_upside_down = flip_upside_down;
+            stack_info.convert_to_8bit = convert_to_8bit;
 
-            if resume && numel(dir(fullfile(outpath, '*.tif'))) == info.z
+            if resume && numel(dir(fullfile(outpath, '*.tif'))) == stack_info.z
                 disp("it seems all the files are already deconvolved!");
                 return
             elseif ~resume
@@ -131,7 +131,7 @@ function [] = LsDeconv(varargin)
             error('provided path did not exist!');
         end
 
-        if info.x * info.y * info.z == 0
+        if stack_info.x * stack_info.y * stack_info.z == 0
             error('No valid TIFF files could be found!');
         end
 
@@ -154,9 +154,9 @@ function [] = LsDeconv(varargin)
         %     end
         end
 
-        p_log(log_file, ['   image size (voxels): ' num2str(info.x)  'x * ' num2str(info.y) 'y * ' num2str(info.z) 'z = ' num2str(info.x * info.y * info.z)]);
+        p_log(log_file, ['   image size (voxels): ' num2str(stack_info.x)  'x * ' num2str(stack_info.y) 'y * ' num2str(stack_info.z) 'z = ' num2str(stack_info.x * stack_info.y * stack_info.z)]);
         p_log(log_file, ['   voxel size (nm^3): ' num2str(dxy)  'x * ' num2str(dxy) 'y * ' num2str(dz) 'z = ' num2str(dxy^2*dz)]);
-        p_log(log_file, ['   image bit depth: ' num2str(info.bit_depth)]);
+        p_log(log_file, ['   image bit depth: ' num2str(stack_info.bit_depth)]);
         p_log(log_file, ' ');
 
         p_log(log_file, 'imaging system parameters ...')
@@ -199,7 +199,7 @@ function [] = LsDeconv(varargin)
         if resume && exist(block_path, 'file')
             block = load(block_path).block;
         else
-            [block.nx, block.ny, block.nz, block.x, block.y, block.z, block.x_pad, block.y_pad, block.z_pad] = autosplit(info, size(psf), filter, block_size_max, ram_total);  % ram_total ram_available
+            [block.nx, block.ny, block.nz, block.x, block.y, block.z, block.x_pad, block.y_pad, block.z_pad] = autosplit(stack_info, size(psf), filter, block_size_max, ram_total);  % ram_total ram_available
             save(block_path, "block");
         end
 
@@ -213,7 +213,7 @@ function [] = LsDeconv(varargin)
         p_log(log_file, ' ');
 
         % start image processing
-        filter.dark = dark(filter, info.bit_depth);
+        filter.dark = dark(filter, stack_info.bit_depth);
         p_log(log_file, 'preprocessing params ...')
         p_log(log_file, ['   3D gaussian filter sigma: ' num2str(filter.sigma, 3)]);
         p_log(log_file, ['   3D gaussian filter size: ' num2str(filter.size, 3)]);
@@ -249,7 +249,7 @@ function [] = LsDeconv(varargin)
         p_log(log_file, ['   logs: ' char(log_file_path)]);
         p_log(log_file, ' ');
         
-        process(inpath, outpath, log_file, info, block, psf, numit, ...
+        process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
             damping, clipval, stop_criterion, gpus, cache_drive, ...
             amplification, filter, resume, starting_block);
 
@@ -269,7 +269,7 @@ function [] = LsDeconv(varargin)
 end
 
 % calculate xy plan size based on z step size
-function [x, y, x_pad, y_pad] = calculate_xy_size(z, z_pad, info, block_size_max, psf_size, filter)
+function [x, y, x_pad, y_pad] = calculate_xy_size(z, z_pad, stack_info, block_size_max, psf_size, filter)
     function size = max_pad_size(x, psf_size, filter_size)
         size = max(pad_size(x, psf_size), gaussian_pad_size(x, filter_size));
     end
@@ -301,33 +301,33 @@ function [x, y, x_pad, y_pad] = calculate_xy_size(z, z_pad, info, block_size_max
     end
     y = x;
     y_pad = x_pad;
-    if x > info.x
-        x = info.x;
+    if x > stack_info.x
+        x = stack_info.x;
     end
-    if y > info.y
-        y = info.y;
+    if y > stack_info.y
+        y = stack_info.y;
     end
 
-    if info.x > info.y
+    if stack_info.x > stack_info.y
         % first try to increase x then y
-        while x < info.x && block_size(x+1, y) < block_size_max && (x+1)*y*z_deconvolved > max_deconvolved_voxels
+        while x < stack_info.x && block_size(x+1, y) < block_size_max && (x+1)*y*z_deconvolved > max_deconvolved_voxels
             x = x + 1;
             x_pad = pad_size(x, psf_size(1));
             max_deconvolved_voxels = x*y*z_deconvolved;
         end
-        while y < info.y && block_size(x, y+1) < block_size_max && x*(y+1)*z_deconvolved > max_deconvolved_voxels
+        while y < stack_info.y && block_size(x, y+1) < block_size_max && x*(y+1)*z_deconvolved > max_deconvolved_voxels
             y = y + 1;
             y_pad = pad_size(y, psf_size(2));
             max_deconvolved_voxels = x*y*z_deconvolved;
         end
     else
         % first try to increase y then x
-        while y < info.y && block_size(x, y+1) < block_size_max && x*(y+1)*z_deconvolved > max_deconvolved_voxels
+        while y < stack_info.y && block_size(x, y+1) < block_size_max && x*(y+1)*z_deconvolved > max_deconvolved_voxels
             y = y + 1;
             y_pad = pad_size(y, psf_size(2));
             max_deconvolved_voxels = x*y*z_deconvolved;
         end
-        while x < info.x && block_size(x+1, y) < block_size_max && (x+1)*y*z_deconvolved > max_deconvolved_voxels
+        while x < stack_info.x && block_size(x+1, y) < block_size_max && (x+1)*y*z_deconvolved > max_deconvolved_voxels
             x = x + 1;
             x_pad = pad_size(x, psf_size(1));
             max_deconvolved_voxels = x*y*z_deconvolved;
@@ -336,7 +336,7 @@ function [x, y, x_pad, y_pad] = calculate_xy_size(z, z_pad, info, block_size_max
 end
 
 % determine the required number of blocks that are deconvolved sequentially
-function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad] = autosplit(info, psf_size, filter, block_size_max, ram_available)
+function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad] = autosplit(stack_info, psf_size, filter, block_size_max, ram_available)
     if block_size_max <= 0
         error(['block size should be larger than zero and smaller than ' num2str(intmax("int32")) ' for GPU computing']);
     end
@@ -345,7 +345,7 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad] = autosplit(info, psf_size, 
     end
 
     % psf half width was not enouph to eliminate artifacts on z
-    psf_size(3) = ceil(psf_size(3) .* 2 / (info.dz / 1000));
+    psf_size(3) = ceil(psf_size(3) .* 2 / (stack_info.dz / 1000));
 
     % image will be converted to single precision (8 bit) float during
     % deconvolution but two copies are needed
@@ -353,13 +353,13 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad] = autosplit(info, psf_size, 
     % smaller 3D blocks. After deconvolution the blocks will be
     % reassembled to save deconvolved z-steps. Therefore, there should be
     % enough ram to reassemble z z-steps in the end.
-    z_max = min(floor(ram_available * 0.8 / info.x / info.y / 8), info.z);
+    z_max = min(floor(ram_available * 0.8 / stack_info.x / stack_info.y / 8), stack_info.z);
     z = z_max;
     % load extra z layers for each block to avoid generating artifacts on z
     % for efficiency of FFT pad data in a way that the largest prime
     % factor becomes <= 5 for each end of the block
     z_pad = pad_size(z, psf_size(3));
-    [x, y, x_pad, y_pad] = calculate_xy_size(z, z_pad, info, block_size_max, psf_size, filter);
+    [x, y, x_pad, y_pad] = calculate_xy_size(z, z_pad, stack_info, block_size_max, psf_size, filter);
     max_deconvolved_voxels = x * y * (z - 2 * z_pad);
     
     % gaussian filter padding cannot be disabled and the added z_pad should
@@ -374,7 +374,7 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad] = autosplit(info, psf_size, 
     z_min = 2 * psf_size(3) + 1;
     for z_ = z_max:-1:z_min
         z_pad_ = pad_size(z_, psf_size(3));
-        [x_, y_, x_pad_, y_pad_] = calculate_xy_size(z_, z_pad_, info, block_size_max, psf_size, filter);
+        [x_, y_, x_pad_, y_pad_] = calculate_xy_size(z_, z_pad_, stack_info, block_size_max, psf_size, filter);
         deconvolved_voxels = x_ * y_ * (z_ - 2 * z_pad_);
         if z_ > 2 * z_pad_ && deconvolved_voxels > max_deconvolved_voxels && block_size(x_, y_, z_, x_pad_, y_pad_) < block_size_max
             x = x_;
@@ -388,13 +388,13 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad] = autosplit(info, psf_size, 
     end
 
     % number of blocks on each axis considering z-pad
-    nx = ceil(info.x / x);
-    ny = ceil(info.y / y);
-    nz = ceil((info.z - 2*z_pad) / (z - 2*z_pad));
+    nx = ceil(stack_info.x / x);
+    ny = ceil(stack_info.y / y);
+    nz = ceil((stack_info.z - 2*z_pad) / (z - 2*z_pad));
 end
 
 %provides coordinates of sub-blocks after splitting
-function [p1, p2] = split(info, block)
+function [p1, p2] = split(stack_info, block)
     % bounding box coordinate points
     p1 = zeros(block.nx * block.ny * block.nz, 4);
     p2 = zeros(block.nx * block.ny * block.nz, 3);
@@ -409,13 +409,13 @@ function [p1, p2] = split(info, block)
 
                 blnr = blnr + 1;
                 p1(blnr, 1) = xs;
-                p2(blnr, 1) = min([xs + block.x - 1, info.x]);
+                p2(blnr, 1) = min([xs + block.x - 1, stack_info.x]);
 
                 p1(blnr, 2) = ys;
-                p2(blnr, 2) = min([ys + block.y - 1, info.y]);
+                p2(blnr, 2) = min([ys + block.y - 1, stack_info.y]);
 
                 p1(blnr, 3) = zs;
-                p2(blnr, 3) = min([zs + block.z - 1, info.z]);
+                p2(blnr, 3) = min([zs + block.z - 1, stack_info.z]);
 
                 % imaged processed so far
                 % p1(blnr, 4) = nz * block.z - max(2*nz - 1, 0) * block.z_pad;
@@ -430,7 +430,7 @@ function [p1, p2] = split(info, block)
     end
 end
 
-function process(inpath, outpath, log_file, info, block, psf, numit, ...
+function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
     damping, clipval, stop_criterion, gpus, cache_drive, amplification, ...
     filter, resume, starting_block)
 
@@ -442,7 +442,7 @@ function process(inpath, outpath, log_file, info, block, psf, numit, ...
     end
     
     % split it to chunks
-    [p1, p2] = split(info, block);
+    [p1, p2] = split(stack_info, block);
 
     % load filelist
     filelist = dir(fullfile(inpath, '*.tif'));
@@ -502,7 +502,7 @@ function process(inpath, outpath, log_file, info, block, psf, numit, ...
             parfor idx = 1 : numel(gpus)
                 deconvolve( ...
                     filelist, psf, numit, damping, ...
-                    block, info, p1, p2, min_max_path, ...
+                    block, stack_info, p1, p2, min_max_path, ...
                     stop_criterion, gpus(idx), cache_drive, ...
                     filter, ...
                     starting_block + idx - 1, queue);
@@ -525,7 +525,7 @@ function process(inpath, outpath, log_file, info, block, psf, numit, ...
     if need_post_processing
         postprocess_save(...
             outpath, cache_drive, min_max_path, log_file, clipval, ...
-            p1, p2, info, resume, block, amplification);
+            p1, p2, stack_info, resume, block, amplification);
     end
     semaphore_destroy(semkey_single);
 
@@ -536,7 +536,7 @@ function process(inpath, outpath, log_file, info, block, psf, numit, ...
 end
 
 function deconvolve(filelist, psf, numit, damping, ...
-    block, info, p1, p2, min_max_path, ...
+    block, stack_info, p1, p2, min_max_path, ...
     stop_criterion, gpu, cache_drive, ...
     filter, starting_block, queue)
     
@@ -544,9 +544,9 @@ function deconvolve(filelist, psf, numit, damping, ...
     semkey_loading_base = 1e4;
     semkey_loading = semkey_loading_base + gpu;
 
-    if info.bit_depth == 8
+    if stack_info.bit_depth == 8
         rawmax = 255;
-    elseif info.bit_depth == 16
+    elseif stack_info.bit_depth == 16
         rawmax = 65535;
     else
         rawmax = -Inf;
@@ -570,11 +570,10 @@ function deconvolve(filelist, psf, numit, damping, ...
         semaphore('post', semkey_single);
 
         % begin processing next block and load next block of data into memory
-        startp = p1(blnr, :);
-        endp = p2(blnr, :);
-        x1 = startp(x); x2 = endp(x);
-        y1 = startp(y); y2 = endp(y);
-        z1 = startp(z); z2 = endp(z);
+        startp = p1(blnr, :); endp = p2(blnr, :);
+        x1     = startp(x);     x2 = endp(x);
+        y1     = startp(y);     y2 = endp(y);
+        z1     = startp(z);     z2 = endp(z);
         semaphore('wait', semkey_loading);
         send(queue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' is loading ...']);
         loading_start = tic;
@@ -583,7 +582,7 @@ function deconvolve(filelist, psf, numit, damping, ...
         semaphore('post', semkey_loading);
 
         % get min-max of raw data stack
-        if ~ismember(info.bit_depth, [8, 16])
+        if ~ismember(stack_info.bit_depth, [8, 16])
             rawmax_start = tic;
             rawmax = max(max(bl(:)), rawmax);
             send(queue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' rawmax calculated in ' num2str(toc(rawmax_start))]);
@@ -599,7 +598,7 @@ function deconvolve(filelist, psf, numit, damping, ...
         if block.z_pad > 0 && block.nz > 1
             if  z1 == 1
                 bl = bl(:, :,                     1 : end - floor(block.z_pad));
-            elseif z2 == info.z
+            elseif z2 == stack_info.z
                 bl = bl(:, :, ceil(block.z_pad) + 1 : end);
             else
                 bl = bl(:, :, ceil(block.z_pad) + 1 : end - floor(block.z_pad));
@@ -629,7 +628,7 @@ function deconvolve(filelist, psf, numit, damping, ...
                 save(min_max_path, "deconvmin", "deconvmax", "rawmax", "-v7.3", "-nocompression");
                 could_not_save = false;
             catch
-                disp("could not load or save min_max file. Retrying ...")
+                send(queue, "could not load or save min_max file. Retrying ...")
                 pause(1);
             end
         end
@@ -641,7 +640,8 @@ function deconvolve(filelist, psf, numit, damping, ...
     end
 end
 
-function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criterion, gpu, filter)   
+function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criterion, gpu, filter)
+    bl_size = size(bl);
     if gpu
         gpu_device = gpuDevice(gpu);
         memory_needed_for_full_acceleration = 43e9;
@@ -763,6 +763,7 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
         unlock_gpu(gpu_lock_path_full);
         semaphore('post', gpu);
     end
+    assert(all(size(bl) == bl_size), 'block size mismatch!');
 end
 
 %Lucy-Richardson deconvolution
@@ -860,7 +861,7 @@ end
 
 function postprocess_save(...
     outpath, cache_drive, min_max_path, log_file, clipval, ...
-    p1, p2, info, resume, block, amplification)
+    p1, p2, stack_info, resume, block, amplification)
 
     semkey_single = 1e3;
 
@@ -890,7 +891,7 @@ function postprocess_save(...
         scal = 255;
     elseif rawmax <= 65535
         scal = 65535;
-        if info.convert_to_8bit
+        if stack_info.convert_to_8bit
             rawmax = 255;
             scal = 255;
         end
@@ -956,11 +957,11 @@ function postprocess_save(...
         if block.z_pad > 0 && block.nz > 1
             bl_z = p2(blnr, z) - p1(blnr, z) + 1;
             if  nz == 1
-                R = zeros(info.x, info.y,                      bl_z - floor(block.z_pad), 'single');
+                R = zeros(stack_info.x, stack_info.y,                      bl_z - floor(block.z_pad), 'single');
             elseif nz == block.nz
-                R = zeros(info.x, info.y, -ceil(block.z_pad) + bl_z                     , 'single');
+                R = zeros(stack_info.x, stack_info.y, -ceil(block.z_pad) + bl_z                     , 'single');
             else
-                R = zeros(info.x, info.y, -ceil(block.z_pad) + bl_z - floor(block.z_pad), 'single');
+                R = zeros(stack_info.x, stack_info.y, -ceil(block.z_pad) + bl_z - floor(block.z_pad), 'single');
             end
         end
         for j = 1 : block.nx * block.ny
@@ -1001,7 +1002,7 @@ function postprocess_save(...
         R = R - amplification;
         R = min(R, scal);
         R = max(R, 0);
-        if info.flip_upside_down
+        if stack_info.flip_upside_down
             R = flip(R, 2);
         end
 
