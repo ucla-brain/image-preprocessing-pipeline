@@ -202,6 +202,9 @@ if __name__ == '__main__':
     PyScriptsPath = Path(r".") / "TeraStitcher" / "pyscripts"
     if sys.platform == "win32":
         # print("Windows is detected.")
+        os.environ['MKL_NUM_THREADS'] = '1'
+        os.environ['NUMEXPR_NUM_THREADS'] = '1'
+        os.environ['OMP_NUM_THREADS'] = '1'
         psutil.Process().nice(getattr(psutil, "IDLE_PRIORITY_CLASS"))
         TeraStitcherPath = Path(r"TeraStitcher") / "Windows" / cpu_instruction
         os.environ["PATH"] = f"{os.environ['PATH']};{TeraStitcherPath.as_posix()}"
@@ -210,6 +213,7 @@ if __name__ == '__main__':
         teraconverter = "teraconverter.exe"
     elif sys.platform == 'linux' and 'microsoft' not in uname().release.lower():
         print("Linux is detected.")
+        os.environ["NUMPY_MADVISE_HUGEPAGE"] = "1"
         psutil.Process().nice(value=19)
         TeraStitcherPath = Path(r".") / "TeraStitcher" / "Linux" / cpu_instruction
         os.environ["PATH"] = f"{os.environ['PATH']}:{TeraStitcherPath.as_posix()}"
