@@ -653,9 +653,11 @@ def filter_streaks(
         img = log1p_jit(img)
 
     # Need to pad image to multiple of 2. It is needed even for bleach correction non-max method
+    img_shape = img.shape
     pad_y, pad_x = [_ % 2 for _ in img.shape]
-    if pad_y == 1 or pad_x == 1:
-        img = pad(img, ((0, pad_y), (0, pad_x)), mode="edge")
+    base_pad = int(max(sigma1, sigma2) // 4) * 2
+    if pad_y > 0 or pad_x > 0 or base_pad > 0:
+        img = pad(img, ((base_pad, base_pad + pad_y), (base_pad, base_pad + pad_x)), mode="edge")
 
     if bleach_correction_frequency is not None:
         clip_min = log1p(bleach_correction_clip_min) if bleach_correction_clip_min is not None else otsu_threshold(img)
@@ -694,10 +696,9 @@ def filter_streaks(
                   f"threshold={threshold}, bidirectional={bidirectional}.")
 
     # undo padding
-    if pad_x > 0:
-        img = img[:, :-pad_x]
-    if pad_y > 0:
-        img = img[:-pad_y]
+    if pad_y > 0 or pad_x > 0 or base_pad > 0:
+        img = img[base_pad:img.shape[0]-(base_pad + pad_y), base_pad:img.shape[1]-(base_pad + pad_x)]
+        assert img.shape == img_shape
     # undo log plus 1
     img = expm1_jit(img)
     if np_d_type(d_type).kind in ("u", "i"):
