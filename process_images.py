@@ -1387,7 +1387,7 @@ if __name__ == '__main__':
             nvidia_smi = "nvidia-smi.exe"
         else:
             print("Linux is detected.")
-            CacheDriveExample = "/mnt/scratch"
+            CacheDriveExample = "/data"
             nvidia_smi = "nvidia-smi"
         psutil.Process().nice(value=19)
         TeraStitcherPath = Path(r".") / "TeraStitcher" / "Linux" / cpu_instruction
