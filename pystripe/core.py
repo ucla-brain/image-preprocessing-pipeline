@@ -697,7 +697,9 @@ def filter_streaks(
 
     # undo padding
     if pad_y > 0 or pad_x > 0 or base_pad > 0:
-        img = img[base_pad:img.shape[0]-(base_pad + pad_y), base_pad:img.shape[1]-(base_pad + pad_x)]
+        img = img[
+              base_pad: img.shape[0]-(base_pad + pad_y),
+              base_pad: img.shape[1]-(base_pad + pad_x)]
         assert img.shape == img_shape
     # undo log plus 1
     img = expm1_jit(img)
