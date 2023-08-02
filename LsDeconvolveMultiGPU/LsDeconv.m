@@ -345,7 +345,7 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad] = autosplit(stack_info, psf_
     end
 
     % psf half width was not enouph to eliminate artifacts on z
-    psf_size(3) = ceil(psf_size(3) .* 2 / (stack_info.dz / 1000));
+    psf_size(3) = ceil(psf_size(3) .* 2.5);
 
     % image will be converted to single precision (8 bit) float during
     % deconvolution but two copies are needed
@@ -1423,3 +1423,83 @@ end
 function R = convFFT(data , otf)
     R = ifftn(otf .* fftn(data));
 end
+
+% function img = filter_subband(img, sigma, level, wavelet)
+%     % img: is a 2D matrix
+%     % sigma: is a positive integer determines smooting degree. Larger = more
+%     % smoothing
+%     % level: decomposition level. 0 = max level
+%     % wavelet: a string determins the name of wavelet
+%     width_frac_h = sigma / size(img, 2);
+%     if level == 0
+%         level = wmaxlev(size(img), wavelet);
+%     end
+%     [c, s] = wavedec2(img, level, wavelet);
+%     for n_level = 2 : level
+%         [ch, cv, cd] = detcoef2('all', c, s, n_level);
+%         sigma_h = size(ch, 2) * width_frac_h;
+%         ch_fft = fft(ch);
+%         g = gaussian_filter(size(ch_fft), sigma_h);
+%         ch_fft = ch_fft * g;
+%         ch_filt = irfft(ch_fft, true); %, axis=-1 = x axis
+%     end
+% 
+% end
+% 
+% function filter = gaussian_filter(shape, sigma)
+%     % Create a gaussian notch filter
+%     % 
+%     % Parameters
+%     % ----------
+%     % shape : tuple
+%     %     shape of the output filter
+%     % sigma : float
+%     %     filter bandwidth
+%     % 
+%     % Returns
+%     % -------
+%     % g : ndarray
+%     %     the impulse response of the gaussian notch filter
+% 
+%     g = gaussian_notch_filter_1d(shape(0), sigma);
+%     filter = repmat(g, shape(1), 1);
+% end
+% 
+% function filter = gaussian_notch_filter_1d(n, sigma)
+%     % Generates a 1D gaussian notch filter `n` pixels long
+%     % 
+%     % Parameters
+%     % ----------
+%     % n : int
+%     %     length of the gaussian notch filter
+%     % sigma : float
+%     %     notch width
+%     % 
+%     % Returns
+%     % -------
+%     % g : ndarray
+%     %     (n,) array containing the gaussian notch filter
+% 
+%     assert(n > 0, 'n must be positive');
+%     assert(sigma > 0, 'sigma must be positive');
+%     n = int32(n);
+%     filter = 0:n-1;
+%     filter = 1 - exp(-filter.^2 / (2 * sigma^2));
+% end
+% 
+% function irfft = irfft(x, even)
+%      % n is the output length
+%      % s is the variable that will hold the index of the highest
+%      % frequency below N/2, s = floor((n+1)/2)
+%      if (even)
+%         n = 2 * (length(x) - 1 );
+%         s = length(x) - 1;
+%      else
+%         n = 2 * (length(x) - 1 )+1;
+%         s = length(x);
+%      end
+%      xn = zeros(1,n);
+%      xn(1:length(x)) = x;
+%      xn(length(x)+1:n) = conj(x(s:-1:2));
+%      irfft  = ifft(xn);
+% end
