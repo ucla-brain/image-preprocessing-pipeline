@@ -26,12 +26,6 @@ from supplements.cli_interface import PrintColors, date_time_now
 from tsv.volume import TSVVolume, VExtent
 
 
-# import os
-# os.environ['MKL_NUM_THREADS'] = '1'
-# os.environ['NUMEXPR_NUM_THREADS'] = '1'
-# os.environ['OMP_NUM_THREADS'] = '1'
-
-
 def imread_tsv(tsv_volume: TSVVolume, extent: VExtent, d_type: str):
     return tsv_volume.imread(extent, d_type)[0]
 
