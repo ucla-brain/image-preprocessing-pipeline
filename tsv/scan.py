@@ -13,7 +13,7 @@ from .raw import raw_imread
 from .volume import TSVStackBase, TSVVolumeBase, VExtent
 
 
-def imread(path:pathlib.Path) -> np.ndarray:
+def imread(path: pathlib.Path) -> np.ndarray:
     if path.name.endswith(".raw"):
         img = raw_imread(os.fspath(path)).astype(np.float32)
     else:
@@ -21,11 +21,12 @@ def imread(path:pathlib.Path) -> np.ndarray:
     return img
 
 
-def zcoord(path:pathlib.Path) -> float:
+def zcoord(path: pathlib.Path) -> float:
     """
     Return the putative Z coordinate for a image file path name
     """
     return int(path.name.split(".")[0]) / 10
+
 
 class ScanStack(TSVStackBase):
     """
@@ -35,9 +36,10 @@ class ScanStack(TSVStackBase):
     look square by trimming a bit off the x and y starts and stops. This
     might be a couple pixels - nothing extreme.
     """
+
     def __init__(self, x0, y0, z0, z0slice, z1slice, paths):
         super(ScanStack, self).__init__()
-        self._x0 = self.x0_orig  = x0
+        self._x0 = self.x0_orig = x0
         self._y0 = self.y0_orig = y0
         self._z0 = self.z0_orig = z0
         self.x0_trim = 0
@@ -73,7 +75,7 @@ class ScanStack(TSVStackBase):
     @property
     def x1(self):
         self._set_x1y1()
-        return self._x0 + self._width  - self.x1_trim
+        return self._x0 + self._width - self.x1_trim
 
     def y0_getter(self):
         return self._y0 + self.y0_trim
@@ -103,7 +105,7 @@ class ScanStack(TSVStackBase):
         self._y0 = self.y0_orig
         self._z0 = self.z0_orig
 
-    def read_plane(self, path:pathlib.Path):
+    def read_plane(self, path: pathlib.Path):
         z = zcoord(path) - self.z0slice
         x_off = int(self.x_off_per_z * z + .5)
         y_off = int(self.y_off_per_z * z + .5)
@@ -130,16 +132,18 @@ class ScanStack(TSVStackBase):
                     orig_z0=orig_z0,
                     path=os.path.dirname(path0))
 
+
 class AverageDrift:
     """
     The average drift in the x, y and z direction between adjacent x, y and z
     stacks - if the stage axes don't exactly align to the objective axes,
     this will be the chief component in the offsets.
     """
+
     def __init__(self,
-                 xoffx:int, yoffx:int, zoffx:int,
-                 xoffy:int, yoffy:int, zoffy:int,
-                 xoffz:int, yoffz:int, zoffz:int):
+                 xoffx: int, yoffx: int, zoffx: int,
+                 xoffy: int, yoffy: int, zoffy: int,
+                 xoffz: int, yoffz: int, zoffz: int):
         self.xoffx = xoffx
         self.yoffx = yoffx
         self.zoffx = zoffx
@@ -150,13 +154,15 @@ class AverageDrift:
         self.yoffz = yoffz
         self.zoffz = zoffz
 
+
 ALIGNMENT_RESULT_T = typing.Tuple[int, typing.Tuple[float, int, int, int]]
+
 
 class Scanner(TSVVolumeBase):
 
     def __init__(self,
-                 path:pathlib.Path,
-                 voxel_size:typing.Tuple[float, float, float],
+                 path: pathlib.Path,
+                 voxel_size: typing.Tuple[float, float, float],
                  z_stepper_distance=297,
                  piezo_distance=300,
                  z_skip=25,
@@ -251,14 +257,14 @@ class Scanner(TSVVolumeBase):
                 stack_paths.append((zbase, current_stack))
                 for z, current_stack in stack_paths:
                     z0slice = int(zcoord(current_stack[0]) / self.z_voxel_size)
-                    z1slice = int(zcoord(current_stack[-1])/self.z_voxel_size) \
+                    z1slice = int(zcoord(current_stack[-1]) / self.z_voxel_size) \
                               + 1
                     stacks[x, y, z] = ScanStack(
                         x, y, int(z / self.z_voxel_size),
                         z0slice, z1slice, current_stack)
         self.xs, self.ys, self.zs = \
             [sorted(set([_[idx] for _ in stacks.keys()]))
-                for idx in range(3)]
+             for idx in range(3)]
         self.n_x, self.n_y, self.n_z = [len(_) for _ in (self.xs, self.ys, self.zs)]
         any_stack = next(iter(stacks.values()))
         height, width = imread(any_stack.paths[0]).shape
@@ -278,8 +284,8 @@ class Scanner(TSVVolumeBase):
         for stack in self._stacks.values():
             stack.reset()
 
-    def setup(self, x_slop:int, y_slop:int, z_slop:int, z_skip:int,
-              decimate:int, drift:AverageDrift):
+    def setup(self, x_slop: int, y_slop: int, z_slop: int, z_skip: int,
+              decimate: int, drift: AverageDrift):
         """
         Set up for another round
 
@@ -345,9 +351,9 @@ class Scanner(TSVVolumeBase):
         Align each stack to the one next to it in the X direction
        """
         for xidx, yidx, zidx in itertools.product(
-            range(len(self.xs) - 1), range(len(self.ys)), range(len(self.zs))):
+                range(len(self.xs) - 1), range(len(self.ys)), range(len(self.zs))):
             k0 = (xidx, yidx, zidx)
-            k1 = (xidx+1, yidx, zidx)
+            k1 = (xidx + 1, yidx, zidx)
             if k1 not in self._stacks or k0 not in self._stacks:
                 continue
             s0 = self._stacks[k0]
@@ -359,9 +365,9 @@ class Scanner(TSVVolumeBase):
         Align each stack to the one next to it in the Y direction
         """
         for xidx, yidx, zidx in itertools.product(
-            range(len(self.xs)), range(len(self.ys)-1), range(len(self.zs))):
+                range(len(self.xs)), range(len(self.ys) - 1), range(len(self.zs))):
             k0 = (xidx, yidx, zidx)
-            k1 = (xidx, yidx+1, zidx)
+            k1 = (xidx, yidx + 1, zidx)
             if k1 not in self._stacks or k0 not in self._stacks:
                 continue
             s0 = self._stacks[k0]
@@ -374,16 +380,16 @@ class Scanner(TSVVolumeBase):
         Align each stack to the one next to it in the Z direction
         """
         for xidx, yidx, zidx in itertools.product(
-            range(len(self.xs)), range(len(self.ys)), range(len(self.zs)-1)):
+                range(len(self.xs)), range(len(self.ys)), range(len(self.zs) - 1)):
             k0 = (xidx, yidx, zidx)
-            k1 = (xidx, yidx, zidx+1)
+            k1 = (xidx, yidx, zidx + 1)
             if k1 not in self._stacks or k0 not in self._stacks:
                 continue
             s0 = self._stacks[k0]
             s1 = self._stacks[k1]
             self.futures_z[xidx, yidx, zidx] = self.align_stack_z(s0, s1)
 
-    def align_stack_x(self, s0:ScanStack, s1:ScanStack):
+    def align_stack_x(self, s0: ScanStack, s1: ScanStack):
         """
         Align stacks that are overlapping in the X direction
         :param s0:
@@ -418,7 +424,7 @@ class Scanner(TSVVolumeBase):
             )))
         return futures
 
-    def align_stack_y(self, s0:ScanStack, s1:ScanStack):
+    def align_stack_y(self, s0: ScanStack, s1: ScanStack):
         yc = s1.y0 - s0.y0 + self.drift.yoffy
         y0 = yc - self.y_slop
         y1 = yc + self.y_slop + 1
@@ -449,7 +455,7 @@ class Scanner(TSVVolumeBase):
             )))
         return futures
 
-    def align_stack_z(self, s0:ScanStack, s1:ScanStack):
+    def align_stack_z(self, s0: ScanStack, s1: ScanStack):
         x0 = -self.x_slop + self.drift.xoffz
         x1 = self.x_slop + 1 + self.drift.xoffz
         y0 = -self.y_slop + self.drift.yoffz
@@ -457,15 +463,14 @@ class Scanner(TSVVolumeBase):
         s0_paths = s0.paths[-self.z_slop:]
         s1_path = s1.paths[0]
         future = self.pool.apply_async(
-                align_one_z, (s0_paths, s1_path, x0, x1, y0, y1,
-                              -self.z_slop, self.dark, self.decimate))
+            align_one_z, (s0_paths, s1_path, x0, x1, y0, y1,
+                          -self.z_slop, self.dark, self.decimate))
         return [[0, future]]
 
     def compute_median_min_max_without_outliers(self, offs, stds):
         median = np.median(offs)
         off_std = np.std(offs) * stds
-        offs = [_ for _ in offs
-                if _ >= median - off_std and _ <= median + off_std]
+        offs = [_ for _ in offs if _ >= median - off_std and _ <= median + off_std]
         median = np.median(offs)
         minimum = np.min(offs)
         maximum = np.max(offs)
@@ -489,18 +494,18 @@ class Scanner(TSVVolumeBase):
         zmedian, zmin, zmax = self.compute_median_min_max_without_outliers(
             zoffs, stds
         )
-        return (xmedian, xmin, xmax),\
-               (ymedian, ymin, ymax),\
-               (zmedian, zmin, zmax)
+        return (xmedian, xmin, xmax), \
+            (ymedian, ymin, ymax), \
+            (zmedian, zmin, zmax)
 
     def calculate_next_round_parameters(self, threshold=.75, stds=3.0,
                                         slop_factor=1.25):
         (xoffx, xminx, xmaxx), (yoffx, yminx, ymaxx), (zoffx, zminx, zmaxx) = \
-        self.accumulate_offsets(self.alignments_x, threshold, stds)
+            self.accumulate_offsets(self.alignments_x, threshold, stds)
         (xoffy, xminy, xmaxy), (yoffy, yminy, ymaxy), (zoffy, zminy, zmaxy) = \
-        self.accumulate_offsets(self.alignments_y, threshold, stds)
+            self.accumulate_offsets(self.alignments_y, threshold, stds)
         (xoffz, xminz, xmaxz), (yoffz, yminz, ymaxz), (zoffz, zminz, zmaxz) = \
-        self.accumulate_offsets(self.alignments_z, threshold, stds)
+            self.accumulate_offsets(self.alignments_z, threshold, stds)
         x_slop = int(max(xmaxx - xoffx, xoffx - xminx,
                          xmaxy - xoffy, xoffy - xminy,
                          xmaxz - xoffz, xoffz - xminz) *
@@ -524,8 +529,8 @@ class Scanner(TSVVolumeBase):
     KEY_t = typing.Tuple[int, int, int]
     PATH_t = typing.Sequence[KEY_t]
     SCORE_AND_OFFS_t = typing.Tuple[float, int, int, int]
-    
-    def get_alignment(self, k0:KEY_t, k1:KEY_t) -> SCORE_AND_OFFS_t:
+
+    def get_alignment(self, k0: KEY_t, k1: KEY_t) -> SCORE_AND_OFFS_t:
         """
         Get the appropriate alignment (alignment_x, alignment_y or alignment_z) for the edge
         represented by k0 and k1
@@ -552,7 +557,7 @@ class Scanner(TSVVolumeBase):
                 return best_score, best_xoff, best_yoff, best_zoff
         raise ValueError("Maybe %s and %s are not adjacent?" % (k0, k1))
 
-    def get_alignments(self, k0: KEY_t, k1: KEY_t, threshold:float) -> typing.Sequence[SCORE_AND_OFFS_t]:
+    def get_alignments(self, k0: KEY_t, k1: KEY_t, threshold: float) -> typing.Sequence[SCORE_AND_OFFS_t]:
         """
         Get all alignments above a threshold (alignment_x, alignment_y or alignment_z) for the edge
         represented by k0 and k1
@@ -573,7 +578,7 @@ class Scanner(TSVVolumeBase):
                 return alignments
         raise ValueError("Maybe %s and %s are not adjacent?" % (k0, k1))
 
-    def check_key(self, direction:str, key:KEY_t)->bool:
+    def check_key(self, direction: str, key: KEY_t) -> bool:
         """
         Checks to see if a key has an edge in the alignments dictionary
 
@@ -591,7 +596,7 @@ class Scanner(TSVVolumeBase):
             zend -= 1
         return 0 <= xidx < xend and 0 <= yidx < yend and 0 <= zidx < zend
 
-    def check_path(self, path:PATH_t)->bool:
+    def check_path(self, path: PATH_t) -> bool:
         """
         Check to make sure all elements of a path are in-bounds
 
@@ -617,7 +622,7 @@ class Scanner(TSVVolumeBase):
                 return False
         return True
 
-    def get_path_score_and_offsets(self, path:PATH_t) -> SCORE_AND_OFFS_t:
+    def get_path_score_and_offsets(self, path: PATH_t) -> SCORE_AND_OFFS_t:
         """
         Compute the cumulative score and offsets along a path
 
@@ -638,7 +643,7 @@ class Scanner(TSVVolumeBase):
             score += 1 - s
         return score, xoff, yoff, zoff
 
-    def get_node_z_paths(self, k0:KEY_t) -> typing.Sequence[PATH_t]:
+    def get_node_z_paths(self, k0: KEY_t) -> typing.Sequence[PATH_t]:
         """
         Return short paths from k0 to the node below it in Z
         The five paths are going straight down and going one in each
@@ -662,7 +667,7 @@ class Scanner(TSVVolumeBase):
                 ] if self.check_path(_)
                 ]
 
-    def compute_all_z_offsets(self, threshold:float) -> np.ndarray:
+    def compute_all_z_offsets(self, threshold: float) -> np.ndarray:
         """
         Scan in the z direction, calculating offset to next lowest.
 
@@ -677,7 +682,7 @@ class Scanner(TSVVolumeBase):
         zoffsets = np.zeros((zend, yend, xend), int)
         for zi in range(zend):
             for xi, yi in itertools.product(range(xend),
-                                                range(yend)):
+                                            range(yend)):
                 score, xoff, yoff, zoff = self.get_best_z_path((xi, yi, zi))
                 scores[zi, yi, xi] = score
                 zoffsets[zi, yi, xi] = zoff
@@ -689,7 +694,7 @@ class Scanner(TSVVolumeBase):
                 zoffsets[zi, mask] = zoffsets[zi, ysrc[mask], xsrc[mask]]
         return zoffsets
 
-    def get_best_z_path(self, k0:KEY_t):
+    def get_best_z_path(self, k0: KEY_t):
         """
         Get the lowest scoring path from K0 to the node below it in Z
 
@@ -709,7 +714,7 @@ class Scanner(TSVVolumeBase):
                 best_zoff = zoff
         return best_score, best_xoff, best_yoff, best_zoff
 
-    def flat_adjust_stacks(self, threshold:float):
+    def flat_adjust_stacks(self, threshold: float):
         """
         For the flat method, what I've seen is this:
         Z offsets within-stack are similar from stack to stack, so if there's not enough evidence, use
@@ -734,7 +739,7 @@ class Scanner(TSVVolumeBase):
             for x in range(self.n_x):
                 for y in range(self.n_y):
                     for x in range(self.n_x):
-                        score, off_x, off_y, off_z = self.get_alignment((x, y, z-1), (x, y, z))
+                        score, off_x, off_y, off_z = self.get_alignment((x, y, z - 1), (x, y, z))
                         if score > threshold:
                             if off_z == -1:
                                 off_z = 0
@@ -751,7 +756,7 @@ class Scanner(TSVVolumeBase):
             z_offs = []
             for x, z in itertools.product(range(1, self.n_x), range(self.n_z)):
                 z_offs += [z_off for score, x_off, y_off, z_off in
-                           self.get_alignments((x-1, y, z), (x, y, z), threshold)]
+                           self.get_alignments((x - 1, y, z), (x, y, z), threshold)]
             median_z = np.median(z_offs) if len(z_offs) >= self.min_support else 0
             off_z_y[y] = median_z
         #
@@ -760,9 +765,9 @@ class Scanner(TSVVolumeBase):
         for x, y in itertools.product(range(self.n_x), range(self.n_y)):
             for z in range(1, self.n_z):
                 if (x, y, z) in off_z_z:
-                    self._stacks[x, y, z].z0 = self._stacks[x, y, z-1].z1 + off_z_z[x, y, z]
+                    self._stacks[x, y, z].z0 = self._stacks[x, y, z - 1].z1 + off_z_z[x, y, z]
                 else:
-                    self._stacks[x, y, z].z0 = self._stacks[x, y, z-1].z1
+                    self._stacks[x, y, z].z0 = self._stacks[x, y, z - 1].z1
         for y in range(self.n_y):
             off_z = 0
             for x in range(1, self.n_x):
@@ -778,12 +783,12 @@ class Scanner(TSVVolumeBase):
         x_off_ys = []
         y_off_ys = []
         for x, y, z in itertools.product(range(1, self.n_x), range(self.n_y), range(self.n_z)):
-            score, off_x, off_y, off_z = self.get_alignment((x-1, y, z), (x, y, z))
+            score, off_x, off_y, off_z = self.get_alignment((x - 1, y, z), (x, y, z))
             if score > threshold:
                 x_off_xs.append(off_x)
                 if x not in x_off_xs_per_x:
-                    x_off_xs_per_x[x-1] = []
-                x_off_xs_per_x[x-1].append(off_x)
+                    x_off_xs_per_x[x - 1] = []
+                x_off_xs_per_x[x - 1].append(off_x)
                 y_off_xs.append(off_y)
         x_off_x = np.ones(self.n_x, int) * np.median(x_off_xs) if len(x_off_xs) > 0 else 0
         if self.loose_x:
@@ -792,7 +797,7 @@ class Scanner(TSVVolumeBase):
                     x_off_x[x] = np.median(x_off_xs_per_x[x])
         y_off_x = np.median(y_off_xs) if len(y_off_xs) > 0 else 0
         for x, y, z in itertools.product(range(self.n_x), range(1, self.n_y), range(self.n_z)):
-            score, off_x, off_y, off_z = self.get_alignment((x, y-1, z), (x, y, z))
+            score, off_x, off_y, off_z = self.get_alignment((x, y - 1, z), (x, y, z))
             if score > threshold:
                 x_off_ys.append(off_x)
                 y_off_ys.append(off_y)
@@ -833,13 +838,13 @@ class Scanner(TSVVolumeBase):
             stack.z0 = stack.z0 - z0
 
 
-def align_one_x(tgt_path:pathlib.Path,
-                src_paths:typing.Sequence[pathlib.Path],
-                x0_off:int, x1_off:int,
-                y0_off:int, y1_off:int,
-                z_off:int,
-                dark:int,
-                decimate:int) -> typing.Tuple[float, int, int, int]:
+def align_one_x(tgt_path: pathlib.Path,
+                src_paths: typing.Sequence[pathlib.Path],
+                x0_off: int, x1_off: int,
+                y0_off: int, y1_off: int,
+                z_off: int,
+                dark: int,
+                decimate: int) -> typing.Tuple[float, int, int, int]:
     """
     Align the target to all of the sources, returning the chosen x_offset,
     y_offset and z_offset
@@ -878,7 +883,7 @@ def align_one(dark, decimate, plane_fn, src_paths, tgt_path, x0_off, x1_off,
         best_zoff = 0
         if decimate != 1:
             tgt_img_decimate = zoom(tgt_img, 1 / decimate)
-            src_imgs_decimate = [zoom(_, 1/ decimate) for _ in src_imgs]
+            src_imgs_decimate = [zoom(_, 1 / decimate) for _ in src_imgs]
         else:
             tgt_img_decimate = tgt_img
             src_imgs_decimate = src_imgs
@@ -887,9 +892,9 @@ def align_one(dark, decimate, plane_fn, src_paths, tgt_path, x0_off, x1_off,
                 best_score, best_xoff, best_yoff, best_zoff, dark,
                 decimate, src_img, tgt_img_decimate, x0_off, x1_off, y0_off,
                 y1_off, z)
-        if best_score  == 0:
+        if best_score == 0:
             break
-        x0_off= max(-tgt_img.shape[1], best_xoff - decimate)
+        x0_off = max(-tgt_img.shape[1], best_xoff - decimate)
         x1_off = min(best_xoff + decimate, tgt_img.shape[1])
         y0_off = max(-tgt_img.shape[1], best_yoff - decimate)
         y1_off = min(best_yoff + decimate, tgt_img.shape[0])
@@ -937,13 +942,13 @@ def score_plane_x(src_img, tgt_img, x_off, y_off):
     return score, src_slice, tgt_slice
 
 
-def align_one_y(tgt_path:pathlib.Path,
-                src_paths:typing.Sequence[pathlib.Path],
-                x0_off:int, x1_off:int,
-                y0_off:int, y1_off:int,
-                z_off:int,
-                dark:int,
-                decimate:int) -> typing.Tuple[float, int, int, int]:
+def align_one_y(tgt_path: pathlib.Path,
+                src_paths: typing.Sequence[pathlib.Path],
+                x0_off: int, x1_off: int,
+                y0_off: int, y1_off: int,
+                z_off: int,
+                dark: int,
+                decimate: int) -> typing.Tuple[float, int, int, int]:
     """
     Align the target to all of the sources, returning the chosen x_offset,
     y_offset and z_offset
@@ -960,7 +965,7 @@ def align_one_y(tgt_path:pathlib.Path,
     :return: a 4 tuple of the best alignment score, and the x, y and z offsets
     chosen
     """
-    best_score, best_xoff, best_yoff, best_zoff =  align_one(
+    best_score, best_xoff, best_yoff, best_zoff = align_one(
         dark, decimate, align_plane_y,
         src_paths, tgt_path, x0_off, x1_off, y0_off, y1_off)
     return best_score, best_xoff, best_yoff, best_zoff + z_off
@@ -1006,15 +1011,15 @@ def score_plane_y(src_img, tgt_img, x_off, y_off):
     return score, src_slice, tgt_slice
 
 
-def align_one_z(src_paths:typing.Sequence[pathlib.Path],
-                tgt_path:pathlib.Path,
-                x0:int,
-                x1:int,
-                y0:int,
-                y1:int,
-                z_off:int,
-                dark:int,
-                decimate:int) -> typing.Tuple[float, int, int, int]:
+def align_one_z(src_paths: typing.Sequence[pathlib.Path],
+                tgt_path: pathlib.Path,
+                x0: int,
+                x1: int,
+                y0: int,
+                y1: int,
+                z_off: int,
+                dark: int,
+                decimate: int) -> typing.Tuple[float, int, int, int]:
     """
     Align one plane in the x and y direction on behalf of z
 
@@ -1030,9 +1035,9 @@ def align_one_z(src_paths:typing.Sequence[pathlib.Path],
     :param decimate: Start out by reducing the size of the image by this factor
     :return: a 4 tuple of the best score,  x offset, y offset and z offset
     """
-    best_score, best_x_offset, best_y_offset, best_z_offset =\
+    best_score, best_x_offset, best_y_offset, best_z_offset = \
         align_one(dark, decimate, align_plane_z, src_paths, tgt_path,
-                     x0, x1, y0, y1)
+                  x0, x1, y0, y1)
     return best_score, best_x_offset, best_y_offset, best_z_offset + z_off
 
 
@@ -1086,6 +1091,7 @@ def score_plane_z(src_img, tgt_img, x_off, y_off):
 if __name__ == "__main__":
     import json
     from tsv.volume import VExtent
+
     logging.basicConfig(level=logging.INFO)
     root = "/mnt/cephfs/SmartSPIM_CEPH/2019/20190920_14_47_43_#384_488LP35_647LP35/Ex_2_Em_2_destriped"
     so_path = "/mnt/cephfs/users/lee/2019-09-20_384/stack-offsets_ch2.json"
@@ -1102,6 +1108,8 @@ if __name__ == "__main__":
         decimate=8,
         dark=100,
         drift=drift)
+
+
     def dump_round(fd):
         json.dump(dict(
             x=dict([(",".join([str(_) for _ in k]), scanner.alignments_x[k])
@@ -1110,6 +1118,7 @@ if __name__ == "__main__":
                     for k in scanner.alignments_y]),
             z=dict([(",".join([str(_) for _ in k]), scanner.alignments_z[k])
                     for k in scanner.alignments_z])), fd, indent=2)
+
 
     def load_round(scanner, fd):
         d = json.load(fd)
@@ -1122,6 +1131,8 @@ if __name__ == "__main__":
         scanner.alignments_z = \
             dict([(tuple(int(_) for _ in k.split(",")), d["z"][k])
                   for k in d["z"]])
+
+
     with open(so_path) as fd:
         load_round(scanner, fd)
 

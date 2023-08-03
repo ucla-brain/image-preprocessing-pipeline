@@ -208,8 +208,7 @@ if blockfs_present:
                            volume.y1 - volume.y0,
                            volume.x1 - volume.x0), dtype)
         with Pool(cores) as pool:
-            for z0 in tqdm(
-                    range(volume.z0, volume.z1, directory.z_block_size)):
+            for z0 in tqdm(range(volume.z0, volume.z1, directory.z_block_size)):
                 z1 = min(volume.z1, z0 + directory.z_block_size)
                 futures = []
                 for z in range(z0, z1):
