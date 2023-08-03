@@ -18,11 +18,6 @@ from pystripe.core import process_img, imread_tif_raw_png
 from supplements.cli_interface import PrintColors
 
 
-# os.environ['MKL_NUM_THREADS'] = '1'
-# os.environ['NUMEXPR_NUM_THREADS'] = '1'
-# os.environ['OMP_NUM_THREADS'] = '1'
-
-
 def main(args: Namespace):
     input_path = Path(args.input)
     if not args.input or not input_path.exists():
