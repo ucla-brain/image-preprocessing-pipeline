@@ -48,11 +48,6 @@ num_retries: int = 40
 use_numexpr: bool = True
 
 
-# environ['MKL_NUM_THREADS'] = '1'
-# environ['NUMEXPR_NUM_THREADS'] = '1'
-# environ['OMP_NUM_THREADS'] = '1'
-
-
 def imread_tif_raw_png(path: Path, dtype: str = None, shape: Tuple[int, int] = None):
     """Load a tiff or raw image
 
