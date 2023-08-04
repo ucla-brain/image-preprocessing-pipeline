@@ -345,7 +345,7 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad] = autosplit(stack_info, psf_
     end
 
     % psf half width was not enouph to eliminate artifacts on z
-    psf_size(3) = ceil(psf_size(3) .* 2.5);
+    psf_size(3) = ceil(psf_size(3) .* 2);
 
     % image will be converted to single precision (8 bit) float during
     % deconvolution but two copies are needed
