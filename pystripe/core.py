@@ -679,9 +679,21 @@ def filter_streaks(
     # Need to pad image to multiple of 2. It is needed even for bleach correction non-max method
     img_shape = img.shape
     pad_y, pad_x = [_ % 2 for _ in img.shape]
-    base_pad = int(max(sigma1, sigma2) // 8) * 2
+    base_pad = int(max(sigma1, sigma2) // 2) * 2
     if pad_y > 0 or pad_x > 0 or base_pad > 0:
         img = pad(img, ((base_pad, base_pad + pad_y), (base_pad, base_pad + pad_x)), mode="wrap")
+
+    if not sigma1 == sigma2 == 0:
+        img = filter_streak_horizontally(img, sigma1, sigma2, level, wavelet, crossover, threshold)
+        if bidirectional:
+            img = rot90(img, 1)
+            img = filter_streak_horizontally(img, sigma1, sigma2, level, wavelet, crossover, threshold)
+            img = rot90(img, -1)
+            # img = filter_subband(img, sigma1, level, wavelet, bidirectional=True)
+
+        if verbose:
+            print(f"de-striping applied: sigma={sigma}, level={level}, wavelet={wavelet}, crossover{crossover}, "
+                  f"threshold={threshold}, bidirectional={bidirectional}.")
 
     if bleach_correction_frequency is not None:
         clip_min = log1p(bleach_correction_clip_min) if bleach_correction_clip_min is not None else otsu_threshold(img)
@@ -709,18 +721,6 @@ def filter_streaks(
                 # f"x_slice_min={bleach_correction_x_slice_min}, \n"
                 # f"x_slice_max={bleach_correction_x_slice_max}, \n"
             )
-
-    if not sigma1 == sigma2 == 0:
-        img = filter_streak_horizontally(img, sigma1, sigma2, level, wavelet, crossover, threshold)
-        if bidirectional:
-            img = rot90(img, 1)
-            img = filter_streak_horizontally(img, sigma1, sigma2, level, wavelet, crossover, threshold)
-            img = rot90(img, -1)
-            # img = filter_subband(img, sigma1, level, wavelet, bidirectional=True)
-
-        if verbose:
-            print(f"de-striping applied: sigma={sigma}, level={level}, wavelet={wavelet}, crossover{crossover}, "
-                  f"threshold={threshold}, bidirectional={bidirectional}.")
 
     # undo padding
     if pad_y > 0 or pad_x > 0 or base_pad > 0:
@@ -865,8 +865,8 @@ def process_img(
                           f"performance enhancement: {speedup:.1f}%")
                 img = img[y_slice_min:y_slice_max, x_slice_min:x_slice_max]
 
-            if bleach_correction_frequency is not None and (dark is None or dark <= 0):
-                dark = img_noise
+            # if bleach_correction_frequency is not None and (dark is None or dark <= 0):
+            #     dark = img_noise
 
         if gaussian_filter_2d:
             img = gaussian(img, sigma=1, preserve_range=True, truncate=2)

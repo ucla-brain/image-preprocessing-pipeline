@@ -85,7 +85,7 @@ def main(args: Namespace):
                 "bidirectional": True if args.bleach_correction else False,
                 "dark": args.dark,
                 "lightsheet": args.background_subtraction,
-                "bleach_correction_frequency": 0.0005 if args.bleach_correction else None,
+                "bleach_correction_frequency": 1/args.bleach_correction_frequency if args.bleach_correction else None,
                 "bleach_correction_max_method": False,
                 "bleach_correction_clip_min": args.bleach_correction_clip_min,
                 "bleach_correction_clip_max": args.bleach_correction_clip_max,
@@ -275,6 +275,9 @@ if __name__ == '__main__':
                              "Default is --no-background_subtraction")
     parser.add_argument("--bleach_correction", default=False, action=BooleanOptionalAction,
                         help="image pre-processing: correct image bleaching. Default is --no-bleach_correction.")
+    parser.add_argument("--bleach_correction_frequency", type=float, default=2000,
+                        help="inverse of low-pass filter used for bleach correction. Try camera tile size first."
+                             "Default is 2000.")
     parser.add_argument("--bleach_correction_clip_min", type=float, default=20,
                         help="foreground vs background threshold. Default is 20.")
     parser.add_argument("--bleach_correction_clip_max", type=float, default=255,
