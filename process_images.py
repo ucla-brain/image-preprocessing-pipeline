@@ -421,7 +421,7 @@ def process_channel(
         sigma = (0, 0)  # sigma=(foreground, background) Default is (0, 0), indicating no de-striping.
         if need_destriping:
             if objective == "4x":
-                sigma = (32, 32)
+                sigma = (100, 100)
             elif objective == "40x":
                 sigma = (128, 256)
             else:
@@ -718,7 +718,7 @@ def process_channel(
             "d_type": tsv_volume.dtype
         },
         source_voxel=(voxel_size_z, voxel_size_y, voxel_size_x),
-        target_voxel=None if stitch_mip else 10,
+        target_voxel=None if stitch_mip else 20,
         rotation=90 if need_rotation_stitched_tif else 0,
         timeout=None,
         max_processors=merge_step_cores,
