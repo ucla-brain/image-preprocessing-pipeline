@@ -260,7 +260,9 @@ if __name__ == '__main__':
                         help="image pre-processing: apply de-striping algorithm. Default is --no-de_stripe")
     parser.add_argument("--padding_mode", "-w", type=str, default='reflect',
                         help="Padding method affects the edge artifacts during de-stripping and bleach correction. "
-                             "In some cases wrap method works better than reflect method.")
+                             "In some cases wrap method works better than reflect method. "
+                             "Options: constant, edge, linear_ramp, maximum, mean, median, minimum, reflect, "
+                             "symmetric, wrap, and empty")
     parser.add_argument("--downsample_x", "-dsx", type=int, default=0,
                         help="image pre-processing: 2D down-sampling factor for x-axis. Default is 0.")
     parser.add_argument("--downsample_y", "-dsy", type=int, default=0,
