@@ -28,6 +28,8 @@ Python code for stitching and image enhancement of Light Sheet data
 
   `cd image-preprocessing-pipeline`
 
+* On Linux make sure binary files in TeraStitcher/Linux have execution permission.
+
 * For running LsDeconvolveMultiGPU deconvolution software you need to install latest version of MATLAB, image processing and parallel computing toolboxes. Then change the folder to LsDeconvolveMultiGPU folder and run the following command from MATLAB.
   
   `MATLAB command line` -> `cd image-preprocessing-pipeline/LsDeconvolveMultiGPU` -> `mex -O -v semaphore.c`
