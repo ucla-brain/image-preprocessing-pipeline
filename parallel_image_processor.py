@@ -14,10 +14,11 @@ from numpy import floor as np_floor
 from numpy import max as np_max
 from numpy import mean as np_mean
 from numpy import sqrt as np_sqrt
-from numpy import zeros, float32, dstack, rollaxis, savez_compressed, array, maximum, rot90
+from numpy import round as np_round
+from numpy import zeros, float32, dstack, rollaxis, savez_compressed, array, maximum, rot90, arange
 from psutil import cpu_count, virtual_memory
 from skimage.measure import block_reduce
-from skimage.transform import resize
+from skimage.transform import resize, resize_local_mean
 from tifffile import natural_sorted
 from tqdm import tqdm
 
@@ -346,6 +347,22 @@ def calculate_downsampling_z_ranges(start, end, steps):
     return z_list_list
 
 
+def generate_voxel_spacing(
+        shape: Tuple[int, int, int],
+        source_voxel: Tuple[int, int, int],
+        target_shape: Tuple[int, int, int],
+        target_voxel: float):
+    voxel_locations = [arange(axis_shape) * axis_v_size - (axis_shape - 1) /
+                    2.0 * axis_v_size for axis_shape, axis_v_size in zip(shape, source_voxel)]
+    axis_spacing = []
+    for i, axis_vals in enumerate(voxel_locations):
+        # Get Downsampled starting value
+        start = np_round(resize_local_mean(axis_vals, (int(target_shape[i]),)))[0]
+        # Create target_voxel spaced list
+        axis_spacing.append(array([start + target_voxel * val for val in range(target_shape[i])]))
+    return axis_spacing
+
+
 def parallel_image_processor(
         source: Union[Path, str],
         destination: Union[Path, str],
@@ -537,14 +554,19 @@ def parallel_image_processor(
                   f"{PrintColors.BLUE}down-sampling: {PrintColors.ENDC}"
                   f"resizing the z-axis ...")
             img_stack = resize(img_stack, target_shape_3d, preserve_range=True, anti_aliasing=True)
+            axes_spacing = generate_voxel_spacing(
+                (num_images, shape[0], shape[1]),
+                source_voxel,
+                target_shape_3d,
+                target_voxel)
             print(f"{PrintColors.GREEN}{date_time_now()}:{PrintColors.ENDC}"
                   f"{PrintColors.BLUE} down-sampling: {PrintColors.ENDC}"
                   f"saving as npz.")
             savez_compressed(
                 destination / f"down_sampled_zyx{target_voxel:.1f}um.npz",
                 I=img_stack,
-                # xI=array(xId, dtype='object')
-            )  # note specify object to avoid "ragged" warning
+                xI=array(axes_spacing, dtype='object')  # note specify object to avoid "ragged" warning
+            )
 
     return return_code
 
