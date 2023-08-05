@@ -677,9 +677,15 @@ def filter_streaks(
     # Need to pad image to multiple of 2. It is needed even for bleach correction non-max method
     img_shape = img.shape
     pad_y, pad_x = [_ % 2 for _ in img.shape]
-    base_pad = int(max(sigma1, sigma2) // 2) * 2
+    base_pad = 0
+    if isinstance(padding_mode, str):
+        padding_mode = padding_mode.lower()
+    if padding_mode in ('constant', 'edge', 'linear_ramp', 'maximum', 'mean', 'median', 'minimum', 'reflect',
+                        'symmetric', 'wrap', 'empty'):
+        base_pad = int(max(sigma1, sigma2) // 2) * 2
     if pad_y > 0 or pad_x > 0 or base_pad > 0:
-        img = pad(img, ((base_pad, base_pad + pad_y), (base_pad, base_pad + pad_x)), mode=padding_mode)
+        img = pad(img, ((base_pad, base_pad + pad_y), (base_pad, base_pad + pad_x)),
+                  mode=padding_mode if padding_mode else 'reflect')
 
     if not sigma1 == sigma2 == 0:
         img = filter_streak_horizontally(img, sigma1, sigma2, level, wavelet, crossover, threshold)
