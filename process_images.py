@@ -704,7 +704,7 @@ def process_channel(
             #         need_bleach_correction or need_lightsheet_cleaning) else False,
             "threshold": None,
             "sigma": bleach_correction_sigma,
-            "padding_mode": "wrap",
+            "padding_mode": "wrap",  # wrap reflect
             "bidirectional": True if need_bleach_correction else False,
             "bleach_correction_frequency": bleach_correction_frequency,
             "bleach_correction_max_method": False,
