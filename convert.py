@@ -82,6 +82,7 @@ def main(args: Namespace):
                 "down_sample_method": args.downsample_method,
                 "new_size": new_size,
                 "sigma": de_striping_sigma,
+                "padding_mode": args.padding_mode,
                 "bidirectional": True if args.bleach_correction else False,
                 "dark": args.dark,
                 "lightsheet": args.background_subtraction,
@@ -257,6 +258,9 @@ if __name__ == '__main__':
                         help="image pre-processing: apply Gaussian filter to denoise. Default is --no-gaussian.")
     parser.add_argument("--de_stripe", default=False, action=BooleanOptionalAction,
                         help="image pre-processing: apply de-striping algorithm. Default is --no-de_stripe")
+    parser.add_argument("--padding_mode", "-w", type=str, default='reflect',
+                        help="Padding method affects the edge artifacts during de-stripping and bleach correction. "
+                             "In some cases wrap method works better than reflect method.")
     parser.add_argument("--downsample_x", "-dsx", type=int, default=0,
                         help="image pre-processing: 2D down-sampling factor for x-axis. Default is 0.")
     parser.add_argument("--downsample_y", "-dsy", type=int, default=0,

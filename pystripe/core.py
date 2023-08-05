@@ -384,7 +384,7 @@ def log1p_jit(img_log_filtered: ndarray) -> ndarray:
 
 def filter_subband(img: ndarray, sigma: float, level: int, wavelet: str, bidirectional: bool = False) -> ndarray:
     coefficients = wavedec2(img, wavelet, mode='symmetric', level=None if level == 0 else level, axes=(-2, -1))
-    coefficients = list(map(list, coefficients))
+    coefficients: List[List] = list(map(list, coefficients))
     width_frac_h = sigma / img.shape[0]
     width_frac_v = sigma / img.shape[1]
     for idx, coefficient in enumerate(coefficients):
@@ -604,6 +604,7 @@ def filter_streaks(
         wavelet: str = 'db10',
         crossover: float = 10,
         threshold: float = None,
+        padding_mode: str = "reflect",
         bidirectional: bool = False,
         bleach_correction_frequency: float = None,
         bleach_correction_max_method: bool = False,
@@ -631,7 +632,9 @@ def filter_streaks(
     crossover : float
         intensity range to switch between filtered background and unfiltered foreground
     threshold : float
-        intensity value to separate background from foreground. Default is Otsu
+        intensity value to separate background from foreground. Default is Otsu.
+    padding_mode : str
+        Padding method affects the edge artifacts. In some cases wrap method works better than reflect method.
     bidirectional : bool
         by default (False) only stripes elongated along horizontal axis will be corrected.
     bleach_correction_frequency : float
@@ -676,7 +679,7 @@ def filter_streaks(
     pad_y, pad_x = [_ % 2 for _ in img.shape]
     base_pad = int(max(sigma1, sigma2) // 2) * 2
     if pad_y > 0 or pad_x > 0 or base_pad > 0:
-        img = pad(img, ((base_pad, base_pad + pad_y), (base_pad, base_pad + pad_x)), mode="wrap")
+        img = pad(img, ((base_pad, base_pad + pad_y), (base_pad, base_pad + pad_x)), mode=padding_mode)
 
     if not sigma1 == sigma2 == 0:
         img = filter_streak_horizontally(img, sigma1, sigma2, level, wavelet, crossover, threshold)
@@ -774,6 +777,7 @@ def process_img(
         wavelet: str = 'db10',
         crossover: float = 10,
         threshold: float = None,
+        padding_mode: str = "reflect",
         bidirectional: bool = False,
         bleach_correction_frequency: float = None,
         bleach_correction_clip_min: float = None,
@@ -890,6 +894,7 @@ def process_img(
                 wavelet=wavelet,
                 crossover=crossover,
                 threshold=threshold,
+                padding_mode=padding_mode,
                 bidirectional=bidirectional,
                 bleach_correction_frequency=bleach_correction_frequency,
                 bleach_correction_max_method=bleach_correction_max_method,
@@ -981,6 +986,7 @@ def read_filter_save(
         wavelet: str = 'db10',
         crossover: float = 10,
         threshold: float = None,
+        padding_mode: str = "reflect",
         bidirectional: bool = False,
         bleach_correction_frequency: float = None,
         bleach_correction_max_method: bool = True,
@@ -1043,6 +1049,8 @@ def read_filter_save(
     threshold : float
         intensity value to separate background from foreground.
         Default (-1) means automatic detection using Otsu method, otherwise uses the given positive value.
+    padding_mode : str
+        Padding method affects the edge artifacts. In some cases wrap method works better than reflect method.
     bidirectional : bool
         by default (False) only stripes elongated along horizontal axis will be corrected.
     bleach_correction_frequency : float
@@ -1163,6 +1171,7 @@ def read_filter_save(
             wavelet=wavelet,
             crossover=crossover,
             threshold=threshold,
+            padding_mode=padding_mode,
             bidirectional=bidirectional,
             lightsheet=lightsheet,
             artifact_length=artifact_length,
@@ -1397,6 +1406,7 @@ def batch_filter(
         wavelet: str = 'db9',
         crossover: int = 10,
         threshold: int = None,
+        padding_mode: str = "reflect",
         bidirectional: bool = False,
         z_step: float = None,
         rotate: int = 0,
@@ -1446,6 +1456,8 @@ def batch_filter(
     threshold : float
         intensity value to separate background from foreground.
         Default (-1) means automatic detection using Otsu method, otherwise uses the given positive value.
+    padding_mode : str
+        Padding method affects the edge artifacts. In some cases wrap method works better than reflect method.
     bidirectional : bool
         by default (False) only stripes elongated along horizontal axis will be corrected.
     bleach_correction_frequency : float
@@ -1531,6 +1543,7 @@ def batch_filter(
         'wavelet': wavelet,
         'crossover': crossover,
         'threshold': threshold,
+        'padding_mode': padding_mode,
         'bidirectional': bidirectional,
         'bleach_correction_frequency': bleach_correction_frequency,
         'bleach_correction_max_method': bleach_correction_max_method,
@@ -1629,6 +1642,9 @@ def _parse_args():
                         help="Name of the mother wavelet (Default: Daubechies 3 tap)")
     parser.add_argument("--threshold", "-t", type=float, default=None,
                         help="Global threshold value (Default: None --> Otsu)")
+    parser.add_argument("--padding_mode", "-w", type=str, default='reflect',
+                        help="Padding method affects the edge artifacts. "
+                             "In some cases wrap method works better than reflect method.")
     parser.add_argument("--bidirectional", "-dr", type=bool, default=False,
                         help="destriping direction: "
                              "\n\tFalse means top-down (default), ")
@@ -1722,6 +1738,7 @@ def main():
         wavelet=args.wavelet,
         crossover=args.crossover,
         threshold=args.threshold,
+        padding_mode=args.padding_mode,
         bidirectional=args.bidirectional,
         dark=args.dark,
         lightsheet=args.lightsheet,
