@@ -386,7 +386,7 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad] = autosplit(stack_info, psf_
             max_deconvolved_voxels = deconvolved_voxels;
         end
     end
-
+    assert(max_deconvolved_voxels > 0, "calculate_xy_size failed to find the correct block sizes and z-pads! probably you need more ram.");
     % number of blocks on each axis considering z-pad
     nx = ceil(stack_info.x / x);
     ny = ceil(stack_info.y / y);
