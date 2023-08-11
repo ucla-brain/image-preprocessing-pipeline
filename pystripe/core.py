@@ -216,7 +216,7 @@ def imsave_tif(path: Path, img: ndarray, compression: Union[Tuple[str, int], Non
                     f"\n{type(inst)}\n"
                     f"{inst.args}\n"
                     f"{inst}\n")
-                return False
+                return False  # do not die
             else:
                 sleep(0.1)
             continue
