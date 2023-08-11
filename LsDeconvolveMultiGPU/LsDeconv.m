@@ -353,7 +353,7 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad] = autosplit(stack_info, psf_
     % smaller 3D blocks. After deconvolution the blocks will be
     % reassembled to save deconvolved z-steps. Therefore, there should be
     % enough ram to reassemble z z-steps in the end.
-    z_max = min(floor(ram_available * 0.8 / stack_info.x / stack_info.y / 8), stack_info.z);
+    z_max = min(floor(ram_available * 0.85 / stack_info.x / stack_info.y / 8), stack_info.z);
     z = z_max;
     % load extra z layers for each block to avoid generating artifacts on z
     % for efficiency of FFT pad data in a way that the largest prime
@@ -578,20 +578,20 @@ function deconvolve(filelist, psf, numit, damping, ...
         send(queue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' is loading ...']);
         loading_start = tic;
         bl = load_block(filelist, x1, x2, y1, y2, z1, z2);
-        send(queue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' is loaded in ' num2str(toc(loading_start))]);
+        send(queue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' is loaded in ' num2str(round(toc(loading_start), 1))]);
         semaphore('post', semkey_loading);
 
         % get min-max of raw data stack
         if ~ismember(stack_info.bit_depth, [8, 16])
             rawmax_start = tic;
             rawmax = max(max(bl(:)), rawmax);
-            send(queue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' rawmax calculated in ' num2str(toc(rawmax_start))]);
+            send(queue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' rawmax calculated in ' num2str(round(toc(rawmax_start), 1))]);
         end
 
         % deconvolve current block of data
         block_processing_start = tic;
         [bl, lb, ub] = process_block(bl, block, psf, numit, damping, stop_criterion, gpu, filter);
-        send(queue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' filters applied in ' num2str(toc(block_processing_start))]);
+        send(queue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' filters applied in ' num2str(round(toc(block_processing_start), 1))]);
         
         save_start = tic;
         % delete block z_pad
@@ -636,7 +636,7 @@ function deconvolve(filelist, psf, numit, damping, ...
 
         % save block to disk
         save(block_path, 'bl', '-v7.3');  % , '-nocompression'
-        send(queue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' saved in ' num2str(toc(save_start))]);
+        send(queue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' saved in ' num2str(round(toc(save_start), 1))]);
     end
 end
 
@@ -801,14 +801,14 @@ function deconvolved = deconCPU(bl, psf, niter, lambda, stop_criterion)
             end
             deltaL = delta;
 
-            disp(['CPU: iteration: ' num2str(i) ' duration: ' num2str(toc(start_time)) ' delta: ' num2str(delta_rel, 3)]);
+            disp(['CPU: iteration: ' num2str(i) ' duration: ' num2str(round(toc(start_time), 1)) ' delta: ' num2str(delta_rel, 3)]);
 
             if i > 1 && delta_rel <= stop_criterion
                 disp('stop criterion reached. finishing iterations.');
                 break
             end
         else
-            disp(['CPU: iteration: ' num2str(i) ' duration: ' num2str(toc(start_time))]);
+            disp(['CPU: iteration: ' num2str(i) ' duration: ' num2str(round(toc(start_time), 1))]);
         end
     end
 end
@@ -847,14 +847,14 @@ function deconvolved = deconGPU(bl, psf, niter, lambda, stop_criterion, gpu)
             end
             deltaL = delta;
 
-            disp(['GPU' num2str(gpu) ': iteration: ' num2str(i) ' duration: ' num2str(toc(start_time)) ' delta: ' num2str(delta_rel, 3)]);
+            disp(['GPU' num2str(gpu) ': iteration: ' num2str(i) ' duration: ' num2str(round(toc(start_time), 1)) ' delta: ' num2str(delta_rel, 3)]);
 
             if i > 1 && delta_rel <= stop_criterion
                 disp('stop criterion reached. Finishing iterations.');
                 break
             end
         else
-            disp(['GPU' num2str(gpu) ': iteration: ' num2str(i) ' duration: ' num2str(toc(start_time))]);
+            disp(['GPU' num2str(gpu) ': iteration: ' num2str(i) ' duration: ' num2str(round(toc(start_time), 1))]);
         end
     end
 end
@@ -976,10 +976,10 @@ function postprocess_save(...
             file_name = char(file_path_parts(end));
             time_out_start = tic;
             bl = async_load(j).fetchOutputs;
-            loading_time = toc(time_out_start);
+            loading_time = round(toc(time_out_start), 1);
             asigment_time_start = tic;
             R(p1(blnr, x) : p2(blnr, x), p1(blnr, y) : p2(blnr, y), :) = bl;
-            disp(['   block ' num2str(j) ':' num2str(block.nx * block.ny) ' file: ' file_name ' loaded in ' num2str(loading_time) ' asinged in ' num2str(toc(asigment_time_start))]);
+            disp(['   block ' num2str(j) ':' num2str(block.nx * block.ny) ' file: ' file_name ' loaded in ' num2str(loading_time) ' asinged in ' num2str(round(toc(asigment_time_start), 1))]);
             blnr = blnr + 1;
         end
         
@@ -1014,7 +1014,7 @@ function postprocess_save(...
 
         %write images to output path
         disp(['layer ' num2str(nz) ' from ' num2str(block.nz) ': saving ' num2str(size(R, 3)) ' images ...']);
-        needed_ram_per_thread = whos('R').bytes / size(R, 3) * 4;
+        needed_ram_per_thread = whos('R').bytes / size(R, 3) * 6;
         parfor k = 1 : size(R, 3)
             save_time = tic;
             % file path
@@ -1396,14 +1396,22 @@ function message = save_image_2d(im, path, s, rawmax, save_time, semkey_single)
     semaphore('post', semkey_single);
     im = squeeze(im);
     im = im';
-    if rawmax <= 255       % 8bit data
-        imwrite(im, path, 'Compression', 'Deflate');
-    elseif rawmax <= 65535 % 16bit data
-        imwrite(im, path, 'Compression', 'Deflate');
-    else                   % 32 bit data
-        writeTiff32(im, path) %im must be single;
+    for num_retries = 1 : 40
+        try
+            if rawmax <= 255       % 8bit data
+                imwrite(im, path, 'Compression', 'Deflate');
+            elseif rawmax <= 65535 % 16bit data
+                imwrite(im, path, 'Compression', 'Deflate');
+            else                   % 32 bit data
+                writeTiff32(im, path) %im must be single;
+            end
+            break
+        catch
+            pause(1);
+            continue
+        end
     end
-    message = ['   saved img_' s ' in ' num2str(toc(save_time)) ' seconds.'];
+    message = ['   saved img_' s ' in ' num2str(round(toc(save_time), 1)) ' seconds and after ' num2str(num_retries) ' attempts.'];
 end
 
 function bl = load_block(filelist, start_x, end_x, start_y, end_y, start_z, end_z)
