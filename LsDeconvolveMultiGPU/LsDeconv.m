@@ -12,7 +12,6 @@
 % Public License for more details. You should have received a copy of the
 % GNU General Public License along with this file. If not, see
 % <http://www.gnu.org/licenses/>.
-
 % TODO: save both flipped and non-flipped
 % TODO: Test SmartSPIM PSF
 % TODO: resume saving consider images saved already in save_image function
@@ -561,6 +560,7 @@ function deconvolve(filelist, psf, numit, damping, ...
     for blnr = starting_block : num_blocks
         % skip blocks already worked on
         block_path = fullfile(cache_drive, ['bl_' num2str(blnr) '.mat']);
+        block_path_tmp = fullfile(cache_drive, ['bl_' num2str(blnr) '.mat.tmp']);
         semaphore('wait', semkey_single);
         if num_blocks > 1 && exist(block_path, "file")
             semaphore('post', semkey_single);
@@ -635,7 +635,9 @@ function deconvolve(filelist, psf, numit, damping, ...
         semaphore('post', semkey_single);
 
         % save block to disk
-        save(block_path, 'bl', '-v7.3');  % , '-nocompression'
+        save(block_path_tmp, 'bl', '-v7.3');  % , '-nocompression'
+        movefile(block_path_tmp, block_path, 'f');
+
         send(queue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' saved in ' num2str(round(toc(save_start), 1))]);
     end
 end
