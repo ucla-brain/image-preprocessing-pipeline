@@ -969,7 +969,7 @@ function postprocess_save(...
             end
         end
         for j = 1 : block.nx * block.ny
-             async_load(j) = pool.parfeval(@my_load, 1, blocklist(blnr+j-1));
+             async_load(j) = pool.parfeval(@load, 1, blocklist(blnr+j-1), 'bl');
         end
         for j = 1 : block.nx * block.ny
             if ispc
@@ -979,10 +979,10 @@ function postprocess_save(...
             end
             file_name = char(file_path_parts(end));
             time_out_start = tic;
-            bl = async_load(j).fetchOutputs;
+            data = async_load(j).fetchOutputs;
             loading_time = round(toc(time_out_start), 1);
             asigment_time_start = tic;
-            R(p1(blnr, x) : p2(blnr, x), p1(blnr, y) : p2(blnr, y), :) = bl;
+            R(p1(blnr, x) : p2(blnr, x), p1(blnr, y) : p2(blnr, y), :) = data.bl;
             disp(['   block ' num2str(j) ':' num2str(block.nx * block.ny) ' file: ' file_name ' loaded in ' num2str(loading_time) ' asinged in ' num2str(round(toc(asigment_time_start), 1))]);
             blnr = blnr + 1;
         end
@@ -1401,11 +1401,6 @@ function [lb, ub] = deconvolved_stats(deconvolved)
     end
     lb = stats(1);
     ub = stats(2);
-end
-
-function bl = my_load(fname)
-    bl = load(fname, 'bl');
-    bl = bl.bl;
 end
 
 function message = save_image_2d(im, path, s, rawmax, save_time, semkey_single)
