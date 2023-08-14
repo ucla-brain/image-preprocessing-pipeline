@@ -950,7 +950,9 @@ function postprocess_save(...
     end
     clear num_tif_files;
     
-    pool = parpool('local', feature('numcores'), 'IdleTimeout', Inf);
+    num_workers = feature('numcores') / get_num_cpu_sockets();
+    needed_ram_per_thread = stack_info.x * stack_info.y * 8 * 4;
+    pool = parpool('local', num_workers, 'IdleTimeout', Inf);
     async_load(1 : block.nx * block.ny) = parallel.FevalFuture;
     for nz = starting_z_block : block.nz
         disp(['layer ' num2str(nz) ' from ' num2str(block.nz) ': mounting blocks ...']);
@@ -1016,7 +1018,6 @@ function postprocess_save(...
 
         %write images to output path
         disp(['layer ' num2str(nz) ' from ' num2str(block.nz) ': saving ' num2str(size(R, 3)) ' images ...']);
-        needed_ram_per_thread = whos('R').bytes / size(R, 3) * 6;
         parfor k = 1 : size(R, 3)
             save_time = tic;
             % file path
@@ -1274,6 +1275,16 @@ function [ram_available, ram_total]  = get_memory()
     %             mem = 0;
     %         end
     %     end
+end
+
+function num_cpu_sockets = get_num_cpu_sockets()
+    if ispc
+        % wmic cpu get SocketDesignation
+        num_cpu_sockets = 2;
+    else
+        [~, num_cpu_sockets_str] = unix("grep 'physical id' /proc/cpuinfo | sort -u | wc -l");
+        num_cpu_sockets = str2double(regexp(num_cpu_sockets_str, '[0-9]*', 'match'));
+    end
 end
 
 function showinfo()
