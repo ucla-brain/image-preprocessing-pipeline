@@ -1279,8 +1279,11 @@ end
 
 function num_cpu_sockets = get_num_cpu_sockets()
     if ispc
-        % wmic cpu get SocketDesignation
-        num_cpu_sockets = 2;
+        [~, str] = dos('wmic cpu get SocketDesignation');
+        num_cpu_sockets = count(str,'CPU');
+        if num_cpu_sockets < 1
+            num_cpu_sockets = 1;
+        end
     else
         [~, num_cpu_sockets_str] = unix("grep 'physical id' /proc/cpuinfo | sort -u | wc -l");
         num_cpu_sockets = str2double(regexp(num_cpu_sockets_str, '[0-9]*', 'match'));
