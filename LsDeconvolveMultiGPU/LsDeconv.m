@@ -1404,8 +1404,8 @@ function [lb, ub] = deconvolved_stats(deconvolved)
 end
 
 function bl = my_load(fname)
-    data = load(fname);
-    bl = data.bl;
+    bl = load(fname, 'bl');
+    bl = bl.bl;
 end
 
 function message = save_image_2d(im, path, s, rawmax, save_time, semkey_single)
