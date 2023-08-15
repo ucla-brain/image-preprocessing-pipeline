@@ -950,7 +950,7 @@ function postprocess_save(...
     end
     clear num_tif_files;
     
-    num_workers = feature('numcores') / get_num_cpu_sockets();
+    num_workers = feature('numcores');
     needed_ram_per_thread = stack_info.x * stack_info.y * 8 * 4;
     pool = parpool('local', num_workers, 'IdleTimeout', Inf);
     async_load(1 : block.nx * block.ny) = parallel.FevalFuture;
@@ -1277,18 +1277,18 @@ function [ram_available, ram_total]  = get_memory()
     %     end
 end
 
-function num_cpu_sockets = get_num_cpu_sockets()
-    if ispc
-        [~, str] = dos('wmic cpu get SocketDesignation');
-        num_cpu_sockets = count(str,'CPU');
-        if num_cpu_sockets < 1
-            num_cpu_sockets = 1;
-        end
-    else
-        [~, num_cpu_sockets_str] = unix("grep 'physical id' /proc/cpuinfo | sort -u | wc -l");
-        num_cpu_sockets = str2double(regexp(num_cpu_sockets_str, '[0-9]*', 'match'));
-    end
-end
+% function num_cpu_sockets = get_num_cpu_sockets()
+%     if ispc
+%         [~, str] = dos('wmic cpu get SocketDesignation');
+%         num_cpu_sockets = count(str,'CPU');
+%         if num_cpu_sockets < 1
+%             num_cpu_sockets = 1;
+%         end
+%     else
+%         [~, num_cpu_sockets_str] = unix("grep 'physical id' /proc/cpuinfo | sort -u | wc -l");
+%         num_cpu_sockets = str2double(regexp(num_cpu_sockets_str, '[0-9]*', 'match'));
+%     end
+% end
 
 function showinfo()
     disp('Usage: LsDeconv TIFDIR DELTAXY DELTAZ nITER NA RI LAMBDA_EX LAMBDA_EM FCYL SLITWIDTH DAMPING HISOCLIP STOP_CRIT MEM_PERCENT');
@@ -1388,9 +1388,9 @@ end
 function pad_size = gaussian_pad_size(image_size, filter_size)
     rankA = numel(image_size);
     rankH = numel(filter_size);
-    
+
     filter_size = [filter_size ones(1, rankA-rankH)];
-    
+
     pad_size = floor(filter_size / 2);
 end
 
