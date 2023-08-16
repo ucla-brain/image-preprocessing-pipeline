@@ -2,6 +2,7 @@ from argparse import RawDescriptionHelpFormatter, ArgumentParser, Namespace, Boo
 from pathlib import Path
 from pandas import read_csv, DataFrame, concat
 from numpy import where, empty, vstack, append
+from cli_interface import PrintColors
 SWC_COLUMNS = ["id", "type", "x", "y", "z", "radius", "parent_id"]
 
 
@@ -144,7 +145,12 @@ def main(args: Namespace):
         swc_df['z'] *= args.voxel_size_z_source / args.voxel_size_z_target
 
         if args.sort:
-            swc_df = sort_swc(swc_df)
+            try:
+                swc_df = sort_swc(swc_df)
+            except Exception as e:
+                print(f"{PrintColors.FAIL}sorting failed! --> {input_file}\n"
+                      f"error --> {e}{PrintColors.ENDC}")
+                continue
 
         if args.output_extension == "swc":
             with open(output_file, 'a'):
