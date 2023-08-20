@@ -21,7 +21,8 @@ def is_overwrite_needed(file: Path, overwrite: bool) -> bool:
 
 def sort_swc(swc_df: DataFrame) -> DataFrame:
     # print(swc_df.head())
-    unsorted_swc = swc_df.to_numpy()
+    unsorted_swc = swc_df.sort_values(by=['id'], ascending=True).drop_duplicates().to_numpy()
+    # unsorted_swc = unique(unsorted_swc, axis=0)
     sorted_swc = empty((0, 7), float)
     root_nodes = where(unsorted_swc[:, 6] == -1)
     if len(root_nodes) == 1 and len(root_nodes[0]) == 0:
@@ -144,7 +145,6 @@ def main(args: Namespace):
         swc_df['y'] *= args.voxel_size_y_source / args.voxel_size_y_target
         swc_df['z'] *= args.voxel_size_z_source / args.voxel_size_z_target
 
-        swc_df = swc_df.sort_values(by=['id'], ascending=True).drop_duplicates()
         if args.sort:
             try:
                 swc_df = sort_swc(swc_df)
