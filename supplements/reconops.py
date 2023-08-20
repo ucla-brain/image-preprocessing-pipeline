@@ -144,6 +144,7 @@ def main(args: Namespace):
         swc_df['y'] *= args.voxel_size_y_source / args.voxel_size_y_target
         swc_df['z'] *= args.voxel_size_z_source / args.voxel_size_z_target
 
+        swc_df = swc_df.sort_values(by=['id'], ascending=True).drop_duplicates()
         if args.sort:
             try:
                 swc_df = sort_swc(swc_df)
