@@ -3,6 +3,7 @@ from pathlib import Path
 from pandas import read_csv, DataFrame, concat
 from numpy import where, empty, vstack, append
 from cli_interface import PrintColors
+from math import pi
 SWC_COLUMNS = ["id", "type", "x", "y", "z", "radius", "parent_id"]
 
 
@@ -64,14 +65,18 @@ def sort_swc(swc_df: DataFrame) -> DataFrame:
 
 
 def main(args: Namespace):
+    args.input_extension = args.input_extension.lower()
+    args.output_extension = args.output_extension.lower()
     assert args.input_extension in ("swc", "eswc", "apo")
+
     if args.input_extension == "apo":
         args.output_extension = "swc"
-    if not args.output_extension:
+    if args.output_extension:
+        assert args.output_extension in ("swc", "eswc", "seed")
+    else:
         args.output_extension = "swc"
         if args.input_extension == "swc":
             args.output_extension = "eswc"
-    assert args.output_extension in ("swc", "eswc")
 
     input_path = Path(args.input)
     assert input_path.exists()
@@ -113,7 +118,7 @@ def main(args: Namespace):
         if args.output_extension == "swc":
             output_file = output_file.parent / (
                     output_file.name[0:-len(output_file.suffix)] + "." + args.output_extension)
-        else:
+        elif args.output_extension == "eswc":
             output_file = output_file.parent / (
                     output_file.name[0:-len(output_file.suffix)] + ".ano." + args.output_extension)
 
@@ -157,9 +162,9 @@ def main(args: Namespace):
             with open(output_file, 'a'):
                 output_file.write_text("#")
                 swc_df.to_csv(output_file, sep=" ", mode="a", index=False)
+                print(f"{args.input_extension} to {args.output_extension} -> {output_file}")
 
             if args.input_extension == "apo":
-                i = 1
                 output_folder = output_file.parent / output_file.name[0:-len('.ano.swc')]
                 output_folder.mkdir(exist_ok=True)
                 for i in range(1, len(swc_df)):
@@ -175,7 +180,8 @@ def main(args: Namespace):
                             df2["type"] = 2
                             df2["parent_id"] = 1
                             concat([df1, df2]).to_csv(output_file_new, sep=" ", mode="a", index=False)
-        else:
+                            print(f"{args.input_extension} to {args.output_extension} -> {output_file_new}")
+        elif args.output_extension == "eswc":
             apo_file = output_file.parent / (output_file.name[0:-len(".eswc")] + ".apo")
             ano_file = output_file.parent / (output_file.name[0:-len(".ano.eswc")] + ".ano")
 
@@ -196,8 +202,22 @@ def main(args: Namespace):
             with open(output_file, 'a'):
                 output_file.write_text("#")
                 swc_df.to_csv(output_file, sep=" ", mode="a", index=False)
-
-        print(f"{args.input_extension} to {args.output_extension} -> {output_file}")
+            print(f"{args.input_extension} to {args.output_extension} -> {output_file}")
+        elif args.output_extension == "seed":
+            for row in swc_df.itertuples():
+                x = int(row.x)
+                y = int(row.y)
+                z = int(row.z)
+                radii = row.radius
+                if args.radii is not None:
+                    radii = args.radii
+                # radii = float(l_split[5])
+                volume = int(4 / 3 * pi * radii ** 3)
+                output_file = output_path / f"marker_{x}_{y}_{z}_{volume}"
+                with open(output_file, 'w') as marker_file:
+                    marker_file.write("# x,y,z,radius_um\n")
+                    marker_file.write(f"{x},{y},{z},{radii}")
+                    print(f"{args.input_extension} to {args.output_extension} -> {output_file}")
 
 
 if __name__ == '__main__':
@@ -253,4 +273,7 @@ if __name__ == '__main__':
     parser.add_argument("--z_axis_length", "-z", type=int, required=False, default=0,
                         help="The length of z-axis in pixels of the image used for reconstruction. "
                              "If z>0 is provided z-axis will be flipped. Default is 0 --> no z-axis flipping")
+    parser.add_argument("--radii", "-r", type=float, required=False, default=None,
+                        help="Force the radii to be a specific number in um during (e)swc to seed conversion. "
+                             "Default value is None which means radius value from swc file will be used.")
     main(parser.parse_args())
