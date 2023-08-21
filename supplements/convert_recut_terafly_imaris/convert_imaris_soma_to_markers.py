@@ -44,7 +44,7 @@ if __name__ == '__main__':
     )
     parser.add_argument("--soma", "-s", type=str, required=True,
                         help="Path to imaris proofread soma file (.SWC)")
-    parser.add_argument("--radii", "-r", type=float, required=False, default= 12,
+    parser.add_argument("--radii", "-r", type=float, required=False, default=12,
                         help="Force the radii to be () um")
     parser.add_argument("--voxel_size_x", "-vx", type=float, required=False, default=0.4, 
                         help="voxel size x")
