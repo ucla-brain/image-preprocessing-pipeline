@@ -205,9 +205,9 @@ def main(args: Namespace):
             print(f"{args.input_extension} to {args.output_extension} -> {output_file}")
         elif args.output_extension == "seed":
             for row in swc_df.itertuples():
-                x = int(row.x)
-                y = int(row.y)
-                z = int(row.z)
+                x = int(row.x + .5)
+                y = int(row.y + .5)
+                z = int(row.z + .5)
                 radii = row.radius
                 if args.radii is not None:
                     radii = args.radii
