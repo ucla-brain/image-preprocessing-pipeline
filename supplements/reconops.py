@@ -132,7 +132,8 @@ def main(args: Namespace):
                 swc_df = swc_df[SWC_COLUMNS].copy()
         elif args.input_extension == "apo":
             swc_df = read_csv(input_file).drop_duplicates().reset_index(drop=True)
-            for col_name, value in (("type", 1), ("radius", 10), ("parent_id", -1)):
+            for col_name, value in (
+                    ("type", 1), ("radius", 12 if args.radii is None else args.radii), ("parent_id", -1)):
                 swc_df[col_name] = value
             swc_df["id"] = swc_df.reset_index().index + 1
             swc_df = swc_df[SWC_COLUMNS].copy()
@@ -164,8 +165,11 @@ def main(args: Namespace):
                 swc_df.to_csv(output_file, sep=" ", mode="a", index=False)
                 print(f"{args.input_extension} to {args.output_extension} -> {output_file}")
 
-            if args.input_extension == "apo":
-                output_folder = output_file.parent / output_file.name[0:-len('.ano.swc')]
+            if args.input_extension == "apo" or args.swc_to_seed:
+                if args.input_extension == "apo":
+                    output_folder = output_file.parent / output_file.name[0:-len('.ano.swc')]
+                else:
+                    output_folder = output_file.parent / output_file.name[0:-len(output_file.suffix)]
                 output_folder.mkdir(exist_ok=True)
                 for i in range(1, len(swc_df)):
                     output_file_new = output_folder / f"{i:06n}.swc"
@@ -233,19 +237,23 @@ if __name__ == '__main__':
     parser.add_argument("--input_extension", "-ie", type=str, required=False, default="eswc",
                         help="Input extension options are eswc, swc, and apo. Default is eswc.")
     parser.add_argument("--output_extension", "-oe", type=str, required=False,
-                        help="Output extension options are eswc and swc. "
+                        help="Output extension options are eswc, swc and seed. "
                              "Default is swc if input_extension is eswc and vice versa. "
-                             "Apo files can be converted to swc only at the moment. "
+                             "Apo files can be converted to swc and seed. "
                              "Two types of swc files are generated for each apo file. "
                              "One of them has all the nodes and can be opened in neuTube. "
                              "The other one is a folder containing one swc per node that can be opened in "
-                             "Fast Neurite Tracer (FNT).")
+                             "Fast Neurite Tracer (FNT)."
+                             "seed type generates marker files that can be read by recut.")
     parser.add_argument("--overwrite", default=False, action=BooleanOptionalAction,
                         help="Overwrite outputs. Default is --no-overwrite")
     parser.add_argument("--sort", default=False, action=BooleanOptionalAction,
                         help="Sort reconstructions. Default is --no-sort. "
                              "Makes sure if a node is upstream to another node, "
                              "it is never below the second node in the (e)swc file.")
+    parser.add_argument("--swc_to_seed", default=False, action=BooleanOptionalAction,
+                        help="If you have a swc file containing only soma location, "
+                             "then, each node will be converted to a separate swc file.")
     parser.add_argument("--voxel_size_x_source", "-dxs", type=float, required=False, default=1.0,
                         help="The voxel size on the x-axis of the image used for reconstruction. "
                              "Default value is 1.")
@@ -275,5 +283,7 @@ if __name__ == '__main__':
                              "If z>0 is provided z-axis will be flipped. Default is 0 --> no z-axis flipping")
     parser.add_argument("--radii", "-r", type=float, required=False, default=None,
                         help="Force the radii to be a specific number in um during (e)swc to seed conversion. "
-                             "Default value is None which means radius value from swc file will be used.")
+                             "Default value is None which means: "
+                             "(1) for swc to seed conversion radius value from swc file will be used."
+                             "(2) fro apo to swc conversion the value of 12 will be used.")
     main(parser.parse_args())
