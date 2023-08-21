@@ -244,7 +244,8 @@ if __name__ == '__main__':
                              "One of them has all the nodes and can be opened in neuTube. "
                              "The other one is a folder containing one swc per node that can be opened in "
                              "Fast Neurite Tracer (FNT)."
-                             "seed type generates marker files that can be read by recut.")
+                             "Seed option generates marker files that can be read by recut. Seed files should be in um "
+                             "unit and therefore source voxel sizes should be provided as needed.")
     parser.add_argument("--overwrite", default=False, action=BooleanOptionalAction,
                         help="Overwrite outputs. Default is --no-overwrite")
     parser.add_argument("--sort", default=False, action=BooleanOptionalAction,
