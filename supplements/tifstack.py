@@ -35,5 +35,8 @@ class TifStack:
     def __len__(self):
         return len(self.files)
 
+    def get_file(self, i):
+        return self.files[i]
+
     def close(self):
         pass
