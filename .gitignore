@@ -4,6 +4,7 @@
 /Ex_488_Em_525/
 /Ex_561_Em_600/
 /Ex_642_Em_680/
+/tempData/
 /cudaDecon/
 /log.txt
 /supplements/3D Manual Tracing Tracking Sheet copy.csv
@@ -12,3 +13,5 @@
 /LsDeconvolveMultiGPU/psf.tif
 /LsDeconvolveMultiGPU/LsDeconv.asv
 */semaphore.mex*
+.idea/
+__pycache__/
