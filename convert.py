@@ -105,7 +105,8 @@ def main(args: Namespace):
             source_voxel=(args.voxel_size_z, args.voxel_size_y, args.voxel_size_x),
             target_voxel=args.voxel_size_target,
             rotation=args.rotation,
-            resume=args.resume
+            resume=args.resume,
+            needed_memory=args.needed_memory * 1024**3
         )
     elif input_path.is_dir():
         tif_2d_folder = input_path
@@ -347,4 +348,6 @@ if __name__ == '__main__':
     parser.add_argument("--resume", default=False, action=BooleanOptionalAction,
                         help="applies to tif conversion only. "
                              "resume processing remaining files. Default is --no-resume.")
+    parser.add_argument("--needed_memory", type=int, default=1,
+                        help="Memory needed per thread in GB. Default is 1 GB.")
     main(parser.parse_args())
