@@ -86,7 +86,7 @@ def main(args: Namespace):
                 "bidirectional": True if args.bleach_correction else False,
                 "dark": args.dark,
                 "lightsheet": args.background_subtraction,
-                "bleach_correction_frequency": 1/args.bleach_correction_frequency if args.bleach_correction else None,
+                "bleach_correction_frequency": 1/args.bleach_correction_period if args.bleach_correction else None,
                 "bleach_correction_max_method": False,
                 "bleach_correction_clip_min": args.bleach_correction_clip_min,
                 "bleach_correction_clip_max": args.bleach_correction_clip_max,
@@ -105,7 +105,8 @@ def main(args: Namespace):
             source_voxel=(args.voxel_size_z, args.voxel_size_y, args.voxel_size_x),
             target_voxel=args.voxel_size_target,
             rotation=args.rotation,
-            resume=args.resume
+            resume=args.resume,
+            needed_memory=args.needed_memory * 1024**3
         )
     elif input_path.is_dir():
         tif_2d_folder = input_path
@@ -281,9 +282,9 @@ if __name__ == '__main__':
                              "Default is --no-background_subtraction")
     parser.add_argument("--bleach_correction", default=False, action=BooleanOptionalAction,
                         help="image pre-processing: correct image bleaching. Default is --no-bleach_correction.")
-    parser.add_argument("--bleach_correction_frequency", type=float, default=2000,
-                        help="inverse of low-pass filter used for bleach correction. Try camera tile size first."
-                             "Default is 2000.")
+    parser.add_argument("--bleach_correction_period", type=float, default=2000,
+                        help="inverse of low-pass filter frequency used for bleach correction. "
+                             "Try camera tile size first. Default is 2000.")
     parser.add_argument("--bleach_correction_clip_min", type=float, default=20,
                         help="foreground vs background threshold. Default is 20.")
     parser.add_argument("--bleach_correction_clip_max", type=float, default=255,
@@ -347,4 +348,6 @@ if __name__ == '__main__':
     parser.add_argument("--resume", default=False, action=BooleanOptionalAction,
                         help="applies to tif conversion only. "
                              "resume processing remaining files. Default is --no-resume.")
+    parser.add_argument("--needed_memory", type=int, default=1,
+                        help="Memory needed per thread in GB. Default is 1 GB.")
     main(parser.parse_args())
