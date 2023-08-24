@@ -459,6 +459,8 @@ function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
     % all the existing processes should be killed first before creating a
     % sechamore
     delete(gcp("nocreate"));
+    myCluster = parcluster('Processes');
+    delete(myCluster.Jobs);
     min_max_path = fullfile(cache_drive, "min_max.mat");
     [unique_gpus, ~, ~] = unique(gpus(:));
     unique_gpus = sort(unique_gpus, 'descend').';
