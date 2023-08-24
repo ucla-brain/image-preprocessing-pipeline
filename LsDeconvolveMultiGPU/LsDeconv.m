@@ -589,6 +589,9 @@ function deconvolve(filelist, psf, numit, damping, ...
         end
 
         % deconvolve current block of data
+        if dir(block_path).bytes > 0 || exist(block_path_tmp, 'file')
+            continue
+        end
         block_processing_start = tic;
         [bl, lb, ub] = process_block(bl, block, psf, numit, damping, stop_criterion, gpu, filter);
         send(queue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' filters applied in ' num2str(round(toc(block_processing_start), 1))]);
@@ -635,6 +638,9 @@ function deconvolve(filelist, psf, numit, damping, ...
         semaphore('post', semkey_single);
 
         % save block to disk
+        if dir(block_path).bytes > 0 || exist(block_path_tmp, 'file')
+            continue
+        end
         save(block_path_tmp, 'bl', '-v7.3');  % , '-nocompression'
         movefile(block_path_tmp, block_path, 'f');
 
