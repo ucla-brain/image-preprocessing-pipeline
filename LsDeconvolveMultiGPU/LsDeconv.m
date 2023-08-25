@@ -458,9 +458,9 @@ function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
     % NOTE: semaphore keys should be a more than zero values.
     % all the existing processes should be killed first before creating a
     % sechamore
-    delete(gcp("nocreate"));
     myCluster = parcluster('Processes');
     delete(myCluster.Jobs);
+    delete(gcp("nocreate"));
     min_max_path = fullfile(cache_drive, "min_max.mat");
     [unique_gpus, ~, ~] = unique(gpus(:));
     unique_gpus = sort(unique_gpus, 'descend').';
@@ -645,7 +645,6 @@ function deconvolve(filelist, psf, numit, damping, ...
         end
         save(block_path_tmp, 'bl', '-v7.3');  % , '-nocompression'
         movefile(block_path_tmp, block_path, 'f');
-
         send(queue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' saved in ' num2str(round(toc(save_start), 1))]);
     end
 end
