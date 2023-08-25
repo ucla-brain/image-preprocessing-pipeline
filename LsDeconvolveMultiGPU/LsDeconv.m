@@ -488,7 +488,7 @@ function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
             % skip blocks already worked on
             block_path = fullfile(cache_drive, ['bl_' num2str(i) '.mat']);
             if exist(block_path, "file")
-                if dir(block_path).bytes > 10
+                if dir(block_path).bytes > 0
                     remaining_blocks = remaining_blocks - 1;
                 else
                     delete(block_path);
@@ -591,7 +591,7 @@ function deconvolve(filelist, psf, numit, damping, ...
         end
 
         % deconvolve current block of data
-        if dir(block_path).bytes > 0 || exist(block_path_tmp, 'file')
+        if exist(block_path_tmp, "file") || dir(block_path).bytes > 0
             continue
         end
         block_processing_start = tic;
@@ -640,7 +640,7 @@ function deconvolve(filelist, psf, numit, damping, ...
         semaphore('post', semkey_single);
 
         % save block to disk
-        if dir(block_path).bytes > 0 || exist(block_path_tmp, 'file')
+        if exist(block_path_tmp, "file") || dir(block_path).bytes > 0
             continue
         end
         save(block_path_tmp, 'bl', '-v7.3');  % , '-nocompression'
