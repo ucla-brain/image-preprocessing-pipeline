@@ -20,22 +20,21 @@ from typing import List, Tuple, Dict, Union
 import mpi4py
 import psutil
 from cpufeature.extension import CPUFeature
-from numpy import ndarray, zeros, uint8, float32, eye, percentile
+from cv2 import (warpAffine, INTER_LINEAR, merge, WARP_INVERSE_MAP, MOTION_TRANSLATION, findTransformECC,
+                 TERM_CRITERIA_COUNT, TERM_CRITERIA_EPS)
+from numpy import ndarray, zeros, uint8, float32, eye, where
 from numpy import round as np_round
 from psutil import cpu_count, virtual_memory
 from tqdm import tqdm
 
 from flat import create_flat_img
 from parallel_image_processor import parallel_image_processor
-from pystripe.core import batch_filter, imread_tif_raw_png, imsave_tif, MultiProcessQueueRunner, progress_manager, \
-    process_img, convert_to_8bit_fun, log1p_jit, expm1_jit, otsu_threshold, prctl
-from supplements.cli_interface import ask_for_a_number_in_range, date_time_now, select_multiple_among_list
-from supplements.cli_interface import select_among_multiple_options, ask_true_false_question, PrintColors
+from pystripe.core import (batch_filter, imread_tif_raw_png, imsave_tif, MultiProcessQueueRunner, progress_manager,
+                           process_img, convert_to_8bit_fun, log1p_jit, expm1_jit, otsu_threshold, prctl)
+from supplements.cli_interface import (ask_for_a_number_in_range, date_time_now, select_multiple_among_list,
+                                       select_among_multiple_options, ask_true_false_question, PrintColors)
 from supplements.tifstack import TifStack
 from tsv.volume import TSVVolume, VExtent
-
-import cv2
-import tifffile
 
 # experiment setup: user needs to set them right
 # AllChannels = [(channel folder name, rgb color)]
@@ -660,8 +659,8 @@ def process_channel(
                 sigma=bleach_correction_sigma,
                 bidirectional=True,
                 bleach_correction_frequency=bleach_correction_frequency,
-                bleach_correction_clip_min=bleach_correction_clip_min,
-                bleach_correction_clip_max=bleach_correction_clip_max,
+                bleach_correction_clip_min=float(bleach_correction_clip_min),
+                bleach_correction_clip_max=float(bleach_correction_clip_max),
                 log1p_normalization_needed=False,
                 lightsheet=need_lightsheet_cleaning,
                 tile_size=shape[1:3],
@@ -775,51 +774,26 @@ def process_channel(
     return stitched_tif_path, shape, running_processes
 
 
-def get_matrix_two_images(image1, image2, threshold=90, iterations=10000, termination=1e-10):
-    # there should never be a case where both images are none, but this function checks just in case.
-    if image1 is None and image2 is None:
-        return None
+def get_matrix_two_images(reference: ndarray,
+                          subject: ndarray,
+                          threshold: float = 90,
+                          iterations: int = 10000,
+                          termination: float = 1e-10):
 
-    # check image1 type
-    if not isinstance(image1, ndarray) and image1 is not None:
-        # normally we need to convert the .tif file to be gray, but these tif files are already single-channel.
-        img1 = cv2.imread(image1, flags=cv2.IMREAD_ANYDEPTH)
-    elif image1 is None:
-        return image2
-    else:
-        img1 = image1
-
-    # check image2 type
-    if not isinstance(image2, ndarray) and image2 is not None:
-        img2 = cv2.imread(image2, flags=cv2.IMREAD_ANYDEPTH)
-    elif image2 is None:
-        return image1
-    else:
-        img2 = image2
+    warp_matrix = eye(2, 3, dtype=float32)
+    if reference is None or subject is None:
+        return warp_matrix
 
     # generate matrices
-    img1_percentile = percentile(img1, threshold)
-    img2_percentile = percentile(img2, threshold)
+    percentile_reference = prctl(reference, threshold)
+    percentile_subject = prctl(subject, threshold)
 
     # scale images to max brightness at percentile; 0 <= pixel intensity <= 1
-    for i in range(len(img1)):
-        for j in range(len(img1[0])):
-            if img1[i][j] > img1_percentile:
-                img1[i][j] = img1_percentile
-            img1[i][j] *= (1 / img1_percentile)
-    for i in range(len(img2)):
-        for j in range(len(img2[0])):
-            if img2[i][j] > img2_percentile:
-                img2[i][j] = img2_percentile
-            img2[i][j] *= (1 / img2_percentile)
+    reference = where(reference >= percentile_reference, 1.0, reference / percentile_reference)
+    subject = where(subject >= percentile_subject, 1.0, subject / percentile_subject)
 
-    warp_mode = cv2.MOTION_TRANSLATION
-    warp_matrix = eye(2, 3, dtype=float32)
-    num_iter = iterations
-    termination_eps = termination
-    criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, num_iter, termination_eps)
-
-    cc, warp_matrix = cv2.findTransformECC(img1, img2, warp_matrix, warp_mode, criteria)
+    criteria = (TERM_CRITERIA_EPS | TERM_CRITERIA_COUNT, iterations, termination)
+    cc, warp_matrix = findTransformECC(reference, subject, warp_matrix, MOTION_TRANSLATION, criteria)
     return warp_matrix
 
 
@@ -827,29 +801,143 @@ def generate_combined_image(images, matrices, filename):
     # there should always be 1 more image than number of matrices.  Example: 3 images, 2 matrices.
     if len(images) != len(matrices) + 1:
         raise Exception("Images and matrices arrays have incorrect lengths")
-    img0 = cv2.imread(str(images[0].absolute()), flags=cv2.IMREAD_ANYDEPTH)
-    size = img0.shape
-    transformed_images = [img0]
+    img_reference = imread_tif_raw_png(images[0])
+    size = img_reference.shape
+    transformed_images = [img_reference]
     for i in range(1, len(images)):
         if not images[i] is None:
-            read_img = cv2.imread(str(images[i].absolute()), flags=cv2.IMREAD_ANYDEPTH)
+            img = imread_tif_raw_png(images[i])
         else:
-            read_img = zeros(size, dtype = img0.dtype)
+            img = zeros(size, dtype=img_reference.dtype)
 
-        warped_image = cv2.warpAffine(read_img, matrices[i - 1], (size[1], size[0]),
-                                      flags=cv2.INTER_LINEAR + cv2.WARP_INVERSE_MAP)
+        warped_image = warpAffine(img, matrices[i - 1], (size[1], size[0]),
+                                  flags=INTER_LINEAR + WARP_INVERSE_MAP)
         transformed_images.append(warped_image)
 
-    merged = cv2.merge(transformed_images)
-
-    # for testing purposes
-    # cv2.imshow("Image 0", transformed_images[0])
-    # cv2.imshow("Image 1", transformed_images[1])
-    # cv2.imshow("Image 2", transformed_images[2])
-    # cv2.imshow("Merged", merged)
-    # cv2.waitKey(0)
-
+    merged = merge(transformed_images)
     imsave_tif(filename, merged)
+
+
+# def merge_all_channels(
+#         stitched_tif_paths: List[Path],
+#         merged_tif_path: Path,
+#         order_of_colors: str = "gbr",
+#         workers: int = cpu_count(logical=False),
+#         resume: bool = True,
+#         compression: Union[Tuple[str, int], None] = ("ADOBE_DEFLATE", 1),
+#         right_bit_shift: Union[Tuple[int, ...], None] = None
+# ):
+#     """
+#     file names should be identical for each z-step of each channel
+#     """
+#     img_suffix = ""
+#     stacks = []
+#     shape = None
+#     max_size = 0
+#     for path in stitched_tif_paths:
+#         img_stack = TifStack(path)
+#         # print(img_stack.shape, img_stack.suffix)
+#         if not img_suffix:
+#             img_suffix = img_stack.suffix
+#         elif img_suffix != img_stack.suffix:
+#             print("folders containing different file suffixes is not supported!")
+#             raise RuntimeError
+#         if not shape:
+#             shape = img_stack.nyx
+#         if len(img_stack) > max_size:
+#             max_size = len(img_stack)
+#
+#         stacks.append(img_stack)
+#
+#     merged_tif_path.mkdir(exist_ok=True)
+#
+#     matrices = list(map(lambda p: get_matrix_two_images(str(stacks[0].get_file(len(stacks[0]) // 2).absolute()), p),
+#                         [str(stacks[i].get_file(len(stacks[i]) // 2).absolute()) for i in range(1, len(stacks))]))
+#
+#     args_queue = Queue(maxsize=max_size)
+#     for i in range(max_size):
+#         imgs = []
+#         for img_stack in stacks:
+#             if i < len(img_stack):
+#                 imgs.append(img_stack.get_file(i))
+#             else:
+#                 imgs.append(None)
+#         file_name = imgs[0].name
+#         # print(merged_tif_path / file_name)
+#         args_queue.put({
+#             "images": imgs,
+#             "matrices": matrices,
+#             "filename": merged_tif_path / file_name
+#         })
+#
+#     workers = min(workers, max_size)
+#     progress_queue = Queue()
+#     for worker_ in range(workers):
+#         MultiProcessQueueRunner(progress_queue, args_queue,
+#                                 fun=generate_combined_image, replace_timeout_with_dummy=False).start()
+#
+#     return_code = progress_manager(progress_queue, workers, max_size, desc="RGB")
+#     args_queue.cancel_join_thread()
+#     args_queue.close()
+#     progress_queue.cancel_join_thread()
+#     progress_queue.close()
+#     if return_code != 0:
+#         p_log(f"{PrintColors.FAIL}merge_all_channels function failed{PrintColors.ENDC}")
+#         raise RuntimeError
+
+def merge_channels_by_file_name(
+        file_name: str = "",
+        stitched_tif_paths: List[Path] = None,
+        order_of_colors: str = "gbr",  # the order of r, g and b letters can be arbitrary here
+        merged_tif_path: Path = None,
+        shape: Tuple[int, int] = None,
+        resume: bool = True,
+        compression: Union[Tuple[str, int], None] = ("ADOBE_DEFLATE", 1),
+        right_bit_shift: Union[Tuple[int, ...], None] = None
+):
+    rgb_file = merged_tif_path / file_name
+    if resume and rgb_file.exists():
+        return
+
+    images: Dict[{str, ndarray}, {str, None}] = {}
+    dtypes = []
+    for idx, path in enumerate(stitched_tif_paths):
+        file_path = path / file_name
+        if file_path.exists():
+            image = imread_tif_raw_png(file_path)
+            if right_bit_shift is not None:
+                image = convert_to_8bit_fun(image, bit_shift_to_right=right_bit_shift[idx])
+            # image = process_img(image, gaussian_filter_2d=True)
+            images.update({order_of_colors[idx]: image})
+            dtypes += [image.dtype]
+        else:
+            images.update({order_of_colors[idx]: None})
+    del image, file_path
+    if dtypes.count(dtypes[0]) != len(dtypes):
+        paths = "\n\t".join(map(str, stitched_tif_paths))
+        p_log(f"\n{PrintColors.WARNING}warning: merging channels should have identical dtypes:\n\t"
+              f"{paths}{PrintColors.ENDC}")
+        del paths
+
+    if len(stitched_tif_paths) == 2:  # then the last color channel should remain all zeros
+        images.update({order_of_colors[2]: None})
+
+    # height (y), width(x), colors
+    multi_channel_img: ndarray = zeros((shape[0], shape[1], 3), dtype=dtypes[0])
+    for idx, color in enumerate("rgb"):  # the order of letters should be "rgb" here
+        image: ndarray = images[color]
+        if image is not None:
+            image_shape = image.shape
+            if image_shape != shape:
+                if image_shape[0] <= shape[0] or image_shape[1] <= shape[1]:
+                    padded_image = zeros(shape, dtype=image.dtype)
+                    padded_image[:image_shape[0], :image_shape[1]] = image
+                    image = padded_image
+                else:
+                    image = image[:shape[0], :shape[1]]
+            multi_channel_img[:, :, idx] = image
+
+    imsave_tif(rgb_file, multi_channel_img, compression=compression)
 
 
 def merge_all_channels(
@@ -865,9 +953,8 @@ def merge_all_channels(
     file names should be identical for each z-step of each channel
     """
     img_suffix = ""
-    stacks = []
-    shape = None
-    max_size = 0
+    x, y, z = 0, 0, 0
+    reference_channel = None
     for path in stitched_tif_paths:
         img_stack = TifStack(path)
         # print(img_stack.shape, img_stack.suffix)
@@ -876,41 +963,33 @@ def merge_all_channels(
         elif img_suffix != img_stack.suffix:
             print("folders containing different file suffixes is not supported!")
             raise RuntimeError
-        if not shape:
-            shape = img_stack.nyx
-        if len(img_stack) > max_size:
-            max_size = len(img_stack)
-
-        stacks.append(img_stack)
+        if img_stack.shape[0] > z:
+            reference_channel = path
+            z = img_stack.shape[0]
+        y, x = max(y, img_stack.shape[1]), max(x, img_stack.shape[2])
 
     merged_tif_path.mkdir(exist_ok=True)
 
-    matrices = list(map(lambda p: get_matrix_two_images(str(stacks[0].get_file(len(stacks[0]) // 2).absolute()), p),
-                        [str(stacks[i].get_file(len(stacks[i]) // 2).absolute()) for i in range(1, len(stacks))]))
-
-    args_queue = Queue(maxsize=max_size)
-    for i in range(max_size):
-        imgs = []
-        for img_stack in stacks:
-            if i < len(img_stack):
-                imgs.append(img_stack.get_file(i))
-            else:
-                imgs.append(None)
-        file_name = imgs[0].name
-        # print(merged_tif_path / file_name)
+    args_queue = Queue(maxsize=z)
+    for file in reference_channel.glob("*"+img_suffix):
         args_queue.put({
-            "images": imgs,
-            "matrices": matrices,
-            "filename": merged_tif_path / file_name
+            "file_name": file.name,
+            "stitched_tif_paths": stitched_tif_paths,
+            "order_of_colors": order_of_colors,
+            "merged_tif_path": merged_tif_path,
+            "shape": (y, x),
+            "resume": resume,
+            "compression": compression,
+            "right_bit_shift": right_bit_shift
         })
 
-    workers = min(workers, max_size)
+    workers = min(workers, z)
     progress_queue = Queue()
     for worker_ in range(workers):
         MultiProcessQueueRunner(progress_queue, args_queue,
-                                fun=generate_combined_image, replace_timeout_with_dummy=False).start()
+                                fun=merge_channels_by_file_name, replace_timeout_with_dummy=False).start()
 
-    return_code = progress_manager(progress_queue, workers, max_size, desc="RGB")
+    return_code = progress_manager(progress_queue, workers, z, desc="RGB")
     args_queue.cancel_join_thread()
     args_queue.close()
     progress_queue.cancel_join_thread()
