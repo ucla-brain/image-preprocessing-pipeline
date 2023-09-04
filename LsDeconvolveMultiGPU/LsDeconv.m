@@ -976,7 +976,7 @@ function postprocess_save(...
             end
         end
         for j = 1 : block.nx * block.ny
-             async_load(j) = pool.parfeval(@load, 1, blocklist(blnr+j-1), 'bl');
+             async_load(j) = pool.parfeval(@load_bl, 1, blocklist(blnr+j-1), semkey_single);
         end
         for j = 1 : block.nx * block.ny
             if ispc
@@ -985,12 +985,13 @@ function postprocess_save(...
                 file_path_parts = strsplit(blocklist(blnr), '/');
             end
             file_name = char(file_path_parts(end));
-            time_out_start = tic;
-            data = async_load(j).fetchOutputs;
-            loading_time = round(toc(time_out_start), 1);
+            % time_out_start = tic;
+            % data = async_load(j).fetchOutputs;
+            % loading_time = round(toc(time_out_start), 1);
             asigment_time_start = tic;
-            R(p1(blnr, x) : p2(blnr, x), p1(blnr, y) : p2(blnr, y), :) = data.bl;
-            disp(['   block ' num2str(j) ':' num2str(block.nx * block.ny) ' file: ' file_name ' loaded in ' num2str(loading_time) ' asinged in ' num2str(round(toc(asigment_time_start), 1))]);
+            R(p1(blnr, x) : p2(blnr, x), p1(blnr, y) : p2(blnr, y), :) = async_load(j).fetchOutputs;
+            % disp(['   block ' num2str(j) ':' num2str(block.nx * block.ny) ' file: ' file_name ' loaded in ' num2str(loading_time) ' asinged in ' num2str(round(toc(asigment_time_start), 1))]);
+            disp(['   block ' num2str(j) ':' num2str(block.nx * block.ny) ' file: ' file_name ' loaded and asinged in ' num2str(round(toc(asigment_time_start), 1))]);
             blnr = blnr + 1;
         end
         
@@ -1062,6 +1063,12 @@ function postprocess_save(...
     % for i = 1 : blnr
     %     delete(convertStringsToChars(blocklist(i)));
     % end
+end
+
+function bl = load_bl(path, semkey_single)
+    semaphore('wait', semkey_single);
+    bl = importdata(path);
+    semaphore('post', semkey_single);
 end
 
 %calculates a theoretical point spread function
