@@ -873,9 +873,6 @@ def process_img(
             # if bleach_correction_frequency is not None and (dark is None or dark <= 0):
             #     dark = img_noise
 
-        if gaussian_filter_2d:
-            img = gaussian(img, sigma=1, preserve_range=True, truncate=2)
-
         if down_sample is not None:
             down_sample_method = down_sample_method.lower()
             if down_sample_method == 'min':
@@ -917,6 +914,9 @@ def process_img(
                 log1p_normalization_needed=log1p_normalization_needed,
                 verbose=verbose,
             )
+
+        if gaussian_filter_2d:
+            img = gaussian(img, sigma=1, preserve_range=True, truncate=2)
 
         # dark subtraction is like baseline subtraction in Imaris
         if dark is not None and dark > 0:
