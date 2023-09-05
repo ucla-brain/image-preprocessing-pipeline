@@ -514,6 +514,7 @@ function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
     end
 
     % clear locks and semaphors
+    semaphore_destroy(semkey_single);
     for gpu = unique_gpus
         semaphore_destroy(gpu);
         semaphore_destroy(gpu + semkey_loading_base);
@@ -528,8 +529,7 @@ function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
             outpath, cache_drive, min_max_path, log_file, clipval, ...
             p1, p2, stack_info, resume, block, amplification);
     end
-    semaphore_destroy(semkey_single);
-
+    
     p_log(log_file, ['deconvolution finished at ' char(datetime)]);
     p_log(log_file, ['elapsed time: ' char(duration(datetime('now') - start_time, 'Format', 'dd:hh:mm:ss'))]);
     disp('----------------------------------------------------------------------------------------');
@@ -873,6 +873,9 @@ function postprocess_save(...
     p1, p2, stack_info, resume, block, amplification)
 
     semkey_single = 1e3;
+    semkey_multi = 1e4;
+    semaphore_create(semkey_single, 1);
+    semaphore_create(semkey_multi, 8);
 
     blocklist = strings(size(p1, 1), 1);
     for i = 1 : size(p1, 1)
@@ -976,7 +979,7 @@ function postprocess_save(...
             end
         end
         for j = 1 : block.nx * block.ny
-             async_load(j) = pool.parfeval(@load_bl, 1, blocklist(blnr+j-1), semkey_single);
+             async_load(j) = pool.parfeval(@load_bl, 1, blocklist(blnr+j-1), semkey_multi);
         end
         for j = 1 : block.nx * block.ny
             if ispc
@@ -1041,7 +1044,7 @@ function postprocess_save(...
             % make sure there is enough ram before copying img to the
             % process that saving the image
             semaphore('wait', semkey_single);
-            [ram_available, ~]  = get_memory();
+            [ram_available, ~] = get_memory();
             while ram_available < needed_ram_per_thread
                 pause(1);
                 [ram_available, ~] = get_memory();
@@ -1058,17 +1061,18 @@ function postprocess_save(...
         % pool = parpool('local', 16, 'IdleTimeout', Inf);
         % async_load(1 : block.nx * block.ny) = parallel.FevalFuture;
     end
-
+    semaphore_destroy(semkey_single);
+    semaphore_destroy(  );
     % delte tmp files
     % for i = 1 : blnr
     %     delete(convertStringsToChars(blocklist(i)));
     % end
 end
 
-function bl = load_bl(path, semkey_single)
-    semaphore('wait', semkey_single);
+function bl = load_bl(path, semkey)
+    semaphore('wait', semkey);
     bl = importdata(path);
-    semaphore('post', semkey_single);
+    semaphore('post', semkey);
 end
 
 %calculates a theoretical point spread function
