@@ -653,7 +653,7 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
     bl_size = size(bl);
     if gpu
         gpu_device = gpuDevice(gpu);
-        memory_needed_for_full_acceleration = 43e9;
+        memory_needed_for_full_acceleration = 39e9;
         memory_needed_for_semi_acceleration = 32e9;
         num_full_accelerated_blocks = floor(gpu_device.TotalMemory / memory_needed_for_full_acceleration);
         if num_full_accelerated_blocks > 0
@@ -875,7 +875,7 @@ function postprocess_save(...
     semkey_single = 1e3;
     semkey_multi = 1e4;
     semaphore_create(semkey_single, 1);
-    semaphore_create(semkey_multi, 16);
+    semaphore_create(semkey_multi, 8);
 
     blocklist = strings(size(p1, 1), 1);
     for i = 1 : size(p1, 1)
@@ -1062,7 +1062,7 @@ function postprocess_save(...
         % async_load(1 : block.nx * block.ny) = parallel.FevalFuture;
     end
     semaphore_destroy(semkey_single);
-    semaphore_destroy(  );
+    semaphore_destroy(semkey_multi);
     % delte tmp files
     % for i = 1 : blnr
     %     delete(convertStringsToChars(blocklist(i)));
