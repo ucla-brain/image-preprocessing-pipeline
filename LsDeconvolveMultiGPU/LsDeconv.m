@@ -971,11 +971,11 @@ function postprocess_save(...
         if block.z_pad > 0 && block.nz > 1
             bl_z = p2(blnr, z) - p1(blnr, z) + 1;
             if  nz == 1
-                R = zeros(stack_info.x, stack_info.y,                      bl_z - floor(block.z_pad), 'single', 'distributed');
+                R = zeros(stack_info.x, stack_info.y,                      bl_z - floor(block.z_pad), 'single');
             elseif nz == block.nz
-                R = zeros(stack_info.x, stack_info.y, -ceil(block.z_pad) + bl_z                     , 'single', 'distributed');
+                R = zeros(stack_info.x, stack_info.y, -ceil(block.z_pad) + bl_z                     , 'single');
             else
-                R = zeros(stack_info.x, stack_info.y, -ceil(block.z_pad) + bl_z - floor(block.z_pad), 'single', 'distributed');
+                R = zeros(stack_info.x, stack_info.y, -ceil(block.z_pad) + bl_z - floor(block.z_pad), 'single');
             end
         end
         for j = 1 : block.nx * block.ny
