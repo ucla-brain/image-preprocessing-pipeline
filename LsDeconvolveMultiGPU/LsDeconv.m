@@ -352,7 +352,7 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad] = autosplit(stack_info, psf_
     % smaller 3D blocks. After deconvolution the blocks will be
     % reassembled to save deconvolved z-steps. Therefore, there should be
     % enough ram to reassemble z z-steps in the end.
-    z_max = min(floor(ram_available * 0.65 / stack_info.x / stack_info.y / 8), stack_info.z);
+    z_max = min(floor(ram_available * stack_info.x * 1.0 / stack_info.y / get_num_cpu_sockets() / 8), stack_info.z);
     z = z_max;
     % load extra z layers for each block to avoid generating artifacts on z
     % for efficiency of FFT pad data in a way that the largest prime
@@ -875,7 +875,7 @@ function postprocess_save(...
     semkey_single = 1e3;
     semkey_multi = 1e4;
     semaphore_create(semkey_single, 1);
-    semaphore_create(semkey_multi, 8);
+    semaphore_create(semkey_multi, 4);
 
     blocklist = strings(size(p1, 1), 1);
     for i = 1 : size(p1, 1)
@@ -1295,18 +1295,18 @@ function [ram_available, ram_total]  = get_memory()
     %     end
 end
 
-% function num_cpu_sockets = get_num_cpu_sockets()
-%     if ispc
-%         [~, str] = dos('wmic cpu get SocketDesignation');
-%         num_cpu_sockets = count(str,'CPU');
-%         if num_cpu_sockets < 1
-%             num_cpu_sockets = 1;
-%         end
-%     else
-%         [~, num_cpu_sockets_str] = unix("grep 'physical id' /proc/cpuinfo | sort -u | wc -l");
-%         num_cpu_sockets = str2double(regexp(num_cpu_sockets_str, '[0-9]*', 'match'));
-%     end
-% end
+function num_cpu_sockets = get_num_cpu_sockets()
+    if ispc
+        [~, str] = dos('wmic cpu get SocketDesignation');
+        num_cpu_sockets = count(str,'CPU');
+        if num_cpu_sockets < 1
+            num_cpu_sockets = 1;
+        end
+    else
+        [~, num_cpu_sockets_str] = unix("grep 'physical id' /proc/cpuinfo | sort -u | wc -l");
+        num_cpu_sockets = str2double(regexp(num_cpu_sockets_str, '[0-9]*', 'match'));
+    end
+end
 
 function showinfo()
     disp('Usage: LsDeconv TIFDIR DELTAXY DELTAZ nITER NA RI LAMBDA_EX LAMBDA_EM FCYL SLITWIDTH DAMPING HISOCLIP STOP_CRIT MEM_PERCENT');
