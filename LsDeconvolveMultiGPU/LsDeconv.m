@@ -875,7 +875,7 @@ function postprocess_save(...
     semkey_single = 1e3;
     semkey_multi = 1e4;
     semaphore_create(semkey_single, 1);
-    semaphore_create(semkey_multi, 8);
+    semaphore_create(semkey_multi, 16);
 
     blocklist = strings(size(p1, 1), 1);
     for i = 1 : size(p1, 1)
