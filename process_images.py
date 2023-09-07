@@ -667,7 +667,7 @@ def process_channel(
                 d_type=tsv_volume.dtype
             )
             # imsave_tif(stitched_tif_path/"test.tif", img)
-            img_approximate_upper_bound = np_round(prctl(img[img > bleach_correction_clip_min], 99.9))
+            img_approximate_upper_bound = np_round(prctl(img[img > bleach_correction_clip_min], 99.99))
 
         del img
         for b in range(0, 9):
