@@ -793,7 +793,15 @@ def get_matrix_two_images(reference: ndarray,
     subject = where(subject >= percentile_subject, 1.0, subject / percentile_subject)
 
     criteria = (TERM_CRITERIA_EPS | TERM_CRITERIA_COUNT, iterations, termination)
-    cc, warp_matrix = findTransformECC(reference, subject, warp_matrix, MOTION_TRANSLATION, criteria)
+    cc, warp_matrix = findTransformECC(
+        reference,
+        subject,
+        warp_matrix,
+        MOTION_TRANSLATION,
+        criteria,
+        inputMask=None,
+        gaussFiltSize=5  # default value is 5
+    )
     return warp_matrix
 
 
@@ -1032,7 +1040,7 @@ def get_imaris_command(imaris_path: Path, input_path: Path, output_path: Path = 
         command += [
             # f"--nthreads {workers if dtype == 'uint8' or sys.platform == 'win32' else 1}",
             f"--nthreads {workers}",
-            f"--compression 1",
+            f"--compression 3",
             f"--voxelsize {voxel_size_x:.2f}-{voxel_size_y:.2f}-{voxel_size_z:.2f}",  # x-y-z
             "--logprogress"
         ]
