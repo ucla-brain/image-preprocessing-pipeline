@@ -774,15 +774,12 @@ def process_channel(
     return stitched_tif_path, shape, running_processes
 
 
-def get_matrix_two_images(reference: ndarray,
-                          subject: ndarray,
-                          threshold: float = 90,
-                          iterations: int = 10000,
-                          termination: float = 1e-10):
+def get_transformation_matrix(reference: ndarray, subject: ndarray,
+                              threshold: float = 90, iterations: int = 10000, termination: float = 1e-10):
 
     warp_matrix = eye(2, 3, dtype=float32)
     if reference is None or subject is None:
-        return warp_matrix
+        return warp_matrix  # i.e. no transformation
 
     # generate matrices
     percentile_reference = prctl(reference, threshold)
@@ -793,203 +790,180 @@ def get_matrix_two_images(reference: ndarray,
     subject = where(subject >= percentile_subject, 1.0, subject / percentile_subject)
 
     criteria = (TERM_CRITERIA_EPS | TERM_CRITERIA_COUNT, iterations, termination)
-    cc, warp_matrix = findTransformECC(reference, subject, warp_matrix, MOTION_TRANSLATION, criteria)
+    cc, warp_matrix = findTransformECC(
+        reference,
+        subject,
+        warp_matrix,
+        MOTION_TRANSLATION,
+        criteria,
+        inputMask=None,
+        gaussFiltSize=5  # default value is 5
+    )
     return warp_matrix
 
 
-def generate_combined_image(images, matrices, filename):
+def generate_combined_image(
+        img_idx: int,
+        tif_stacks: List[TifStack],
+        z_offsets: List[int],
+        transformation_matrices: List[ndarray],
+        order_of_colors: str,
+        merged_tif_path: Path,
+        resume: bool,
+        compression: Union[Tuple[str, int], None] = ("ADOBE_DEFLATE", 1),
+        right_bit_shifts: Union[Tuple[int, ...], None] = None
+):
     # there should always be 1 more image than number of matrices.  Example: 3 images, 2 matrices.
-    if len(images) != len(matrices) + 1:
-        raise Exception("Images and matrices arrays have incorrect lengths")
-    img_reference = imread_tif_raw_png(images[0])
-    size = img_reference.shape
-    transformed_images = [img_reference]
-    for i in range(1, len(images)):
-        if not images[i] is None:
-            img = imread_tif_raw_png(images[i])
+    assert len(transformation_matrices) + 1 == len(tif_stacks)
+
+    save_path = merged_tif_path / f"img_{img_idx:06n}.tif"
+    if resume and save_path.exists():
+        return
+
+    images = [tif_stack[img_idx + z_offset] for tif_stack, z_offset in zip(tif_stacks, z_offsets)]
+    assert images[0] is not None
+    if right_bit_shifts is not None:
+        images = [convert_to_8bit_fun(img, bit_shift_to_right=bsh) for img, bsh in zip(images, right_bit_shifts)]
+
+    img_shape = images[0].shape
+    for idx in range(1, len(images)):
+        if images[idx] is None:
+            images[idx] = zeros(img_shape, dtype=images[0].dtype)
         else:
-            img = zeros(size, dtype=img_reference.dtype)
+            images[idx] = warpAffine(images[idx], transformation_matrices[idx - 1], (img_shape[1], img_shape[0]),
+                                     flags=INTER_LINEAR + WARP_INVERSE_MAP)
 
-        warped_image = warpAffine(img, matrices[i - 1], (size[1], size[0]),
-                                  flags=INTER_LINEAR + WARP_INVERSE_MAP)
-        transformed_images.append(warped_image)
-
-    merged = merge(transformed_images)
-    imsave_tif(filename, merged)
+    color_idx = {color: idx for idx, color in enumerate(order_of_colors.lower())}
+    images = [images[color_idx[color]] for color in "rgb"]
+    merged = merge(images)
+    imsave_tif(save_path, merged, compression=compression)
 
 
-# def merge_all_channels(
-#         stitched_tif_paths: List[Path],
-#         merged_tif_path: Path,
-#         order_of_colors: str = "gbr",
-#         workers: int = cpu_count(logical=False),
+# def merge_channels_by_file_name(
+#         file_name: str = "",
+#         stitched_tif_paths: List[Path] = None,
+#         order_of_colors: str = "gbr",  # the order of r, g and b letters can be arbitrary here
+#         merged_tif_path: Path = None,
+#         shape: Tuple[int, int] = None,
 #         resume: bool = True,
 #         compression: Union[Tuple[str, int], None] = ("ADOBE_DEFLATE", 1),
 #         right_bit_shift: Union[Tuple[int, ...], None] = None
 # ):
-#     """
-#     file names should be identical for each z-step of each channel
-#     """
-#     img_suffix = ""
-#     stacks = []
-#     shape = None
-#     max_size = 0
-#     for path in stitched_tif_paths:
-#         img_stack = TifStack(path)
-#         # print(img_stack.shape, img_stack.suffix)
-#         if not img_suffix:
-#             img_suffix = img_stack.suffix
-#         elif img_suffix != img_stack.suffix:
-#             print("folders containing different file suffixes is not supported!")
-#             raise RuntimeError
-#         if not shape:
-#             shape = img_stack.nyx
-#         if len(img_stack) > max_size:
-#             max_size = len(img_stack)
+#     rgb_file = merged_tif_path / file_name
+#     if resume and rgb_file.exists():
+#         return
 #
-#         stacks.append(img_stack)
+#     images: Dict[{str, ndarray}, {str, None}] = {}
+#     dtypes = []
+#     for idx, path in enumerate(stitched_tif_paths):
+#         file_path = path / file_name
+#         if file_path.exists():
+#             image = imread_tif_raw_png(file_path)
+#             if right_bit_shift is not None:
+#                 image = convert_to_8bit_fun(image, bit_shift_to_right=right_bit_shift[idx])
+#             # image = process_img(image, gaussian_filter_2d=True)
+#             images.update({order_of_colors[idx]: image})
+#             dtypes += [image.dtype]
+#         else:
+#             images.update({order_of_colors[idx]: None})
+#     del image, file_path
+#     if dtypes.count(dtypes[0]) != len(dtypes):
+#         paths = "\n\t".join(map(str, stitched_tif_paths))
+#         p_log(f"\n{PrintColors.WARNING}warning: merging channels should have identical dtypes:\n\t"
+#               f"{paths}{PrintColors.ENDC}")
+#         del paths
 #
-#     merged_tif_path.mkdir(exist_ok=True)
+#     if len(stitched_tif_paths) == 2:  # then the last color channel should remain all zeros
+#         images.update({order_of_colors[2]: None})
 #
-#     matrices = list(map(lambda p: get_matrix_two_images(str(stacks[0].get_file(len(stacks[0]) // 2).absolute()), p),
-#                         [str(stacks[i].get_file(len(stacks[i]) // 2).absolute()) for i in range(1, len(stacks))]))
+#     # height (y), width(x), colors
+#     multi_channel_img: ndarray = zeros((shape[0], shape[1], 3), dtype=dtypes[0])
+#     for idx, color in enumerate("rgb"):  # the order of letters should be "rgb" here
+#         image: ndarray = images[color]
+#         if image is not None:
+#             image_shape = image.shape
+#             if image_shape != shape:
+#                 if image_shape[0] <= shape[0] or image_shape[1] <= shape[1]:
+#                     padded_image = zeros(shape, dtype=image.dtype)
+#                     padded_image[:image_shape[0], :image_shape[1]] = image
+#                     image = padded_image
+#                 else:
+#                     image = image[:shape[0], :shape[1]]
+#             multi_channel_img[:, :, idx] = image
 #
-#     args_queue = Queue(maxsize=max_size)
-#     for i in range(max_size):
-#         imgs = []
-#         for img_stack in stacks:
-#             if i < len(img_stack):
-#                 imgs.append(img_stack.get_file(i))
-#             else:
-#                 imgs.append(None)
-#         file_name = imgs[0].name
-#         # print(merged_tif_path / file_name)
-#         args_queue.put({
-#             "images": imgs,
-#             "matrices": matrices,
-#             "filename": merged_tif_path / file_name
-#         })
-#
-#     workers = min(workers, max_size)
-#     progress_queue = Queue()
-#     for worker_ in range(workers):
-#         MultiProcessQueueRunner(progress_queue, args_queue,
-#                                 fun=generate_combined_image, replace_timeout_with_dummy=False).start()
-#
-#     return_code = progress_manager(progress_queue, workers, max_size, desc="RGB")
-#     args_queue.cancel_join_thread()
-#     args_queue.close()
-#     progress_queue.cancel_join_thread()
-#     progress_queue.close()
-#     if return_code != 0:
-#         p_log(f"{PrintColors.FAIL}merge_all_channels function failed{PrintColors.ENDC}")
-#         raise RuntimeError
-
-def merge_channels_by_file_name(
-        file_name: str = "",
-        stitched_tif_paths: List[Path] = None,
-        order_of_colors: str = "gbr",  # the order of r, g and b letters can be arbitrary here
-        merged_tif_path: Path = None,
-        shape: Tuple[int, int] = None,
-        resume: bool = True,
-        compression: Union[Tuple[str, int], None] = ("ADOBE_DEFLATE", 1),
-        right_bit_shift: Union[Tuple[int, ...], None] = None
-):
-    rgb_file = merged_tif_path / file_name
-    if resume and rgb_file.exists():
-        return
-
-    images: Dict[{str, ndarray}, {str, None}] = {}
-    dtypes = []
-    for idx, path in enumerate(stitched_tif_paths):
-        file_path = path / file_name
-        if file_path.exists():
-            image = imread_tif_raw_png(file_path)
-            if right_bit_shift is not None:
-                image = convert_to_8bit_fun(image, bit_shift_to_right=right_bit_shift[idx])
-            # image = process_img(image, gaussian_filter_2d=True)
-            images.update({order_of_colors[idx]: image})
-            dtypes += [image.dtype]
-        else:
-            images.update({order_of_colors[idx]: None})
-    del image, file_path
-    if dtypes.count(dtypes[0]) != len(dtypes):
-        paths = "\n\t".join(map(str, stitched_tif_paths))
-        p_log(f"\n{PrintColors.WARNING}warning: merging channels should have identical dtypes:\n\t"
-              f"{paths}{PrintColors.ENDC}")
-        del paths
-
-    if len(stitched_tif_paths) == 2:  # then the last color channel should remain all zeros
-        images.update({order_of_colors[2]: None})
-
-    # height (y), width(x), colors
-    multi_channel_img: ndarray = zeros((shape[0], shape[1], 3), dtype=dtypes[0])
-    for idx, color in enumerate("rgb"):  # the order of letters should be "rgb" here
-        image: ndarray = images[color]
-        if image is not None:
-            image_shape = image.shape
-            if image_shape != shape:
-                if image_shape[0] <= shape[0] or image_shape[1] <= shape[1]:
-                    padded_image = zeros(shape, dtype=image.dtype)
-                    padded_image[:image_shape[0], :image_shape[1]] = image
-                    image = padded_image
-                else:
-                    image = image[:shape[0], :shape[1]]
-            multi_channel_img[:, :, idx] = image
-
-    imsave_tif(rgb_file, multi_channel_img, compression=compression)
+#     imsave_tif(rgb_file, multi_channel_img, compression=compression)
 
 
 def merge_all_channels(
-        stitched_tif_paths: List[Path],
+        tif_paths: List[Path],
+        z_offsets: List[int],
         merged_tif_path: Path,
         order_of_colors: str = "gbr",
         workers: int = cpu_count(logical=False),
         resume: bool = True,
         compression: Union[Tuple[str, int], None] = ("ADOBE_DEFLATE", 1),
-        right_bit_shift: Union[Tuple[int, ...], None] = None
+        right_bit_shifts: Union[Tuple[int, ...], None] = None
 ):
     """
+    Merge and align different channels to RGB color tif files.
     file names should be identical for each z-step of each channel
+
+    stitched_tif_paths:
+        list of Path objects for different channel locations. The first element is the reference channel.
+    z_offsets:
+        z-step offset of the channels with respect to the reference channel.
+        Both negative and positive z-steps are allowed.
+    merged_tif_path:
+        Path for saving the results.
+    order_of_colors:
+        the color of each channel.
+    workers:
+        number of parallel threads.
+    resume:
+        resume the work by working on remaining files.
+    compression:
+        compression method and level.
+    right_bit_shift:
+        If not none convert the image to 8-bit with the requested bit shift.
+        None, and any number between 0 and 8 is accepted. Default if None = no 8-bit conversion and bit shifting.
     """
-    img_suffix = ""
-    x, y, z = 0, 0, 0
-    reference_channel = None
-    for path in stitched_tif_paths:
-        img_stack = TifStack(path)
-        # print(img_stack.shape, img_stack.suffix)
-        if not img_suffix:
-            img_suffix = img_stack.suffix
-        elif img_suffix != img_stack.suffix:
-            print("folders containing different file suffixes is not supported!")
-            raise RuntimeError
-        if img_stack.shape[0] > z:
-            reference_channel = path
-            z = img_stack.shape[0]
-        y, x = max(y, img_stack.shape[1]), max(x, img_stack.shape[2])
+    z_offsets = [0] + z_offsets
+    assert len(tif_paths) == len(z_offsets)
+    tif_stacks = list(map(TifStack, tif_paths))
+    assert all([tif_stack.nz > 0 for tif_stack in tif_stacks])
+    img_reference_idx = tif_stacks[0].nz // 2
+    assert img_reference_idx >= 0
+    img_samples = [tif_stack[img_reference_idx + z_offset] for tif_stack, z_offset in zip(tif_stacks, z_offsets)]
+    assert all([img is not None for img in img_samples])
+    if right_bit_shifts is not None:
+        assert len(right_bit_shifts) == len(tif_stacks)
+
+    img_sample_transformation_matrices = [get_transformation_matrix(img_samples[0], img) for img in img_samples[1:]]
+    del img_samples
 
     merged_tif_path.mkdir(exist_ok=True)
 
-    args_queue = Queue(maxsize=z)
-    for file in reference_channel.glob("*"+img_suffix):
+    args_queue = Queue(maxsize=tif_stacks[0].nz)
+    for idx in range(tif_stacks[0].nz):
         args_queue.put({
-            "file_name": file.name,
-            "stitched_tif_paths": stitched_tif_paths,
+            "img_idx": idx,
+            "tif_stacks": tif_stacks,
+            "z_offsets": z_offsets,
+            "transformation_matrices": img_sample_transformation_matrices,
             "order_of_colors": order_of_colors,
             "merged_tif_path": merged_tif_path,
-            "shape": (y, x),
             "resume": resume,
             "compression": compression,
-            "right_bit_shift": right_bit_shift
+            "right_bit_shifts": right_bit_shifts
         })
 
-    workers = min(workers, z)
+    workers = min(workers, tif_stacks[0].nz)
     progress_queue = Queue()
     for worker_ in range(workers):
         MultiProcessQueueRunner(progress_queue, args_queue,
-                                fun=merge_channels_by_file_name, replace_timeout_with_dummy=False).start()
+                                fun=generate_combined_image, replace_timeout_with_dummy=True).start()
 
-    return_code = progress_manager(progress_queue, workers, z, desc="RGB")
+    return_code = progress_manager(progress_queue, workers, tif_stacks[0].nz, desc="RGB")
     args_queue.cancel_join_thread()
     args_queue.close()
     progress_queue.cancel_join_thread()
@@ -1032,7 +1006,7 @@ def get_imaris_command(imaris_path: Path, input_path: Path, output_path: Path = 
         command += [
             # f"--nthreads {workers if dtype == 'uint8' or sys.platform == 'win32' else 1}",
             f"--nthreads {workers}",
-            f"--compression 1",
+            f"--compression 3",
             f"--voxelsize {voxel_size_x:.2f}-{voxel_size_y:.2f}-{voxel_size_z:.2f}",  # x-y-z
             "--logprogress"
         ]

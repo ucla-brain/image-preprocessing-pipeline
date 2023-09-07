@@ -155,10 +155,11 @@ def convert_to_16bit_fun(img: ndarray):
 
 
 def convert_to_8bit_fun(img: ndarray, bit_shift_to_right: int = 8):
-    if img.dtype in ('uint8', uint8):
+    if img is None or img.dtype in ('uint8', uint8):
         return img
     elif img.dtype not in ('uint16', uint16):
         img = convert_to_16bit_fun(img)
+
     # bit shift then change the type to avoid floating point operations
     # img >> 8 is equivalent to img / 256
     if 0 <= bit_shift_to_right < 9:
