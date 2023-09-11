@@ -353,7 +353,7 @@ def generate_voxel_spacing(
         target_shape: Tuple[int, int, int],
         target_voxel: float):
     voxel_locations = [arange(axis_shape) * axis_v_size - (axis_shape - 1) /
-                    2.0 * axis_v_size for axis_shape, axis_v_size in zip(shape, source_voxel)]
+                       2.0 * axis_v_size for axis_shape, axis_v_size in zip(shape, source_voxel)]
     axis_spacing = []
     for i, axis_vals in enumerate(voxel_locations):
         # Get Downsampled starting value
@@ -361,6 +361,20 @@ def generate_voxel_spacing(
         # Create target_voxel spaced list
         axis_spacing.append(array([start + target_voxel * val for val in range(target_shape[i])]))
     return axis_spacing
+
+
+def jumpy_step_range(start, end):
+    distance = end - start
+    steps = [1, ]
+    while distance / steps[-1] > 0:
+        steps += [steps[-1] * 10]
+    steps.reverse()
+    top_list = []
+    for step in steps:
+        for idx in range(start, end, step):
+            if idx not in top_list:
+                top_list += [idx]
+    return top_list
 
 
 def parallel_image_processor(
@@ -443,14 +457,8 @@ def parallel_image_processor(
                     calculate_downsampling_z_ranges(source.volume.z0, source.volume.z1, down_sampling_z_steps)):
                 args_queue.put((ds_z_idx, z_range))
         else:
-            top_list = []
-            for step in (1000, 100, 10, 1):
-                for idx in range(source.volume.z0, source.volume.z1, step):
-                    if idx not in top_list:
-                        args_queue.put((idx, [idx]))
-                    if step > 1:
-                        top_list += [idx]
-            del top_list
+            for idx in jumpy_step_range(source.volume.z0, source.volume.z1):
+                args_queue.put((idx, [idx]))
 
     elif source.is_file() and source.suffix.lower() == ".ims":
         print(f"ims file detected. hdf5plugin=v{hdf5plugin.version}")

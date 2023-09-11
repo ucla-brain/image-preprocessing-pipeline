@@ -20,8 +20,8 @@ from typing import List, Tuple, Dict, Union
 import mpi4py
 import psutil
 from cpufeature.extension import CPUFeature
-from cv2 import (INTER_LINEAR, WARP_INVERSE_MAP, MOTION_AFFINE, MOTION_TRANSLATION, findTransformECC,
-                 TERM_CRITERIA_COUNT, TERM_CRITERIA_EPS, Sobel, CV_32F, addWeighted)
+from cv2 import (MOTION_AFFINE, MOTION_TRANSLATION, findTransformECC, TERM_CRITERIA_COUNT, TERM_CRITERIA_EPS,
+                 Sobel, CV_32F, addWeighted)
 from numpy import ndarray, zeros, uint8, float32, eye, where, absolute, dstack, append, array
 from numpy import round as np_round
 from numpy import mean as np_mean
@@ -30,10 +30,9 @@ from psutil import cpu_count, virtual_memory
 from tqdm import tqdm
 from skimage.measure import block_reduce
 from skimage.transform import warp
-from scipy.ndimage import affine_transform
 
 from flat import create_flat_img
-from parallel_image_processor import parallel_image_processor
+from parallel_image_processor import parallel_image_processor, jumpy_step_range
 from pystripe.core import (batch_filter, imread_tif_raw_png, imsave_tif, MultiProcessQueueRunner, progress_manager,
                            process_img, convert_to_8bit_fun, log1p_jit, expm1_jit, otsu_threshold, prctl)
 from supplements.cli_interface import (ask_for_a_number_in_range, date_time_now, select_multiple_among_list,
@@ -779,7 +778,7 @@ def process_channel(
     return stitched_tif_path, shape, running_processes
 
 
-def get_gradient(img: ndarray, threshold: float = 90) -> ndarray:
+def get_gradient(img: ndarray, threshold: float = 99.9) -> ndarray:
     """
     Calculate the x and y gradients using Sobel operator
     Parameters
@@ -798,8 +797,9 @@ def get_gradient(img: ndarray, threshold: float = 90) -> ndarray:
     img = addWeighted(absolute(grad_x), 0.5, absolute(grad_y), 0.5, 0)  # Combine the two gradients
 
     img_percentile = prctl(img, threshold)
+    img = where(img >= img_percentile, 255, img / (img_percentile * 255))  # scale images
+    img = log1p_jit(img)
     img = img.astype(float32)
-    img = where(img >= img_percentile, 1.0, img / img_percentile)  # scale images
 
     return img
 
@@ -834,7 +834,7 @@ def get_transformation_matrix(reference: ndarray, subject: ndarray,
     )
     warp_matrix[0, 2] *= downsampling_factors  # x
     warp_matrix[1, 2] *= downsampling_factors  # y
-    warp_matrix = inv(append(warp_matrix, array([[0, 0, 1]]), axis=0))
+    warp_matrix = inv(append(warp_matrix, array([[0, 0, 1]], dtype=float32), axis=0))
 
     return warp_matrix
 
@@ -976,11 +976,8 @@ def merge_all_channels(
     img_reference_idx = tif_stacks[0].nz // 2
     assert img_reference_idx >= 0
     img_samples = [tif_stack[img_reference_idx + z_offset] for tif_stack, z_offset in zip(tif_stacks, z_offsets)]
-
     img_samples = list(map(get_gradient, img_samples))
     assert all([img is not None for img in img_samples])
-    # with Pool(len(img_samples)) as pool:
-    img_samples = list(map(get_gradient, img_samples))
     transformation_matrices = [get_transformation_matrix(img_samples[0], img) for img in img_samples[1:]]
     print(transformation_matrices)
     del img_samples
@@ -988,7 +985,7 @@ def merge_all_channels(
     merged_tif_path.mkdir(exist_ok=True)
 
     args_queue = Queue(maxsize=tif_stacks[0].nz)
-    for idx in range(tif_stacks[0].nz):
+    for idx in jumpy_step_range(0, tif_stacks[0].nz):
         args_queue.put({
             "img_idx": idx,
             "tif_stacks": tif_stacks,
