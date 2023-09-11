@@ -1543,7 +1543,7 @@ if __name__ == '__main__':
                 raise RuntimeError
             try:
                 cuda_version = compile(r"CUDA *Version: *(\d+(?:\.\d+)?)").findall(str(check_output([nvidia_smi])))[0]
-            except IndexError:
+            except (IndexError, CalledProcessError):
                 pass
             if Path(f"/usr/local/cuda-{cuda_version}/").exists() and \
                     Path(f"/usr/local/cuda-{cuda_version}/bin").exists():
