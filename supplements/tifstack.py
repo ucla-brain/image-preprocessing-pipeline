@@ -30,7 +30,7 @@ class TifStack:
         self.shape = (self.nz, self.nyx[0], self.nyx[1])
 
     def __getitem__(self, i):
-        if i < 0:
+        if i < 0 or i >= self.nz:
             return None
         return imread_tif_raw_png(self.files[i])
 

@@ -8,7 +8,7 @@ import platform
 import sys
 from datetime import timedelta
 from math import floor
-from multiprocessing import freeze_support, Queue, Process
+from multiprocessing import freeze_support, Queue, Process, Pool
 from pathlib import Path
 from platform import uname
 from queue import Empty
@@ -20,12 +20,17 @@ from typing import List, Tuple, Dict, Union
 import mpi4py
 import psutil
 from cpufeature.extension import CPUFeature
-from cv2 import (warpAffine, INTER_LINEAR, merge, WARP_INVERSE_MAP, MOTION_TRANSLATION, findTransformECC,
-                 TERM_CRITERIA_COUNT, TERM_CRITERIA_EPS)
-from numpy import ndarray, zeros, uint8, float32, eye, where
+from cv2 import (INTER_LINEAR, WARP_INVERSE_MAP, MOTION_AFFINE, MOTION_TRANSLATION, findTransformECC,
+                 TERM_CRITERIA_COUNT, TERM_CRITERIA_EPS, Sobel, CV_32F, addWeighted)
+from numpy import ndarray, zeros, uint8, float32, eye, where, absolute, dstack, append, array
 from numpy import round as np_round
+from numpy import mean as np_mean
+from numpy.linalg import inv
 from psutil import cpu_count, virtual_memory
 from tqdm import tqdm
+from skimage.measure import block_reduce
+from skimage.transform import warp
+from scipy.ndimage import affine_transform
 
 from flat import create_flat_img
 from parallel_image_processor import parallel_image_processor
@@ -774,31 +779,63 @@ def process_channel(
     return stitched_tif_path, shape, running_processes
 
 
+def get_gradient(img: ndarray, threshold: float = 90) -> ndarray:
+    """
+    Calculate the x and y gradients using Sobel operator
+    Parameters
+    ----------
+    img: ndarray
+        input image
+    threshold: float
+        a value between 0 and 100 percent for foreground clipping
+
+    Returns
+    -------
+    ndarray: image gradient
+    """
+    grad_x = Sobel(img, CV_32F, 1, 0, ksize=3)
+    grad_y = Sobel(img, CV_32F, 0, 1, ksize=3)
+    img = addWeighted(absolute(grad_x), 0.5, absolute(grad_y), 0.5, 0)  # Combine the two gradients
+
+    img_percentile = prctl(img, threshold)
+    img = img.astype(float32)
+    img = where(img >= img_percentile, 1.0, img / img_percentile)  # scale images
+
+    return img
+
+
 def get_transformation_matrix(reference: ndarray, subject: ndarray,
-                              threshold: float = 90, iterations: int = 10000, termination: float = 1e-10):
+                              iterations: int = 10000, termination: float = 1e-10) -> ndarray:
 
     warp_matrix = eye(2, 3, dtype=float32)
     if reference is None or subject is None:
         return warp_matrix  # i.e. no transformation
 
+    downsampling_factors = [1, 1]  # y, x
+    for idx in range(len(downsampling_factors)):
+        max_size = max(reference.shape[idx], subject.shape[idx])
+        while max_size > 32767:
+            downsampling_factors[idx] *= 2
+            max_size //= 2
+    downsampling_factors = max(downsampling_factors)
+    print(f"downsampling factor for transformation_matrix {downsampling_factors}")
+    reference = block_reduce(reference, block_size=downsampling_factors, func=np_mean)
+    subject = block_reduce(subject, block_size=downsampling_factors, func=np_mean)
+
     # generate matrices
-    percentile_reference = prctl(reference, threshold)
-    percentile_subject = prctl(subject, threshold)
-
-    # scale images to max brightness at percentile; 0 <= pixel intensity <= 1
-    reference = where(reference >= percentile_reference, 1.0, reference / percentile_reference)
-    subject = where(subject >= percentile_subject, 1.0, subject / percentile_subject)
-
-    criteria = (TERM_CRITERIA_EPS | TERM_CRITERIA_COUNT, iterations, termination)
     cc, warp_matrix = findTransformECC(
         reference,
         subject,
         warp_matrix,
-        MOTION_TRANSLATION,
-        criteria,
+        MOTION_AFFINE,  # MOTION_AFFINE MOTION_TRANSLATION
+        (TERM_CRITERIA_COUNT | TERM_CRITERIA_EPS, iterations, termination),
         inputMask=None,
         gaussFiltSize=5  # default value is 5
     )
+    warp_matrix[0, 2] *= downsampling_factors  # x
+    warp_matrix[1, 2] *= downsampling_factors  # y
+    warp_matrix = inv(append(warp_matrix, array([[0, 0, 1]]), axis=0))
+
     return warp_matrix
 
 
@@ -815,28 +852,31 @@ def generate_combined_image(
 ):
     # there should always be 1 more image than number of matrices.  Example: 3 images, 2 matrices.
     assert len(transformation_matrices) + 1 == len(tif_stacks)
-
     save_path = merged_tif_path / f"img_{img_idx:06n}.tif"
     if resume and save_path.exists():
         return
-
     images = [tif_stack[img_idx + z_offset] for tif_stack, z_offset in zip(tif_stacks, z_offsets)]
     assert images[0] is not None
     if right_bit_shifts is not None:
         images = [convert_to_8bit_fun(img, bit_shift_to_right=bsh) for img, bsh in zip(images, right_bit_shifts)]
 
     img_shape = images[0].shape
+    img_dtype = images[0].dtype
     for idx in range(1, len(images)):
         if images[idx] is None:
-            images[idx] = zeros(img_shape, dtype=images[0].dtype)
+            images[idx] = zeros(img_shape, dtype=img_dtype)
         else:
-            images[idx] = warpAffine(images[idx], transformation_matrices[idx - 1], (img_shape[1], img_shape[0]),
-                                     flags=INTER_LINEAR + WARP_INVERSE_MAP)
+            images[idx] = warp(images[idx], transformation_matrices[idx - 1],
+                               output_shape=img_shape, preserve_range=True).astype(img_dtype)
+            assert images[idx].shape == img_shape
 
-    color_idx = {color: idx for idx, color in enumerate(order_of_colors.lower())}
-    images = [images[color_idx[color]] for color in "rgb"]
-    merged = merge(images)
-    imsave_tif(save_path, merged, compression=compression)
+    if len(tif_stacks) == 3:
+        color_idx = {color: idx for idx, color in enumerate(order_of_colors.lower())}
+        images = [images[color_idx[color]] for color in "rgb"]
+    elif len(tif_stacks) == 2:
+        images += [zeros(img_shape, dtype=img_dtype)]
+    images = dstack(images)
+    imsave_tif(save_path, images, compression=compression)
 
 
 # def merge_channels_by_file_name(
@@ -929,16 +969,20 @@ def merge_all_channels(
     """
     z_offsets = [0] + z_offsets
     assert len(tif_paths) == len(z_offsets)
+    if right_bit_shifts is not None:
+        assert len(right_bit_shifts) == len(tif_paths)
     tif_stacks = list(map(TifStack, tif_paths))
     assert all([tif_stack.nz > 0 for tif_stack in tif_stacks])
     img_reference_idx = tif_stacks[0].nz // 2
     assert img_reference_idx >= 0
     img_samples = [tif_stack[img_reference_idx + z_offset] for tif_stack, z_offset in zip(tif_stacks, z_offsets)]
-    assert all([img is not None for img in img_samples])
-    if right_bit_shifts is not None:
-        assert len(right_bit_shifts) == len(tif_stacks)
 
-    img_sample_transformation_matrices = [get_transformation_matrix(img_samples[0], img) for img in img_samples[1:]]
+    img_samples = list(map(get_gradient, img_samples))
+    assert all([img is not None for img in img_samples])
+    # with Pool(len(img_samples)) as pool:
+    img_samples = list(map(get_gradient, img_samples))
+    transformation_matrices = [get_transformation_matrix(img_samples[0], img) for img in img_samples[1:]]
+    print(transformation_matrices)
     del img_samples
 
     merged_tif_path.mkdir(exist_ok=True)
@@ -949,7 +993,7 @@ def merge_all_channels(
             "img_idx": idx,
             "tif_stacks": tif_stacks,
             "z_offsets": z_offsets,
-            "transformation_matrices": img_sample_transformation_matrices,
+            "transformation_matrices": transformation_matrices,
             "order_of_colors": order_of_colors,
             "merged_tif_path": merged_tif_path,
             "resume": resume,
@@ -961,7 +1005,7 @@ def merge_all_channels(
     progress_queue = Queue()
     for worker_ in range(workers):
         MultiProcessQueueRunner(progress_queue, args_queue,
-                                fun=generate_combined_image, replace_timeout_with_dummy=True).start()
+                                fun=generate_combined_image, replace_timeout_with_dummy=False).start()
 
     return_code = progress_manager(progress_queue, workers, tif_stacks[0].nz, desc="RGB")
     args_queue.cancel_join_thread()
