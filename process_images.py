@@ -789,15 +789,13 @@ def get_gradient(img: ndarray, threshold: float = 99.9) -> ndarray:
     -------
     ndarray: image gradient
     """
+    img = log1p_jit(img)
     grad_x = Sobel(img, CV_32F, 1, 0, ksize=3)
     grad_y = Sobel(img, CV_32F, 0, 1, ksize=3)
     img = addWeighted(absolute(grad_x), 0.5, absolute(grad_y), 0.5, 0)  # Combine the two gradients
-
     img_percentile = prctl(img, threshold)
     img = where(img >= img_percentile, 255, img / (img_percentile * 255))  # scale images
-    # img = log1p_jit(img)
     img = img.astype(float32)
-
     return img
 
 
@@ -824,7 +822,7 @@ def get_transformation_matrix(reference: ndarray, subject: ndarray,
             MOTION_AFFINE,  # MOTION_AFFINE MOTION_TRANSLATION
             (TERM_CRITERIA_COUNT | TERM_CRITERIA_EPS, iterations, termination),
             inputMask=None,
-            gaussFiltSize=9  # default value is 5
+            gaussFiltSize=5  # default value is 5
         )
         warp_matrix[0, 2] *= downsampling_factors  # x
         warp_matrix[1, 2] *= downsampling_factors  # y
@@ -969,6 +967,7 @@ def merge_all_channels(
     tif_stacks = list(map(TifStack, tif_paths))
     assert all([tif_stack.nz > 0 for tif_stack in tif_stacks])
     img_reference_idx = tif_stacks[0].nz // 2
+    print(f"reference image index = {img_reference_idx}")
     assert img_reference_idx >= 0
     img_samples = [tif_stack[img_reference_idx + z_offset] for tif_stack, z_offset in zip(tif_stacks, z_offsets)]
     img_samples = list(map(get_gradient, img_samples))
