@@ -45,6 +45,7 @@ from tsv.volume import TSVVolume, VExtent
 AllChannels: List[Tuple[str, str]] = [
     ("Ex_488_Em_525", "b"), ("Ex_561_Em_600", "g"), ("Ex_647_Em_690", "r"), ("Ex_642_Em_690", "r"),
     ("Ex_488_Em_1", "b"), ("Ex_561_Em_1", "g"), ("Ex_642_Em_1", "r"),
+    ("Ex_488_Ch0", "b"), ("Ex_561_Ch1", "g"), ("Ex_642_Ch2", "r"),
     ("Ex_488_Em_2", "b"), ("Ex_561_Em_2", "g"), ("Ex_642_Em_2", "r"), ("Ex_642_Em_680", "r")
 ]
 VoxelSizeX_4x, VoxelSizeY_4x = (1.809,) * 2  # old stage --> 1.835
@@ -651,7 +652,9 @@ def process_channel(
             tsv_volume.dtype)[0]
         img = log1p_jit(img)
         bleach_correction_clip_min = np_round(expm1_jit(otsu_threshold(img)))
-        bleach_correction_clip_max = np_round(expm1_jit(prctl(img[img > log1p_jit(bleach_correction_clip_min)], 99.9)))
+        if bleach_correction_clip_min > 0:
+            bleach_correction_clip_min -= 1
+        bleach_correction_clip_max = np_round(expm1_jit(prctl(img[img > log1p_jit(bleach_correction_clip_min)], 99.8)))
         img_approximate_upper_bound = bleach_correction_clip_max
         if need_bleach_correction and need_16bit_to_8bit_conversion:
             img = process_img(
@@ -1131,11 +1134,7 @@ def main(source_path):
         f"Do you need to apply a 5x5 Gaussian filter to tiles before stitching to remove camera artifacts and "
         f"produce up to two times smaller files?"
     )
-    channels_need_gaussian_filter_application = []
-    if need_gaussian_filter_2d:
-        channels_need_gaussian_filter_application = all_channels
-        # channels_need_gaussian_filter_application = select_multiple_among_list("gaussian", all_channels)
-        p_log(f"gaussian: {channels_need_gaussian_filter_application}")
+    p_log(f"gaussian: {need_gaussian_filter_2d}")
 
     def destination_name(name: str):
         new_name = name
@@ -1361,7 +1360,7 @@ def main(source_path):
             files_list=file_list,
             need_flat_image_application=need_flat_image_application,
             image_classes_training_data_path=image_classes_training_data_path,
-            need_gaussian_filter_2d=channel in channels_need_gaussian_filter_application,
+            need_gaussian_filter_2d=need_gaussian_filter_2d,
             dark=dark_threshold[channel],
             need_destriping=need_destriping,
             down_sampling_factor=down_sampling_factor,
