@@ -6,7 +6,7 @@ Python code for stitching and image enhancement of Light Sheet data
 * Install 64 bit version of [Microsoft Visual C++ 2010 Service Pack 1 Redistributable Package](https://www.microsoft.com/en-us/download/confirmation.aspx?id=26999), specifically in Wine.
 * On Windows install [Microsoft C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/), which is required for installation of `cpufeature` python package.
 * On Linux make sure Java server (e.g., [openjdk](https://openjdk.java.net/install/)), and [Nvidia drivers and CUDA >10.1](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/index.html#ubuntu-installation) are installed.
-  `sudo apt install nvidia-cuda-toolkit default-jre`
+  `sudo apt install nvidia-cuda-toolkit nvidia-cudnn default-jre`
 * On Linux and if you have a high core count system make sure to [increase the limit on number of open files](https://stackoverflow.com/questions/39537731/errno-24-too-many-open-files-but-i-am-not-opening-files).
 * Install [anaconda python distribution](https://www.anaconda.com/products/individual):
   make a dedicated python environment for stitching:

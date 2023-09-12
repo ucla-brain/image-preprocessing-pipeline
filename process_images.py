@@ -1551,6 +1551,9 @@ if __name__ == '__main__':
             elif Path(f"/usr/local/cuda/").exists() and \
                     Path(f"/usr/local/cuda/bin").exists():
                 os.environ["CUDA_ROOT_DIR"] = f"/usr/local/cuda/"
+            elif Path(f"/usr/lib/cuda/").exists() and \
+                    Path(f"/usr/lib/cuda/bin").exists():
+                os.environ["CUDA_ROOT_DIR"] = f"/usr/lib/cuda/"
             else:
                 cuda_version = ask_for_a_number_in_range(
                     f"What is your cuda version (for example {cuda_version})?", (1, 20), float)
