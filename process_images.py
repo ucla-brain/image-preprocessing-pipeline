@@ -778,7 +778,7 @@ def process_channel(
     return stitched_tif_path, shape, running_processes
 
 
-def get_gradient(img: ndarray, threshold: float = 99.9) -> ndarray:
+def get_gradient(img: ndarray, threshold: float = 99) -> ndarray:
     """
     Calculate the x and y gradients using Sobel operator
     Parameters
