@@ -30,6 +30,7 @@ from psutil import cpu_count, virtual_memory
 from tqdm import tqdm
 from skimage.measure import block_reduce
 from skimage.transform import warp
+from skimage.filters import gaussian
 
 from flat import create_flat_img
 from parallel_image_processor import parallel_image_processor, jumpy_step_range
@@ -778,26 +779,15 @@ def process_channel(
     return stitched_tif_path, shape, running_processes
 
 
-def get_gradient(img: ndarray, threshold: float = 99) -> ndarray:
-    """
-    Calculate the x and y gradients using Sobel operator
-    Parameters
-    ----------
-    img: ndarray
-        input image
-    threshold: float
-        a value between 0 and 100 percent for foreground clipping
-
-    Returns
-    -------
-    ndarray: image gradient
-    """
-    img = log1p_jit(img)
-    grad_x = Sobel(img, CV_32F, 1, 0, ksize=3)
-    grad_y = Sobel(img, CV_32F, 0, 1, ksize=3)
-    img = addWeighted(absolute(grad_x), 0.5, absolute(grad_y), 0.5, 0)  # Combine the two gradients
+def get_gradient(img: ndarray, threshold: float = 98) -> ndarray:
     img_percentile = prctl(img, threshold)
-    img = where(img >= img_percentile, 255, img / (img_percentile * 255))  # scale images
+    img = where(img >= img_percentile, 1, img / img_percentile)  # scale images
+    ksize = 3
+    img = addWeighted(
+        absolute(Sobel(img, CV_32F, 1, 0, ksize=ksize)), 0.5,
+        absolute(Sobel(img, CV_32F, 0, 1, ksize=ksize)), 0.5, 0)
+    img_percentile = prctl(img, threshold)
+    img = where(img >= img_percentile, 255, img / img_percentile * 255)  # scale images
     img = img.astype(float32)
     return img
 
@@ -831,8 +821,42 @@ def get_transformation_matrix(reference: ndarray, subject: ndarray,
         warp_matrix[1, 2] *= downsampling_factors  # y
 
     warp_matrix = inv(append(warp_matrix, array([[0, 0, 1]], dtype=float32), axis=0))
-    print(warp_matrix)
+    print(np_round(warp_matrix, 2))
     return warp_matrix
+
+
+# def correct_shape(img: ndarray, shape: Tuple[int, int]):
+#     if img.shape == shape:
+#         return img
+#     else:
+#         if img.shape[0] >= shape[0] and img.shape[1] >= shape[1]:
+#             return img[0:shape[0], 0:shape[1]]
+#         else:
+#             img_new = zeros(shape=shape, dtype=img.dtype)
+#             if img.shape[0] < shape[0] and img.shape[1] >= shape[1]:
+#                 img_new[0:img.shape[0], :] = img[:, 0:shape[1]]
+#             elif img.shape[0] >= shape[0] and img.shape[1] < shape[1]:
+#                 img_new[:, 0:img.shape[1]] = img[0:shape[0], :]
+#             else:
+#                 img_new[0:img.shape[0], 0:img.shape[1]] = img
+#             return img_new
+
+
+def correct_shape(img: ndarray, shape: Tuple[int, int]):
+    if img.shape == shape:
+        return img
+    else:
+        if img.shape[0] >= shape[0] and img.shape[1] >= shape[1]:
+            return img[img.shape[0]-shape[0]:, img.shape[1]-shape[1]:]
+        else:
+            img_new = zeros(shape=shape, dtype=img.dtype)
+            if img.shape[0] < shape[0] and img.shape[1] >= shape[1]:
+                img_new[shape[0] - img.shape[0]:, :] = img[:, img.shape[1] - shape[1]:]
+            elif img.shape[0] >= shape[0] and img.shape[1] < shape[1]:
+                img_new[:, shape[1] - img.shape[1]:] = img[img.shape[0] - shape[0]:, :]
+            else:
+                img_new[shape[0] - img.shape[0]:, shape[1] - img.shape[1]:] = img
+            return img_new
 
 
 def generate_composite_image(
@@ -863,7 +887,8 @@ def generate_composite_image(
             images[idx] = zeros(img_shape, dtype=img_dtype)
         else:
             images[idx] = warp(images[idx], transformation_matrices[idx - 1],
-                               output_shape=img_shape, preserve_range=True).astype(img_dtype)
+                               output_shape=None, preserve_range=True).astype(img_dtype)
+            images[idx] = correct_shape(images[idx], img_shape)
             assert images[idx].shape == img_shape
 
     if len(tif_stacks) == 3:
