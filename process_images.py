@@ -20,9 +20,8 @@ from typing import List, Tuple, Dict, Union
 import mpi4py
 import psutil
 from cpufeature.extension import CPUFeature
-from cv2 import (MOTION_AFFINE, MOTION_TRANSLATION, findTransformECC, TERM_CRITERIA_COUNT, TERM_CRITERIA_EPS,
-                 Sobel, CV_32F, addWeighted)
-from numpy import ndarray, zeros, uint8, float32, eye, where, absolute, dstack, append, array
+from cv2 import MOTION_AFFINE, findTransformECC, TERM_CRITERIA_COUNT, TERM_CRITERIA_EPS
+from numpy import ndarray, zeros, uint8, float32, eye, where, dstack, append, array
 from numpy import round as np_round
 from numpy import mean as np_mean
 from numpy.linalg import inv
@@ -30,7 +29,7 @@ from psutil import cpu_count, virtual_memory
 from tqdm import tqdm
 from skimage.measure import block_reduce
 from skimage.transform import warp
-from skimage.filters import gaussian
+from skimage.filters import sobel
 
 from flat import create_flat_img
 from parallel_image_processor import parallel_image_processor, jumpy_step_range
@@ -782,10 +781,7 @@ def process_channel(
 def get_gradient(img: ndarray, threshold: float = 98) -> ndarray:
     img_percentile = prctl(img, threshold)
     img = where(img >= img_percentile, 1, img / img_percentile)  # scale images
-    ksize = 3
-    img = addWeighted(
-        absolute(Sobel(img, CV_32F, 1, 0, ksize=ksize)), 0.5,
-        absolute(Sobel(img, CV_32F, 0, 1, ksize=ksize)), 0.5, 0)
+    img = sobel(img)
     img_percentile = prctl(img, threshold)
     img = where(img >= img_percentile, 255, img / img_percentile * 255)  # scale images
     img = img.astype(float32)
