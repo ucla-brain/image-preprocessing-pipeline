@@ -8,7 +8,7 @@ import platform
 import sys
 from datetime import timedelta
 from math import floor
-from multiprocessing import freeze_support, Queue, Process
+from multiprocessing import freeze_support, Queue, Process, Pool
 from pathlib import Path
 from platform import uname
 from queue import Empty
@@ -37,7 +37,7 @@ from pystripe.core import (batch_filter, imread_tif_raw_png, imsave_tif, MultiPr
                            process_img, convert_to_8bit_fun, log1p_jit, expm1_jit, otsu_threshold, prctl)
 from supplements.cli_interface import (ask_for_a_number_in_range, date_time_now, select_multiple_among_list,
                                        select_among_multiple_options, ask_true_false_question, PrintColors)
-from supplements.tifstack import TifStack
+from supplements.tifstack import TifStack, imread_tif_stck
 from tsv.volume import TSVVolume, VExtent
 
 # experiment setup: user needs to set them right
@@ -782,6 +782,7 @@ def get_gradient(img: ndarray, threshold: float = 98) -> ndarray:
     img_percentile = prctl(img, threshold)
     img = where(img >= img_percentile, 1, img / img_percentile)  # scale images
     img = sobel(img)
+    img = array(img)
     img_percentile = prctl(img, threshold)
     img = where(img >= img_percentile, 255, img / img_percentile * 255)  # scale images
     img = img.astype(float32)
@@ -858,7 +859,6 @@ def correct_shape(img: ndarray, shape: Tuple[int, int]):
 def generate_composite_image(
         img_idx: int,
         tif_stacks: List[TifStack],
-        z_offsets: List[int],
         transformation_matrices: List[ndarray],
         order_of_colors: str,
         merged_tif_path: Path,
@@ -871,7 +871,7 @@ def generate_composite_image(
     save_path = merged_tif_path / f"img_{img_idx:06n}.tif"
     if resume and save_path.exists():
         return
-    images = [tif_stack[img_idx + z_offset] for tif_stack, z_offset in zip(tif_stacks, z_offsets)]
+    images = [tif_stack[img_idx] for tif_stack in tif_stacks]
     assert images[0] is not None
     if right_bit_shifts is not None:
         images = [convert_to_8bit_fun(img, bit_shift_to_right=bsh) for img, bsh in zip(images, right_bit_shifts)]
@@ -894,61 +894,6 @@ def generate_composite_image(
         images += [zeros(img_shape, dtype=img_dtype)]
     images = dstack(images)
     imsave_tif(save_path, images, compression=compression)
-
-
-# def merge_channels_by_file_name(
-#         file_name: str = "",
-#         stitched_tif_paths: List[Path] = None,
-#         order_of_colors: str = "gbr",  # the order of r, g and b letters can be arbitrary here
-#         merged_tif_path: Path = None,
-#         shape: Tuple[int, int] = None,
-#         resume: bool = True,
-#         compression: Union[Tuple[str, int], None] = ("ADOBE_DEFLATE", 1),
-#         right_bit_shift: Union[Tuple[int, ...], None] = None
-# ):
-#     rgb_file = merged_tif_path / file_name
-#     if resume and rgb_file.exists():
-#         return
-#
-#     images: Dict[{str, ndarray}, {str, None}] = {}
-#     dtypes = []
-#     for idx, path in enumerate(stitched_tif_paths):
-#         file_path = path / file_name
-#         if file_path.exists():
-#             image = imread_tif_raw_png(file_path)
-#             if right_bit_shift is not None:
-#                 image = convert_to_8bit_fun(image, bit_shift_to_right=right_bit_shift[idx])
-#             # image = process_img(image, gaussian_filter_2d=True)
-#             images.update({order_of_colors[idx]: image})
-#             dtypes += [image.dtype]
-#         else:
-#             images.update({order_of_colors[idx]: None})
-#     del image, file_path
-#     if dtypes.count(dtypes[0]) != len(dtypes):
-#         paths = "\n\t".join(map(str, stitched_tif_paths))
-#         p_log(f"\n{PrintColors.WARNING}warning: merging channels should have identical dtypes:\n\t"
-#               f"{paths}{PrintColors.ENDC}")
-#         del paths
-#
-#     if len(stitched_tif_paths) == 2:  # then the last color channel should remain all zeros
-#         images.update({order_of_colors[2]: None})
-#
-#     # height (y), width(x), colors
-#     multi_channel_img: ndarray = zeros((shape[0], shape[1], 3), dtype=dtypes[0])
-#     for idx, color in enumerate("rgb"):  # the order of letters should be "rgb" here
-#         image: ndarray = images[color]
-#         if image is not None:
-#             image_shape = image.shape
-#             if image_shape != shape:
-#                 if image_shape[0] <= shape[0] or image_shape[1] <= shape[1]:
-#                     padded_image = zeros(shape, dtype=image.dtype)
-#                     padded_image[:image_shape[0], :image_shape[1]] = image
-#                     image = padded_image
-#                 else:
-#                     image = image[:shape[0], :shape[1]]
-#             multi_channel_img[:, :, idx] = image
-#
-#     imsave_tif(rgb_file, multi_channel_img, compression=compression)
 
 
 def merge_all_channels(
@@ -988,13 +933,14 @@ def merge_all_channels(
     assert len(tif_paths) == len(z_offsets)
     if right_bit_shifts is not None:
         assert len(right_bit_shifts) == len(tif_paths)
-    tif_stacks = list(map(TifStack, tif_paths))
-    assert all([tif_stack.nz > 0 for tif_stack in tif_stacks])
-    img_reference_idx = tif_stacks[0].nz // 2
-    print(f"reference image index = {img_reference_idx}")
-    assert img_reference_idx >= 0
-    img_samples = [tif_stack[img_reference_idx + z_offset] for tif_stack, z_offset in zip(tif_stacks, z_offsets)]
-    img_samples = list(map(get_gradient, img_samples))
+    with Pool(len(tif_paths)) as pool:
+        tif_stacks = list(pool.starmap(TifStack, zip(tif_paths, z_offsets)))
+        assert all([tif_stack.nz > 0 for tif_stack in tif_stacks])
+        img_reference_idx = tif_stacks[0].nz // 2
+        print(f"reference image index = {img_reference_idx}")
+        assert img_reference_idx >= 0
+        img_samples = pool.starmap(imread_tif_stck, zip(tif_stacks, (img_reference_idx,) * len(tif_paths)))
+        img_samples = list(pool.map(get_gradient, img_samples))
     assert all([img is not None for img in img_samples])
     transformation_matrices = [get_transformation_matrix(img_samples[0], img) for img in img_samples[1:]]
     del img_samples
@@ -1006,7 +952,6 @@ def merge_all_channels(
         args_queue.put({
             "img_idx": idx,
             "tif_stacks": tif_stacks,
-            "z_offsets": z_offsets,
             "transformation_matrices": transformation_matrices,
             "order_of_colors": order_of_colors,
             "merged_tif_path": merged_tif_path,
