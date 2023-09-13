@@ -778,7 +778,7 @@ def process_channel(
     return stitched_tif_path, shape, running_processes
 
 
-def get_gradient(img: ndarray, threshold: float = 98) -> ndarray:
+def get_gradient(img: ndarray, threshold: float = 98.5) -> ndarray:
     img_percentile = prctl(img, threshold)
     img = where(img >= img_percentile, 1, img / img_percentile)  # scale images
     img = sobel(img)
