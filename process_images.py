@@ -21,7 +21,7 @@ import mpi4py
 import psutil
 from cpufeature.extension import CPUFeature
 from cv2 import MOTION_AFFINE, findTransformECC, TERM_CRITERIA_COUNT, TERM_CRITERIA_EPS
-from numpy import ndarray, zeros, uint8, float32, eye, where, dstack, append, array
+from numpy import ndarray, zeros, uint8, float32, eye, where, dstack, append, array, absolute
 from numpy import round as np_round
 from numpy import mean as np_mean
 from numpy.linalg import inv
@@ -622,13 +622,6 @@ def process_channel(
     )
     shape: Tuple[int, int, int] = tsv_volume.volume.shape  # shape is in z y x format
 
-    memory_needed_per_thread = 32 if need_bleach_correction else 16
-    memory_needed_per_thread *= shape[1] * shape[2] / 1024 ** 3
-    if tsv_volume.dtype in (uint8, "uint8"):
-        memory_needed_per_thread /= 2
-    memory_ram = virtual_memory().available / 1024 ** 3  # in GB
-    merge_step_cores = min(floor(memory_ram / memory_needed_per_thread), cpu_physical_core_count)
-
     bleach_correction_frequency = None
     bleach_correction_sigma = (0, 0)
     if need_bleach_correction:
@@ -638,7 +631,7 @@ def process_channel(
             bleach_correction_frequency = 1 / min(new_tile_size) * min(down_sampling_factor)
         else:
             bleach_correction_frequency = 1 / min(tile_size)
-        bleach_correction_sigma = (1 / bleach_correction_frequency * 2,) * 2
+        bleach_correction_sigma = (floor(1 // bleach_correction_frequency * 2),) * 2
 
     bleach_correction_clip_min = bleach_correction_clip_max = None
     if need_bleach_correction or need_16bit_to_8bit_conversion:
@@ -678,6 +671,14 @@ def process_channel(
             if 256 * 2 ** b >= img_approximate_upper_bound:
                 right_bit_shift = b
                 break
+
+    memory_needed_per_thread = 32 if need_bleach_correction else 16
+    memory_needed_per_thread *= (shape[1] + max(bleach_correction_sigma)) * (shape[2] + max(bleach_correction_sigma))
+    memory_needed_per_thread /= 1024 ** 3
+    if tsv_volume.dtype in (uint8, "uint8"):
+        memory_needed_per_thread /= 2
+    memory_ram = virtual_memory().available / 1024 ** 3  # in GB
+    merge_step_cores = max(1, min(floor(memory_ram / memory_needed_per_thread), cpu_physical_core_count))
 
     p_log(
         f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
@@ -822,26 +823,21 @@ def get_transformation_matrix(reference: ndarray, subject: ndarray,
     return warp_matrix
 
 
-# def correct_shape(img: ndarray, shape: Tuple[int, int]):
-#     if img.shape == shape:
-#         return img
-#     else:
-#         if img.shape[0] >= shape[0] and img.shape[1] >= shape[1]:
-#             return img[0:shape[0], 0:shape[1]]
-#         else:
-#             img_new = zeros(shape=shape, dtype=img.dtype)
-#             if img.shape[0] < shape[0] and img.shape[1] >= shape[1]:
-#                 img_new[0:img.shape[0], :] = img[:, 0:shape[1]]
-#             elif img.shape[0] >= shape[0] and img.shape[1] < shape[1]:
-#                 img_new[:, 0:img.shape[1]] = img[0:shape[0], :]
-#             else:
-#                 img_new[0:img.shape[0], 0:img.shape[1]] = img
-#             return img_new
-
-
-def correct_shape(img: ndarray, shape: Tuple[int, int]):
+def correct_shape(img: ndarray, shape: Tuple[int, int], zero_is_origin: bool = False):
     if img.shape == shape:
         return img
+    elif zero_is_origin:
+        if img.shape[0] >= shape[0] and img.shape[1] >= shape[1]:
+            return img[0:shape[0], 0:shape[1]]
+        else:
+            img_new = zeros(shape=shape, dtype=img.dtype)
+            if img.shape[0] < shape[0] and img.shape[1] >= shape[1]:
+                img_new[0:img.shape[0], :] = img[:, 0:shape[1]]
+            elif img.shape[0] >= shape[0] and img.shape[1] < shape[1]:
+                img_new[:, 0:img.shape[1]] = img[0:shape[0], :]
+            else:
+                img_new[0:img.shape[0], 0:img.shape[1]] = img
+            return img_new
     else:
         if img.shape[0] >= shape[0] and img.shape[1] >= shape[1]:
             return img[img.shape[0]-shape[0]:, img.shape[1]-shape[1]:]
@@ -854,6 +850,16 @@ def correct_shape(img: ndarray, shape: Tuple[int, int]):
             else:
                 img_new[shape[0] - img.shape[0]:, shape[1] - img.shape[1]:] = img
             return img_new
+
+
+def transformation_is_needed(matrix: ndarray):
+    matrix = absolute(np_round(matrix, 2))
+    if matrix[0, 2] >= 1 or matrix[1, 2] >= 1:  # translation is needed
+        return True
+    elif matrix[0, 1] > 0.01 or matrix[1, 0] > 0.01:  # shearing is needed
+        return True
+    else:
+        return False
 
 
 def generate_composite_image(
@@ -881,11 +887,13 @@ def generate_composite_image(
     for idx in range(1, len(images)):
         if images[idx] is None:
             images[idx] = zeros(img_shape, dtype=img_dtype)
+        elif transformation_is_needed(transformation_matrices[idx - 1]):
+            images[idx] = warp(images[idx], transformation_matrices[idx - 1], output_shape=None, preserve_range=True)
+            images[idx] = images[idx].astype(img_dtype)
+            images[idx] = correct_shape(images[idx], img_shape, zero_is_origin=False)
         else:
-            images[idx] = warp(images[idx], transformation_matrices[idx - 1],
-                               output_shape=None, preserve_range=True).astype(img_dtype)
-            images[idx] = correct_shape(images[idx], img_shape)
-            assert images[idx].shape == img_shape
+            images[idx] = correct_shape(images[idx], img_shape, zero_is_origin=True)
+        assert images[idx].shape == img_shape
 
     if len(tif_stacks) == 3:
         color_idx = {color: idx for idx, color in enumerate(order_of_colors.lower())}
