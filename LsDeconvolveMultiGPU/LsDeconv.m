@@ -591,7 +591,7 @@ function deconvolve(filelist, psf, numit, damping, ...
         end
 
         % deconvolve current block of data
-        if exist(block_path_tmp, "file") || dir(block_path).bytes > 0
+        if exist(block_path_tmp, "file") || (exist(block_path, "file") && dir(block_path).bytes > 0)
             continue
         end
         block_processing_start = tic;
@@ -640,7 +640,7 @@ function deconvolve(filelist, psf, numit, damping, ...
         semaphore('post', semkey_single);
 
         % save block to disk
-        if exist(block_path_tmp, "file") || dir(block_path).bytes > 0
+        if exist(block_path_tmp, "file") || (exist(block_path, "file") && dir(block_path).bytes > 0)
             continue
         end
         save(block_path_tmp, 'bl', '-v7.3');  % , '-nocompression'
