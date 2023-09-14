@@ -140,6 +140,10 @@ def main(args: Namespace):
         else:
             swc_df = read_csv(input_file, sep=r"\s+", comment="#", names=SWC_COLUMNS)
 
+        swc_df['x'] /= args.voxel_size_x_target
+        swc_df['y'] /= args.voxel_size_y_target
+        swc_df['z'] /= args.voxel_size_z_target
+
         if args.x_axis_length > 0:
             swc_df['x'] = args.x_axis_length - swc_df['x']
         if args.y_axis_length > 0:
@@ -147,9 +151,9 @@ def main(args: Namespace):
         if args.z_axis_length > 0:
             swc_df['z'] = args.z_axis_length - swc_df['z']
 
-        swc_df['x'] *= args.voxel_size_x_source / args.voxel_size_x_target
-        swc_df['y'] *= args.voxel_size_y_source / args.voxel_size_y_target
-        swc_df['z'] *= args.voxel_size_z_source / args.voxel_size_z_target
+        swc_df['x'] *= args.voxel_size_x_source
+        swc_df['y'] *= args.voxel_size_y_source
+        swc_df['z'] *= args.voxel_size_z_source
 
         if args.sort:
             try:
@@ -274,13 +278,13 @@ if __name__ == '__main__':
                         help="The voxel size on the z-axis of the target image. "
                              "Default value is 1.")
     parser.add_argument("--x_axis_length", "-x", type=int, required=False, default=0,
-                        help="The length of x-axis in pixels of the image used for reconstruction. "
+                        help="The length of x-axis in pixels of the target image. "
                              "If x>0 is provided x-axis will be flipped. Default is 0 --> no x-axis flipping")
     parser.add_argument("--y_axis_length", "-y", type=int, required=False, default=0,
-                        help="The length of y-axis in pixels of the image used for reconstruction. "
+                        help="The length of y-axis in pixels of the target image. "
                              "If y>0 is provided y-axis will be flipped. Default is 0 --> no y-axis flipping")
     parser.add_argument("--z_axis_length", "-z", type=int, required=False, default=0,
-                        help="The length of z-axis in pixels of the image used for reconstruction. "
+                        help="The length of z-axis in pixels of the target image. "
                              "If z>0 is provided z-axis will be flipped. Default is 0 --> no z-axis flipping")
     parser.add_argument("--radii", "-r", type=float, required=False, default=None,
                         help="Force the radii to be a specific number in um during (e)swc to seed conversion. "
