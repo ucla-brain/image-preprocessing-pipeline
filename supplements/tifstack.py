@@ -2,6 +2,7 @@ from pathlib import Path
 from typing import Union
 
 from tifffile import natural_sorted
+from numpy import zeros
 
 from pystripe.core import imread_tif_raw_png
 
@@ -36,6 +37,12 @@ class TifStack:
 
     def close(self):
         pass
+
+    def as_3d_numpy(self):
+        stack = zeros(self.shape, dtype=self.dtype)
+        for idx in range(self.nz):
+            stack[idx] = self.__getitem__(idx)
+        return stack
 
 
 def imread_tif_stck(tif_stack, idx):
