@@ -140,9 +140,9 @@ def main(args: Namespace):
         else:
             swc_df = read_csv(input_file, sep=r"\s+", comment="#", names=SWC_COLUMNS)
 
-        swc_df['x'] /= args.voxel_size_x_target
-        swc_df['y'] /= args.voxel_size_y_target
-        swc_df['z'] /= args.voxel_size_z_target
+        swc_df['x'] *= args.voxel_size_x_source / args.voxel_size_x_target
+        swc_df['y'] *= args.voxel_size_y_source / args.voxel_size_y_target
+        swc_df['z'] *= args.voxel_size_z_source / args.voxel_size_z_target
 
         if args.x_axis_length > 0:
             swc_df['x'] = args.x_axis_length - swc_df['x']
@@ -150,10 +150,6 @@ def main(args: Namespace):
             swc_df['y'] = args.y_axis_length - swc_df['y']
         if args.z_axis_length > 0:
             swc_df['z'] = args.z_axis_length - swc_df['z']
-
-        swc_df['x'] *= args.voxel_size_x_source
-        swc_df['y'] *= args.voxel_size_y_source
-        swc_df['z'] *= args.voxel_size_z_source
 
         if args.sort:
             try:
