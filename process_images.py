@@ -673,7 +673,8 @@ def process_channel(
                 break
 
     memory_needed_per_thread = 32 if need_bleach_correction else 16
-    memory_needed_per_thread *= (shape[1] + max(bleach_correction_sigma)) * (shape[2] + max(bleach_correction_sigma))
+    memory_needed_per_thread *= shape[1] + 2 * max(bleach_correction_sigma) + 1
+    memory_needed_per_thread *= shape[2] + 2 * max(bleach_correction_sigma) + 1
     memory_needed_per_thread /= 1024 ** 3
     if tsv_volume.dtype in (uint8, "uint8"):
         memory_needed_per_thread /= 2
