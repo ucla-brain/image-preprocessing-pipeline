@@ -759,10 +759,12 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
             floor(pad_y) + 1 : end - ceil(pad_y), ...
             floor(pad_z) + 1 : end - ceil(pad_z));
     end
-    if isgpuarray(bl) && gpu_device.TotalMemory < 60e9
+    if isgpuarray(bl) && gpu_device.TotalMemory < 52e9
         bl = gather(bl);
         reset(gpu_device);
-        bl = gpuArray(bl);
+        if gpu_device.TotalMemory > 43e9
+            bl = gpuArray(bl);
+        end
     end
     [lb, ub] = deconvolved_stats(bl);
     % since prctile function needs high vram usage gather it to avoid low
