@@ -517,10 +517,10 @@ function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
     % clear locks and semaphors
     semaphore_destroy(semkey_single);
     for gpu = unique_gpus
+        unlock_gpu(fullfile(tempdir, ['gpu_full_' num2str(gpu)]), gpu);
+        unlock_gpu(fullfile(tempdir, ['gpu_semi_' num2str(gpu)]), gpu);
         semaphore_destroy(gpu);
         semaphore_destroy(gpu + semkey_loading_base);
-        unlock_gpu(fullfile(tempdir, ['gpu_full_' num2str(gpu)]));
-        unlock_gpu(fullfile(tempdir, ['gpu_semi_' num2str(gpu)]));
     end
 
     % postprocess and write tif files
