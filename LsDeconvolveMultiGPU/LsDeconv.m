@@ -764,7 +764,7 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
         if gpu_device.TotalMemory > 43e9
             bl = gpuArray(bl);
         else
-            unlock_gpu(gpu_lock_path_full);
+            unlock_gpu(gpu_lock_path_full, gpu);
         end
     end
     [lb, ub] = deconvolved_stats(bl);
