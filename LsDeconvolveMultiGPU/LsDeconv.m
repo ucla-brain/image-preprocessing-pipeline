@@ -655,7 +655,7 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
     if gpu
         gpu_device = gpuDevice(gpu);
         memory_needed_for_full_acceleration = 35e9;
-        memory_needed_for_semi_acceleration = 32e9;
+        memory_needed_for_semi_acceleration = 24e9;
         num_full_accelerated_blocks = floor(gpu_device.TotalMemory / memory_needed_for_full_acceleration);
         if num_full_accelerated_blocks > 0
             num_semi_accelerated_blocks = floor(mod(gpu_device.TotalMemory, memory_needed_for_full_acceleration) / memory_needed_for_semi_acceleration);
