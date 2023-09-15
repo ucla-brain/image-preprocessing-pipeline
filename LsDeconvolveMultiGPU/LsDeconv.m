@@ -517,10 +517,10 @@ function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
     % clear locks and semaphors
     semaphore_destroy(semkey_single);
     for gpu = unique_gpus
-        unlock_gpu(fullfile(tempdir, ['gpu_full_' num2str(gpu)]), gpu);
-        unlock_gpu(fullfile(tempdir, ['gpu_semi_' num2str(gpu)]), gpu);
         semaphore_destroy(gpu);
         semaphore_destroy(gpu + semkey_loading_base);
+        unlock_gpu(fullfile(tempdir, ['gpu_full_' num2str(gpu)]));
+        unlock_gpu(fullfile(tempdir, ['gpu_semi_' num2str(gpu)]));
     end
 
     % postprocess and write tif files
@@ -741,7 +741,8 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
                     bl = deconGPU(bl, psf, niter, lambda, stop_criterion, gpu);
                     bl = gather(bl);
                     gpuDevice(gpu);
-                    unlock_gpu(gpu_lock_path_semi, gpu);
+                    unlock_gpu(gpu_lock_path_semi);
+                    semaphore('post', gpu);
                 else
                     % GPU acceleration is requested by the user but the GPU
                     % cannot handle the block at the time of the request
@@ -764,7 +765,8 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
         if gpu_device.TotalMemory > 43e9
             bl = gpuArray(bl);
         else
-            unlock_gpu(gpu_lock_path_full, gpu);
+            unlock_gpu(gpu_lock_path_full);
+            semaphore('post', gpu);
         end
     end
     [lb, ub] = deconvolved_stats(bl);
@@ -773,7 +775,8 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
     if isgpuarray(bl)
         bl = gather(bl);
         reset(gpu_device);  % to free gpu memory
-        unlock_gpu(gpu_lock_path_full, gpu);
+        unlock_gpu(gpu_lock_path_full);
+        semaphore('post', gpu);
     end
     assert(all(size(bl) == bl_size), 'block size mismatch!');
 end
@@ -1113,11 +1116,10 @@ function lock_gpu(lock_path)
     fclose(fopen(lock_path, "w"));
 end
 
-function unlock_gpu(lock_path, gpu)
+function unlock_gpu(lock_path)
     if exist(lock_path, 'file')
         delete(lock_path)
     end
-    semaphore('post', gpu);
 end
 
 function status = islock_gpu(lock_path, gpu, gpu_device, memory_needed)
