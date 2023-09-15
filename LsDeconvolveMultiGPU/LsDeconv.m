@@ -654,7 +654,7 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
     bl_size = size(bl);
     if gpu
         gpu_device = gpuDevice(gpu);
-        memory_needed_for_full_acceleration = 39e9;
+        memory_needed_for_full_acceleration = 35e9;
         memory_needed_for_semi_acceleration = 32e9;
         num_full_accelerated_blocks = floor(gpu_device.TotalMemory / memory_needed_for_full_acceleration);
         if num_full_accelerated_blocks > 0
@@ -741,8 +741,7 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
                     bl = deconGPU(bl, psf, niter, lambda, stop_criterion, gpu);
                     bl = gather(bl);
                     gpuDevice(gpu);
-                    unlock_gpu(gpu_lock_path_semi);
-                    semaphore('post', gpu);
+                    unlock_gpu(gpu_lock_path_semi, gpu);
                 else
                     % GPU acceleration is requested by the user but the GPU
                     % cannot handle the block at the time of the request
@@ -759,14 +758,13 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
             floor(pad_y) + 1 : end - ceil(pad_y), ...
             floor(pad_z) + 1 : end - ceil(pad_z));
     end
-    if isgpuarray(bl) && gpu_device.TotalMemory < 52e9
+    if isgpuarray(bl) && gpu_device.TotalMemory < 60e9
         bl = gather(bl);
         reset(gpu_device);
         if gpu_device.TotalMemory > 43e9
             bl = gpuArray(bl);
         else
             unlock_gpu(gpu_lock_path_full);
-            semaphore('post', gpu);
         end
     end
     [lb, ub] = deconvolved_stats(bl);
@@ -775,8 +773,7 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
     if isgpuarray(bl)
         bl = gather(bl);
         reset(gpu_device);  % to free gpu memory
-        unlock_gpu(gpu_lock_path_full);
-        semaphore('post', gpu);
+        unlock_gpu(gpu_lock_path_full, gpu);
     end
     assert(all(size(bl) == bl_size), 'block size mismatch!');
 end
@@ -1116,10 +1113,11 @@ function lock_gpu(lock_path)
     fclose(fopen(lock_path, "w"));
 end
 
-function unlock_gpu(lock_path)
+function unlock_gpu(lock_path, gpu)
     if exist(lock_path, 'file')
         delete(lock_path)
     end
+    semaphore('post', gpu);
 end
 
 function status = islock_gpu(lock_path, gpu, gpu_device, memory_needed)
