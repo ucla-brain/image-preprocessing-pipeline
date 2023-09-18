@@ -15,7 +15,7 @@ Python code for stitching and image enhancement of Light Sheet data
    
    `conda activate stitching`
     
-   `pip install dcimg cpufeature`
+   `pip install dcimg cpufeature pyvista`
 
 
    
