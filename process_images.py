@@ -20,7 +20,7 @@ from typing import List, Tuple, Dict, Union
 import mpi4py
 import psutil
 from cpufeature.extension import CPUFeature
-from cv2 import MOTION_AFFINE, findTransformECC, TERM_CRITERIA_COUNT, TERM_CRITERIA_EPS
+from cv2 import MOTION_TRANSLATION, findTransformECC, TERM_CRITERIA_COUNT, TERM_CRITERIA_EPS
 from numpy import ndarray, zeros, uint8, float32, eye, where, dstack, append, array, absolute
 from numpy import round as np_round
 from numpy import mean as np_mean
@@ -811,7 +811,7 @@ def get_transformation_matrix(reference: ndarray, subject: ndarray,
             reference,
             subject,
             warp_matrix,
-            MOTION_AFFINE,  # MOTION_AFFINE MOTION_TRANSLATION
+            MOTION_TRANSLATION,  # MOTION_AFFINE MOTION_TRANSLATION
             (TERM_CRITERIA_COUNT | TERM_CRITERIA_EPS, iterations, termination),
             inputMask=None,
             gaussFiltSize=5  # default value is 5
@@ -824,7 +824,7 @@ def get_transformation_matrix(reference: ndarray, subject: ndarray,
     return warp_matrix
 
 
-def correct_shape(img: ndarray, shape: Tuple[int, int], zero_is_origin: bool = False):
+def correct_shape(img: ndarray, shape: Tuple[int, int], zero_is_origin: bool = True):
     if img.shape == shape:
         return img
     elif zero_is_origin:
@@ -889,9 +889,10 @@ def generate_composite_image(
         if images[idx] is None:
             images[idx] = zeros(img_shape, dtype=img_dtype)
         elif transformation_is_needed(transformation_matrices[idx - 1]):
-            images[idx] = warp(images[idx], transformation_matrices[idx - 1], output_shape=None, preserve_range=True)
+            images[idx] = warp(images[idx], transformation_matrices[idx - 1],
+                               output_shape=img_shape, preserve_range=True)
             images[idx] = images[idx].astype(img_dtype)
-            images[idx] = correct_shape(images[idx], img_shape, zero_is_origin=False)
+            # images[idx] = correct_shape(images[idx], img_shape, zero_is_origin=True)
         else:
             images[idx] = correct_shape(images[idx], img_shape, zero_is_origin=True)
         assert images[idx].shape == img_shape
