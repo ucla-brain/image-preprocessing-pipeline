@@ -569,7 +569,7 @@ function deconvolve(filelist, psf, numit, damping, ...
         block_path = fullfile(cache_drive, ['bl_' num2str(blnr) '.mat']);
         block_path_tmp = fullfile(cache_drive, ['bl_' num2str(blnr) '.mat.tmp']);
         semaphore('wait', semkey_single);
-        if num_blocks > 1 && exist(block_path, "file")
+        if num_blocks > 1 && (exist(block_path, "file") || exist(block_path_tmp, "file"))
             semaphore('post', semkey_single);
             continue
         end
