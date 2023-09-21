@@ -654,8 +654,9 @@ function deconvolve(filelist, psf, numit, damping, ...
                 save(block_path_tmp, 'bl', '-v7.3');  % , '-nocompression'
                 movefile(block_path_tmp, block_path, 'f');
                 send(queue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' saved in ' num2str(round(toc(save_start), 1))]);
-             catch
-                send(queue, "could not load or save bl! Retrying ...")
+                could_not_save = false;
+            catch
+                send(queue, ['could not save ' block_path '! Retrying ...']);
                 pause(1);
             end
         end
