@@ -486,11 +486,19 @@ function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
         for i = starting_block : num_blocks
             % skip blocks already worked on
             block_path = fullfile(cache_drive, ['bl_' num2str(i) '.mat']);
+            block_path_tmp = fullfile(cache_drive, ['bl_' num2str(i) '.mat.tmp']);
             if exist(block_path, "file")
                 if dir(block_path).bytes > 0
                     remaining_blocks = remaining_blocks - 1;
                 else
                     delete(block_path);
+                end
+            end
+            if exist(block_path_tmp, "file")
+                try
+                    delete(block_path_tmp);
+                catch
+                    warning([block_path_tmp ' file could not be deleted!']);
                 end
             end
         end
@@ -661,7 +669,7 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
 
         % for gaussian filter 
         if num_full_accelerated_blocks > 0
-            semaphore('wait', gpu); % is insdie islock_gpu
+            semaphore('wait', gpu);
             bl = gpuArray(bl);
         end
     end
@@ -704,32 +712,18 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
         bl = padarray(bl, [ceil(pad_x) ceil(pad_y) ceil(pad_z)], 'post', 'symmetric');
     
         % deconvolve block using Lucy-Richardson algorithm
-        if gpu
-            if isgpuarray(bl)
-                % block is already on GPU and no GPU allocation is needed
-                bl = deconGPU(bl, psf, niter, lambda, stop_criterion, gpu);
-            else
-                % wait until GPU memory becomes available
-                % on A100 iteration time is 11.5s and on A6000 it is 22s
-                if num_full_accelerated_blocks > 0 
-                    % probably the programs will never run this block but I
-                    % kept it as a safegaurd
-                    semaphore('wait', gpu);
-                    bl = gpuArray(bl);
-                    bl = deconGPU(bl, psf, niter, lambda, stop_criterion, gpu);
-                elseif num_semi_accelerated_blocks > 0
-                    semaphore('wait', gpu);
-                    bl = deconGPU(bl, psf, niter, lambda, stop_criterion, gpu);
-                    bl = gather(bl);
-                    gpuDevice(gpu);
-                    semaphore('post', gpu);
-                else
-                    % GPU acceleration is requested by the user but the GPU
-                    % cannot handle the block at the time of the request
-                    bl = deconCPU(bl, psf, niter, lambda, stop_criterion);
-                end
-            end
+        if gpu && isgpuarray(bl)
+            % block is already on GPU and no GPU allocation is needed
+            bl = deconGPU(bl, psf, niter, lambda, stop_criterion, gpu);
+        elseif gpu && num_semi_accelerated_blocks > 0
+            semaphore('wait', gpu);
+            bl = deconGPU(bl, psf, niter, lambda, stop_criterion, gpu);
+            bl = gather(bl);
+            gpuDevice(gpu);  % free GPU memory
+            semaphore('post', gpu);
         else
+            % GPU acceleration is requested by the user but the GPU
+            % cannot handle the block at the time of the request
             bl = deconCPU(bl, psf, niter, lambda, stop_criterion);
         end
 
@@ -739,7 +733,7 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
             floor(pad_y) + 1 : end - ceil(pad_y), ...
             floor(pad_z) + 1 : end - ceil(pad_z));
     end
-    if isgpuarray(bl) && gpu_device.TotalMemory < 60e9
+    if gpu && isgpuarray(bl) && gpu_device.TotalMemory < 60e9
         % try hard to run deconvolved_stats on GPU, which needs 43e9 ram.
         % Reseting the GPU
         bl = gather(bl);
@@ -753,7 +747,7 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
     [lb, ub] = deconvolved_stats(bl);
     % since prctile function needs high vram usage gather it to avoid low
     % memory error
-    if isgpuarray(bl)
+    if gpu && isgpuarray(bl)
         bl = gather(bl);
         reset(gpu_device);  % to free gpu memory
         semaphore('post', gpu);
