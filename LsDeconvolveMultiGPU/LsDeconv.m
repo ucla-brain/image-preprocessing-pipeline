@@ -648,9 +648,17 @@ function deconvolve(filelist, psf, numit, damping, ...
         if exist(block_path_tmp, "file") || (exist(block_path, "file") && dir(block_path).bytes > 0)
             continue
         end
-        save(block_path_tmp, 'bl', '-v7.3');  % , '-nocompression'
-        movefile(block_path_tmp, block_path, 'f');
-        send(queue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' saved in ' num2str(round(toc(save_start), 1))]);
+        could_not_save = true;
+        while could_not_save
+            try
+                save(block_path_tmp, 'bl', '-v7.3');  % , '-nocompression'
+                movefile(block_path_tmp, block_path, 'f');
+                send(queue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' saved in ' num2str(round(toc(save_start), 1))]);
+             catch
+                send(queue, "could not load or save bl! Retrying ...")
+                pause(1);
+            end
+        end
     end
 end
 
@@ -1081,9 +1089,9 @@ function semaphore_destroy(semkey)
 end
 
 function semaphore_create(semkey, value)
-    disp(['semaphore ' num2str(semkey) ' is created with the initial value of ' num2str(value)]);
     semaphore_destroy(semkey);
     semaphore('create', semkey, value);
+    disp(['semaphore ' num2str(semkey) ' is created with the initial value of ' num2str(value)]);
 end
 
 function device = current_device(gpu)
