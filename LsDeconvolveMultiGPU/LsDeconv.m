@@ -864,7 +864,7 @@ function postprocess_save(...
     semkey_single = 1e3;
     semkey_multi = 1e4;
     semaphore_create(semkey_single, 1);
-    semaphore_create(semkey_multi, 4);
+    semaphore_create(semkey_multi, 32);
 
     blocklist = strings(size(p1, 1), 1);
     for i = 1 : size(p1, 1)
@@ -1032,12 +1032,12 @@ function postprocess_save(...
             
             % make sure there is enough ram before copying img to the
             % process that saving the image
-            semaphore('wait', semkey_single);
-            [ram_available, ~] = get_memory();
-            while ram_available < needed_ram_per_thread
-                pause(1);
-                [ram_available, ~] = get_memory();
-            end
+            %semaphore('wait', semkey_single);
+            %[ram_available, ~] = get_memory();
+            %while ram_available < needed_ram_per_thread
+            %    pause(1);
+            %    [ram_available, ~] = get_memory();
+            %end
             % semaphore will be released once the data copied to the
             % save_image_2d process
 
@@ -1391,7 +1391,7 @@ function [lb, ub] = deconvolved_stats(deconvolved)
 end
 
 function message = save_image_2d(im, path, s, rawmax, save_time, semkey_single)
-    semaphore('post', semkey_single);
+    %semaphore('post', semkey_single);
     im = squeeze(im);
     im = im';
     for num_retries = 1 : 40
