@@ -575,8 +575,8 @@ def process_channel(
             if step == 2 and alignment_cores > 1:
                 os.environ["slots"] = f"{cpu_logical_core_count}"
                 command = [
-                    f"mpiexec{' --use-hwthread-cpus' if sys.platform.lower() == 'linux' else ''} "
-                    f"--oversubscribe -np {int(alignment_cores + 1)} "  # one extra thread is needed for management
+                    f"mpiexec{' --use-hwthread-cpus --oversubscribe ' if sys.platform.lower() == 'linux' else ''} "
+                    f"-np {int(alignment_cores + 1)} "  # one extra thread is needed for management
                     f"python -m mpi4py {parastitcher}"
                 ]
             else:
