@@ -49,10 +49,10 @@ AllChannels: List[Tuple[str, str]] = [
     ("Ex_488_Em_2", "b"), ("Ex_561_Em_2", "g"), ("Ex_642_Em_2", "r"), ("Ex_642_Em_680", "r")
 ]
 VoxelSizeX_4x, VoxelSizeY_4x = (1.809,) * 2  # old stage --> 1.835
-VoxelSizeX_8x, VoxelSizeY_8x = (0.8,) * 2
-VoxelSizeX_9x, VoxelSizeY_9x = (0.7,) * 2
-VoxelSizeX_10x, VoxelSizeY_10x = (0.6,) * 2
-VoxelSizeX_15x, VoxelSizeY_15x = (0.4,) * 2
+VoxelSizeX_8x, VoxelSizeY_8x = (0.81,) * 2
+VoxelSizeX_9x, VoxelSizeY_9x = (0.71,) * 2
+VoxelSizeX_10x, VoxelSizeY_10x = (0.61,) * 2
+VoxelSizeX_15x, VoxelSizeY_15x = (0.41,) * 2
 VoxelSizeX_40x, VoxelSizeY_40x = (0.14, 0.14)  # 0.143, 0.12
 
 
@@ -503,8 +503,8 @@ def process_channel(
             f"--ref1={'V' if objective == '40x' else 'H'}",  # x horizontal
             f"--ref2={'H' if objective == '40x' else 'V'}",  # y vertical
             "--ref3=D",  # z depth?
-            f"--vxl1={voxel_size_y if objective == '40x' else voxel_size_x + 0.01:.3f}",
-            f"--vxl2={voxel_size_x if objective == '40x' else voxel_size_y + 0.01:.3f}",
+            f"--vxl1={voxel_size_y if objective == '40x' else voxel_size_x:.3f}",
+            f"--vxl2={voxel_size_x if objective == '40x' else voxel_size_y:.3f}",
             f"--vxl3={voxel_size_z}",
             "--sparse_data",
             f"--volin={preprocessed_path / channel}",
