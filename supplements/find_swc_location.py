@@ -7,6 +7,13 @@ from pandas import read_csv
 from shutil import copy
 
 
+class DotDict(dict):
+    """dot.notation access to dictionary attributes"""
+    __getattr__ = dict.get
+    __setattr__ = dict.__setitem__
+    __delattr__ = dict.__delitem__
+
+
 def is_point_inside_surface(surface, points: List[Tuple[float, float, float]]):
     points_poly = PolyData(points)
     select = points_poly.select_enclosed_points(surface, check_surface=False)
@@ -23,20 +30,14 @@ def load_mesh(obj_file: Path):
     return read_mesh(obj_file.__str__())
 
 
-def correct_point(point: Tuple[float, float, float], y_axis_length: float):
-    return tuple((point[0], point[1] - y_axis_length, -point[2]))
+def correct_point(point: Tuple[int, int, int], y_axis_length: int, z_axis_length: int):
+    # return tuple((point[0], point[1] - y_axis_length, -point[2] - z_axis_length))
+    return tuple((point[0], point[1] - y_axis_length, z_axis_length - point[2]))
 
 
-class DotDict(dict):
-    """dot.notation access to dictionary attributes"""
-    __getattr__ = dict.get
-    __setattr__ = dict.__setitem__
-    __delattr__ = dict.__delitem__
-
-
-def get_soma_locations(reconstructions: Path, y_axis_length: float):
+def get_soma_locations(reconstructions: Path, y_axis_length: int, z_axis_length: int):
     soma_coordinates = []
-    for swc_file in reconstructions.rglob("*.swc"):
+    for swc_file in list(reconstructions.rglob("*.swc")):
         swc_df = read_csv(swc_file, sep=r"\s+", comment="#", nrows=1,
                           names=("id", "type_id", "x", "y", "z", "radius", "parent_id"))
         if swc_df.type_id[0] != 1 and swc_df.parent_id[0] != -1:
@@ -44,7 +45,7 @@ def get_soma_locations(reconstructions: Path, y_axis_length: float):
         else:
             soma_coordinates += [DotDict({
                 'swc_path': swc_file,
-                'point': correct_point((swc_df.x[0], swc_df.y[0], swc_df.z[0]), y_axis_length)
+                'point': correct_point((swc_df.x[0], swc_df.y[0], swc_df.z[0]), y_axis_length, z_axis_length)
             })]
     return soma_coordinates
 
@@ -57,13 +58,14 @@ def get_surface_meshes(surfaces: Path):
             convert_wrl_to_obj(wrl_file, obj_file)
         surface_meshes += [DotDict({
             'file_name': obj_file.name,
-            'mesh': load_mesh(obj_file).flip_z()
+            #'mesh': load_mesh(obj_file).flip_z()
+            'mesh': load_mesh(obj_file)
         })]
     return surface_meshes
 
 
 def main(args: Namespace):
-    soma_coordinates = get_soma_locations(Path(args.reconstructions), args.y_axis_length)
+    soma_coordinates = get_soma_locations(Path(args.reconstructions), args.y_axis_length, args.z_axis_length)
     soma_coordinates_list = [soma.point for soma in soma_coordinates]
     surface_meshes = get_surface_meshes(Path(args.surfaces))
     for surface in surface_meshes:
@@ -102,6 +104,8 @@ if __name__ == '__main__':
                         help="Path folder containing all swc files.")
     parser.add_argument("--surfaces", "-s", type=str, required=True,
                         help="Path folder containing all surface files.")
-    parser.add_argument("--y_axis_length", "-y", type=float, default=0.0, required=True,
-                        help="Y-axis length of image in voxels. Default is 0.")
+    parser.add_argument("--y_axis_length", "-y", type=int, default=0.0, required=False,
+                        help="Y-axis length of image in voxels. Default is 0. Is used for flipping the swcs.")
+    parser.add_argument("--z_axis_length", "-z", type=int, default=0.0, required=False,
+                        help="Z-axis length of image in voxels. Default is 0. Is used for flipping the swcs.")
     main(parser.parse_args())

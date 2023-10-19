@@ -171,9 +171,9 @@ def main(args: Namespace):
                 else:
                     output_folder = output_file.parent / output_file.name[0:-len(output_file.suffix)]
                 output_folder.mkdir(exist_ok=True)
-                for i in range(1, len(swc_df)):
+                for i in range(0, len(swc_df)):
                     df1: DataFrame = swc_df.iloc[[i]].copy()
-                    output_file_new = output_folder / f"tree-with-soma-xyz-{int(df1['x'])}-{int(df1['y'])}-{int(df1['z'])}.swc"
+                    output_file_new = output_folder / f"x{int(df1['x'])}-y{int(df1['y'])}-z{int(df1['z'])}.swc"
                     if is_overwrite_needed(output_file_new, args.overwrite):
                         with open(output_file_new, 'a'):
                             output_file_new.write_text("#")
