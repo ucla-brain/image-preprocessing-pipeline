@@ -135,7 +135,11 @@ class MultiProcess(Process):
         if self.is_tsv or self.is_ims or self.rename:
             return self.save_path / f"{self.tif_prefix}_{idx:06}.tif"
         else:
-            return self.save_path / Path(images[idx]).name
+            file = Path(images[idx])
+            if file.suffix.lower() in (".png", ".raw"):
+                return self.save_path / (file.name[0:-4] + ".tif")
+            else:
+                return self.save_path / file.name
 
     def free_ram_is_not_enough(self):
         self.semaphore.get(block=True)
