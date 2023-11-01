@@ -11,6 +11,7 @@ from time import time
 import psutil
 from cpufeature.extension import CPUFeature
 from tqdm import tqdm
+from tifffile import natural_sorted
 
 from parallel_image_processor import parallel_image_processor
 from process_images import get_imaris_command, MultiProcessCommandRunner, commands_progress_manger
@@ -31,6 +32,10 @@ def main(args: Namespace):
     dir_tera_fly = Path(args.teraFly)
     if args.teraFly and not dir_tera_fly.exists():
         dir_tera_fly.mkdir(exist_ok=True, parents=True)
+
+    dir_fnt = Path(args.fnt)
+    if args.fnt and not dir_fnt.exists():
+        dir_fnt.mkdir(exist_ok=True, parents=True)
 
     return_code = 0
 
@@ -139,6 +144,27 @@ def main(args: Namespace):
             subprocess.call(command, shell=True)
             print(f"elapsed time = {round((time() - start_time) / 60, 1)}")
 
+    if args.fnt:
+        file_txt_sorted_tif_list = tif_2d_folder / "files.txt"
+        with open(file_txt_sorted_tif_list, "w") as f:
+            f.write("\n".join(natural_sorted(list(map(str, tif_2d_folder.glob("*.tif"))))))
+        command = [
+            f"{fnt_slice2cube}",
+            f"-i {file_txt_sorted_tif_list}",
+            f"-o {args.fnt}",
+            f"-j{args.nthreads}",
+            f"-r {args.voxel_size_x}:{args.voxel_size_y}:{args.voxel_size_z}",
+            "-Y"
+        ]
+        command = " ".join(command)
+        print(command)
+        if args.imaris:
+            MultiProcessCommandRunner(progress_queue, command).start()
+        else:
+            start_time = time()
+            subprocess.call(command, shell=True)
+            print(f"elapsed time = {round((time() - start_time) / 60, 1)}")
+
     if args.imaris:
         ims_file = Path(args.imaris)
         files = list(tif_2d_folder.glob("*.tif"))
@@ -208,6 +234,7 @@ if __name__ == '__main__':
         os.environ["PATH"] = f"{os.environ['PATH']};{PyScriptsPath.as_posix()}"
         terastitcher = "terastitcher.exe"
         teraconverter = "teraconverter.exe"
+        fnt_slice2cube = Path(r".") / "fnt" / "Windows" / "fnt-slice2cube.exe"
     elif sys.platform == 'linux' and 'microsoft' not in uname().release.lower():
         print("Linux is detected.")
         os.environ["NUMPY_MADVISE_HUGEPAGE"] = "1"
@@ -218,6 +245,7 @@ if __name__ == '__main__':
         terastitcher = "terastitcher"
         teraconverter = "teraconverter"
         os.environ["TERM"] = "xterm"
+        fnt_slice2cube = Path(r".") / "fnt" / "Linux" / "fnt-slice2cube"
     else:
         print("yet unsupported OS")
         raise RuntimeError
@@ -239,12 +267,14 @@ if __name__ == '__main__':
         epilog="Developed 2022 by Keivan Moradi, Hongwei Dong Lab (B.R.A.I.N) at UCLA\n"
     )
     parser.add_argument("--input", "-i", type=str, required=True,
-                        help="path to input image or path. Input path can be: a tera-stitcher stage 5 volume (xml) file"
+                        help="path to input image. Input path can be: a tera-stitcher stage 5 volume (xml) file"
                              ", Imaris (ims) image, or a 2D tif[f]?, png, raw series.")
     parser.add_argument("--tif", "-t", type=str, required=False, default='',
-                        help="path to tif output path.")
+                        help="path to tif output files.")
     parser.add_argument("--teraFly", "-f", type=str, required=False, default='',
-                        help="path to output teraFly path.")
+                        help="path to output teraFly files.")
+    parser.add_argument("--fnt", "-fnt", type=str, required=False, default='',
+                        help="path to output Fast Neurite Tracer files.")
     parser.add_argument("--imaris", "-o", type=str, required=False, default='',
                         help="path to imaris output file.")
     parser.add_argument("--movie", "-m", type=str, required=False, default='',
