@@ -127,7 +127,7 @@ def main(args: Namespace):
 
         if args.input_extension == "eswc":
             swc_df = read_csv(input_file, sep=r"\s+", comment="#",
-                               names=SWC_COLUMNS + ["seg_id", "level", "mode", "timestamp", "TFresindex"])
+                              names=SWC_COLUMNS + ["seg_id", "level", "mode", "timestamp", "TFresindex"])
             if args.output_extension == "swc":
                 swc_df = swc_df[SWC_COLUMNS].copy()
         elif args.input_extension == "apo":
@@ -145,11 +145,11 @@ def main(args: Namespace):
         swc_df['z'] *= args.voxel_size_z_source / args.voxel_size_z_target
 
         if args.x_axis_length > 0:
-            swc_df['x'] = args.x_axis_length - swc_df['x']
+            swc_df['x'] = args.x_axis_length * args.voxel_size_x_source / args.voxel_size_x_target - swc_df['x']
         if args.y_axis_length > 0:
-            swc_df['y'] = args.y_axis_length - swc_df['y']
+            swc_df['y'] = args.y_axis_length * args.voxel_size_y_source / args.voxel_size_y_target - swc_df['y']
         if args.z_axis_length > 0:
-            swc_df['z'] = args.z_axis_length - swc_df['z']
+            swc_df['z'] = args.z_axis_length * args.voxel_size_z_source / args.voxel_size_z_target - swc_df['z']
 
         if args.sort:
             try:
@@ -173,7 +173,10 @@ def main(args: Namespace):
                 output_folder.mkdir(exist_ok=True)
                 for i in range(0, len(swc_df)):
                     df1: DataFrame = swc_df.iloc[[i]].copy()
-                    output_file_new = output_folder / f"x{int(df1['x'])}-y{int(df1['y'])}-z{int(df1['z'])}.swc"
+                    output_file_new = (output_folder /
+                                       f"x{int(df1['x'].iloc[0])}-"
+                                       f"y{int(df1['y'].iloc[0])}-"
+                                       f"z{int(df1['z'].iloc[0])}.swc")
                     if is_overwrite_needed(output_file_new, args.overwrite):
                         with open(output_file_new, 'a'):
                             output_file_new.write_text("#")
@@ -274,13 +277,13 @@ if __name__ == '__main__':
                         help="The voxel size on the z-axis of the target image. "
                              "Default value is 1.")
     parser.add_argument("--x_axis_length", "-x", type=int, required=False, default=0,
-                        help="The length of x-axis in pixels of the target image. "
+                        help="The length of x-axis in pixels of the source image. "
                              "If x>0 is provided x-axis will be flipped. Default is 0 --> no x-axis flipping")
     parser.add_argument("--y_axis_length", "-y", type=int, required=False, default=0,
-                        help="The length of y-axis in pixels of the target image. "
+                        help="The length of y-axis in pixels of the source image. "
                              "If y>0 is provided y-axis will be flipped. Default is 0 --> no y-axis flipping")
     parser.add_argument("--z_axis_length", "-z", type=int, required=False, default=0,
-                        help="The length of z-axis in pixels of the target image. "
+                        help="The length of z-axis in pixels of the source image. "
                              "If z>0 is provided z-axis will be flipped. Default is 0 --> no z-axis flipping")
     parser.add_argument("--radii", "-r", type=float, required=False, default=None,
                         help="Force the radii to be a specific number in um during (e)swc to seed conversion. "
