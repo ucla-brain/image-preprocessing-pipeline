@@ -647,7 +647,7 @@ def process_channel(
         bleach_correction_clip_min = np_round(expm1_jit(otsu_threshold(img)))
         if bleach_correction_clip_min > 0:
             bleach_correction_clip_min -= 1
-        bleach_correction_clip_max = np_round(expm1_jit(prctl(img[img > log1p_jit(bleach_correction_clip_min)], 99.8)))
+        bleach_correction_clip_max = np_round(expm1_jit(prctl(img[img > log1p_jit(bleach_correction_clip_min)], 99.7)))
         img_approximate_upper_bound = bleach_correction_clip_max
         if need_bleach_correction and need_16bit_to_8bit_conversion:
             img = process_img(
@@ -664,7 +664,9 @@ def process_channel(
                 d_type=tsv_volume.dtype
             )
             # imsave_tif(stitched_tif_path/"test.tif", img)
-            img_approximate_upper_bound = np_round(prctl(img[img > bleach_correction_clip_min], 99.99))
+            if need_bleach_correction:
+                img = where(img > bleach_correction_clip_min, img - bleach_correction_clip_min, 0)
+            img_approximate_upper_bound = np_round(prctl(img[img > 0], 99.9))
 
         del img
         for b in range(0, 9):
