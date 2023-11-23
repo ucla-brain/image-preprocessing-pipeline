@@ -1,5 +1,4 @@
-from concurrent.futures import ProcessPoolExecutor, TimeoutError
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, TimeoutError
 from concurrent.futures.process import BrokenProcessPool
 from math import ceil, floor, sqrt
 from multiprocessing import Queue, Process, Manager, freeze_support
