@@ -347,8 +347,8 @@ def run_command(command, need_progress_dot=True):
     pattern = compile(r"error|warning|fail", IGNORECASE | MULTILINE)
     for stdout in execute(command):
         if need_progress_dot:
-            m = findall(pattern, stdout)
-            if m:
+            important_messages = findall(pattern, stdout)
+            if important_messages:
                 p_log(f"\n{PrintColors.WARNING}{stdout}{PrintColors.ENDC}\n")
             else:
                 print(".", end="", flush=True)
