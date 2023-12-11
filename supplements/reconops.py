@@ -14,9 +14,7 @@ SWC_COLUMNS = ["id", "type", "x", "y", "z", "radius", "parent_id"]
 
 
 def execute(command):
-    popen = Popen(command, stdout=PIPE,
-                  stderr=DEVNULL,
-                  shell=True, text=True, universal_newlines=True, bufsize=1)
+    popen = Popen(command, stdout=PIPE, stderr=DEVNULL, shell=True, text=True, universal_newlines=True, bufsize=1)
     for stdout_line in iter(popen.stdout.readline, ""):
         yield stdout_line
     popen.stdout.close()
