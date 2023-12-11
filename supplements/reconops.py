@@ -1,3 +1,4 @@
+import os
 import sys
 from argparse import RawDescriptionHelpFormatter, ArgumentParser, Namespace, BooleanOptionalAction
 from pathlib import Path
@@ -327,6 +328,8 @@ if __name__ == '__main__':
         Vaa3D = Path(".") / "Vaa3D" / "Windows" / "Vaa3D.exe"
     else:
         Vaa3D = Path(".") / "Vaa3D" / "Linux" / "vaa3d"
+        print(Vaa3D.absolute())
+        os.environ["LD_LIBRARY_PATH"] = f"{Vaa3D.parent.absolute()}"
     parser = ArgumentParser(
         description="ReconOps, i.e. reconstruction operations, convert flip and scale swc and eswc files\n\n",
         formatter_class=RawDescriptionHelpFormatter,
