@@ -14,7 +14,9 @@ SWC_COLUMNS = ["id", "type", "x", "y", "z", "radius", "parent_id"]
 
 
 def execute(command):
-    popen = Popen(command, stdout=PIPE, stderr=DEVNULL, shell=True, text=True, universal_newlines=True, bufsize=1)
+    popen = Popen(command, stdout=PIPE,
+                  stderr=DEVNULL,
+                  shell=True, text=True, universal_newlines=True, bufsize=1)
     for stdout_line in iter(popen.stdout.readline, ""):
         yield stdout_line
     popen.stdout.close()
@@ -25,8 +27,6 @@ def execute(command):
 
 
 def run_command(command: str, need_progress_dot=True, verbose=True):
-    if sys.platform.lower() != "win32":
-        command = command.replace(" /", " -")
     if verbose:
         pattern = compile(r"error|warning|fail", IGNORECASE | MULTILINE)
         print(f"\t{command}", end="", flush=True)
@@ -203,26 +203,39 @@ def main(args: Namespace):
                 # Parameters:
                 #   normalized radius change [ratio to baseline] DEFAULT: 0.25
                 #   minimum fiber radius [in um] DEFAULT: 0.1
-                cmd = f"{Vaa3D} /x N3DFix /f N3DFix /i {output_file} /o {v3d_file} /p 0.25 0.1"
+                if sys.platform.lower() == "win32":
+                    cmd = f"{Vaa3D} /x N3DFix /f N3DFix /i {output_file} /o {v3d_file} /p 0.25 0.1"
+                else:
+                    cmd = f"{Vaa3D} -x N3DFix -f N3DFix -i {output_file} -o {v3d_file} -p 0.25 0.1"
                 run_command(cmd)
                 output_file.unlink()
                 v3d_file.rename(output_file)
 
             if args.inter_node_pruning:
-                cmd = f"{Vaa3D} /x inter_node_pruning /f pruning /i {output_file}"
+                if sys.platform.lower() == "win32":
+                    cmd = f"{Vaa3D} /x inter_node_pruning /f pruning /i {output_file}"
+                else:
+                    cmd = f"{Vaa3D} -x inter_node_pruning -f pruning -i {output_file}"
                 run_command(cmd)
                 output_file.unlink()
                 (output_file.parent / (output_file.name + "_pruned.swc")).rename(output_file)
 
             if args.Vaa3D_sort:
-                cmd = f"{Vaa3D} /x sort_neuron_swc /f sort_swc /i {output_file} /o {v3d_file} /p 0 1"
+                if sys.platform.lower() == "win32":
+                    cmd = f"{Vaa3D} /x sort_neuron_swc /f sort_swc /i {output_file} /o {v3d_file} /p 0 1"
+                else:
+                    cmd = f"{Vaa3D} -x sort_neuron_swc -f sort_swc -i {output_file} -o {v3d_file} -p 0 1"
                 run_command(cmd)
                 output_file.unlink()
                 v3d_file.rename(output_file)
 
             if args.resample_step_size is not None and args.resample_step_size > 0:
-                cmd = (f"{Vaa3D} /x resample_swc /f resample_swc /i {output_file} /o {v3d_file} "
-                       f"/p {args.resample_step_size}")
+                if sys.platform.lower() == "win32":
+                    cmd = (f"{Vaa3D} /x resample_swc /f resample_swc /i {output_file} /o {v3d_file} "
+                           f"/p {args.resample_step_size}")
+                else:
+                    cmd = (f"{Vaa3D} -x resample_swc -f resample_swc -i {output_file} -o {v3d_file} "
+                           f"-p {args.resample_step_size}")
                 run_command(cmd)
                 output_file.unlink()
                 v3d_file.rename(output_file)
@@ -328,8 +341,10 @@ if __name__ == '__main__':
         Vaa3D = Path(".") / "Vaa3D" / "Windows" / "Vaa3D.exe"
     else:
         Vaa3D = Path(".") / "Vaa3D" / "Linux" / "Vaa3D-x"
-        os.environ["LD_LIBRARY_PATH"] = "./lib"
-        os.environ["PLUGIN_PATH"] = "./plugins"
+        print(f"{Vaa3D.parent.absolute() / 'lib'}")
+        print(f"{Vaa3D.parent.absolute() / 'plugins'}")
+        os.environ["LD_LIBRARY_PATH"] = f"{Vaa3D.parent.absolute() / 'lib'}"
+        os.environ["PLUGIN_PATH"] = f"{Vaa3D.parent.absolute() / 'plugins'}"
     parser = ArgumentParser(
         description="ReconOps, i.e. reconstruction operations, convert flip and scale swc and eswc files\n\n",
         formatter_class=RawDescriptionHelpFormatter,
