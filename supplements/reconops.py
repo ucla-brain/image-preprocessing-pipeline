@@ -327,7 +327,7 @@ if __name__ == '__main__':
     if sys.platform.lower() == "win32":
         Vaa3D = Path(".") / "Vaa3D" / "Windows" / "Vaa3D.exe"
     else:
-        Vaa3D = Path(".") / "Vaa3D" / "Linux" / "vaa3d"
+        Vaa3D = Path(".") / "Vaa3D" / "Linux" / "Vaa3D-x"
         print(Vaa3D.absolute())
         os.environ["LD_LIBRARY_PATH"] = f"{Vaa3D.parent.absolute()}"
     parser = ArgumentParser(
