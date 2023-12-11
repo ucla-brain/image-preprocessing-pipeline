@@ -26,7 +26,7 @@ def execute(command):
 
 def run_command(command: str, need_progress_dot=True, verbose=True):
     if sys.platform.lower() != "win32":
-        command.replace(" /", " -")
+        command = command.replace(" /", " -")
     if verbose:
         pattern = compile(r"error|warning|fail", IGNORECASE | MULTILINE)
         print(f"\t{command}", end="", flush=True)
@@ -328,8 +328,8 @@ if __name__ == '__main__':
         Vaa3D = Path(".") / "Vaa3D" / "Windows" / "Vaa3D.exe"
     else:
         Vaa3D = Path(".") / "Vaa3D" / "Linux" / "Vaa3D-x"
-        print(Vaa3D.absolute())
-        os.environ["LD_LIBRARY_PATH"] = f"{Vaa3D.parent.absolute()}"
+        os.environ["LD_LIBRARY_PATH"] = "./lib"
+        os.environ["PLUGIN_PATH"] = "./plugins"
     parser = ArgumentParser(
         description="ReconOps, i.e. reconstruction operations, convert flip and scale swc and eswc files\n\n",
         formatter_class=RawDescriptionHelpFormatter,
