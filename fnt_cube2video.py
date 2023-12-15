@@ -45,7 +45,7 @@ if __name__ == '__main__':
     parser = ArgumentParser(
         description="Convert cube to video in parallel\n\n",
         formatter_class=RawDescriptionHelpFormatter,
-        epilog="Developed 2023 by Keivan Moradi and Sumit Nanda at UCLA, Hongwei Dong Lab (B.R.A.I.N.) \n"
+        epilog="Developed 2023 by Keivan Moradi at UCLA, Hongwei Dong Lab (B.R.A.I.N.) \n"
     )
     parser.add_argument("--input", "-i", type=str, required=True,
                         help="Path folder containing all nrrd files.")
