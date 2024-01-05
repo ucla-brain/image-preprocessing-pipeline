@@ -330,7 +330,7 @@ def main(args: Namespace):
                 output_file = output_path / f"[{x},{y},{z}]-r={radii}.swc"
                 with open(output_file, 'w') as marker_file:
                     marker_file.write("#id type x y z radius_um parent_id\n")
-                    marker_file.write(f"0 1 {x} {y} {z} {radii} 0")
+                    marker_file.write(f"1 1 {x} {y} {z} {radii} 1")
                     print(f"{args.input_extension} to {args.output_extension} -> {output_file}")
 
 
