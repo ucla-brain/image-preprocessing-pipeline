@@ -327,10 +327,10 @@ def main(args: Namespace):
                     radii = args.radii
                 # radii = float(l_split[5])
                 # volume = int(4 / 3 * pi * radii ** 3)
-                output_file = output_path / f"[{x},{y},{z}]-r={radii}"
+                output_file = output_path / f"[{x},{y},{z}]-r={radii}.swc"
                 with open(output_file, 'w') as marker_file:
-                    marker_file.write("# x,y,z,radius_um\n")
-                    marker_file.write(f"{x},{y},{z},{radii}")
+                    marker_file.write("#id type x y z radius_um parent_id\n")
+                    marker_file.write(f"0 1 {x} {y} {z} {radii} 0")
                     print(f"{args.input_extension} to {args.output_extension} -> {output_file}")
 
 
