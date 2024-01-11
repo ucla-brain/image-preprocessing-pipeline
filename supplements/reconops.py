@@ -289,6 +289,7 @@ def main(args: Namespace):
                             output_file_new.write_text("#")
                             df2 = df1.copy()
                             df1["id"] = 1
+                            df1["type"] = 1
                             df1["parent_id"] = 0
                             df2["id"] = 2
                             df2["type"] = 2
