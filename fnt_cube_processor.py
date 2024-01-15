@@ -35,7 +35,7 @@ def destrype_cube(input_file: Path, output_file: Path):
         img = rot90(img, k=1, axes=(1, 2))
         for idx in range(0, img.shape[0], 1):
             if not is_uniform_2d(img[idx]):
-                img[idx] = filter_streaks(img[idx], sigma=(20, 20), bidirectional=True)
+                img[idx] = filter_streaks(img[idx], sigma=(1, 1), bidirectional=True)
         img = rot90(img, k=-1, axes=(1, 2))
         nrrd.write(filename=output_file.__str__(), data=img, header=header, compression_level=1)
     return return_code
