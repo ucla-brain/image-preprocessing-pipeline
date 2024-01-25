@@ -366,7 +366,6 @@ def process_channel(
         voxel_size_y: float,
         voxel_size_z: float,
         objective: str,
-        # tile_overlap_percent: float,
         queue: Queue,
         stitch_mip: bool,
         files_list: List[Path] = None,
@@ -647,7 +646,7 @@ def process_channel(
         bleach_correction_clip_min = np_round(expm1_jit(otsu_threshold(img)))
         if bleach_correction_clip_min > 0:
             bleach_correction_clip_min -= 1
-        bleach_correction_clip_max = np_round(expm1_jit(prctl(img[img > log1p_jit(bleach_correction_clip_min)], 99.6)))
+        bleach_correction_clip_max = np_round(expm1_jit(prctl(img[img > log1p_jit(bleach_correction_clip_min)], 90)))
         img_approximate_upper_bound = bleach_correction_clip_max
         if need_bleach_correction and need_16bit_to_8bit_conversion:
             img = process_img(
