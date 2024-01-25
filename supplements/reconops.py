@@ -215,17 +215,6 @@ def main(args: Namespace):
                 output_file.unlink()
                 v3d_file.rename(output_file)
 
-            if args.resample_step_size is not None and args.resample_step_size > 0:
-                if sys.platform.lower() == "win32":
-                    cmd = (f"{Vaa3D} /x resample_swc /f resample_swc /i {output_file} /o {v3d_file} "
-                           f"/p {args.resample_step_size}")
-                else:
-                    cmd = (f"{Vaa3D} -x resample_swc -f resample_swc -i {output_file} -o {v3d_file} "
-                           f"-p {args.resample_step_size}")
-                run_command(cmd)
-                output_file.unlink()
-                v3d_file.rename(output_file)
-
             if args.N3Dfix:
                 # Parameters:
                 #   normalized radius change [ratio to baseline] DEFAULT: 0.25
@@ -234,6 +223,17 @@ def main(args: Namespace):
                     cmd = f"{Vaa3D} /x N3DFix /f N3DFix /i {output_file} /o {v3d_file} /p 0.25 0.1"
                 else:
                     cmd = f"{Vaa3D} -x N3DFix -f N3DFix -i {output_file} -o {v3d_file} -p 0.25 0.1"
+                run_command(cmd)
+                output_file.unlink()
+                v3d_file.rename(output_file)
+
+            if args.resample_step_size is not None and args.resample_step_size > 0:
+                if sys.platform.lower() == "win32":
+                    cmd = (f"{Vaa3D} /x resample_swc /f resample_swc /i {output_file} /o {v3d_file} "
+                           f"/p {args.resample_step_size}")
+                else:
+                    cmd = (f"{Vaa3D} -x resample_swc -f resample_swc -i {output_file} -o {v3d_file} "
+                           f"-p {args.resample_step_size}")
                 run_command(cmd)
                 output_file.unlink()
                 v3d_file.rename(output_file)
