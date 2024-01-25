@@ -197,18 +197,6 @@ def main(args: Namespace):
                 output_file.write_text("#")
                 swc_df.to_csv(output_file, sep=" ", mode="a", index=False)
 
-            if args.N3Dfix:
-                # Parameters:
-                #   normalized radius change [ratio to baseline] DEFAULT: 0.25
-                #   minimum fiber radius [in um] DEFAULT: 0.1
-                if sys.platform.lower() == "win32":
-                    cmd = f"{Vaa3D} /x N3DFix /f N3DFix /i {output_file} /o {v3d_file} /p 0.25 0.1"
-                else:
-                    cmd = f"{Vaa3D} -x N3DFix -f N3DFix -i {output_file} -o {v3d_file} -p 0.25 0.1"
-                run_command(cmd)
-                output_file.unlink()
-                v3d_file.rename(output_file)
-
             if args.inter_node_pruning:
                 if sys.platform.lower() == "win32":
                     cmd = f"{Vaa3D} /x inter_node_pruning /f pruning /i {output_file}"
@@ -234,6 +222,18 @@ def main(args: Namespace):
                 else:
                     cmd = (f"{Vaa3D} -x resample_swc -f resample_swc -i {output_file} -o {v3d_file} "
                            f"-p {args.resample_step_size}")
+                run_command(cmd)
+                output_file.unlink()
+                v3d_file.rename(output_file)
+
+            if args.N3Dfix:
+                # Parameters:
+                #   normalized radius change [ratio to baseline] DEFAULT: 0.25
+                #   minimum fiber radius [in um] DEFAULT: 0.1
+                if sys.platform.lower() == "win32":
+                    cmd = f"{Vaa3D} /x N3DFix /f N3DFix /i {output_file} /o {v3d_file} /p 0.25 0.1"
+                else:
+                    cmd = f"{Vaa3D} -x N3DFix -f N3DFix -i {output_file} -o {v3d_file} -p 0.25 0.1"
                 run_command(cmd)
                 output_file.unlink()
                 v3d_file.rename(output_file)
