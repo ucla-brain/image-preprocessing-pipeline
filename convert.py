@@ -64,12 +64,16 @@ def main(args: Namespace):
             args.dark > 0 or args.convert_to_8bit or
             new_size or down_sample or args.voxel_size_target or
             args.rotation or args.flip_upside_down or
-            args.gaussian or args.background_subtraction or args.de_stripe or args.bleach_correction or
-            args.compression_level > 0 or args.compression_method != "ADOBE_DEFLATE")
+            args.gaussian or args.background_subtraction or args.de_stripe or args.bleach_correction)
     ):
         if not args.tif:
             print(f"{PrintColors.FAIL}tif path is needed to continue.{PrintColors.ENDC}")
             raise RuntimeError
+
+        need_pre_processing = False
+        if args.dark > 0 or args.convert_to_8bit or down_sample or args.flip_upside_down or args.gaussian or \
+                args.background_subtraction or args.de_stripe or args.bleach_correction:
+            need_pre_processing = True
 
         de_striping_sigma = (0, 0)
         if args.de_stripe:
@@ -80,7 +84,7 @@ def main(args: Namespace):
         return_code = parallel_image_processor(
             source=input_path,
             destination=tif_2d_folder,
-            fun=process_img if args.channel >= 0 else lambda img: img,
+            fun=process_img if need_pre_processing else None,
             kwargs={
                 "gaussian_filter_2d": args.gaussian,
                 "down_sample": down_sample,
@@ -91,7 +95,7 @@ def main(args: Namespace):
                 "bidirectional": True if args.bleach_correction else False,
                 "dark": args.dark,
                 "lightsheet": args.background_subtraction,
-                "bleach_correction_frequency": 1/args.bleach_correction_period if args.bleach_correction else None,
+                "bleach_correction_frequency": 1 / args.bleach_correction_period if args.bleach_correction else None,
                 "bleach_correction_max_method": False,
                 "bleach_correction_clip_min": args.bleach_correction_clip_min,
                 "bleach_correction_clip_max": args.bleach_correction_clip_max,
@@ -111,7 +115,8 @@ def main(args: Namespace):
             target_voxel=args.voxel_size_target,
             rotation=args.rotation,
             resume=args.resume,
-            needed_memory=args.needed_memory * 1024**3
+            needed_memory=args.needed_memory * 1024 ** 3,
+            save_images=args.save_images
         )
     elif input_path.is_dir():
         tif_2d_folder = input_path
@@ -198,14 +203,14 @@ def main(args: Namespace):
         movie_file = Path(args.movie)
         duration = args.movie_frame_duration
 
-        with open(tif_2d_folder/"ffmpeg_input.txt", "wb") as ffmpeg_input:
+        with open(tif_2d_folder / "ffmpeg_input.txt", "wb") as ffmpeg_input:
             for file in sorted(tif_2d_folder.glob("*.tif"))[args.movie_start:args.movie_end]:
                 ffmpeg_input.write(f"file '{file.absolute().as_posix()}'\n".encode())
                 ffmpeg_input.write(f"duration {duration}\n".encode())
 
         command = " ".join([
             f"ffmpeg -r 60 -f concat -safe 0",
-            f"-i {tif_2d_folder/'ffmpeg_input.txt'}",
+            f"-i {tif_2d_folder / 'ffmpeg_input.txt'}",
             f"{movie_file.absolute()}"
         ])
         print(f"{PrintColors.BLUE}{command}{PrintColors.ENDC}")
@@ -350,8 +355,8 @@ if __name__ == '__main__':
                              "one of 0, 90, 180 or 270 degree values are accepted. Default is 0.")
     parser.add_argument("--flip_upside_down", default=False, action=BooleanOptionalAction,
                         help="image pre-processing: flip the y-axis. Default is --no-flip_upside_down")
-    parser.add_argument("--compression_level", "-zl", type=int, default=0,
-                        help="image pre-processing: compression level for tif files. Default is 0.")
+    parser.add_argument("--compression_level", "-zl", type=int, default=1,
+                        help="image pre-processing: compression level for tif files. Default is 1.")
     parser.add_argument("--compression_method", "-zm", type=str, default="ADOBE_DEFLATE",
                         help="image pre-processing: compression method for tif files. Default is ADOBE_DEFLATE. "
                              "LZW and PackBits are also supported.")
@@ -380,4 +385,7 @@ if __name__ == '__main__':
                              "resume processing remaining files. Default is --no-resume.")
     parser.add_argument("--needed_memory", type=int, default=1,
                         help="Memory needed per thread in GB. Default is 1 GB.")
+    parser.add_argument("--save_images", default=True, action=BooleanOptionalAction,
+                        help="save the processed images. Default is --save_images. "
+                             "if you just need to do downsampling use --no-save_images.")
     main(parser.parse_args())

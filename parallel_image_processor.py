@@ -53,7 +53,8 @@ class MultiProcess(Process):
             timeout: Union[float, None] = 1800,
             resume: bool = True,
             compression: Tuple[str, int] = ("ADOBE_DEFLATE", 1),
-            needed_memory: int = None
+            needed_memory: int = None,
+            save_images: bool = True
     ):
         Process.__init__(self)
         self.daemon = False
@@ -75,6 +76,7 @@ class MultiProcess(Process):
         self.channel = channel
         self.images = images
         self.save_path = save_path
+        self.save_images = save_images
         self.rename = rename
         self.tif_prefix = tif_prefix
         self.args = args
@@ -166,6 +168,7 @@ class MultiProcess(Process):
         tif_prefix = self.tif_prefix
         channel = self.channel
         resume = self.resume
+        save_images = self.save_images
         compression = self.compression
         down_sampled_path = self.down_sampled_path
         d_type = self.d_type
@@ -265,7 +268,7 @@ class MultiProcess(Process):
                             elif rotation == 270:
                                 img = rot90(img, 3)
 
-                            if is_tsv or is_ims or function is not None or rotation in (90, 180, 270):
+                            if save_images and (is_tsv or is_ims or function is not None or rotation in (90, 180, 270)):
                                 self.imsave_tif(tif_save_path, img, compression=compression)
 
                             if img.dtype != post_processed_d_type:
@@ -352,7 +355,7 @@ def calculate_downsampling_z_ranges(start, end, steps):
 
 def generate_voxel_spacing(
         shape: Tuple[int, int, int],
-        source_voxel: Tuple[int, int, int],
+        source_voxel: Tuple[float, float, float],
         target_shape: Tuple[int, int, int],
         target_voxel: float):
     voxel_locations = [arange(axis_shape) * axis_v_size - (axis_shape - 1) /
@@ -397,7 +400,8 @@ def parallel_image_processor(
         progress_bar_name: str = " ImgProc",
         compression: Tuple[str, int] = ("ADOBE_DEFLATE", 1),
         resume: bool = True,
-        needed_memory: int = None
+        needed_memory: int = None,
+        save_images: bool = True,
 ):
     """
     fun: Callable
@@ -532,7 +536,7 @@ def parallel_image_processor(
                 rename=rename, tif_prefix=tif_prefix,
                 source_voxel=source_voxel, target_voxel=target_voxel, down_sampled_path=down_sampled_path,
                 rotation=rotation, channel=channel, timeout=timeout, compression=compression, resume=resume,
-                needed_memory=needed_memory).start()
+                needed_memory=needed_memory, save_images=save_images).start()
         else:
             print('\n the existing workers can finish the job! no more workers are needed.')
             workers = worker
