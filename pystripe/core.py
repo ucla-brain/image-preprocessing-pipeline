@@ -561,6 +561,10 @@ def correct_bleaching(
     img_filter /= np_max(img_filter)
     # img[y_slice_min:y_slice_max, x_slice_min:x_slice_max] = where(img_filter > 0, img_sliced / img_filter, img_sliced)
     img = where(img_filter > 0, img / img_filter, img)
+    if clip_max is not None:
+        max_correction = clip_max / prctl(img[img > 0], 99.99)
+        if max_correction < 1:
+            img *= max_correction
     return img
 
 
