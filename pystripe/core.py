@@ -561,6 +561,10 @@ def correct_bleaching(
     img_filter /= np_max(img_filter)
     # img[y_slice_min:y_slice_max, x_slice_min:x_slice_max] = where(img_filter > 0, img_sliced / img_filter, img_sliced)
     img = where(img_filter > 0, img / img_filter, img)
+    if clip_max is not None:
+        max_correction = clip_max / prctl(img[img > 0], 99.99)
+        if max_correction < 1:
+            img *= max_correction
     return img
 
 
@@ -694,7 +698,6 @@ def filter_streaks(
             img = rot90(img, 1)
             img = filter_streak_horizontally(img, sigma1, sigma2, level, wavelet, crossover, threshold)
             img = rot90(img, -1)
-            # img = filter_subband(img, sigma1, level, wavelet, bidirectional=True)
 
         if verbose:
             print(f"de-striping applied: sigma={sigma}, level={level}, wavelet={wavelet}, crossover{crossover}, "
