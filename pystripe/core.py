@@ -507,12 +507,10 @@ def slice_non_zero_box(img_axis: ndarray, noise: int, filter_frequency: int = 1 
 
 
 def correct_bleaching(
-        img: ndarray, frequency: float, clip_min: float, clip_max: float,
-        max_method: bool = False,
-        # y_slice_min: int = None,
-        # y_slice_max: int = None,
-        # x_slice_min: int = None,
-        # x_slice_max: int = None,
+        img: ndarray, frequency: float,
+        clip_min: float = 0,
+        clip_max: float = None,
+        max_method: bool = False
 ) -> ndarray:
     """
     Parameters
@@ -532,9 +530,8 @@ def correct_bleaching(
     max normalized filter values.
     """
 
-    # slice image
-    # img_sliced = img[y_slice_min:y_slice_max, x_slice_min:x_slice_max]
-
+    if clip_max is None:
+        clip_max = np_max(img)
     # creat the filter
     if max_method:
         # img_filter_y = np_max(img_sliced, axis=1)
@@ -551,20 +548,18 @@ def correct_bleaching(
         img_filter = dot(img_filter_y, img_filter_x)
     else:
         # img_filter = where(img_sliced < log1p(.99), clip_max if clip_max else np_max(img_sliced), img_sliced)
-        img_filter = where(img < log1p(.99), clip_max if clip_max else np_max(img), img)
-        if clip_min is not None or clip_max is not None:
-            clip(img_filter, clip_min, clip_max, out=img_filter)
+        img_filter = where(img < log1p(.99), clip_max, img)
+        clip(img_filter, clip_min, clip_max, out=img_filter)
         img_filter = butter_lowpass_filter(img_filter, frequency)
         img_filter = filter_subband(img_filter, 1 / frequency, 0, "db10", bidirectional=True)
 
     # apply the filter
-    img_filter /= np_max(img_filter)
-    # img[y_slice_min:y_slice_max, x_slice_min:x_slice_max] = where(img_filter > 0, img_sliced / img_filter, img_sliced)
+    img_filter /= ((clip_min + clip_max) / 2)  # np_max(img_filter) *
     img = where(img_filter > 0, img / img_filter, img)
-    if clip_max is not None:
-        max_correction = clip_max / prctl(img[img > 0], 99.99)
-        if max_correction < 1:
-            img *= max_correction
+    # if clip_max is not None:
+    #     max_correction = clip_max / prctl(img[img > 0], 99.99)
+    #     if max_correction < 1:
+    #         img *= max_correction
     return img
 
 
@@ -615,10 +610,6 @@ def filter_streaks(
         bleach_correction_max_method: bool = False,
         bleach_correction_clip_min: float = None,
         bleach_correction_clip_max: float = None,
-        # bleach_correction_y_slice_min: int = None,
-        # bleach_correction_y_slice_max: int = None,
-        # bleach_correction_x_slice_min: int = None,
-        # bleach_correction_x_slice_max: int = None,
         log1p_normalization_needed: bool = True,
         verbose: bool = False
 ) -> ndarray:
@@ -709,11 +700,7 @@ def filter_streaks(
         if clip_max is None or (clip_max is not None and clip_min < clip_max):
             img = correct_bleaching(
                 img, bleach_correction_frequency, clip_min, clip_max,
-                max_method=bleach_correction_max_method,
-                # y_slice_min=bleach_correction_y_slice_min,
-                # y_slice_max=bleach_correction_y_slice_max,
-                # x_slice_min=bleach_correction_x_slice_min,
-                # x_slice_max=bleach_correction_x_slice_max,
+                max_method=bleach_correction_max_method
             )
         else:
             print(f"{PrintColors.WARNING}skipped bleach correction because of "
