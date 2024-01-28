@@ -7,7 +7,7 @@ import os
 import platform
 import sys
 from datetime import timedelta
-from math import floor
+from math import floor, ceil
 from multiprocessing import freeze_support, Queue, Process, Pool
 from pathlib import Path
 from platform import uname
@@ -630,7 +630,7 @@ def process_channel(
             bleach_correction_frequency = 1 / min(new_tile_size) * min(down_sampling_factor)
         else:
             bleach_correction_frequency = 1 / min(tile_size)
-        bleach_correction_sigma = (floor(1 // bleach_correction_frequency * 2),) * 2
+        bleach_correction_sigma = (ceil(1 / bleach_correction_frequency * 2),) * 2
 
     bleach_correction_clip_min = bleach_correction_clip_max = None
     if need_bleach_correction or need_16bit_to_8bit_conversion:
@@ -653,6 +653,7 @@ def process_channel(
                 img,
                 exclude_dark_edges_set_them_to_zero=False,
                 sigma=bleach_correction_sigma,
+                wavelet="coif15",
                 bidirectional=True,
                 bleach_correction_frequency=bleach_correction_frequency,
                 bleach_correction_clip_min=float(bleach_correction_clip_min),
@@ -713,6 +714,7 @@ def process_channel(
             #         need_bleach_correction or need_lightsheet_cleaning) else False,
             "threshold": None,
             "sigma": bleach_correction_sigma,
+            "wavelet": "coif15",
             "padding_mode": "wrap",  # wrap reflect
             "bidirectional": True if need_bleach_correction else False,
             "bleach_correction_frequency": bleach_correction_frequency,

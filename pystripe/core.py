@@ -780,10 +780,6 @@ def process_img(
         bleach_correction_clip_min: float = None,
         bleach_correction_clip_max: float = None,
         bleach_correction_max_method: bool = False,
-        # bleach_correction_y_slice_min: int = None,
-        # bleach_correction_y_slice_max: int = None,
-        # bleach_correction_x_slice_min: int = None,
-        # bleach_correction_x_slice_max: int = None,
         log1p_normalization_needed: bool = True,
         dark: float = 0,
         lightsheet: bool = False,
@@ -897,14 +893,6 @@ def process_img(
                 bleach_correction_max_method=bleach_correction_max_method,
                 bleach_correction_clip_min=bleach_correction_clip_min,
                 bleach_correction_clip_max=bleach_correction_clip_max,
-                # bleach_correction_y_slice_min=correct_slice_value(
-                #     bleach_correction_y_slice_min, y_slice_min, None),
-                # bleach_correction_y_slice_max=correct_slice_value(
-                #     bleach_correction_y_slice_max, y_slice_min, y_slice_max),
-                # bleach_correction_x_slice_min=correct_slice_value(
-                #     bleach_correction_x_slice_min, x_slice_min, None),
-                # bleach_correction_x_slice_max=correct_slice_value(
-                #     bleach_correction_x_slice_max, x_slice_min, x_slice_max),
                 log1p_normalization_needed=log1p_normalization_needed,
                 verbose=verbose,
             )
