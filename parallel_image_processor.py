@@ -519,7 +519,7 @@ def parallel_image_processor(
               f"\tpost-processed shape zyx: {' '.join(target_shape.round(0).astype(str))}\n"
               f"\tactual voxel sizes zyx: {' '.join(target_voxel_actual.round(3).astype(str))}")
 
-        down_sampled_path = destination / f"down_sampled_" \
+        down_sampled_path = destination / f"{destination.stem[0:-3]}" \
                                           f"z{down_sampling_z_steps * new_source_voxel[0]:.1f}_" \
                                           f"yx{target_voxel:.1f}um"
         down_sampled_path.mkdir(exist_ok=True)

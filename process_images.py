@@ -724,7 +724,7 @@ def process_channel(
             "d_type": tsv_volume.dtype
         },
         source_voxel=(voxel_size_z, voxel_size_y, voxel_size_x),
-        target_voxel=None if stitch_mip else 20,
+        target_voxel=None if stitch_mip else 10,
         rotation=90 if need_rotation_stitched_tif else 0,
         timeout=None,
         max_processors=merge_step_cores,
@@ -1102,10 +1102,11 @@ def main(source_path):
                     p_log("All images will be used for flat image generation!")
                     image_classes_training_data_path = None
 
-    need_gaussian_filter_2d = ask_true_false_question(
-        f"Do you need to apply a 5x5 Gaussian filter to tiles before stitching to remove camera artifacts and "
-        f"produce up to two times smaller files?"
-    )
+    need_gaussian_filter_2d = True
+    # need_gaussian_filter_2d = ask_true_false_question(
+    #     f"Do you need to apply a 5x5 Gaussian filter to tiles before stitching to remove camera artifacts and "
+    #     f"produce up to two times smaller files?"
+    # )
     p_log(f"gaussian: {need_gaussian_filter_2d}")
 
     def destination_name(name: str):
@@ -1137,35 +1138,35 @@ def main(source_path):
     need_down_sampling = False
     need_up_sizing = False
     new_tile_size = None
-    if voxel_size_z < voxel_size_x or voxel_size_z < voxel_size_y:
-        need_up_sizing = ask_true_false_question(
-            "Do you need to upsize images for isotropic voxel generation before stitching?")
-        if need_up_sizing:
-            posix += "_upsized"
-            what_for += "upsizing "
-            new_tile_size = (
-                int(round(tile_size[0] * voxel_size_y / voxel_size_z, 0)),
-                int(round(tile_size[1] * voxel_size_x / voxel_size_z, 0))
-            )
-            voxel_size_x = voxel_size_y = voxel_size_z
-    elif voxel_size_z > voxel_size_x or voxel_size_z > voxel_size_y:
-        need_down_sampling = ask_true_false_question(
-            "Do you need to down-sample and resize images for isotropic voxel generation before stitching?")
-        if need_down_sampling:
-            posix += "_downsampled"
-            what_for += "down-sampling "
-            new_tile_size = (
-                int(round(tile_size[0] * voxel_size_y / voxel_size_z, 0)),
-                int(round(tile_size[1] * voxel_size_x / voxel_size_z, 0))
-            )
-            voxel_size_x = voxel_size_y = voxel_size_z
-            down_sampling_factor = (int(voxel_size_z // voxel_size_y), int(voxel_size_z // voxel_size_x))
-            if down_sampling_factor == (1, 1):
-                down_sampling_factor = None
-    else:
-        print(f'{PrintColors.WARNING}make sure voxel sizes are really equal!{PrintColors.ENDC}')
+    # if voxel_size_z < voxel_size_x or voxel_size_z < voxel_size_y:
+    #     need_up_sizing = ask_true_false_question(
+    #         "Do you need to upsize images for isotropic voxel generation before stitching?")
+    #     if need_up_sizing:
+    #         posix += "_upsized"
+    #         what_for += "upsizing "
+    #         new_tile_size = (
+    #             int(round(tile_size[0] * voxel_size_y / voxel_size_z, 0)),
+    #             int(round(tile_size[1] * voxel_size_x / voxel_size_z, 0))
+    #         )
+    #         voxel_size_x = voxel_size_y = voxel_size_z
+    # elif voxel_size_z > voxel_size_x or voxel_size_z > voxel_size_y:
+    #     need_down_sampling = ask_true_false_question(
+    #         "Do you need to down-sample and resize images for isotropic voxel generation before stitching?")
+    #     if need_down_sampling:
+    #         posix += "_downsampled"
+    #         what_for += "down-sampling "
+    #         new_tile_size = (
+    #             int(round(tile_size[0] * voxel_size_y / voxel_size_z, 0)),
+    #             int(round(tile_size[1] * voxel_size_x / voxel_size_z, 0))
+    #         )
+    #         voxel_size_x = voxel_size_y = voxel_size_z
+    #         down_sampling_factor = (int(voxel_size_z // voxel_size_y), int(voxel_size_z // voxel_size_x))
+    #         if down_sampling_factor == (1, 1):
+    #             down_sampling_factor = None
+    # else:
+    #     print(f'{PrintColors.WARNING}make sure voxel sizes are really equal!{PrintColors.ENDC}')
 
-    need_destriping = ask_true_false_question("Do you need to de-stripe tiles?")
+    need_destriping = True  # ask_true_false_question("Do you need to de-stripe tiles?")
     if need_destriping:
         posix += "_destriped"
         what_for += "destriped "
@@ -1180,8 +1181,9 @@ def main(source_path):
                 f"Enter foreground vs background threshold (dark uint) for channel {channel}:", (0, 2 ** 16 - 1), int)
     p_log(f"baseline subtraction value: {dark_threshold}")
 
-    need_raw_png_to_tiff_conversion = ask_true_false_question(
-        "Are images in raw or png format that needs tif conversion before stitching?")
+    need_raw_png_to_tiff_conversion = True
+    # need_raw_png_to_tiff_conversion = ask_true_false_question(
+    #     "Are images in raw or png format that needs tif conversion before stitching?")
     p_log(f"tif conversion requested: {need_raw_png_to_tiff_conversion}")
     need_compression = True  # ask_true_false_question("Do you need to compress un-stitched tif tiles?")
     p_log(f"tile tif compression: {need_compression}")
@@ -1197,15 +1199,17 @@ def main(source_path):
         channels_need_bleach_correction = select_multiple_among_list("bleach correction", all_channels)
     p_log(f"bleach correction: {channels_need_bleach_correction}")
 
-    need_background_subtraction = ask_true_false_question(
-        "Do you need to apply background subtraction algorithm to stitched images?")
+    need_background_subtraction = False
+    # need_background_subtraction = ask_true_false_question(
+    #     "Do you need to apply background subtraction algorithm to stitched images?")
     channels_need_background_subtraction: List[str] = []
     if need_background_subtraction:
         channels_need_background_subtraction = select_multiple_among_list("background subtraction", all_channels)
     p_log(f"background subtraction: {channels_need_background_subtraction}")
 
-    need_16bit_to_8bit_conversion = ask_true_false_question(
-        "Do you need to convert 16-bit images to 8-bit after stitching to reduce final file size?")
+    need_16bit_to_8bit_conversion = True
+    # need_16bit_to_8bit_conversion = ask_true_false_question(
+    #     "Do you need to convert 16-bit images to 8-bit after stitching to reduce final file size?")
     p_log(f"conversion to 8-bit: {need_16bit_to_8bit_conversion}")
     right_bit_shift: Dict[str, int] = {channel: 8 for channel in all_channels}
     # if need_16bit_to_8bit_conversion:
@@ -1234,7 +1238,8 @@ def main(source_path):
     #     #     [f"{channel_color_dict[channel]}{right_bit_shift[channel]}" for channel in all_channels])
     # p_log(f"bit shift: {right_bit_shift}")
 
-    need_rotation_stitched_tif = ask_true_false_question("Do you need to rotate stitched tif files for 90 degrees?")
+    need_rotation_stitched_tif = True
+    # need_rotation_stitched_tif = ask_true_false_question("Do you need to rotate stitched tif files for 90 degrees?")
     p_log(f"rotation: {need_rotation_stitched_tif}")
 
     need_compression_stitched_tif = True  # ask_true_false_question("Do you need to compress stitched tif files?")
@@ -1264,7 +1269,8 @@ def main(source_path):
         posix="_MIP_stitched" if stitch_mip else "_stitched",
         default_path=stitched_path)
 
-    need_tera_fly_conversion = ask_true_false_question("Do you need to convert a channel to TeraFly format?")
+    need_tera_fly_conversion = False
+    # need_tera_fly_conversion = ask_true_false_question("Do you need to convert a channel to TeraFly format?")
     channels_need_tera_fly_conversion: list = []
     if need_tera_fly_conversion:
         if len(all_channels) == 1:
@@ -1285,7 +1291,8 @@ def main(source_path):
     need_compression_merged_channels = True
     reference_channel = all_channels[0]
     if len(all_channels) > 1:
-        need_merged_channels = ask_true_false_question("Do you need to merge channels to RGB color tiff?")
+        need_merged_channels = True
+        # need_merged_channels = ask_true_false_question("Do you need to merge channels to RGB color tiff?")
         # if need_merged_channels:
         #     need_compression_merged_channels = ask_true_false_question("Do you need to compress RGB color tif files?")
         reference_channel = select_among_multiple_options("Choose the reference channel for alignment?", all_channels)
