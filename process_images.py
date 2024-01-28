@@ -639,7 +639,7 @@ def process_channel(
         bleach_correction_clip_min = np_round(expm1_jit(otsu_threshold(img)))
         if bleach_correction_clip_min > 0:
             bleach_correction_clip_min -= 1
-        bleach_correction_clip_max = np_round(expm1_jit(prctl(img[img > log1p_jit(bleach_correction_clip_min)], 90)))
+        bleach_correction_clip_max = np_round(expm1_jit(prctl(img[img > log1p_jit(bleach_correction_clip_min)], 99.5)))
         img_approximate_upper_bound = bleach_correction_clip_max
         if need_bleach_correction and need_16bit_to_8bit_conversion:
             img = process_img(
