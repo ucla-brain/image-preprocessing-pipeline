@@ -241,7 +241,7 @@ def make_diag_stack(
         compression=4,
         cores=cpu_count()
 ):
-    v = TSVVolume.load(xml_path)
+    v = TSVVolume(xml_path)
     if volume is None:
         volume = v.volume
     if dtype is None:
@@ -283,7 +283,7 @@ def make_diag_plane(v, compression, decimation, dtype, mipmap_level, output_patt
 def main(args=argv[1:]):
     parser = ArgumentParser(description="Make a z-stack out of a Terastitcher volume")
     args, mipmap_level, volume = parse_args(parser, args)
-    v = TSVVolume.load(args.xml_path, args.ignore_z_offsets, args.input)
+    v = TSVVolume(args.xml_path, args.ignore_z_offsets, args.input)
 
     if not blockfs_present or args.precomputed_path is None:
         convert_to_2D_tif(v,

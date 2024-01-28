@@ -473,7 +473,6 @@ def process_channel(
             tile_size=tile_size,
             new_size=new_tile_size,
             d_type="uint16",
-            # convert_to_16bit=False,  # defaults to False
             convert_to_8bit=False,  # need_16bit_to_8bit_conversion
             bit_shift_to_right=right_bit_shift,
             compression=('ADOBE_DEFLATE', 1) if need_compression else None,  # ('ZSTD', 1) conda install imagecodecs
@@ -488,12 +487,6 @@ def process_channel(
     if not stitched_path.joinpath(f"{channel}_xml_import_step_5.xml").exists() or not continue_process_terastitcher:
         p_log(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
               f"{channel}: aligning tiles using parastitcher ...")
-
-        # tile_overlap_y = int(tile_size[0] * tile_overlap_percent / 100)
-        # tile_overlap_x = int(tile_size[1] * tile_overlap_percent / 100)
-        # if new_tile_size is not None:
-        #     tile_overlap_y = int(new_tile_size[0] * tile_overlap_percent / 100)
-        #     tile_overlap_x = int(new_tile_size[1] * tile_overlap_percent / 100)
 
         proj_out = stitched_path / f'{channel}_xml_import_step_1.xml'
         command = [
@@ -615,7 +608,7 @@ def process_channel(
     stitched_tif_path = stitched_path / f"{channel}_tif"
     stitched_tif_path.mkdir(exist_ok=True)
 
-    tsv_volume = TSVVolume.load(
+    tsv_volume = TSVVolume(
         stitched_path / f'{channel}_xml_import_step_5.xml',
         alt_stack_dir=preprocessed_path / channel
     )
@@ -641,7 +634,7 @@ def process_channel(
                 tsv_volume.volume.x0, tsv_volume.volume.x1,
                 tsv_volume.volume.y0, tsv_volume.volume.y1,
                 tsv_volume.volume.z0 + shape[0] // 2, tsv_volume.volume.z0 + shape[0] // 2 + 1),
-            tsv_volume.dtype)[0]
+            tsv_volume.dtype, cosine_blending=False)[0]
         img = log1p_jit(img)
         bleach_correction_clip_min = np_round(expm1_jit(otsu_threshold(img)))
         if bleach_correction_clip_min > 0:
