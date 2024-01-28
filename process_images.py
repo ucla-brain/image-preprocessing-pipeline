@@ -1297,7 +1297,7 @@ def main(source_path):
         #     need_compression_merged_channels = ask_true_false_question("Do you need to compress RGB color tif files?")
         reference_channel = select_among_multiple_options("Choose the reference channel for alignment?", all_channels)
         print(f"reference channel={reference_channel}")
-    need_imaris_conversion = ask_true_false_question("Do you need to convert to Imaris format?")
+    need_imaris_conversion = True  # ask_true_false_question("Do you need to convert to Imaris format?")
     # Start ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
     start_time = time()
