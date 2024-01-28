@@ -551,7 +551,7 @@ def correct_bleaching(
         img_filter = where(img < log1p(.99), clip_max, img)
         clip(img_filter, clip_min, clip_max, out=img_filter)
         img_filter = butter_lowpass_filter(img_filter, frequency)
-        img_filter = filter_subband(img_filter, 1 / frequency, 0, "db10", bidirectional=True)
+        img_filter = filter_subband(img_filter, 1 / frequency, 0, "coif15", bidirectional=True)
 
     # apply the filter
     img_filter /= ((clip_min + clip_max) / 2)  # np_max(img_filter) *
