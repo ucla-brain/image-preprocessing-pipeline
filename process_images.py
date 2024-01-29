@@ -646,7 +646,7 @@ def process_channel(
                 img,
                 exclude_dark_edges_set_them_to_zero=False,
                 sigma=bleach_correction_sigma,
-                wavelet="coif15",
+                wavelet="db37",
                 bidirectional=True,
                 bleach_correction_frequency=bleach_correction_frequency,
                 bleach_correction_clip_min=float(bleach_correction_clip_min),

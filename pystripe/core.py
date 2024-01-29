@@ -24,7 +24,7 @@ from numpy import max as np_max
 from numpy import mean as np_mean
 from numpy import median as np_median
 from numpy import min as np_min
-from numpy import uint8, uint16, float32, float64, ndarray, generic, zeros, broadcast_to, exp, expm1, log1p, \
+from numpy import uint8, uint16, float16, float32, float64, ndarray, generic, zeros, broadcast_to, exp, expm1, log1p, \
     cumsum, arange, unique, interp, pad, clip, where, rot90, flipud, dot, reshape, iinfo, nonzero
 from pywt import wavedec2, waverec2, Wavelet, dwt_max_level
 from scipy.fftpack import rfft, fftshift, irfft
@@ -379,11 +379,12 @@ def expm1_jit(img_log_filtered: Union[ndarray, float, int]) -> ndarray:
 
 
 @jit
-def log1p_jit(img_log_filtered: ndarray) -> ndarray:
-    return log1p(img_log_filtered)
+def log1p_jit(img_log_filtered: ndarray, dtype=float16) -> ndarray:
+    return log1p(img_log_filtered, dtype=dtype)
 
 
 def filter_subband(img: ndarray, sigma: float, level: int, wavelet: str, bidirectional: bool = False) -> ndarray:
+    d_type = img.dtype
     coefficients = wavedec2(img, wavelet, mode='symmetric', level=None if level == 0 else level, axes=(-2, -1))
     coefficients: List[List] = list(map(list, coefficients))
     width_frac_h = sigma / img.shape[0]
@@ -407,13 +408,16 @@ def filter_subband(img: ndarray, sigma: float, level: int, wavelet: str, bidirec
             cv_fft *= g
             cv_filt = irfft(cv_fft, axis=-1)
             coefficients[idx][1] = cv_filt
+    img = waverec2(coefficients, wavelet, mode='symmetric', axes=(-2, -1))
+    img = img.astype(d_type)
+    return img
 
-    return waverec2(coefficients, wavelet, mode='symmetric', axes=(-2, -1))
 
-
-def butter_lowpass_filter(data: ndarray, cutoff_frequency: float, order: int = 1) -> ndarray:
+def butter_lowpass_filter(img: ndarray, cutoff_frequency: float, order: int = 1, dtype=float16) -> ndarray:
     sos = butter(order, cutoff_frequency, output='sos')
-    return sosfiltfilt(sos, data)
+    img = sosfiltfilt(sos, img)
+    img = img.astype(dtype)
+    return img
 
 
 @jit(nopython=True)
@@ -510,7 +514,8 @@ def correct_bleaching(
         img: ndarray, frequency: float,
         clip_min: float = 0,
         clip_max: float = None,
-        max_method: bool = False
+        max_method: bool = False,
+        wavelet: str = "db37"
 ) -> ndarray:
     """
     Parameters
@@ -520,10 +525,7 @@ def correct_bleaching(
     max_method: use max value on x and y axes to create the filter. Max method is faster and smoother but less accurate
     clip_min: background vs foreground threshold
     clip_max: max allowed foreground
-    # y_slice_min: exclude bleach correction for image regions for which y-axis is smaller than y_slice_min.
-    # y_slice_max: exclude bleach correction for image regions for which y-axis is larger than y_slice_max.
-    # x_slice_min: exclude bleach correction for image regions for which x-axis is smaller than x_slice_min.
-    # x_slice_max: exclude bleach correction for image regions for which x-axis is larger than x_slice_max.
+    wavelet: wavelet to destripe the bleach_correction filter
 
     Returns
     -------
@@ -534,8 +536,6 @@ def correct_bleaching(
         clip_max = np_max(img)
     # creat the filter
     if max_method:
-        # img_filter_y = np_max(img_sliced, axis=1)
-        # img_filter_x = np_max(img_sliced, axis=0)
         img_filter_y = np_max(img, axis=1)
         img_filter_x = np_max(img, axis=0)
         if clip_min is not None or clip_max is not None:
@@ -547,19 +547,14 @@ def correct_bleaching(
         img_filter_x = reshape(img_filter_x, (1, len(img_filter_x)))
         img_filter = dot(img_filter_y, img_filter_x)
     else:
-        # img_filter = where(img_sliced < log1p(.99), clip_max if clip_max else np_max(img_sliced), img_sliced)
         img_filter = where(img < log1p(.99), clip_max, img)
         clip(img_filter, clip_min, clip_max, out=img_filter)
         img_filter = butter_lowpass_filter(img_filter, frequency)
-        img_filter = filter_subband(img_filter, 1 / frequency, 0, "coif15", bidirectional=True)
+        img_filter = filter_subband(img_filter, 1 / frequency, 0, wavelet, bidirectional=True)
 
     # apply the filter
-    img_filter /= ((clip_min + clip_max) / 2)  # np_max(img_filter) *
+    img_filter /= log1p_jit((expm1(clip_min) + expm1(clip_max)) / 2)
     img = where(img_filter > 0, img / img_filter, img)
-    # if clip_max is not None:
-    #     max_correction = clip_max / prctl(img[img > 0], 99.99)
-    #     if max_correction < 1:
-    #         img *= max_correction
     return img
 
 
@@ -601,7 +596,7 @@ def filter_streaks(
         img: ndarray,
         sigma: Tuple[float, float] = (200, 200),
         level: int = 0,
-        wavelet: str = 'db10',
+        wavelet: str = 'db37',
         crossover: float = 10,
         threshold: float = None,
         padding_mode: str = "reflect",
@@ -673,12 +668,14 @@ def filter_streaks(
     # Need to pad image to multiple of 2. It is needed even for bleach correction non-max method
     img_shape = img.shape
     pad_y, pad_x = [_ % 2 for _ in img.shape]
-    base_pad = 0
     if isinstance(padding_mode, str):
         padding_mode = padding_mode.lower()
     if padding_mode in ('constant', 'edge', 'linear_ramp', 'maximum', 'mean', 'median', 'minimum', 'reflect',
                         'symmetric', 'wrap', 'empty'):
         base_pad = int(max(sigma1, sigma2) // 2) * 2
+    else:
+        print(f"{PrintColors.FAIL}Unsupported padding mode: {padding_mode}{PrintColors.ENDC}")
+        raise RuntimeError
     if pad_y > 0 or pad_x > 0 or base_pad > 0:
         img = pad(img, ((base_pad, base_pad + pad_y), (base_pad, base_pad + pad_x)),
                   mode=padding_mode if padding_mode else 'reflect')
@@ -700,7 +697,8 @@ def filter_streaks(
         if clip_max is None or (clip_max is not None and clip_min < clip_max):
             img = correct_bleaching(
                 img, bleach_correction_frequency, clip_min, clip_max,
-                max_method=bleach_correction_max_method
+                max_method=bleach_correction_max_method,
+                wavelet=wavelet
             )
         else:
             print(f"{PrintColors.WARNING}skipped bleach correction because of "
@@ -728,8 +726,8 @@ def filter_streaks(
     if np_d_type(d_type).kind in ("u", "i"):
         d_type_info = iinfo(d_type)
         clip(img, d_type_info.min, d_type_info.max, out=img)
-
-    return img.astype(d_type)
+    img = img.astype(d_type)
+    return img
 
 
 def calculate_down_sampled_size(tile_size, down_sample):
@@ -771,7 +769,7 @@ def process_img(
         exclude_dark_edges_set_them_to_zero: bool = False,
         sigma: Tuple[int, int] = (0, 0),
         level: int = 0,
-        wavelet: str = 'db10',
+        wavelet: str = 'db37',
         crossover: float = 10,
         threshold: float = None,
         padding_mode: str = "reflect",
@@ -968,7 +966,7 @@ def read_filter_save(
         gaussian_filter_2d: bool = False,
         sigma: Tuple[int, int] = (0, 0),
         level: int = 0,
-        wavelet: str = 'db10',
+        wavelet: str = 'db37',
         crossover: float = 10,
         threshold: float = None,
         padding_mode: str = "reflect",
@@ -977,10 +975,6 @@ def read_filter_save(
         bleach_correction_max_method: bool = True,
         bleach_correction_clip_min: float = None,
         bleach_correction_clip_max: float = None,
-        # bleach_correction_y_slice_min: int = None,
-        # bleach_correction_y_slice_max: int = None,
-        # bleach_correction_x_slice_min: int = None,
-        # bleach_correction_x_slice_max: int = None,
         dark: float = 0,
         lightsheet: bool = False,
         artifact_length: int = 150,
@@ -1047,14 +1041,6 @@ def read_filter_save(
         max values in the image omitting outliers
     bleach_correction_clip_min: float
         foreground vs background threshold
-    # bleach_correction_x_slice_min: int
-    #     from 0 to leach_correction_x_slice_min of the image on x-axis that will not be corrected.
-    # bleach_correction_x_slice_max: int
-    #     from bleach_correction_x_slice_max to max of the image on x-axis that will not be corrected.
-    # bleach_correction_y_slice_min: int
-    #     from 0 to leach_correction_y_slice_min of the image on y-axis that will not be corrected.
-    # bleach_correction_y_slice_max: int
-    #     from bleach_correction_y_slice_max to max of the image on y-axis that will not be corrected.
     dark : float
         Intensity to subtract from the images for dark offset. Default is 0.
     lightsheet : bool
@@ -1147,10 +1133,6 @@ def read_filter_save(
             bleach_correction_max_method=bleach_correction_max_method,
             bleach_correction_clip_min=bleach_correction_clip_min,
             bleach_correction_clip_max=bleach_correction_clip_max,
-            # bleach_correction_y_slice_min=bleach_correction_y_slice_min,
-            # bleach_correction_y_slice_max=bleach_correction_y_slice_max,
-            # bleach_correction_x_slice_min=bleach_correction_x_slice_min,
-            # bleach_correction_x_slice_max=bleach_correction_x_slice_max,
             sigma=sigma,
             level=level,
             wavelet=wavelet,

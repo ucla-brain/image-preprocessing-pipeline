@@ -43,7 +43,7 @@ if __name__ == '__main__':
     # os.environ['NUMEXPR_NUM_THREADS'] = '1'
     # os.environ['OMP_NUM_THREADS'] = '1'
     with ProcessPoolExecutor(max_workers=32) as executor:
-        list(executor.map(main, wavelist()))
+        list(executor.map(main, wavelist(kind='discrete')))
 
 
 
