@@ -46,7 +46,7 @@ def process_cube(
                         img[idx] = filter_streaks(img[idx], sigma=(1, 1), bidirectional=True)
                 img = rot90(img, k=-1, axes=(1, 2))
             if need_gaussian:
-                img = (gaussian_filter(img, sigma=1))
+                img = gaussian_filter(img, sigma=1)
                 img = img.astype(dtype)
             nrrd.write(filename=output_file.__str__(), data=img, header=header, compression_level=1)
             if need_video:
