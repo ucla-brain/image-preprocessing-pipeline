@@ -43,7 +43,7 @@ def process_cube(
                 img = rot90(img, k=1, axes=(1, 2))
                 for idx in range(0, img.shape[0], 1):
                     if not is_uniform_2d(img[idx]):
-                        img[idx] = filter_streaks(img[idx], sigma=(1, 1), bidirectional=True)
+                        img[idx] = filter_streaks(img[idx], sigma=(1, 1), wavelet="db9", bidirectional=True)
                 img = rot90(img, k=-1, axes=(1, 2))
             if need_gaussian:
                 img = gaussian_filter(img, sigma=1)
@@ -58,6 +58,7 @@ def process_cube(
 
 def main(args):
     args_list = make_a_list_of_input_output_paths(args)
+    # list(map(lambda args: process_cube(**args), args_list))
     num_images = len(args_list)
     args_queue = Queue(maxsize=num_images)
     for item in args_list:
