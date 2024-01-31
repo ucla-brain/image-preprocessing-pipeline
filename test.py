@@ -12,29 +12,31 @@ from pywt import wavelist
 #         tsv_volume.volume.y0, tsv_volume.volume.y1,
 #         tsv_volume.volume.z0 + shape[0] // 2, tsv_volume.volume.z0 + shape[0] // 2 + 1),
 #     tsv_volume.dtype)[0]
-img = imread(Path(r"C:\Users\kmoradi\Downloads")/f"img_16bit_test.tif")
+img = imread_tif_raw_png(Path(r"C:\Users\kmoradi\Downloads")/f"test2.png")
 
 
 def main(wavelet):
     img_debleach = process_img(
         img,
         exclude_dark_edges_set_them_to_zero=False,
-        sigma=(4000, 4000),
+        sigma=(250, 250),
         wavelet=wavelet,
-        bidirectional=True,
-        bleach_correction_frequency=0.0005,
-        bleach_correction_clip_min=0,
-        bleach_correction_clip_max=63,
-        log1p_normalization_needed=True,
+        # bidirectional=True,
+        # bleach_correction_frequency=0.0005,
+        # bleach_correction_clip_min=0,
+        # bleach_correction_clip_max=63,
+        # log1p_normalization_needed=True,
         convert_to_8bit=True,
         bit_shift_to_right=0,
-        tile_size=img.shape,
-        d_type=uint16,
-        down_sample=(16, 16),
-        down_sample_method="mean",
-        rotate=90
+        # tile_size=img.shape,
+        # d_type=uint16,
+        # down_sample=(16, 16),
+        # down_sample_method="mean",
+        # rotate=90
     )
-    imsave_tif(Path(r"C:\Users\kmoradi\Downloads")/f"{wavelet}.tif", img_debleach)
+    save_path = Path(r"C:\Users\kmoradi\Downloads")/"test_8"
+    save_path.mkdir(exist_ok=True)
+    imsave_tif(save_path/f"{wavelet}.tif", img_debleach)
 
 
 if __name__ == '__main__':
@@ -43,7 +45,8 @@ if __name__ == '__main__':
     # os.environ['NUMEXPR_NUM_THREADS'] = '1'
     # os.environ['OMP_NUM_THREADS'] = '1'
     with ProcessPoolExecutor(max_workers=32) as executor:
-        list(executor.map(main, wavelist(kind='discrete')))
+        # list(executor.map(main, wavelist(kind='discrete')))
+        list(executor.map(main, ["bior3.7", "bior3.9", "db8", "db9", "db10", "sym7", "sym9", "sym10"]))
 
 
 
