@@ -486,7 +486,7 @@ def is_uniform_2d(arr: ndarray) -> Union[bool, None]:
 
 
 @jit(nopython=True)
-def is_uniform_3d(arr: ndarray) -> Union[bool, None]:
+def is_uniform_3d_jit(arr: ndarray) -> Union[bool, None]:
     n = len(arr)
     if n <= 0:
         return None
@@ -501,6 +501,30 @@ def is_uniform_3d(arr: ndarray) -> Union[bool, None]:
         elif val != arr[i, 0, 0]:
             return False
     return is_uniform
+
+
+def is_uniform_3d_nonjit(arr: ndarray) -> Union[bool, None]:
+    n = len(arr)
+    if n <= 0:
+        return None
+    is_uniform: bool = is_uniform_2d(arr[0])
+    if not is_uniform:
+        return False
+    val = arr[0, 0, 0]
+    for i in range(1, n):
+        is_uniform = is_uniform_2d(arr[i])
+        if not is_uniform:
+            return False
+        elif val != arr[i, 0, 0]:
+            return False
+    return is_uniform
+
+
+def is_uniform_3d(arr: ndarray) -> Union[bool, None]:
+    if arr.dtype == float16:
+        return is_uniform_3d_nonjit(arr)
+    else:
+        return is_uniform_3d_jit(arr)
 
 
 @jit(nopython=True)
