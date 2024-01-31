@@ -421,7 +421,18 @@ def butter_lowpass_filter(img: ndarray, cutoff_frequency: float, order: int = 1,
 
 
 @jit(nopython=True)
-def is_uniform_1d(arr: ndarray) -> Union[bool, None]:
+def is_uniform_1d_jit(arr: ndarray) -> Union[bool, None]:
+    n = len(arr)
+    if n <= 0:
+        return None
+    y = arr[0]
+    for x in arr:
+        if x != y:
+            return False
+    return True
+
+
+def is_uniform_1d_nonjit(arr: ndarray) -> Union[bool, None]:
     n = len(arr)
     if n <= 0:
         return None
@@ -433,21 +444,45 @@ def is_uniform_1d(arr: ndarray) -> Union[bool, None]:
 
 
 @jit(nopython=True)
-def is_uniform_2d(arr: ndarray) -> Union[bool, None]:
+def is_uniform_2d_jit(arr: ndarray) -> Union[bool, None]:
     n = len(arr)
     if n <= 0:
         return None
-    is_uniform: bool = is_uniform_1d(arr[0])
+    is_uniform: bool = is_uniform_1d_jit(arr[0])
     if not is_uniform:
         return False
     val = arr[0, 0]
     for i in range(1, n):
-        is_uniform = is_uniform_1d(arr[i])
+        is_uniform = is_uniform_1d_jit(arr[i])
         if not is_uniform:
             return False
         elif val != arr[i, 0]:
             return False
     return is_uniform
+
+
+def is_uniform_2d_nonjit(arr: ndarray) -> Union[bool, None]:
+    n = len(arr)
+    if n <= 0:
+        return None
+    is_uniform: bool = is_uniform_1d_nonjit(arr[0])
+    if not is_uniform:
+        return False
+    val = arr[0, 0]
+    for i in range(1, n):
+        is_uniform = is_uniform_1d_nonjit(arr[i])
+        if not is_uniform:
+            return False
+        elif val != arr[i, 0]:
+            return False
+    return is_uniform
+
+
+def is_uniform_2d(arr: ndarray) -> Union[bool, None]:
+    if arr.dtype == float16:
+        is_uniform_2d_nonjit(arr)
+    else:
+        is_uniform_2d_jit(arr)
 
 
 @jit(nopython=True)

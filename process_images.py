@@ -24,7 +24,6 @@ from cv2 import MOTION_TRANSLATION, findTransformECC, TERM_CRITERIA_COUNT, TERM_
 from numpy import ndarray, zeros, uint8, float32, eye, where, dstack, append, array, absolute
 from numpy import round as np_round
 from numpy import mean as np_mean
-from numpy import percentile as np_percentile
 from numpy.linalg import inv
 from psutil import cpu_count, virtual_memory
 from tqdm import tqdm
@@ -35,7 +34,7 @@ from skimage.filters import sobel
 from flat import create_flat_img
 from parallel_image_processor import parallel_image_processor, jumpy_step_range
 from pystripe.core import (batch_filter, imread_tif_raw_png, imsave_tif, MultiProcessQueueRunner, progress_manager,
-                           process_img, convert_to_8bit_fun, log1p_jit, expm1_jit, otsu_threshold)
+                           process_img, convert_to_8bit_fun, log1p_jit, expm1_jit, otsu_threshold, prctl)
 from supplements.cli_interface import (ask_for_a_number_in_range, date_time_now, select_multiple_among_list,
                                        select_among_multiple_options, ask_true_false_question, PrintColors)
 from supplements.tifstack import TifStack, imread_tif_stck
@@ -640,7 +639,7 @@ def process_channel(
             bleach_correction_clip_min = np_round(expm1_jit(otsu_threshold(img)))
             if bleach_correction_clip_min > 0:
                 bleach_correction_clip_min -= 1
-            bleach_correction_clip_max = np_round(expm1_jit(np_percentile(img[img > log1p_jit(bleach_correction_clip_min)], 99.5)))
+            bleach_correction_clip_max = np_round(expm1_jit(prctl(img[img > log1p_jit(bleach_correction_clip_min)], 99.5)))
             img_approximate_upper_bound = bleach_correction_clip_max
             if need_bleach_correction and need_16bit_to_8bit_conversion:
                 img = process_img(
@@ -660,7 +659,7 @@ def process_channel(
                 # imsave_tif(stitched_tif_path/"test.tif", img)
                 if need_bleach_correction:
                     img = where(img > bleach_correction_clip_min, img - bleach_correction_clip_min, 0)
-                img_approximate_upper_bound = np_round(np_percentile(img[img > 0], 99.99))
+                img_approximate_upper_bound = np_round(prctl(img[img > 0], 99.99))
 
             del img
             for b in range(0, 9):
@@ -778,11 +777,11 @@ def process_channel(
 
 
 def get_gradient(img: ndarray, threshold: float = 98.5) -> ndarray:
-    img_percentile = np_percentile(img, threshold)
+    img_percentile = prctl(img, threshold)
     img = where(img >= img_percentile, 1, img / img_percentile)  # scale images
     img = sobel(img)
     img = array(img)
-    img_percentile = np_percentile(img, threshold)
+    img_percentile = prctl(img, threshold)
     img = where(img >= img_percentile, 255, img / img_percentile * 255)  # scale images
     img = img.astype(float32)
     return img
