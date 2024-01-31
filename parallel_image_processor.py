@@ -283,7 +283,7 @@ class MultiProcess(Process):
                         # down-sampling on xy
                         if need_down_sampling and self.target_shape is not None and \
                                 self.down_sampling_methods is not None and img is not None:
-                            if is_uniform_2d(img):
+                            if is_uniform_2d(img, img.dtype):
                                 z_stack[idx_z] = zeros(self.target_shape, dtype=float32)
                             else:
                                 img = img.astype(float32)
@@ -323,7 +323,7 @@ class MultiProcess(Process):
 
                 # approximate down-sampling on the z-axis
                 if need_down_sampling and down_sampling_method_z is not None and z_stack is not None:
-                    if is_uniform_3d(z_stack):
+                    if is_uniform_3d(z_stack, z_stack.dtype):
                         self.imsave_tif(down_sampled_tif_path, zeros(self.target_shape, dtype=float32),
                                         compression=compression)
                     else:

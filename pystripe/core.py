@@ -478,24 +478,24 @@ def is_uniform_2d_nonjit(arr: ndarray) -> Union[bool, None]:
     return is_uniform
 
 
-def is_uniform_2d(arr: ndarray) -> Union[bool, None]:
-    if arr.dtype == float16:
+def is_uniform_2d(arr: ndarray, dtype) -> Union[bool, None]:
+    if dtype == float16:
         is_uniform_2d_nonjit(arr)
     else:
         is_uniform_2d_jit(arr)
 
 
 @jit(nopython=True)
-def is_uniform_3d_jit(arr: ndarray) -> Union[bool, None]:
+def is_uniform_3d_jit(arr: ndarray, dtype) -> Union[bool, None]:
     n = len(arr)
     if n <= 0:
         return None
-    is_uniform: bool = is_uniform_2d(arr[0])
+    is_uniform: bool = is_uniform_2d(arr[0], dtype)
     if not is_uniform:
         return False
     val = arr[0, 0, 0]
     for i in range(1, n):
-        is_uniform = is_uniform_2d(arr[i])
+        is_uniform = is_uniform_2d(arr[i], dtype)
         if not is_uniform:
             return False
         elif val != arr[i, 0, 0]:
@@ -503,16 +503,16 @@ def is_uniform_3d_jit(arr: ndarray) -> Union[bool, None]:
     return is_uniform
 
 
-def is_uniform_3d_nonjit(arr: ndarray) -> Union[bool, None]:
+def is_uniform_3d_nonjit(arr: ndarray, dtype) -> Union[bool, None]:
     n = len(arr)
     if n <= 0:
         return None
-    is_uniform: bool = is_uniform_2d(arr[0])
+    is_uniform: bool = is_uniform_2d(arr[0], dtype)
     if not is_uniform:
         return False
     val = arr[0, 0, 0]
     for i in range(1, n):
-        is_uniform = is_uniform_2d(arr[i])
+        is_uniform = is_uniform_2d(arr[i], dtype)
         if not is_uniform:
             return False
         elif val != arr[i, 0, 0]:
@@ -520,11 +520,11 @@ def is_uniform_3d_nonjit(arr: ndarray) -> Union[bool, None]:
     return is_uniform
 
 
-def is_uniform_3d(arr: ndarray) -> Union[bool, None]:
-    if arr.dtype == float16:
-        return is_uniform_3d_nonjit(arr)
+def is_uniform_3d(arr: ndarray, dtype) -> Union[bool, None]:
+    if dtype == float16:
+        return is_uniform_3d_nonjit(arr, dtype)
     else:
-        return is_uniform_3d_jit(arr)
+        return is_uniform_3d_jit(arr, dtype)
 
 
 @jit(nopython=True)
@@ -887,7 +887,7 @@ def process_img(
     if d_type is None:
         d_type = img.dtype
 
-    if is_uniform_2d(img):
+    if is_uniform_2d(img, d_type):
         if new_size is not None:
             tile_size = new_size
         elif down_sample is not None:
