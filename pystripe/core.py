@@ -816,14 +816,14 @@ def process_img(
     else:
         if flat is not None:
             if tile_size == flat.shape:
-                img = img / flat
+                img /= flat
             else:
                 print(f"{PrintColors.WARNING}"
                       f"warning: image and flat arrays had different shapes"
                       f"{PrintColors.ENDC}")
 
         y_slice_min = y_slice_max = x_slice_min = x_slice_max = None
-        if bleach_correction_frequency is not None or exclude_dark_edges_set_them_to_zero:
+        if exclude_dark_edges_set_them_to_zero:
             img_x_max = np_max(img, axis=0)
             img_y_max = np_max(img, axis=1)
             img_x_max_min, img_x_max_max = min_max_1d(img_x_max)
@@ -834,32 +834,25 @@ def process_img(
             img_x_noise = prctl(img_x_max, noise_percentile)
             img_y_noise = prctl(img_y_max, noise_percentile)
             img_noise = min(img_x_noise, img_y_noise)
-            # if dark is not None and dark > 0:
-            #     if bleach_correction_clip_max is not None:
-            #         bleach_correction_clip_max = max(0.0, bleach_correction_clip_max - dark)
-            #     if bleach_correction_clip_min is not None:
-            #         bleach_correction_clip_min = max(0.0, bleach_correction_clip_min - dark)
+            y_slice_min, y_slice_max = slice_non_zero_box(img_y_max, noise=img_x_noise)
+            x_slice_min, x_slice_max = slice_non_zero_box(img_x_max, noise=img_y_noise)
+            img = img[y_slice_min:y_slice_max, x_slice_min:x_slice_max]
             if verbose:
                 print(f"min={img_min}, x_max_min={img_x_max_min}, y_max_min={img_y_max_min},\n"
                       f"noise={img_noise}, x_noise={img_x_noise}, y_noise={img_y_noise},\n"
                       f"bleach_correction_clip_min={bleach_correction_clip_min}, "
                       f"bleach_correction_clip_max={bleach_correction_clip_max},\n"
                       f"max={img_max}, x_max_max={img_x_max_max}, y_max_max={img_y_max_max}.")
-            if exclude_dark_edges_set_them_to_zero:
-                y_slice_min, y_slice_max = slice_non_zero_box(img_y_max, noise=img_x_noise)
-                x_slice_min, x_slice_max = slice_non_zero_box(img_x_max, noise=img_y_noise)
-                if verbose:
-                    speedup = 100 - (x_slice_max - x_slice_min) * (y_slice_max - y_slice_min) / (
-                            img.shape[0] * img.shape[1]) * 100
-                    print(f"slicing: y: {y_slice_min} to {y_slice_max} and x: {x_slice_min} to {x_slice_max}, "
-                          f"performance enhancement: {speedup:.1f}%")
-                img = img[y_slice_min:y_slice_max, x_slice_min:x_slice_max]
-
-            # if bleach_correction_frequency is not None and (dark is None or dark <= 0):
-            #     dark = img_noise
+                speedup = 100 - (x_slice_max - x_slice_min) * (y_slice_max - y_slice_min) / (
+                        img.shape[0] * img.shape[1]) * 100
+                print(f"slicing: y: {y_slice_min} to {y_slice_max} and x: {x_slice_min} to {x_slice_max}, "
+                      f"performance enhancement: {speedup:.1f}%")
 
         if gaussian_filter_2d:
-            img = gaussian(img, sigma=1, preserve_range=True, truncate=2)
+            if img.dtype == float32:
+                gaussian(img, sigma=1, preserve_range=True, truncate=2, output=img)
+            else:
+                img = gaussian(img, sigma=1, preserve_range=True, truncate=2)  # returns float32
 
         if down_sample is not None:
             down_sample_method = down_sample_method.lower()
