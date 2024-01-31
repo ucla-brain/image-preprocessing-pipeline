@@ -544,7 +544,7 @@ class TSVVolumeBase:
         """
         return sum(self.stacks, [])
 
-    def imread(self, volume, dtype, cosine_blending: True):
+    def imread(self, volume, dtype, cosine_blending: bool = False):
         """Read the given volume
 
         volume:
@@ -648,7 +648,6 @@ class TSVVolumeBase:
             z0 = min(z0, stack.z0)
             z1 = max(z1, stack.z1)
         return VExtent(x0, x1, y0, y1, z0, z1)
-
 
 
 class TSVVolume(TSVVolumeBase):

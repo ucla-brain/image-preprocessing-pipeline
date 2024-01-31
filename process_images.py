@@ -613,129 +613,129 @@ def process_channel(
         alt_stack_dir=preprocessed_path / channel
     )
     shape: Tuple[int, int, int] = tsv_volume.volume.shape  # shape is in z y x format
+    if len(list(stitched_tif_path.glob("*.tif"))) < shape[0]:
+        bleach_correction_frequency = None
+        bleach_correction_sigma = (0, 0)
+        if need_bleach_correction:
+            if new_tile_size is not None:
+                bleach_correction_frequency = 1 / min(new_tile_size)
+            elif down_sampling_factor is not None:
+                bleach_correction_frequency = 1 / min(new_tile_size) * min(down_sampling_factor)
+            else:
+                bleach_correction_frequency = 1 / min(tile_size)
+            bleach_correction_sigma = (ceil(1 / bleach_correction_frequency * 2),) * 2
 
-    bleach_correction_frequency = None
-    bleach_correction_sigma = (0, 0)
-    if need_bleach_correction:
-        if new_tile_size is not None:
-            bleach_correction_frequency = 1 / min(new_tile_size)
-        elif down_sampling_factor is not None:
-            bleach_correction_frequency = 1 / min(new_tile_size) * min(down_sampling_factor)
-        else:
-            bleach_correction_frequency = 1 / min(tile_size)
-        bleach_correction_sigma = (ceil(1 / bleach_correction_frequency * 2),) * 2
+        bleach_correction_clip_min = bleach_correction_clip_max = None
+        if need_bleach_correction or need_16bit_to_8bit_conversion:
+            p_log(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
+                  f"{channel}: calculating clip_min, clip_max, and right bit shift values ...")
+            img = tsv_volume.imread(
+                VExtent(
+                    tsv_volume.volume.x0, tsv_volume.volume.x1,
+                    tsv_volume.volume.y0, tsv_volume.volume.y1,
+                    tsv_volume.volume.z0 + shape[0] // 2, tsv_volume.volume.z0 + shape[0] // 2 + 1),
+                tsv_volume.dtype, cosine_blending=False)[0]
+            img = log1p_jit(img)
+            bleach_correction_clip_min = np_round(expm1_jit(otsu_threshold(img)))
+            if bleach_correction_clip_min > 0:
+                bleach_correction_clip_min -= 1
+            bleach_correction_clip_max = np_round(expm1_jit(prctl(img[img > log1p_jit(bleach_correction_clip_min)], 99.5)))
+            img_approximate_upper_bound = bleach_correction_clip_max
+            if need_bleach_correction and need_16bit_to_8bit_conversion:
+                img = process_img(
+                    img,
+                    exclude_dark_edges_set_them_to_zero=False,
+                    sigma=bleach_correction_sigma,
+                    wavelet="db37",
+                    bidirectional=True,
+                    bleach_correction_frequency=bleach_correction_frequency,
+                    bleach_correction_clip_min=float(bleach_correction_clip_min),
+                    bleach_correction_clip_max=float(bleach_correction_clip_max),
+                    log1p_normalization_needed=False,
+                    lightsheet=need_lightsheet_cleaning,
+                    tile_size=shape[1:3],
+                    d_type=tsv_volume.dtype
+                )
+                # imsave_tif(stitched_tif_path/"test.tif", img)
+                if need_bleach_correction:
+                    img = where(img > bleach_correction_clip_min, img - bleach_correction_clip_min, 0)
+                img_approximate_upper_bound = np_round(prctl(img[img > 0], 99.99))
 
-    bleach_correction_clip_min = bleach_correction_clip_max = None
-    if need_bleach_correction or need_16bit_to_8bit_conversion:
-        p_log(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
-              f"{channel}: calculating clip_min, clip_max, and right bit shift values ...")
-        img = tsv_volume.imread(
-            VExtent(
-                tsv_volume.volume.x0, tsv_volume.volume.x1,
-                tsv_volume.volume.y0, tsv_volume.volume.y1,
-                tsv_volume.volume.z0 + shape[0] // 2, tsv_volume.volume.z0 + shape[0] // 2 + 1),
-            tsv_volume.dtype, cosine_blending=False)[0]
-        img = log1p_jit(img)
-        bleach_correction_clip_min = np_round(expm1_jit(otsu_threshold(img)))
-        if bleach_correction_clip_min > 0:
-            bleach_correction_clip_min -= 1
-        bleach_correction_clip_max = np_round(expm1_jit(prctl(img[img > log1p_jit(bleach_correction_clip_min)], 99.5)))
-        img_approximate_upper_bound = bleach_correction_clip_max
-        if need_bleach_correction and need_16bit_to_8bit_conversion:
-            img = process_img(
-                img,
-                exclude_dark_edges_set_them_to_zero=False,
-                sigma=bleach_correction_sigma,
-                wavelet="db37",
-                bidirectional=True,
-                bleach_correction_frequency=bleach_correction_frequency,
-                bleach_correction_clip_min=float(bleach_correction_clip_min),
-                bleach_correction_clip_max=float(bleach_correction_clip_max),
-                log1p_normalization_needed=False,
-                lightsheet=need_lightsheet_cleaning,
-                tile_size=shape[1:3],
-                d_type=tsv_volume.dtype
-            )
-            # imsave_tif(stitched_tif_path/"test.tif", img)
-            if need_bleach_correction:
-                img = where(img > bleach_correction_clip_min, img - bleach_correction_clip_min, 0)
-            img_approximate_upper_bound = np_round(prctl(img[img > 0], 99.99))
+            del img
+            for b in range(0, 9):
+                if 256 * 2 ** b >= img_approximate_upper_bound:
+                    right_bit_shift = b
+                    break
 
-        del img
-        for b in range(0, 9):
-            if 256 * 2 ** b >= img_approximate_upper_bound:
-                right_bit_shift = b
-                break
+        memory_needed_per_thread = 32 if need_bleach_correction else 16
+        memory_needed_per_thread *= shape[1] + 2 * max(bleach_correction_sigma) + 1
+        memory_needed_per_thread *= shape[2] + 2 * max(bleach_correction_sigma) + 1
+        memory_needed_per_thread /= 1024 ** 3
+        if tsv_volume.dtype in (uint8, "uint8"):
+            memory_needed_per_thread /= 2
+        memory_ram = virtual_memory().available / 1024 ** 3  # in GB
+        merge_step_cores = max(1, min(floor(memory_ram / memory_needed_per_thread), cpu_physical_core_count))
 
-    memory_needed_per_thread = 32 if need_bleach_correction else 16
-    memory_needed_per_thread *= shape[1] + 2 * max(bleach_correction_sigma) + 1
-    memory_needed_per_thread *= shape[2] + 2 * max(bleach_correction_sigma) + 1
-    memory_needed_per_thread /= 1024 ** 3
-    if tsv_volume.dtype in (uint8, "uint8"):
-        memory_needed_per_thread /= 2
-    memory_ram = virtual_memory().available / 1024 ** 3  # in GB
-    merge_step_cores = max(1, min(floor(memory_ram / memory_needed_per_thread), cpu_physical_core_count))
-
-    p_log(
-        f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
-        f"{channel}: starting step 6 of stitching, merging tiles into 2D tif series and "
-        f"postprocessing the stitched images, using TSV ...\n"
-        f"\tsource: {stitched_path / f'{channel}_xml_import_step_5.xml'}\n"
-        f"\tdestination: {stitched_tif_path}\n"
-        f"\tmemory needed per thread = {memory_needed_per_thread:.1f} GB\n"
-        f"\tmemory needed total = {memory_needed_per_thread * merge_step_cores:.1f} GB\n"
-        f"\tavailable ram = {memory_ram:.1f} GB\n"
-        f"\ttsv volume shape (zyx): {shape}\n"
-        f"\ttsv volume data type: {tsv_volume.dtype}\n"
-        f"\t8-bit conversion: {need_16bit_to_8bit_conversion}\n"
-        f"\tbit-shift to right: {right_bit_shift}\n"
-        f"\tbleach correction frequency: {bleach_correction_frequency}\n"
-        f"\tbleach correction sigma: {bleach_correction_sigma}\n"
-        f"\tbleach correction clip min: {bleach_correction_clip_min}\n"
-        f"\tbleach correction clip max: {bleach_correction_clip_max}\n"
-        f"\tdark: {bleach_correction_clip_min if need_bleach_correction else 0}\n"
-        f"\tbackground subtraction: {need_lightsheet_cleaning}\n"
-        f"\trotate: {90 if need_rotation_stitched_tif else 0}"
-    )
-    # need_lightsheet_cleaning
-    return_code = parallel_image_processor(
-        source=tsv_volume,
-        destination=stitched_tif_path,
-        fun=process_img,
-        kwargs={
-            # "exclude_dark_edges_set_them_to_zero": True if (
-            #         need_bleach_correction or need_lightsheet_cleaning) else False,
-            "threshold": None,
-            "sigma": bleach_correction_sigma,
-            "wavelet": "db37",  # coif15
-            "padding_mode": "wrap",  # wrap reflect
-            "bidirectional": True if need_bleach_correction else False,
-            "bleach_correction_frequency": bleach_correction_frequency,
-            "bleach_correction_max_method": False,
-            "bleach_correction_clip_min": bleach_correction_clip_min,
-            "bleach_correction_clip_max": bleach_correction_clip_max,
-            "dark": bleach_correction_clip_min if need_bleach_correction else 0,
-            "lightsheet": need_lightsheet_cleaning,
-            "percentile": 0.25,
-            "rotate": 0,
-            "convert_to_8bit": need_16bit_to_8bit_conversion,
-            "bit_shift_to_right": right_bit_shift,
-            "tile_size": shape[1:3],
-            "d_type": tsv_volume.dtype
-        },
-        source_voxel=(voxel_size_z, voxel_size_y, voxel_size_x),
-        target_voxel=None if stitch_mip else 10,
-        rotation=90 if need_rotation_stitched_tif else 0,
-        timeout=None,
-        max_processors=merge_step_cores,
-        progress_bar_name="TSV",
-        compression=("ADOBE_DEFLATE", 1) if need_compression_stitched_tif else None,
-        needed_memory=memory_needed_per_thread * 1024 ** 3
-    )
-    if need_rotation_stitched_tif:
-        shape = (shape[0], shape[2], shape[1])
-    if return_code != 0:
-        exit(return_code)
+        p_log(
+            f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
+            f"{channel}: starting step 6 of stitching, merging tiles into 2D tif series and "
+            f"postprocessing the stitched images, using TSV ...\n"
+            f"\tsource: {stitched_path / f'{channel}_xml_import_step_5.xml'}\n"
+            f"\tdestination: {stitched_tif_path}\n"
+            f"\tmemory needed per thread = {memory_needed_per_thread:.1f} GB\n"
+            f"\tmemory needed total = {memory_needed_per_thread * merge_step_cores:.1f} GB\n"
+            f"\tavailable ram = {memory_ram:.1f} GB\n"
+            f"\ttsv volume shape (zyx): {shape}\n"
+            f"\ttsv volume data type: {tsv_volume.dtype}\n"
+            f"\t8-bit conversion: {need_16bit_to_8bit_conversion}\n"
+            f"\tbit-shift to right: {right_bit_shift}\n"
+            f"\tbleach correction frequency: {bleach_correction_frequency}\n"
+            f"\tbleach correction sigma: {bleach_correction_sigma}\n"
+            f"\tbleach correction clip min: {bleach_correction_clip_min}\n"
+            f"\tbleach correction clip max: {bleach_correction_clip_max}\n"
+            f"\tdark: {bleach_correction_clip_min if need_bleach_correction else 0}\n"
+            f"\tbackground subtraction: {need_lightsheet_cleaning}\n"
+            f"\trotate: {90 if need_rotation_stitched_tif else 0}"
+        )
+        # need_lightsheet_cleaning
+        return_code = parallel_image_processor(
+            source=tsv_volume,
+            destination=stitched_tif_path,
+            fun=process_img,
+            kwargs={
+                # "exclude_dark_edges_set_them_to_zero": True if (
+                #         need_bleach_correction or need_lightsheet_cleaning) else False,
+                "threshold": None,
+                "sigma": bleach_correction_sigma,
+                "wavelet": "db37",  # coif15
+                "padding_mode": "wrap",  # wrap reflect
+                "bidirectional": True if need_bleach_correction else False,
+                "bleach_correction_frequency": bleach_correction_frequency,
+                "bleach_correction_max_method": False,
+                "bleach_correction_clip_min": bleach_correction_clip_min,
+                "bleach_correction_clip_max": bleach_correction_clip_max,
+                "dark": bleach_correction_clip_min if need_bleach_correction else 0,
+                "lightsheet": need_lightsheet_cleaning,
+                "percentile": 0.25,
+                "rotate": 0,
+                "convert_to_8bit": need_16bit_to_8bit_conversion,
+                "bit_shift_to_right": right_bit_shift,
+                "tile_size": shape[1:3],
+                "d_type": tsv_volume.dtype
+            },
+            source_voxel=(voxel_size_z, voxel_size_y, voxel_size_x),
+            target_voxel=None if stitch_mip else 10,
+            rotation=90 if need_rotation_stitched_tif else 0,
+            timeout=None,
+            max_processors=merge_step_cores,
+            progress_bar_name="TSV",
+            compression=("ADOBE_DEFLATE", 1) if need_compression_stitched_tif else None,
+            needed_memory=memory_needed_per_thread * 1024 ** 3
+        )
+        if need_rotation_stitched_tif:
+            shape = (shape[0], shape[2], shape[1])
+        if return_code != 0:
+            exit(return_code)
 
     # TeraFly ----------------------------------------------------------------------------------------------------------
 
