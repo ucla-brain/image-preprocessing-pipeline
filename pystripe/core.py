@@ -504,7 +504,7 @@ def is_uniform_3d(arr: ndarray) -> Union[bool, None]:
 
 
 @jit(nopython=True)
-def min_max_1d(arr: ndarray) -> (int, int):
+def min_max_1d_jit(arr: ndarray) -> (int, int):
     n = len(arr)
     if n <= 0:
         return None, None
@@ -526,6 +526,36 @@ def min_max_1d(arr: ndarray) -> (int, int):
         min_val = min(x, min_val)
         max_val = max(x, max_val)
     return min_val, max_val
+
+def min_max_1d_nonjit(arr: ndarray) -> (int, int):
+    n = len(arr)
+    if n <= 0:
+        return None, None
+    max_val = min_val = arr[0]
+    odd = n % 2
+    if not odd:
+        n -= 1
+    i = 1
+    while i < n:
+        x = arr[i]
+        y = arr[i + 1]
+        if x > y:
+            x, y = y, x
+        min_val = min(x, min_val)
+        max_val = max(y, max_val)
+        i += 2
+    if not odd:
+        x = arr[n]
+        min_val = min(x, min_val)
+        max_val = max(x, max_val)
+    return min_val, max_val
+
+
+def min_max_1d(arr: ndarray) -> (int, int):
+    if arr.dtype == float16:
+        return min_max_1d_nonjit(arr)
+    else:
+        return min_max_1d_jit(arr)
 
 
 @jit(nopython=True)
