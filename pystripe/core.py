@@ -480,9 +480,9 @@ def is_uniform_2d_nonjit(arr: ndarray) -> Union[bool, None]:
 
 def is_uniform_2d(arr: ndarray, dtype) -> Union[bool, None]:
     if dtype == float16:
-        is_uniform_2d_nonjit(arr)
+        return is_uniform_2d_nonjit(arr)
     else:
-        is_uniform_2d_jit(arr)
+        return is_uniform_2d_jit(arr)
 
 
 @jit(nopython=True)
