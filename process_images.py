@@ -707,7 +707,7 @@ def process_channel(
             #         need_bleach_correction or need_lightsheet_cleaning) else False,
             "threshold": None,
             "sigma": bleach_correction_sigma,
-            "wavelet": "coif15",
+            "wavelet": "db37",  # coif15
             "padding_mode": "wrap",  # wrap reflect
             "bidirectional": True if need_bleach_correction else False,
             "bleach_correction_frequency": bleach_correction_frequency,
