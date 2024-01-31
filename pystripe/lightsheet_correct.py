@@ -237,16 +237,16 @@ def apply_local_function(
     return results
 
 
+@njit
+def percentile_jit(data: ndarray, percentile: Union[List, Tuple]):
+    return np_percentile(data, percentile)
+
+
 def prctl(data: ndarray, percentile: Union[List, Tuple, float]):
     if data.dtype == float16:
         return np_percentile(data, percentile)
     else:
-        return prctl(data, percentile)
-
-
-@njit
-def percentile_jit(data: ndarray, percentile: Union[List, Tuple]):
-    return np_percentile(data, percentile)
+        return percentile_jit(data, percentile)
 
 
 def local_percentile(
