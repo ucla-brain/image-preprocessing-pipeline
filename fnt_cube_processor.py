@@ -42,7 +42,7 @@ def process_cube(
             if need_destripe:
                 img = rot90(img, k=1, axes=(1, 2))
                 for idx in range(0, img.shape[0], 1):
-                    if not is_uniform_2d(img[idx], dtype):
+                    if not is_uniform_2d(img[idx]):
                         img[idx] = filter_streaks(img[idx], sigma=(1, 1), wavelet="db9", bidirectional=True)
                 img = rot90(img, k=-1, axes=(1, 2))
             if need_gaussian:

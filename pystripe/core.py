@@ -420,8 +420,8 @@ def butter_lowpass_filter(img: ndarray, cutoff_frequency: float, order: int = 1,
     return img
 
 
-@jit(nopython=True)
-def is_uniform_1d_jit(arr: ndarray) -> Union[bool, None]:
+# @jit(nopython=True)
+def is_uniform_1d(arr: ndarray) -> Union[bool, None]:
     n = len(arr)
     if n <= 0:
         return None
@@ -432,28 +432,17 @@ def is_uniform_1d_jit(arr: ndarray) -> Union[bool, None]:
     return True
 
 
-def is_uniform_1d_nonjit(arr: ndarray) -> Union[bool, None]:
+# @jit(nopython=True)
+def is_uniform_2d(arr: ndarray) -> Union[bool, None]:
     n = len(arr)
     if n <= 0:
         return None
-    y = arr[0]
-    for x in arr:
-        if x != y:
-            return False
-    return True
-
-
-@jit(nopython=True)
-def is_uniform_2d_jit(arr: ndarray) -> Union[bool, None]:
-    n = len(arr)
-    if n <= 0:
-        return None
-    is_uniform: bool = is_uniform_1d_jit(arr[0])
+    is_uniform: bool = is_uniform_1d(arr[0])
     if not is_uniform:
         return False
     val = arr[0, 0]
     for i in range(1, n):
-        is_uniform = is_uniform_1d_jit(arr[i])
+        is_uniform = is_uniform_1d(arr[i])
         if not is_uniform:
             return False
         elif val != arr[i, 0]:
@@ -461,41 +450,17 @@ def is_uniform_2d_jit(arr: ndarray) -> Union[bool, None]:
     return is_uniform
 
 
-def is_uniform_2d_nonjit(arr: ndarray) -> Union[bool, None]:
+# @jit(nopython=True)
+def is_uniform_3d(arr: ndarray) -> Union[bool, None]:
     n = len(arr)
     if n <= 0:
         return None
-    is_uniform: bool = is_uniform_1d_nonjit(arr[0])
-    if not is_uniform:
-        return False
-    val = arr[0, 0]
-    for i in range(1, n):
-        is_uniform = is_uniform_1d_nonjit(arr[i])
-        if not is_uniform:
-            return False
-        elif val != arr[i, 0]:
-            return False
-    return is_uniform
-
-
-def is_uniform_2d(arr: ndarray, dtype) -> Union[bool, None]:
-    if dtype == float16:
-        return is_uniform_2d_nonjit(arr)
-    else:
-        return is_uniform_2d_jit(arr)
-
-
-@jit(nopython=True)
-def is_uniform_3d_jit(arr: ndarray, dtype) -> Union[bool, None]:
-    n = len(arr)
-    if n <= 0:
-        return None
-    is_uniform: bool = is_uniform_2d(arr[0], dtype)
+    is_uniform: bool = is_uniform_2d(arr[0])
     if not is_uniform:
         return False
     val = arr[0, 0, 0]
     for i in range(1, n):
-        is_uniform = is_uniform_2d(arr[i], dtype)
+        is_uniform = is_uniform_2d(arr[i])
         if not is_uniform:
             return False
         elif val != arr[i, 0, 0]:
@@ -503,86 +468,32 @@ def is_uniform_3d_jit(arr: ndarray, dtype) -> Union[bool, None]:
     return is_uniform
 
 
-def is_uniform_3d_nonjit(arr: ndarray, dtype) -> Union[bool, None]:
-    n = len(arr)
-    if n <= 0:
-        return None
-    is_uniform: bool = is_uniform_2d(arr[0], dtype)
-    if not is_uniform:
-        return False
-    val = arr[0, 0, 0]
-    for i in range(1, n):
-        is_uniform = is_uniform_2d(arr[i], dtype)
-        if not is_uniform:
-            return False
-        elif val != arr[i, 0, 0]:
-            return False
-    return is_uniform
-
-
-def is_uniform_3d(arr: ndarray, dtype) -> Union[bool, None]:
-    if dtype == float16:
-        return is_uniform_3d_nonjit(arr, dtype)
-    else:
-        return is_uniform_3d_jit(arr, dtype)
-
-
-@jit(nopython=True)
-def min_max_1d_jit(arr: ndarray) -> (int, int):
-    n = len(arr)
-    if n <= 0:
-        return None, None
-    max_val = min_val = arr[0]
-    odd = n % 2
-    if not odd:
-        n -= 1
-    i = 1
-    while i < n:
-        x = arr[i]
-        y = arr[i + 1]
-        if x > y:
-            x, y = y, x
-        min_val = min(x, min_val)
-        max_val = max(y, max_val)
-        i += 2
-    if not odd:
-        x = arr[n]
-        min_val = min(x, min_val)
-        max_val = max(x, max_val)
-    return min_val, max_val
-
-def min_max_1d_nonjit(arr: ndarray) -> (int, int):
-    n = len(arr)
-    if n <= 0:
-        return None, None
-    max_val = min_val = arr[0]
-    odd = n % 2
-    if not odd:
-        n -= 1
-    i = 1
-    while i < n:
-        x = arr[i]
-        y = arr[i + 1]
-        if x > y:
-            x, y = y, x
-        min_val = min(x, min_val)
-        max_val = max(y, max_val)
-        i += 2
-    if not odd:
-        x = arr[n]
-        min_val = min(x, min_val)
-        max_val = max(x, max_val)
-    return min_val, max_val
-
-
+# @jit(nopython=True)
 def min_max_1d(arr: ndarray) -> (int, int):
-    if arr.dtype == float16:
-        return min_max_1d_nonjit(arr)
-    else:
-        return min_max_1d_jit(arr)
+    n = len(arr)
+    if n <= 0:
+        return None, None
+    max_val = min_val = arr[0]
+    odd = n % 2
+    if not odd:
+        n -= 1
+    i = 1
+    while i < n:
+        x = arr[i]
+        y = arr[i + 1]
+        if x > y:
+            x, y = y, x
+        min_val = min(x, min_val)
+        max_val = max(y, max_val)
+        i += 2
+    if not odd:
+        x = arr[n]
+        min_val = min(x, min_val)
+        max_val = max(x, max_val)
+    return min_val, max_val
 
 
-@jit(nopython=True)
+# @jit(nopython=True)
 def min_max_2d(arr: ndarray) -> (int, int):
     n = len(arr)
     if n <= 0:
@@ -887,7 +798,7 @@ def process_img(
     if d_type is None:
         d_type = img.dtype
 
-    if is_uniform_2d(img, d_type):
+    if is_uniform_2d(img):
         if new_size is not None:
             tile_size = new_size
         elif down_sample is not None:
