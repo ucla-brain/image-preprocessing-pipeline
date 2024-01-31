@@ -19,7 +19,7 @@ https://doi.org/10.1016/j.cell.2016.05.007
 """
 
 from scipy.ndimage import zoom as ndi_zoom
-from numpy import array, ndarray, meshgrid, minimum, moveaxis, reshape, zeros, logical_and, float16
+from numpy import array, ndarray, meshgrid, minimum, moveaxis, reshape, zeros, logical_and
 from numpy import percentile as np_percentile
 from typing import Callable, Tuple, List, Union
 from numba import njit
@@ -238,15 +238,8 @@ def apply_local_function(
 
 
 @njit
-def percentile_jit(data: ndarray, percentile: Union[List, Tuple]):
-    return np_percentile(data, percentile)
-
-
-def prctl(data: ndarray, percentile: Union[List, Tuple, float]):
-    if data.dtype == float16:
-        return np_percentile(data, percentile)
-    else:
-        return percentile_jit(data, percentile)
+def prctl(data: ndarray, percentiles: Union[List, Tuple]):
+    return np_percentile(data, percentiles)
 
 
 def local_percentile(

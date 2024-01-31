@@ -379,7 +379,7 @@ def expm1_jit(img_log_filtered: Union[ndarray, float, int]) -> ndarray:
 
 
 @jit
-def log1p_jit(img_log_filtered: ndarray, dtype=float16) -> ndarray:
+def log1p_jit(img_log_filtered: ndarray, dtype=float32) -> ndarray:
     return log1p(img_log_filtered, dtype=dtype)
 
 
@@ -413,14 +413,14 @@ def filter_subband(img: ndarray, sigma: float, level: int, wavelet: str, bidirec
     return img
 
 
-def butter_lowpass_filter(img: ndarray, cutoff_frequency: float, order: int = 1, dtype=float16) -> ndarray:
+def butter_lowpass_filter(img: ndarray, cutoff_frequency: float, order: int = 1, dtype=float32) -> ndarray:
     sos = butter(order, cutoff_frequency, output='sos')
-    img = sosfiltfilt(sos, img)
+    img = sosfiltfilt(sos, img)  # return floadt64
     img = img.astype(dtype)
     return img
 
 
-# @jit(nopython=True)
+@jit(nopython=True)
 def is_uniform_1d(arr: ndarray) -> Union[bool, None]:
     n = len(arr)
     if n <= 0:
@@ -432,7 +432,7 @@ def is_uniform_1d(arr: ndarray) -> Union[bool, None]:
     return True
 
 
-# @jit(nopython=True)
+@jit(nopython=True)
 def is_uniform_2d(arr: ndarray) -> Union[bool, None]:
     n = len(arr)
     if n <= 0:
@@ -450,7 +450,7 @@ def is_uniform_2d(arr: ndarray) -> Union[bool, None]:
     return is_uniform
 
 
-# @jit(nopython=True)
+@jit(nopython=True)
 def is_uniform_3d(arr: ndarray) -> Union[bool, None]:
     n = len(arr)
     if n <= 0:
@@ -468,7 +468,7 @@ def is_uniform_3d(arr: ndarray) -> Union[bool, None]:
     return is_uniform
 
 
-# @jit(nopython=True)
+@jit(nopython=True)
 def min_max_1d(arr: ndarray) -> (int, int):
     n = len(arr)
     if n <= 0:
@@ -493,7 +493,7 @@ def min_max_1d(arr: ndarray) -> (int, int):
     return min_val, max_val
 
 
-# @jit(nopython=True)
+@jit(nopython=True)
 def min_max_2d(arr: ndarray) -> (int, int):
     n = len(arr)
     if n <= 0:
