@@ -1466,7 +1466,7 @@ def main(source_path):
                 dtype='uint8' if need_16bit_to_8bit_conversion else 'uint16'
             )
             p_log(f"\t{PrintColors.BLUE}tiff to ims conversion command:{PrintColors.ENDC}\n\t\t{command}\n")
-            MultiProcessCommandRunner(queue, command, pattern=r"(WriteProgress:)\s+(\d*.\d+)\s*$", position=idx).start()
+            MultiProcessCommandRunner(queue, command, pattern=r"WriteProgress:\s+(\d*.\d+)\s*$", position=idx).start()
             running_processes += 1
             progress_bars += [
                 tqdm(total=100, ascii=True, position=idx, unit=" %", smoothing=0.01,
