@@ -304,7 +304,7 @@ class MultiProcessCommandRunner(Process):
             else:
                 process = Popen(
                     self.command,
-                    stdin=PIPE,
+                    # stdin=PIPE,
                     stdout=PIPE,
                     # stderr=PIPE,
                     shell=True,
@@ -315,16 +315,9 @@ class MultiProcessCommandRunner(Process):
                 pattern = compile(self.pattern, IGNORECASE)
                 while return_code is None:
                     return_code = process.poll()
-                    match1 = match(pattern, process.stdout.readline())
-                    stdin = process.stdin.readline()
-                    match2 = match(pattern, stdin)
-                    print(stdin)
-                    if match1:
-                        percent = round(float(match1[2]) * self.percent_conversion, 1)
-                        self.queue.put([percent - previous_percent, self.position, return_code, self.command])
-                        previous_percent = percent
-                    if match2:
-                        percent = round(float(match2[2]) * self.percent_conversion, 1)
+                    matches = match(pattern, process.stdout.readline())
+                    if matches:
+                        percent = round(float(matches[2]) * self.percent_conversion, 1)
                         self.queue.put([percent - previous_percent, self.position, return_code, self.command])
                         previous_percent = percent
         except Exception as inst:
