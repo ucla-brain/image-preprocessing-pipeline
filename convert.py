@@ -150,6 +150,7 @@ def main(args: Namespace):
             print(f"elapsed time = {round((time() - start_time) / 60, 1)}")
 
     progressbar_position = 0
+    progress_bars = []
     if args.fnt:
         file_txt_sorted_tif_list = tif_2d_folder / "files.txt"
         files = list(tif_2d_folder.glob("*.tif"))
@@ -169,7 +170,10 @@ def main(args: Namespace):
                                   pattern=r"(\d+)(?=\)\s*finished)\.\s*$",
                                   position=progressbar_position,
                                   percent_conversion=100 / len(files)).start()
+        progress_bars += [tqdm(total=100, ascii=True, position=progressbar_position, unit=" %", smoothing=0.01,
+                              desc=f"FNT")]
         progressbar_position += 1
+
         # if args.imaris:
         #     MultiProcessCommandRunner(progress_queue, command,
         #                               pattern=r"(WriteProgress:)\s+(\d*.\d+)\s*$",
@@ -179,13 +183,13 @@ def main(args: Namespace):
         #     subprocess.call(command, shell=True)
         #     print(f"elapsed time = {round((time() - start_time) / 60, 1)}")
 
+    is_renamed: bool = False
     if args.imaris:
         ims_file = Path(args.imaris)
         files = list(tif_2d_folder.glob("*.tif"))
         files += list(tif_2d_folder.glob("*.tiff"))
         assert len(files) > 0
 
-        is_renamed: bool = False
         if compile(r"^\d+$").findall(files[0].name[:-len(files[0].suffix)]):
             files = [file.rename(file.parent / ("_" + file.name)) for file in files]
             is_renamed = True
@@ -202,9 +206,12 @@ def main(args: Namespace):
 
         MultiProcessCommandRunner(progress_queue, command,
                                   pattern=r"(WriteProgress:)\s+(\d*.\d+)\s*$", position=progressbar_position).start()
-        progress_bars = [tqdm(total=100, ascii=True, position=0, unit=" %", smoothing=0.01, desc=f"imaris")]
-        commands_progress_manger(progress_queue, progress_bars, running_processes=2 if args.teraFly else 1)
+        progress_bars += [tqdm(total=100, ascii=True, position=progressbar_position, unit=" %", smoothing=0.01,
+                               desc=f"imaris")]
+        progressbar_position += 1
 
+    if progressbar_position > 0:
+        commands_progress_manger(progress_queue, progress_bars, running_processes=2 if args.teraFly else 1)
         if is_renamed:
             [file.rename(file.parent / file.name[1:]) for file in files]
 
