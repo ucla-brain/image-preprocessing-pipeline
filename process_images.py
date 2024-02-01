@@ -306,7 +306,7 @@ class MultiProcessCommandRunner(Process):
                     self.command,
                     # stdin=PIPE,
                     stdout=PIPE,
-                    # stderr=PIPE,
+                    stderr=PIPE,
                     shell=True,
                     text=True,
                     start_new_session=False,
