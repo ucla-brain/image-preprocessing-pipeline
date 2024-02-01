@@ -285,7 +285,7 @@ def worker(command: str):
 
 
 class MultiProcessCommandRunner(Process):
-    def __init__(self, queue, command, pattern="", position=None):
+    def __init__(self, queue, command, pattern: str = "", position: int = None, percent_conversion: float = 100):
         Process.__init__(self)
         super().__init__()
         self.daemon = True
@@ -293,6 +293,7 @@ class MultiProcessCommandRunner(Process):
         self.command = command
         self.position = position
         self.pattern = pattern
+        self.percent_conversion = percent_conversion
 
     def run(self):
         return_code = None  # 0 == success and any other number is an error code
@@ -312,7 +313,7 @@ class MultiProcessCommandRunner(Process):
                     return_code = process.poll()
                     m = match(pattern, process.stdout.readline())
                     if m:
-                        percent = round(float(m[2]) * 100, 1)
+                        percent = round(float(m[2]) * self.percent_conversion, 1)
                         self.queue.put([percent - previous_percent, self.position, return_code, self.command])
                         previous_percent = percent
         except Exception as inst:

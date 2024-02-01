@@ -149,10 +149,12 @@ def main(args: Namespace):
             subprocess.call(command, shell=True)
             print(f"elapsed time = {round((time() - start_time) / 60, 1)}")
 
+    progressbar_position = 0
     if args.fnt:
         file_txt_sorted_tif_list = tif_2d_folder / "files.txt"
+        files = list(tif_2d_folder.glob("*.tif"))
         with open(file_txt_sorted_tif_list, "w") as f:
-            f.write("\n".join(natural_sorted(list(map(str, tif_2d_folder.glob("*.tif"))))))
+            f.write("\n".join(natural_sorted(list(map(str, files)))))
         command = [
             f"{fnt_slice2cube}",
             f"-i {file_txt_sorted_tif_list}",
@@ -163,12 +165,19 @@ def main(args: Namespace):
         ]
         command = " ".join(command)
         print(command)
-        if args.imaris:
-            MultiProcessCommandRunner(progress_queue, command).start()
-        else:
-            start_time = time()
-            subprocess.call(command, shell=True)
-            print(f"elapsed time = {round((time() - start_time) / 60, 1)}")
+        MultiProcessCommandRunner(progress_queue, command,
+                                  pattern=r"(\d+)(?=\)\s*finished)\.\s*$",
+                                  position=progressbar_position,
+                                  percent_conversion=100 / len(files)).start()
+        progressbar_position += 1
+        # if args.imaris:
+        #     MultiProcessCommandRunner(progress_queue, command,
+        #                               pattern=r"(WriteProgress:)\s+(\d*.\d+)\s*$",
+        #                               position=progressbar_position).start()
+        # else:
+        #     start_time = time()
+        #     subprocess.call(command, shell=True)
+        #     print(f"elapsed time = {round((time() - start_time) / 60, 1)}")
 
     if args.imaris:
         ims_file = Path(args.imaris)
@@ -192,7 +201,7 @@ def main(args: Namespace):
         print(f"\t{PrintColors.BLUE}tiff to ims conversion command:{PrintColors.ENDC}\n\t\t{command}\n")
 
         MultiProcessCommandRunner(progress_queue, command,
-                                  pattern=r"(WriteProgress:)\s+(\d*.\d+)\s*$", position=0).start()
+                                  pattern=r"(WriteProgress:)\s+(\d*.\d+)\s*$", position=progressbar_position).start()
         progress_bars = [tqdm(total=100, ascii=True, position=0, unit=" %", smoothing=0.01, desc=f"imaris")]
         commands_progress_manger(progress_queue, progress_bars, running_processes=2 if args.teraFly else 1)
 
