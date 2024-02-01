@@ -848,10 +848,9 @@ def process_img(
                       f"performance enhancement: {speedup:.1f}%")
 
         if gaussian_filter_2d:
-            if img.dtype in (float32, float64):
-                gaussian(img, sigma=1, preserve_range=True, truncate=2, output=img)
-            else:
-                img = gaussian(img, sigma=1, preserve_range=True, truncate=2)  # returns float32
+            if img.dtype != float32:
+                img = img.astype(float32)
+            gaussian(img, sigma=1, preserve_range=True, truncate=2, output=img)
 
         if down_sample is not None:
             down_sample_method = down_sample_method.lower()
