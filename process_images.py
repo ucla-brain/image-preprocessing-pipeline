@@ -307,7 +307,9 @@ class MultiProcessCommandRunner(Process):
                     stdout=PIPE,
                     # stderr=PIPE,
                     shell=True,
-                    text=True)
+                    text=True,
+                    start_new_session=True
+                )
                 pattern = compile(self.pattern, IGNORECASE)
                 while return_code is None:
                     return_code = process.poll()
