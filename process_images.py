@@ -308,7 +308,8 @@ class MultiProcessCommandRunner(Process):
                     # stderr=PIPE,
                     shell=True,
                     text=True,
-                    start_new_session=True
+                    start_new_session=False,
+                    bufsize=0
                 )
                 pattern = compile(self.pattern, IGNORECASE)
                 while return_code is None:
