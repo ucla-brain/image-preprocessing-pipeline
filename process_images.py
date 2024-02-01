@@ -315,7 +315,8 @@ class MultiProcessCommandRunner(Process):
                 pattern = compile(self.pattern, IGNORECASE)
                 while return_code is None:
                     return_code = process.poll()
-                    matches = match(pattern, process.stdout.readline())
+                    # matches = match(pattern, process.stdout.readline())
+                    matches = match(pattern, process.stdout.read().decode())
                     if matches:
                         percent = round(float(matches[2]) * self.percent_conversion, 1)
                         self.queue.put([percent - previous_percent, self.position, return_code, self.command])
