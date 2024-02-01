@@ -316,21 +316,14 @@ class MultiProcessCommandRunner(Process):
                 while return_code is None:
                     return_code = process.poll()
                     output = process.stdout.readline()
-                    if output:
-                        if not isinstance(output, str):
-                            output = output.decode('utf-8')
-                        print(f"Output: {output}")
-                        matches = match(pattern, output)
-                    error = process.stderr.readline()
-                    if error:
-                        if not isinstance(error, str):
-                            error = error.decode('utf-8')
-                        print(f"Error: {error}")
-                        matches = match(pattern, error)
+                    matches = match(pattern, output)
                     if matches:
                         percent = round(float(matches[2]) * self.percent_conversion, 1)
                         self.queue.put([percent - previous_percent, self.position, return_code, self.command])
                         previous_percent = percent
+                error = process.stderr.read()
+                if error:
+                    print(f"Error: {error}")
         except Exception as inst:
             p_log(f'Process failed for {self.command}.')
             print(type(inst))  # the exception instance
