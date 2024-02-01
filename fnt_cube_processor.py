@@ -8,7 +8,7 @@ from subprocess import call
 from platform import uname
 from numpy import rot90
 from pystripe.core import filter_streaks
-from scipy.ndimage import gaussian_filter
+from skimage.filters import gaussian
 from argparse import RawDescriptionHelpFormatter, ArgumentParser, BooleanOptionalAction
 
 
@@ -46,7 +46,7 @@ def process_cube(
                         img[idx] = filter_streaks(img[idx], sigma=(1, 1), wavelet="db9", bidirectional=True)
                 img = rot90(img, k=-1, axes=(1, 2))
             if need_gaussian:
-                img = gaussian_filter(img, sigma=1)
+                gaussian(img, 1, output=img)
                 img = img.astype(dtype)
             nrrd.write(filename=output_file.__str__(), data=img, header=header, compression_level=1)
             if need_video:
