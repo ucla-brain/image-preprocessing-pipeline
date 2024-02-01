@@ -211,7 +211,7 @@ def main(args: Namespace):
         print(f"\t{PrintColors.BLUE}tiff to ims conversion command:{PrintColors.ENDC}\n\t\t{command}\n")
 
         MultiProcessCommandRunner(progress_queue, command,
-                                  pattern=r"(WriteProgress:)\s+(\d*.\d+)\s*$", position=progressbar_position).start()
+                                  pattern=r"WriteProgress:\s+(\d*.\d+)\s*$", position=progressbar_position).start()
         progress_bars += [tqdm(total=100, ascii=True, position=progressbar_position, unit=" %", smoothing=0.01,
                                desc=f"IMS")]
         progressbar_position += 1
