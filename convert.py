@@ -172,7 +172,8 @@ def main(args: Namespace):
         MultiProcessCommandRunner(progress_queue, command,
                                   pattern=r"(\d+)(?=\)\s*finished\.*\s*$)",
                                   position=progressbar_position,
-                                  percent_conversion=100 / len(files)).start()
+                                  percent_conversion=100 / len(files),
+                                  check_stderr=True).start()
         progress_bars += [tqdm(total=100, ascii=True, position=progressbar_position, unit=" %", smoothing=0.01,
                                desc=f"FNT")]
         progressbar_position += 1

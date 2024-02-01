@@ -285,7 +285,8 @@ def worker(command: str):
 
 
 class MultiProcessCommandRunner(Process):
-    def __init__(self, queue, command, pattern: str = "", position: int = None, percent_conversion: float = 100):
+    def __init__(self, queue, command, pattern: str = "", position: int = None, percent_conversion: float = 100,
+                 check_stderr: bool = False):
         Process.__init__(self)
         super().__init__()
         self.daemon = True
@@ -294,6 +295,7 @@ class MultiProcessCommandRunner(Process):
         self.position = position
         self.pattern = pattern
         self.percent_conversion = percent_conversion
+        self.check_stderr = check_stderr
 
     def run(self):
         return_code = None  # 0 == success and any other number is an error code
@@ -317,18 +319,20 @@ class MultiProcessCommandRunner(Process):
                     print(1)
                     return_code = process.poll()
                     print(2)
-                    # output = process.stdout.readline()
-                    # print(3)
-                    # print(output)
-                    print(process.stderr)
-                    # matches = match(pattern, output)
-                    # if matches:
-                    #     percent = round(float(matches[2]) * self.percent_conversion, 1)
-                    #     self.queue.put([percent - previous_percent, self.position, return_code, self.command])
-                    #     previous_percent = percent
-                error = process.stderr.read()
-                if error:
-                    print(f"{PrintColors.FAIL}Error: {error}{PrintColors.ENDC}")
+                    if self.check_stderr:
+                        output = process.stderr.readline()
+                    else:
+                        output = process.stdout.readline()
+                    print(3)
+                    print(output)
+                    matches = match(pattern, output)
+                    if matches:
+                        percent = round(float(matches[2]) * self.percent_conversion, 1)
+                        self.queue.put([percent - previous_percent, self.position, return_code, self.command])
+                        previous_percent = percent
+                # error = process.stderr.read()
+                # if error:
+                #     print(f"{PrintColors.FAIL}Error: {error}{PrintColors.ENDC}")
         except Exception as inst:
             p_log(f'Process failed for {self.command}.')
             print(type(inst))  # the exception instance
