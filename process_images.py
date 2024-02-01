@@ -317,12 +317,14 @@ class MultiProcessCommandRunner(Process):
                     return_code = process.poll()
                     output = process.stdout.readline()
                     if output:
-                        output = output.decode('utf-8')
+                        if not isinstance(output, str):
+                            output = output.decode('utf-8')
                         print(f"Output: {output}")
                         matches = match(pattern, output)
                     error = process.stderr.readline()
                     if error:
-                        error = error.decode('utf-8')
+                        if not isinstance(error, str):
+                            error = error.decode('utf-8')
                         print(f"Error: {error}")
                         matches = match(pattern, error)
                     if matches:
