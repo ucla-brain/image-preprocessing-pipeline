@@ -142,12 +142,13 @@ def main(args: Namespace):
         ]
         command = " ".join(command)
 
-        if args.imaris:
-            MultiProcessCommandRunner(progress_queue, command).start()
-        else:
-            start_time = time()
-            subprocess.call(command, shell=True)
-            print(f"elapsed time = {round((time() - start_time) / 60, 1)}")
+        MultiProcessCommandRunner(progress_queue, command).start()
+        # if args.imaris:
+        #
+        # else:
+        #     start_time = time()
+        #     subprocess.call(command, shell=True)
+        #     print(f"elapsed time = {round((time() - start_time) / 60, 1)}")
 
     progressbar_position = 0
     progress_bars = []
@@ -167,11 +168,11 @@ def main(args: Namespace):
         command = " ".join(command)
         print(command)
         MultiProcessCommandRunner(progress_queue, command,
-                                  pattern=r"(\d+)(?=\)\s*finished)\.\s*$",
+                                  pattern=r"(\d+)(?=\)\s*finished\.*)\s*$",
                                   position=progressbar_position,
                                   percent_conversion=100 / len(files)).start()
         progress_bars += [tqdm(total=100, ascii=True, position=progressbar_position, unit=" %", smoothing=0.01,
-                              desc=f"FNT")]
+                               desc=f"FNT")]
         progressbar_position += 1
 
         # if args.imaris:
@@ -208,7 +209,7 @@ def main(args: Namespace):
         MultiProcessCommandRunner(progress_queue, command,
                                   pattern=r"(WriteProgress:)\s+(\d*.\d+)\s*$", position=progressbar_position).start()
         progress_bars += [tqdm(total=100, ascii=True, position=progressbar_position, unit=" %", smoothing=0.01,
-                               desc=f"imaris")]
+                               desc=f"IMS")]
         progressbar_position += 1
 
     if progressbar_position > 0:
