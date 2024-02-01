@@ -318,6 +318,7 @@ class MultiProcessCommandRunner(Process):
                     return_code = process.poll()
                     print(2)
                     output = process.stdout.readline()
+                    print(3)
                     print(output)
                     print(process.stderr)
                     matches = match(pattern, output)
