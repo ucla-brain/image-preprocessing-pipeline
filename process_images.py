@@ -314,7 +314,9 @@ class MultiProcessCommandRunner(Process):
                 )
                 pattern = compile(self.pattern, IGNORECASE)
                 while return_code is None:
+                    print(1)
                     return_code = process.poll()
+                    print(2)
                     output = process.stdout.readline()
                     print(output)
                     print(process.stderr)
