@@ -316,11 +316,11 @@ class MultiProcessCommandRunner(Process):
                 while return_code is None:
                     return_code = process.poll()
                     output = process.stdout.readline()
-                    error = process.stderr.readline()
                     if output:
                         output = output.decode('utf-8')
                         print(f"Output: {output}")
                         matches = match(pattern, output)
+                    error = process.stderr.readline()
                     if error:
                         error = error.decode('utf-8')
                         print(f"Error: {error}")
