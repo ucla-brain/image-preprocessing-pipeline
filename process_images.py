@@ -305,8 +305,8 @@ class MultiProcessCommandRunner(Process):
                 process = Popen(
                     self.command,
                     stdout=PIPE,
-                    stderr=PIPE,
-                    shell=True,
+                    # stderr=PIPE,
+                    shell=False,
                     text=True)
                 pattern = compile(self.pattern, IGNORECASE)
                 while return_code is None:
