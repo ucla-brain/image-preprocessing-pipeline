@@ -777,14 +777,13 @@ def process_channel(
     return stitched_tif_path, shape, running_processes
 
 
-def get_gradient(img: ndarray, threshold: float = 98.5) -> ndarray:
-    img_percentile = prctl(img, threshold)
-    img = where(img >= img_percentile, 1, img / img_percentile)  # scale images
-    img = sobel(img)
-    img = array(img)
-    img_percentile = prctl(img, threshold)
-    img = where(img >= img_percentile, 255, img / img_percentile * 255)  # scale images
+def get_gradient(img: ndarray) -> ndarray:
+    # threshold: float = 98.5
+    # img_percentile = prctl(img, threshold)
     img = img.astype(float32)
+    img = sobel(img)
+    # img_percentile = prctl(img, threshold)
+    # img = where(img >= img_percentile, 255, img / img_percentile * 255)  # scale images
     return img
 
 
@@ -946,8 +945,8 @@ def merge_all_channels(
         img_reference_idx = tif_stacks[0].nz // 2
         print(f"reference image index = {img_reference_idx}")
         assert img_reference_idx >= 0
-        img_samples = pool.starmap(imread_tif_stck, zip(tif_stacks, (img_reference_idx,) * len(tif_paths)))
-        img_samples = list(pool.map(get_gradient, img_samples))
+        img_samples = list(pool.starmap(imread_tif_stck, zip(tif_stacks, (img_reference_idx,) * len(tif_paths))))
+    img_samples = list(map(get_gradient, img_samples))
     assert all([img is not None for img in img_samples])
     transformation_matrices = [get_transformation_matrix(img_samples[0], img) for img in img_samples[1:]]
     del img_samples
@@ -981,6 +980,7 @@ def merge_all_channels(
     if return_code != 0:
         p_log(f"{PrintColors.FAIL}merge_all_channels function failed{PrintColors.ENDC}")
         raise RuntimeError
+    # map(lambda arg: generate_composite_image(**arg), [args_queue.get() for _ in range(tif_stacks[0].nz)])
 
 
 def get_imaris_command(imaris_path: Path, input_path: Path, output_path: Path = None,
