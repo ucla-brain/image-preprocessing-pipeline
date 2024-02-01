@@ -24,6 +24,7 @@ from numpy import max as np_max
 from numpy import mean as np_mean
 from numpy import median as np_median
 from numpy import min as np_min
+from numpy import round as np_round
 from numpy import uint8, uint16, float16, float32, float64, ndarray, generic, zeros, broadcast_to, exp, expm1, log1p, \
     cumsum, arange, unique, interp, pad, clip, where, rot90, flipud, dot, reshape, iinfo, nonzero
 from pywt import wavedec2, waverec2, Wavelet, dwt_max_level
@@ -692,18 +693,16 @@ def filter_streaks(
                   f"threshold={threshold}, bidirectional={bidirectional}.")
 
     if bleach_correction_frequency is not None:
-        clip_min = log1p(bleach_correction_clip_min) if bleach_correction_clip_min is not None else otsu_threshold(img)
-        clip_max = log1p(bleach_correction_clip_max) if bleach_correction_clip_max is not None else prctl(img, 99)
-        if clip_max is None or (clip_max is not None and clip_min < clip_max):
-            img = correct_bleaching(
-                img, bleach_correction_frequency, clip_min, clip_max,
-                max_method=bleach_correction_max_method,
-                wavelet=wavelet
-            )
+        clip_min = otsu_threshold(img) if bleach_correction_clip_min is None else log1p(bleach_correction_clip_min)
+        if bleach_correction_clip_max is not None:
+            clip_max = log1p(bleach_correction_clip_max)
         else:
-            print(f"{PrintColors.WARNING}skipped bleach correction because of "
-                  f"clip_min={clip_min} and clip_max={clip_max} values!{PrintColors.ENDC}")
-
+            clip_max = prctl(img[img > clip_min], 99.5)
+        img = correct_bleaching(
+            img, bleach_correction_frequency, clip_min, clip_max,
+            max_method=bleach_correction_max_method,
+            wavelet=wavelet
+        )
         if verbose:
             print(
                 f"bleach correction is applied: frequency={bleach_correction_frequency}, "
