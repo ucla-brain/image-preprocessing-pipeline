@@ -184,6 +184,7 @@ def main(args: Namespace):
         #     print(f"elapsed time = {round((time() - start_time) / 60, 1)}")
 
     is_renamed: bool = False
+    files = []
     if args.imaris:
         ims_file = Path(args.imaris)
         files = list(tif_2d_folder.glob("*.tif"))
@@ -211,7 +212,9 @@ def main(args: Namespace):
         progressbar_position += 1
 
     if progressbar_position > 0:
-        commands_progress_manger(progress_queue, progress_bars, running_processes=2 if args.teraFly else 1)
+        if args.teraFly:
+            progressbar_position += 1
+        commands_progress_manger(progress_queue, progress_bars, running_processes=progressbar_position)
         if is_renamed:
             [file.rename(file.parent / file.name[1:]) for file in files]
 
