@@ -170,7 +170,7 @@ def main(args: Namespace):
         command = " ".join(command)
         print(command)
         MultiProcessCommandRunner(progress_queue, command,
-                                  pattern=r" (\d+)",
+                                  pattern=r"(Slices).+ (\d+)\)",
                                   position=progressbar_position,
                                   percent_conversion=100 / len(files),
                                   check_stderr=True).start()
