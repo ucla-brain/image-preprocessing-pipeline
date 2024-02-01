@@ -324,7 +324,7 @@ class MultiProcessCommandRunner(Process):
                     else:
                         output = process.stdout.readline()
                     # print(3)
-                    # print(output)
+                    print(output)
                     matches = match(pattern, output)
                     if matches:
                         percent = round(float(matches[2]) * self.percent_conversion, 1)
