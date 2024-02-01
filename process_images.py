@@ -316,15 +316,15 @@ class MultiProcessCommandRunner(Process):
                 )
                 pattern = compile(self.pattern, IGNORECASE)
                 while return_code is None:
-                    print(1)
+                    # print(1)
                     return_code = process.poll()
-                    print(2)
+                    # print(2)
                     if self.check_stderr:
                         output = process.stderr.readline()
                     else:
                         output = process.stdout.readline()
-                    print(3)
-                    print(output)
+                    # print(3)
+                    # print(output)
                     matches = match(pattern, output)
                     if matches:
                         percent = round(float(matches[2]) * self.percent_conversion, 1)
