@@ -725,7 +725,8 @@ def filter_streaks(
     if np_d_type(d_type).kind in ("u", "i"):
         d_type_info = iinfo(d_type)
         clip(img, d_type_info.min, d_type_info.max, out=img)
-    img = img.astype(d_type)
+    if img.dtype != d_type:
+        img = img.astype(d_type)
     return img
 
 
