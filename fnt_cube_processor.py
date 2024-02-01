@@ -46,6 +46,8 @@ def process_cube(
                         img[idx] = filter_streaks(img[idx], sigma=(1, 1), wavelet="db9", bidirectional=True)
                 img = rot90(img, k=-1, axes=(1, 2))
             if need_gaussian:
+                if img.dtype != float32:
+                    img = img.astype(float32)
                 gaussian(img, 1, output=img)
                 img = img.astype(dtype)
             nrrd.write(filename=output_file.__str__(), data=img, header=header, compression_level=1)
