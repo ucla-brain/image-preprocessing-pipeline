@@ -306,7 +306,7 @@ class MultiProcessCommandRunner(Process):
                     self.command,
                     stdout=PIPE,
                     # stderr=PIPE,
-                    shell=False,
+                    shell=True,
                     text=True)
                 pattern = compile(self.pattern, IGNORECASE)
                 while return_code is None:
