@@ -317,15 +317,15 @@ class MultiProcessCommandRunner(Process):
                     print(1)
                     return_code = process.poll()
                     print(2)
-                    output = process.stdout.readline()
-                    print(3)
-                    print(output)
+                    # output = process.stdout.readline()
+                    # print(3)
+                    # print(output)
                     print(process.stderr)
-                    matches = match(pattern, output)
-                    if matches:
-                        percent = round(float(matches[2]) * self.percent_conversion, 1)
-                        self.queue.put([percent - previous_percent, self.position, return_code, self.command])
-                        previous_percent = percent
+                    # matches = match(pattern, output)
+                    # if matches:
+                    #     percent = round(float(matches[2]) * self.percent_conversion, 1)
+                    #     self.queue.put([percent - previous_percent, self.position, return_code, self.command])
+                    #     previous_percent = percent
                 error = process.stderr.read()
                 if error:
                     print(f"{PrintColors.FAIL}Error: {error}{PrintColors.ENDC}")
