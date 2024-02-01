@@ -304,6 +304,7 @@ class MultiProcessCommandRunner(Process):
             else:
                 process = Popen(
                     self.command,
+                    stdin=PIPE,
                     stdout=PIPE,
                     # stderr=PIPE,
                     shell=True,
@@ -315,9 +316,9 @@ class MultiProcessCommandRunner(Process):
                 while return_code is None:
                     return_code = process.poll()
                     match1 = match(pattern, process.stdout.readline())
-                    error = process.stderr.readline()
-                    match2 = match(pattern, error)
-                    print(error)
+                    stdin = process.stdin.readline()
+                    match2 = match(pattern, stdin)
+                    print(stdin)
                     if match1:
                         percent = round(float(match1[2]) * self.percent_conversion, 1)
                         self.queue.put([percent - previous_percent, self.position, return_code, self.command])
