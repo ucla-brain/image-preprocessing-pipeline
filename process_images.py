@@ -15,13 +15,13 @@ from queue import Empty
 from re import compile, match, findall, IGNORECASE, MULTILINE
 from subprocess import check_output, call, Popen, PIPE, CalledProcessError
 from time import time, sleep
-from typing import List, Tuple, Dict, Union
+from typing import List, Tuple, Dict, Union, LiteralString
 
 import mpi4py
 import psutil
 from cpufeature.extension import CPUFeature
 from cv2 import MOTION_TRANSLATION, findTransformECC, TERM_CRITERIA_COUNT, TERM_CRITERIA_EPS
-from numpy import ndarray, zeros, uint8, float32, eye, where, dstack, append, array, absolute
+from numpy import ndarray, zeros, uint8, float32, eye, where, dstack, append, array, absolute, log1p, expm1
 from numpy import round as np_round
 from numpy import mean as np_mean
 from numpy.linalg import inv
@@ -34,7 +34,7 @@ from skimage.filters import sobel
 from flat import create_flat_img
 from parallel_image_processor import parallel_image_processor, jumpy_step_range
 from pystripe.core import (batch_filter, imread_tif_raw_png, imsave_tif, MultiProcessQueueRunner, progress_manager,
-                           process_img, convert_to_8bit_fun, log1p_jit, expm1_jit, otsu_threshold, prctl)
+                           process_img, convert_to_8bit_fun, log1p_jit, otsu_threshold, prctl)
 from supplements.cli_interface import (ask_for_a_number_in_range, date_time_now, select_multiple_among_list,
                                        select_among_multiple_options, ask_true_false_question, PrintColors)
 from supplements.tifstack import TifStack, imread_tif_stck
@@ -220,7 +220,7 @@ def get_destination_path(folder_name_prefix, what_for='tif', posix='', default_p
 
 
 def get_list_of_files(y_folder: Path, extensions=(".tif", ".tiff", ".raw", ".png")) -> List[Path]:
-    extensions: Tuple[str] = tuple(ext.lower() for ext in extensions)
+    extensions: Tuple[LiteralString, ...] = tuple(ext.lower() for ext in extensions)
     files_list = []
     for file in y_folder.iterdir():
         if file.suffix.lower() in extensions:
@@ -613,6 +613,7 @@ def process_channel(
         alt_stack_dir=preprocessed_path / channel
     )
     shape: Tuple[int, int, int] = tsv_volume.volume.shape  # shape is in z y x format
+    merge_step_cores = cpu_count(logical=True)
     if len(list(stitched_tif_path.glob("*.tif"))) < shape[0]:
         bleach_correction_frequency = None
         bleach_correction_sigma = (0, 0)
@@ -636,10 +637,10 @@ def process_channel(
                     tsv_volume.volume.z0 + shape[0] // 2, tsv_volume.volume.z0 + shape[0] // 2 + 1),
                 tsv_volume.dtype, cosine_blending=False)[0]
             img = log1p_jit(img)
-            bleach_correction_clip_min = np_round(expm1_jit(otsu_threshold(img)))
+            bleach_correction_clip_min = np_round(expm1(otsu_threshold(img)))
             if bleach_correction_clip_min > 0:
                 bleach_correction_clip_min -= 1
-            bleach_correction_clip_max = np_round(expm1_jit(prctl(img[img > log1p_jit(bleach_correction_clip_min)], 99.5)))
+            bleach_correction_clip_max = np_round(expm1(prctl(img[img > log1p(bleach_correction_clip_min)], 99.5)))
             img_approximate_upper_bound = bleach_correction_clip_max
             if need_bleach_correction and need_16bit_to_8bit_conversion:
                 img = process_img(
@@ -1013,8 +1014,7 @@ def get_imaris_command(imaris_path: Path, input_path: Path, output_path: Path = 
             command += ["--inputformat TiffSeries"]
 
         command += [
-            # f"--nthreads {workers if dtype == 'uint8' or sys.platform == 'win32' else 1}",
-            f"--nthreads {workers}",
+            f"--nthreads {workers if dtype == 'uint8' or sys.platform == 'win32' else 1}",
             f"--compression 3",
             f"--voxelsize {voxel_size_x:.2f}-{voxel_size_y:.2f}-{voxel_size_z:.2f}",  # x-y-z
             "--logprogress"

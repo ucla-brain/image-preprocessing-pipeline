@@ -384,7 +384,7 @@ def jumpy_step_range(start, end):
 
 
 def parallel_image_processor(
-        source: Union[Path, str],
+        source: Union[TSVVolume, Path, str],
         destination: Union[Path, str],
         fun: Union[Callable, None] = None,
         args: tuple = None,

@@ -24,8 +24,7 @@ from numpy import max as np_max
 from numpy import mean as np_mean
 from numpy import median as np_median
 from numpy import min as np_min
-from numpy import round as np_round
-from numpy import uint8, uint16, float16, float32, float64, ndarray, generic, zeros, broadcast_to, exp, expm1, log1p, \
+from numpy import uint8, uint16, float32, float64, ndarray, generic, zeros, broadcast_to, exp, expm1, log1p, \
     cumsum, arange, unique, interp, pad, clip, where, rot90, flipud, dot, reshape, iinfo, nonzero
 from pywt import wavedec2, waverec2, Wavelet, dwt_max_level
 from scipy.fftpack import rfft, fftshift, irfft
@@ -604,8 +603,8 @@ def filter_streaks(
         bidirectional: bool = False,
         bleach_correction_frequency: float = None,
         bleach_correction_max_method: bool = False,
-        bleach_correction_clip_min: float = None,
-        bleach_correction_clip_max: float = None,
+        bleach_correction_clip_min: Union[float, int] = None,
+        bleach_correction_clip_max: Union[float, int] = None,
         log1p_normalization_needed: bool = True,
         verbose: bool = False
 ) -> ndarray:
@@ -634,9 +633,9 @@ def filter_streaks(
     bleach_correction_max_method : bool
         use max value on x and y axes to create the filter. Max method is faster and smoother but less accurate
         for large images.
-    bleach_correction_clip_min: float
+    bleach_correction_clip_min: float, int
         background vs foreground threshold.
-    bleach_correction_clip_max: float
+    bleach_correction_clip_max: float, int
         foreground max value
     # bleach_correction_y_slice_min: int
     #     from 0 to leach_correction_y_slice_min of the image on y-axis that will not be corrected.
@@ -775,8 +774,8 @@ def process_img(
         padding_mode: str = "reflect",
         bidirectional: bool = False,
         bleach_correction_frequency: float = None,
-        bleach_correction_clip_min: float = None,
-        bleach_correction_clip_max: float = None,
+        bleach_correction_clip_min: Union[float, int] = None,
+        bleach_correction_clip_max: Union[float, int] = None,
         bleach_correction_max_method: bool = False,
         log1p_normalization_needed: bool = True,
         dark: float = 0,
@@ -966,8 +965,8 @@ def read_filter_save(
         bidirectional: bool = False,
         bleach_correction_frequency: float = None,
         bleach_correction_max_method: bool = True,
-        bleach_correction_clip_min: float = None,
-        bleach_correction_clip_max: float = None,
+        bleach_correction_clip_min: Union[float, int] = None,
+        bleach_correction_clip_max: Union[float, int] = None,
         dark: float = 0,
         lightsheet: bool = False,
         artifact_length: int = 150,
@@ -1030,9 +1029,9 @@ def read_filter_save(
     bleach_correction_max_method: bool
         use max value on x and y axes to create the filter. Max method is faster and smoother but less accurate
         for large images.
-    bleach_correction_clip_max: float
+    bleach_correction_clip_max: float, int
         max values in the image omitting outliers
-    bleach_correction_clip_min: float
+    bleach_correction_clip_min: float, int
         foreground vs background threshold
     dark : float
         Intensity to subtract from the images for dark offset. Default is 0.
@@ -1359,8 +1358,8 @@ def batch_filter(
         dark: int = 0,
         bleach_correction_frequency: float = None,
         bleach_correction_max_method: bool = True,
-        bleach_correction_clip_min: float = None,
-        bleach_correction_clip_max: float = None,
+        bleach_correction_clip_min: Union[float, int] = None,
+        bleach_correction_clip_max: Union[float, int] = None,
         sigma: Tuple[int, int] = (0, 0),
         level=0,
         wavelet: str = 'db9',
@@ -1425,9 +1424,9 @@ def batch_filter(
     bleach_correction_max_method: bool
         use max value on x and y axes to create the filter. Max method is faster and smoother but less accurate
         for large images.
-    bleach_correction_clip_max: float
+    bleach_correction_clip_max: float, int
         max values in the image omitting outliers
-    bleach_correction_clip_min: float
+    bleach_correction_clip_min: float, int
         foreground vs background threshold
     compression : tuple (str, int)
         The 1st argument is compression method the 2nd compression level for tiff files
