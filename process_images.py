@@ -321,6 +321,8 @@ class MultiProcessCommandRunner(Process):
                     # print(2)
                     if self.check_stderr:
                         output = process.stderr.readline()
+                        if not isinstance(output, str):
+                            output = str(output)
                     else:
                         output = process.stdout.readline()
                     # print(3)
