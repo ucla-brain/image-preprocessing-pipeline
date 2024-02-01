@@ -331,7 +331,7 @@ class MultiProcessCommandRunner(Process):
                     # print(matches)
                     if matches:
                         percent = round(float(matches[1]) * self.percent_conversion, 1)
-                        print(percent)
+                        # print(percent)
                         self.queue.put([percent - previous_percent, self.position, return_code, self.command])
                         previous_percent = percent
                 # error = process.stderr.read()
