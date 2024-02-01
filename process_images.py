@@ -314,7 +314,7 @@ class MultiProcessCommandRunner(Process):
                     start_new_session=False,
                     bufsize=0
                 )
-                pattern = compile(self.pattern, IGNORECASE)
+                pattern = compile(self.pattern, IGNORECASE | MULTILINE)
                 while return_code is None:
                     # print(1)
                     return_code = process.poll()
