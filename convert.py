@@ -216,7 +216,7 @@ def main(args: Namespace):
         progressbar_position += 1
         running_proceses += 1
 
-    if running_proceses > 0:
+    if progressbar_position > 0:
         if args.teraFly:
             progressbar_position += 1
         commands_progress_manger(progress_queue, progress_bars, running_processes=progressbar_position)
