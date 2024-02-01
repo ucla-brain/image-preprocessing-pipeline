@@ -123,6 +123,9 @@ def main(args: Namespace):
 
     assert return_code == 0
     progress_queue = Queue()
+    running_proceses = 0
+    progressbar_position = 0
+    progress_bars = []
     if args.teraFly:
         command = [
             f"mpiexec -np {min(12, args.nthreads)} python -m mpi4py {paraconverter}",
@@ -143,6 +146,7 @@ def main(args: Namespace):
         command = " ".join(command)
 
         MultiProcessCommandRunner(progress_queue, command).start()
+        running_proceses += 1
         # if args.imaris:
         #
         # else:
@@ -150,8 +154,6 @@ def main(args: Namespace):
         #     subprocess.call(command, shell=True)
         #     print(f"elapsed time = {round((time() - start_time) / 60, 1)}")
 
-    progressbar_position = 0
-    progress_bars = []
     if args.fnt:
         file_txt_sorted_tif_list = tif_2d_folder / "files.txt"
         files = list(tif_2d_folder.glob("*.tif"))
@@ -171,6 +173,7 @@ def main(args: Namespace):
                                   pattern=r"(\d+)(?=\)\s*finished\.*\s*$)",
                                   position=progressbar_position,
                                   percent_conversion=100 / len(files)).start()
+        running_proceses += 1
         # progress_bars += [tqdm(total=100, ascii=True, position=progressbar_position, unit=" %", smoothing=0.01,
         #                        desc=f"FNT")]
         # progressbar_position += 1
@@ -211,8 +214,9 @@ def main(args: Namespace):
         progress_bars += [tqdm(total=100, ascii=True, position=progressbar_position, unit=" %", smoothing=0.01,
                                desc=f"IMS")]
         progressbar_position += 1
+        running_proceses += 1
 
-    if progressbar_position > 0:
+    if running_proceses > 0:
         if args.teraFly:
             progressbar_position += 1
         commands_progress_manger(progress_queue, progress_bars, running_processes=progressbar_position)
