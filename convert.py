@@ -168,7 +168,7 @@ def main(args: Namespace):
         command = " ".join(command)
         print(command)
         MultiProcessCommandRunner(progress_queue, command,
-                                  pattern=r"(\d+)(?=\)\s*finished\.*)\s*$",
+                                  pattern=r"(\d+)(?=\)\s*finished\.*\s*$)",
                                   position=progressbar_position,
                                   percent_conversion=100 / len(files)).start()
         progress_bars += [tqdm(total=100, ascii=True, position=progressbar_position, unit=" %", smoothing=0.01,
