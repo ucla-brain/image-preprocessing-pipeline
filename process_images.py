@@ -1470,7 +1470,7 @@ def main(source_path):
             running_processes += 1
             progress_bars += [
                 tqdm(total=100, ascii=True, position=idx, unit=" %", smoothing=0.01,
-                     desc=f"Imaris {(idx + 1) if len(merged_tif_paths) > 1 else ''}")]
+                     desc=f"IMS {(idx + 1) if len(merged_tif_paths) > 1 else ''}")]
 
     # waite for TeraFly and Imaris conversion to finish ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
     commands_progress_manger(queue, progress_bars, running_processes)

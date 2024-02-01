@@ -145,14 +145,14 @@ def main(args: Namespace):
         ]
         command = " ".join(command)
 
-        MultiProcessCommandRunner(progress_queue, command).start()
-        running_proceses += 1
-        # if args.imaris:
-        #
-        # else:
-        #     start_time = time()
-        #     subprocess.call(command, shell=True)
-        #     print(f"elapsed time = {round((time() - start_time) / 60, 1)}")
+
+        if args.imaris or args.fnt:
+            MultiProcessCommandRunner(progress_queue, command).start()
+            running_proceses += 1
+        else:
+            start_time = time()
+            subprocess.call(command, shell=True)
+            print(f"elapsed time = {round((time() - start_time) / 60, 1)}")
 
     if args.fnt:
         file_txt_sorted_tif_list = tif_2d_folder / "files.txt"
@@ -178,15 +178,6 @@ def main(args: Namespace):
                                desc=f"FNT")]
         progressbar_position += 1
         running_proceses += 1
-
-        # if args.imaris:
-        #     MultiProcessCommandRunner(progress_queue, command,
-        #                               pattern=r"(WriteProgress:)\s+(\d*.\d+)\s*$",
-        #                               position=progressbar_position).start()
-        # else:
-        #     start_time = time()
-        #     subprocess.call(command, shell=True)
-        #     print(f"elapsed time = {round((time() - start_time) / 60, 1)}")
 
     is_renamed: bool = False
     files = []
@@ -218,9 +209,7 @@ def main(args: Namespace):
         running_proceses += 1
 
     if progressbar_position > 0:
-        if args.teraFly:
-            progressbar_position += 1
-        commands_progress_manger(progress_queue, progress_bars, running_processes=progressbar_position)
+        commands_progress_manger(progress_queue, progress_bars, running_processes=running_proceses)
         if is_renamed:
             [file.rename(file.parent / file.name[1:]) for file in files]
 
