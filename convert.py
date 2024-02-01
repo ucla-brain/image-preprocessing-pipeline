@@ -171,9 +171,9 @@ def main(args: Namespace):
                                   pattern=r"(\d+)(?=\)\s*finished\.*\s*$)",
                                   position=progressbar_position,
                                   percent_conversion=100 / len(files)).start()
-        progress_bars += [tqdm(total=100, ascii=True, position=progressbar_position, unit=" %", smoothing=0.01,
-                               desc=f"FNT")]
-        progressbar_position += 1
+        # progress_bars += [tqdm(total=100, ascii=True, position=progressbar_position, unit=" %", smoothing=0.01,
+        #                        desc=f"FNT")]
+        # progressbar_position += 1
 
         # if args.imaris:
         #     MultiProcessCommandRunner(progress_queue, command,
