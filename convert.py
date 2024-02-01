@@ -170,7 +170,7 @@ def main(args: Namespace):
         command = " ".join(command)
         print(command)
         MultiProcessCommandRunner(progress_queue, command,
-                                  pattern=r"\[\d*:\d*:\d*.\d*]\s*Slices\s*\[\d*,\s+(\d+)\)\s*finished.\s*",
+                                  pattern=r"(\[\d*:\d*:\d*.\d*]\s*Slices\s*\[\d*,\s+)(\d+)\)\s*finished.\s*",
                                   position=progressbar_position,
                                   percent_conversion=100 / len(files),
                                   check_stderr=True).start()
