@@ -29,6 +29,7 @@ function [] = LsDeconv(varargin)
         disp(datetime('now'));
         disp(' ');
 
+        % make sure correct number of parameters specified
         if nargin < 23
             showinfo();
             if isdeployed
@@ -38,6 +39,7 @@ function [] = LsDeconv(varargin)
         end
 
         %read command line parameters
+        disp("assigning command line parameter strings")
         inpath = varargin{1};
         dxy = varargin{2};
         dz = varargin{3};
@@ -63,13 +65,16 @@ function [] = LsDeconv(varargin)
         convert_to_8bit = varargin{23};
         cache_drive = tempdir;
         if nargin > 23
-            cache_drive=varargin{24};
+            cache_drive = fullfile(inpath, varargin{24});
             if ~exist(cache_drive, "dir")
+                disp("making cache drive dir " + cache_drive)
                 mkdir(cache_drive);
             end
+            disp("cache drive dir created and/or exists " + cache_drive)            
         end
 
         %convert command line parameters from string to double
+        disp("converting double command line parameters")
         if isdeployed
             dxy = str2double(strrep(dxy, ',', '.'));
             dz = str2double(strrep(dz, ',', '.'));
@@ -99,11 +104,13 @@ function [] = LsDeconv(varargin)
                 outpath = fullfile(inpath, 'deconvolved_fliped_upside_down');
             end
             if ~exist(outpath, 'dir')
+                disp("making folder " + outpath );
                 mkdir(outpath);
             end
-
+            disp("outpath folder created and/or exists " + outpath);
             log_file_path = fullfile(outpath, 'log.txt');
             log_file = fopen(log_file_path, 'w');
+            disp('made log file: ' + log_file)
             % get available resources
             [ram_available, ram_total]  = get_memory();
             p_log(log_file, 'system information ...');
@@ -260,7 +267,10 @@ function [] = LsDeconv(varargin)
         end
     catch ME
         % error handling
-        p_log(log_file, getReport(ME, 'extended', 'hyperlinks', 'off'));
+        disp(ME);
+        if exist('log_file', 'var')
+            p_log(log_file, getReport(ME, 'extended', 'hyperlinks', 'off'));
+        end
         if isdeployed
             exit(1);
         end
