@@ -1,20 +1,25 @@
 import os
 import sys
-import nrrd
-import psutil
-from pystripe.core import *
-from multiprocessing import freeze_support
-from subprocess import call
-from platform import uname
-from numpy import rot90
-from pystripe.core import filter_streaks
-from skimage.filters import gaussian
 from argparse import RawDescriptionHelpFormatter, ArgumentParser, BooleanOptionalAction
+from multiprocessing import freeze_support, Queue
+from pathlib import Path
+from platform import uname
+from subprocess import call
+
+from nrrd import read, write
+import psutil
+from numpy import rot90, float32
+from psutil import cpu_count
+from skimage.filters import gaussian
+from tqdm import tqdm
+
+from pystripe.core import filter_streaks, is_uniform_2d, MultiProcessQueueRunner, progress_manager
 
 
 def make_a_list_of_input_output_paths(args):
     input_folder = Path(args.input)
     output_folder = Path(args.output)
+
     def output_file(input_file: Path):
         return {
             "input_file": input_file,
@@ -23,6 +28,7 @@ def make_a_list_of_input_output_paths(args):
             "need_gaussian": args.gaussian,
             "need_video": args.video
         }
+
     return tuple(map(output_file, input_folder.rglob("*.nrrd")))
 
 
@@ -37,7 +43,7 @@ def process_cube(
     if not output_file.exists():
         output_file.parent.mkdir(exist_ok=True, parents=True)
         if need_destripe or need_gaussian:
-            img, header = nrrd.read(input_file.__str__())
+            img, header = read(input_file.__str__())
             dtype = img.dtype
             if need_destripe:
                 img = rot90(img, k=1, axes=(1, 2))
@@ -50,7 +56,7 @@ def process_cube(
                     img = img.astype(float32)
                 gaussian(img, 1, output=img)
                 img = img.astype(dtype)
-            nrrd.write(filename=output_file.__str__(), data=img, header=header, compression_level=1)
+            write(filename=output_file.__str__(), data=img, header=header, compression_level=1)
             if need_video:
                 input_file = output_file
         if need_video:
@@ -60,7 +66,8 @@ def process_cube(
 
 def main(args):
     args_list = make_a_list_of_input_output_paths(args)
-    # list(map(lambda args: process_cube(**args), args_list))
+    list(tqdm(map(lambda args_: process_cube(**args_), args_list), total=len(args_list), desc="cubes"))
+
     num_images = len(args_list)
     args_queue = Queue(maxsize=num_images)
     for item in args_list:
@@ -107,10 +114,9 @@ if __name__ == '__main__':
                         default=cpu_count(logical=False) + 4,
                         help="Number of CPU cores.")
     parser.add_argument("--destripe", default=True, action=BooleanOptionalAction,
-                        help="Destripe the image by default. In order to disable use --no_destripe.")
+                        help="Destripe the image by default. Disable by --no_destripe.")
     parser.add_argument("--gaussian", "-g", default=False, action=BooleanOptionalAction,
                         help="Apply a 3D gaussian filter after destriping. Default is --no_gaussian.")
     parser.add_argument("--video", "-v", default=False, action=BooleanOptionalAction,
                         help="Convert cubes to video format. Default is --no_video.")
     main(parser.parse_args())
-

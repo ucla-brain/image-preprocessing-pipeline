@@ -285,7 +285,8 @@ def worker(command: str):
 
 
 class MultiProcessCommandRunner(Process):
-    def __init__(self, queue, command, pattern: str = "", position: int = None, percent_conversion: float = 100):
+    def __init__(self, queue, command, pattern: str = "", position: int = None, percent_conversion: float = 100,
+                 check_stderr: bool = False):
         Process.__init__(self)
         super().__init__()
         self.daemon = True
@@ -294,6 +295,7 @@ class MultiProcessCommandRunner(Process):
         self.position = position
         self.pattern = pattern
         self.percent_conversion = percent_conversion
+        self.check_stderr = check_stderr
 
     def run(self):
         return_code = None  # 0 == success and any other number is an error code
@@ -312,23 +314,29 @@ class MultiProcessCommandRunner(Process):
                     start_new_session=False,
                     bufsize=0
                 )
-                pattern = compile(self.pattern, IGNORECASE)
+                pattern = compile(self.pattern, IGNORECASE | MULTILINE)
                 while return_code is None:
-                    print(1)
+                    # print(1)
                     return_code = process.poll()
-                    print(2)
-                    # output = process.stdout.readline()
+                    # print(2)
+                    if self.check_stderr:
+                        output = process.stderr.readline()
+                        if not isinstance(output, str):
+                            output = str(output)
+                    else:
+                        output = process.stdout.readline()
                     # print(3)
                     # print(output)
-                    print(process.stderr)
-                    # matches = match(pattern, output)
-                    # if matches:
-                    #     percent = round(float(matches[2]) * self.percent_conversion, 1)
-                    #     self.queue.put([percent - previous_percent, self.position, return_code, self.command])
-                    #     previous_percent = percent
-                error = process.stderr.read()
-                if error:
-                    print(f"{PrintColors.FAIL}Error: {error}{PrintColors.ENDC}")
+                    matches = match(pattern, output)
+                    # print(matches)
+                    if matches:
+                        percent = round(float(matches[1]) * self.percent_conversion, 1)
+                        # print(percent)
+                        self.queue.put([percent - previous_percent, self.position, return_code, self.command])
+                        previous_percent = percent
+                # error = process.stderr.read()
+                # if error:
+                #     print(f"{PrintColors.FAIL}Error: {error}{PrintColors.ENDC}")
         except Exception as inst:
             p_log(f'Process failed for {self.command}.')
             print(type(inst))  # the exception instance
@@ -1458,11 +1466,11 @@ def main(source_path):
                 dtype='uint8' if need_16bit_to_8bit_conversion else 'uint16'
             )
             p_log(f"\t{PrintColors.BLUE}tiff to ims conversion command:{PrintColors.ENDC}\n\t\t{command}\n")
-            MultiProcessCommandRunner(queue, command, pattern=r"(WriteProgress:)\s+(\d*.\d+)\s*$", position=idx).start()
+            MultiProcessCommandRunner(queue, command, pattern=r"WriteProgress:\s+(\d*.\d+)\s*$", position=idx).start()
             running_processes += 1
             progress_bars += [
                 tqdm(total=100, ascii=True, position=idx, unit=" %", smoothing=0.01,
-                     desc=f"Imaris {(idx + 1) if len(merged_tif_paths) > 1 else ''}")]
+                     desc=f"IMS {(idx + 1) if len(merged_tif_paths) > 1 else ''}")]
 
     # waite for TeraFly and Imaris conversion to finish ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
     commands_progress_manger(queue, progress_bars, running_processes)
