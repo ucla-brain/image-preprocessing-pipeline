@@ -1321,13 +1321,13 @@ class MultiProcessQueueRunner(Process):
 
 
 def progress_manager(progress_queue: Queue, workers: int, total: int,
-                     desc="PyStripe"):
+                     desc="PyStripe", unit=" images"):
     return_code = 0
     list_of_outputs = []
     print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
           f"using {workers} workers. {total} images need to be processed.", flush=True)
     sleep(1)
-    progress_bar = tqdm(total=total, ascii=True, smoothing=0.01, mininterval=1.0, unit=" images", desc=desc)
+    progress_bar = tqdm(total=total, ascii=True, smoothing=0.01, mininterval=1.0, unit=unit, desc=desc)
     progress_bar.refresh()
 
     while workers > 0:

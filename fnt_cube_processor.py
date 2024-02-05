@@ -65,23 +65,26 @@ def process_cube(
 
 
 def main(args):
+    return_code = 0
     args_list = make_a_list_of_input_output_paths(args)
-    list(tqdm(map(lambda args_: process_cube(**args_), args_list), total=len(args_list), desc="cubes"))
-
-    num_images = len(args_list)
-    args_queue = Queue(maxsize=num_images)
-    for item in args_list:
-        args_queue.put(item)
-    del args_list
-    workers = min(args.num_processes, num_images)
-    progress_queue = Queue()
-    for _ in range(workers):
-        MultiProcessQueueRunner(progress_queue, args_queue, fun=process_cube, timeout=None).start()
-    return_code = progress_manager(progress_queue, workers, num_images, desc="FNT Cube Processor")
-    args_queue.cancel_join_thread()
-    args_queue.close()
-    progress_queue.cancel_join_thread()
-    progress_queue.close()
+    if args.num_processes == 1:
+        list(tqdm(map(lambda args_: process_cube(**args_), args_list),
+                  total=len(args_list), desc="FNT Cube Processor", unit=" cubes"))
+    else:
+        num_images = len(args_list)
+        args_queue = Queue(maxsize=num_images)
+        for item in args_list:
+            args_queue.put(item)
+        del args_list
+        workers = min(args.num_processes, num_images)
+        progress_queue = Queue()
+        for _ in range(workers):
+            MultiProcessQueueRunner(progress_queue, args_queue, fun=process_cube, timeout=None).start()
+        return_code = progress_manager(progress_queue, workers, num_images, desc="FNT Cube Processor", unit=" cubes")
+        args_queue.cancel_join_thread()
+        args_queue.close()
+        progress_queue.cancel_join_thread()
+        progress_queue.close()
     return return_code
 
 
