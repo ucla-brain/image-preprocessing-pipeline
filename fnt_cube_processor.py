@@ -68,7 +68,7 @@ def main(args):
     return_code = 0
     args_list = make_a_list_of_input_output_paths(args)
     if args.num_processes == 1:
-        list(tqdm(map(lambda args_: process_cube(**args_), args_list),
+        list(tqdm(map(lambda _: process_cube(**_), args_list),
                   total=len(args_list), desc="FNT Cube Processor", unit=" cubes"))
     else:
         num_images = len(args_list)
