@@ -673,6 +673,11 @@ def filter_streaks(
     if padding_mode in ('constant', 'edge', 'linear_ramp', 'maximum', 'mean', 'median', 'minimum', 'reflect',
                         'symmetric', 'wrap', 'empty'):
         base_pad = int(max(sigma1, sigma2) // 2) * 2
+        min_image_length = 34
+        if (img_shape[0] + 2 * base_pad + pad_y) < min_image_length:
+            pad_y = min_image_length - (img_shape[0] + 2 * base_pad)
+        if (img_shape[1] + 2 * base_pad + pad_x) < min_image_length:
+            pad_x = min_image_length - (img_shape[1] + 2 * base_pad)
     else:
         print(f"{PrintColors.FAIL}Unsupported padding mode: {padding_mode}{PrintColors.ENDC}")
         raise RuntimeError
