@@ -67,11 +67,12 @@ def process_cube(
 def main(args):
     return_code = 0
     args_list = make_a_list_of_input_output_paths(args)
+    num_images = len(args_list)
     if args.num_processes == 1:
+        # could be used for debugging purpose
         list(tqdm(map(lambda _: process_cube(**_), args_list),
-                  total=len(args_list), desc="FNT Cube Processor", unit=" cubes"))
+                  total=num_images, desc="FNT Cube Processor", unit=" cubes"))
     else:
-        num_images = len(args_list)
         args_queue = Queue(maxsize=num_images)
         for item in args_list:
             args_queue.put(item)
