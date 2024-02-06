@@ -7,7 +7,7 @@ def construct_cache_drive_folder_name(brain_name, lambda_ex, lambda_em):
     return f"cache_deconvolution_{brain_name}_Ex_{lambda_ex}_Em_{lambda_em}"
 
 def main():
-    magnifications = {'9x': (400, 800), '15x': (800, 800)}
+    magnifications = {'15x': (400, 800), '9x': (800, 800)}
     lambda_ex_choices = [488, 561, 642]
     lambda_em_choices = [525, 600, 690]
 
