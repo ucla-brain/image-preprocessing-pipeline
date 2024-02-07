@@ -8,7 +8,7 @@ function [] = deconvolve(folderPath, dxy, dz, numit, lambda_ex, lambda_em, ...
     disp("Hello I was called as ");
     disp(calledAs);
     LsDeconv(...
-        folderPath, ... % e.g. "/data/20230724_15_54_32_SM230601_05_LS_15x_800z_stitched/Ex_488_Em_525_tif", ...
+        convertCharsToStrings(folderPath), ... % e.g. "/data/20230724_15_54_32_SM230601_05_LS_15x_800z_stitched/Ex_488_Em_525_tif", ...
         str2double(strrep(dxy, ',', '.')),  ... % dxy (nm) e.g. 400 for 15x, 800 for 9x
         str2double(strrep(dz, ',', '.')),  ... % dz (nm)  e.g. 800 for 15x, 800 for 9x
         str2double(strrep(numit, ',', '.')),   ... % numit e.g. 10
@@ -31,6 +31,6 @@ function [] = deconvolve(folderPath, dxy, dz, numit, lambda_ex, lambda_em, ...
         1,    ... % starting block should be greater than 0 for multiGPU processing
         0,    ... % 1 flip the deconvolved image upside down. 0 do not.
         1,    ... % 1 convert_to_8bit, 0 keep as is
-        cache_drive_path ... % cache drive (optional)
+        convertCharsToStrings(cache_drive_path) ... % cache drive (optional)
     );
 end

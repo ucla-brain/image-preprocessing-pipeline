@@ -105,12 +105,13 @@ function [] = LsDeconv(varargin)
         disp("Hello I was called as ");
         disp(calledAs);
 
-        disp("inpath type: " + class(inpath));
+        assert(isa(inpath, "string"), "wrong type " + class(inpath));
         assert(isa(dxy, "double"), "wrong type " + class(dxy));
         assert(isa(dz, "double"), "wrong type " + class(dz));
         assert(isa(numit, "double"), "wrong type " + class(numit));
         assert(isa(lambda_ex, "double"), "wrong type " + class(lambda_ex));
         assert(isa(lambda_em, "double"), "wrong type " + class(lambda_em));
+        assert(isa(cache_drive, "string"), "wrong type " + class(cache_drive));
         disp("All types correct");
 
         if isfolder(inpath)
