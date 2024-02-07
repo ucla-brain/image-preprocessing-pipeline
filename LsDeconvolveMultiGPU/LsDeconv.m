@@ -105,6 +105,7 @@ function [] = LsDeconv(varargin)
         disp("Hello I was called as ");
         disp(calledAs);
 
+        disp("inpath type: " + class(inpath));
         assert(isa(dxy, "double"), "wrong type " + class(dxy));
         assert(isa(dz, "double"), "wrong type " + class(dz));
         assert(isa(numit, "double"), "wrong type " + class(numit));

@@ -22,5 +22,5 @@ LsDeconv(...
     1,    ... % starting block should be greater than 0 for multiGPU processing
     0,    ... % 1 flip the deconvolved image upside down. 0 do not.
     1,    ... % 1 convert_to_8bit, 0 keep as is
-    "/data/cache_deconvolution_NA230907_01_Ex488_Em_525" ... % cache drive (optional)
+    "cache_deconvolution_NA230907_01_Ex488_Em_525" ... % cache drive (optional)
 );
