@@ -9,13 +9,13 @@ function [] = deconvolve(folderPath, dxy, dz, numit, lambda_ex, lambda_em, ...
     disp(calledAs);
     LsDeconv(...
         folderPath, ... % e.g. "/data/20230724_15_54_32_SM230601_05_LS_15x_800z_stitched/Ex_488_Em_525_tif", ...
-        dxy,  ... % dxy (nm) e.g. 400 for 15x, 800 for 9x
-        dz,  ... % dz (nm)  e.g. 800 for 15x, 800 for 9x
-        numit,   ... % numit e.g. 10
+        str2double(strrep(dxy, ',', '.')),  ... % dxy (nm) e.g. 400 for 15x, 800 for 9x
+        str2double(strrep(dz, ',', '.')),  ... % dz (nm)  e.g. 800 for 15x, 800 for 9x
+        str2double(strrep(numit, ',', '.')),   ... % numit e.g. 10
         0.40, ... % NA
         1.52, ... % rf
-        lambda_ex,  ... % lambda_ex 488 561 642  e.g. 488
-        lambda_em,  ... % lambda_em 525 600 690  e.g. 525
+        str2double(strrep(lambda_ex, ',', '.')),  ... % lambda_ex 488 561 642  e.g. 488
+        str2double(strrep(lambda_em, ',', '.')),  ... % lambda_em 525 600 690  e.g. 525
         240,  ... % fcyl 80, 240 for the older unaligned stage
         12.0, ... % slitwidth (mm)
         0,    ... % damping percent or lambda

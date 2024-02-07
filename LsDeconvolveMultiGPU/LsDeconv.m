@@ -105,6 +105,13 @@ function [] = LsDeconv(varargin)
         disp("Hello I was called as ");
         disp(calledAs);
 
+        assert(isa(dxy, "double"), "wrong type " + class(dxy));
+        assert(isa(dz, "double"), "wrong type " + class(dz));
+        assert(isa(numit, "double"), "wrong type " + class(numit));
+        assert(isa(lambda_ex, "double"), "wrong type " + class(lambda_ex));
+        assert(isa(lambda_em, "double"), "wrong type " + class(lambda_em));
+        disp("All types correct");
+
         if isfolder(inpath)
             % make folder for results and make sure the outpath is writable
             outpath = fullfile(inpath, 'deconvolved');
