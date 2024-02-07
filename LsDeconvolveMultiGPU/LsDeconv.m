@@ -74,8 +74,9 @@ function [] = LsDeconv(varargin)
         end
 
         %convert command line parameters from string to double
-        disp("converting double command line parameters")
+        disp("Deployed? " + isdeployed);
         if isdeployed
+            disp("converting double command line parameters")
             dxy = str2double(strrep(dxy, ',', '.'));
             dz = str2double(strrep(dz, ',', '.'));
             numit = str2double(strrep(numit, ',', '.'));
@@ -96,6 +97,13 @@ function [] = LsDeconv(varargin)
             convert_to_8bit = str2double(strrep(convert_to_8bit, ',', '.'));
             filter.dark  = str2double(strrep(filter.dark, ',', '.'));
         end
+        
+        calledAs = "LsDeconvolve(folderPath=" + inpath + ", dxy=" + dxy + ...
+                ", dz=" + dz + ", numit=" + numit + ", lambda_ex=" + lambda_ex + ...
+                ", lambda_em=" + lambda_em + ", cache_drive_path=" + ...
+                cache_drive + ")";        
+        disp("Hello I was called as ");
+        disp(calledAs);
 
         if isfolder(inpath)
             % make folder for results and make sure the outpath is writable
