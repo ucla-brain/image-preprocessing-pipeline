@@ -667,13 +667,13 @@ def filter_streaks(
 
     # Need to pad image to multiple of 2. It is needed even for bleach correction non-max method
     img_shape = img.shape
-    pad_y, pad_x = [_ % 2 for _ in img.shape]
+    pad_y, pad_x = [_ % 2 for _ in img_shape]
     if isinstance(padding_mode, str):
         padding_mode = padding_mode.lower()
     if padding_mode in ('constant', 'edge', 'linear_ramp', 'maximum', 'mean', 'median', 'minimum', 'reflect',
                         'symmetric', 'wrap', 'empty'):
         base_pad = int(max(sigma1, sigma2) // 2) * 2
-        min_image_length = 34
+        min_image_length = 34  # tested for db9 to 37
         if (img_shape[0] + 2 * base_pad + pad_y) < min_image_length:
             pad_y = min_image_length - (img_shape[0] + 2 * base_pad)
         if (img_shape[1] + 2 * base_pad + pad_x) < min_image_length:

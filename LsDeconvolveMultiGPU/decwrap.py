@@ -2,9 +2,11 @@ import os
 import argparse
 import subprocess
 
+
 def construct_cache_drive_folder_name(brain_name, lambda_ex, lambda_em):
     """Construct name using brain name and wavelengths."""
     return f"cache_deconvolution_{brain_name}_Ex_{lambda_ex}_Em_{lambda_em}"
+
 
 def main():
     magnifications = {'15x': (400, 800), '9x': (800, 800)}
@@ -58,6 +60,7 @@ def main():
         print("decwrap.py done.")
     except subprocess.CalledProcessError as e:
         print(f"An error occurred while running the deconvolution: {e}")
+
 
 if __name__ == "__main__":
     main()

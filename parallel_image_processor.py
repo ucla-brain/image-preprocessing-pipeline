@@ -394,6 +394,7 @@ def parallel_image_processor(
         channel: int = 0,
         source_voxel: Union[Tuple[float, float, float], None] = None,
         target_voxel: Union[int, float, None] = None,
+        downsampled_path: Union[Path, None] = None,
         rotation: int = 0,
         timeout: Union[float, None] = None,
         max_processors: int = cpu_count(logical=False),
@@ -424,6 +425,8 @@ def parallel_image_processor(
         voxel sizes of the image in um and zyx order.
     target_voxel: float
         down-sampled isotropic voxel size in um.
+    downsampled_path: Path
+        path to save the downsampled image. If None destination path will be used.
     rotation: int
         Rotate the image. One of 0, 90, 180 or 270 degree values are accepted. Default is 0 (no rotation).
     timeout: float
@@ -442,7 +445,6 @@ def parallel_image_processor(
         source = Path(source)
     if isinstance(destination, str):
         destination = Path(destination)
-
     if destination is not None:
         Path(destination).mkdir(exist_ok=True)
 
@@ -519,7 +521,12 @@ def parallel_image_processor(
               f"\tpost-processed shape zyx: {' '.join(target_shape.round(0).astype(str))}\n"
               f"\tactual voxel sizes zyx: {' '.join(target_voxel_actual.round(3).astype(str))}")
 
-        down_sampled_path = destination / f"{destination.stem[0:-3]}" \
+        if downsampled_path is None:
+            down_sampled_path = destination / f"{destination.stem}" \
+                                          f"z{down_sampling_z_steps * new_source_voxel[0]:.1f}_" \
+                                          f"yx{target_voxel:.1f}um"
+        else:
+            down_sampled_path = downsampled_path / f"{destination.stem}" \
                                           f"z{down_sampling_z_steps * new_source_voxel[0]:.1f}_" \
                                           f"yx{target_voxel:.1f}um"
         down_sampled_path.mkdir(exist_ok=True)
@@ -554,15 +561,15 @@ def parallel_image_processor(
               f"{PrintColors.BLUE}down-sampling: {PrintColors.ENDC}"
               f"resizing on the z-axis accurately ...")
         target_shape_3d = [
-            round(num_images / (target_voxel / source_voxel[0])),
-            round(shape[0] / (target_voxel / source_voxel[1])),
-            round(shape[1] / (target_voxel / source_voxel[2]))
+            int(round(num_images / (target_voxel / source_voxel[0]))),
+            int(round(shape[0] / (target_voxel / source_voxel[1]))),
+            int(round(shape[1] / (target_voxel / source_voxel[2])))
         ]
         if rotation in (90, 270):
             target_shape_3d[1], target_shape_3d[2] = target_shape_3d[2], target_shape_3d[1]
         files = sorted(down_sampled_path.glob("*.tif"))
         with ThreadPoolExecutor(max_processors) as pool:
-            img_stack = pool.map(imread_tif_raw_png, tqdm(files, desc="loading", unit="images"))
+            img_stack = list(pool.map(imread_tif_raw_png, tqdm(files, desc="loading", unit="images")))
             img_stack = dstack(img_stack)  # yxz format
             img_stack = rollaxis(img_stack, -1)  # zyx format
             print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
@@ -578,7 +585,7 @@ def parallel_image_processor(
                   f"{PrintColors.BLUE} down-sampling: {PrintColors.ENDC}"
                   f"saving as npz.")
             savez_compressed(
-                destination / f"down_sampled_zyx{target_voxel:.1f}um.npz",
+                down_sampled_path / f"{destination.stem}_zyx{target_voxel:.1f}um.npz",
                 I=img_stack,
                 xI=array(axes_spacing, dtype='object')  # note specify object to avoid "ragged" warning
             )
