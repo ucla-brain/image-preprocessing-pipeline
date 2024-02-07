@@ -1203,7 +1203,7 @@ def main(args):
         f"\n\ttimeout: {args.timeout}"
         f"\n\tresume: {args.resume}"
     )
-    input("press enter to continue if everything is OK ... ")
+    input(f"{PrintColors.BLUE}press enter to continue if everything is OK ... {PrintColors.ENDC}")
     # stitch :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
     # channels need reconstruction will be stitched first to start slow TeraFly conversion as soon as possible
