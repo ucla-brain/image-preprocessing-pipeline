@@ -168,11 +168,13 @@ function [] = LsDeconv(varargin)
         %     end
         end
 
+        disp("Logging image attributes");
         p_log(log_file, ['   image size (voxels): ' num2str(stack_info.x)  'x * ' num2str(stack_info.y) 'y * ' num2str(stack_info.z) 'z = ' num2str(stack_info.x * stack_info.y * stack_info.z)]);
         p_log(log_file, ['   voxel size (nm^3): ' num2str(dxy)  'x * ' num2str(dxy) 'y * ' num2str(dz) 'z = ' num2str(dxy^2*dz)]);
         p_log(log_file, ['   image bit depth: ' num2str(stack_info.bit_depth)]);
         p_log(log_file, ' ');
 
+        disp("Logging imaging system parameters");
         p_log(log_file, 'imaging system parameters ...')
         p_log(log_file, ['   focal length of cylinder lens (mm): ' num2str(fcyl)]);
         p_log(log_file, ['   width of slit aperture (mm): ' num2str(slitwidth)]);
