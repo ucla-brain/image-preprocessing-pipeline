@@ -1,12 +1,12 @@
 LsDeconv(...
-    "/data/20230724_15_54_32_SM230601_05_LS_15x_800z_stitched/Ex_488_Em_525_tif", ...
-    400,  ... % dxy (nm)
+    "/data/20231223_09_28_42_NA230907_01_LS_9x_800z_stitched/Ex_488_Ch0_tif", ...
+    800,  ... % dxy (nm)
     800,  ... % dz (nm)
-    25,   ... % numit
+    10,   ... % numit
     0.40, ... % NA
     1.52, ... % rf
-    642,  ... % lambda_ex 488 561 642
-    690,  ... % lambda_em 525 600 690
+    488,  ... % lambda_ex 488 561 642
+    525,  ... % lambda_em 525 600 690
     240,  ... % fcyl 80, 240 for the older unaligned stage
     12.0, ... % slitwidth (mm)
     0,    ... % damping percent or lambda
@@ -22,5 +22,5 @@ LsDeconv(...
     1,    ... % starting block should be greater than 0 for multiGPU processing
     0,    ... % 1 flip the deconvolved image upside down. 0 do not.
     1,    ... % 1 convert_to_8bit, 0 keep as is
-    "/data/cache_deconvolution_b5_Ex488_Em_525" ... % cache drive (optional)
+    "/data/cache_deconvolution_NA230907_01_Ex488_Em_525" ... % cache drive (optional)
 );
