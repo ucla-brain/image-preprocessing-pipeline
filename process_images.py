@@ -890,19 +890,23 @@ def merge_all_channels(
         assert len(right_bit_shifts) == len(tif_paths)
     with Pool(len(tif_paths)) as pool:
         tif_stacks = list(pool.starmap(TifStack, zip(tif_paths, z_offsets)))
-        assert all([tif_stack.nz > 0 for tif_stack in tif_stacks])
-        img_reference_idx = tif_stacks[0].nz // 2
-        if not all([tif_stack.nz > img_reference_idx for tif_stack in tif_stacks]):
-            img_reference_idx = min([tif_stack.nz for tif_stack in tif_stacks])
-        print(f"reference image index = {img_reference_idx}")
-        assert img_reference_idx >= 0
+    assert all([tif_stack.nz > 0 for tif_stack in tif_stacks])
+
+    merged_tif_path.mkdir(exist_ok=True)
+    if resume and len(list(merged_tif_path.glob("*.tif"))) >= max([tif_stack.nz for tif_stack in tif_stacks]):
+        return
+
+    img_reference_idx = tif_stacks[0].nz // 2
+    if not all([tif_stack.nz > img_reference_idx for tif_stack in tif_stacks]):
+        img_reference_idx = min([tif_stack.nz for tif_stack in tif_stacks])
+    print(f"reference image index = {img_reference_idx}")
+    assert img_reference_idx >= 0
+    with Pool(len(tif_paths)) as pool:
         img_samples = list(pool.starmap(imread_tif_stck, zip(tif_stacks, (img_reference_idx,) * len(tif_paths))))
-    img_samples = list(map(get_gradient, img_samples))
+        img_samples = list(map(get_gradient, img_samples))
     assert all([img is not None for img in img_samples])
     transformation_matrices = [get_transformation_matrix(img_samples[0], img) for img in img_samples[1:]]
     del img_samples
-
-    merged_tif_path.mkdir(exist_ok=True)
 
     args_queue = Queue(maxsize=tif_stacks[0].nz)
     for idx in jumpy_step_range(0, tif_stacks[0].nz):
@@ -984,14 +988,14 @@ def commands_progress_manger(queue: Queue, progress_bars: List[tqdm], running_pr
     while running_processes > 0:
         try:
             [percent_addition, position, return_code, command] = queue.get()
+            if position is not None and 0 < len(progress_bars) <= position + 1:
+                progress_bars[position].update(percent_addition)
             if return_code is not None:
                 if return_code > 0:
                     p_log(f"\nFollowing command failed:\n\t{command}\n\treturn code: {return_code}\n")
                 else:
                     p_log(f"\nFollowing command succeeded:\n\t{command}\n")
                 running_processes -= 1
-            if position is not None and 0 < len(progress_bars) <= position + 1:
-                progress_bars[position].update(percent_addition)
         except Empty:
             sleep(1)  # waite one second before checking the queue again
 
