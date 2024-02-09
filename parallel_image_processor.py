@@ -447,6 +447,9 @@ def parallel_image_processor(
         destination = Path(destination)
     if destination is not None:
         Path(destination).mkdir(exist_ok=True)
+    if isinstance(downsampled_path, str):
+        downsampled_path = Path(downsampled_path)
+    downsampled_path: Path = destination if downsampled_path is None else downsampled_path
 
     down_sampling_z_steps: int = 1
     need_down_sampling: bool = False
@@ -504,7 +507,6 @@ def parallel_image_processor(
         print("source can be either a tsv volume, an ims file path, or a 2D tiff series folder")
         raise RuntimeError
 
-    down_sampled_path = None
     if need_down_sampling:
         shape_3d = array((num_images,) + shape)
         new_source_voxel = source_voxel
@@ -521,15 +523,9 @@ def parallel_image_processor(
               f"\tpost-processed shape zyx: {' '.join(target_shape.round(0).astype(str))}\n"
               f"\tactual voxel sizes zyx: {' '.join(target_voxel_actual.round(3).astype(str))}")
 
-        if downsampled_path is None:
-            down_sampled_path = destination / f"{destination.stem}" \
-                                          f"z{down_sampling_z_steps * new_source_voxel[0]:.1f}_" \
-                                          f"yx{target_voxel:.1f}um"
-        else:
-            down_sampled_path = downsampled_path / f"{destination.stem}" \
-                                          f"z{down_sampling_z_steps * new_source_voxel[0]:.1f}_" \
-                                          f"yx{target_voxel:.1f}um"
-        down_sampled_path.mkdir(exist_ok=True)
+        downsampled_path /= (
+            f"{destination.stem}_z{down_sampling_z_steps * new_source_voxel[0]:.1f}_yx{target_voxel:.1f}um")
+        downsampled_path.mkdir(exist_ok=True)
 
     progress_queue = Queue()
     semaphore = Queue()
@@ -541,7 +537,7 @@ def parallel_image_processor(
             MultiProcess(
                 progress_queue, args_queue, semaphore, fun, images, destination, args, kwargs, shape, dtype,
                 rename=rename, tif_prefix=tif_prefix,
-                source_voxel=source_voxel, target_voxel=target_voxel, down_sampled_path=down_sampled_path,
+                source_voxel=source_voxel, target_voxel=target_voxel, down_sampled_path=downsampled_path,
                 rotation=rotation, channel=channel, timeout=timeout, compression=compression, resume=resume,
                 needed_memory=needed_memory, save_images=save_images).start()
         else:
@@ -567,7 +563,7 @@ def parallel_image_processor(
         ]
         if rotation in (90, 270):
             target_shape_3d[1], target_shape_3d[2] = target_shape_3d[2], target_shape_3d[1]
-        files = sorted(down_sampled_path.glob("*.tif"))
+        files = sorted(downsampled_path.glob("*.tif"))
         with ThreadPoolExecutor(max_processors) as pool:
             img_stack = list(pool.map(imread_tif_raw_png, tqdm(files, desc="loading", unit="images")))
             img_stack = dstack(img_stack)  # yxz format
@@ -585,7 +581,7 @@ def parallel_image_processor(
                   f"{PrintColors.BLUE} down-sampling: {PrintColors.ENDC}"
                   f"saving as npz.")
             savez_compressed(
-                down_sampled_path / f"{destination.stem}_zyx{target_voxel:.1f}um.npz",
+                downsampled_path.parent / f"{destination.stem}_zyx{target_voxel:.1f}um.npz",
                 I=img_stack,
                 xI=array(axes_spacing, dtype='object')  # note specify object to avoid "ragged" warning
             )
