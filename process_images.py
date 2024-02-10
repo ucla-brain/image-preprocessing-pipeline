@@ -673,7 +673,6 @@ def process_channel(
             f"\tbackground subtraction: {need_lightsheet_cleaning}\n"
             f"\trotate: {90 if need_rotation_stitched_tif else 0}"
         )
-        input("press enter")
         # need_lightsheet_cleaning
         return_code = parallel_image_processor(
             source=tsv_volume,
