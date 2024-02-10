@@ -590,7 +590,7 @@ def process_channel(
             bleach_correction_sigma = (ceil(1 / bleach_correction_frequency * 2),) * 2
 
         def estimate_bleach_correction_lb_ub_bit_shift():
-            from numpy import max as np_max
+            # just a scope to clear unneeded variables
             from numpy import percentile as np_percentile
             print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
                   f"calculating clip_min, clip_max, and right bit shift values ...")
@@ -635,7 +635,6 @@ def process_channel(
             if need_16bit_to_8bit_conversion:
                 ub = np_percentile(img[img > lb], 99.999)
                 ub = int(np_round(expm1_jit(ub)))
-                print(f"lb={expm1_jit(lb)} ub={ub} max={expm1_jit(np_max(img))}")
                 bit_shift = estimate_bit_shift(ub)
 
             return bit_shift, clip_min, clip_max
