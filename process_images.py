@@ -306,7 +306,7 @@ def get_gradient(img: ndarray) -> ndarray:
 
 
 def estimate_bit_shift(img: ndarray, lb):
-    img_approximate_upper_bound = int(np_round(prctl(img[img > lb], 99.99)))
+    img_approximate_upper_bound = int(np_round(expm1(prctl(img[img > lb], 99.99))))
     right_bit_shift: int = 8
     for b in range(0, 9):
         if 256 * 2 ** b >= img_approximate_upper_bound:
@@ -335,10 +335,11 @@ def estimage_bleach_correction_lb_ub_bit_shift(
         tsv_volume.dtype, cosine_blending=False)[0]
     img = log1p_jit(img)
     lb = otsu_threshold(img)
-    bleach_correction_clip_min = np_round(expm1(lb))
+    bleach_correction_clip_min = None
     bleach_correction_clip_max = None
     right_bit_shift = 8
     if bleach_correction_sigma:
+        bleach_correction_clip_min = np_round(expm1(lb))
         if bleach_correction_clip_min > 0:
             bleach_correction_clip_min_correction = 1
             bleach_correction_clip_min -= bleach_correction_clip_min_correction
