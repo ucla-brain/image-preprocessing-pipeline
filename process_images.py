@@ -306,7 +306,7 @@ def get_gradient(img: ndarray) -> ndarray:
 
 
 def estimate_bit_shift(img: ndarray, lb):
-    img_approximate_upper_bound = int(np_round(expm1(prctl(img[img > lb], 99.99999))))
+    img_approximate_upper_bound = int(np_round(expm1(prctl(img[img > lb], 99.9999999))))
     right_bit_shift: int = 8
     for b in range(0, 9):
         if 256 * 2 ** b >= img_approximate_upper_bound:
@@ -329,6 +329,7 @@ def estimage_bleach_correction_lb_ub_bit_shift(
           f"calculating clip_min, clip_max, and right bit shift values ...")
     shape = tsv_volume.volume.shape
     nz = tsv_volume.volume.shape[0]
+    print(f"nz={nz}")
     img = tsv_volume.imread(
         VExtent(
             tsv_volume.volume.x0, tsv_volume.volume.x1,
@@ -453,7 +454,7 @@ def process_channel(
                 sigma = (250, 250)
         p_log(
             f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
-            f"{channel}: started preprocessing images and converting them to tif.\n"
+            f"{channel}: started preprocessing tile images and converting them to tif.\n"
             f"\tsource: {source_path / channel}\n"
             f"\tdestination: {preprocessed_path / channel}\n"
             f"\tcompression: ({compression_method}, {compression_level})\n"
@@ -462,8 +463,8 @@ def process_channel(
             f"\tbaseline subtraction value: {dark}\n"
             f"\ttile de-striping sigma: {sigma}\n"
             f"\ttile size: {tile_size}\n"
-            f"\tdown sampling factor: {down_sampling_factor}\n"
-            f"\tresizing target: {new_tile_size}"
+            f"\tdown sampling factor on xy-plane: {down_sampling_factor}\n"
+            f"\tresizing target on xy-plane: {new_tile_size}"
         )
 
         return_code = batch_filter(
