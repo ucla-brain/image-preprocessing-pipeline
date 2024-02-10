@@ -370,7 +370,7 @@ def estimage_bleach_correction_lb_ub_bit_shift(
         lb = otsu_threshold(img)
 
     if need_16bit_to_8bit_conversion:
-        ub = np_percentile(img[img > lb], 99.99)
+        ub = np_percentile(img[img > lb], 99.9999)
         ub = int(np_round(expm1_jit(ub)))
         print(f"lb={expm1_jit(lb)} ub={ub} max={expm1_jit(np_max(img))}")
         right_bit_shift = estimate_bit_shift(ub)
