@@ -607,7 +607,7 @@ def process_channel(
             clip_min = None
             clip_max = None
             bit_shift = 8
-            if bleach_correction_sigma != (0, 0):
+            if need_bleach_correction:
                 clip_min = np_round(expm1_jit(lb))
                 if clip_min > 0:
                     clip_min_correction = 1
