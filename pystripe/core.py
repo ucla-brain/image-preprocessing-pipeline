@@ -379,7 +379,7 @@ def expm1_jit(img_log_filtered: Union[ndarray, float, int]) -> ndarray:
 
 
 @jit
-def log1p_jit(img_log_filtered: ndarray, dtype=float16) -> ndarray:
+def log1p_jit(img_log_filtered: ndarray, dtype=float32) -> ndarray:
     return log1p(img_log_filtered, dtype=dtype)
 
 
@@ -512,11 +512,12 @@ def slice_non_zero_box(img_axis: ndarray, noise: int, filter_frequency: int = 1 
 
 
 def correct_bleaching(
-        img: ndarray, frequency: float,
-        clip_min: float = 0,
-        clip_max: float = None,
+        img: ndarray,
+        frequency: float,
+        clip_min: float,
+        clip_median: float,
+        clip_max: float,
         max_method: bool = False,
-        wavelet: str = "db37"
 ) -> ndarray:
     """
     Parameters
@@ -525,18 +526,20 @@ def correct_bleaching(
     frequency: low pass fileter frequency. Usually 1/min(img.shape).
     max_method: use max value on x and y axes to create the filter. Max method is faster and smoother but less accurate
     clip_min: background vs foreground threshold
-    clip_max: max allowed foreground
+    clip_median: foreground median
+    clip_max: foreground max
     wavelet: wavelet to destripe the bleach_correction filter
 
     Returns
     -------
     max normalized filter values.
     """
+    assert isinstance(frequency, float) and frequency > 0
+    assert isinstance(clip_min, float) and clip_min >= 0
+    assert isinstance(clip_median, float) and clip_median > 0
+    assert isinstance(clip_max, float) and clip_max > 0
 
-    if clip_max is None:
-        clip_max = np_max(img)
-
-    clip_average = log1p((expm1(clip_min) + expm1(clip_max)) / 2)
+    # clip_average = log1p((expm1(clip_min) + expm1(clip_max)) / 2)
     # creat the filter
     if max_method:
         img_filter_y = np_max(img, axis=1)
@@ -550,13 +553,12 @@ def correct_bleaching(
         img_filter_x = reshape(img_filter_x, (1, len(img_filter_x)))
         img_filter = dot(img_filter_y, img_filter_x)
     else:
-        img_filter = where(img < log1p(.99), clip_max, img)
+        img_filter = where(img < log1p(.99), clip_median, img)
         clip(img_filter, clip_min, clip_max, out=img_filter)
         img_filter = butter_lowpass_filter(img_filter, frequency)
-        # img_filter = filter_subband(img_filter, 1 / frequency, 0, wavelet, bidirectional=True)
 
     # apply the filter
-    img_filter /= clip_average
+    img_filter /= clip_median
     img = where(img_filter > 0, img / img_filter, img)
     return img
 
@@ -607,6 +609,7 @@ def filter_streaks(
         bleach_correction_frequency: float = None,
         bleach_correction_max_method: bool = False,
         bleach_correction_clip_min: Union[float, int] = None,
+        bleach_correction_clip_median: Union[float, int] = None,
         bleach_correction_clip_max: Union[float, int] = None,
         log1p_normalization_needed: bool = True,
         verbose: bool = False
@@ -638,16 +641,10 @@ def filter_streaks(
         for large images.
     bleach_correction_clip_min: float, int
         background vs foreground threshold.
+    bleach_correction_clip_median: float, int
+        foreground median value
     bleach_correction_clip_max: float, int
         foreground max value
-    # bleach_correction_y_slice_min: int
-    #     from 0 to leach_correction_y_slice_min of the image on y-axis that will not be corrected.
-    # bleach_correction_y_slice_max: int
-    #     from bleach_correction_y_slice_max to max of the image on y-axis that will not be corrected.
-    # bleach_correction_x_slice_min: int
-    #     from 0 to leach_correction_x_slice_min of the image on x-axis that will not be corrected.
-    # bleach_correction_x_slice_max: int
-    #     from bleach_correction_x_slice_max to max of the image on x-axis that will not be corrected.
     log1p_normalization_needed: bool
         It should be true in most cases except when img is already normalized with log1p function.
     verbose:
@@ -700,21 +697,29 @@ def filter_streaks(
                   f"threshold={threshold}, bidirectional={bidirectional}.")
 
     if bleach_correction_frequency is not None:
-        clip_min = otsu_threshold(img) if bleach_correction_clip_min is None else log1p(bleach_correction_clip_min)
-        if bleach_correction_clip_max is not None:
-            clip_max = log1p(bleach_correction_clip_max)
+        max_percentile = 99.5
+        median_percentile = 50
+        # convert uint16 to log1p
+        if bleach_correction_clip_min is None:
+            clip_min = otsu_threshold(img)
         else:
-            clip_max = prctl(img[img > clip_min], 99.5)
+            clip_min = log1p(bleach_correction_clip_min)
+        if bleach_correction_clip_max is None and bleach_correction_clip_median is None:
+            clip_median, clip_max = prctl(img[img > clip_min], [median_percentile, max_percentile])
+        elif bleach_correction_clip_max is None:
+            clip_median, clip_max = log1p(bleach_correction_clip_median), prctl(img[img > clip_min], max_percentile)
+        else:
+            clip_median, clip_max = prctl(img[img > clip_min], median_percentile), log1p(bleach_correction_clip_max)
+
         img = correct_bleaching(
-            img, bleach_correction_frequency, clip_min, clip_max,
-            max_method=bleach_correction_max_method,
-            wavelet=wavelet
+            img, bleach_correction_frequency, clip_min, clip_median, clip_max,
+            max_method=bleach_correction_max_method
         )
         if verbose:
             print(
                 f"bleach correction is applied: frequency={bleach_correction_frequency}, "
                 f"max_method={bleach_correction_max_method},\n"
-                f"clip_min={expm1(clip_min)}, clip_max={expm1(clip_max)},\n"
+                f"clip_min={expm1(clip_min)}, clip_median={expm1(clip_median)}, clip_max={expm1(clip_max)},\n"
                 # f"y_slice_min={bleach_correction_y_slice_min}, \n"
                 # f"y_slice_max={bleach_correction_y_slice_max}, \n"
                 # f"x_slice_min={bleach_correction_x_slice_min}, \n"
@@ -783,6 +788,7 @@ def process_img(
         bidirectional: bool = False,
         bleach_correction_frequency: float = None,
         bleach_correction_clip_min: Union[float, int] = None,
+        bleach_correction_clip_median: Union[float, int] = None,
         bleach_correction_clip_max: Union[float, int] = None,
         bleach_correction_max_method: bool = False,
         log1p_normalization_needed: bool = True,
@@ -847,8 +853,6 @@ def process_img(
             if verbose:
                 print(f"min={img_min}, x_max_min={img_x_max_min}, y_max_min={img_y_max_min},\n"
                       f"noise={img_noise}, x_noise={img_x_noise}, y_noise={img_y_noise},\n"
-                      f"bleach_correction_clip_min={bleach_correction_clip_min}, "
-                      f"bleach_correction_clip_max={bleach_correction_clip_max},\n"
                       f"max={img_max}, x_max_max={img_x_max_max}, y_max_max={img_y_max_max}.")
                 speedup = 100 - (x_slice_max - x_slice_min) * (y_slice_max - y_slice_min) / (
                         img.shape[0] * img.shape[1]) * 100
@@ -889,6 +893,7 @@ def process_img(
                 bleach_correction_frequency=bleach_correction_frequency,
                 bleach_correction_max_method=bleach_correction_max_method,
                 bleach_correction_clip_min=bleach_correction_clip_min,
+                bleach_correction_clip_median=bleach_correction_clip_median,
                 bleach_correction_clip_max=bleach_correction_clip_max,
                 log1p_normalization_needed=log1p_normalization_needed,
                 verbose=verbose,
@@ -973,6 +978,7 @@ def read_filter_save(
         bleach_correction_frequency: float = None,
         bleach_correction_max_method: bool = True,
         bleach_correction_clip_min: Union[float, int] = None,
+        bleach_correction_clip_median: Union[float, int] = None,
         bleach_correction_clip_max: Union[float, int] = None,
         dark: float = 0,
         lightsheet: bool = False,
@@ -1036,10 +1042,12 @@ def read_filter_save(
     bleach_correction_max_method: bool
         use max value on x and y axes to create the filter. Max method is faster and smoother but less accurate
         for large images.
-    bleach_correction_clip_max: float, int
-        max values in the image omitting outliers
     bleach_correction_clip_min: float, int
         foreground vs background threshold
+    bleach_correction_clip_median: float, int
+        foreground median
+    bleach_correction_clip_max: float, int
+        foreground max
     dark : float
         Intensity to subtract from the images for dark offset. Default is 0.
     lightsheet : bool
@@ -1131,6 +1139,7 @@ def read_filter_save(
             bleach_correction_frequency=bleach_correction_frequency,
             bleach_correction_max_method=bleach_correction_max_method,
             bleach_correction_clip_min=bleach_correction_clip_min,
+            bleach_correction_clip_median=bleach_correction_clip_median,
             bleach_correction_clip_max=bleach_correction_clip_max,
             sigma=sigma,
             level=level,
@@ -1366,6 +1375,7 @@ def batch_filter(
         bleach_correction_frequency: float = None,
         bleach_correction_max_method: bool = True,
         bleach_correction_clip_min: Union[float, int] = None,
+        bleach_correction_clip_median: Union[float, int] = None,
         bleach_correction_clip_max: Union[float, int] = None,
         sigma: Tuple[int, int] = (0, 0),
         level=0,
@@ -1431,10 +1441,12 @@ def batch_filter(
     bleach_correction_max_method: bool
         use max value on x and y axes to create the filter. Max method is faster and smoother but less accurate
         for large images.
-    bleach_correction_clip_max: float, int
-        max values in the image omitting outliers
     bleach_correction_clip_min: float, int
         foreground vs background threshold
+    bleach_correction_clip_median: float, int
+        foreground median
+    bleach_correction_clip_max: float, int
+        foreground max
     compression : tuple (str, int)
         The 1st argument is compression method the 2nd compression level for tiff files
         For example, ('ZSTD', 1) or ('ADOBE_DEFLATE', 1).
@@ -1514,6 +1526,7 @@ def batch_filter(
         'bleach_correction_frequency': bleach_correction_frequency,
         'bleach_correction_max_method': bleach_correction_max_method,
         'bleach_correction_clip_min': bleach_correction_clip_min,
+        'bleach_correction_clip_median': bleach_correction_clip_median,
         'bleach_correction_clip_max': bleach_correction_clip_max,
         'z_idx': None,
         'rotate': rotate,
