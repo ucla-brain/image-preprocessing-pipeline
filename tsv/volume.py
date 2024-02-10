@@ -544,6 +544,9 @@ class TSVVolumeBase:
         self.stacks_dir: str = ""
         self.cosine_blending: bool = False
 
+    @property
+    def dtype(self):
+        return uint16
 
     def flattened_stacks(self):
         """
@@ -569,7 +572,9 @@ class TSVVolumeBase:
                 intersections.append((stack, stack.intersection(volume)))
 
         if self.cosine_blending:
-            template = float16
+            template = float32
+            if self.dtype in (uint8, uint16):
+                template = float16
             epsilon = finfo(template).eps
             result = zeros(volume.shape, dtype=template)
             multiplier = zeros(volume.shape, dtype=template)
@@ -600,10 +605,7 @@ class TSVVolumeBase:
                     intersection.x0 - volume.x0:intersection.x1 - volume.x0
                 ] += mpart
             result = where(multiplier > epsilon, result / multiplier,  result / epsilon)
-            # multiplier += epsilon
-            # result/= multiplier
             if result.dtype != dtype and np_d_type(dtype).kind in ("u", "i"):
-                # result = around(result, 0)
                 clip(result, iinfo(dtype).min, iinfo(dtype).max, out=result)
                 result = result.astype(dtype)
         else:
@@ -835,7 +837,3 @@ class TSVSimpleVolume(TSVVolumeBase):
                 self.stacks[yi][xi] = TSVSimpleStack(yi, xi, xloc, yloc, 0, ydir)
 
         self.cosine_blending = cosine_blending
-
-    @property
-    def dtype(self):
-        return uint16

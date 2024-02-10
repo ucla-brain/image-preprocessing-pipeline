@@ -881,6 +881,8 @@ def process_img(
             tile_size = calculate_down_sampled_size(tile_size, down_sample)
 
         if bleach_correction_frequency is not None or sigma > (0, 0):
+            if dark is not None and dark > 0 and bleach_correction_clip_median is not None:
+                bleach_correction_clip_median += dark
             img = filter_streaks(
                 img,
                 sigma=sigma,
