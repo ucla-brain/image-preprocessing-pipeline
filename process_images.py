@@ -344,7 +344,7 @@ def estimage_bleach_correction_lb_ub_bit_shift(
     bleach_correction_clip_min = None
     bleach_correction_clip_max = None
     right_bit_shift = 8
-    if bleach_correction_sigma:
+    if bleach_correction_sigma != (0, 0):
         bleach_correction_clip_min = np_round(expm1_jit(lb))
         if bleach_correction_clip_min > 0:
             bleach_correction_clip_min_correction = 1
@@ -366,7 +366,7 @@ def estimage_bleach_correction_lb_ub_bit_shift(
             tile_size=(shape[1], shape[2]),
             d_type=tsv_volume.dtype
         )
-        # img = log1p_jit(img)
+        img = log1p_jit(img)
         lb = otsu_threshold(img)
 
     if need_16bit_to_8bit_conversion:
@@ -640,10 +640,11 @@ def process_channel(
         alt_stack_dir=preprocessed_path / channel
     )
     shape: Tuple[int, int, int] = tsv_volume.volume.shape  # shape is in z y x format
-    merge_step_cores = cpu_count(logical=True)
+    merge_step_cores = nthreads
+    bleach_correction_frequency = None
+    bleach_correction_sigma = (0, 0)
     if continue_process_terastitcher and len(list(stitched_tif_path.glob("*.tif"))) < shape[0]:
-        bleach_correction_frequency = None
-        bleach_correction_sigma = (0, 0)
+
         if need_bleach_correction:
             if new_tile_size is not None:
                 bleach_correction_frequency = 1 / min(new_tile_size)
