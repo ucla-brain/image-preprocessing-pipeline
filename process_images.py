@@ -335,6 +335,8 @@ def estimage_bleach_correction_lb_ub_bit_shift(
             tsv_volume.volume.y0, tsv_volume.volume.y1,
             tsv_volume.volume.z0 + nz // 2, tsv_volume.volume.z0 + nz // 2 + 1),
         tsv_volume.dtype, cosine_blending=False)[0]
+    from numpy import max as np_max
+    print(f"max={np_max(img)}")
     img = log1p_jit(img)
     lb = otsu_threshold(img)
     bleach_correction_clip_min = None
@@ -368,7 +370,7 @@ def estimage_bleach_correction_lb_ub_bit_shift(
     if need_16bit_to_8bit_conversion:
         ub = prctl(img[img > lb], 99.9999999)
         ub = int(np_round(expm1(ub)))
-        from numpy import max as np_max
+
         print(f"lb={expm1(lb)} ub={ub} max={expm1(np_max(img))}")
         right_bit_shift = estimate_bit_shift(ub)
 
