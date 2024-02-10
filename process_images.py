@@ -607,12 +607,13 @@ def process_channel(
             clip_min = None
             clip_max = None
             bit_shift = 8
+            max_percentile = 99.999
             if need_bleach_correction:
                 clip_min = np_round(expm1_jit(lb))
                 if clip_min > 0:
                     clip_min_correction = 1
                     clip_min -= clip_min_correction
-                clip_max = np_round(expm1_jit(np_percentile(img[img > lb], 99.9)))
+                clip_max = np_round(expm1_jit(np_percentile(img[img > lb], max_percentile)))
                 img = process_img(
                     img,
                     exclude_dark_edges_set_them_to_zero=False,
@@ -625,7 +626,7 @@ def process_channel(
                     padding_mode=padding_mode,
                     log1p_normalization_needed=False,
                     lightsheet=need_lightsheet_cleaning,
-                    dark=bleach_correction_clip_min if bleach_correction_clip_min else 0,
+                    dark=clip_min if clip_min else 0,
                     tile_size=(shape[1], shape[2]),
                     d_type=tsv_volume.dtype
                 )
@@ -633,7 +634,7 @@ def process_channel(
                 lb = otsu_threshold(img)
 
             if need_16bit_to_8bit_conversion:
-                ub = np_percentile(img[img > lb], 99.999)
+                ub = np_percentile(img[img > lb], max_percentile)
                 ub = int(np_round(expm1_jit(ub)))
                 bit_shift = estimate_bit_shift(ub)
 
