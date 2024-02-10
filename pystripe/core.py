@@ -704,7 +704,7 @@ def filter_streaks(
         if bleach_correction_clip_max is not None:
             clip_max = log1p(bleach_correction_clip_max)
         else:
-            clip_max = prctl(img[img > clip_min], 99.999)
+            clip_max = prctl(img[img > clip_min], 99.5)
         img = correct_bleaching(
             img, bleach_correction_frequency, clip_min, clip_max,
             max_method=bleach_correction_max_method,
