@@ -22,7 +22,7 @@ import mpi4py
 import psutil
 from cpufeature.extension import CPUFeature
 from cv2 import MOTION_TRANSLATION, findTransformECC, TERM_CRITERIA_COUNT, TERM_CRITERIA_EPS
-from numpy import ndarray, zeros, uint8, float32, eye, dstack, append, array, absolute, log1p, expm1
+from numpy import ndarray, zeros, uint8, float32, eye, dstack, append, array, absolute
 from numpy import round as np_round
 from numpy import mean as np_mean
 from numpy.linalg import inv
@@ -35,7 +35,7 @@ from skimage.filters import sobel
 from flat import create_flat_img
 from parallel_image_processor import parallel_image_processor, jumpy_step_range
 from pystripe.core import (batch_filter, imread_tif_raw_png, imsave_tif, MultiProcessQueueRunner, progress_manager,
-                           process_img, convert_to_8bit_fun, log1p_jit, otsu_threshold, prctl)
+                           process_img, convert_to_8bit_fun, log1p_jit, expm1_jit, otsu_threshold, prctl)
 from supplements.cli_interface import (ask_for_a_number_in_range, date_time_now, PrintColors)
 from supplements.tifstack import TifStack, imread_tif_stck
 from tsv.volume import TSVVolume, VExtent
@@ -343,11 +343,11 @@ def estimage_bleach_correction_lb_ub_bit_shift(
     bleach_correction_clip_max = None
     right_bit_shift = 8
     if bleach_correction_sigma:
-        bleach_correction_clip_min = np_round(expm1(lb))
+        bleach_correction_clip_min = np_round(expm1_jit(lb))
         if bleach_correction_clip_min > 0:
             bleach_correction_clip_min_correction = 1
             bleach_correction_clip_min -= bleach_correction_clip_min_correction
-        bleach_correction_clip_max = np_round(expm1(prctl(img[img > log1p(bleach_correction_clip_min)], 99.9)))
+        bleach_correction_clip_max = np_round(expm1_jit(prctl(img[img > lb], 99.9)))
         img = process_img(
             img,
             exclude_dark_edges_set_them_to_zero=True,
@@ -360,7 +360,7 @@ def estimage_bleach_correction_lb_ub_bit_shift(
             padding_mode=padding_mode,
             log1p_normalization_needed=False,
             lightsheet=need_lightsheet_cleaning,
-            dark=bleach_correction_clip_min,
+            dark=bleach_correction_clip_min if bleach_correction_clip_min else 0,
             tile_size=(shape[1], shape[2]),
             d_type=tsv_volume.dtype
         )
@@ -369,9 +369,9 @@ def estimage_bleach_correction_lb_ub_bit_shift(
 
     if need_16bit_to_8bit_conversion:
         ub = prctl(img[img > lb], 99.9999999)
-        ub = int(np_round(expm1(ub)))
+        ub = int(np_round(expm1_jit(ub)))
 
-        print(f"lb={expm1(lb)} ub={ub} max={expm1(np_max(img))}")
+        print(f"lb={expm1_jit(lb)} ub={ub} max={expm1_jit(np_max(img))}")
         right_bit_shift = estimate_bit_shift(ub)
 
     return right_bit_shift, bleach_correction_clip_min, bleach_correction_clip_max
