@@ -306,7 +306,7 @@ def get_gradient(img: ndarray) -> ndarray:
 
 
 def estimate_bit_shift(img: ndarray, lb):
-    img_approximate_upper_bound = int(np_round(expm1(prctl(img[img > lb], 99.999))))
+    img_approximate_upper_bound = int(np_round(expm1(prctl(img[img > lb], 99.99999))))
     right_bit_shift: int = 8
     for b in range(0, 9):
         if 256 * 2 ** b >= img_approximate_upper_bound:
