@@ -311,71 +311,7 @@ def estimate_bit_shift(ub: int):
         if 256 * 2 ** b >= ub:
             right_bit_shift = b
             break
-    print(f"right_bit_shift={right_bit_shift}")
-    input("press enter ...")
     return right_bit_shift
-
-
-def estimage_bleach_correction_lb_ub_bit_shift(
-        tsv_volume: TSVVolume,
-        need_16bit_to_8bit_conversion: bool,
-        bleach_correction_sigma: tuple[int, int],
-        bleach_correction_frequency: float,
-        padding_mode: str,
-        need_lightsheet_cleaning,
-):
-    from numpy import max as np_max
-    from numpy import percentile as np_percentile
-    print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
-          f"calculating clip_min, clip_max, and right bit shift values ...")
-    shape = tsv_volume.volume.shape
-    nz = tsv_volume.volume.shape[0]
-    print(f"nz={nz}")
-    img = tsv_volume.imread(
-        VExtent(
-            tsv_volume.volume.x0, tsv_volume.volume.x1,
-            tsv_volume.volume.y0, tsv_volume.volume.y1,
-            tsv_volume.volume.z0 + nz // 2, tsv_volume.volume.z0 + nz // 2 + 1),
-        tsv_volume.dtype, cosine_blending=False)[0]
-
-    print(f"max={np_max(img)}")
-    img = log1p_jit(img)
-    lb = otsu_threshold(img)
-    bleach_correction_clip_min = None
-    bleach_correction_clip_max = None
-    right_bit_shift = 8
-    if bleach_correction_sigma != (0, 0):
-        bleach_correction_clip_min = np_round(expm1_jit(lb))
-        if bleach_correction_clip_min > 0:
-            bleach_correction_clip_min_correction = 1
-            bleach_correction_clip_min -= bleach_correction_clip_min_correction
-        bleach_correction_clip_max = np_round(expm1_jit(np_percentile(img[img > lb], 99.9)))
-        img = process_img(
-            img,
-            exclude_dark_edges_set_them_to_zero=False,
-            sigma=bleach_correction_sigma,
-            wavelet="db37",
-            bidirectional=True,
-            bleach_correction_frequency=bleach_correction_frequency,
-            bleach_correction_clip_min=float(bleach_correction_clip_min),
-            bleach_correction_clip_max=float(bleach_correction_clip_max),
-            padding_mode=padding_mode,
-            log1p_normalization_needed=False,
-            lightsheet=need_lightsheet_cleaning,
-            dark=bleach_correction_clip_min if bleach_correction_clip_min else 0,
-            tile_size=(shape[1], shape[2]),
-            d_type=tsv_volume.dtype
-        )
-        img = log1p_jit(img)
-        lb = otsu_threshold(img)
-
-    if need_16bit_to_8bit_conversion:
-        ub = np_percentile(img[img > lb], 99.9999)
-        ub = int(np_round(expm1_jit(ub)))
-        print(f"lb={expm1_jit(lb)} ub={ub} max={expm1_jit(np_max(img))}")
-        right_bit_shift = estimate_bit_shift(ub)
-
-    return right_bit_shift, bleach_correction_clip_min, bleach_correction_clip_max
 
 
 def process_channel(
@@ -644,7 +580,6 @@ def process_channel(
     bleach_correction_frequency = None
     bleach_correction_sigma = (0, 0)
     if continue_process_terastitcher and len(list(stitched_tif_path.glob("*.tif"))) < shape[0]:
-
         if need_bleach_correction:
             if new_tile_size is not None:
                 bleach_correction_frequency = 1 / min(new_tile_size)
@@ -654,14 +589,59 @@ def process_channel(
                 bleach_correction_frequency = 1 / min(tile_size)
             bleach_correction_sigma = (ceil(1 / bleach_correction_frequency * 2),) * 2
 
+        def estimate_bleach_correction_lb_ub_bit_shift():
+            from numpy import max as np_max
+            from numpy import percentile as np_percentile
+            print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
+                  f"calculating clip_min, clip_max, and right bit shift values ...")
+            nz = tsv_volume.volume.shape[0]
+            img = tsv_volume.imread(
+                VExtent(
+                    tsv_volume.volume.x0, tsv_volume.volume.x1,
+                    tsv_volume.volume.y0, tsv_volume.volume.y1,
+                    tsv_volume.volume.z0 + nz // 2, tsv_volume.volume.z0 + nz // 2 + 1),
+                tsv_volume.dtype, cosine_blending=False)[0]
+
+            img = log1p_jit(img)
+            lb = otsu_threshold(img)
+            clip_min = None
+            clip_max = None
+            bit_shift = 8
+            if bleach_correction_sigma != (0, 0):
+                clip_min = np_round(expm1_jit(lb))
+                if clip_min > 0:
+                    clip_min_correction = 1
+                    clip_min -= clip_min_correction
+                clip_max = np_round(expm1_jit(np_percentile(img[img > lb], 99.9)))
+                img = process_img(
+                    img,
+                    exclude_dark_edges_set_them_to_zero=False,
+                    sigma=bleach_correction_sigma,
+                    wavelet="db37",
+                    bidirectional=True,
+                    bleach_correction_frequency=bleach_correction_frequency,
+                    bleach_correction_clip_min=float(clip_min),
+                    bleach_correction_clip_max=float(clip_max),
+                    padding_mode=padding_mode,
+                    log1p_normalization_needed=False,
+                    lightsheet=need_lightsheet_cleaning,
+                    dark=bleach_correction_clip_min if bleach_correction_clip_min else 0,
+                    tile_size=(shape[1], shape[2]),
+                    d_type=tsv_volume.dtype
+                )
+                img = log1p_jit(img)
+                lb = otsu_threshold(img)
+
+            if need_16bit_to_8bit_conversion:
+                ub = np_percentile(img[img > lb], 99.999)
+                ub = int(np_round(expm1_jit(ub)))
+                print(f"lb={expm1_jit(lb)} ub={ub} max={expm1_jit(np_max(img))}")
+                bit_shift = estimate_bit_shift(ub)
+
+            return bit_shift, clip_min, clip_max
+
         right_bit_shift, bleach_correction_clip_min, bleach_correction_clip_max = \
-            estimage_bleach_correction_lb_ub_bit_shift(
-                tsv_volume,
-                need_16bit_to_8bit_conversion,
-                bleach_correction_sigma,
-                bleach_correction_frequency,
-                padding_mode,
-                need_lightsheet_cleaning)
+            estimate_bleach_correction_lb_ub_bit_shift()
 
         memory_needed_per_thread = 24 if need_bleach_correction else 16
         memory_needed_per_thread *= shape[1] + 2 * max(bleach_correction_sigma) + 1
@@ -693,6 +673,7 @@ def process_channel(
             f"\tbackground subtraction: {need_lightsheet_cleaning}\n"
             f"\trotate: {90 if need_rotation_stitched_tif else 0}"
         )
+        input("press enter")
         # need_lightsheet_cleaning
         return_code = parallel_image_processor(
             source=tsv_volume,
