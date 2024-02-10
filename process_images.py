@@ -324,6 +324,8 @@ def estimage_bleach_correction_lb_ub_bit_shift(
         padding_mode: str,
         need_lightsheet_cleaning,
 ):
+    from numpy import max as np_max
+    from numpy import percentile as np_percentile
     print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
           f"calculating clip_min, clip_max, and right bit shift values ...")
     shape = tsv_volume.volume.shape
@@ -335,7 +337,7 @@ def estimage_bleach_correction_lb_ub_bit_shift(
             tsv_volume.volume.y0, tsv_volume.volume.y1,
             tsv_volume.volume.z0 + nz // 2, tsv_volume.volume.z0 + nz // 2 + 1),
         tsv_volume.dtype, cosine_blending=False)[0]
-    from numpy import max as np_max
+
     print(f"max={np_max(img)}")
     img = log1p_jit(img)
     lb = otsu_threshold(img)
@@ -347,10 +349,10 @@ def estimage_bleach_correction_lb_ub_bit_shift(
         if bleach_correction_clip_min > 0:
             bleach_correction_clip_min_correction = 1
             bleach_correction_clip_min -= bleach_correction_clip_min_correction
-        bleach_correction_clip_max = np_round(expm1_jit(prctl(img[img > lb], 99.9)))
+        bleach_correction_clip_max = np_round(expm1_jit(np_percentile(img[img > lb], 99.9)))
         img = process_img(
             img,
-            exclude_dark_edges_set_them_to_zero=True,
+            exclude_dark_edges_set_them_to_zero=False,
             sigma=bleach_correction_sigma,
             wavelet="db37",
             bidirectional=True,
@@ -368,9 +370,8 @@ def estimage_bleach_correction_lb_ub_bit_shift(
         lb = otsu_threshold(img)
 
     if need_16bit_to_8bit_conversion:
-        ub = prctl(img[img > lb], 99.9999999)
+        ub = np_percentile(img[img > lb], 99.99)
         ub = int(np_round(expm1_jit(ub)))
-
         print(f"lb={expm1_jit(lb)} ub={ub} max={expm1_jit(np_max(img))}")
         right_bit_shift = estimate_bit_shift(ub)
 
