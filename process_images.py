@@ -592,9 +592,6 @@ def process_channel(
 
         def estimate_bleach_correction_lb_ub_bit_shift() -> [int, int, int, int]:
             # just a scope to clear unneeded variables
-            from numpy import percentile as np_percentile
-            print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
-                  f"calculating clip_min, clip_max, and right bit shift values ...")
             nz = tsv_volume.volume.shape[0]
             img = tsv_volume.imread(
                 VExtent(
@@ -610,8 +607,10 @@ def process_channel(
             clip_median = None
             bit_shift = 8
             if need_bleach_correction:
+                print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
+                      f"calculating clip_min, clip_median, and clip_max ...")
                 clip_min = int(np_round(expm1_jit(lb)))
-                clip_median, clip_max = list(map(int, np_round(expm1_jit(np_percentile(img[img > lb], [50, 99.5])))))
+                clip_median, clip_max = list(map(int, np_round(expm1_jit(prctl(img[img > lb], [50, 99.5])))))
                 img = process_img(
                     img,
                     exclude_dark_edges_set_them_to_zero=True,
@@ -633,7 +632,9 @@ def process_channel(
                 lb = otsu_threshold(img)
 
             if need_16bit_to_8bit_conversion:
-                ub = np_percentile(img[img > lb], 99.999)
+                print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
+                      f"calculating right bit shift ...")
+                ub = prctl(img[img > lb], 99.999)
                 ub = int(np_round(expm1_jit(ub)))
                 bit_shift = estimate_bit_shift(ub)
 
