@@ -422,7 +422,7 @@ def butter_lowpass_filter(img: ndarray, cutoff_frequency: float, order: int = 1,
 
 @jit(nopython=True)
 def is_uniform_1d(arr: ndarray) -> Union[bool, None]:
-    n = len(arr)
+    n: int = len(arr)
     if n <= 0:
         return None
     y = arr[0]
@@ -434,7 +434,7 @@ def is_uniform_1d(arr: ndarray) -> Union[bool, None]:
 
 @jit(nopython=True)
 def is_uniform_2d(arr: ndarray) -> Union[bool, None]:
-    n = len(arr)
+    n: int = len(arr)
     if n <= 0:
         return None
     is_uniform: bool = is_uniform_1d(arr[0])
@@ -452,7 +452,7 @@ def is_uniform_2d(arr: ndarray) -> Union[bool, None]:
 
 @jit(nopython=True)
 def is_uniform_3d(arr: ndarray) -> Union[bool, None]:
-    n = len(arr)
+    n: int = len(arr)
     if n <= 0:
         return None
     is_uniform: bool = is_uniform_2d(arr[0])
