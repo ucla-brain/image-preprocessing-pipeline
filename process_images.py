@@ -1374,7 +1374,9 @@ def main(args):
 def get_cpu_sockets() -> int:
     try:
         # Execute a shell command to get the physical IDs
-        command = "wmic cpu get socketdesignation"
+        command = "grep \"physical id\" /proc/cpuinfo | sort -u | wc -l"
+        if sys.platform.lower() == "win32":
+            command = "wmic cpu get socketdesignation"
         output = check_output(command, shell=True).decode()
         # Count the unique physical IDs
         sockets = len(set(output.strip().split('\n')[1:]))
