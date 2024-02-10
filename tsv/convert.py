@@ -1,7 +1,7 @@
 """convert.py - programs to convert stacks to output formats"""
 
 from sys import platform, argv
-from os import path, environ, makedirs
+from os import path, makedirs
 from argparse import ArgumentParser
 from itertools import product
 from multiprocessing import cpu_count, Pool
@@ -237,7 +237,7 @@ def make_diag_stack(
         mipmap_level=None,
         volume=None,
         dtype=None,
-        silent=False,
+        # silent=False,
         compression=4,
         cores=cpu_count()
 ):
@@ -290,10 +290,10 @@ def main(args=argv[1:]):
                           args.output_pattern,
                           mipmap_level=mipmap_level,
                           volume=volume,
-                          silent=args.silent,
+                          # silent=args.silent,
                           compression=args.compression,
                           cores=args.cpus,
-                          ignore_z_offsets=args.ignore_z_offsets,
+                          # ignore_z_offsets=args.ignore_z_offsets,
                           rotation=args.rotation)
     else:
         global V

@@ -24,7 +24,7 @@ from numpy import max as np_max
 from numpy import mean as np_mean
 from numpy import median as np_median
 from numpy import min as np_min
-from numpy import uint8, uint16, float32, float64, ndarray, generic, zeros, broadcast_to, exp, expm1, log1p, \
+from numpy import uint8, uint16, float16, float32, float64, ndarray, generic, zeros, broadcast_to, exp, expm1, log1p, \
     cumsum, arange, unique, interp, pad, clip, where, rot90, flipud, dot, reshape, iinfo, nonzero
 from pywt import wavedec2, waverec2, Wavelet, dwt_max_level
 from scipy.fftpack import rfft, fftshift, irfft
@@ -373,13 +373,13 @@ def foreground_fraction(img: ndarray, center: float, crossover: float, smoothing
     return gaussian_filter_nd(img, sigma=smoothing)
 
 
-@jit
+# @jit
 def expm1_jit(img_log_filtered: Union[ndarray, float, int]) -> ndarray:
     return expm1(img_log_filtered)
 
 
 @jit
-def log1p_jit(img_log_filtered: ndarray, dtype=float32) -> ndarray:
+def log1p_jit(img_log_filtered: ndarray, dtype=float16) -> ndarray:
     return log1p(img_log_filtered, dtype=dtype)
 
 
@@ -413,10 +413,11 @@ def filter_subband(img: ndarray, sigma: float, level: int, wavelet: str, bidirec
     return img
 
 
-def butter_lowpass_filter(img: ndarray, cutoff_frequency: float, order: int = 1, dtype=float32) -> ndarray:
+def butter_lowpass_filter(img: ndarray, cutoff_frequency: float, order: int = 1) -> ndarray:
+    d_type = img.dtype
     sos = butter(order, cutoff_frequency, output='sos')
-    img = sosfiltfilt(sos, img)  # return floadt64
-    img = img.astype(dtype)
+    img = sosfiltfilt(sos, img)  # returns float64
+    img = img.astype(d_type)
     return img
 
 
@@ -470,7 +471,7 @@ def is_uniform_3d(arr: ndarray) -> Union[bool, None]:
 
 @jit(nopython=True)
 def min_max_1d(arr: ndarray) -> (int, int):
-    n = len(arr)
+    n: int = len(arr)
     if n <= 0:
         return None, None
     max_val = min_val = arr[0]
@@ -495,7 +496,7 @@ def min_max_1d(arr: ndarray) -> (int, int):
 
 @jit(nopython=True)
 def min_max_2d(arr: ndarray) -> (int, int):
-    n = len(arr)
+    n: int = len(arr)
     if n <= 0:
         return None, None
     min_val, max_val = min_max_1d(arr[0])
@@ -534,6 +535,8 @@ def correct_bleaching(
 
     if clip_max is None:
         clip_max = np_max(img)
+
+    clip_average = log1p((expm1(clip_min) + expm1(clip_max)) / 2)
     # creat the filter
     if max_method:
         img_filter_y = np_max(img, axis=1)
@@ -550,10 +553,10 @@ def correct_bleaching(
         img_filter = where(img < log1p(.99), clip_max, img)
         clip(img_filter, clip_min, clip_max, out=img_filter)
         img_filter = butter_lowpass_filter(img_filter, frequency)
-        img_filter = filter_subband(img_filter, 1 / frequency, 0, wavelet, bidirectional=True)
+        # img_filter = filter_subband(img_filter, 1 / frequency, 0, wavelet, bidirectional=True)
 
     # apply the filter
-    img_filter /= log1p_jit((expm1(clip_min) + expm1(clip_max)) / 2)
+    img_filter /= clip_average
     img = where(img_filter > 0, img / img_filter, img)
     return img
 
@@ -701,7 +704,7 @@ def filter_streaks(
         if bleach_correction_clip_max is not None:
             clip_max = log1p(bleach_correction_clip_max)
         else:
-            clip_max = prctl(img[img > clip_min], 99.5)
+            clip_max = prctl(img[img > clip_min], 99.999)
         img = correct_bleaching(
             img, bleach_correction_frequency, clip_min, clip_max,
             max_method=bleach_correction_max_method,

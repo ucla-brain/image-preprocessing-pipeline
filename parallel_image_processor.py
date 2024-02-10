@@ -27,7 +27,7 @@ from tsv.volume import TSVVolume, VExtent
 
 
 def imread_tsv(tsv_volume: TSVVolume, extent: VExtent, d_type: str):
-    return tsv_volume.imread(extent, d_type, cosine_blending=False)[0]
+    return tsv_volume.imread(extent, d_type)[0]
 
 
 class MultiProcess(Process):

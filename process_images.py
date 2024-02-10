@@ -413,7 +413,7 @@ def process_channel(
             source_path / channel,
             preprocessed_path / channel,
             files_list=files_list,
-            workers=nthreads + 2,
+            workers=nthreads + get_cpu_sockets() * 2,
             continue_process=continue_process_pystripe,
             print_input_file_names=print_input_file_names,
             timeout=timeout,  # 600.0,
@@ -573,7 +573,8 @@ def process_channel(
 
     tsv_volume = TSVVolume(
         stitched_path / f'{channel}_xml_import_step_5.xml',
-        alt_stack_dir=preprocessed_path / channel
+        alt_stack_dir=preprocessed_path.joinpath(channel).__str__(),
+        cosine_blending=True if need_bleach_correction else False
     )
     shape: Tuple[int, int, int] = tsv_volume.volume.shape  # shape is in z y x format
     merge_step_cores = nthreads
@@ -600,23 +601,19 @@ def process_channel(
                     tsv_volume.volume.x0, tsv_volume.volume.x1,
                     tsv_volume.volume.y0, tsv_volume.volume.y1,
                     tsv_volume.volume.z0 + nz // 2, tsv_volume.volume.z0 + nz // 2 + 1),
-                tsv_volume.dtype, cosine_blending=False)[0]
+                tsv_volume.dtype)[0]
 
-            img = log1p_jit(img)
+            img = log1p_jit(img, dtype=float32)
             lb = otsu_threshold(img)
             clip_min = None
             clip_max = None
             bit_shift = 8
-            max_percentile = 99.999
             if need_bleach_correction:
                 clip_min = np_round(expm1_jit(lb))
-                if clip_min > 0:
-                    clip_min_correction = 1
-                    clip_min -= clip_min_correction
-                clip_max = np_round(expm1_jit(np_percentile(img[img > lb], max_percentile)))
+                clip_max = np_round(expm1_jit(np_percentile(img[img > lb], 99.5)))
                 img = process_img(
                     img,
-                    exclude_dark_edges_set_them_to_zero=False,
+                    exclude_dark_edges_set_them_to_zero=True,
                     sigma=bleach_correction_sigma,
                     wavelet="db37",
                     bidirectional=True,
@@ -630,11 +627,11 @@ def process_channel(
                     tile_size=(shape[1], shape[2]),
                     d_type=tsv_volume.dtype
                 )
-                img = log1p_jit(img)
+                img = log1p_jit(img, dtype=float32)
                 lb = otsu_threshold(img)
 
             if need_16bit_to_8bit_conversion:
-                ub = np_percentile(img[img > lb], max_percentile)
+                ub = np_percentile(img[img > lb], 99.999)
                 ub = int(np_round(expm1_jit(ub)))
                 bit_shift = estimate_bit_shift(ub)
 
@@ -643,7 +640,7 @@ def process_channel(
         right_bit_shift, bleach_correction_clip_min, bleach_correction_clip_max = \
             estimate_bleach_correction_lb_ub_bit_shift()
 
-        memory_needed_per_thread = 24 if need_bleach_correction else 16
+        memory_needed_per_thread = 16  # 24 if need_bleach_correction else 16
         memory_needed_per_thread *= shape[1] + 2 * max(bleach_correction_sigma) + 1
         memory_needed_per_thread *= shape[2] + 2 * max(bleach_correction_sigma) + 1
         memory_needed_per_thread /= 1024 ** 3
@@ -1542,11 +1539,11 @@ if __name__ == '__main__':
                         help="image pre-processing: apply Gaussian filter to denoise. Disabled by --no-gaussian.")
     parser.add_argument("--de_stripe", default=True, action=BooleanOptionalAction,
                         help="image pre-processing: apply de-striping algorithm. Disabled by --no-de_stripe")
-    parser.add_argument("--padding_mode", type=str, default='wrap',
+    parser.add_argument("--padding_mode", type=str, default='reflect',
                         choices=("constant", "edge", "linear_ramp", "maximum", "mean", "median", "minimum", "reflect",
                                  "symmetric", "wrap", "empty"),
                         help="Padding method affects the edge artifacts during bleach correction. "
-                             "The default mode is wrap, but in some cases reflect method works better. "
+                             "The default mode is reflect, but in some cases wrap method works better. "
                              "Options: constant, edge, linear_ramp, maximum, mean, median, minimum, reflect, "
                              "symmetric, wrap, and empty")
     parser.add_argument("--isotropic", default=False, action=BooleanOptionalAction,
