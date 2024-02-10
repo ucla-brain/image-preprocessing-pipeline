@@ -364,7 +364,7 @@ def estimage_bleach_correction_lb_ub_bit_shift(
             tile_size=(shape[1], shape[2]),
             d_type=tsv_volume.dtype
         )
-        img = log1p_jit(img)
+        # img = log1p_jit(img)
         lb = otsu_threshold(img)
 
     if need_16bit_to_8bit_conversion:
