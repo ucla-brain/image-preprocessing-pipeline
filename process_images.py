@@ -593,23 +593,25 @@ def process_channel(
         # just a scope to clear unneeded variables
         print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
               f"calculating clip_min, clip_median, clip_max, and bit shift ...")
-        nz = shape[0]
-        img = tsv_volume.imread(
-            VExtent(
-                tsv_volume.volume.x0, tsv_volume.volume.x1,
-                tsv_volume.volume.y0, tsv_volume.volume.y1,
-                tsv_volume.volume.z0 + nz // 2, tsv_volume.volume.z0 + nz // 2 + 1),
-            tsv_volume.dtype)[0]
-        assert isinstance(img, ndarray)
-        img = log1p_jit(img, dtype=float32)
-        lb = otsu_threshold(img)
-        clip_min = int(np_round(expm1_jit(lb)))
-        clip_median, clip_max, ub = list(map(int, np_round(expm1_jit(prctl(img[img > lb], [50.0, 99.5, 99.999])))))
-        bit_shift = estimate_bit_shift(ub)
-        if need_16bit_to_8bit_conversion:
-            max_values_8bit_conversion_sets_to_zero = 2**bit_shift-1
-            if max_values_8bit_conversion_sets_to_zero + clip_median < clip_max:
-                clip_median += max_values_8bit_conversion_sets_to_zero
+        bit_shift, clip_min, clip_median, clip_max = 8, None, None, None
+        if need_bleach_correction or need_16bit_to_8bit_conversion:
+            nz = shape[0]
+            img = tsv_volume.imread(
+                VExtent(
+                    tsv_volume.volume.x0, tsv_volume.volume.x1,
+                    tsv_volume.volume.y0, tsv_volume.volume.y1,
+                    tsv_volume.volume.z0 + nz // 2, tsv_volume.volume.z0 + nz // 2 + 1),
+                tsv_volume.dtype)[0]
+            assert isinstance(img, ndarray)
+            img = log1p_jit(img, dtype=float32)
+            lb = otsu_threshold(img)
+            clip_min = int(np_round(expm1_jit(lb)))
+            ub_prctl = 99.9999 if need_bleach_correction else 99.99
+            clip_median, clip_max, ub = list(map(int, np_round(expm1_jit(
+                prctl(img[img > lb], [50.0, 99.5, ub_prctl])
+            ))))
+            clip_max = max(256, clip_max)
+            bit_shift = estimate_bit_shift(ub)
         return bit_shift, clip_min, clip_median, clip_max
 
     right_bit_shift, bleach_correction_clip_min, bleach_correction_clip_median, bleach_correction_clip_max = \

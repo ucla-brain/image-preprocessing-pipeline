@@ -558,7 +558,8 @@ def correct_bleaching(
         img_filter = butter_lowpass_filter(img_filter, frequency)
 
     # apply the filter
-
+    if expm1(clip_max) > 255:
+        clip_median = log1p(255)
     if USE_NUMEXPR:
         img = evaluate("where((img_filter > 0) & (img > clip_min), img / img_filter * clip_median, img)")
     else:
@@ -907,19 +908,17 @@ def process_img(
 
         # Subtract the dark offset
         # dark subtraction is like baseline subtraction in Imaris
-        if convert_to_8bit:
-            max_values_8bit_conversion_sets_to_zero = 2**bit_shift_to_right-1
-            if dark > max_values_8bit_conversion_sets_to_zero:
+        if dark is not None:
+            if convert_to_8bit:
+                max_values_8bit_conversion_sets_to_zero = 2**bit_shift_to_right-1
                 dark -= max_values_8bit_conversion_sets_to_zero
-            else:
-                dark = 0
-        if dark is not None and dark > 0:
-            if USE_NUMEXPR:
-                img = evaluate("where(img > dark, img - dark, 0)")
-            else:
-                img = where(img > dark, img - dark, 0)
-            if verbose:
-                print(f"dark value of {dark} is subtracted.")
+            if dark > 0:
+                if USE_NUMEXPR:
+                    img = evaluate("where(img > dark, img - dark, 0)")
+                else:
+                    img = where(img > dark, img - dark, 0)
+                if verbose:
+                    print(f"dark value of {dark} is subtracted.")
 
         # lightsheet method is like background subtraction in Imaris
         if lightsheet:
