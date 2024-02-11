@@ -905,9 +905,18 @@ def process_img(
                 verbose=verbose,
             )
 
+        # Subtract the dark offset
         # dark subtraction is like baseline subtraction in Imaris
+        if convert_to_8bit:
+            if (bit_shift_to_right-1) > dark:
+                dark -= (bit_shift_to_right-1)
+            else:
+                dark = 0
         if dark is not None and dark > 0:
-            img = where(img > dark, img - dark, 0)  # Subtract the dark offset
+            if use_numexpr:
+                img = evaluate("where(img > dark, img - dark, 0)")
+            else:
+                img = where(img > dark, img - dark, 0)
             if verbose:
                 print(f"dark value of {dark} is subtracted.")
 
