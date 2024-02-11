@@ -593,7 +593,7 @@ def process_channel(
         # just a scope to clear unneeded variables
         print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
               f"calculating clip_min, clip_median, clip_max, and bit shift ...")
-        nz = tsv_volume.volume.shape[0]
+        nz = shape[0]
         img = tsv_volume.imread(
             VExtent(
                 tsv_volume.volume.x0, tsv_volume.volume.x1,
@@ -606,43 +606,16 @@ def process_channel(
         clip_min = int(np_round(expm1_jit(lb)))
         clip_median, clip_max, ub = list(map(int, np_round(expm1_jit(prctl(img[img > lb], [50.0, 99.5, 99.999])))))
         bit_shift = estimate_bit_shift(ub)
-        # if need_bleach_correction:
-        #     print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
-        #           f"calculating clip_min, clip_median, and clip_max ...")
-        #     clip_min = int(np_round(expm1_jit(lb)))
-        #     clip_median, clip_max = list(map(int, np_round(expm1_jit(prctl(img[img > lb], [50.0, 99.5])))))
-        #     img = process_img(
-        #         img,
-        #         exclude_dark_edges_set_them_to_zero=True,
-        #         sigma=bleach_correction_sigma,
-        #         wavelet="db37",
-        #         bidirectional=True,
-        #         bleach_correction_frequency=bleach_correction_frequency,
-        #         bleach_correction_clip_min=clip_min,
-        #         bleach_correction_clip_median=clip_median,
-        #         bleach_correction_clip_max=clip_max,
-        #         padding_mode=padding_mode,
-        #         log1p_normalization_needed=False,
-        #         lightsheet=need_lightsheet_cleaning,
-        #         dark=clip_min,
-        #         tile_size=(shape[1], shape[2]),
-        #         d_type=tsv_volume.dtype
-        #     )
-        #     img = log1p_jit(img, dtype=float32)
-        #     lb = otsu_threshold(img)
-        #
-        # if need_16bit_to_8bit_conversion:
-        #     print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
-        #           f"calculating right bit shift ...")
-        #     ub = prctl(img[img > lb], 99.99)
-        #     bit_shift = estimate_bit_shift(int(np_round(expm1_jit(ub))))
-
+        if need_16bit_to_8bit_conversion:
+            max_values_8bit_conversion_sets_to_zero = 2**bit_shift-1
+            if max_values_8bit_conversion_sets_to_zero + clip_median < clip_max:
+                clip_median += max_values_8bit_conversion_sets_to_zero
         return bit_shift, clip_min, clip_median, clip_max
 
     right_bit_shift, bleach_correction_clip_min, bleach_correction_clip_median, bleach_correction_clip_max = \
         estimate_bleach_correction_lb_ub_bit_shift()
 
-    memory_needed_per_thread = 16  # 24 if need_bleach_correction else 16
+    memory_needed_per_thread = 24 if need_bleach_correction else 16
     memory_needed_per_thread *= shape[1] + 2 * max(bleach_correction_sigma) + 1
     memory_needed_per_thread *= shape[2] + 2 * max(bleach_correction_sigma) + 1
     memory_needed_per_thread /= 1024 ** 3
@@ -1399,7 +1372,7 @@ if __name__ == '__main__':
     freeze_support()
     FlatNonFlatTrainingData = "image_classes.csv"
     cpu_instruction = "SSE2"
-    os.environ['NUMEXPR_NUM_THREADS'] = f'{cpu_count(logical=False) / get_cpu_sockets()}'
+    os.environ['NUMEXPR_NUM_THREADS'] = f'{cpu_count(logical=False) // get_cpu_sockets()}'
     for item in ["SSE2", "AVX", "AVX2", "AVX512f"]:
         cpu_instruction = item if CPUFeature[item] else cpu_instruction
     PyScriptPath = Path(r".") / "TeraStitcher" / "pyscripts"

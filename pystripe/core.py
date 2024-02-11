@@ -43,9 +43,9 @@ from pystripe.raw import raw_imread
 from supplements.cli_interface import PrintColors, date_time_now
 
 filterwarnings("ignore")
-supported_extensions = ['.png', '.tif', '.tiff', '.raw', '.dcimg']
-num_retries: int = 40
-use_numexpr: bool = True
+SUPPORTED_EXTENSIONS = ['.png', '.tif', '.tiff', '.raw', '.dcimg']
+NUM_RETRIES: int = 40
+USE_NUMEXPR: bool = True
 
 
 def imread_tif_raw_png(path: Path, dtype: str = None, shape: Tuple[int, int] = None):
@@ -69,7 +69,7 @@ def imread_tif_raw_png(path: Path, dtype: str = None, shape: Tuple[int, int] = N
     img = None
     # for NAS
     attempt = 0
-    for attempt in range(num_retries):
+    for attempt in range(NUM_RETRIES):
         try:
             extension = path.suffix.lower()
             if extension == '.raw':
@@ -198,7 +198,7 @@ def imsave_tif(path: Path, img: ndarray, compression: Union[Tuple[str, int], Non
     # if compression and isinstance(compression, tuple) and len(compression) >= 2 and \
     #         isinstance(compression[1], int) and compression[1] <= 0:
     #     compression = False
-    for attempt in range(1, num_retries):
+    for attempt in range(1, NUM_RETRIES):
         try:
             # imwrite(path, data=img, compression=compression_method, compressionargs={'level': compression_level})
             imwrite(path, data=img, compression=compression)
@@ -208,11 +208,11 @@ def imsave_tif(path: Path, img: ndarray, compression: Union[Tuple[str, int], Non
             imwrite(path, data=img, compression=compression)
             return True  # die
         except (OSError, TypeError, PermissionError) as inst:
-            if attempt == num_retries:
+            if attempt == NUM_RETRIES:
                 # f"Data size={img.size * img.itemsize} should be equal to the saved file's byte_count={byte_count}?"
                 # f"\nThe file_size={path.stat().st_size} should be at least larger than tif header={offset} bytes\n"
                 print(
-                    f"After {num_retries} attempts failed to save the file:\n"
+                    f"After {NUM_RETRIES} attempts failed to save the file:\n"
                     f"{path}\n"
                     f"\n{type(inst)}\n"
                     f"{inst.args}\n"
@@ -269,7 +269,7 @@ def notch(n: int, sigma: float) -> ndarray:
     if sigma <= 0:
         raise ValueError('sigma must be positive')
     x = arange(n)
-    if use_numexpr:
+    if USE_NUMEXPR:
         x = evaluate("1 - exp(-x ** 2 / (2 * sigma ** 2))")
     else:
         x = 1 - exp(-x ** 2 / (2 * sigma ** 2))
@@ -365,7 +365,7 @@ def max_level(min_len, wavelet):
 
 
 def foreground_fraction(img: ndarray, center: float, crossover: float, smoothing: int) -> ndarray:
-    if use_numexpr:
+    if USE_NUMEXPR:
         img = evaluate("(img - center) / crossover")
     else:
         img = (img - center) / crossover
@@ -559,7 +559,7 @@ def correct_bleaching(
 
     # apply the filter
 
-    if use_numexpr:
+    if USE_NUMEXPR:
         img = evaluate("where((img_filter > 0) & (img > clip_min), img / img_filter * clip_median, img)")
     else:
         img_filter /= clip_median
@@ -593,7 +593,7 @@ def filter_streak_horizontally(img, sigma1, sigma2, level, wavelet, crossover, t
             background = clip(img, None, threshold)
             background = filter_subband(background, sigma2, level, wavelet)
 
-        if use_numexpr:
+        if USE_NUMEXPR:
             img = evaluate("foreground * ff + background * (1 - ff)")
         else:
             img = foreground * ff + background * (1 - ff)
@@ -908,12 +908,13 @@ def process_img(
         # Subtract the dark offset
         # dark subtraction is like baseline subtraction in Imaris
         if convert_to_8bit:
-            if (bit_shift_to_right-1) > dark:
-                dark -= (bit_shift_to_right-1)
+            max_values_8bit_conversion_sets_to_zero = 2**bit_shift_to_right-1
+            if dark > max_values_8bit_conversion_sets_to_zero:
+                dark -= max_values_8bit_conversion_sets_to_zero
             else:
                 dark = 0
         if dark is not None and dark > 0:
-            if use_numexpr:
+            if USE_NUMEXPR:
                 img = evaluate("where(img > dark, img - dark, 0)")
             else:
                 img = where(img > dark, img - dark, 0)
@@ -1703,14 +1704,14 @@ def main():
         raise ValueError('Only positive values for dark offset are allowed')
 
     if input_path.is_file():  # single image
-        if input_path.suffix not in supported_extensions:
+        if input_path.suffix not in SUPPORTED_EXTENSIONS:
             print('Input file was found but is not supported. Exiting...')
             return
         if args.output == '':
             output_path = Path(input_path.parent).joinpath(input_path.stem + '_destriped' + input_path.suffix)
         else:
             output_path = Path(args.output)
-            assert output_path.suffix in supported_extensions
+            assert output_path.suffix in SUPPORTED_EXTENSIONS
 
     elif input_path.is_dir():  # batch processing
         if args.output == '':
