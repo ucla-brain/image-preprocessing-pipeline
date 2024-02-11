@@ -552,7 +552,10 @@ def parallel_image_processor(
     progress_queue.close()
 
     # down-sample on z accurately
+    npz_file = downsampled_path.parent / f"{destination.stem}_zyx{target_voxel:.1f}um.npz"
     if return_code == 0 and need_down_sampling:
+        if resume and npz_file.exists():
+            return return_code
         print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
               f"{PrintColors.BLUE}down-sampling: {PrintColors.ENDC}"
               f"resizing on the z-axis accurately ...")
@@ -581,7 +584,7 @@ def parallel_image_processor(
                   f"{PrintColors.BLUE} down-sampling: {PrintColors.ENDC}"
                   f"saving as npz.")
             savez_compressed(
-                downsampled_path.parent / f"{destination.stem}_zyx{target_voxel:.1f}um.npz",
+                npz_file,
                 I=img_stack,
                 xI=array(axes_spacing, dtype='object')  # note specify object to avoid "ragged" warning
             )

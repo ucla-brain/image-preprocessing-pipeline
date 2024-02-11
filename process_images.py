@@ -22,7 +22,7 @@ import mpi4py
 import psutil
 from cpufeature.extension import CPUFeature
 from cv2 import MOTION_TRANSLATION, findTransformECC, TERM_CRITERIA_COUNT, TERM_CRITERIA_EPS
-from numpy import ndarray, zeros, uint8, float32, eye, dstack, append, array, absolute
+from numpy import ndarray, zeros, uint8, float32, eye, dstack, append, array, absolute, log1p, expm1
 from numpy import round as np_round
 from numpy import mean as np_mean
 from numpy.linalg import inv
@@ -35,7 +35,7 @@ from skimage.filters import sobel
 from flat import create_flat_img
 from parallel_image_processor import parallel_image_processor, jumpy_step_range
 from pystripe.core import (batch_filter, imread_tif_raw_png, imsave_tif, MultiProcessQueueRunner, progress_manager,
-                           process_img, convert_to_8bit_fun, log1p_jit, expm1_jit, otsu_threshold, prctl)
+                           process_img, convert_to_8bit_fun, log1p_jit, prctl)
 from supplements.cli_interface import (ask_for_a_number_in_range, date_time_now, PrintColors)
 from supplements.tifstack import TifStack, imread_tif_stck
 from tsv.volume import TSVVolume, VExtent
@@ -591,10 +591,11 @@ def process_channel(
 
     def estimate_bleach_correction_lb_ub_bit_shift() -> [int, int, int, int]:
         # just a scope to clear unneeded variables
-        background, bit_shift, clip_min, clip_median, clip_max = 0, 8, None, None, None
+        from skimage.filters.thresholding import threshold_multiotsu
+        background, bit_shift, clip_min, clip_max = 0, 8, None, None
         if need_bleach_correction or need_16bit_to_8bit_conversion:
             print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
-                  f"calculating clip_min, clip_median, clip_max, and bit shift ...")
+                  f"calculating clip_min, clip_max, and bit shift ...")
             nz = shape[0]
             img = tsv_volume.imread(
                 VExtent(
@@ -604,47 +605,17 @@ def process_channel(
                 tsv_volume.dtype)[0]
             assert isinstance(img, ndarray)
             img = log1p_jit(img, dtype=float32)
-            lb = otsu_threshold(img)
-            clip_min = int(np_round(expm1_jit(lb)))
-            background = clip_min if need_bleach_correction else 0
-            clip_median, clip_max, ub = list(map(int, np_round(expm1_jit(
-                prctl(img[img > lb], [50.0, 99.5, 99.999])
-            ))))
-            bit_shift = estimate_bit_shift(ub)
-            # clip_max = max(256, clip_max)
-            # if need_bleach_correction:
-            #     img = process_img(
-            #         img,
-            #         threshold=None,
-            #         sigma=bleach_correction_sigma,
-            #         wavelet="db37",  # coif15
-            #         padding_mode=padding_mode,  # wrap reflect
-            #         bidirectional=True,
-            #         bleach_correction_frequency=bleach_correction_frequency,
-            #         bleach_correction_max_method=False,
-            #         bleach_correction_clip_min=clip_min,
-            #         bleach_correction_clip_median=clip_median,
-            #         bleach_correction_clip_max=clip_max,
-            #         dark=background,
-            #         lightsheet=need_lightsheet_cleaning,
-            #         percentile=0.25,
-            #         rotate=0,
-            #         convert_to_8bit=False,
-            #         bit_shift_to_right=bit_shift,
-            #         tile_size=(shape[1], shape[2]),
-            #         d_type=tsv_volume.dtype
-            #     )
-            #     if need_16bit_to_8bit_conversion:
-            #         img = log1p_jit(img, dtype=float32)
-            #         lb = otsu_threshold(img)
-            #         background = int(np_round(expm1_jit(lb)))
-            #         ub = prctl(img[img > lb], ub_prctl)
-            #         ub = int(np_round(expm1_jit(ub)))
-            #         bit_shift = estimate_bit_shift(ub)
-            print(background, clip_min, clip_median, clip_max, ub, bit_shift)
-        return background, bit_shift, clip_min, clip_median, clip_max
+            lb, ub = threshold_multiotsu(img, classes=3)
+            assert isinstance(lb, float32)
+            assert isinstance(ub, float32)
+            if need_bleach_correction:
+                clip_min, clip_max = list(map(int, np_round(expm1(array([lb, ub])))))
+                background = clip_min
+            if need_16bit_to_8bit_conversion:
+                bit_shift = estimate_bit_shift(int(np_round(expm1(prctl(img[img > ub], 99.99)))))
+        return background, bit_shift, clip_min, clip_max
 
-    dark, right_bit_shift, bleach_correction_clip_min, bleach_correction_clip_median, bleach_correction_clip_max = \
+    dark, right_bit_shift, bleach_correction_clip_min, bleach_correction_clip_max = \
         estimate_bleach_correction_lb_ub_bit_shift()
 
     memory_needed_per_thread = 24 if need_bleach_correction else 16
@@ -672,7 +643,6 @@ def process_channel(
         f"\tbleach correction frequency: {bleach_correction_frequency}\n"
         f"\tbleach correction sigma: {bleach_correction_sigma}\n"
         f"\tbleach correction clip min: {bleach_correction_clip_min}\n"
-        f"\tbleach correction clip median: {bleach_correction_clip_median}\n"
         f"\tbleach correction clip max: {bleach_correction_clip_max}\n"
         f"\tdark: {bleach_correction_clip_min if need_bleach_correction else 0}\n"
         f"\tbackground subtraction: {need_lightsheet_cleaning}\n"
@@ -684,7 +654,7 @@ def process_channel(
         destination=stitched_tif_path,
         fun=process_img,
         kwargs={
-            "threshold": None,
+            "threshold": log1p(bleach_correction_clip_min) if bleach_correction_clip_min else 0,
             "sigma": bleach_correction_sigma,
             "wavelet": "db37",  # coif15
             "padding_mode": padding_mode,  # wrap reflect
@@ -692,7 +662,6 @@ def process_channel(
             "bleach_correction_frequency": bleach_correction_frequency,
             "bleach_correction_max_method": False,
             "bleach_correction_clip_min": bleach_correction_clip_min,
-            "bleach_correction_clip_median": bleach_correction_clip_median,
             "bleach_correction_clip_max": bleach_correction_clip_max,
             "dark": dark,
             "lightsheet": need_lightsheet_cleaning,

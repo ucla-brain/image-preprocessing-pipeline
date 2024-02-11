@@ -31,7 +31,7 @@ from scipy.fftpack import rfft, fftshift, irfft
 from scipy.ndimage import gaussian_filter as gaussian_filter_nd
 from scipy.signal import butter, sosfiltfilt
 from scipy.special import expit as sigmoid
-from skimage.filters import threshold_otsu, gaussian
+from skimage.filters import threshold_otsu, gaussian, threshold_multiotsu
 from skimage.measure import block_reduce
 from skimage.transform import resize
 from tifffile import imread, imwrite
@@ -497,7 +497,6 @@ def correct_bleaching(
         img: ndarray,
         frequency: float,
         clip_min: float,
-        clip_median: float,
         clip_max: float,
         max_method: bool = False,
 ) -> ndarray:
@@ -508,9 +507,7 @@ def correct_bleaching(
     frequency: low pass fileter frequency. Usually 1/min(img.shape).
     max_method: use max value on x and y axes to create the filter. Max method is faster and smoother but less accurate
     clip_min: background vs foreground threshold
-    clip_median: foreground median
     clip_max: foreground max
-    wavelet: wavelet to destripe the bleach_correction filter
 
     Returns
     -------
@@ -518,7 +515,6 @@ def correct_bleaching(
     """
     assert isinstance(frequency, float) and frequency > 0
     assert isinstance(clip_min, float) and clip_min >= 0
-    assert isinstance(clip_median, float) and clip_median > 0
     assert isinstance(clip_max, float) and clip_max > 0
 
     # clip_average = log1p((expm1(clip_min) + expm1(clip_max)) / 2)
@@ -535,16 +531,14 @@ def correct_bleaching(
         img_filter_x = reshape(img_filter_x, (1, len(img_filter_x)))
         img_filter = dot(img_filter_y, img_filter_x)
     else:
-        img_filter = clip(img, clip_min, clip_max, out=img)
+        img_filter = clip(img, clip_min, clip_max)
         img_filter = butter_lowpass_filter(img_filter, frequency)
 
     # apply the filter
-    # if expm1(clip_max) > 255:
-    #     clip_median = log1p(255)
     if USE_NUMEXPR:
-        img = evaluate("where((img_filter > 0) & (img > clip_min), img / img_filter * clip_median, img)")
+        img = evaluate("where((img_filter > 0) & (img > clip_min), img / img_filter * clip_max, img)")
     else:
-        img_filter /= clip_median
+        img_filter /= clip_max
         img = where((img_filter > 0) & (img > clip_min), img / img_filter, img)
     return img
 
@@ -595,7 +589,6 @@ def filter_streaks(
         bleach_correction_frequency: float = None,
         bleach_correction_max_method: bool = False,
         bleach_correction_clip_min: Union[float, int] = None,
-        bleach_correction_clip_median: Union[float, int] = None,
         bleach_correction_clip_max: Union[float, int] = None,
         log1p_normalization_needed: bool = True,
         verbose: bool = False
@@ -627,8 +620,6 @@ def filter_streaks(
         for large images.
     bleach_correction_clip_min: float, int
         background vs foreground threshold.
-    bleach_correction_clip_median: float, int
-        foreground median value
     bleach_correction_clip_max: float, int
         foreground max value
     log1p_normalization_needed: bool
@@ -683,33 +674,27 @@ def filter_streaks(
                   f"threshold={threshold}, bidirectional={bidirectional}.")
 
     if bleach_correction_frequency is not None:
-        max_percentile: float = 99.5
-        median_percentile: float = 50.0
         # convert uint16 to log1p
-        if bleach_correction_clip_min is None:
-            clip_min = otsu_threshold(img)
-        else:
-            clip_min = log1p(bleach_correction_clip_min)
-        if bleach_correction_clip_max is None and bleach_correction_clip_median is None:
-            clip_median, clip_max = prctl(img[img > clip_min], [median_percentile, max_percentile])
+        if bleach_correction_clip_min is None and bleach_correction_clip_max is None:
+            clip_min, clip_max = threshold_multiotsu(img, classes=3)
+        elif bleach_correction_clip_min is None:
+            clip_min, _ = threshold_multiotsu(img, classes=3)
+            clip_max = log1p(bleach_correction_clip_max)
         elif bleach_correction_clip_max is None:
-            clip_median, clip_max = log1p(bleach_correction_clip_median), prctl(img[img > clip_min], max_percentile)
+            clip_min = log1p(bleach_correction_clip_min)
+            clip_max, _ = threshold_multiotsu(img, classes=3)
         else:
-            clip_median, clip_max = prctl(img[img > clip_min], median_percentile), log1p(bleach_correction_clip_max)
+            clip_min, clip_max = log1p([bleach_correction_clip_min, bleach_correction_clip_max])
 
         img = correct_bleaching(
-            img, bleach_correction_frequency, clip_min, clip_median, clip_max,
+            img, bleach_correction_frequency, clip_min, clip_max,
             max_method=bleach_correction_max_method
         )
         if verbose:
             print(
                 f"bleach correction is applied: frequency={bleach_correction_frequency}, "
                 f"max_method={bleach_correction_max_method},\n"
-                f"clip_min={expm1(clip_min)}, clip_median={expm1(clip_median)}, clip_max={expm1(clip_max)},\n"
-                # f"y_slice_min={bleach_correction_y_slice_min}, \n"
-                # f"y_slice_max={bleach_correction_y_slice_max}, \n"
-                # f"x_slice_min={bleach_correction_x_slice_min}, \n"
-                # f"x_slice_max={bleach_correction_x_slice_max}, \n"
+                f"clip_min={expm1(clip_min)}, clip_max={expm1(clip_max)},\n"
             )
 
     # undo padding
@@ -774,7 +759,6 @@ def process_img(
         bidirectional: bool = False,
         bleach_correction_frequency: float = None,
         bleach_correction_clip_min: Union[float, int] = None,
-        bleach_correction_clip_median: Union[float, int] = None,
         bleach_correction_clip_max: Union[float, int] = None,
         bleach_correction_max_method: bool = False,
         log1p_normalization_needed: bool = True,
@@ -867,8 +851,6 @@ def process_img(
             tile_size = calculate_down_sampled_size(tile_size, down_sample)
 
         if bleach_correction_frequency is not None or sigma > (0, 0):
-            # if dark is not None and dark > 0 and bleach_correction_clip_median is not None:
-            #     bleach_correction_clip_median += dark
             img = filter_streaks(
                 img,
                 sigma=sigma,
@@ -881,7 +863,6 @@ def process_img(
                 bleach_correction_frequency=bleach_correction_frequency,
                 bleach_correction_max_method=bleach_correction_max_method,
                 bleach_correction_clip_min=bleach_correction_clip_min,
-                bleach_correction_clip_median=bleach_correction_clip_median,
                 bleach_correction_clip_max=bleach_correction_clip_max,
                 log1p_normalization_needed=log1p_normalization_needed,
                 verbose=verbose,
@@ -970,7 +951,6 @@ def read_filter_save(
         bleach_correction_frequency: float = None,
         bleach_correction_max_method: bool = True,
         bleach_correction_clip_min: Union[float, int] = None,
-        bleach_correction_clip_median: Union[float, int] = None,
         bleach_correction_clip_max: Union[float, int] = None,
         dark: float = 0,
         lightsheet: bool = False,
@@ -1036,8 +1016,6 @@ def read_filter_save(
         for large images.
     bleach_correction_clip_min: float, int
         foreground vs background threshold
-    bleach_correction_clip_median: float, int
-        foreground median
     bleach_correction_clip_max: float, int
         foreground max
     dark : float
@@ -1131,7 +1109,6 @@ def read_filter_save(
             bleach_correction_frequency=bleach_correction_frequency,
             bleach_correction_max_method=bleach_correction_max_method,
             bleach_correction_clip_min=bleach_correction_clip_min,
-            bleach_correction_clip_median=bleach_correction_clip_median,
             bleach_correction_clip_max=bleach_correction_clip_max,
             sigma=sigma,
             level=level,
@@ -1367,7 +1344,6 @@ def batch_filter(
         bleach_correction_frequency: float = None,
         bleach_correction_max_method: bool = True,
         bleach_correction_clip_min: Union[float, int] = None,
-        bleach_correction_clip_median: Union[float, int] = None,
         bleach_correction_clip_max: Union[float, int] = None,
         sigma: Tuple[int, int] = (0, 0),
         level=0,
@@ -1435,8 +1411,6 @@ def batch_filter(
         for large images.
     bleach_correction_clip_min: float, int
         foreground vs background threshold
-    bleach_correction_clip_median: float, int
-        foreground median
     bleach_correction_clip_max: float, int
         foreground max
     compression : tuple (str, int)
@@ -1518,7 +1492,6 @@ def batch_filter(
         'bleach_correction_frequency': bleach_correction_frequency,
         'bleach_correction_max_method': bleach_correction_max_method,
         'bleach_correction_clip_min': bleach_correction_clip_min,
-        'bleach_correction_clip_median': bleach_correction_clip_median,
         'bleach_correction_clip_max': bleach_correction_clip_max,
         'z_idx': None,
         'rotate': rotate,
