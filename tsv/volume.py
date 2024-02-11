@@ -288,7 +288,11 @@ class TSVStackBase(VExtentBase):
         if result is None:
             result = zeros(volume.shape, self.dtype)
         for z in range(volume.z0, volume.z1):
-            plane = self.read_plane(self.paths[z - self.z0])
+            plane_paths = self.paths[z - self.z0]
+            plane = self.read_plane(plane_paths)
+            if not isinstance(plane, ndarray):
+                print(f"{PrintColors.FAIL}following planes for z {z} are damaged:\n\t{plane_paths}{PrintColors.ENDC}")
+                continue
             result[z - volume.z0] = plane[
                                     volume.y0 - self.y0:volume.y1 - self.y0,
                                     volume.x0 - self.x0:volume.x1 - self.x0]
