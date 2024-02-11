@@ -1383,12 +1383,8 @@ def get_cpu_sockets() -> int:
         if sys.platform.lower() == "win32":
             command = "wmic cpu get socketdesignation"
         output: str = check_output(command, shell=True).decode()
-            # Count the unique physical IDs
+        # Count the unique physical IDs
         sockets = len(set(output.strip().split('\n')[1:]))
-        # else:
-        #     command = "grep \"physical id\" /proc/cpuinfo | sort -u | wc -l"
-        #     output: str = check_output(command, shell=True).decode()
-        #     sockets = int(output.strip())
         return sockets
     except Exception as inst:
         print(f"{PrintColors.FAIL}Unable to determine the number of CPU sockets."
