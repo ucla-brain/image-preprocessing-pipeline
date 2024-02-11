@@ -591,10 +591,10 @@ def process_channel(
 
     def estimate_bleach_correction_lb_ub_bit_shift() -> [int, int, int, int]:
         # just a scope to clear unneeded variables
-        print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
-              f"calculating clip_min, clip_median, clip_max, and bit shift ...")
         bit_shift, clip_min, clip_median, clip_max = 8, None, None, None
         if need_bleach_correction or need_16bit_to_8bit_conversion:
+            print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
+                  f"calculating clip_min, clip_median, clip_max, and bit shift ...")
             nz = shape[0]
             img = tsv_volume.imread(
                 VExtent(
