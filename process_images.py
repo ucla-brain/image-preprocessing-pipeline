@@ -1379,16 +1379,16 @@ def main(args):
 def get_cpu_sockets() -> int:
     try:
         # Execute a shell command to get the physical IDs
-
+        command = "grep \"physical id\" /proc/cpuinfo"
         if sys.platform.lower() == "win32":
             command = "wmic cpu get socketdesignation"
-            output: str = check_output(command, shell=True).decode()
+        output: str = check_output(command, shell=True).decode()
             # Count the unique physical IDs
-            sockets = len(set(output.strip().split('\n')[1:]))
-        else:
-            command = "grep \"physical id\" /proc/cpuinfo | sort -u | wc -l"
-            output: str = check_output(command, shell=True).decode()
-            sockets = int(output.strip())
+        sockets = len(set(output.strip().split('\n')[1:]))
+        # else:
+        #     command = "grep \"physical id\" /proc/cpuinfo | sort -u | wc -l"
+        #     output: str = check_output(command, shell=True).decode()
+        #     sockets = int(output.strip())
         return sockets
     except Exception as inst:
         print(f"{PrintColors.FAIL}Unable to determine the number of CPU sockets."
