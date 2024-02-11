@@ -1379,12 +1379,16 @@ def main(args):
 def get_cpu_sockets() -> int:
     try:
         # Execute a shell command to get the physical IDs
-        command = "grep \"physical id\" /proc/cpuinfo | sort -u | wc -l"
+
         if sys.platform.lower() == "win32":
             command = "wmic cpu get socketdesignation"
-        output = check_output(command, shell=True).decode()
-        # Count the unique physical IDs
-        sockets = len(set(output.strip().split('\n')[1:]))
+            output: str = check_output(command, shell=True).decode()
+            # Count the unique physical IDs
+            sockets = len(set(output.strip().split('\n')[1:]))
+        else:
+            command = "grep \"physical id\" /proc/cpuinfo | sort -u | wc -l"
+            output: str = check_output(command, shell=True).decode()
+            sockets = int(output.strip())
         return sockets
     except Exception as inst:
         print(f"{PrintColors.FAIL}Unable to determine the number of CPU sockets."
@@ -1405,7 +1409,7 @@ if __name__ == '__main__':
     if sys.platform.lower() == "win32":
         if get_cpu_sockets() > 1:
             os.environ['MKL_NUM_THREADS'] = '1'
-            # os.environ['NUMEXPR_NUM_THREADS'] = '1'
+            os.environ['NUMEXPR_NUM_THREADS'] = f'{cpu_count(logical=False)/get_cpu_sockets()}'
             os.environ['OMP_NUM_THREADS'] = '1'
         print("Windows is detected.")
         psutil.Process().nice(getattr(psutil, "IDLE_PRIORITY_CLASS"))
