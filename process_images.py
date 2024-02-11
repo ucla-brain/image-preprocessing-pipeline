@@ -607,12 +607,11 @@ def process_channel(
             lb = otsu_threshold(img)
             clip_min = int(np_round(expm1_jit(lb)))
             background = clip_min if need_bleach_correction else 0
-            ub_prctl = 99.9999 if need_bleach_correction else 99.999
             clip_median, clip_max, ub = list(map(int, np_round(expm1_jit(
-                prctl(img[img > lb], [50.0, 99.5, ub_prctl])
+                prctl(img[img > lb], [50.0, 99.5, 99.999])
             ))))
-            clip_max = max(256, clip_max)
             bit_shift = estimate_bit_shift(ub)
+            # clip_max = max(256, clip_max)
             # if need_bleach_correction:
             #     img = process_img(
             #         img,
@@ -642,7 +641,7 @@ def process_channel(
             #         ub = prctl(img[img > lb], ub_prctl)
             #         ub = int(np_round(expm1_jit(ub)))
             #         bit_shift = estimate_bit_shift(ub)
-            print(background, bit_shift, clip_min, clip_median, clip_max)
+            print(background, clip_min, clip_median, clip_max, ub, bit_shift)
         return background, bit_shift, clip_min, clip_median, clip_max
 
     dark, right_bit_shift, bleach_correction_clip_min, bleach_correction_clip_median, bleach_correction_clip_max = \

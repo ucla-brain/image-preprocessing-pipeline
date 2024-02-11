@@ -535,8 +535,7 @@ def correct_bleaching(
         img_filter_x = reshape(img_filter_x, (1, len(img_filter_x)))
         img_filter = dot(img_filter_y, img_filter_x)
     else:
-        img_filter = where(img < log1p(.99), clip_median, img)
-        clip(img_filter, clip_min, clip_max, out=img_filter)
+        img_filter = clip(img, clip_min, clip_max, out=img)
         img_filter = butter_lowpass_filter(img_filter, frequency)
 
     # apply the filter
