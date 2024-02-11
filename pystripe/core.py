@@ -162,10 +162,15 @@ def convert_to_8bit_fun(img: ndarray, bit_shift_to_right: int = 8):
 
     # bit shift then change the type to avoid floating point operations
     # img >> 8 is equivalent to img / 256
+    if bit_shift_to_right is None:
+        bit_shift_to_right = 8
     if 0 <= bit_shift_to_right < 9:
+        lower_bound = 2**bit_shift_to_right
+        if USE_NUMEXPR:
+            img = evaluate("where((0 < img) & (img < lower_bound), lower_bound, img)")
+        else:
+            img = where((0 < img) & (img < lower_bound), lower_bound, img)
         img = (img >> bit_shift_to_right)
-    elif bit_shift_to_right is None:
-        img = (img >> 8)
     else:
         print("right shift should be between 0 and 8")
         raise RuntimeError
@@ -294,29 +299,6 @@ def gaussian_filter(shape: tuple, sigma: float) -> ndarray:
     """
     g = notch(n=shape[-1], sigma=sigma)
     return broadcast_to(g, shape).copy()
-
-# from numpy import roll
-# def gaussian_filter(shape: tuple, sigma: float, axis='x') -> ndarray:
-#     """Create a gaussian notch filter
-#
-#     Parameters
-#     ----------
-#     shape : tuple
-#         shape of the output filter
-#     sigma : float
-#         filter bandwidth
-#
-#     Returns
-#     -------
-#     g : ndarray
-#         the impulse response of the gaussian notch filter
-#
-#     """
-#     if axis != 'x':
-#         shape = roll(shape, 1)
-#     g = notch(n=shape[-1], sigma=sigma)
-#     g = broadcast_to(g, shape).copy()
-#     return g if axis == 'x' else rot90(g, -1)
 
 
 def hist_match(source, template):
@@ -908,17 +890,13 @@ def process_img(
 
         # Subtract the dark offset
         # dark subtraction is like baseline subtraction in Imaris
-        if dark is not None:
-            if convert_to_8bit:
-                max_values_8bit_conversion_sets_to_zero = 2**bit_shift_to_right-1
-                dark -= max_values_8bit_conversion_sets_to_zero
-            if dark > 0:
-                if USE_NUMEXPR:
-                    img = evaluate("where(img > dark, img - dark, 0)")
-                else:
-                    img = where(img > dark, img - dark, 0)
-                if verbose:
-                    print(f"dark value of {dark} is subtracted.")
+        if dark is not None and dark > 0:
+            if USE_NUMEXPR:
+                img = evaluate("where(img > dark, img - dark, 0)")
+            else:
+                img = where(img > dark, img - dark, 0)
+            if verbose:
+                print(f"dark value of {dark} is subtracted.")
 
         # lightsheet method is like background subtraction in Imaris
         if lightsheet:

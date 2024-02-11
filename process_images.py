@@ -606,41 +606,42 @@ def process_channel(
             img = log1p_jit(img, dtype=float32)
             lb = otsu_threshold(img)
             clip_min = int(np_round(expm1_jit(lb)))
-            background = clip_min
+            background = clip_min if need_bleach_correction else 0
             ub_prctl = 99.9999 if need_bleach_correction else 99.999
             clip_median, clip_max, ub = list(map(int, np_round(expm1_jit(
                 prctl(img[img > lb], [50.0, 99.5, ub_prctl])
             ))))
             clip_max = max(256, clip_max)
-            if need_bleach_correction:
-                img = process_img(
-                    img,
-                    threshold=None,
-                    sigma=bleach_correction_sigma,
-                    wavelet="db37",  # coif15
-                    padding_mode=padding_mode,  # wrap reflect
-                    bidirectional=True,
-                    bleach_correction_frequency=bleach_correction_frequency,
-                    bleach_correction_max_method=False,
-                    bleach_correction_clip_min=clip_min,
-                    bleach_correction_clip_median=clip_median,
-                    bleach_correction_clip_max=clip_max,
-                    dark=background,
-                    lightsheet=need_lightsheet_cleaning,
-                    percentile=0.25,
-                    rotate=0,
-                    convert_to_8bit=False,
-                    bit_shift_to_right=bit_shift,
-                    tile_size=(shape[1], shape[2]),
-                    d_type=tsv_volume.dtype
-                )
-                if need_16bit_to_8bit_conversion:
-                    img = log1p_jit(img, dtype=float32)
-                    lb = otsu_threshold(img)
-                    background = int(np_round(expm1_jit(lb)))
-                    ub = prctl(img[img > lb], ub_prctl)
-                    ub = int(np_round(expm1_jit(ub)))
-                    bit_shift = estimate_bit_shift(ub)
+            bit_shift = estimate_bit_shift(ub)
+            # if need_bleach_correction:
+            #     img = process_img(
+            #         img,
+            #         threshold=None,
+            #         sigma=bleach_correction_sigma,
+            #         wavelet="db37",  # coif15
+            #         padding_mode=padding_mode,  # wrap reflect
+            #         bidirectional=True,
+            #         bleach_correction_frequency=bleach_correction_frequency,
+            #         bleach_correction_max_method=False,
+            #         bleach_correction_clip_min=clip_min,
+            #         bleach_correction_clip_median=clip_median,
+            #         bleach_correction_clip_max=clip_max,
+            #         dark=background,
+            #         lightsheet=need_lightsheet_cleaning,
+            #         percentile=0.25,
+            #         rotate=0,
+            #         convert_to_8bit=False,
+            #         bit_shift_to_right=bit_shift,
+            #         tile_size=(shape[1], shape[2]),
+            #         d_type=tsv_volume.dtype
+            #     )
+            #     if need_16bit_to_8bit_conversion:
+            #         img = log1p_jit(img, dtype=float32)
+            #         lb = otsu_threshold(img)
+            #         background = int(np_round(expm1_jit(lb)))
+            #         ub = prctl(img[img > lb], ub_prctl)
+            #         ub = int(np_round(expm1_jit(ub)))
+            #         bit_shift = estimate_bit_shift(ub)
             print(background, bit_shift, clip_min, clip_median, clip_max)
         return background, bit_shift, clip_min, clip_median, clip_max
 
