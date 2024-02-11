@@ -1399,13 +1399,13 @@ if __name__ == '__main__':
     freeze_support()
     FlatNonFlatTrainingData = "image_classes.csv"
     cpu_instruction = "SSE2"
+    os.environ['NUMEXPR_NUM_THREADS'] = f'{cpu_count(logical=False) / get_cpu_sockets()}'
     for item in ["SSE2", "AVX", "AVX2", "AVX512f"]:
         cpu_instruction = item if CPUFeature[item] else cpu_instruction
     PyScriptPath = Path(r".") / "TeraStitcher" / "pyscripts"
     if sys.platform.lower() == "win32":
         if get_cpu_sockets() > 1:
             os.environ['MKL_NUM_THREADS'] = '1'
-            os.environ['NUMEXPR_NUM_THREADS'] = f'{cpu_count(logical=False)/get_cpu_sockets()}'
             os.environ['OMP_NUM_THREADS'] = '1'
         print("Windows is detected.")
         psutil.Process().nice(getattr(psutil, "IDLE_PRIORITY_CLASS"))
