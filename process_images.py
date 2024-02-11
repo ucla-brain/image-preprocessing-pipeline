@@ -606,7 +606,7 @@ def process_channel(
             img = log1p_jit(img, dtype=float32)
             lb = otsu_threshold(img)
             clip_min = int(np_round(expm1_jit(lb)))
-            ub_prctl = 99.9999 if need_bleach_correction else 99.99
+            ub_prctl = 99.9999 if need_bleach_correction else 99.999
             clip_median, clip_max, ub = list(map(int, np_round(expm1_jit(
                 prctl(img[img > lb], [50.0, 99.5, ub_prctl])
             ))))
