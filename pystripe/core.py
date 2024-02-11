@@ -559,7 +559,7 @@ def correct_bleaching(
 
     # apply the filter
     img_filter /= clip_median
-    img = where(img_filter > 0, img / img_filter, img)
+    img = where((img_filter > 0) & (img > clip_min), img / img_filter, img)
     return img
 
 
@@ -697,8 +697,8 @@ def filter_streaks(
                   f"threshold={threshold}, bidirectional={bidirectional}.")
 
     if bleach_correction_frequency is not None:
-        max_percentile = 99.5
-        median_percentile = 50
+        max_percentile: float = 99.5
+        median_percentile: float = 50.0
         # convert uint16 to log1p
         if bleach_correction_clip_min is None:
             clip_min = otsu_threshold(img)
@@ -881,8 +881,8 @@ def process_img(
             tile_size = calculate_down_sampled_size(tile_size, down_sample)
 
         if bleach_correction_frequency is not None or sigma > (0, 0):
-            if dark is not None and dark > 0 and bleach_correction_clip_median is not None:
-                bleach_correction_clip_median += dark
+            # if dark is not None and dark > 0 and bleach_correction_clip_median is not None:
+            #     bleach_correction_clip_median += dark
             img = filter_streaks(
                 img,
                 sigma=sigma,

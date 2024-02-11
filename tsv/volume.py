@@ -13,7 +13,7 @@ from pathlib import Path
 from xml.etree import ElementTree
 from .raw import raw_imread
 from numpy import ndarray, zeros, hstack, inf, arange, arctan2, sin, isinf, ones, float32, newaxis, minimum, finfo, \
-    iinfo, around, clip, int32, uint32, uint8, uint16, float16, where
+    iinfo, clip, int32, uint32, uint8, uint16, float16, where
 from numpy import max as np_max
 from numpy import min as np_min
 from numpy import dtype as np_d_type
@@ -21,6 +21,7 @@ from numpy import maximum
 from supplements.cli_interface import PrintColors
 from tifffile import imread, imwrite
 from pystripe.core import glob_re
+from typing import Union
 
 
 def get_dim_tuple(element):
@@ -63,7 +64,7 @@ class VExtentBase(abc.ABC):
     """A volume extent (in voxels)"""
 
     def __init__(self):
-        super(abc.ABC, self).__init__()
+        super().__init__()
 
     def intersects(self, other):
         """Determine whether two extents intersect
@@ -197,12 +198,18 @@ class VExtent(VExtentBase):
 class TSVStackBase(VExtentBase):
     def __init__(self):
         super().__init__()
-        # self.paths = None
-        self._height = None
-        self._width = None
-        self.__x1 = None
-        self.__y1 = None
-        self.__dtype = None
+        self.input_plugin: str = ""
+        self.z0slice: int = 0
+        self.z1slice: int = 0
+        self._height: Union[int, None] = None
+        self._width: Union[int, None] = None
+        self.__x1: Union[int, None] = None
+        self.__y1: Union[int, None] = None
+        self.__dtype = uint16
+
+    @property
+    def paths(self):
+        return []
 
     def _set_x1y1(self):
         if self.__x1 is None:
@@ -307,7 +314,7 @@ class TSVStack(TSVStackBase):
         z_step: int
             used to find missing files if there is any
         """
-        TSVStackBase.__init__(self)
+        super().__init__()
         self.root_dir = root_dir
         self.n_chans = int(element.attrib["N_CHANS"])
         self.bytes_per_chan = int(element.attrib["N_BYTESxCHAN"])
@@ -322,7 +329,8 @@ class TSVStack(TSVStackBase):
         self.__idxs_to_keep = zeros(0, int)
         self.z_step = z_step
         if len(z_ranges) == 0:
-            self.z0slice = self.z1slice = 0
+            self.z0slice = 0
+            self.z1slice = 0
         else:
             # format is [AAAA,BBBB);[AAAA,BBBB)
             # never seen (AAAA,BBBB], but it's coded
@@ -384,7 +392,7 @@ class TSVStack(TSVStackBase):
 
 class TSVSimpleStack(TSVStackBase):
     def __init__(self, row, column, x0, y0, z0, root):
-        TSVStackBase.__init__(self)
+        super().__init__()
         self.row = row
         self.column = column
         self._x0 = x0
@@ -392,7 +400,7 @@ class TSVSimpleStack(TSVStackBase):
         self._z0 = z0
         self.root: Path = root
         self.__paths = None
-        self.z0slice = 0
+        self.z0slice: int = 0
 
     @property
     def paths(self):
@@ -409,7 +417,7 @@ class TSVSimpleStack(TSVStackBase):
         return [str(_) for _ in self.__paths]
 
 
-def compute_cosine(volume: VExtentBase, stack: TSVStack, ostack: TSVStack, img: ndarray):
+def compute_cosine(volume: TSVStackBase, stack: TSVStack, ostack: TSVStack, img: ndarray):
     """
     Given two overlapping stacks, compute the cosine blend between them
 
