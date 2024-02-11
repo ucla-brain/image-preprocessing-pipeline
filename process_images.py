@@ -1405,7 +1405,7 @@ if __name__ == '__main__':
     if sys.platform.lower() == "win32":
         if get_cpu_sockets() > 1:
             os.environ['MKL_NUM_THREADS'] = '1'
-            os.environ['NUMEXPR_NUM_THREADS'] = '1'
+            # os.environ['NUMEXPR_NUM_THREADS'] = '1'
             os.environ['OMP_NUM_THREADS'] = '1'
         print("Windows is detected.")
         psutil.Process().nice(getattr(psutil, "IDLE_PRIORITY_CLASS"))
