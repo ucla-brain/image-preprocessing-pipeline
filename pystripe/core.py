@@ -558,8 +558,12 @@ def correct_bleaching(
         img_filter = butter_lowpass_filter(img_filter, frequency)
 
     # apply the filter
-    img_filter /= clip_median
-    img = where((img_filter > 0) & (img > clip_min), img / img_filter, img)
+
+    if use_numexpr:
+        img = evaluate("where((img_filter > 0) & (img > clip_min), img / img_filter * clip_median, img)")
+    else:
+        img_filter /= clip_median
+        img = where((img_filter > 0) & (img > clip_min), img / img_filter, img)
     return img
 
 
