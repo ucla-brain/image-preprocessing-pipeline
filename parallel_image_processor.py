@@ -552,8 +552,8 @@ def parallel_image_processor(
     progress_queue.close()
 
     # down-sample on z accurately
-    npz_file = downsampled_path.parent / f"{destination.stem}_zyx{target_voxel:.1f}um.npz"
     if return_code == 0 and need_down_sampling:
+        npz_file = downsampled_path.parent / f"{destination.stem}_zyx{target_voxel:.1f}um.npz"
         if resume and npz_file.exists():
             return return_code
         print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
