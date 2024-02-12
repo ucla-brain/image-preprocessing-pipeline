@@ -578,20 +578,18 @@ def process_channel(
     )
     shape: Tuple[int, int, int] = tsv_volume.volume.shape  # shape is in z y x format
     bleach_correction_frequency = None
-    bleach_correction_sigma = (0, 0)
-    # if len(list(stitched_tif_path.glob("*.tif"))) < shape[0]:
-    if need_bleach_correction:
-        if new_tile_size is not None:
-            sigma = min(new_tile_size)
-        elif down_sampling_factor is not None:
-            sigma = min(new_tile_size) // min(down_sampling_factor)
-        else:
-            sigma = min(tile_size)
-        bleach_correction_sigma = (sigma * 2, ) * 2
-        # bleach_correction_frequency = 1 / sigma
 
     def estimate_img_bit_shift() -> [int, int, int, int]:
         # just a scope to clear unneeded variables
+        sig = 0
+        if need_bleach_correction:
+            if new_tile_size is not None:
+                sig = min(new_tile_size)
+            elif down_sampling_factor is not None:
+                sig = min(new_tile_size) // min(down_sampling_factor)
+            else:
+                sig = min(tile_size)
+
         from skimage.filters.thresholding import threshold_multiotsu
         background, bit_shift = 0, 8
         if need_16bit_to_8bit_conversion:
@@ -611,9 +609,9 @@ def process_channel(
             assert isinstance(ub, float32)
             bit_shift = estimate_bit_shift(int(np_round(expm1(prctl(img[img > lb], 99.99)))))
             background = int(np_round(expm1(lb)))
-        return background, bit_shift
+        return background, bit_shift, (sig,) * 2
 
-    dark, right_bit_shift = estimate_img_bit_shift()
+    dark, right_bit_shift, bleach_correction_sigma = estimate_img_bit_shift()
 
     memory_needed_per_thread = 24 if need_bleach_correction else 16
     memory_needed_per_thread *= shape[1] + 2 * max(bleach_correction_sigma) + 1
