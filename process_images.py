@@ -582,14 +582,15 @@ def process_channel(
     # if len(list(stitched_tif_path.glob("*.tif"))) < shape[0]:
     if need_bleach_correction:
         if new_tile_size is not None:
-            bleach_correction_sigma = (min(new_tile_size), ) * 2
+            sigma = min(new_tile_size)
         elif down_sampling_factor is not None:
-            bleach_correction_sigma = (min(new_tile_size) // min(down_sampling_factor), ) * 2
+            sigma = min(new_tile_size) // min(down_sampling_factor)
         else:
-            bleach_correction_sigma = (min(tile_size), ) * 2
-        # bleach_correction_frequency = 1 / max(bleach_correction_sigma)
+            sigma = min(tile_size)
+        bleach_correction_sigma = (sigma * 2, ) * 2
+        # bleach_correction_frequency = 1 / sigma
 
-    def estimate_bleach_correction_lb_ub_bit_shift() -> [int, int, int, int]:
+    def estimate_img_bit_shift() -> [int, int, int, int]:
         # just a scope to clear unneeded variables
         from skimage.filters.thresholding import threshold_multiotsu
         background, bit_shift = 0, 8
@@ -612,7 +613,7 @@ def process_channel(
             background = int(np_round(expm1(lb)))
         return background, bit_shift
 
-    dark, right_bit_shift = estimate_bleach_correction_lb_ub_bit_shift()
+    dark, right_bit_shift = estimate_img_bit_shift()
 
     memory_needed_per_thread = 16  # 24 if need_bleach_correction else 16
     memory_needed_per_thread *= shape[1] + 2 * max(bleach_correction_sigma) + 1
