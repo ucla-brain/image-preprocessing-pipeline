@@ -574,7 +574,7 @@ def process_channel(
     tsv_volume = TSVVolume(
         stitched_path / f'{channel}_xml_import_step_5.xml',
         alt_stack_dir=preprocessed_path.joinpath(channel).__str__(),
-        cosine_blending=False  # True if need_bleach_correction else False
+        cosine_blending=True if need_bleach_correction else False
     )
     shape: Tuple[int, int, int] = tsv_volume.volume.shape  # shape is in z y x format
     bleach_correction_frequency = None
