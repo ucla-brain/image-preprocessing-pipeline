@@ -608,7 +608,7 @@ def process_channel(
             lb, ub = threshold_multiotsu(img, classes=3)
             assert isinstance(lb, float32)
             assert isinstance(ub, float32)
-            bit_shift = estimate_bit_shift(int(np_round(expm1(prctl(img[img > ub], 99.999)))))
+            bit_shift = estimate_bit_shift(int(np_round(expm1(prctl(img[img > lb], 99.999)))))
             background = int(np_round(expm1(lb)))
         return background, bit_shift
 
