@@ -615,7 +615,7 @@ def process_channel(
 
     dark, right_bit_shift = estimate_img_bit_shift()
 
-    memory_needed_per_thread = 16  # 24 if need_bleach_correction else 16
+    memory_needed_per_thread = 24 if need_bleach_correction else 16
     memory_needed_per_thread *= shape[1] + 2 * max(bleach_correction_sigma) + 1
     memory_needed_per_thread *= shape[2] + 2 * max(bleach_correction_sigma) + 1
     memory_needed_per_thread /= 1024 ** 3
