@@ -24,7 +24,7 @@ from numpy import max as np_max
 from numpy import mean as np_mean
 from numpy import median as np_median
 from numpy import min as np_min
-from numpy import uint8, uint16, float16, float32, float64, ndarray, generic, zeros, broadcast_to, exp, expm1, log1p, \
+from numpy import uint8, uint16, float32, float64, ndarray, generic, zeros, broadcast_to, exp, expm1, log1p, \
     cumsum, arange, unique, interp, pad, clip, where, rot90, flipud, dot, reshape, iinfo, nonzero
 from pywt import wavedec2, waverec2, Wavelet, dwt_max_level
 from scipy.fftpack import rfft, fftshift, irfft
@@ -365,12 +365,15 @@ def log1p_jit(img_log_filtered: ndarray, dtype=float32) -> ndarray:
     return log1p(img_log_filtered, dtype=dtype)
 
 
-def filter_subband(img: ndarray, sigma: float, level: int, wavelet: str, bidirectional: bool = False) -> ndarray:
+def filter_subband(
+        img: ndarray, sigma: float, level: int, wavelet: str,
+        # bidirectional: bool = False
+) -> ndarray:
     d_type = img.dtype
     coefficients = wavedec2(img, wavelet, mode='symmetric', level=None if level == 0 else level, axes=(-2, -1))
     coefficients: List[List] = list(map(list, coefficients))
     width_frac_h = sigma / img.shape[0]
-    width_frac_v = sigma / img.shape[1]
+    # width_frac_v = sigma / img.shape[1]
     for idx, coefficient in enumerate(coefficients):
         if idx == 0:  # the first coefficient is unpackable to ch, cv, cd
             continue
@@ -382,14 +385,14 @@ def filter_subband(img: ndarray, sigma: float, level: int, wavelet: str, bidirec
         ch_filt = irfft(ch_fft, axis=-1)
         coefficients[idx][0] = ch_filt
 
-        if bidirectional:
-            sigma_v = cv.shape[0] * width_frac_v
-            cv_fft = fft(cv, shift=False)
-            if cv_fft.shape != ch_fft.shape or sigma_h != sigma_v:
-                g = gaussian_filter(shape=cv_fft.shape, sigma=sigma_v)
-            cv_fft *= g
-            cv_filt = irfft(cv_fft, axis=-1)
-            coefficients[idx][1] = cv_filt
+        # if bidirectional:
+        #     sigma_v = cv.shape[0] * width_frac_v
+        #     cv_fft = fft(cv, shift=False)
+        #     if cv_fft.shape != ch_fft.shape or sigma_h != sigma_v:
+        #         g = gaussian_filter(shape=cv_fft.shape, sigma=sigma_v)
+        #     cv_fft *= g
+        #     cv_filt = irfft(cv_fft, axis=-1)
+        #     coefficients[idx][1] = cv_filt
     img = waverec2(coefficients, wavelet, mode='symmetric', axes=(-2, -1))
     img = img.astype(d_type)
     return img
@@ -513,9 +516,13 @@ def correct_bleaching(
     -------
     max normalized filter values.
     """
+
     assert isinstance(frequency, float) and frequency > 0
     assert isinstance(clip_min, float) and clip_min >= 0
-    assert isinstance(clip_max, float) and clip_max > 0
+    assert isinstance(clip_max, float) and clip_max > clip_min
+    clip_min_lb = log1p(1)
+    if clip_min < clip_min_lb:
+        clip_min = clip_min_lb
 
     # clip_average = log1p((expm1(clip_min) + expm1(clip_max)) / 2)
     # creat the filter
@@ -531,15 +538,16 @@ def correct_bleaching(
         img_filter_x = reshape(img_filter_x, (1, len(img_filter_x)))
         img_filter = dot(img_filter_y, img_filter_x)
     else:
-        img_filter = clip(img, clip_min, clip_max)
+        img_filter = img.copy()
+        clip(img_filter, clip_min, clip_max, out=img_filter)
         img_filter = butter_lowpass_filter(img_filter, frequency)
 
     # apply the filter
     if USE_NUMEXPR:
-        img = evaluate("where((img_filter > 0) & (img > clip_min), img / img_filter * clip_max, img)")
+        img = evaluate("img / img_filter * clip_max")
     else:
-        img_filter /= clip_max
-        img = where((img_filter > 0) & (img > clip_min), img / img_filter, img)
+        img /= img_filter
+        img *= clip_max
     return img
 
 
@@ -555,31 +563,33 @@ def filter_streak_horizontally(img, sigma1, sigma2, level, wavelet, crossover, t
         img = filter_subband(img, sigma1, level, wavelet)
     else:
         smoothing: int = 1
-        img_max = np_max(img)
+        # img_max = np_max(img)
         if threshold is None:
             threshold = otsu_threshold(img)
         ff = foreground_fraction(img, threshold, crossover, smoothing)
-        foreground = img
+        foreground = img.copy()
         if sigma1 > 0:
             foreground = clip(img, threshold, None)
             foreground = filter_subband(foreground, sigma1, level, wavelet)
 
-        background = img
+        background = img.copy()
         if sigma2 > 0:
-            background = clip(img, None, threshold)
+            clip(background, None, threshold, out=background)
             background = filter_subband(background, sigma2, level, wavelet)
 
         if USE_NUMEXPR:
             img = evaluate("foreground * ff + background * (1 - ff)")
         else:
-            img = foreground * ff + background * (1 - ff)
-        img *= (img_max / np_max(img))
+            foreground *= ff
+            background *= (1 - ff)
+            img = foreground + background
+        # img *= (img_max / np_max(img))
     return img
 
 
 def filter_streaks(
         img: ndarray,
-        sigma: Tuple[float, float] = (200, 200),
+        sigma: Tuple[float, float] = (250, 250),
         level: int = 0,
         wavelet: str = 'db37',
         crossover: float = 10,
@@ -659,8 +669,10 @@ def filter_streaks(
         print(f"{PrintColors.FAIL}Unsupported padding mode: {padding_mode}{PrintColors.ENDC}")
         raise RuntimeError
     if pad_y > 0 or pad_x > 0 or base_pad > 0:
-        img = pad(img, ((base_pad, base_pad + pad_y), (base_pad, base_pad + pad_x)),
-                  mode=padding_mode if padding_mode else 'reflect')
+        img = pad(
+            img, ((base_pad, base_pad + pad_y), (base_pad, base_pad + pad_x)),
+            mode=padding_mode if padding_mode else 'reflect',
+        )
 
     if not sigma1 == sigma2 == 0:
         img = filter_streak_horizontally(img, sigma1, sigma2, level, wavelet, crossover, threshold)
