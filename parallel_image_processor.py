@@ -54,7 +54,8 @@ class MultiProcess(Process):
             resume: bool = True,
             compression: Tuple[str, int] = ("ADOBE_DEFLATE", 1),
             needed_memory: int = None,
-            save_images: bool = True
+            save_images: bool = True,
+            alternating_downsampling_method: bool = True,
     ):
         Process.__init__(self)
         self.daemon = False
@@ -94,12 +95,12 @@ class MultiProcess(Process):
         self.down_sampling_methods = None
         if self.target_voxel is not None and self.source_voxel is not None and shape is not None:
             if rotation in (90, 270):
-                self.calculate_down_sampling_target((shape[1], shape[0]), True)
+                self.calculate_down_sampling_target((shape[1], shape[0]), True, alternating_downsampling_method)
             else:
-                self.calculate_down_sampling_target(shape, False)
+                self.calculate_down_sampling_target(shape, False, alternating_downsampling_method)
         self.rotation = rotation
 
-    def calculate_down_sampling_target(self, new_shape: Tuple[int, int], is_rotated: bool):
+    def calculate_down_sampling_target(self, new_shape: Tuple[int, int], is_rotated: bool, alternating_downsampling_method: bool):
         # calculate voxel size change
         new_shape: array = array(new_shape)
         new_voxel_size: list = list(self.source_voxel)
@@ -125,7 +126,11 @@ class MultiProcess(Process):
             down_sampling_method_x += [None, ] * (reduction_factors[0] - reduction_factors[1])
         elif reduction_factors[0] < reduction_factors[1]:
             down_sampling_method_y += [None, ] * (reduction_factors[1] - reduction_factors[0])
-        self.down_sampling_methods = tuple(zip(down_sampling_method_y, down_sampling_method_x))
+        down_sampling_methods = tuple(zip(down_sampling_method_y, down_sampling_method_x))
+        if not alternating_downsampling_method:
+            down_sampling_methods = [(np_mean, np_mean) for _ in down_sampling_methods]
+
+        self.down_sampling_methods = down_sampling_methods
 
     def imsave_tif(self, path, img, compression=None):
         die = imsave_tif(path, img, compression=compression)
