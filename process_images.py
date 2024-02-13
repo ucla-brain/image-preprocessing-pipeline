@@ -574,26 +574,25 @@ def process_channel(
     tsv_volume = TSVVolume(
         stitched_path / f'{channel}_xml_import_step_5.xml',
         alt_stack_dir=preprocessed_path.joinpath(channel).__str__(),
-        cosine_blending=False  # True if need_bleach_correction else False
+        cosine_blending=True if need_bleach_correction else False
     )
     shape: Tuple[int, int, int] = tsv_volume.volume.shape  # shape is in z y x format
     bleach_correction_frequency = None
-    bleach_correction_sigma = (0, 0)
-    # if len(list(stitched_tif_path.glob("*.tif"))) < shape[0]:
-    if need_bleach_correction:
-        if new_tile_size is not None:
-            bleach_correction_frequency = 1 / min(new_tile_size)
-        elif down_sampling_factor is not None:
-            bleach_correction_frequency = 1 / min(new_tile_size) * min(down_sampling_factor)
-        else:
-            bleach_correction_frequency = 1 / min(tile_size)
-        bleach_correction_sigma = (ceil(1 / bleach_correction_frequency),) * 2
 
-    def estimate_bleach_correction_lb_ub_bit_shift() -> [int, int, int, int]:
+    def estimate_img_bit_shift() -> [int, int, int, int]:
         # just a scope to clear unneeded variables
+        sig = 0
+        if need_bleach_correction:
+            if new_tile_size is not None:
+                sig = min(new_tile_size)
+            elif down_sampling_factor is not None:
+                sig = min(new_tile_size) // min(down_sampling_factor)
+            else:
+                sig = min(tile_size)
+
         from skimage.filters.thresholding import threshold_multiotsu
-        background, bit_shift, clip_min, clip_max = 0, 8, None, None
-        if need_bleach_correction or need_16bit_to_8bit_conversion:
+        background, bit_shift = 0, 8
+        if need_16bit_to_8bit_conversion:
             print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
                   f"calculating clip_min, clip_max, and bit shift ...")
             nz = shape[0]
@@ -608,15 +607,11 @@ def process_channel(
             lb, ub = threshold_multiotsu(img, classes=3)
             assert isinstance(lb, float32)
             assert isinstance(ub, float32)
-            if need_bleach_correction:
-                clip_min, clip_max = list(map(int, np_round(expm1(array([lb, ub])))))
-                background = clip_min
-            if need_16bit_to_8bit_conversion:
-                bit_shift = estimate_bit_shift(int(np_round(expm1(prctl(img[img > ub], 99.99)))))
-        return background, bit_shift, clip_min, clip_max
+            bit_shift = estimate_bit_shift(int(np_round(expm1(prctl(img[img > lb], 99.99)))))
+            background = int(np_round(expm1(lb)))
+        return background, bit_shift, (sig,) * 2
 
-    dark, right_bit_shift, bleach_correction_clip_min, bleach_correction_clip_max = \
-        estimate_bleach_correction_lb_ub_bit_shift()
+    dark, right_bit_shift, bleach_correction_sigma = estimate_img_bit_shift()
 
     memory_needed_per_thread = 24 if need_bleach_correction else 16
     memory_needed_per_thread *= shape[1] + 2 * max(bleach_correction_sigma) + 1
@@ -640,11 +635,9 @@ def process_channel(
         f"\ttsv volume data type: {tsv_volume.dtype}\n"
         f"\t8-bit conversion: {need_16bit_to_8bit_conversion}\n"
         f"\tbit-shift to right: {right_bit_shift}\n"
-        f"\tbleach correction frequency: {bleach_correction_frequency}\n"
         f"\tbleach correction sigma: {bleach_correction_sigma}\n"
-        f"\tbleach correction clip min: {bleach_correction_clip_min}\n"
-        f"\tbleach correction clip max: {bleach_correction_clip_max}\n"
-        f"\tdark: {bleach_correction_clip_min if need_bleach_correction else 0}\n"
+        f"\tbleach correction frequency: {bleach_correction_frequency}\n"
+        f"\tdark: {dark}\n"
         f"\tbackground subtraction: {need_lightsheet_cleaning}\n"
         f"\trotate: {90 if need_rotation_stitched_tif else 0}"
     )
@@ -654,15 +647,13 @@ def process_channel(
         destination=stitched_tif_path,
         fun=process_img,
         kwargs={
-            "threshold": log1p(bleach_correction_clip_min) if bleach_correction_clip_min else 0,
+            "threshold": None,
             "sigma": bleach_correction_sigma,
             "wavelet": "db37",  # coif15
             "padding_mode": padding_mode,  # wrap reflect
             "bidirectional": True if need_bleach_correction else False,
             "bleach_correction_frequency": bleach_correction_frequency,
             "bleach_correction_max_method": False,
-            "bleach_correction_clip_min": bleach_correction_clip_min,
-            "bleach_correction_clip_max": bleach_correction_clip_max,
             "dark": dark,
             "lightsheet": need_lightsheet_cleaning,
             "percentile": 0.25,
@@ -1520,11 +1511,11 @@ if __name__ == '__main__':
                         help="image pre-processing: apply Gaussian filter to denoise. Disabled by --no-gaussian.")
     parser.add_argument("--de_stripe", default=True, action=BooleanOptionalAction,
                         help="image pre-processing: apply de-striping algorithm. Disabled by --no-de_stripe")
-    parser.add_argument("--padding_mode", type=str, default='reflect',
+    parser.add_argument("--padding_mode", type=str, default='wrap',
                         choices=("constant", "edge", "linear_ramp", "maximum", "mean", "median", "minimum", "reflect",
                                  "symmetric", "wrap", "empty"),
                         help="Padding method affects the edge artifacts during bleach correction. "
-                             "The default mode is reflect, but in some cases wrap method works better. "
+                             "The default mode is wrap, but in some cases reflect method works better. "
                              "Options: constant, edge, linear_ramp, maximum, mean, median, minimum, reflect, "
                              "symmetric, wrap, and empty")
     parser.add_argument("--isotropic", default=False, action=BooleanOptionalAction,
