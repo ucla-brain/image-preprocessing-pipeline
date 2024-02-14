@@ -14,14 +14,15 @@ from numpy import max as np_max
 from numpy import mean as np_mean
 from numpy import sqrt as np_sqrt
 from numpy import round as np_round
-from numpy import zeros, float32, dstack, rollaxis, savez_compressed, array, maximum, rot90, arange
+from numpy import zeros, float32, dstack, rollaxis, savez_compressed, array, maximum, rot90, arange, uint8, uint16
 from psutil import cpu_count, virtual_memory
 from skimage.measure import block_reduce
 from skimage.transform import resize, resize_local_mean
 from tifffile import natural_sorted
 from tqdm import tqdm
 
-from pystripe.core import imread_tif_raw_png, imsave_tif, progress_manager, is_uniform_2d, is_uniform_3d
+from pystripe.core import (imread_tif_raw_png, imsave_tif, progress_manager, is_uniform_2d, is_uniform_3d,
+                           convert_to_8bit_fun,  convert_to_16bit_fun)
 from supplements.cli_interface import PrintColors, date_time_now
 from tsv.volume import TSVVolume, VExtent
 
@@ -56,6 +57,7 @@ class MultiProcess(Process):
             needed_memory: int = None,
             save_images: bool = True,
             alternating_downsampling_method: bool = True,
+            down_sampled_dtype: str = "float32"
     ):
         Process.__init__(self)
         self.daemon = False
@@ -91,6 +93,7 @@ class MultiProcess(Process):
         self.source_voxel = source_voxel
         self.target_voxel = target_voxel
         self.down_sampled_path = down_sampled_path
+        self.down_sampled_dtype = down_sampled_dtype
         self.target_shape = None
         self.down_sampling_methods = None
         if self.target_voxel is not None and self.source_voxel is not None and shape is not None:
@@ -336,7 +339,21 @@ class MultiProcess(Process):
                             if z_method is not None and z_stack.shape[0] > 1:
                                 z_stack = block_reduce(z_stack, block_size=(2, 1, 1), func=z_method)
                         assert z_stack.shape[0] == 1
-                        self.imsave_tif(down_sampled_tif_path, z_stack[0], compression=compression)
+                        img = z_stack[0]
+                        if self.down_sampled_dtype not in (float32, "float32"):
+                            if self.down_sampled_dtype in (uint16, "uint16"):
+                                img = convert_to_16bit_fun(img)
+                            elif self.down_sampled_dtype in (uint8, "uint8"):
+                                if post_processed_d_type in (uint8, "uint8"):
+                                    img = img.astype(uint8)
+                                else:
+                                    img = convert_to_8bit_fun(img)
+                            else:
+                                print(f"{PrintColors.FAIL}"
+                                      f"requested downsampled format is not supported"
+                                      f"{PrintColors.ENDC}")
+                                raise RuntimeError
+                        self.imsave_tif(down_sampled_tif_path, img, compression=compression)
 
             except (Empty, TimeoutError):
                 self.die = True
