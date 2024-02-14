@@ -96,6 +96,7 @@ class MultiProcess(Process):
         self.down_sampled_dtype = down_sampled_dtype
         self.target_shape = None
         self.down_sampling_methods = None
+        self.alternating_downsampling_method = alternating_downsampling_method
         if self.target_voxel is not None and self.source_voxel is not None and shape is not None:
             if rotation in (90, 270):
                 self.calculate_down_sampling_target((shape[1], shape[0]), True, alternating_downsampling_method)
@@ -103,7 +104,8 @@ class MultiProcess(Process):
                 self.calculate_down_sampling_target(shape, False, alternating_downsampling_method)
         self.rotation = rotation
 
-    def calculate_down_sampling_target(self, new_shape: Tuple[int, int], is_rotated: bool, alternating_downsampling_method: bool):
+    def calculate_down_sampling_target(self, new_shape: Tuple[int, int], is_rotated: bool,
+                                       alternating_downsampling_method: bool):
         # calculate voxel size change
         new_shape: array = array(new_shape)
         new_voxel_size: list = list(self.source_voxel)
@@ -285,7 +287,8 @@ class MultiProcess(Process):
                             if rotation in (90, 270) or img.shape != post_processed_shape:
                                 post_processed_shape = img.shape
                                 if need_down_sampling:
-                                    self.calculate_down_sampling_target(post_processed_shape, rotation in (90, 270))
+                                    self.calculate_down_sampling_target(post_processed_shape, rotation in (90, 270),
+                                                                        self.alternating_downsampling_method)
                                     z_stack = zeros((len(indices),) + self.target_shape, dtype=float32)
 
                         # down-sampling on xy
