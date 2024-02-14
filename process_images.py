@@ -1187,8 +1187,12 @@ def main(args):
         f"\n\tImaris file:\n\t\t{imaris_file}"
         f"\n\ttimeout: {args.timeout}"
         f"\n\tresume: {args.resume}"
+        f"\n\tskipconf: {args.skipconf}"
     )
-    input(f"{PrintColors.BLUE}press enter to continue if everything is OK ... {PrintColors.ENDC}")
+
+    if not args.skipconf:
+        input(f"{PrintColors.BLUE}press enter to continue if everything is OK ... {PrintColors.ENDC}")
+    
     # stitch :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
     # channels need reconstruction will be stitched first to start slow TeraFly conversion as soon as possible
@@ -1554,4 +1558,6 @@ if __name__ == '__main__':
                              "Applies to image series and tsv volumes (not ims). "
                              "adds up to 30 percent overhead for copying the data from one process to another "
                              "but if you have corrupt files you can find them this way.")
+    parser.add_argument("--skipconf", default=False, action=BooleanOptionalAction,
+                        help="Skip confirmation message before beginning processing.")
     main(parser.parse_args())
