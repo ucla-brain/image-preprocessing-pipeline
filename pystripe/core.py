@@ -14,7 +14,7 @@ from types import GeneratorType
 from typing import Tuple, Iterator, List, Callable, Union
 from warnings import filterwarnings
 
-from cv2 import morphologyEx, MORPH_CLOSE, MORPH_OPEN, floodFill
+from cv2 import morphologyEx, MORPH_CLOSE, MORPH_OPEN, floodFill, GaussianBlur
 from dcimg import DCIMGFile
 from imageio.v3 import imread as png_imread
 from numba import jit
@@ -890,9 +890,10 @@ def process_img(
                       f"performance enhancement: {speedup:.1f}%")
 
         if gaussian_filter_2d:
-            if img.dtype != float32:
-                img = img.astype(float32)
-            gaussian(img, sigma=1, preserve_range=True, truncate=2, output=img)
+            # if img.dtype != float32:
+            #     img = img.astype(float32)
+            # gaussian(img, sigma=1, preserve_range=True, truncate=2, output=img)
+            GaussianBlur(img,  ksize=(5, 5), sigmaX=1, sigmaY=1)
 
         if down_sample is not None:
             down_sample_method = down_sample_method.lower()
