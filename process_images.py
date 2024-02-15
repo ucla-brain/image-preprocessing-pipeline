@@ -31,6 +31,7 @@ from tqdm import tqdm
 from skimage.measure import block_reduce
 from skimage.transform import warp
 from skimage.filters import sobel
+from skimage.filters.thresholding import threshold_multiotsu
 
 from flat import create_flat_img
 from parallel_image_processor import parallel_image_processor, jumpy_step_range
@@ -430,8 +431,6 @@ def process_channel(
             padding_mode="reflect",
             bidirectional=True if objective == "40x" else False,
             lightsheet=False,
-            # artifact_length=artifact_length,
-            # percentile=0.25,
             down_sample=down_sampling_factor,
             tile_size=tile_size,
             new_size=new_tile_size,
@@ -571,49 +570,54 @@ def process_channel(
     stitched_tif_path = stitched_path / f"{channel}_tif"
     stitched_tif_path.mkdir(exist_ok=True)
 
+    cosine_blending = False  # True if need_bleach_correction else False
     tsv_volume = TSVVolume(
         stitched_path / f'{channel}_xml_import_step_5.xml',
         alt_stack_dir=preprocessed_path.joinpath(channel).__str__(),
-        cosine_blending=True if need_bleach_correction else False
+        cosine_blending=cosine_blending
     )
     shape: Tuple[int, int, int] = tsv_volume.volume.shape  # shape is in z y x format
-    bleach_correction_frequency = None
 
-    def estimate_img_bit_shift() -> [int, int, int, int]:
+    def estimate_img_related_params():
         # just a scope to clear unneeded variables
         sig = 0
-        if need_bleach_correction:
-            if new_tile_size is not None:
-                sig = min(new_tile_size)
-            elif down_sampling_factor is not None:
-                sig = min(new_tile_size) // min(down_sampling_factor)
-            else:
-                sig = min(tile_size)
-
-        from skimage.filters.thresholding import threshold_multiotsu
-        background, bit_shift = 0, 8
-        if need_16bit_to_8bit_conversion:
+        frequency = None
+        background, bit_shift, clip_min, clip_med, clip_max = 0, 8, None, None, None
+        if need_16bit_to_8bit_conversion or need_bleach_correction:
+            z1 = shape[0]//2
             print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
-                  f"calculating clip_min, clip_max, and bit shift ...")
-            nz = shape[0]
+                  f"calculating thresholding, and bit shift for 8-bit conversion using img_{z1:06n}.tif ...")
             img = tsv_volume.imread(
                 VExtent(
                     tsv_volume.volume.x0, tsv_volume.volume.x1,
                     tsv_volume.volume.y0, tsv_volume.volume.y1,
-                    tsv_volume.volume.z0 + nz // 2, tsv_volume.volume.z0 + nz // 2 + 1),
+                    tsv_volume.volume.z0 + z1, tsv_volume.volume.z0 + z1 + 1),
                 tsv_volume.dtype)[0]
             assert isinstance(img, ndarray)
             img = log1p_jit(img, dtype=float32)
-            lb, ub = threshold_multiotsu(img, classes=3)
+            lb, mb, ub, _, _ = threshold_multiotsu(img, classes=6)
             assert isinstance(lb, float32)
+            assert isinstance(mb, float32)
             assert isinstance(ub, float32)
             bit_shift = estimate_bit_shift(int(np_round(expm1(prctl(img[img > lb], 99.99)))))
-            background = int(np_round(expm1(lb)))
-        return background, bit_shift, (sig,) * 2
+            clip_min, clip_med, clip_max = np_round(expm1([lb, mb, ub])).astype(int)
+            if need_bleach_correction:
+                background = clip_min
+                if new_tile_size is not None:
+                    sig = min(new_tile_size)
+                elif down_sampling_factor is not None:
+                    sig = min(new_tile_size) // min(down_sampling_factor)
+                else:
+                    sig = min(tile_size)
+                frequency = 1 / sig
+        return background, bit_shift, (int(sig * 2),) * 2, clip_min, clip_med, clip_max, frequency
 
-    dark, right_bit_shift, bleach_correction_sigma = estimate_img_bit_shift()
+    dark, right_bit_shift, \
+        bleach_correction_sigma, \
+        bleach_correction_clip_min, bleach_correction_clip_med, bleach_correction_clip_max, \
+        bleach_correction_frequency = estimate_img_related_params()
 
-    memory_needed_per_thread = 24 if need_bleach_correction else 16
+    memory_needed_per_thread = 24 if cosine_blending else 16
     memory_needed_per_thread *= shape[1] + 2 * max(bleach_correction_sigma) + 1
     memory_needed_per_thread *= shape[2] + 2 * max(bleach_correction_sigma) + 1
     memory_needed_per_thread /= 1024 ** 3
@@ -633,12 +637,16 @@ def process_channel(
         f"\tavailable ram = {memory_ram:.1f} GB\n"
         f"\ttsv volume shape (zyx): {shape}\n"
         f"\ttsv volume data type: {tsv_volume.dtype}\n"
-        f"\t8-bit conversion: {need_16bit_to_8bit_conversion}\n"
-        f"\tbit-shift to right: {right_bit_shift}\n"
         f"\tbleach correction sigma: {bleach_correction_sigma}\n"
         f"\tbleach correction frequency: {bleach_correction_frequency}\n"
+        f"\tbleach correction clip min: {bleach_correction_clip_min}\n"
+        f"\tbleach correction clip med: {bleach_correction_clip_med}\n"
+        f"\tbleach correction clip max: {bleach_correction_clip_max}\n"
+        f"\tbleach correction clip padding mode: {padding_mode}\n"
         f"\tdark: {dark}\n"
         f"\tbackground subtraction: {need_lightsheet_cleaning}\n"
+        f"\t8-bit conversion: {need_16bit_to_8bit_conversion}\n"
+        f"\tbit-shift to right: {right_bit_shift}\n"
         f"\trotate: {90 if need_rotation_stitched_tif else 0}"
     )
     # need_lightsheet_cleaning
@@ -647,12 +655,15 @@ def process_channel(
         destination=stitched_tif_path,
         fun=process_img,
         kwargs={
-            "threshold": None,
+            "threshold": None,  # for dual-band sigma
             "sigma": bleach_correction_sigma,
-            "wavelet": "db37",  # coif15
+            "wavelet": "coif15",  # db37
             "padding_mode": padding_mode,  # wrap reflect
             "bidirectional": True if need_bleach_correction else False,
             "bleach_correction_frequency": bleach_correction_frequency,
+            "bleach_correction_clip_min": bleach_correction_clip_min,
+            "bleach_correction_clip_med": bleach_correction_clip_med,
+            "bleach_correction_clip_max": bleach_correction_clip_max,
             "bleach_correction_max_method": False,
             "dark": dark,
             "lightsheet": need_lightsheet_cleaning,

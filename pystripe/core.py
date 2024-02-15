@@ -7,7 +7,6 @@ from multiprocessing import Process, Queue
 from operator import iconcat
 from os import scandir, DirEntry  # , environ
 from pathlib import Path
-from psutil import cpu_count
 from queue import Empty
 from re import compile, IGNORECASE
 from time import sleep, time
@@ -15,6 +14,7 @@ from types import GeneratorType
 from typing import Tuple, Iterator, List, Callable, Union
 from warnings import filterwarnings
 
+from cv2 import morphologyEx, MORPH_CLOSE, MORPH_OPEN, floodFill
 from dcimg import DCIMGFile
 from imageio.v3 import imread as png_imread
 from numba import jit
@@ -24,8 +24,9 @@ from numpy import max as np_max
 from numpy import mean as np_mean
 from numpy import median as np_median
 from numpy import min as np_min
-from numpy import uint8, uint16, float32, float64, ndarray, generic, zeros, broadcast_to, exp, expm1, log1p, \
-    cumsum, arange, unique, interp, pad, clip, where, rot90, flipud, dot, reshape, iinfo, nonzero
+from numpy import uint8, uint16, float32, float64, ndarray, generic, zeros, broadcast_to, exp, expm1, log1p, ones, \
+    cumsum, arange, unique, interp, pad, clip, where, rot90, flipud, dot, reshape, iinfo, nonzero, logical_not
+from psutil import cpu_count
 from pywt import wavedec2, waverec2, Wavelet, dwt_max_level
 from scipy.fftpack import rfft, fftshift, irfft
 from scipy.ndimage import gaussian_filter as gaussian_filter_nd
@@ -165,7 +166,7 @@ def convert_to_8bit_fun(img: ndarray, bit_shift_to_right: int = 8):
     if bit_shift_to_right is None:
         bit_shift_to_right = 8
     if 0 <= bit_shift_to_right < 9:
-        lower_bound = 2**bit_shift_to_right
+        lower_bound = 2 ** bit_shift_to_right
         if USE_NUMEXPR:
             img = evaluate("where((0 < img) & (img < lower_bound), lower_bound, img)")
         else:
@@ -346,16 +347,18 @@ def max_level(min_len, wavelet):
     return dwt_max_level(min_len, w.dec_len)
 
 
-def foreground_fraction(img: ndarray, center: float, crossover: float, smoothing: int) -> ndarray:
+def foreground_fraction(img: ndarray, threshold: float, crossover: float, smoothing: int) -> ndarray:
     if USE_NUMEXPR:
-        img = evaluate("(img - center) / crossover")
+        im = evaluate("(img - threshold) / crossover")
     else:
-        img = (img - center) / crossover
-    img = sigmoid(img)
-    return gaussian_filter_nd(img, sigma=smoothing)
+        im = img - threshold
+        im /= crossover
+    im = sigmoid(im)
+    im = gaussian_filter_nd(im, sigma=smoothing)
+    return im
 
 
-# @jit
+@jit
 def expm1_jit(img_log_filtered: Union[ndarray, float, int]) -> ndarray:
     return expm1(img_log_filtered)
 
@@ -393,8 +396,8 @@ def filter_subband(
         #     cv_fft *= g
         #     cv_filt = irfft(cv_fft, axis=-1)
         #     coefficients[idx][1] = cv_filt
-    img = waverec2(coefficients, wavelet, mode='symmetric', axes=(-2, -1))
-    img = img.astype(d_type)
+    # img = maximum(waverec2(coefficients, wavelet, mode='symmetric', axes=(-2, -1)), img)
+    img = waverec2(coefficients, wavelet, mode='symmetric', axes=(-2, -1)).astype(d_type)
     return img
 
 
@@ -496,10 +499,27 @@ def slice_non_zero_box(img_axis: ndarray, noise: int, filter_frequency: int = 1 
     return min_max_1d(nonzero(butter_lowpass_filter(img_axis, filter_frequency).astype(uint16) > noise)[0])
 
 
+def get_img_mask(img: ndarray, threshold: Union[int, float], close_steps: int = 200, open_steps: int = 100) -> ndarray:
+    # start_time = time()
+    shape = list(img.shape)
+    mask = (img > threshold).astype(uint8)
+    mask = morphologyEx(mask, MORPH_CLOSE, ones((close_steps, close_steps), dtype=uint8))
+    mask = morphologyEx(mask, MORPH_OPEN, ones((open_steps, open_steps), dtype=uint8)).astype(bool)
+    inverted_mask = logical_not(mask).astype(uint8)
+    floodFill(inverted_mask, None, (0, 0), 0, flags=4)
+    floodFill(inverted_mask, None, (0, shape[0]-1), 0, flags=4)
+    floodFill(inverted_mask, None, (shape[1]-1, 0), 0, flags=4)
+    floodFill(inverted_mask, None, (shape[1]-1, shape[0]-1), 0, flags=4)
+    mask |= inverted_mask.astype(bool)
+    # print("mask time:", time() - start_time)
+    return mask
+
+
 def correct_bleaching(
         img: ndarray,
         frequency: float,
         clip_min: float,
+        clip_med: float,
         clip_max: float,
         max_method: bool = False,
 ) -> ndarray:
@@ -508,9 +528,10 @@ def correct_bleaching(
     ----------
     img: log1p filtered image
     frequency: low pass fileter frequency. Usually 1/min(img.shape).
-    max_method: use max value on x and y axes to create the filter. Max method is faster and smoother but less accurate
     clip_min: background vs foreground threshold
+    clip_med: foreground intermediate
     clip_max: foreground max
+    max_method: use max value on x and y axes to create the filter. Max method is faster and smoother but less accurate
 
     Returns
     -------
@@ -519,19 +540,21 @@ def correct_bleaching(
 
     assert isinstance(frequency, float) and frequency > 0
     assert isinstance(clip_min, float) and clip_min >= 0
+    assert isinstance(clip_med, float) and clip_med > clip_min
     assert isinstance(clip_max, float) and clip_max > clip_min
+    assert clip_max > clip_med
     clip_min_lb = log1p(1)
     if clip_min < clip_min_lb:
         clip_min = clip_min_lb
 
-    # clip_average = log1p((expm1(clip_min) + expm1(clip_max)) / 2)
     # creat the filter
     if max_method:
         img_filter_y = np_max(img, axis=1)
         img_filter_x = np_max(img, axis=0)
-        if clip_min is not None or clip_max is not None:
-            img_filter_y = clip(img_filter_y, clip_min, clip_max)
-            img_filter_x = clip(img_filter_x, clip_min, clip_max)
+        img_filter_y[img_filter_y == 0] = clip_med
+        img_filter_x[img_filter_x == 0] = clip_med
+        img_filter_y = clip(img_filter_y, clip_min, clip_max)
+        img_filter_x = clip(img_filter_x, clip_min, clip_max)
         img_filter_y = butter_lowpass_filter(img_filter_y, frequency)
         img_filter_x = butter_lowpass_filter(img_filter_x, frequency)
         img_filter_y = reshape(img_filter_y, (len(img_filter_y), 1))
@@ -539,15 +562,17 @@ def correct_bleaching(
         img_filter = dot(img_filter_y, img_filter_x)
     else:
         img_filter = img.copy()
+        img_filter[img_filter == 0] = clip_med
         clip(img_filter, clip_min, clip_max, out=img_filter)
         img_filter = butter_lowpass_filter(img_filter, frequency)
 
     # apply the filter
+    img_filter_max = np_max(img_filter)
     if USE_NUMEXPR:
-        img = evaluate("img / img_filter * clip_max")
+        img = evaluate("img / img_filter * img_filter_max")
     else:
         img /= img_filter
-        img *= clip_max
+        img *= img_filter_max
     return img
 
 
@@ -563,7 +588,6 @@ def filter_streak_horizontally(img, sigma1, sigma2, level, wavelet, crossover, t
         img = filter_subband(img, sigma1, level, wavelet)
     else:
         smoothing: int = 1
-        # img_max = np_max(img)
         if threshold is None:
             threshold = otsu_threshold(img)
         ff = foreground_fraction(img, threshold, crossover, smoothing)
@@ -581,9 +605,10 @@ def filter_streak_horizontally(img, sigma1, sigma2, level, wavelet, crossover, t
             img = evaluate("foreground * ff + background * (1 - ff)")
         else:
             foreground *= ff
-            background *= (1 - ff)
-            img = foreground + background
-        # img *= (img_max / np_max(img))
+            foreground += background
+            background *= ff
+            foreground -= background
+            img = foreground
     return img
 
 
@@ -591,7 +616,7 @@ def filter_streaks(
         img: ndarray,
         sigma: Tuple[float, float] = (250, 250),
         level: int = 0,
-        wavelet: str = 'db37',
+        wavelet: str = 'db9',
         crossover: float = 10,
         threshold: float = None,
         padding_mode: str = "reflect",
@@ -599,6 +624,7 @@ def filter_streaks(
         bleach_correction_frequency: float = None,
         bleach_correction_max_method: bool = False,
         bleach_correction_clip_min: Union[float, int] = None,
+        bleach_correction_clip_med: Union[float, int] = None,
         bleach_correction_clip_max: Union[float, int] = None,
         log1p_normalization_needed: bool = True,
         verbose: bool = False
@@ -630,9 +656,12 @@ def filter_streaks(
         for large images.
     bleach_correction_clip_min: float, int
         background vs foreground threshold.
+    bleach_correction_clip_med: float, int
+        foreground intermediate value
     bleach_correction_clip_max: float, int
         foreground max value
     log1p_normalization_needed: bool
+        smooth the image using log plus 1 function.
         It should be true in most cases except when img is already normalized with log1p function.
     verbose:
         if true explain to user what's going on
@@ -647,34 +676,44 @@ def filter_streaks(
     if sigma1 == sigma2 == 0 and bleach_correction_frequency is None:
         return img
 
+    mask = None
+    if bleach_correction_clip_med is not None:
+        mask = get_img_mask(img, bleach_correction_clip_med)
+
     # smooth the image using log plus 1 function
     d_type = img.dtype
     if log1p_normalization_needed:
         img = log1p_jit(img)
 
-    # Need to pad image to multiple of 2. It is needed even for bleach correction non-max method
-    img_shape = img.shape
-    pad_y, pad_x = [_ % 2 for _ in img_shape]
-    if isinstance(padding_mode, str):
-        padding_mode = padding_mode.lower()
-    if padding_mode in ('constant', 'edge', 'linear_ramp', 'maximum', 'mean', 'median', 'minimum', 'reflect',
-                        'symmetric', 'wrap', 'empty'):
-        base_pad = int(max(sigma1, sigma2) // 2) * 2
-        min_image_length = 34  # tested for db9 to 37
-        if (img_shape[0] + 2 * base_pad + pad_y) < min_image_length:
-            pad_y = min_image_length - (img_shape[0] + 2 * base_pad)
-        if (img_shape[1] + 2 * base_pad + pad_x) < min_image_length:
-            pad_x = min_image_length - (img_shape[1] + 2 * base_pad)
-    else:
-        print(f"{PrintColors.FAIL}Unsupported padding mode: {padding_mode}{PrintColors.ENDC}")
-        raise RuntimeError
-    if pad_y > 0 or pad_x > 0 or base_pad > 0:
-        img = pad(
-            img, ((base_pad, base_pad + pad_y), (base_pad, base_pad + pad_x)),
-            mode=padding_mode if padding_mode else 'reflect',
-        )
-
     if not sigma1 == sigma2 == 0:
+        # Need to pad image to multiple of 2. It is needed even for bleach correction non-max method
+        img_shape = img.shape
+        pad_y, pad_x = [_ % 2 for _ in img_shape]
+        if isinstance(padding_mode, str):
+            padding_mode = padding_mode.lower()
+        if padding_mode in ('constant', 'edge', 'linear_ramp', 'maximum', 'mean', 'median', 'minimum', 'reflect',
+                            'symmetric', 'wrap', 'empty'):
+            base_pad = int(max(sigma1, sigma2) // 2) * 2
+            min_image_length = 34  # tested for db9 to 37
+            if (img_shape[0] + 2 * base_pad + pad_y) < min_image_length:
+                pad_y = min_image_length - (img_shape[0] + 2 * base_pad)
+            if (img_shape[1] + 2 * base_pad + pad_x) < min_image_length:
+                pad_x = min_image_length - (img_shape[1] + 2 * base_pad)
+        else:
+            print(f"{PrintColors.FAIL}Unsupported padding mode: {padding_mode}{PrintColors.ENDC}")
+            raise RuntimeError
+        if pad_y > 0 or pad_x > 0 or base_pad > 0:
+            if padding_mode == 'constant' and bleach_correction_clip_min is not None:
+                img = pad(
+                    img, ((base_pad, base_pad + pad_y), (base_pad, base_pad + pad_x)),
+                    mode='constant', constant_values=log1p(bleach_correction_clip_min)
+                )
+            else:
+                img = pad(
+                    img, ((base_pad, base_pad + pad_y), (base_pad, base_pad + pad_x)),
+                    mode=padding_mode if padding_mode else 'reflect'
+                )
+
         img = filter_streak_horizontally(img, sigma1, sigma2, level, wavelet, crossover, threshold)
         if bidirectional:
             img = rot90(img, 1)
@@ -685,36 +724,44 @@ def filter_streaks(
             print(f"de-striping applied: sigma={sigma}, level={level}, wavelet={wavelet}, crossover{crossover}, "
                   f"threshold={threshold}, bidirectional={bidirectional}.")
 
+        # undo padding
+        if pad_y > 0 or pad_x > 0 or base_pad > 0:
+            img = img[
+                  base_pad: img.shape[0] - (base_pad + pad_y),
+                  base_pad: img.shape[1] - (base_pad + pad_x)]
+            assert img.shape == img_shape
+
+        if mask is not None:
+            img *= mask
+            del mask
+
     if bleach_correction_frequency is not None:
         # convert uint16 to log1p
-        if bleach_correction_clip_min is None and bleach_correction_clip_max is None:
-            clip_min, clip_max = threshold_multiotsu(img, classes=3)
-        elif bleach_correction_clip_min is None:
-            clip_min, _ = threshold_multiotsu(img, classes=3)
-            clip_max = log1p(bleach_correction_clip_max)
-        elif bleach_correction_clip_max is None:
-            clip_min = log1p(bleach_correction_clip_min)
-            clip_max, _ = threshold_multiotsu(img, classes=3)
-        else:
-            clip_min, clip_max = log1p([bleach_correction_clip_min, bleach_correction_clip_max])
+        if bleach_correction_clip_min is None or \
+           bleach_correction_clip_med is None or \
+           bleach_correction_clip_max is None:
+            lb, mb, _, ub, _ = threshold_multiotsu(img, classes=6)
+            if bleach_correction_clip_min is None:
+                bleach_correction_clip_min = expm1(lb)
+            if bleach_correction_clip_med is None:
+                bleach_correction_clip_med = expm1(mb)
+            if bleach_correction_clip_max is None:
+                bleach_correction_clip_max = expm1(ub)
+        clip_min, clip_med, clip_max = log1p([bleach_correction_clip_min,
+                                              bleach_correction_clip_med,
+                                              bleach_correction_clip_max])
 
         img = correct_bleaching(
-            img, bleach_correction_frequency, clip_min, clip_max,
+            img, bleach_correction_frequency, clip_min, clip_med, clip_max,
             max_method=bleach_correction_max_method
         )
         if verbose:
             print(
                 f"bleach correction is applied: frequency={bleach_correction_frequency}, "
                 f"max_method={bleach_correction_max_method},\n"
-                f"clip_min={expm1(clip_min)}, clip_max={expm1(clip_max)},\n"
+                f"clip_min={expm1(clip_min)}, clip_med={expm1(clip_med)}, clip_max={expm1(clip_max)},\n"
             )
 
-    # undo padding
-    if pad_y > 0 or pad_x > 0 or base_pad > 0:
-        img = img[
-              base_pad: img.shape[0]-(base_pad + pad_y),
-              base_pad: img.shape[1]-(base_pad + pad_x)]
-        assert img.shape == img_shape
     # undo log plus 1
     img = expm1_jit(img)
     if np_d_type(d_type).kind in ("u", "i"):
@@ -767,10 +814,11 @@ def process_img(
         wavelet: str = 'db37',
         crossover: float = 10,
         threshold: float = None,
-        padding_mode: str = "reflect",
+        padding_mode: str = "wrap",
         bidirectional: bool = False,
         bleach_correction_frequency: float = None,
         bleach_correction_clip_min: Union[float, int] = None,
+        bleach_correction_clip_med: Union[float, int] = None,
         bleach_correction_clip_max: Union[float, int] = None,
         bleach_correction_max_method: bool = False,
         log1p_normalization_needed: bool = True,
@@ -875,6 +923,7 @@ def process_img(
                 bleach_correction_frequency=bleach_correction_frequency,
                 bleach_correction_max_method=bleach_correction_max_method,
                 bleach_correction_clip_min=bleach_correction_clip_min,
+                bleach_correction_clip_med=bleach_correction_clip_med,
                 bleach_correction_clip_max=bleach_correction_clip_max,
                 log1p_normalization_needed=log1p_normalization_needed,
                 verbose=verbose,
@@ -963,6 +1012,7 @@ def read_filter_save(
         bleach_correction_frequency: float = None,
         bleach_correction_max_method: bool = True,
         bleach_correction_clip_min: Union[float, int] = None,
+        bleach_correction_clip_med: Union[float, int] = None,
         bleach_correction_clip_max: Union[float, int] = None,
         dark: float = 0,
         lightsheet: bool = False,
@@ -1028,6 +1078,8 @@ def read_filter_save(
         for large images.
     bleach_correction_clip_min: float, int
         foreground vs background threshold
+    bleach_correction_clip_med: float, int
+        foreground intermediate
     bleach_correction_clip_max: float, int
         foreground max
     dark : float
@@ -1121,6 +1173,7 @@ def read_filter_save(
             bleach_correction_frequency=bleach_correction_frequency,
             bleach_correction_max_method=bleach_correction_max_method,
             bleach_correction_clip_min=bleach_correction_clip_min,
+            bleach_correction_clip_med=bleach_correction_clip_med,
             bleach_correction_clip_max=bleach_correction_clip_max,
             sigma=sigma,
             level=level,
@@ -1356,6 +1409,7 @@ def batch_filter(
         bleach_correction_frequency: float = None,
         bleach_correction_max_method: bool = True,
         bleach_correction_clip_min: Union[float, int] = None,
+        bleach_correction_clip_med: Union[float, int] = None,
         bleach_correction_clip_max: Union[float, int] = None,
         sigma: Tuple[int, int] = (0, 0),
         level=0,
@@ -1423,6 +1477,8 @@ def batch_filter(
         for large images.
     bleach_correction_clip_min: float, int
         foreground vs background threshold
+    bleach_correction_clip_med: float, int
+        foreground intermediate
     bleach_correction_clip_max: float, int
         foreground max
     compression : tuple (str, int)
@@ -1504,6 +1560,7 @@ def batch_filter(
         'bleach_correction_frequency': bleach_correction_frequency,
         'bleach_correction_max_method': bleach_correction_max_method,
         'bleach_correction_clip_min': bleach_correction_clip_min,
+        'bleach_correction_clip_med': bleach_correction_clip_med,
         'bleach_correction_clip_max': bleach_correction_clip_max,
         'z_idx': None,
         'rotate': rotate,
