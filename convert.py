@@ -116,7 +116,10 @@ def main(args: Namespace):
             rotation=args.rotation,
             resume=args.resume,
             needed_memory=args.needed_memory * 1024 ** 3,
-            save_images=args.save_images
+            save_images=args.save_images,
+            down_sampled_path=args.downsample_path,
+            alternating_downsampling_method=False if args.downsample_method else True,
+            down_sample_dtype=args.downsample_dtype
         )
     elif input_path.is_dir():
         tif_2d_folder = input_path
@@ -320,6 +323,11 @@ if __name__ == '__main__':
     parser.add_argument("--downsample_method", "-dsm", type=str, default='max',
                         help="image pre-processing: down-sampling method. "
                              "options are max, min, mean, median. Default is max.")
+    parser.add_argument("--downsample_dtype", "-dsdt", type=str, default='float32',
+                        help="image pre-processing: down-sample final data type. "
+                             "options are float32, uint16, uint8.")
+    parser.add_argument("--downsample_path", "-dsp", type=str, default='',
+                        help="path to tif output downsampled files.")
     parser.add_argument("--new_size_x", "-nsx", type=int, default=0,
                         help="image pre-processing: new size of x-axis. Default is 0.")
     parser.add_argument("--new_size_y", "-nsy", type=int, default=0,
