@@ -166,10 +166,10 @@ def convert_to_8bit_fun(img: ndarray, bit_shift_to_right: int = 8):
     if 0 <= bit_shift_to_right < 9:
         lower_bound = 2 ** bit_shift_to_right
         if USE_NUMEXPR:
-            evaluate("where((0 < img) & (img < lower_bound), lower_bound, img)", out=img, casting="unsafe")
+            evaluate("where((0 < img) & (img < lower_bound), 1, img >> bit_shift_to_right)", out=img, casting="unsafe")
         else:
             img = where((0 < img) & (img < lower_bound), lower_bound, img)
-        img = (img >> bit_shift_to_right)
+            img = (img >> bit_shift_to_right)
     else:
         print("right shift should be between 0 and 8")
         raise RuntimeError
@@ -629,7 +629,7 @@ def filter_streak_horizontally(img, sigma1, sigma2, level, wavelet, crossover, t
 
         fraction = foreground_fraction(img, threshold, crossover, smoothing)
         if USE_NUMEXPR:
-            evaluate("foreground * ff + background * (1 - ff)", out=img, casting="unsafe")
+            evaluate("foreground * fraction + background * (1 - fraction)", out=img, casting="unsafe")
         else:
             foreground *= fraction
             fraction = 1 - fraction
