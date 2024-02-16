@@ -571,10 +571,10 @@ def correct_bleaching(
     max normalized filter values.
     """
 
-    assert isinstance(frequency, float) and frequency > 0
-    assert isinstance(clip_min, float) and clip_min >= 0
-    assert isinstance(clip_med, float) and clip_med > clip_min
-    assert isinstance(clip_max, float) and clip_max > clip_min
+    assert isinstance(frequency, (float, float32, float64)) and frequency > 0
+    assert isinstance(clip_min, (float, float32, float64)) and clip_min >= 0
+    assert isinstance(clip_med, (float, float32, float64)) and clip_med > clip_min
+    assert isinstance(clip_max, (float, float32, float64)) and clip_max > clip_min
     assert clip_max > clip_med
     clip_min_lb = log1p(1)
     if clip_min < clip_min_lb:
