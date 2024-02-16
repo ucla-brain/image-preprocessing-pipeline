@@ -7,7 +7,7 @@ import os
 import platform
 import sys
 from datetime import timedelta
-from math import floor, ceil
+from math import floor
 from multiprocessing import freeze_support, Queue, Process, Pool
 from pathlib import Path
 from platform import uname
@@ -22,9 +22,8 @@ import mpi4py
 import psutil
 from cpufeature.extension import CPUFeature
 from cv2 import MOTION_TRANSLATION, findTransformECC, TERM_CRITERIA_COUNT, TERM_CRITERIA_EPS
-from numpy import ndarray, zeros, uint8, float32, eye, dstack, append, array, absolute, log1p, expm1
+from numpy import ndarray, zeros, uint8, float32, eye, dstack, append, array, absolute, expm1
 from numpy import round as np_round
-from numpy import mean as np_mean
 from numpy.linalg import inv
 from psutil import cpu_count, virtual_memory
 from tqdm import tqdm
@@ -36,7 +35,7 @@ from skimage.filters.thresholding import threshold_multiotsu
 from flat import create_flat_img
 from parallel_image_processor import parallel_image_processor, jumpy_step_range
 from pystripe.core import (batch_filter, imread_tif_raw_png, imsave_tif, MultiProcessQueueRunner, progress_manager,
-                           process_img, convert_to_8bit_fun, log1p_jit, prctl)
+                           process_img, convert_to_8bit_fun, log1p_jit, prctl, np_max, np_mean)
 from supplements.cli_interface import (ask_for_a_number_in_range, date_time_now, PrintColors)
 from supplements.tifstack import TifStack, imread_tif_stck
 from tsv.volume import TSVVolume, VExtent
@@ -306,10 +305,15 @@ def get_gradient(img: ndarray) -> ndarray:
     return img
 
 
-def estimate_bit_shift(ub: int):
+def estimate_bit_shift(img, threshold: float, percentile=99.9):
+    try:
+        upper_bound = prctl(img[img > threshold], percentile)
+    except (ValueError, AssertionError):
+        upper_bound = np_max(img)
+    upper_bound = int(np_round(expm1(upper_bound)))
     right_bit_shift: int = 8
     for b in range(0, 9):
-        if 256 * 2 ** b >= ub:
+        if 256 * 2 ** b >= upper_bound:
             right_bit_shift = b
             break
     return right_bit_shift
@@ -595,14 +599,13 @@ def process_channel(
                 tsv_volume.dtype)[0]
             assert isinstance(img, ndarray)
             img = log1p_jit(img, dtype=float32)
-            lb, mb, ub, _, _ = threshold_multiotsu(img, classes=6)
-            assert isinstance(lb, float32)
-            assert isinstance(mb, float32)
-            assert isinstance(ub, float32)
-            bit_shift = estimate_bit_shift(int(np_round(expm1(prctl(img[img > lb], 99.99)))))
-            clip_min, clip_med, clip_max = np_round(expm1([lb, mb, ub])).astype(int)
+            clip_min, clip_med, clip_max = threshold_multiotsu(img, classes=4)
+            assert isinstance(clip_min, float32)
+            assert isinstance(clip_med, float32)
+            assert isinstance(clip_max, float32)
+            bit_shift = estimate_bit_shift(img, threshold=clip_max, percentile=99.9)
             if need_bleach_correction:
-                background = clip_min
+                background = int(np_round(expm1(clip_min)))
                 if new_tile_size is not None:
                     sig = min(new_tile_size)
                 elif down_sampling_factor is not None:
@@ -610,7 +613,7 @@ def process_channel(
                 else:
                     sig = min(tile_size)
                 frequency = 1 / sig
-        return background, bit_shift, (int(sig * 2),) * 2, clip_min, clip_med, clip_max, frequency
+        return background, bit_shift, (int(sig), int(sig * 2)), clip_min, clip_med, clip_max, frequency
 
     dark, right_bit_shift, \
         bleach_correction_sigma, \
@@ -639,9 +642,9 @@ def process_channel(
         f"\ttsv volume data type: {tsv_volume.dtype}\n"
         f"\tbleach correction sigma: {bleach_correction_sigma}\n"
         f"\tbleach correction frequency: {bleach_correction_frequency}\n"
-        f"\tbleach correction clip min: {bleach_correction_clip_min}\n"
-        f"\tbleach correction clip med: {bleach_correction_clip_med}\n"
-        f"\tbleach correction clip max: {bleach_correction_clip_max}\n"
+        f"\tbleach correction clip min: {np_round(expm1(bleach_correction_clip_min))}\n"
+        f"\tbleach correction clip med: {np_round(expm1(bleach_correction_clip_med))}\n"
+        f"\tbleach correction clip max: {np_round(expm1(bleach_correction_clip_max))}\n"
         f"\tbleach correction clip padding mode: {padding_mode}\n"
         f"\tdark: {dark}\n"
         f"\tbackground subtraction: {need_lightsheet_cleaning}\n"
@@ -655,11 +658,11 @@ def process_channel(
         destination=stitched_tif_path,
         fun=process_img,
         kwargs={
-            "threshold": None,  # for dual-band sigma
+            "threshold": bleach_correction_clip_med,  # for dual-band sigma
             "sigma": bleach_correction_sigma,
             "wavelet": "coif15",  # db37
             "padding_mode": padding_mode,  # wrap reflect
-            "bidirectional": True if need_bleach_correction else False,
+            "bidirectional": False,
             "bleach_correction_frequency": bleach_correction_frequency,
             "bleach_correction_clip_min": bleach_correction_clip_min,
             "bleach_correction_clip_med": bleach_correction_clip_med,

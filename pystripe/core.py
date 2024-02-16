@@ -617,7 +617,7 @@ def otsu_threshold(img: ndarray) -> float:
 
 
 def filter_streak_horizontally(img, sigma1, sigma2, level, wavelet, crossover, threshold):
-    if sigma1 > 0 and sigma1 == sigma2:
+    if (sigma1 > 0 and sigma1 == sigma2) or (threshold is not None and threshold <= 0):
         img = filter_subband(img, sigma1, level, wavelet)
     else:
         smoothing: int = 1
@@ -716,7 +716,7 @@ def filter_streaks(
     # smooth the image using log plus 1 function
     d_type = img.dtype
     if log1p_normalization_needed:
-        img = log1p_jit(img)
+        img = log1p_jit(img, dtype=float32)
 
     mask = None
     if (bleach_correction_frequency, bleach_correction_clip_med) != (None, None):
@@ -751,10 +751,18 @@ def filter_streaks(
                     mode=padding_mode if padding_mode else 'reflect'
                 )
 
+        if threshold is None and bleach_correction_clip_med is not None:
+            threshold = log1p(bleach_correction_clip_med, dtype=float32)
+
         img = filter_streak_horizontally(img, sigma1, sigma2, level, wavelet, crossover, threshold)
         if bidirectional:
             img = rot90(img, 1)
             img = filter_streak_horizontally(img, sigma1, sigma2, level, wavelet, crossover, threshold)
+            img = rot90(img, -1)
+
+        if bleach_correction_frequency is not None and not bidirectional:
+            img = rot90(img, 1)
+            img = filter_streak_horizontally(img, sigma1, sigma1, level, wavelet, crossover, threshold)
             img = rot90(img, -1)
 
         if verbose:
@@ -778,26 +786,29 @@ def filter_streaks(
         if bleach_correction_clip_min is None or \
            bleach_correction_clip_med is None or \
            bleach_correction_clip_max is None:
-            lb, mb, _, ub, _ = threshold_multiotsu(img, classes=6)
+            lb, mb, ub = threshold_multiotsu(img, classes=4)
             if bleach_correction_clip_min is None:
-                bleach_correction_clip_min = expm1(lb)
+                bleach_correction_clip_min = lb
             if bleach_correction_clip_med is None:
-                bleach_correction_clip_med = expm1(mb)
+                bleach_correction_clip_med = mb
             if bleach_correction_clip_max is None:
-                bleach_correction_clip_max = expm1(ub)
-        clip_min, clip_med, clip_max = log1p([bleach_correction_clip_min,
-                                              bleach_correction_clip_med,
-                                              bleach_correction_clip_max])
+                bleach_correction_clip_max = ub
 
         img = correct_bleaching(
-            img, bleach_correction_frequency, clip_min, clip_med, clip_max,
+            img,
+            bleach_correction_frequency,
+            bleach_correction_clip_min,
+            bleach_correction_clip_med,
+            bleach_correction_clip_max,
             max_method=bleach_correction_max_method
         )
         if verbose:
             print(
                 f"bleach correction is applied: frequency={bleach_correction_frequency}, "
                 f"max_method={bleach_correction_max_method},\n"
-                f"clip_min={expm1(clip_min)}, clip_med={expm1(clip_med)}, clip_max={expm1(clip_max)},\n"
+                f"clip_min={expm1(bleach_correction_clip_min)}, "
+                f"clip_med={expm1(bleach_correction_clip_med)}, "
+                f"clip_max={expm1(bleach_correction_clip_max)},\n"
             )
 
     # undo log plus 1
