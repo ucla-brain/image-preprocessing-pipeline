@@ -25,14 +25,12 @@ from numpy import mean as np_mean
 from numpy import median as np_median
 from numpy import min as np_min
 from numpy import uint8, uint16, float32, float64, ndarray, generic, zeros, broadcast_to, exp, expm1, log1p, ones, \
-    cumsum, arange, unique, interp, pad, clip, where, rot90, flipud, dot, reshape, iinfo, nonzero, logical_not
+    cumsum, arange, unique, interp, pad, clip, where, rot90, flipud, dot, reshape, iinfo, nonzero, logical_not, tanh
 from psutil import cpu_count
 from pywt import wavedec2, waverec2, Wavelet, dwt_max_level
 from scipy.fftpack import rfft, fftshift, irfft
-from scipy.ndimage import gaussian_filter as gaussian_filter_nd
 from scipy.signal import butter, sosfiltfilt
-from scipy.special import expit as sigmoid
-from skimage.filters import threshold_otsu, gaussian, threshold_multiotsu
+from skimage.filters import threshold_otsu, threshold_multiotsu
 from skimage.measure import block_reduce
 from skimage.transform import resize
 from tifffile import imread, imwrite
@@ -168,7 +166,7 @@ def convert_to_8bit_fun(img: ndarray, bit_shift_to_right: int = 8):
     if 0 <= bit_shift_to_right < 9:
         lower_bound = 2 ** bit_shift_to_right
         if USE_NUMEXPR:
-            img = evaluate("where((0 < img) & (img < lower_bound), lower_bound, img)")
+            evaluate("where((0 < img) & (img < lower_bound), lower_bound, img)", out=img, casting="unsafe")
         else:
             img = where((0 < img) & (img < lower_bound), lower_bound, img)
         img = (img >> bit_shift_to_right)
@@ -274,9 +272,9 @@ def notch(n: int, sigma: float) -> ndarray:
     n = int(n)
     if sigma <= 0:
         raise ValueError('sigma must be positive')
-    x = arange(n)
+    x = arange(n, dtype=float32)
     if USE_NUMEXPR:
-        x = evaluate("1 - exp(-x ** 2 / (2 * sigma ** 2))")
+        evaluate("1 - exp(-x ** 2 / (2 * sigma ** 2))", out=x, casting='unsafe')
     else:
         x = 1 - exp(-x ** 2 / (2 * sigma ** 2))
     return x
@@ -347,14 +345,26 @@ def max_level(min_len, wavelet):
     return dwt_max_level(min_len, w.dec_len)
 
 
-def foreground_fraction(img: ndarray, threshold: float, crossover: float, smoothing: int) -> ndarray:
+def sigmoid(img: ndarray) -> ndarray:
     if USE_NUMEXPR:
-        im = evaluate("(img - threshold) / crossover")
+        evaluate(".5 * (tanh(.5 * img) + 1)", out=img, casting="unsafe")
+    else:
+        img = .5 * (tanh(.5 * img) + 1)
+    return img
+
+
+def foreground_fraction(img: ndarray, threshold: float, crossover: float, sigma: int) -> ndarray:
+    if USE_NUMEXPR:
+        im = evaluate("(img - threshold) / crossover").astype(img.dtype)
     else:
         im = img - threshold
         im /= crossover
     im = sigmoid(im)
-    im = gaussian_filter_nd(im, sigma=smoothing)
+    if im.dtype != float32:
+        im = im.astype(float32)
+    ksize = (sigma*2+1,)*2
+    # im = gaussian_filter_nd(im, sigma=sigma)
+    GaussianBlur(im, ksize=ksize, sigmaX=sigma, sigmaY=sigma)
     return im
 
 
@@ -569,7 +579,7 @@ def correct_bleaching(
     # apply the filter
     img_filter_max = np_max(img_filter)
     if USE_NUMEXPR:
-        img = evaluate("img / img_filter * img_filter_max")
+        evaluate("img / img_filter * img_filter_max", out=img, casting="unsafe")
     else:
         img /= img_filter
         img *= img_filter_max
@@ -602,7 +612,7 @@ def filter_streak_horizontally(img, sigma1, sigma2, level, wavelet, crossover, t
             background = filter_subband(background, sigma2, level, wavelet)
 
         if USE_NUMEXPR:
-            img = evaluate("foreground * ff + background * (1 - ff)")
+            evaluate("foreground * ff + background * (1 - ff)", out=img, casting="unsafe")
         else:
             foreground *= ff
             foreground += background
@@ -934,7 +944,7 @@ def process_img(
         # dark subtraction is like baseline subtraction in Imaris
         if dark is not None and dark > 0:
             if USE_NUMEXPR:
-                img = evaluate("where(img > dark, img - dark, 0)")
+                evaluate("where(img > dark, img - dark, 0)", out=img, casting="unsafe")
             else:
                 img = where(img > dark, img - dark, 0)
             if verbose:
