@@ -632,9 +632,9 @@ def filter_streak_horizontally(img, sigma1, sigma2, level, wavelet, crossover, t
             evaluate("foreground * ff + background * (1 - ff)", out=img, casting="unsafe")
         else:
             foreground *= ff
-            foreground += background
+            ff = 1 - ff
             background *= ff
-            foreground -= background
+            foreground += background
             img = foreground
     return img
 
