@@ -166,10 +166,9 @@ def convert_to_8bit_fun(img: ndarray, bit_shift_to_right: int = 8):
     if 0 <= bit_shift_to_right < 9:
         lower_bound = 2 ** bit_shift_to_right
         if USE_NUMEXPR:
-            evaluate("where((0 < img) & (img < lower_bound), 1, img >> bit_shift_to_right)", out=img, casting="unsafe")
+            img = evaluate("where((0 < img) & (img < lower_bound), 1, img >> bit_shift_to_right)")
         else:
-            img = where((0 < img) & (img < lower_bound), lower_bound, img)
-            img = (img >> bit_shift_to_right)
+            img = where((0 < img) & (img < lower_bound), 1, img >> bit_shift_to_right)
     else:
         print("right shift should be between 0 and 8")
         raise RuntimeError
@@ -273,10 +272,13 @@ def notch(n: int, sigma: float) -> ndarray:
     if sigma <= 0:
         raise ValueError('sigma must be positive')
     x = arange(n, dtype=float32)
+    one = float32(1)
+    two = float32(2)
     if USE_NUMEXPR:
-        evaluate("1 - exp(-x ** 2 / (2 * sigma ** 2))", out=x, casting='unsafe')
+
+        evaluate("one - exp(-x ** 2 / (two * sigma ** 2))", out=x, casting='unsafe')
     else:
-        x = 1 - exp(-x ** 2 / (2 * sigma ** 2))
+        x = one - exp(-x ** 2 / (two * sigma ** 2))
     return x
 
 
@@ -346,14 +348,19 @@ def max_level(min_len, wavelet):
 
 
 def sigmoid(img: ndarray) -> ndarray:
+    if img.dtype != float32:
+        img = img.astype(float32)
+    half = float32(.5)
+    one = float32(1)
     if USE_NUMEXPR:
-        evaluate(".5 * (tanh(.5 * img) + 1)", out=img, casting="unsafe")
+
+        evaluate("half * (tanh(half * img) + one)", out=img, casting="unsafe")
     else:
         # img = .5 * (tanh(.5 * img) + 1)
-        img *= .5
+        img *= half
         img = tanh(img)
-        img += 1
-        img *= .5
+        img += one
+        img *= half
     return img
 
 
@@ -362,6 +369,8 @@ def foreground_fraction(img: ndarray, threshold: float, crossover: float, sigma:
         ff = img.astype(float32)
     else:
         ff = img.copy()
+    threshold = float32(threshold)
+    crossover = float32(crossover)
     if USE_NUMEXPR:
         evaluate("(ff - threshold) / crossover", out=ff, casting="unsafe")
     else:
@@ -628,11 +637,12 @@ def filter_streak_horizontally(img, sigma1, sigma2, level, wavelet, crossover, t
             background = filter_subband(background, sigma2, level, wavelet)
 
         fraction = foreground_fraction(img, threshold, crossover, smoothing)
+        one = float32(1.0)
         if USE_NUMEXPR:
-            evaluate("foreground * fraction + background * (1 - fraction)", out=img, casting="unsafe")
+            evaluate("foreground * fraction + background * (one - fraction)", out=img, casting="unsafe")
         else:
             foreground *= fraction
-            fraction = 1 - fraction
+            fraction = one - fraction
             background *= fraction
             del fraction
             img = foreground + background
