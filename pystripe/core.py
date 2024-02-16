@@ -601,13 +601,16 @@ def filter_streak_horizontally(img, sigma1, sigma2, level, wavelet, crossover, t
         if threshold is None:
             threshold = otsu_threshold(img)
         ff = foreground_fraction(img, threshold, crossover, smoothing)
-        foreground = img.copy()
+
+        foreground = img
         if sigma1 > 0:
-            foreground = clip(img, threshold, None)
+            foreground = img.copy()
+            clip(foreground, threshold, None, out=foreground)
             foreground = filter_subband(foreground, sigma1, level, wavelet)
 
-        background = img.copy()
+        background = img
         if sigma2 > 0:
+            background = img.copy()
             clip(background, None, threshold, out=background)
             background = filter_subband(background, sigma2, level, wavelet)
 
