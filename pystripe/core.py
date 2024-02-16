@@ -421,7 +421,6 @@ def filter_subband(
         #     cv_fft *= g
         #     cv_filt = irfft(cv_fft, axis=-1)
         #     coefficients[idx][1] = cv_filt
-    # img = maximum(waverec2(coefficients, wavelet, mode='symmetric', axes=(-2, -1)), img)
     img = waverec2(coefficients, wavelet, mode='symmetric', axes=(-2, -1)).astype(d_type)
     return img
 
