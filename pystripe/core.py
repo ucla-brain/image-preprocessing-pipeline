@@ -686,16 +686,16 @@ def filter_streaks(
     if sigma1 == sigma2 == 0 and bleach_correction_frequency is None:
         return img
 
-    mask = None
-    if bleach_correction_clip_med is not None:
-        mask = get_img_mask(img, bleach_correction_clip_med)
-
     # smooth the image using log plus 1 function
     d_type = img.dtype
     if log1p_normalization_needed:
         img = log1p_jit(img)
 
     if not sigma1 == sigma2 == 0:
+        # mask = None
+        # if bleach_correction_clip_med is not None:
+        #     mask = get_img_mask(img, bleach_correction_clip_med)
+
         # Need to pad image to multiple of 2. It is needed even for bleach correction non-max method
         img_shape = img.shape
         pad_y, pad_x = [_ % 2 for _ in img_shape]
@@ -741,9 +741,9 @@ def filter_streaks(
                   base_pad: img.shape[1] - (base_pad + pad_x)]
             assert img.shape == img_shape
 
-        if mask is not None:
-            img *= mask
-            del mask
+        # if mask is not None:
+        #     img *= mask
+        #     del mask
 
     if bleach_correction_frequency is not None:
         # convert uint16 to log1p
