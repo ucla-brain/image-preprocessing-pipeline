@@ -373,9 +373,14 @@ def foreground_fraction(img: ndarray, threshold: float, crossover: float, sigma:
     return ff
 
 
-@jit
-def expm1_jit(img_log_filtered: Union[ndarray, float, int]) -> ndarray:
-    return expm1(img_log_filtered)
+def expm1_jit(img: Union[ndarray, float, int], dtype=float32) -> ndarray:
+    if USE_NUMEXPR:
+        if img.dtype != dtype:
+            img = img.astype(dtype)
+        evaluate("expm1(img)", out=img, casting="unsafe")
+    else:
+        img = expm1(img).astype(dtype)
+    return img
 
 
 def log1p_jit(img: ndarray, dtype=float32):
@@ -384,7 +389,7 @@ def log1p_jit(img: ndarray, dtype=float32):
             img = img.astype(dtype)
         evaluate("log1p(img)", out=img, casting="unsafe")
     else:
-        img = log1p(img, dtype=float32)
+        img = log1p(img, dtype=dtype)
     return img
 
 
