@@ -349,23 +349,28 @@ def sigmoid(img: ndarray) -> ndarray:
     if USE_NUMEXPR:
         evaluate(".5 * (tanh(.5 * img) + 1)", out=img, casting="unsafe")
     else:
-        img = .5 * (tanh(.5 * img) + 1)
+        # img = .5 * (tanh(.5 * img) + 1)
+        img *= .5
+        img = tanh(img)
+        img += 1
+        img *= .5
     return img
 
 
 def foreground_fraction(img: ndarray, threshold: float, crossover: float, sigma: int) -> ndarray:
-    if USE_NUMEXPR:
-        im = evaluate("(img - threshold) / crossover").astype(img.dtype)
+    if img.dtype != float32:
+        ff = img.astype(float32)
     else:
-        im = img - threshold
-        im /= crossover
-    im = sigmoid(im)
-    if im.dtype != float32:
-        im = im.astype(float32)
+        ff = img.copy()
+    if USE_NUMEXPR:
+        evaluate("(img - threshold) / crossover", out=ff, casting="unsafe")
+    else:
+        ff = img - threshold
+        ff /= crossover
+    ff = sigmoid(ff)
     ksize = (sigma*2+1,)*2
-    # im = gaussian_filter_nd(im, sigma=sigma)
-    GaussianBlur(im, ksize=ksize, sigmaX=sigma, sigmaY=sigma)
-    return im
+    GaussianBlur(ff, ksize=ksize, sigmaX=sigma, sigmaY=sigma)
+    return ff
 
 
 @jit
@@ -373,9 +378,14 @@ def expm1_jit(img_log_filtered: Union[ndarray, float, int]) -> ndarray:
     return expm1(img_log_filtered)
 
 
-@jit
-def log1p_jit(img_log_filtered: ndarray, dtype=float32) -> ndarray:
-    return log1p(img_log_filtered, dtype=dtype)
+def log1p_jit(img: ndarray, dtype=float32):
+    if USE_NUMEXPR:
+        if img.dtype != dtype:
+            img = img.astype(dtype)
+        evaluate("log1p(img)", out=img, casting="unsafe")
+    else:
+        img = log1p(img, dtype=float32)
+    return img
 
 
 def filter_subband(
