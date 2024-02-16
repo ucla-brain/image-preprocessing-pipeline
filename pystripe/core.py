@@ -363,12 +363,12 @@ def foreground_fraction(img: ndarray, threshold: float, crossover: float, sigma:
     else:
         ff = img.copy()
     if USE_NUMEXPR:
-        evaluate("(img - threshold) / crossover", out=ff, casting="unsafe")
+        evaluate("(ff - threshold) / crossover", out=ff, casting="unsafe")
     else:
-        ff = img - threshold
+        ff -= threshold
         ff /= crossover
     ff = sigmoid(ff)
-    ksize = (sigma*2+1,)*2
+    ksize = (sigma * 2 + 1,) * 2
     GaussianBlur(ff, ksize=ksize, sigmaX=sigma, sigmaY=sigma)
     return ff
 
@@ -614,7 +614,6 @@ def filter_streak_horizontally(img, sigma1, sigma2, level, wavelet, crossover, t
         smoothing: int = 1
         if threshold is None:
             threshold = otsu_threshold(img)
-        ff = foreground_fraction(img, threshold, crossover, smoothing)
 
         foreground = img
         if sigma1 > 0:
@@ -628,14 +627,15 @@ def filter_streak_horizontally(img, sigma1, sigma2, level, wavelet, crossover, t
             clip(background, None, threshold, out=background)
             background = filter_subband(background, sigma2, level, wavelet)
 
+        fraction = foreground_fraction(img, threshold, crossover, smoothing)
         if USE_NUMEXPR:
             evaluate("foreground * ff + background * (1 - ff)", out=img, casting="unsafe")
         else:
-            foreground *= ff
-            ff = 1 - ff
-            background *= ff
-            foreground += background
-            img = foreground
+            foreground *= fraction
+            fraction = 1 - fraction
+            background *= fraction
+            del fraction
+            img = foreground + background
     return img
 
 
@@ -646,7 +646,7 @@ def filter_streaks(
         wavelet: str = 'db9',
         crossover: float = 10,
         threshold: float = None,
-        padding_mode: str = "reflect",
+        padding_mode: str = "wrap",
         bidirectional: bool = False,
         bleach_correction_frequency: float = None,
         bleach_correction_max_method: bool = False,
@@ -708,11 +708,11 @@ def filter_streaks(
     if log1p_normalization_needed:
         img = log1p_jit(img)
 
-    if not sigma1 == sigma2 == 0:
-        # mask = None
-        # if bleach_correction_clip_med is not None:
-        #     mask = get_img_mask(img, bleach_correction_clip_med)
+    mask = None
+    if (bleach_correction_frequency, bleach_correction_clip_med) != (None, None):
+        mask = get_img_mask(img, log1p(bleach_correction_clip_med))
 
+    if not sigma1 == sigma2 == 0:
         # Need to pad image to multiple of 2. It is needed even for bleach correction non-max method
         img_shape = img.shape
         pad_y, pad_x = [_ % 2 for _ in img_shape]
@@ -758,9 +758,10 @@ def filter_streaks(
                   base_pad: img.shape[1] - (base_pad + pad_x)]
             assert img.shape == img_shape
 
-        # if mask is not None:
-        #     img *= mask
-        #     del mask
+    # apply the mask
+    if mask is not None:
+        img *= mask
+        del mask
 
     if bleach_correction_frequency is not None:
         # convert uint16 to log1p
