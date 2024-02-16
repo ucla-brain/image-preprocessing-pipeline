@@ -1058,29 +1058,33 @@ def main(args):
     channel_color_dict = {channel: channel_color_dict[channel] for channel in all_channels}
 
     need_imaris_conversion = False
-    imaris_file = None
+    imaris_files = None
     if args.imaris:
         need_imaris_conversion = True
-        imaris_file = Path(args.imaris)
-        if imaris_file.exists() and imaris_file.is_file():
-            print(f"{PrintColors.FAIL}"
-                  f"provided --imaris file already exist. You should not overwrite an existing image!"
-                  f"{PrintColors.ENDC}")
-            raise RuntimeError
-        elif not imaris_file.suffix.lower() == ".ims":
-            print(f"{PrintColors.FAIL}provided --imaris file should have .ims extension!{PrintColors.ENDC}")
-            raise RuntimeError
-        elif not imaris_file.parent.exists():
-            print(f"{PrintColors.FAIL}parent folder of --imaris file does not exist!{PrintColors.ENDC}")
-            raise RuntimeError
-        else:
-            # make sure the path is writable
-            imaris_file.touch(exist_ok=False)
-            imaris_file.unlink()
+        imaris_files = [Path(args.imaris)]
+        if len(all_channels) > 1 and not need_composite_image:
+            imaris_files = [Path(args.imaris).parent / (channel + ".ims") for channel in all_channels]
+
+        for imaris_file in imaris_files:
+            if imaris_file.exists() and imaris_file.is_file():
+                print(f"{PrintColors.FAIL}"
+                      f"provided --imaris file already exist. You should not overwrite an existing image!"
+                      f"{PrintColors.ENDC}")
+                raise RuntimeError
+            elif not imaris_file.suffix.lower() == ".ims":
+                print(f"{PrintColors.FAIL}provided --imaris file should have .ims extension!{PrintColors.ENDC}")
+                raise RuntimeError
+            elif not imaris_file.parent.exists():
+                print(f"{PrintColors.FAIL}parent folder of --imaris file does not exist!{PrintColors.ENDC}")
+                raise RuntimeError
+            else:
+                # make sure the path is writable
+                imaris_file.touch(exist_ok=False)
+                imaris_file.unlink()
 
     downsampled_path = stitched_path
     if args.imaris:
-        downsampled_path = imaris_file.parent
+        downsampled_path = imaris_files[0].parent
     downsampled_path /= "Downsampled"
     downsampled_path.mkdir(exist_ok=True)
 
@@ -1151,7 +1155,7 @@ def main(args):
 
     channels_need_tera_fly_conversion = select_channels(
         True if args.terafly_channels else False, args.terafly_channels, "terafly conversion")
-    terafly_path = imaris_file.parent
+    terafly_path = imaris_files[0].parent
     if channels_need_tera_fly_conversion and args.terafly_path:
         terafly_path = Path(args.terafly_path)
         if not terafly_path.exists():
@@ -1198,7 +1202,7 @@ def main(args):
         f"\n\t\tChannel colors:{channel_color_dict}"
         f"\n\tDownsampled path:\n\t\t{downsampled_path}"
         f"\n\tImaris conversion: {need_imaris_conversion}"
-        f"\n\tImaris file:\n\t\t{imaris_file}"
+        f"\n\tImaris files:\n\t\t{imaris_files}"
         f"\n\ttimeout: {args.timeout}"
         f"\n\tresume: {args.resume}"
         f"\n\tskipconf: {args.skipconf}"
@@ -1328,7 +1332,7 @@ def main(args):
             command = get_imaris_command(
                 imaris_path=imaris_converter,
                 input_path=composite_tif_path,
-                output_path=imaris_file if idx == 0 else None,
+                output_path=imaris_files[idx] if idx < len(imaris_files) else None,
                 voxel_size_x=voxel_size_y if args.rot90 else voxel_size_x,
                 voxel_size_y=voxel_size_x if args.rot90 else voxel_size_y,
                 voxel_size_z=voxel_size_z,
