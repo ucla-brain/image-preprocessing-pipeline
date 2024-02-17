@@ -25,7 +25,8 @@ from numpy import mean as np_mean
 from numpy import median as np_median
 from numpy import min as np_min
 from numpy import uint8, uint16, float32, float64, ndarray, generic, zeros, broadcast_to, exp, expm1, log1p, ones, \
-    cumsum, arange, unique, interp, pad, clip, where, rot90, flipud, dot, reshape, iinfo, nonzero, logical_not, tanh
+    cumsum, arange, unique, interp, pad, clip, where, rot90, flipud, dot, reshape, iinfo, nonzero, logical_not, tanh, \
+    array
 from psutil import cpu_count
 from pywt import wavedec2, waverec2, Wavelet, dwt_max_level
 from scipy.fftpack import rfft, fftshift, irfft
@@ -38,7 +39,9 @@ from tifffile.tifffile import TiffFileError
 from tqdm import tqdm
 from torch import from_numpy as pt_from_numpy
 from torch import Tensor
+from torch.cuda import is_available as cuda_is_available_for_pt
 from ptwt import wavedec2 as pt_wavedec2
+from ptwt import waverec2 as pt_waverec2
 
 from pystripe.lightsheet_correct import correct_lightsheet, prctl
 from pystripe.raw import raw_imread
@@ -49,6 +52,7 @@ SUPPORTED_EXTENSIONS = ['.png', '.tif', '.tiff', '.raw', '.dcimg']
 NUM_RETRIES: int = 40
 USE_NUMEXPR: bool = True
 USE_PYTORCH = True
+CUDA_IS_AVAILABLE_FOR_PT = cuda_is_available_for_pt()
 
 
 def imread_tif_raw_png(path: Path, dtype: str = None, shape: Tuple[int, int] = None):
@@ -406,44 +410,56 @@ def log1p_jit(img: ndarray, dtype=float32):
     return img
 
 
-def to_numpy(x: Tensor) -> ndarray:
-    return x.detach().cpu().numpy()[0]
+def to_numpy(x: Union[Tensor, ndarray]) -> ndarray:
+    if isinstance(x, Tensor):
+        return x.detach().cpu().numpy()[0]
+    else:
+        return x
+
+
+def filter_coefficient(coef: ndarray, width_frac: float) -> ndarray:
+    sigma_h = coef.shape[0] * width_frac
+    coef = fft(coef, shift=False)
+    coef *= gaussian_filter(shape=coef.shape, sigma=sigma_h)
+    coef = irfft(coef, axis=-1, overwrite_x=True)
+    return coef
 
 
 def filter_subband(
         img: ndarray, sigma: float, level: int, wavelet: str,
-        # bidirectional: bool = False
 ) -> ndarray:
     d_type = img.dtype
-    if USE_PYTORCH:
-        img = pt_from_numpy(img)
-        coefficients = [to_numpy(cfs) if idx == 0 else list(map(to_numpy, cfs)) for idx, cfs in enumerate(
-            pt_wavedec2(img, wavelet, mode='symmetric', level=None if level == 0 else level, axes=(-2, -1)))]
-    else:
-        coefficients = wavedec2(img, wavelet, mode='symmetric', level=None if level == 0 else level, axes=(-2, -1))
-        coefficients: List[List] = list(map(list, coefficients))
     width_frac_h = sigma / img.shape[0]
-    # width_frac_v = sigma / img.shape[1]
-    for idx, coefficient in enumerate(coefficients):
-        if idx == 0:  # the first coefficient is unpackable to ch, cv, cd
-            continue
-        ch, cv, cd = coefficient  # horizontal, vertical and diagonal coefficients
-        sigma_h = ch.shape[0] * width_frac_h
-        ch_fft = fft(ch, shift=False)
-        g = gaussian_filter(shape=ch_fft.shape, sigma=sigma_h)
-        ch_fft *= g
-        ch_filt = irfft(ch_fft, axis=-1)
-        coefficients[idx][0] = ch_filt
+    decoder: Callable = wavedec2
+    if USE_PYTORCH:
+        decoder = pt_wavedec2
+        img = pt_from_numpy(img)
+    # the first item (idx=0) is the details matrix
+    # the rest of items are tuples of horizontal, vertical and diagonal coefficients matrices
+    coefficients = decoder(img, wavelet, mode='symmetric', level=None if level == 0 else level, axes=(-2, -1))
 
-        # if bidirectional:
-        #     sigma_v = cv.shape[0] * width_frac_v
-        #     cv_fft = fft(cv, shift=False)
-        #     if cv_fft.shape != ch_fft.shape or sigma_h != sigma_v:
-        #         g = gaussian_filter(shape=cv_fft.shape, sigma=sigma_v)
-        #     cv_fft *= g
-        #     cv_filt = irfft(cv_fft, axis=-1)
-        #     coefficients[idx][1] = cv_filt
-    img = waverec2(coefficients, wavelet, mode='symmetric', axes=(-2, -1)).astype(d_type)
+    if USE_PYTORCH and CUDA_IS_AVAILABLE_FOR_PT:
+        for idx, cfs in enumerate(coefficients):
+            if idx == 0:
+                continue
+            coefficients[idx] = (
+                pt_from_numpy(array([filter_coefficient(to_numpy(cfs[0]), width_frac_h)], copy=False)),
+                cfs[1],
+                cfs[2]
+            )
+        img = pt_waverec2(coefficients, wavelet, axes=(-2, -1))
+        img = to_numpy(img)
+    else:
+        for idx, cfs in enumerate(coefficients):
+            if idx == 0:
+                coefficients[idx] = to_numpy(cfs)
+                continue
+            coefficients[idx] = (
+                filter_coefficient(to_numpy(cfs[0]), width_frac_h),
+                to_numpy(cfs[1]),
+                to_numpy(cfs[2])
+            )
+        img = waverec2(coefficients, wavelet, mode='symmetric', axes=(-2, -1)).astype(d_type)
     return img
 
 
