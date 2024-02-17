@@ -720,7 +720,7 @@ def filter_streaks(
 
     mask = None
     if (bleach_correction_frequency, bleach_correction_clip_med) != (None, None):
-        mask = get_img_mask(img, log1p(bleach_correction_clip_med))
+        mask = get_img_mask(img, bleach_correction_clip_med)
 
     if not sigma1 == sigma2 == 0:
         # Need to pad image to multiple of 2. It is needed even for bleach correction non-max method
