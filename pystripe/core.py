@@ -36,6 +36,9 @@ from skimage.transform import resize
 from tifffile import imread, imwrite
 from tifffile.tifffile import TiffFileError
 from tqdm import tqdm
+from torch import from_numpy as pt_from_numpy
+from torch import Tensor
+from ptwt import wavedec2 as pt_wavedec2
 
 from pystripe.lightsheet_correct import correct_lightsheet, prctl
 from pystripe.raw import raw_imread
@@ -45,6 +48,7 @@ filterwarnings("ignore")
 SUPPORTED_EXTENSIONS = ['.png', '.tif', '.tiff', '.raw', '.dcimg']
 NUM_RETRIES: int = 40
 USE_NUMEXPR: bool = True
+USE_PYTORCH = True
 
 
 def imread_tif_raw_png(path: Path, dtype: str = None, shape: Tuple[int, int] = None):
@@ -402,13 +406,22 @@ def log1p_jit(img: ndarray, dtype=float32):
     return img
 
 
+def to_numpy(x: Tensor) -> ndarray:
+    return x.detach().cpu().numpy()[0]
+
+
 def filter_subband(
         img: ndarray, sigma: float, level: int, wavelet: str,
         # bidirectional: bool = False
 ) -> ndarray:
     d_type = img.dtype
-    coefficients = wavedec2(img, wavelet, mode='symmetric', level=None if level == 0 else level, axes=(-2, -1))
-    coefficients: List[List] = list(map(list, coefficients))
+    if USE_PYTORCH:
+        img = pt_from_numpy(img)
+        coefficients = [to_numpy(cfs) if idx == 0 else list(map(to_numpy, cfs)) for idx, cfs in enumerate(
+            pt_wavedec2(img, wavelet, mode='symmetric', level=None if level == 0 else level, axes=(-2, -1)))]
+    else:
+        coefficients = wavedec2(img, wavelet, mode='symmetric', level=None if level == 0 else level, axes=(-2, -1))
+        coefficients: List[List] = list(map(list, coefficients))
     width_frac_h = sigma / img.shape[0]
     # width_frac_v = sigma / img.shape[1]
     for idx, coefficient in enumerate(coefficients):
