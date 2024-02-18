@@ -11,7 +11,7 @@ Python code for stitching and image enhancement of Light Sheet data
 * Install [anaconda python distribution](https://www.anaconda.com/products/individual):
   make a dedicated python environment for stitching:
 
-   `conda create -n stitching -c conda-forge python=3.11 psutil tqdm tifffile numpy scipy scikit-image scikit-learn matplotlib pyqt pandas 'imagecodecs>=2023.7.10' freeimage git mpi4py=3.1.4 hdf5plugin h5py ffmpeg cmake numba numexpr jupyter ipykernel libopencv opencv py-opencv pynrrd`
+   `conda create -n stitching -c conda-forge -c pytorch -c nvidia python=3.11 pytorch pytorch-cuda psutil tqdm tifffile numpy scipy scikit-image scikit-learn matplotlib pandas 'imagecodecs>=2023.7.10' freeimage git mpi4py=3.1.5 hdf5plugin h5py ffmpeg cmake numba numexpr jupyter ipykernel libopencv opencv py-opencv pynrrd`
    
    `conda activate stitching`
     

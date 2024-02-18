@@ -25,8 +25,7 @@ from numpy import mean as np_mean
 from numpy import median as np_median
 from numpy import min as np_min
 from numpy import uint8, uint16, float32, float64, ndarray, generic, zeros, broadcast_to, exp, expm1, log1p, ones, \
-    cumsum, arange, unique, interp, pad, clip, where, rot90, flipud, dot, reshape, iinfo, nonzero, logical_not, tanh, \
-    array
+    cumsum, arange, unique, interp, pad, clip, where, rot90, flipud, dot, reshape, iinfo, nonzero, logical_not, tanh
 from psutil import cpu_count
 from pywt import wavedec2, waverec2, Wavelet, dwt_max_level
 from scipy.fftpack import rfft, fftshift, irfft
@@ -40,8 +39,9 @@ from tqdm import tqdm
 from torch import from_numpy as pt_from_numpy
 from torch import Tensor
 from torch.cuda import is_available as cuda_is_available_for_pt
+from torch.cuda import device_count as cuda_device_count
+from torch.cuda import empty_cache as cuda_empty_cache
 from ptwt import wavedec2 as pt_wavedec2
-from ptwt import waverec2 as pt_waverec2
 
 from pystripe.lightsheet_correct import correct_lightsheet, prctl
 from pystripe.raw import raw_imread
@@ -411,10 +411,7 @@ def log1p_jit(img: ndarray, dtype=float32):
 
 
 def to_numpy(x: Union[Tensor, ndarray]) -> ndarray:
-    if isinstance(x, Tensor):
-        return x.detach().cpu().numpy()[0]
-    else:
-        return x
+    return x.detach().cpu().numpy()[0]
 
 
 def filter_coefficient(coef: ndarray, width_frac: float) -> ndarray:
@@ -426,40 +423,40 @@ def filter_coefficient(coef: ndarray, width_frac: float) -> ndarray:
 
 
 def filter_subband(
-        img: ndarray, sigma: float, level: int, wavelet: str,
-) -> ndarray:
+        img: ndarray, sigma: float, level: int, wavelet: str, gpu_semaphore: Queue) -> ndarray:
     d_type = img.dtype
     width_frac_h = sigma / img.shape[0]
-    decoder: Callable = wavedec2
     if USE_PYTORCH:
-        decoder = pt_wavedec2
-        img = pt_from_numpy(img)
+        device = "cpu"
+        gpu = 0
+        if CUDA_IS_AVAILABLE_FOR_PT:
+            if gpu_semaphore is not None:
+                gpu = gpu_semaphore.get(block=True)
+            device = f"cuda:{gpu}"
+        img = pt_from_numpy(img.copy()).to(device)
+        coefficients = pt_wavedec2(img, wavelet, mode='symmetric', level=None if level == 0 else level, axes=(-2, -1))
+        if CUDA_IS_AVAILABLE_FOR_PT:
+            img.detach()
+            del img
+            cuda_empty_cache()
+            if gpu_semaphore is not None:
+                gpu_semaphore.put(gpu)
+
+        coefficients = [to_numpy(cfs) if idx == 0 else tuple(map(to_numpy, cfs)) for idx, cfs in
+                        enumerate(coefficients)]
+        if CUDA_IS_AVAILABLE_FOR_PT:
+            cuda_empty_cache()
+    else:
+        coefficients = wavedec2(img, wavelet, mode='symmetric', level=None if level == 0 else level, axes=(-2, -1))
+
     # the first item (idx=0) is the details matrix
     # the rest of items are tuples of horizontal, vertical and diagonal coefficients matrices
-    coefficients = decoder(img, wavelet, mode='symmetric', level=None if level == 0 else level, axes=(-2, -1))
-
-    if USE_PYTORCH and CUDA_IS_AVAILABLE_FOR_PT:
-        for idx, cfs in enumerate(coefficients):
-            if idx == 0:
-                continue
-            coefficients[idx] = (
-                pt_from_numpy(array([filter_coefficient(to_numpy(cfs[0]), width_frac_h)], copy=False)),
-                cfs[1],
-                cfs[2]
-            )
-        img = pt_waverec2(coefficients, wavelet, axes=(-2, -1))
-        img = to_numpy(img)
-    else:
-        for idx, cfs in enumerate(coefficients):
-            if idx == 0:
-                coefficients[idx] = to_numpy(cfs)
-                continue
-            coefficients[idx] = (
-                filter_coefficient(to_numpy(cfs[0]), width_frac_h),
-                to_numpy(cfs[1]),
-                to_numpy(cfs[2])
-            )
-        img = waverec2(coefficients, wavelet, mode='symmetric', axes=(-2, -1)).astype(d_type)
+    for idx, cfs in enumerate(coefficients):
+        if idx == 0:
+            coefficients[idx] = cfs
+            continue
+        coefficients[idx] = (filter_coefficient(cfs[0], width_frac_h), cfs[1], cfs[2])
+    img = waverec2(coefficients, wavelet, mode='symmetric', axes=(-2, -1)).astype(d_type)
     return img
 
 
@@ -645,9 +642,9 @@ def otsu_threshold(img: ndarray) -> float:
         return 2
 
 
-def filter_streak_horizontally(img, sigma1, sigma2, level, wavelet, crossover, threshold):
+def filter_streak_horizontally(img, sigma1, sigma2, level, wavelet, crossover, threshold, gpu_semaphore):
     if (sigma1 > 0 and sigma1 == sigma2) or (threshold is not None and threshold <= 0):
-        img = filter_subband(img, sigma1, level, wavelet)
+        img = filter_subband(img, sigma1, level, wavelet, gpu_semaphore)
     else:
         smoothing: int = 1
         if threshold is None:
@@ -657,13 +654,13 @@ def filter_streak_horizontally(img, sigma1, sigma2, level, wavelet, crossover, t
         if sigma1 > 0:
             foreground = img.copy()
             clip(foreground, threshold, None, out=foreground)
-            foreground = filter_subband(foreground, sigma1, level, wavelet)
+            foreground = filter_subband(foreground, sigma1, level, wavelet, gpu_semaphore)
 
         background = img
         if sigma2 > 0:
             background = img.copy()
             clip(background, None, threshold, out=background)
-            background = filter_subband(background, sigma2, level, wavelet)
+            background = filter_subband(background, sigma2, level, wavelet, gpu_semaphore)
 
         fraction = foreground_fraction(img, threshold, crossover, smoothing)
         one = float32(1.0)
@@ -687,6 +684,7 @@ def filter_streaks(
         threshold: float = None,
         padding_mode: str = "wrap",
         bidirectional: bool = False,
+        gpu_semaphore: Queue = None,
         bleach_correction_frequency: float = None,
         bleach_correction_max_method: bool = False,
         bleach_correction_clip_min: Union[float, int] = None,
@@ -715,6 +713,8 @@ def filter_streaks(
         Padding method affects the edge artifacts. In some cases wrap method works better than reflect method.
     bidirectional : bool
         by default (False) only stripes elongated along horizontal axis will be corrected.
+    gpu_semaphore: Queue
+        Needed for multi-GPU processing and prevents overflowing GPUs vRAM
     bleach_correction_frequency : float
         2D bleach correction frequency in Hz. For stitched tiled images 1/tile_size is a suggested value.
     bleach_correction_max_method : bool
@@ -783,15 +783,15 @@ def filter_streaks(
         if threshold is None and bleach_correction_clip_med is not None:
             threshold = log1p(bleach_correction_clip_med, dtype=float32)
 
-        img = filter_streak_horizontally(img, sigma1, sigma2, level, wavelet, crossover, threshold)
+        img = filter_streak_horizontally(img, sigma1, sigma2, level, wavelet, crossover, threshold, gpu_semaphore)
         if bidirectional:
             img = rot90(img, 1)
-            img = filter_streak_horizontally(img, sigma1, sigma2, level, wavelet, crossover, threshold)
+            img = filter_streak_horizontally(img, sigma1, sigma2, level, wavelet, crossover, threshold, gpu_semaphore)
             img = rot90(img, -1)
 
         if bleach_correction_frequency is not None and not bidirectional:
             img = rot90(img, 1)
-            img = filter_streak_horizontally(img, sigma1, sigma1, level, wavelet, crossover, threshold)
+            img = filter_streak_horizontally(img, sigma1, sigma1, level, wavelet, crossover, threshold, gpu_semaphore)
             img = rot90(img, -1)
 
         if verbose:
@@ -894,6 +894,7 @@ def process_img(
         threshold: float = None,
         padding_mode: str = "wrap",
         bidirectional: bool = False,
+        gpu_semaphore: Queue = None,
         bleach_correction_frequency: float = None,
         bleach_correction_clip_min: Union[float, int] = None,
         bleach_correction_clip_med: Union[float, int] = None,
@@ -999,6 +1000,7 @@ def process_img(
                 threshold=threshold,
                 padding_mode=padding_mode,
                 bidirectional=bidirectional,
+                gpu_semaphore=gpu_semaphore,
                 bleach_correction_frequency=bleach_correction_frequency,
                 bleach_correction_max_method=bleach_correction_max_method,
                 bleach_correction_clip_min=bleach_correction_clip_min,
@@ -1088,6 +1090,7 @@ def read_filter_save(
         threshold: float = None,
         padding_mode: str = "reflect",
         bidirectional: bool = False,
+        gpu_semaphore: Queue = None,
         bleach_correction_frequency: float = None,
         bleach_correction_max_method: bool = True,
         bleach_correction_clip_min: Union[float, int] = None,
@@ -1150,6 +1153,8 @@ def read_filter_save(
         Padding method affects the edge artifacts. In some cases wrap method works better than reflect method.
     bidirectional : bool
         by default (False) only stripes elongated along horizontal axis will be corrected.
+    gpu_semaphore: Queue
+        Needed for multi-GPU processing and prevents overflowing GPUs vRAM
     bleach_correction_frequency : float
         frequency of a low-pass filter that describes bleaching
     bleach_correction_max_method: bool
@@ -1248,12 +1253,6 @@ def read_filter_save(
             down_sample_method=down_sample_method,
             tile_size=tile_size,
             new_size=new_size,
-            dark=dark,
-            bleach_correction_frequency=bleach_correction_frequency,
-            bleach_correction_max_method=bleach_correction_max_method,
-            bleach_correction_clip_min=bleach_correction_clip_min,
-            bleach_correction_clip_med=bleach_correction_clip_med,
-            bleach_correction_clip_max=bleach_correction_clip_max,
             sigma=sigma,
             level=level,
             wavelet=wavelet,
@@ -1261,6 +1260,13 @@ def read_filter_save(
             threshold=threshold,
             padding_mode=padding_mode,
             bidirectional=bidirectional,
+            gpu_semaphore=gpu_semaphore,
+            bleach_correction_frequency=bleach_correction_frequency,
+            bleach_correction_max_method=bleach_correction_max_method,
+            bleach_correction_clip_min=bleach_correction_clip_min,
+            bleach_correction_clip_med=bleach_correction_clip_med,
+            bleach_correction_clip_max=bleach_correction_clip_max,
+            dark=dark,
             lightsheet=lightsheet,
             artifact_length=artifact_length,
             background_window_size=background_window_size,
@@ -1371,11 +1377,15 @@ def process_dc_images(input_file: Path, input_path: Path, output_path: Path, arg
 
 class MultiProcessQueueRunner(Process):
     def __init__(self, progress_queue: Queue, args_queue: Queue,
-                 fun: Callable = read_filter_save, timeout: float = None, replace_timeout_with_dummy: bool = True):
+                 gpu_semaphore: Queue = None,
+                 fun: Callable = read_filter_save,
+                 timeout: float = None,
+                 replace_timeout_with_dummy: bool = True):
         Process.__init__(self)
         self.daemon = False
         self.progress_queue = progress_queue
         self.args_queue = args_queue
+        self.gpu_semaphore = gpu_semaphore
         self.timeout = timeout
         self.die = False
         self.function = fun
@@ -1384,6 +1394,7 @@ class MultiProcessQueueRunner(Process):
     def run(self):
         running_next = True
         timeout = self.timeout
+        gpu_semaphore = self.gpu_semaphore
         if timeout:
             pool = ProcessPoolExecutor(max_workers=1)
         else:
@@ -1393,7 +1404,9 @@ class MultiProcessQueueRunner(Process):
         while not self.die and not self.args_queue.qsize() == 0:
             try:
                 queue_start_time = time()
-                args = self.args_queue.get(block=True, timeout=queue_timeout)
+                args: dict = self.args_queue.get(block=True, timeout=queue_timeout)
+                if gpu_semaphore is not None:
+                    args.update({"gpu_semaphore": gpu_semaphore})
                 queue_timeout = max(queue_timeout, 0.9 * queue_timeout + 0.3 * (time() - queue_start_time))
                 try:
                     start_time = time()
@@ -1484,12 +1497,6 @@ def batch_filter(
         workers: int = cpu_count(logical=False),
         flat: ndarray = None,
         gaussian_filter_2d: bool = False,
-        dark: int = 0,
-        bleach_correction_frequency: float = None,
-        bleach_correction_max_method: bool = True,
-        bleach_correction_clip_min: Union[float, int] = None,
-        bleach_correction_clip_med: Union[float, int] = None,
-        bleach_correction_clip_max: Union[float, int] = None,
         sigma: Tuple[int, int] = (0, 0),
         level=0,
         wavelet: str = 'db9',
@@ -1497,6 +1504,12 @@ def batch_filter(
         threshold: int = None,
         padding_mode: str = "reflect",
         bidirectional: bool = False,
+        bleach_correction_frequency: float = None,
+        bleach_correction_max_method: bool = True,
+        bleach_correction_clip_min: Union[float, int] = None,
+        bleach_correction_clip_med: Union[float, int] = None,
+        bleach_correction_clip_max: Union[float, int] = None,
+        dark: int = 0,
         z_step: float = None,
         rotate: int = 0,
         flip_upside_down: bool = False,
@@ -1628,7 +1641,6 @@ def batch_filter(
     arg_dict_template = {
         'flat': flat,
         'gaussian_filter_2d': gaussian_filter_2d,
-        'dark': dark,
         'sigma': sigma,
         'level': level,
         'wavelet': wavelet,
@@ -1641,14 +1653,15 @@ def batch_filter(
         'bleach_correction_clip_min': bleach_correction_clip_min,
         'bleach_correction_clip_med': bleach_correction_clip_med,
         'bleach_correction_clip_max': bleach_correction_clip_max,
-        'z_idx': None,
-        'rotate': rotate,
-        'flip_upside_down': flip_upside_down,
+        'dark': dark,
         'lightsheet': lightsheet,
         'artifact_length': artifact_length,
         'background_window_size': background_window_size,
         'percentile': percentile,
         'lightsheet_vs_background': lightsheet_vs_background,
+        'z_idx': None,
+        'rotate': rotate,
+        'flip_upside_down': flip_upside_down,
         'convert_to_16bit': convert_to_16bit,
         'convert_to_8bit': convert_to_8bit,
         'bit_shift_to_right': bit_shift_to_right,
@@ -1689,10 +1702,19 @@ def batch_filter(
         args_queue.put(args)
     del args_list
 
+    gpu_semaphore = None
+    if cuda_is_available_for_pt:
+        repeat = 3
+        gpu_semaphore = Queue(maxsize=cuda_device_count() * repeat)
+        for _ in range(repeat):
+            for i in range(cuda_device_count()):
+                gpu_semaphore.put(i)
+
     workers = min(workers, num_images)
     progress_queue = Queue()
     for worker in range(workers):
-        MultiProcessQueueRunner(progress_queue, args_queue, fun=read_filter_save, timeout=timeout).start()
+        MultiProcessQueueRunner(progress_queue, args_queue, gpu_semaphore,
+                                fun=read_filter_save, timeout=timeout).start()
 
     return_code = progress_manager(progress_queue, workers, num_images)
     args_queue.cancel_join_thread()
