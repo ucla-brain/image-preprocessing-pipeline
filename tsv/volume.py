@@ -22,6 +22,8 @@ from supplements.cli_interface import PrintColors
 from tifffile import imread, imwrite
 from pystripe.core import glob_re
 from typing import Union
+from numexpr import evaluate
+USE_NUMEXPR: bool = True
 
 
 def get_dim_tuple(element):
@@ -616,7 +618,10 @@ class TSVVolumeBase:
                     intersection.y0 - volume.y0:intersection.y1 - volume.y0,
                     intersection.x0 - volume.x0:intersection.x1 - volume.x0
                 ] += mpart
-            result = where(multiplier > epsilon, result / multiplier,  result / epsilon)
+            if USE_NUMEXPR:
+                evaluate("where(multiplier > epsilon, result / multiplier,  result / epsilon)", out=result)
+            else:
+                result = where(multiplier > epsilon, result / multiplier,  result / epsilon)
             if result.dtype != dtype and np_d_type(dtype).kind in ("u", "i"):
                 clip(result, iinfo(dtype).min, iinfo(dtype).max, out=result)
                 result = result.astype(dtype)
