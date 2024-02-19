@@ -622,17 +622,18 @@ def slice_non_zero_box(img_axis: ndarray, noise: int, filter_frequency: int = 1 
     return min_max_1d(nonzero(butter_lowpass_filter(img_axis, filter_frequency).astype(uint16) > noise)[0])
 
 
-def get_img_mask(img: ndarray, threshold: Union[int, float], close_steps: int = 200, open_steps: int = 100) -> ndarray:
+def get_img_mask(img: ndarray, threshold: Union[int, float],
+                 close_steps: int = 13, open_steps: int = 4, flood_fill_flag: int = 8) -> ndarray:
     # start_time = time()
     shape = list(img.shape)
     mask = (img > threshold).astype(uint8)
     mask = morphologyEx(mask, MORPH_CLOSE, ones((close_steps, close_steps), dtype=uint8))
     mask = morphologyEx(mask, MORPH_OPEN, ones((open_steps, open_steps), dtype=uint8)).astype(bool)
     inverted_mask = logical_not(mask).astype(uint8)
-    floodFill(inverted_mask, None, (0, 0), 0, flags=4)
-    floodFill(inverted_mask, None, (0, shape[0]-1), 0, flags=4)
-    floodFill(inverted_mask, None, (shape[1]-1, 0), 0, flags=4)
-    floodFill(inverted_mask, None, (shape[1]-1, shape[0]-1), 0, flags=4)
+    floodFill(inverted_mask, None, (0, 0), 0, flags=flood_fill_flag)
+    floodFill(inverted_mask, None, (0, shape[0]-1), 0, flags=flood_fill_flag)
+    floodFill(inverted_mask, None, (shape[1]-1, 0), 0, flags=flood_fill_flag)
+    floodFill(inverted_mask, None, (shape[1]-1, shape[0]-1), 0, flags=flood_fill_flag)
     mask |= inverted_mask.astype(bool)
     # print("mask time:", time() - start_time)
     return mask
@@ -866,10 +867,6 @@ def filter_streaks(
                   base_pad: img.shape[1] - (base_pad + pad_x)]
             assert img.shape == img_shape
 
-    # apply a mask
-    if (bleach_correction_frequency, bleach_correction_clip_med) != (None, None):
-        img *= get_img_mask(img, bleach_correction_clip_med)
-
     if bleach_correction_frequency is not None:
         # convert uint16 to log1p
         if bleach_correction_clip_min is None or \
@@ -899,6 +896,10 @@ def filter_streaks(
                 f"clip_med={expm1(bleach_correction_clip_med)}, "
                 f"clip_max={expm1(bleach_correction_clip_max)},\n"
             )
+
+    # apply a mask
+    if (bleach_correction_frequency, bleach_correction_clip_med) != (None, None):
+        img *= get_img_mask(img, bleach_correction_clip_med)
 
     # undo log plus 1
     img = expm1_jit(img)
