@@ -493,19 +493,19 @@ def filter_subband(
             if gpu_semaphore is not None:
                 gpu = gpu_semaphore.get(block=True)
             device = f"cuda:{gpu}"
-        img = pt_from_numpy(img.copy()).to(device)
+        img = pt_from_numpy(img.copy()).to(device, non_blocking=True)
         coefficients = pt_wavedec2(img, wavelet, mode='symmetric', level=None if level == 0 else level, axes=(-2, -1))
         if CUDA_IS_AVAILABLE_FOR_PT:
             img.detach()
             del img
             cuda_empty_cache()
 
-        coefficients = [
+        coefficients = list([
             to_numpy(cfs) if idx == 0 else
             tuple(pt_filter_coefficient(cf, sigma / img_shape[i], axis=-1 - i) if -1 - i in axes else to_numpy(cf)
                   for i, cf in enumerate(cfs))
             for idx, cfs in enumerate(coefficients)
-        ]
+        ])
         if CUDA_IS_AVAILABLE_FOR_PT:
             cuda_empty_cache()
             if gpu_semaphore is not None:
@@ -514,12 +514,12 @@ def filter_subband(
         coefficients = wavedec2(img, wavelet, mode='symmetric', level=None if level == 0 else level, axes=(-2, -1))
         # the first item (idx=0) is the details matrix
         # the rest of items are tuples of horizontal, vertical and diagonal coefficients matrices
-        coefficients = [
+        coefficients = list([
             cfs if idx == 0 else
             tuple(np_filter_coefficient(cf, sigma / img_shape[i], axis=-1 - i) if -1 - i in axes else cf
                   for i, cf in enumerate(cfs))
             for idx, cfs in enumerate(coefficients)
-        ]
+        ])
     img = waverec2(coefficients, wavelet, mode='symmetric', axes=(-2, -1)).astype(d_type)
     return img
 
@@ -812,10 +812,6 @@ def filter_streaks(
     if log1p_normalization_needed:
         img = log1p_jit(img, dtype=float32)
 
-    mask = None
-    if (bleach_correction_frequency, bleach_correction_clip_med) != (None, None):
-        mask = get_img_mask(img, bleach_correction_clip_med)
-
     if not sigma1 == sigma2 == 0:
         # Need to pad image to multiple of 2. It is needed even for bleach correction non-max method
         img_shape = img.shape
@@ -870,10 +866,9 @@ def filter_streaks(
                   base_pad: img.shape[1] - (base_pad + pad_x)]
             assert img.shape == img_shape
 
-    # apply the mask
-    if mask is not None:
-        img *= mask
-        del mask
+    # apply a mask
+    if (bleach_correction_frequency, bleach_correction_clip_med) != (None, None):
+        img *= get_img_mask(img, bleach_correction_clip_med)
 
     if bleach_correction_frequency is not None:
         # convert uint16 to log1p
