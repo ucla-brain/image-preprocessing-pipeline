@@ -641,6 +641,8 @@ def process_channel(
      bleach_correction_sigma, bleach_correction_clip_min, bleach_correction_clip_med, bleach_correction_clip_max,
      bleach_correction_frequency, free_ram, ram_needed_per_thread, n_cores) = estimate_img_related_params()
 
+    def expm1_int(x: float):
+        return x if x is None else int(np_round(expm1(x)))
     p_log(
         f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
         f"{channel}: starting step 6 of stitching, merging tiles into 2D tif series and "
@@ -649,15 +651,15 @@ def process_channel(
         f"\tdestination: {stitched_tif_path}\n"
         f"\tmemory needed per thread: \t{ram_needed_per_thread:.1f} GB\n"
         f"\tmemory needed total: \t\t{ram_needed_per_thread * n_cores:.1f} GB\n"
-        f"\tavailable ram: \t\t{free_ram:.1f} GB\n"
+        f"\tavailable ram: \t\t\t{free_ram:.1f} GB\n"
         f"\tmax threads based on ram: \t{n_cores}\n"
         f"\ttsv volume shape (zyx): \t{shape}\n"
         f"\ttsv volume data type: \t\t{tsv_volume.dtype}\n"
         f"\tbleach correction sigma: \t{bleach_correction_sigma}\n"
         f"\tbleach correction frequency: \t{bleach_correction_frequency}\n"
-        f"\tbleach correction clip min: \t{np_round(expm1(bleach_correction_clip_min))}\n"
-        f"\tbleach correction clip med: \t{np_round(expm1(bleach_correction_clip_med))}\n"
-        f"\tbleach correction clip max: \t{np_round(expm1(bleach_correction_clip_max))}\n"
+        f"\tbleach correction clip min: \t{expm1_int(bleach_correction_clip_min)}\n"
+        f"\tbleach correction clip med: \t{expm1_int(bleach_correction_clip_med)}\n"
+        f"\tbleach correction clip max: \t{expm1_int(bleach_correction_clip_max)}\n"
         f"\tpadding mode: \t\t\t{padding_mode}\n"
         f"\tdark: \t\t\t\t{dark}\n"
         f"\tbackground subtraction: \t{need_lightsheet_cleaning}\n"
