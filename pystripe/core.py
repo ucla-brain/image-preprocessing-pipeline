@@ -28,7 +28,7 @@ from numpy import uint8, uint16, float32, float64, ndarray, generic, zeros, broa
     cumsum, arange, unique, interp, pad, clip, where, rot90, flipud, dot, reshape, iinfo, nonzero, logical_not, tanh
 from psutil import cpu_count
 from pywt import wavedec2, waverec2, Wavelet, dwt_max_level
-from scipy.fftpack import rfft, fftshift, irfft
+from scipy.fftpack import rfft, irfft
 from scipy.signal import butter, sosfiltfilt
 from skimage.filters import threshold_otsu, threshold_multiotsu
 from skimage.measure import block_reduce
@@ -38,6 +38,13 @@ from tifffile.tifffile import TiffFileError
 from tqdm import tqdm
 from torch import from_numpy as pt_from_numpy
 from torch import Tensor
+from torch import exp as pt_exp
+from torch import arange as pt_arange
+from torch import broadcast_to as pt_broadcast_to
+from torch import float32 as pt_float32
+from torch import reshape as pt_reshape
+from torch.fft import rfft as pt_rfft
+from torch.fft import irfft as pt_irfft
 from torch.cuda import is_available as cuda_is_available_for_pt
 from torch.cuda import device_count as cuda_device_count
 from torch.cuda import empty_cache as cuda_empty_cache
@@ -234,82 +241,6 @@ def imsave_tif(path: Path, img: ndarray, compression: Union[Tuple[str, int], Non
             continue
 
 
-def fft(data, axis=-1, shift=True):
-    """Computes the 1D Fast Fourier Transform of an input array
-
-    Parameters
-    ----------
-    data : ndarray
-        input array to transform
-    axis : int (optional)
-        axis to perform the 1D FFT over
-    shift : bool
-        indicator for centering the DC component
-
-    Returns
-    -------
-    fdata : ndarray
-        transformed data
-
-    """
-    fdata = rfft(data, axis=axis)
-    if shift:
-        fdata = fftshift(fdata)
-    return fdata
-
-
-def notch(n: int, sigma: float) -> ndarray:
-    """Generates a 1D gaussian notch filter `n` pixels long
-
-    Parameters
-    ----------
-    n : int
-        length of the gaussian notch filter
-    sigma : float
-        notch width
-
-    Returns
-    -------
-    g : ndarray
-        (n,) array containing the gaussian notch filter
-
-    """
-    if n <= 0:
-        raise ValueError('n must be positive')
-    n = int(n)
-    if sigma <= 0:
-        raise ValueError('sigma must be positive')
-    x = arange(n, dtype=float32)
-    one = float32(1)
-    two = float32(2)
-    if USE_NUMEXPR:
-
-        evaluate("one - exp(-x ** 2 / (two * sigma ** 2))", out=x, casting='unsafe')
-    else:
-        x = one - exp(-x ** 2 / (two * sigma ** 2))
-    return x
-
-
-def gaussian_filter(shape: tuple, sigma: float) -> ndarray:
-    """Create a gaussian notch filter
-
-    Parameters
-    ----------
-    shape : tuple
-        shape of the output filter
-    sigma : float
-        filter bandwidth
-
-    Returns
-    -------
-    g : ndarray
-        the impulse response of the gaussian notch filter
-
-    """
-    g = notch(n=shape[-1], sigma=sigma)
-    return broadcast_to(g, shape).copy()
-
-
 def hist_match(source, template):
     """Adjust the pixel values of a grayscale image such that its histogram matches that of a target image
 
@@ -410,22 +341,151 @@ def log1p_jit(img: ndarray, dtype=float32):
     return img
 
 
-def to_numpy(x: Union[Tensor, ndarray]) -> ndarray:
+def to_numpy(x: Tensor) -> ndarray:
     return x.detach().cpu().numpy()[0]
 
 
-def filter_coefficient(coef: ndarray, width_frac: float) -> ndarray:
-    sigma_h = coef.shape[0] * width_frac
-    coef = fft(coef, shift=False)
-    coef *= gaussian_filter(shape=coef.shape, sigma=sigma_h)
-    coef = irfft(coef, axis=-1, overwrite_x=True)
+def pt_notch(length: int, sigma: float, device: str = "cpu") -> Tensor:
+    """Generates a 1D gaussian notch filter `n` pixels long
+
+    Parameters
+    ----------
+    length : int
+        length of the gaussian notch filter
+    sigma : float
+        notch width
+    device : str, optional
+
+    Returns
+    -------
+    g : Tensor
+        (length,) array containing the gaussian notch filter
+
+    """
+    if length <= 0:
+        raise ValueError('pt_notch: length must be positive')
+    if sigma <= 0:
+        raise ValueError('pt_notch: sigma must be positive')
+    g = pt_arange(0, length, 1, dtype=pt_float32).to(device)
+    g **= 2
+    g /= -2 * sigma ** 2
+    g = pt_exp(g)
+    g = 1 - g
+    return g
+
+
+def np_notch(length: int, sigma: float) -> ndarray:
+    """Generates a 1D gaussian notch filter `n` pixels long
+
+    Parameters
+    ----------
+    length : int
+        length of the gaussian notch filter
+    sigma : float
+        notch width
+
+    Returns
+    -------
+    g : ndarray
+        (length,) array containing the gaussian notch filter
+
+    """
+    if length <= 0:
+        raise ValueError('np_notch: length must be positive')
+    if sigma <= 0:
+        raise ValueError('np_notch: sigma must be positive')
+    g = arange(length, dtype=float32)
+    one = float32(1)
+    two = float32(2)
+    if USE_NUMEXPR:
+        evaluate("one - exp(-g ** 2 / (two * sigma ** 2))", out=g, casting='unsafe')
+    else:
+        g **= 2
+        g /= -two * sigma ** 2
+        g = exp(g)
+        g = one - g
+    return g
+
+
+def np_gaussian_filter(shape: tuple, sigma: float, axis: int) -> ndarray:
+    """Create a gaussian notch filter
+
+    Parameters
+    ----------
+    shape: tuple
+        shape of the output filter
+    sigma: float
+        filter bandwidth
+    axis: int
+        axis of the filter. options: -1 or -2
+
+    Returns
+    -------
+    g : ndarray
+        the impulse response of the gaussian notch filter
+
+    """
+    g = np_notch(length=shape[axis], sigma=sigma)
+    if axis == -2:
+        g = reshape(g, newshape=(shape[axis], 1))
+    return broadcast_to(g, shape)
+
+
+def pt_gaussian_filter(shape: tuple, sigma: float, axis: int, device: str = "cpu") -> Tensor:
+    """Create a gaussian notch filter
+    Parameters
+    ----------
+    shape : tuple
+        shape of the output filter
+    sigma : float
+        filter bandwidth
+    axis: int
+        axis of the filter. options: -1 or -2
+    device : int, optional
+
+    Returns
+    ----------
+    g : Tensor
+        the impulse response of the gaussian notch filter
+    """
+    g = pt_notch(length=shape[axis], sigma=sigma, device=device)
+    if axis == -2:
+        g = pt_reshape(g, shape=(shape[axis], 1))
+    g = pt_broadcast_to(g, shape)
+    return g
+
+
+def np_filter_coefficient(coef: ndarray, width_frac: float, axis=-1) -> ndarray:
+    sigma = coef.shape[axis + 1] * width_frac
+    coef = rfft(coef, axis=axis, overwrite_x=True)
+    coef *= np_gaussian_filter(shape=coef.shape, sigma=sigma, axis=axis)
+    coef = irfft(coef, axis=axis, overwrite_x=True)
+    return coef
+
+
+def pt_filter_coefficient(coef: Tensor, width_frac: float, axis=-1) -> ndarray:
+    shape = coef.shape
+    if axis == -1:
+        sigma = coef.shape[1] * width_frac
+    elif axis == -2:
+        sigma = coef.shape[2] * width_frac
+    else:
+        raise ValueError('axis must be -1 or -2')
+    coef = pt_rfft(coef, n=shape[axis], dim=axis)
+    g = pt_gaussian_filter(shape=coef.shape[1:3], sigma=sigma / 2, device=coef.device, axis=axis)
+    coef[0].imag *= g
+    coef[0].real *= g
+    coef = pt_irfft(coef, n=shape[axis], dim=axis)
+    coef = to_numpy(coef)
     return coef
 
 
 def filter_subband(
-        img: ndarray, sigma: float, level: int, wavelet: str, gpu_semaphore: Queue) -> ndarray:
+        img: ndarray, sigma: float, level: int, wavelet: str, gpu_semaphore: Queue, axes=-1) -> ndarray:
     d_type = img.dtype
-    width_frac_h = sigma / img.shape[0]
+    img_shape = tuple(img.shape)
+    if isinstance(axes, int):
+        axes = (axes,)
     if USE_PYTORCH:
         device = "cpu"
         gpu = 0
@@ -442,20 +502,24 @@ def filter_subband(
             if gpu_semaphore is not None:
                 gpu_semaphore.put(gpu)
 
-        coefficients = [to_numpy(cfs) if idx == 0 else tuple(map(to_numpy, cfs)) for idx, cfs in
-                        enumerate(coefficients)]
+        coefficients = [
+            to_numpy(cfs) if idx == 0 else
+            tuple(pt_filter_coefficient(cf, sigma / img_shape[i], axis=-1 - i) if -1 - i in axes else to_numpy(cf)
+                  for i, cf in enumerate(cfs))
+            for idx, cfs in enumerate(coefficients)
+        ]
         if CUDA_IS_AVAILABLE_FOR_PT:
             cuda_empty_cache()
     else:
         coefficients = wavedec2(img, wavelet, mode='symmetric', level=None if level == 0 else level, axes=(-2, -1))
-
-    # the first item (idx=0) is the details matrix
-    # the rest of items are tuples of horizontal, vertical and diagonal coefficients matrices
-    for idx, cfs in enumerate(coefficients):
-        if idx == 0:
-            coefficients[idx] = cfs
-            continue
-        coefficients[idx] = (filter_coefficient(cfs[0], width_frac_h), cfs[1], cfs[2])
+        # the first item (idx=0) is the details matrix
+        # the rest of items are tuples of horizontal, vertical and diagonal coefficients matrices
+        coefficients = [
+            cfs if idx == 0 else
+            tuple(np_filter_coefficient(cf, sigma / img_shape[i], axis=-1 - i) if -1 - i in axes else cf
+                  for i, cf in enumerate(cfs))
+            for idx, cfs in enumerate(coefficients)
+        ]
     img = waverec2(coefficients, wavelet, mode='symmetric', axes=(-2, -1)).astype(d_type)
     return img
 
@@ -642,9 +706,10 @@ def otsu_threshold(img: ndarray) -> float:
         return 2
 
 
-def filter_streak_horizontally(img, sigma1, sigma2, level, wavelet, crossover, threshold, gpu_semaphore):
+def filter_streak_dual_band(img, sigma1, sigma2, level, wavelet, crossover, threshold, gpu_semaphore,
+                            axes: Union[tuple, int] = -1):
     if (sigma1 > 0 and sigma1 == sigma2) or (threshold is not None and threshold <= 0):
-        img = filter_subband(img, sigma1, level, wavelet, gpu_semaphore)
+        img = filter_subband(img, sigma1, level, wavelet, gpu_semaphore, axes=axes)
     else:
         smoothing: int = 1
         if threshold is None:
@@ -654,13 +719,13 @@ def filter_streak_horizontally(img, sigma1, sigma2, level, wavelet, crossover, t
         if sigma1 > 0:
             foreground = img.copy()
             clip(foreground, threshold, None, out=foreground)
-            foreground = filter_subband(foreground, sigma1, level, wavelet, gpu_semaphore)
+            foreground = filter_subband(foreground, sigma1, level, wavelet, gpu_semaphore, axes=axes)
 
         background = img
         if sigma2 > 0:
             background = img.copy()
             clip(background, None, threshold, out=background)
-            background = filter_subband(background, sigma2, level, wavelet, gpu_semaphore)
+            background = filter_subband(background, sigma2, level, wavelet, gpu_semaphore, axes=axes)
 
         fraction = foreground_fraction(img, threshold, crossover, smoothing)
         one = float32(1.0)
@@ -783,16 +848,16 @@ def filter_streaks(
         if threshold is None and bleach_correction_clip_med is not None:
             threshold = log1p(bleach_correction_clip_med, dtype=float32)
 
-        img = filter_streak_horizontally(img, sigma1, sigma2, level, wavelet, crossover, threshold, gpu_semaphore)
         if bidirectional:
-            img = rot90(img, 1)
-            img = filter_streak_horizontally(img, sigma1, sigma2, level, wavelet, crossover, threshold, gpu_semaphore)
-            img = rot90(img, -1)
+            img = filter_streak_dual_band(
+                img, sigma1, sigma2, level, wavelet, crossover, threshold, gpu_semaphore, axes=(-1, -2))
+        else:
+            img = filter_streak_dual_band(
+                img, sigma1, sigma2, level, wavelet, crossover, threshold, gpu_semaphore, axes=-1)
 
         if bleach_correction_frequency is not None and not bidirectional:
-            img = rot90(img, 1)
-            img = filter_streak_horizontally(img, sigma1, sigma1, level, wavelet, crossover, threshold, gpu_semaphore)
-            img = rot90(img, -1)
+            img = filter_streak_dual_band(
+                img, sigma1, sigma1, level, wavelet, crossover, threshold, gpu_semaphore, axes=-2)
 
         if verbose:
             print(f"de-striping applied: sigma={sigma}, level={level}, wavelet={wavelet}, crossover{crossover}, "
