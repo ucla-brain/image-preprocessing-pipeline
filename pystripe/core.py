@@ -499,8 +499,6 @@ def filter_subband(
             img.detach()
             del img
             cuda_empty_cache()
-            if gpu_semaphore is not None:
-                gpu_semaphore.put(gpu)
 
         coefficients = [
             to_numpy(cfs) if idx == 0 else
@@ -510,6 +508,8 @@ def filter_subband(
         ]
         if CUDA_IS_AVAILABLE_FOR_PT:
             cuda_empty_cache()
+            if gpu_semaphore is not None:
+                gpu_semaphore.put(gpu)
     else:
         coefficients = wavedec2(img, wavelet, mode='symmetric', level=None if level == 0 else level, axes=(-2, -1))
         # the first item (idx=0) is the details matrix
@@ -855,9 +855,9 @@ def filter_streaks(
             img = filter_streak_dual_band(
                 img, sigma1, sigma2, level, wavelet, crossover, threshold, gpu_semaphore, axes=-1)
 
-        if bleach_correction_frequency is not None and not bidirectional:
-            img = filter_streak_dual_band(
-                img, sigma1, sigma1, level, wavelet, crossover, threshold, gpu_semaphore, axes=-2)
+        # if bleach_correction_frequency is not None and not bidirectional:
+        #     img = filter_streak_dual_band(
+        #         img, sigma1, sigma1, level, wavelet, crossover, threshold, gpu_semaphore, axes=-2)
 
         if verbose:
             print(f"de-striping applied: sigma={sigma}, level={level}, wavelet={wavelet}, crossover{crossover}, "
