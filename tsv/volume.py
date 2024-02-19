@@ -385,13 +385,16 @@ class TSVStack(TSVStackBase):
                         if not os.path.exists(file):
                             print(f"\t\tthe following missing files is replaced with a dummy (zeros) image:\n"
                                   f"\t\t\t{file}")
+                            Path(file).parent.mkdir(exist_ok=True, parents=True)
                             imwrite(file, zeros(self.shape[1:3], dtype=self.dtype))
                     # raise RuntimeError
                     redo_path = True
             if redo_path:
                 self.__paths = []
-                for idx in self.__idxs_to_keep:
-                    self.__paths += [my_paths[idx]]
+                if my_paths:
+                    for idx in self.__idxs_to_keep:
+                        if idx < len(my_paths):
+                            self.__paths += [my_paths[idx]]
 
         return self.__paths
 
