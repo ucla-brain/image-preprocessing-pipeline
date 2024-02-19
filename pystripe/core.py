@@ -813,6 +813,10 @@ def filter_streaks(
     if log1p_normalization_needed:
         img = log1p_jit(img, dtype=float32)
 
+    mask = None
+    if (bleach_correction_frequency, bleach_correction_clip_med) != (None, None):
+        mask = get_img_mask(img, bleach_correction_clip_med)
+
     if not sigma1 == sigma2 == 0:
         # Need to pad image to multiple of 2. It is needed even for bleach correction non-max method
         img_shape = img.shape
@@ -866,6 +870,10 @@ def filter_streaks(
                   base_pad: img.shape[0] - (base_pad + pad_y),
                   base_pad: img.shape[1] - (base_pad + pad_x)]
             assert img.shape == img_shape
+
+    if mask is not None:
+        img *= mask
+        del mask
 
     if bleach_correction_frequency is not None:
         # convert uint16 to log1p
