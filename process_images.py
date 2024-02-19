@@ -624,7 +624,7 @@ def process_channel(
                 frequency = 1 / sig
 
         sigma = (int(sig), int(sig * 2))
-        memory_needed_per_thread = 24 if cosine_blending else 16
+        memory_needed_per_thread = 28 if need_bleach_correction else 16
         memory_needed_per_thread *= shape[1] + 2 * max(sigma) + 1
         memory_needed_per_thread *= shape[2] + 2 * max(sigma) + 1
         memory_needed_per_thread /= 1024 ** 3
@@ -632,15 +632,14 @@ def process_channel(
             memory_needed_per_thread /= 2
         memory_ram = virtual_memory().available / 1024 ** 3  # in GB
         merge_step_cores = max(1, min(floor(memory_ram / memory_needed_per_thread), nthreads))
-        return \
-            background, bit_shift, \
-            sigma, clip_min, clip_med, clip_max, frequency, \
-            memory_ram, memory_needed_per_thread, merge_step_cores
+        return (
+            background, bit_shift,
+            sigma, clip_min, clip_med, clip_max, frequency,
+            memory_ram, memory_needed_per_thread, merge_step_cores)
 
-    dark, right_bit_shift, \
-        bleach_correction_sigma, \
-        bleach_correction_clip_min, bleach_correction_clip_med, bleach_correction_clip_max, \
-        bleach_correction_frequency, free_ram, ram_needed_per_thread, n_cores = estimate_img_related_params()
+    (dark, right_bit_shift,
+     bleach_correction_sigma, bleach_correction_clip_min, bleach_correction_clip_med, bleach_correction_clip_max,
+     bleach_correction_frequency, free_ram, ram_needed_per_thread, n_cores) = estimate_img_related_params()
 
     p_log(
         f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
@@ -648,27 +647,27 @@ def process_channel(
         f"postprocessing the stitched images, using TSV ...\n"
         f"\tsource: {stitched_path / f'{channel}_xml_import_step_5.xml'}\n"
         f"\tdestination: {stitched_tif_path}\n"
-        f"\tmemory needed per thread = {ram_needed_per_thread:.1f} GB\n"
-        f"\tmemory needed total = {ram_needed_per_thread * n_cores:.1f} GB\n"
-        f"\tavailable ram = {free_ram:.1f} GB\n"
-        f"\ttsv volume shape (zyx): {shape}\n"
-        f"\ttsv volume data type: {tsv_volume.dtype}\n"
-        f"\tbleach correction sigma: {bleach_correction_sigma}\n"
-        f"\tbleach correction frequency: {bleach_correction_frequency}\n"
-        f"\tbleach correction clip min: {np_round(expm1(bleach_correction_clip_min))}\n"
-        f"\tbleach correction clip med: {np_round(expm1(bleach_correction_clip_med))}\n"
-        f"\tbleach correction clip max: {np_round(expm1(bleach_correction_clip_max))}\n"
-        f"\tbleach correction clip padding mode: {padding_mode}\n"
-        f"\tdark: {dark}\n"
-        f"\tbackground subtraction: {need_lightsheet_cleaning}\n"
-        f"\t8-bit conversion: {need_16bit_to_8bit_conversion}\n"
-        f"\tbit-shift to right: {right_bit_shift}\n"
-        f"\trotate: {90 if need_rotation_stitched_tif else 0}"
+        f"\tmemory needed per thread: \t{ram_needed_per_thread:.1f} GB\n"
+        f"\tmemory needed total: \t\t{ram_needed_per_thread * n_cores:.1f} GB\n"
+        f"\tavailable ram: \t\t{free_ram:.1f} GB\n"
+        f"\tmax threads based on ram: \t{n_cores}\n"
+        f"\ttsv volume shape (zyx): \t{shape}\n"
+        f"\ttsv volume data type: \t\t{tsv_volume.dtype}\n"
+        f"\tbleach correction sigma: \t{bleach_correction_sigma}\n"
+        f"\tbleach correction frequency: \t{bleach_correction_frequency}\n"
+        f"\tbleach correction clip min: \t{np_round(expm1(bleach_correction_clip_min))}\n"
+        f"\tbleach correction clip med: \t{np_round(expm1(bleach_correction_clip_med))}\n"
+        f"\tbleach correction clip max: \t{np_round(expm1(bleach_correction_clip_max))}\n"
+        f"\tpadding mode: \t\t\t{padding_mode}\n"
+        f"\tdark: \t\t\t\t{dark}\n"
+        f"\tbackground subtraction: \t{need_lightsheet_cleaning}\n"
+        f"\t8-bit conversion: \t\t{need_16bit_to_8bit_conversion}\n"
+        f"\tbit-shift to right: \t\t{right_bit_shift}\n"
+        f"\trotate: \t\t\t{90 if need_rotation_stitched_tif else 0}"
     )
     gpu_semaphore = Queue(maxsize=cuda_device_count())
     for i in range(cuda_device_count()):
         gpu_semaphore.put(i)
-    # need_lightsheet_cleaning
     return_code = parallel_image_processor(
         source=tsv_volume,
         destination=stitched_tif_path,
@@ -678,7 +677,7 @@ def process_channel(
             "sigma": bleach_correction_sigma,
             "wavelet": "coif15",  # db37
             "padding_mode": padding_mode,  # wrap reflect
-            "bidirectional": False,
+            "bidirectional": True if need_bleach_correction else False,
             "gpu_semaphore": gpu_semaphore,
             "bleach_correction_frequency": bleach_correction_frequency,
             "bleach_correction_clip_min": bleach_correction_clip_min,
