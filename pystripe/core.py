@@ -1768,14 +1768,13 @@ def batch_filter(
         args_queue.put(args)
     del args_list
 
-    gpu_semaphore = gpu_semaphore = Queue()
+    gpu_semaphore = None
     repeat = 3
     if cuda_is_available_for_pt:
+        gpu_semaphore = gpu_semaphore = Queue()
         for _ in range(repeat):
             for i in range(cuda_device_count()):
                 gpu_semaphore.put(f"cuda:{i}")
-    # for _ in range(repeat * 4):
-    #     gpu_semaphore.put("cpu")
 
     workers = min(workers, num_images)
     progress_queue = Queue()
