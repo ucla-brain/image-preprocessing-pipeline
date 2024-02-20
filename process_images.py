@@ -794,7 +794,7 @@ def get_gradient(img: ndarray, threshold: float = 98.5) -> ndarray:
 
 
 def get_transformation_matrix(reference: ndarray, subject: ndarray,
-                              iterations: int = 10000, termination: float = 1e-10) -> ndarray:
+                              iterations: int = 10000, termination: float = 1e-10, verbose=True) -> ndarray:
     warp_matrix = eye(2, 3, dtype=float32)  # i.e. no transformation
     if reference is not None and subject is not None:
         downsampling_factors = [1, 1]  # y, x
@@ -804,7 +804,7 @@ def get_transformation_matrix(reference: ndarray, subject: ndarray,
                 downsampling_factors[idx] *= 2
                 max_size //= 2
         downsampling_factors = max(downsampling_factors)
-        print(f"downsampling factor for transformation_matrix {downsampling_factors}")
+        if verbose: print(f"downsampling factor for transformation_matrix {downsampling_factors}")
         reference = block_reduce(reference, block_size=downsampling_factors, func=np_mean)
         subject = block_reduce(subject, block_size=downsampling_factors, func=np_mean)
 
@@ -822,7 +822,7 @@ def get_transformation_matrix(reference: ndarray, subject: ndarray,
         warp_matrix[1, 2] *= downsampling_factors  # y
 
     warp_matrix = inv(append(warp_matrix, array([[0, 0, 1]], dtype=float32), axis=0))
-    print(np_round(warp_matrix, 2))
+    if verbose: print(np_round(warp_matrix, 2))
     return warp_matrix
 
 
