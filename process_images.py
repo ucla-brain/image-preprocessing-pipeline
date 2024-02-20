@@ -650,7 +650,7 @@ def process_channel(
         f"\tsource: {stitched_path / f'{channel}_xml_import_step_5.xml'}\n"
         f"\tdestination: {stitched_tif_path}\n"
         f"\tmemory needed per thread: \t{ram_needed_per_thread:.1f} GB\n"
-        f"\tmemory needed total: \t\t{ram_needed_per_thread * n_cores:.1f} GB\n"
+        f"\tmemory needed total: \t\t{ram_needed_per_thread * min(n_cores, shape[0]):.1f} GB\n"
         f"\tavailable ram: \t\t\t{free_ram:.1f} GB\n"
         f"\tmax threads based on ram: \t{n_cores}\n"
         f"\ttsv volume shape (zyx): \t{shape}\n"
