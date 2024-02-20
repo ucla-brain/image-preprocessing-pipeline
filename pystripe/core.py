@@ -27,6 +27,7 @@ from numpy import min as np_min
 from numpy import uint8, uint16, float32, float64, ndarray, generic, zeros, broadcast_to, exp, expm1, log1p, ones, \
     cumsum, arange, unique, interp, pad, clip, where, rot90, flipud, dot, reshape, iinfo, nonzero, logical_not, tanh
 from psutil import cpu_count
+from ptwt import wavedec2 as pt_wavedec2
 from pywt import wavedec2, waverec2, Wavelet, dwt_max_level
 from scipy.fftpack import rfft, irfft
 from scipy.signal import butter, sosfiltfilt
@@ -35,20 +36,19 @@ from skimage.measure import block_reduce
 from skimage.transform import resize
 from tifffile import imread, imwrite
 from tifffile.tifffile import TiffFileError
-from tqdm import tqdm
-from torch import from_numpy as pt_from_numpy
 from torch import Tensor
-from torch import exp as pt_exp
 from torch import arange as pt_arange
 from torch import broadcast_to as pt_broadcast_to
+from torch import exp as pt_exp
 from torch import float32 as pt_float32
+from torch import from_numpy as pt_from_numpy
 from torch import reshape as pt_reshape
-from torch.fft import rfft as pt_rfft
-from torch.fft import irfft as pt_irfft
-from torch.cuda import is_available as cuda_is_available_for_pt
 from torch.cuda import device_count as cuda_device_count
 from torch.cuda import empty_cache as cuda_empty_cache
-from ptwt import wavedec2 as pt_wavedec2
+from torch.cuda import is_available as cuda_is_available_for_pt
+from torch.fft import irfft as pt_irfft
+from torch.fft import rfft as pt_rfft
+from tqdm import tqdm
 
 from pystripe.lightsheet_correct import correct_lightsheet, prctl
 from pystripe.raw import raw_imread
@@ -60,6 +60,112 @@ NUM_RETRIES: int = 40
 USE_NUMEXPR: bool = True
 USE_PYTORCH = True
 CUDA_IS_AVAILABLE_FOR_PT = cuda_is_available_for_pt()
+
+
+@jit(nopython=True)
+def is_uniform_1d(arr: ndarray) -> Union[bool, None]:
+    n: int = len(arr)
+    if n <= 0:
+        return None
+    y = arr[0]
+    for x in arr:
+        if x != y:
+            return False
+    return True
+
+
+@jit(nopython=True)
+def is_uniform_2d(arr: ndarray) -> Union[bool, None]:
+    n: int = len(arr)
+    if n <= 0:
+        return None
+    is_uniform: bool = is_uniform_1d(arr[0])
+    if not is_uniform:
+        return False
+    val = arr[0, 0]
+    for i in range(1, n):
+        is_uniform = is_uniform_1d(arr[i])
+        if not is_uniform:
+            return False
+        elif val != arr[i, 0]:
+            return False
+    return is_uniform
+
+
+@jit(nopython=True)
+def is_uniform_3d(arr: ndarray) -> Union[bool, None]:
+    n: int = len(arr)
+    if n <= 0:
+        return None
+    is_uniform: bool = is_uniform_2d(arr[0])
+    if not is_uniform:
+        return False
+    val = arr[0, 0, 0]
+    for i in range(1, n):
+        is_uniform = is_uniform_2d(arr[i])
+        if not is_uniform:
+            return False
+        elif val != arr[i, 0, 0]:
+            return False
+    return is_uniform
+
+
+@jit(nopython=True)
+def min_max_1d(arr: ndarray) -> (int, int):
+    n: int = len(arr)
+    if n <= 0:
+        return None, None
+    max_val = min_val = arr[0]
+    odd = n % 2
+    if not odd:
+        n -= 1
+    i = 1
+    while i < n:
+        x = arr[i]
+        y = arr[i + 1]
+        if x > y:
+            x, y = y, x
+        min_val = min(x, min_val)
+        max_val = max(y, max_val)
+        i += 2
+    if not odd:
+        x = arr[n]
+        min_val = min(x, min_val)
+        max_val = max(x, max_val)
+    return min_val, max_val
+
+
+@jit(nopython=True)
+def min_max_2d(arr: ndarray) -> (int, int):
+    n: int = len(arr)
+    if n <= 0:
+        return None, None
+    min_val, max_val = min_max_1d(arr[0])
+    for i in range(1, n):
+        x, y = min_max_1d(arr[i])
+        min_val = min(x, min_val)
+        max_val = max(y, max_val)
+    return min_val, max_val
+
+
+def expm1_jit(img: Union[ndarray, float, int], dtype=float32) -> ndarray:
+    if USE_NUMEXPR:
+        if img.dtype != dtype:
+            img = img.astype(dtype)
+        evaluate("expm1(img)", out=img, casting="unsafe")
+    else:
+        img = expm1(img).astype(dtype)
+    return img
+
+
+def log1p_jit(img: ndarray, dtype=float32):
+    if USE_NUMEXPR:
+        if img.dtype != dtype:
+            img = img.astype(dtype)
+        evaluate("log1p(img)", out=img, casting="unsafe")
+    else:
+        img = log1p(img, dtype=dtype)
+    return img
 
 
 def imread_tif_raw_png(path: Path, dtype: str = None, shape: Tuple[int, int] = None):
@@ -101,6 +207,55 @@ def imread_tif_raw_png(path: Path, dtype: str = None, shape: Tuple[int, int] = N
     if img is None:
         print(f"after {attempt + 1} attempts failed to read file:\n{path}")
     return img
+
+
+def imsave_tif(path: Path, img: ndarray, compression: Union[Tuple[str, int], None] = ('ADOBE_DEFLATE', 1)) -> bool:
+    """Save an array as a tiff or raw image
+
+    The file format will be inferred from the file extension in `path`
+
+    Parameters
+    ----------
+    path : Path
+        path to tiff or raw image
+    img : ndarray
+        image as a numpy array
+    compression : Tuple[str, int]
+        The 1st argument is compression method the 2nd compression level for tiff files
+        For example, ('ZSTD', 1) or ('ADOBE_DEFLATE', 1).
+
+    Returns
+    ----------
+    True if the user interrupted the program, else False even if failed to save.
+    """
+    # compression_method = enumarg(TIFF.COMPRESSION, "None")
+    # compression_level: int = 0
+    # if compression and isinstance(compression, tuple) and len(compression) >= 2 and \
+    #         isinstance(compression[1], int) and compression[1] <= 0:
+    #     compression = False
+    for attempt in range(1, NUM_RETRIES):
+        try:
+            # imwrite(path, data=img, compression=compression_method, compressionargs={'level': compression_level})
+            imwrite(path, data=img, compression=compression)
+            return False  # do not die
+        except KeyboardInterrupt:
+            print(f"{PrintColors.WARNING}\ndying from imsave_tif{PrintColors.ENDC}")
+            imwrite(path, data=img, compression=compression)
+            return True  # die
+        except (OSError, TypeError, PermissionError) as inst:
+            if attempt == NUM_RETRIES:
+                # f"Data size={img.size * img.itemsize} should be equal to the saved file's byte_count={byte_count}?"
+                # f"\nThe file_size={path.stat().st_size} should be at least larger than tif header={offset} bytes\n"
+                print(
+                    f"After {NUM_RETRIES} attempts failed to save the file:\n"
+                    f"{path}\n"
+                    f"\n{type(inst)}\n"
+                    f"{inst.args}\n"
+                    f"{inst}\n")
+                return False  # do not die
+            else:
+                sleep(0.1)
+            continue
 
 
 def imread_dcimg(path: Path, z: int):
@@ -181,7 +336,7 @@ def convert_to_8bit_fun(img: ndarray, bit_shift_to_right: int = 8):
     if 0 <= bit_shift_to_right < 9:
         lower_bound = 2 ** bit_shift_to_right
         if USE_NUMEXPR:
-            img = evaluate("where((0 < img) & (img < lower_bound), 1, img >> bit_shift_to_right)")
+            evaluate("where((0 < img) & (img < lower_bound), 1, img >> bit_shift_to_right)", out=img)
         else:
             img = where((0 < img) & (img < lower_bound), 1, img >> bit_shift_to_right)
     else:
@@ -190,55 +345,6 @@ def convert_to_8bit_fun(img: ndarray, bit_shift_to_right: int = 8):
     clip(img, 0, 255, out=img)  # Clip to 8-bit [0, 2 ** 8 - 1] unsigned range
     img = img.astype(uint8)
     return img
-
-
-def imsave_tif(path: Path, img: ndarray, compression: Union[Tuple[str, int], None] = ('ADOBE_DEFLATE', 1)) -> bool:
-    """Save an array as a tiff or raw image
-
-    The file format will be inferred from the file extension in `path`
-
-    Parameters
-    ----------
-    path : Path
-        path to tiff or raw image
-    img : ndarray
-        image as a numpy array
-    compression : Tuple[str, int]
-        The 1st argument is compression method the 2nd compression level for tiff files
-        For example, ('ZSTD', 1) or ('ADOBE_DEFLATE', 1).
-
-    Returns
-    ----------
-    True if the user interrupted the program, else False even if failed to save.
-    """
-    # compression_method = enumarg(TIFF.COMPRESSION, "None")
-    # compression_level: int = 0
-    # if compression and isinstance(compression, tuple) and len(compression) >= 2 and \
-    #         isinstance(compression[1], int) and compression[1] <= 0:
-    #     compression = False
-    for attempt in range(1, NUM_RETRIES):
-        try:
-            # imwrite(path, data=img, compression=compression_method, compressionargs={'level': compression_level})
-            imwrite(path, data=img, compression=compression)
-            return False  # do not die
-        except KeyboardInterrupt:
-            print(f"{PrintColors.WARNING}\ndying from imsave_tif{PrintColors.ENDC}")
-            imwrite(path, data=img, compression=compression)
-            return True  # die
-        except (OSError, TypeError, PermissionError) as inst:
-            if attempt == NUM_RETRIES:
-                # f"Data size={img.size * img.itemsize} should be equal to the saved file's byte_count={byte_count}?"
-                # f"\nThe file_size={path.stat().st_size} should be at least larger than tif header={offset} bytes\n"
-                print(
-                    f"After {NUM_RETRIES} attempts failed to save the file:\n"
-                    f"{path}\n"
-                    f"\n{type(inst)}\n"
-                    f"{inst.args}\n"
-                    f"{inst}\n")
-                return False  # do not die
-            else:
-                sleep(0.1)
-            continue
 
 
 def hist_match(source, template):
@@ -286,6 +392,104 @@ def max_level(min_len, wavelet):
     return dwt_max_level(min_len, w.dec_len)
 
 
+def slice_non_zero_box(img_axis: ndarray, noise: int, filter_frequency: int = 1 / 1000) -> (int, int):
+    return min_max_1d(nonzero(butter_lowpass_filter(img_axis, filter_frequency).astype(uint16) > noise)[0])
+
+
+def get_img_mask(img: ndarray, threshold: Union[int, float],
+                 close_steps: int = 50, open_steps: int = 500, flood_fill_flag: int = 8) -> ndarray:
+    # start_time = time()
+    shape = list(img.shape)
+    mask = (img > threshold).astype(uint8)
+    mask = morphologyEx(mask, MORPH_CLOSE, ones((close_steps, close_steps), dtype=uint8))
+    mask = morphologyEx(mask, MORPH_OPEN, ones((open_steps, open_steps), dtype=uint8)).astype(bool)
+    inverted_mask = logical_not(mask).astype(uint8)
+    floodFill(inverted_mask, None, (0, 0), 0, flags=flood_fill_flag)
+    floodFill(inverted_mask, None, (0, shape[0] - 1), 0, flags=flood_fill_flag)
+    floodFill(inverted_mask, None, (shape[1] - 1, 0), 0, flags=flood_fill_flag)
+    floodFill(inverted_mask, None, (shape[1] - 1, shape[0] - 1), 0, flags=flood_fill_flag)
+    mask |= inverted_mask.astype(bool)
+    # print("mask time:", time() - start_time)
+    return mask
+
+
+def butter_lowpass_filter(img: ndarray, cutoff_frequency: float, order: int = 1) -> ndarray:
+    d_type = img.dtype
+    sos = butter(order, cutoff_frequency, output='sos')
+    img = sosfiltfilt(sos, img)  # returns float64
+    img = img.astype(d_type)
+
+    return img
+
+
+def correct_bleaching(
+        img: ndarray,
+        frequency: float,
+        clip_min: float,
+        clip_med: float,
+        clip_max: float,
+        max_method: bool = False,
+) -> ndarray:
+    """
+    Parameters
+    ----------
+    img: log1p filtered image
+    frequency: low pass fileter frequency. Usually 1/min(img.shape).
+    clip_min: background vs foreground threshold
+    clip_med: foreground intermediate
+    clip_max: foreground max
+    max_method: use max value on x and y axes to create the filter. Max method is faster and smoother but less accurate
+
+    Returns
+    -------
+    max normalized filter values.
+    """
+
+    assert isinstance(frequency, (float, float32, float64)) and frequency > 0
+    assert isinstance(clip_min, (float, float32, float64)) and clip_min >= 0
+    assert isinstance(clip_med, (float, float32, float64)) and clip_med > clip_min
+    assert isinstance(clip_max, (float, float32, float64)) and clip_max > clip_min
+    assert clip_max > clip_med
+    clip_min_lb = log1p(1)
+    if clip_min < clip_min_lb:
+        clip_min = clip_min_lb
+
+    # creat the filter
+    if max_method:
+        img_filter_y = np_max(img, axis=1)
+        img_filter_x = np_max(img, axis=0)
+        img_filter_y[img_filter_y == 0] = clip_med
+        img_filter_x[img_filter_x == 0] = clip_med
+        img_filter_y = clip(img_filter_y, clip_min, clip_max)
+        img_filter_x = clip(img_filter_x, clip_min, clip_max)
+        img_filter_y = butter_lowpass_filter(img_filter_y, frequency)
+        img_filter_x = butter_lowpass_filter(img_filter_x, frequency)
+        img_filter_y = reshape(img_filter_y, (len(img_filter_y), 1))
+        img_filter_x = reshape(img_filter_x, (1, len(img_filter_x)))
+        img_filter = dot(img_filter_y, img_filter_x)
+    else:
+        img_filter = img.copy()
+        img_filter[img_filter == 0] = clip_med
+        clip(img_filter, clip_min, clip_max, out=img_filter)
+        img_filter = butter_lowpass_filter(img_filter, frequency)
+
+    # apply the filter
+    img_filter_max = np_max(img_filter)
+    if USE_NUMEXPR:
+        evaluate("img / img_filter * img_filter_max", out=img, casting="unsafe")
+    else:
+        img /= img_filter
+        img *= img_filter_max
+    return img
+
+
+def otsu_threshold(img: ndarray) -> float:
+    try:
+        return threshold_otsu(img)
+    except ValueError:
+        return 2
+
+
 def sigmoid(img: ndarray) -> ndarray:
     if img.dtype != float32:
         img = img.astype(float32)
@@ -319,26 +523,6 @@ def foreground_fraction(img: ndarray, threshold: float, crossover: float, sigma:
     ksize = (sigma * 2 + 1,) * 2
     GaussianBlur(ff, ksize=ksize, sigmaX=sigma, sigmaY=sigma)
     return ff
-
-
-def expm1_jit(img: Union[ndarray, float, int], dtype=float32) -> ndarray:
-    if USE_NUMEXPR:
-        if img.dtype != dtype:
-            img = img.astype(dtype)
-        evaluate("expm1(img)", out=img, casting="unsafe")
-    else:
-        img = expm1(img).astype(dtype)
-    return img
-
-
-def log1p_jit(img: ndarray, dtype=float32):
-    if USE_NUMEXPR:
-        if img.dtype != dtype:
-            img = img.astype(dtype)
-        evaluate("log1p(img)", out=img, casting="unsafe")
-    else:
-        img = log1p(img, dtype=dtype)
-    return img
 
 
 def to_numpy(x: Tensor) -> ndarray:
@@ -488,11 +672,11 @@ def filter_subband(
         axes = (axes,)
     if USE_PYTORCH:
         device = "cpu"
-        gpu = 0
         if CUDA_IS_AVAILABLE_FOR_PT:
+            device = f"cuda:0"
             if gpu_semaphore is not None:
-                gpu = gpu_semaphore.get(block=True)
-            device = f"cuda:{gpu}"
+                device = gpu_semaphore.get(block=True)
+
         img = pt_from_numpy(img.copy()).to(device, non_blocking=True)
         coefficients = pt_wavedec2(img, wavelet, mode='symmetric', level=None if level == 0 else level, axes=(-2, -1))
         if CUDA_IS_AVAILABLE_FOR_PT:
@@ -509,7 +693,7 @@ def filter_subband(
         if CUDA_IS_AVAILABLE_FOR_PT:
             cuda_empty_cache()
             if gpu_semaphore is not None:
-                gpu_semaphore.put(gpu)
+                gpu_semaphore.put(device)
     else:
         coefficients = wavedec2(img, wavelet, mode='symmetric', level=None if level == 0 else level, axes=(-2, -1))
         # the first item (idx=0) is the details matrix
@@ -522,189 +706,6 @@ def filter_subband(
         ])
     img = waverec2(coefficients, wavelet, mode='symmetric', axes=(-2, -1)).astype(d_type)
     return img
-
-
-def butter_lowpass_filter(img: ndarray, cutoff_frequency: float, order: int = 1) -> ndarray:
-    d_type = img.dtype
-    sos = butter(order, cutoff_frequency, output='sos')
-    img = sosfiltfilt(sos, img)  # returns float64
-    img = img.astype(d_type)
-    return img
-
-
-@jit(nopython=True)
-def is_uniform_1d(arr: ndarray) -> Union[bool, None]:
-    n: int = len(arr)
-    if n <= 0:
-        return None
-    y = arr[0]
-    for x in arr:
-        if x != y:
-            return False
-    return True
-
-
-@jit(nopython=True)
-def is_uniform_2d(arr: ndarray) -> Union[bool, None]:
-    n: int = len(arr)
-    if n <= 0:
-        return None
-    is_uniform: bool = is_uniform_1d(arr[0])
-    if not is_uniform:
-        return False
-    val = arr[0, 0]
-    for i in range(1, n):
-        is_uniform = is_uniform_1d(arr[i])
-        if not is_uniform:
-            return False
-        elif val != arr[i, 0]:
-            return False
-    return is_uniform
-
-
-@jit(nopython=True)
-def is_uniform_3d(arr: ndarray) -> Union[bool, None]:
-    n: int = len(arr)
-    if n <= 0:
-        return None
-    is_uniform: bool = is_uniform_2d(arr[0])
-    if not is_uniform:
-        return False
-    val = arr[0, 0, 0]
-    for i in range(1, n):
-        is_uniform = is_uniform_2d(arr[i])
-        if not is_uniform:
-            return False
-        elif val != arr[i, 0, 0]:
-            return False
-    return is_uniform
-
-
-@jit(nopython=True)
-def min_max_1d(arr: ndarray) -> (int, int):
-    n: int = len(arr)
-    if n <= 0:
-        return None, None
-    max_val = min_val = arr[0]
-    odd = n % 2
-    if not odd:
-        n -= 1
-    i = 1
-    while i < n:
-        x = arr[i]
-        y = arr[i + 1]
-        if x > y:
-            x, y = y, x
-        min_val = min(x, min_val)
-        max_val = max(y, max_val)
-        i += 2
-    if not odd:
-        x = arr[n]
-        min_val = min(x, min_val)
-        max_val = max(x, max_val)
-    return min_val, max_val
-
-
-@jit(nopython=True)
-def min_max_2d(arr: ndarray) -> (int, int):
-    n: int = len(arr)
-    if n <= 0:
-        return None, None
-    min_val, max_val = min_max_1d(arr[0])
-    for i in range(1, n):
-        x, y = min_max_1d(arr[i])
-        min_val = min(x, min_val)
-        max_val = max(y, max_val)
-    return min_val, max_val
-
-
-def slice_non_zero_box(img_axis: ndarray, noise: int, filter_frequency: int = 1 / 1000) -> (int, int):
-    return min_max_1d(nonzero(butter_lowpass_filter(img_axis, filter_frequency).astype(uint16) > noise)[0])
-
-
-def get_img_mask(img: ndarray, threshold: Union[int, float],
-                 close_steps: int = 13, open_steps: int = 4, flood_fill_flag: int = 8) -> ndarray:
-    # start_time = time()
-    shape = list(img.shape)
-    mask = (img > threshold).astype(uint8)
-    mask = morphologyEx(mask, MORPH_CLOSE, ones((close_steps, close_steps), dtype=uint8))
-    mask = morphologyEx(mask, MORPH_OPEN, ones((open_steps, open_steps), dtype=uint8)).astype(bool)
-    inverted_mask = logical_not(mask).astype(uint8)
-    floodFill(inverted_mask, None, (0, 0), 0, flags=flood_fill_flag)
-    floodFill(inverted_mask, None, (0, shape[0]-1), 0, flags=flood_fill_flag)
-    floodFill(inverted_mask, None, (shape[1]-1, 0), 0, flags=flood_fill_flag)
-    floodFill(inverted_mask, None, (shape[1]-1, shape[0]-1), 0, flags=flood_fill_flag)
-    mask |= inverted_mask.astype(bool)
-    # print("mask time:", time() - start_time)
-    return mask
-
-
-def correct_bleaching(
-        img: ndarray,
-        frequency: float,
-        clip_min: float,
-        clip_med: float,
-        clip_max: float,
-        max_method: bool = False,
-) -> ndarray:
-    """
-    Parameters
-    ----------
-    img: log1p filtered image
-    frequency: low pass fileter frequency. Usually 1/min(img.shape).
-    clip_min: background vs foreground threshold
-    clip_med: foreground intermediate
-    clip_max: foreground max
-    max_method: use max value on x and y axes to create the filter. Max method is faster and smoother but less accurate
-
-    Returns
-    -------
-    max normalized filter values.
-    """
-
-    assert isinstance(frequency, (float, float32, float64)) and frequency > 0
-    assert isinstance(clip_min, (float, float32, float64)) and clip_min >= 0
-    assert isinstance(clip_med, (float, float32, float64)) and clip_med > clip_min
-    assert isinstance(clip_max, (float, float32, float64)) and clip_max > clip_min
-    assert clip_max > clip_med
-    clip_min_lb = log1p(1)
-    if clip_min < clip_min_lb:
-        clip_min = clip_min_lb
-
-    # creat the filter
-    if max_method:
-        img_filter_y = np_max(img, axis=1)
-        img_filter_x = np_max(img, axis=0)
-        img_filter_y[img_filter_y == 0] = clip_med
-        img_filter_x[img_filter_x == 0] = clip_med
-        img_filter_y = clip(img_filter_y, clip_min, clip_max)
-        img_filter_x = clip(img_filter_x, clip_min, clip_max)
-        img_filter_y = butter_lowpass_filter(img_filter_y, frequency)
-        img_filter_x = butter_lowpass_filter(img_filter_x, frequency)
-        img_filter_y = reshape(img_filter_y, (len(img_filter_y), 1))
-        img_filter_x = reshape(img_filter_x, (1, len(img_filter_x)))
-        img_filter = dot(img_filter_y, img_filter_x)
-    else:
-        img_filter = img.copy()
-        img_filter[img_filter == 0] = clip_med
-        clip(img_filter, clip_min, clip_max, out=img_filter)
-        img_filter = butter_lowpass_filter(img_filter, frequency)
-
-    # apply the filter
-    img_filter_max = np_max(img_filter)
-    if USE_NUMEXPR:
-        evaluate("img / img_filter * img_filter_max", out=img, casting="unsafe")
-    else:
-        img /= img_filter
-        img *= img_filter_max
-    return img
-
-
-def otsu_threshold(img: ndarray) -> float:
-    try:
-        return threshold_otsu(img)
-    except ValueError:
-        return 2
 
 
 def filter_streak_dual_band(img, sigma1, sigma2, level, wavelet, crossover, threshold, gpu_semaphore,
@@ -814,7 +815,7 @@ def filter_streaks(
         img = log1p_jit(img, dtype=float32)
 
     mask = None
-    if (bleach_correction_frequency, bleach_correction_clip_med) != (None, None):
+    if bleach_correction_frequency is not None and bleach_correction_clip_med is not None:
         mask = get_img_mask(img, bleach_correction_clip_med)
 
     if not sigma1 == sigma2 == 0:
@@ -878,8 +879,8 @@ def filter_streaks(
     if bleach_correction_frequency is not None:
         # convert uint16 to log1p
         if bleach_correction_clip_min is None or \
-           bleach_correction_clip_med is None or \
-           bleach_correction_clip_max is None:
+                bleach_correction_clip_med is None or \
+                bleach_correction_clip_max is None:
             lb, mb, ub = threshold_multiotsu(img, classes=4)
             if bleach_correction_clip_min is None:
                 bleach_correction_clip_min = lb
@@ -904,10 +905,6 @@ def filter_streaks(
                 f"clip_med={expm1(bleach_correction_clip_med)}, "
                 f"clip_max={expm1(bleach_correction_clip_max)},\n"
             )
-
-    # apply a mask
-    if (bleach_correction_frequency, bleach_correction_clip_med) != (None, None):
-        img *= get_img_mask(img, bleach_correction_clip_med)
 
     # undo log plus 1
     img = expm1_jit(img)
@@ -958,7 +955,7 @@ def process_img(
         exclude_dark_edges_set_them_to_zero: bool = False,
         sigma: Tuple[int, int] = (0, 0),
         level: int = 0,
-        wavelet: str = 'db37',
+        wavelet: str = 'coif15',
         crossover: float = 10,
         threshold: float = None,
         padding_mode: str = "wrap",
@@ -1041,7 +1038,7 @@ def process_img(
             # if img.dtype != float32:
             #     img = img.astype(float32)
             # gaussian(img, sigma=1, preserve_range=True, truncate=2, output=img)
-            GaussianBlur(img,  ksize=(5, 5), sigmaX=1, sigmaY=1)
+            GaussianBlur(img, ksize=(5, 5), sigmaX=1, sigmaY=1)
 
         if down_sample is not None:
             down_sample_method = down_sample_method.lower()
@@ -1154,7 +1151,7 @@ def read_filter_save(
         gaussian_filter_2d: bool = False,
         sigma: Tuple[int, int] = (0, 0),
         level: int = 0,
-        wavelet: str = 'db37',
+        wavelet: str = 'coif15',
         crossover: float = 10,
         threshold: float = None,
         padding_mode: str = "reflect",
@@ -1771,13 +1768,14 @@ def batch_filter(
         args_queue.put(args)
     del args_list
 
-    gpu_semaphore = None
+    gpu_semaphore = gpu_semaphore = Queue()
+    repeat = 3
     if cuda_is_available_for_pt:
-        repeat = 3
-        gpu_semaphore = Queue(maxsize=cuda_device_count() * repeat)
         for _ in range(repeat):
             for i in range(cuda_device_count()):
-                gpu_semaphore.put(i)
+                gpu_semaphore.put(f"cuda:{i}")
+    # for _ in range(repeat * 4):
+    #     gpu_semaphore.put("cpu")
 
     workers = min(workers, num_images)
     progress_queue = Queue()

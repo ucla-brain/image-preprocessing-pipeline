@@ -36,7 +36,7 @@ from torch.cuda import device_count as cuda_device_count
 from flat import create_flat_img
 from parallel_image_processor import parallel_image_processor, jumpy_step_range
 from pystripe.core import (batch_filter, imread_tif_raw_png, imsave_tif, MultiProcessQueueRunner, progress_manager,
-                           process_img, convert_to_8bit_fun, log1p_jit, prctl, np_max, np_mean)
+                           process_img, convert_to_8bit_fun, log1p_jit, prctl, np_max, np_mean, is_uniform_2d)
 from supplements.cli_interface import (ask_for_a_number_in_range, date_time_now, PrintColors)
 from supplements.tifstack import TifStack, imread_tif_stck
 from tsv.volume import TSVVolume, VExtent
@@ -597,21 +597,28 @@ def process_channel(
         frequency = None
         background, bit_shift, clip_min, clip_med, clip_max = 0, 8, None, None, None
         if need_16bit_to_8bit_conversion or need_bleach_correction:
-            z1 = shape[0]//2
-            print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
-                  f"calculating thresholding, and bit shift for 8-bit conversion using img_{z1:06n}.tif ...")
-            img = tsv_volume.imread(
-                VExtent(
-                    tsv_volume.volume.x0, tsv_volume.volume.x1,
-                    tsv_volume.volume.y0, tsv_volume.volume.y1,
-                    tsv_volume.volume.z0 + z1, tsv_volume.volume.z0 + z1 + 1),
-                tsv_volume.dtype)[0]
-            assert isinstance(img, ndarray)
-            img = log1p_jit(img, dtype=float32)
-            clip_min, clip_med, clip_max = threshold_multiotsu(img, classes=4)
-            assert isinstance(clip_min, float32)
-            assert isinstance(clip_med, float32)
-            assert isinstance(clip_max, float32)
+            found_threshold = False
+            z1 = shape[0] // 2
+            while not found_threshold:
+                try:
+                    p_log(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
+                          f"calculating thresholding, and bit shift for 8-bit conversion using img_{z1:06n}.tif ...")
+                    img = tsv_volume.imread(
+                        VExtent(
+                            tsv_volume.volume.x0, tsv_volume.volume.x1,
+                            tsv_volume.volume.y0, tsv_volume.volume.y1,
+                            tsv_volume.volume.z0 + z1, tsv_volume.volume.z0 + z1 + 1),
+                        tsv_volume.dtype)[0]
+                    assert not is_uniform_2d(img)
+                    assert isinstance(img, ndarray)
+                    img = log1p_jit(img, dtype=float32)
+                    clip_min, clip_med, clip_max = threshold_multiotsu(img, classes=4)
+                    assert isinstance(clip_min, float32)
+                    assert isinstance(clip_med, float32)
+                    assert isinstance(clip_max, float32)
+                    found_threshold = True
+                except (ValueError, AssertionError):
+                    z1 += 1
             bit_shift = estimate_bit_shift(img, threshold=clip_max, percentile=99.9)
             if need_bleach_correction:
                 background = int(np_round(expm1(clip_min)))
@@ -621,7 +628,7 @@ def process_channel(
                     sig = min(new_tile_size) // min(down_sampling_factor)
                 else:
                     sig = min(tile_size)
-                frequency = 1 / sig
+                # frequency = 1 / sig
 
         sigma = (int(sig), int(sig * 2))
         memory_needed_per_thread = 28 if need_bleach_correction else 16
@@ -669,18 +676,18 @@ def process_channel(
     )
     gpu_semaphore = Queue(maxsize=cuda_device_count())
     for i in range(cuda_device_count()):
-        gpu_semaphore.put(i)
+        gpu_semaphore.put(f"cuda:{i}")
     return_code = parallel_image_processor(
         source=tsv_volume,
         destination=stitched_tif_path,
         fun=process_img,
         kwargs={
-            "threshold": bleach_correction_clip_med,  # for dual-band sigma
             "sigma": bleach_correction_sigma,
             "wavelet": "coif15",  # db37
             "padding_mode": padding_mode,  # wrap reflect
-            "bidirectional": True if need_bleach_correction else False,
             "gpu_semaphore": gpu_semaphore,
+            "bidirectional": True if need_bleach_correction else False,
+            "threshold": bleach_correction_clip_med,  # for dual-band sigma
             "bleach_correction_frequency": bleach_correction_frequency,
             "bleach_correction_clip_min": bleach_correction_clip_min,
             "bleach_correction_clip_med": bleach_correction_clip_med,
@@ -1056,7 +1063,7 @@ def main(args):
 
     need_composite_image = False
     reference_channel = all_channels[0]
-    composite_path = Path(args.tmptif) / source_path.name
+    composite_path = Path(args.tmptif)
     if len(all_channels) > 1:
         if args.composite:
             need_composite_image = True
@@ -1065,7 +1072,7 @@ def main(args):
                 print(f"{PrintColors.FAIL}composite path {composite_path} did not exist.{PrintColors.ENDC}")
                 raise RuntimeError
             composite_path /= source_path.name + "_composite" + ("_MIP" if args.stitch_mip else "")
-        composite_path.mkdir(exist_ok=True)
+            composite_path.mkdir(exist_ok=True)
         if args.reference_channel:
             reference_channel = args.reference_channel
         if reference_channel not in all_channels:
@@ -1173,7 +1180,10 @@ def main(args):
 
     channels_need_tera_fly_conversion = select_channels(
         True if args.terafly_channels else False, args.terafly_channels, "terafly conversion")
-    terafly_path = imaris_files[0].parent
+
+    terafly_path = stitched_path
+    if args.imaris:
+        terafly_path = imaris_files[0].parent
     if channels_need_tera_fly_conversion and args.terafly_path:
         terafly_path = Path(args.terafly_path)
         if not terafly_path.exists():
@@ -1539,7 +1549,7 @@ if __name__ == '__main__':
                              "Works if more than one channels is acquired in one acquisition. "
                              "Disable if channels are acquired in separate acquisitions. "
                              "Default is --no-stitch_based_on_reference_channel_alignment.")
-    parser.add_argument("--imaris", "-o", type=str, required=True,
+    parser.add_argument("--imaris", "-o", type=str, required=False,
                         help="path to imaris output file.")
     parser.add_argument("--terafly_channels", "-f", required=False, nargs='+', default=[],
                         help="list of channels that need terafly conversion")

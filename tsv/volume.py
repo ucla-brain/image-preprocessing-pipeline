@@ -390,12 +390,12 @@ class TSVStack(TSVStackBase):
                     # raise RuntimeError
                     redo_path = True
             if redo_path:
-                self.paths
-                # self.__paths = []
-                # if my_paths:
-                #     for idx in self.__idxs_to_keep:
-                #         if idx < len(my_paths):
-                #             self.__paths += [my_paths[idx]]
+                self.__paths = []
+                if my_paths:
+                    for idx in self.__idxs_to_keep:
+                        if idx < len(my_paths):
+                            self.__paths += [my_paths[idx]]
+                # self.paths()
 
         return self.__paths
 
