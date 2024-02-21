@@ -36,7 +36,8 @@ from torch.cuda import device_count as cuda_device_count
 from flat import create_flat_img
 from parallel_image_processor import parallel_image_processor, jumpy_step_range
 from pystripe.core import (batch_filter, imread_tif_raw_png, imsave_tif, MultiProcessQueueRunner, progress_manager,
-                           process_img, convert_to_8bit_fun, log1p_jit, prctl, np_max, np_mean, is_uniform_2d)
+                           process_img, convert_to_8bit_fun, log1p_jit, prctl, np_max, np_mean, is_uniform_2d,
+                           calculate_pad_size)
 from supplements.cli_interface import (ask_for_a_number_in_range, date_time_now, PrintColors)
 from supplements.tifstack import TifStack, imread_tif_stck
 from tsv.volume import TSVVolume, VExtent
@@ -632,8 +633,8 @@ def process_channel(
 
         sigma = (int(sig), int(sig * 2))
         memory_needed_per_thread = 28 if need_bleach_correction else 16
-        memory_needed_per_thread *= shape[1] + 2 * max(sigma) + 1
-        memory_needed_per_thread *= shape[2] + 2 * max(sigma) + 1
+        memory_needed_per_thread *= shape[1] + 2 * calculate_pad_size(shape=shape[1:3], sigma=max(sigma)) + 1
+        memory_needed_per_thread *= shape[2] + 2 * calculate_pad_size(shape=shape[1:3], sigma=max(sigma)) + 1
         memory_needed_per_thread /= 1024 ** 3
         if tsv_volume.dtype in (uint8, "uint8"):
             memory_needed_per_thread /= 2

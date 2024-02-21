@@ -2,7 +2,7 @@ from argparse import RawDescriptionHelpFormatter, ArgumentParser
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, TimeoutError
 from concurrent.futures.process import BrokenProcessPool
 from functools import reduce
-from math import ceil
+from math import ceil, log, sqrt
 from multiprocessing import Process, Queue
 from operator import iconcat
 from os import scandir, DirEntry  # , environ
@@ -24,8 +24,9 @@ from numpy import max as np_max
 from numpy import mean as np_mean
 from numpy import median as np_median
 from numpy import min as np_min
-from numpy import uint8, uint16, float32, float64, ndarray, generic, zeros, broadcast_to, exp, expm1, log1p, ones, \
-    cumsum, arange, unique, interp, pad, clip, where, rot90, flipud, dot, reshape, iinfo, nonzero, logical_not, tanh
+from numpy import (uint8, uint16, float32, float64, iinfo, ndarray, generic, broadcast_to, exp, expm1, log1p, tanh,
+                   zeros, ones, cumsum, arange, unique, interp, pad, clip, where, rot90, flipud, dot, reshape, nonzero,
+                   logical_not)
 from psutil import cpu_count
 from ptwt import wavedec2 as pt_wavedec2
 from pywt import wavedec2, waverec2, Wavelet, dwt_max_level
@@ -336,7 +337,7 @@ def convert_to_8bit_fun(img: ndarray, bit_shift_to_right: int = 8):
     if 0 <= bit_shift_to_right < 9:
         lower_bound = 2 ** bit_shift_to_right
         if USE_NUMEXPR:
-            evaluate("where((0 < img) & (img < lower_bound), 1, img >> bit_shift_to_right)", out=img)
+            evaluate("where((0 < img) & (img < lower_bound), 1, img >> bit_shift_to_right)", out=img, casting="unsafe")
         else:
             img = where((0 < img) & (img < lower_bound), 1, img >> bit_shift_to_right)
     else:
@@ -397,7 +398,7 @@ def slice_non_zero_box(img_axis: ndarray, noise: int, filter_frequency: int = 1 
 
 
 def get_img_mask(img: ndarray, threshold: Union[int, float],
-                 close_steps: int = 50, open_steps: int = 500, flood_fill_flag: int = 8) -> ndarray:
+                 close_steps: int = 50, open_steps: int = 500, flood_fill_flag: int = 4) -> ndarray:
     # start_time = time()
     shape = list(img.shape)
     mask = (img > threshold).astype(uint8)
@@ -591,6 +592,42 @@ def np_notch(length: int, sigma: float) -> ndarray:
     return g
 
 
+def notch_rise_point(sigma: int, rise: float):
+    """ Compute length at which gaussian notch reaches the given rise point
+    :param sigma: sigma of notch function
+    :param rise: a vlue between 0 and 1.
+
+    ----
+    :return: length at which notch reaches the rise
+    """
+    return int(sqrt(-2 * sigma ** 2 * log(1 - rise)) + .5) // 2 * 2
+
+
+def calculate_pad_size(shape: tuple, sigma: int, rise: float = 0.5):
+    """ Calculate image padding based on padding size but make sure padded image fits into gpu memory
+    :param shape: shape of image
+    :param sigma: sigma of notch function
+    :param rise: requested rise point of gaussian notch function.
+        Since rfft output is symmetric 0.5 is optimum to avoid generating artifacts on the image.
+        at 0.4 pad size will be equal to the sigma itself.
+    ---
+    :return: pad size
+    """
+    x = shape[1] + 1
+    y = shape[0] + 1
+    c = 2e15  # for 8GB float32 image which needs ~40 GB of vRAM in pt_wavedec2
+    sqrt_xyc = sqrt(x ** 2 - 2 * x * y + y ** 2 + 4 * c)
+    rise = min(
+        round(
+            max(1 - exp((x + y - sqrt_xyc) / (4 * sigma ** 2)),
+                1 - exp((x + y + sqrt_xyc) / (4 * sigma ** 2))),
+            2
+        ) - 0.01,
+        rise
+    )
+    return notch_rise_point(sigma, rise)
+
+
 def np_gaussian_filter(shape: tuple, sigma: float, axis: int) -> ndarray:
     """Create a gaussian notch filter
 
@@ -744,7 +781,7 @@ def filter_streak_dual_band(img, sigma1, sigma2, level, wavelet, crossover, thre
 
 def filter_streaks(
         img: ndarray,
-        sigma: Tuple[float, float] = (250, 250),
+        sigma: Tuple[int, int] = (250, 250),
         level: int = 0,
         wavelet: str = 'db9',
         crossover: float = 10,
@@ -826,7 +863,8 @@ def filter_streaks(
             padding_mode = padding_mode.lower()
         if padding_mode in ('constant', 'edge', 'linear_ramp', 'maximum', 'mean', 'median', 'minimum', 'reflect',
                             'symmetric', 'wrap', 'empty'):
-            base_pad = int(max(sigma1, sigma2) // 2) * 2
+            # base_pad = int(max(sigma1, sigma2) // 2) * 2
+            base_pad = calculate_pad_size(shape=img_shape, sigma=max(sigma))
             min_image_length = 34  # tested for db9 to 37
             if (img_shape[0] + 2 * base_pad + pad_y) < min_image_length:
                 pad_y = min_image_length - (img_shape[0] + 2 * base_pad)
@@ -846,9 +884,6 @@ def filter_streaks(
                     img, ((base_pad, base_pad + pad_y), (base_pad, base_pad + pad_x)),
                     mode=padding_mode if padding_mode else 'reflect'
                 )
-
-        if threshold is None and bleach_correction_clip_med is not None:
-            threshold = log1p(bleach_correction_clip_med, dtype=float32)
 
         if bidirectional:
             img = filter_streak_dual_band(
@@ -1771,7 +1806,7 @@ def batch_filter(
     gpu_semaphore = None
     repeat = 3
     if cuda_is_available_for_pt:
-        gpu_semaphore = gpu_semaphore = Queue()
+        gpu_semaphore = Queue()
         for _ in range(repeat):
             for i in range(cuda_device_count()):
                 gpu_semaphore.put(f"cuda:{i}")
