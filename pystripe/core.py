@@ -617,14 +617,7 @@ def calculate_pad_size(shape: tuple, sigma: int, rise: float = 0.5):
     y = shape[0] + 1
     c = 2e15  # for 8GB float32 image which needs ~40 GB of vRAM in pt_wavedec2
     sqrt_xyc = sqrt(x ** 2 - 2 * x * y + y ** 2 + 4 * c)
-    rise = min(
-        round(
-            max(1 - exp((x + y - sqrt_xyc) / (4 * sigma ** 2)),
-                1 - exp((x + y + sqrt_xyc) / (4 * sigma ** 2))),
-            2
-        ) - 0.01,
-        rise
-    )
+    rise = min(round(1 - exp((x + y - sqrt_xyc) / (4 * sigma ** 2)), 2) - 0.01, rise)
     return notch_rise_point(sigma, rise)
 
 
