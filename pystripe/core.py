@@ -1804,7 +1804,7 @@ def batch_filter(
     del args_list
 
     gpu_semaphore = None
-    repeat = 3
+    repeat = 6
     if cuda_is_available_for_pt:
         gpu_semaphore = Queue()
         for _ in range(repeat):

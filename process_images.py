@@ -614,13 +614,15 @@ def process_channel(
                     assert isinstance(img, ndarray)
                     img = log1p_jit(img, dtype=float32)
                     clip_min, clip_med, clip_max = threshold_multiotsu(img, classes=4)
+                    bit_shift = estimate_bit_shift(img, threshold=clip_max, percentile=99.9)
                     assert isinstance(clip_min, float32)
                     assert isinstance(clip_med, float32)
                     assert isinstance(clip_max, float32)
+                    assert isinstance(bit_shift, int)
+                    assert 0 <= bit_shift <= 8
                     found_threshold = True
                 except (ValueError, AssertionError):
                     z1 += 1
-            bit_shift = estimate_bit_shift(img, threshold=clip_max, percentile=99.9)
             if need_bleach_correction:
                 background = int(np_round(expm1(clip_min)))
                 if new_tile_size is not None:
@@ -663,13 +665,17 @@ def process_channel(
         f"\tmax threads based on ram: \t{n_cores}\n"
         f"\ttsv volume shape (zyx): \t{shape}\n"
         f"\ttsv volume data type: \t\t{tsv_volume.dtype}\n"
-        f"\tbleach correction sigma: \t{bleach_correction_sigma}\n"
+        f"\tbleach correction sigma fg: \t{bleach_correction_sigma[0]}\n"
+        f"\tbleach correction sigma bg: \t{bleach_correction_sigma[1]}\n"
+        f"\tfg vs bg threshold: \t\t{expm1_int(bleach_correction_clip_med)}\n"
+        f"\tbidirectional axes (-1, -2): \t{True if need_bleach_correction else False}\n"
+        f"\tpadding mode: \t\t\t{padding_mode}\n"
+        f"\tpadding size: \t\t\t{calculate_pad_size(shape=shape[1:3], sigma=max(bleach_correction_sigma))}\n"
         f"\tbleach correction frequency: \t{bleach_correction_frequency}\n"
         f"\tbleach correction clip min: \t{expm1_int(bleach_correction_clip_min)}\n"
         f"\tbleach correction clip med: \t{expm1_int(bleach_correction_clip_med)}\n"
         f"\tbleach correction clip max: \t{expm1_int(bleach_correction_clip_max)}\n"
-        f"\tpadding mode: \t\t\t{padding_mode}\n"
-        f"\tdark: \t\t\t\t{dark}\n"
+        f"\tbaseline subtraction: \t\t{dark}\n"
         f"\tbackground subtraction: \t{need_lightsheet_cleaning}\n"
         f"\t8-bit conversion: \t\t{need_16bit_to_8bit_conversion}\n"
         f"\tbit-shift to right: \t\t{right_bit_shift}\n"
@@ -1246,7 +1252,6 @@ def main(args):
     all_channels = reorder_list(all_channels, channels_need_tera_fly_conversion)
     if args.stitch_based_on_reference_channel_alignment:
         all_channels = reorder_list(all_channels, [reference_channel])
-    print(all_channels)
     files_list = list(map(
         inspect_for_missing_tiles_get_files_list,
         [source_path / channel for channel in all_channels]))
