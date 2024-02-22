@@ -435,7 +435,7 @@ def process_channel(
             crossover=10,
             threshold=None,
             padding_mode="reflect",
-            bidirectional=True if objective == "40x" else False,
+            bidirectional=True,
             dark=dark,
             lightsheet=False,
             down_sample=down_sampling_factor,
