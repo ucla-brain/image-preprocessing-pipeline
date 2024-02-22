@@ -420,6 +420,9 @@ def parallel_image_processor(
         source_voxel: Union[Tuple[float, float, float], None] = None,
         target_voxel: Union[int, float, None] = None,
         downsampled_path: Union[Path, None] = None,
+        down_sampled_dtype: str = "float32",
+        
+        alternating_downsampling_method: bool = True,
         rotation: int = 0,
         timeout: Union[float, None] = None,
         max_processors: int = cpu_count(logical=False),

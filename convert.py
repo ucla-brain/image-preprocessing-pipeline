@@ -117,9 +117,9 @@ def main(args: Namespace):
             resume=args.resume,
             needed_memory=args.needed_memory * 1024 ** 3,
             save_images=args.save_images,
-            down_sampled_path=args.downsample_path,
+            downsampled_path=args.downsample_path,
             alternating_downsampling_method=False if args.downsample_method else True,
-            down_sample_dtype=args.downsample_dtype
+            down_sampled_dtype=args.downsample_dtype
         )
     elif input_path.is_dir():
         tif_2d_folder = input_path
