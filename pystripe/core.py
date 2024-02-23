@@ -27,7 +27,7 @@ from numpy import min as np_min
 from numpy import (uint8, uint16, float32, float64, iinfo, ndarray, generic, broadcast_to, exp, expm1, log1p, tanh,
                    zeros, ones, cumsum, arange, unique, interp, pad, clip, where, rot90, flipud, dot, reshape, nonzero,
                    logical_not, prod)
-from psutil import cpu_count
+from psutil import cpu_count, virtual_memory
 from ptwt import wavedec2 as pt_wavedec2
 from ptwt import waverec2 as pt_waverec2
 from pywt import wavedec2, waverec2, Wavelet, dwt_max_level
@@ -712,8 +712,7 @@ def filter_subband(
             else:
                 device = f"cuda:0"
                 gpu_mem = cuda_get_device_properties(device).total_memory
-            if ((48305274880 <= gpu_mem and prod(img_shape, dtype="uint32") * 2**9 * 1.437 < gpu_mem) or
-                    gpu_mem > 48305274880):
+            if device != "cpu" and (gpu_mem > 48305274880 or prod(img_shape, dtype="uint32") * 2**9 * 1.437 < gpu_mem):
                 recode_with_cpu = False
 
         img = pt_from_numpy(img.copy()).to(device, non_blocking=False)
@@ -1832,6 +1831,7 @@ def batch_filter(
         for _ in range(threads_per_gpu):
             for i in range(cuda_device_count()):
                 gpu_semaphore.put((f"cuda:{i}", cuda_get_device_properties(i).total_memory))
+        # gpu_semaphore.put(("cpu", virtual_memory().available))
 
     workers = min(workers, num_images)
     progress_queue = Queue()
