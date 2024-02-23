@@ -15,7 +15,7 @@ from tifffile import natural_sorted
 
 from parallel_image_processor import parallel_image_processor
 from process_images import get_imaris_command, MultiProcessCommandRunner, commands_progress_manger
-from pystripe.core import process_img, imread_tif_raw_png
+from pystripe.core import process_img, imread_tif_raw_png, cuda_get_device_properties, cuda_device_count
 from supplements.cli_interface import PrintColors
 
 
@@ -81,6 +81,9 @@ def main(args: Namespace):
         if args.bleach_correction:
             de_striping_sigma = (4000, 4000)
 
+        gpu_semaphore = Queue(maxsize=cuda_device_count())
+        for i in range(cuda_device_count()):
+            gpu_semaphore.put((f"cuda:{i}", cuda_get_device_properties(i).total_memory))
         return_code = parallel_image_processor(
             source=input_path,
             destination=tif_2d_folder,
@@ -104,7 +107,8 @@ def main(args: Namespace):
                 "flip_upside_down": args.flip_upside_down,
                 "convert_to_16bit": args.convert_to_16bit,
                 "convert_to_8bit": args.convert_to_8bit,
-                "bit_shift_to_right": args.bit_shift
+                "bit_shift_to_right": args.bit_shift,
+                "gpu_semaphore": gpu_semaphore
             } if args.channel >= 0 else None,
             rename=args.rename,
             max_processors=args.nthreads,
