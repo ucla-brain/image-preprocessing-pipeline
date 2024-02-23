@@ -48,6 +48,7 @@ from torch import reshape as pt_reshape
 from torch.cuda import device_count as cuda_device_count
 from torch.cuda import empty_cache as cuda_empty_cache
 from torch.cuda import is_available as cuda_is_available_for_pt
+from torch.cuda import synchronize as cuda_synchronize
 from torch.fft import irfft as pt_irfft
 from torch.fft import rfft as pt_rfft
 from tqdm import tqdm
@@ -701,6 +702,7 @@ def filter_subband(
     d_type = img.dtype
     img_shape = tuple(img.shape)
     recode_with_cpu = True
+    # recode_with_cpu = False
     if isinstance(axes, int):
         axes = (axes,)
     if USE_PYTORCH:
@@ -715,6 +717,7 @@ def filter_subband(
         img = pt_from_numpy(img.copy()).to(device, non_blocking=False)
         coefficients = pt_wavedec2(img, wavelet, mode='symmetric', level=None if level == 0 else level, axes=(-2, -1))
         if CUDA_IS_AVAILABLE_FOR_PT:
+            cuda_synchronize(device)
             img.detach()
             del img
             cuda_empty_cache()
@@ -728,6 +731,7 @@ def filter_subband(
                 for idx, cfs in enumerate(coefficients)
             ])
             if CUDA_IS_AVAILABLE_FOR_PT:
+                cuda_synchronize(device)
                 cuda_empty_cache()
                 if gpu_semaphore is not None:
                     gpu_semaphore.put(device)
@@ -743,6 +747,7 @@ def filter_subband(
             img = pt_waverec2(coefficients, wavelet, axes=(-2, -1))
             img = to_numpy(img)
             if CUDA_IS_AVAILABLE_FOR_PT:
+                cuda_synchronize(device)
                 cuda_empty_cache()
                 if gpu_semaphore is not None:
                     gpu_semaphore.put(device)
