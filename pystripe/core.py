@@ -46,9 +46,9 @@ from torch import float32 as pt_float32
 from torch import from_numpy as pt_from_numpy
 from torch import reshape as pt_reshape
 from torch.cuda import device_count as cuda_device_count
+from torch.cuda import get_device_properties as cuda_get_device_properties
 from torch.cuda import empty_cache as cuda_empty_cache
 from torch.cuda import is_available as cuda_is_available_for_pt
-from torch.cuda import synchronize as cuda_synchronize
 from torch.fft import irfft as pt_irfft
 from torch.fft import rfft as pt_rfft
 from tqdm import tqdm
@@ -58,7 +58,7 @@ from pystripe.raw import raw_imread
 from supplements.cli_interface import PrintColors, date_time_now
 
 filterwarnings("ignore")
-SUPPORTED_EXTENSIONS = ['.png', '.tif', '.tiff', '.raw', '.dcimg']
+SUPPORTED_EXTENSIONS = ('.png', '.tif', '.tiff', '.raw', '.dcimg')
 NUM_RETRIES: int = 40
 USE_NUMEXPR: bool = True
 USE_PYTORCH = True
@@ -702,22 +702,23 @@ def filter_subband(
     d_type = img.dtype
     img_shape = tuple(img.shape)
     recode_with_cpu = True
-    # recode_with_cpu = False
     if isinstance(axes, int):
         axes = (axes,)
     if USE_PYTORCH:
         device = "cpu"
         if CUDA_IS_AVAILABLE_FOR_PT:
-            device = f"cuda:0"
             if gpu_semaphore is not None:
-                device = gpu_semaphore.get(block=True)
-            if prod(img_shape) < 16000000:
+                device, gpu_mem = gpu_semaphore.get(block=True)
+            else:
+                device = f"cuda:0"
+                gpu_mem = cuda_get_device_properties(device).total_memory
+            if ((48305274880 <= gpu_mem and prod(img_shape, dtype="uint32") * 2**9 * 1.437 < gpu_mem) or
+                    gpu_mem > 48305274880):
                 recode_with_cpu = False
 
         img = pt_from_numpy(img.copy()).to(device, non_blocking=False)
         coefficients = pt_wavedec2(img, wavelet, mode='symmetric', level=None if level == 0 else level, axes=(-2, -1))
         if CUDA_IS_AVAILABLE_FOR_PT:
-            cuda_synchronize(device)
             img.detach()
             del img
             cuda_empty_cache()
@@ -731,10 +732,9 @@ def filter_subband(
                 for idx, cfs in enumerate(coefficients)
             ])
             if CUDA_IS_AVAILABLE_FOR_PT:
-                cuda_synchronize(device)
                 cuda_empty_cache()
                 if gpu_semaphore is not None:
-                    gpu_semaphore.put(device)
+                    gpu_semaphore.put((device, gpu_mem))
             img = waverec2(coefficients, wavelet, mode='symmetric', axes=(-2, -1)).astype(d_type)
         else:
             coefficients = list([
@@ -747,10 +747,9 @@ def filter_subband(
             img = pt_waverec2(coefficients, wavelet, axes=(-2, -1))
             img = to_numpy(img)
             if CUDA_IS_AVAILABLE_FOR_PT:
-                cuda_synchronize(device)
                 cuda_empty_cache()
                 if gpu_semaphore is not None:
-                    gpu_semaphore.put(device)
+                    gpu_semaphore.put((device, gpu_mem))
     else:
         coefficients = wavedec2(img, wavelet, mode='symmetric', level=None if level == 0 else level, axes=(-2, -1))
         # the first item (idx=0) is the details matrix
@@ -1616,6 +1615,7 @@ def batch_filter(
         output_path: Path,
         files_list: List[Path] = None,
         workers: int = cpu_count(logical=False),
+        threads_per_gpu: int = 8,
         flat: ndarray = None,
         gaussian_filter_2d: bool = False,
         sigma: Tuple[int, int] = (0, 0),
@@ -1667,6 +1667,9 @@ def batch_filter(
         list of files to process. If given, pystripe will not spend time searching for files in input path
     workers : int
         number of CPU workers to use
+    threads_per_gpu: int
+        number of images processed simultaneously with each GPU.
+        Depends on the vRAM capacity, size of the image, and CUDA core usage.
     sigma : tuple
         bandwidth of the stripe filter in pixels
         sigma=(foreground, background) Default is (0, 0), indicating no de-striping.
@@ -1824,12 +1827,11 @@ def batch_filter(
     del args_list
 
     gpu_semaphore = None
-    repeat = 6
     if cuda_is_available_for_pt:
         gpu_semaphore = Queue()
-        for _ in range(repeat):
+        for _ in range(threads_per_gpu):
             for i in range(cuda_device_count()):
-                gpu_semaphore.put(f"cuda:{i}")
+                gpu_semaphore.put((f"cuda:{i}", cuda_get_device_properties(i).total_memory))
 
     workers = min(workers, num_images)
     progress_queue = Queue()

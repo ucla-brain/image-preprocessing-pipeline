@@ -37,7 +37,7 @@ from flat import create_flat_img
 from parallel_image_processor import parallel_image_processor, jumpy_step_range
 from pystripe.core import (batch_filter, imread_tif_raw_png, imsave_tif, MultiProcessQueueRunner, progress_manager,
                            process_img, convert_to_8bit_fun, log1p_jit, prctl, np_max, np_mean, is_uniform_2d,
-                           calculate_pad_size)
+                           calculate_pad_size, cuda_get_device_properties)
 from supplements.cli_interface import (ask_for_a_number_in_range, date_time_now, PrintColors)
 from supplements.tifstack import TifStack, imread_tif_stck
 from tsv.volume import TSVVolume, VExtent
@@ -56,6 +56,7 @@ VoxelSizeX_9x, VoxelSizeY_9x = (0.72,) * 2
 VoxelSizeX_10x, VoxelSizeY_10x = (0.62,) * 2
 VoxelSizeX_15x, VoxelSizeY_15x = (0.41,) * 2
 VoxelSizeX_40x, VoxelSizeY_40x = (0.14, 0.14)  # 0.143, 0.12
+SUPPORTED_EXTENSIONS = ('.png', '.tif', '.tiff', '.raw')
 
 
 def p_log(txt: Union[str, list]):
@@ -120,7 +121,7 @@ def get_voxel_sizes(objective: str, path: Path, is_mip: bool):
             for x_folder in y_folder.iterdir():
                 if x_folder.is_dir():
                     files = sorted([f for f in x_folder.iterdir() if
-                                    f.is_file() and f.suffix.lower() in ['.png', '.tif', '.tiff', '.raw']])
+                                    f.suffix.lower() in SUPPORTED_EXTENSIONS and f.is_file()])
                     if len(files) > 1:
                         try:
                             voxel_size_z = (int(files[1].stem) - int(files[0].stem)) / 10
@@ -138,7 +139,7 @@ def get_voxel_sizes(objective: str, path: Path, is_mip: bool):
     return voxel_size_x, voxel_size_y, voxel_size_z, tile_size
 
 
-def get_list_of_files(y_folder: Path, extensions=(".tif", ".tiff", ".raw", ".png")) -> List[Path]:
+def get_list_of_files(y_folder: Path, extensions=SUPPORTED_EXTENSIONS) -> List[Path]:
     extensions: Tuple[LiteralString, ...] = tuple(ext.lower() for ext in extensions)
     files_list = []
     for file in y_folder.iterdir():
@@ -683,7 +684,7 @@ def process_channel(
     )
     gpu_semaphore = Queue(maxsize=cuda_device_count())
     for i in range(cuda_device_count()):
-        gpu_semaphore.put(f"cuda:{i}")
+        gpu_semaphore.put((f"cuda:{i}", cuda_get_device_properties(i).total_memory))
     return_code = parallel_image_processor(
         source=tsv_volume,
         destination=stitched_tif_path,
@@ -1252,9 +1253,11 @@ def main(args):
     all_channels = reorder_list(all_channels, channels_need_tera_fly_conversion)
     if args.stitch_based_on_reference_channel_alignment:
         all_channels = reorder_list(all_channels, [reference_channel])
-    files_list = list(map(
-        inspect_for_missing_tiles_get_files_list,
-        [source_path / channel for channel in all_channels]))
+    files_list = [(None, 100), ] * len(all_channels)
+    if not args.skip_inspection:
+        files_list = list(map(
+            inspect_for_missing_tiles_get_files_list,
+            [source_path / channel for channel in all_channels]))
     stitched_tif_paths, channel_volume_shapes = [], []
     queue = Queue()
     running_processes: int = 0
@@ -1622,4 +1625,6 @@ if __name__ == '__main__':
                              "but if you have corrupt files you can find them this way.")
     parser.add_argument("--skipconf", default=False, action=BooleanOptionalAction,
                         help="Skip confirmation message before beginning processing.")
+    parser.add_argument("--skip_inspection", default=False, action=BooleanOptionalAction,
+                        help="Skip inspecting unstitched image folders for missing tiles.")
     main(parser.parse_args())
