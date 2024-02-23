@@ -36,7 +36,7 @@ from flat import create_flat_img
 from parallel_image_processor import parallel_image_processor, jumpy_step_range
 from pystripe.core import (batch_filter, imread_tif_raw_png, imsave_tif, MultiProcessQueueRunner, progress_manager,
                            process_img, convert_to_8bit_fun, log1p_jit, prctl, np_max, np_mean, is_uniform_2d,
-                           calculate_pad_size, cuda_get_device_properties, cuda_device_count)
+                           calculate_pad_size, cuda_get_device_properties, cuda_device_count, CUDA_IS_AVAILABLE_FOR_PT)
 from supplements.cli_interface import (ask_for_a_number_in_range, date_time_now, PrintColors)
 from supplements.tifstack import TifStack, imread_tif_stck
 from tsv.volume import TSVVolume, VExtent
@@ -681,9 +681,15 @@ def process_channel(
         f"\tbit-shift to right: \t\t{right_bit_shift}\n"
         f"\trotate: \t\t\t{90 if need_rotation_stitched_tif else 0}"
     )
-    gpu_semaphore = Queue(maxsize=cuda_device_count())
-    for i in range(cuda_device_count()):
-        gpu_semaphore.put((f"cuda:{i}", cuda_get_device_properties(i).total_memory))
+
+    gpu_semaphore = None
+    if CUDA_IS_AVAILABLE_FOR_PT:
+        gpu_semaphore = Queue()
+        for i in range(cuda_device_count()):
+            gpu_semaphore.put((f"cuda:{i}", cuda_get_device_properties(i).total_memory))
+        if sys.platform.lower() != "win32" or (sys.platform.lower() == "win32" and get_cpu_sockets() == 1):
+            gpu_semaphore.put(("cpu", virtual_memory().available))
+
     return_code = parallel_image_processor(
         source=tsv_volume,
         destination=stitched_tif_path,
