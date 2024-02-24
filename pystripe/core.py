@@ -764,10 +764,11 @@ def filter_subband(
 
 
 def filter_streak_dual_band(img, sigma1, sigma2, level, wavelet, crossover, threshold, gpu_semaphore,
-                            axes: Union[tuple, int] = -1):
+                            axes: Union[tuple, int] = -1, use_thresholding: bool = False):
     if (sigma1 > 0 and sigma1 == sigma2) or (threshold is not None and threshold <= 0):
         img = filter_subband(img, sigma1, level, wavelet, gpu_semaphore, axes=axes)
-    else:
+    elif use_thresholding:
+        # this method is not compatible with log1p normalization
         smoothing: int = 1
         if threshold is None:
             threshold = otsu_threshold(img)
@@ -787,13 +788,17 @@ def filter_streak_dual_band(img, sigma1, sigma2, level, wavelet, crossover, thre
         fraction = foreground_fraction(img, threshold, crossover, smoothing)
         one = float32(1.0)
         if USE_NUMEXPR:
-            evaluate("foreground * fraction + background * (one - fraction)", out=img, casting="unsafe")
+            evaluate("(foreground * fraction + background * (one - fraction)) * threshold", out=img, casting="unsafe")
         else:
             foreground *= fraction
             fraction = one - fraction
             background *= fraction
             del fraction
             img = foreground + background
+            img *= threshold
+    else:
+        img = filter_subband(img, sigma1, level, wavelet, gpu_semaphore, axes=axes)
+        img = filter_subband(img, sigma2, level, wavelet, gpu_semaphore, axes=axes)
     return img
 
 

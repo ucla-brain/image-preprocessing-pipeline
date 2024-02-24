@@ -633,7 +633,7 @@ def process_channel(
                     sig = min(tile_size)
                 # frequency = 1 / sig
 
-        sigma = (int(sig), int(sig * 2))
+        sigma = (int(sig * 2), ) * 2
         memory_needed_per_thread = 28 if need_bleach_correction else 16
         memory_needed_per_thread *= shape[1] + 2 * calculate_pad_size(shape=shape[1:3], sigma=max(sigma)) + shape[1] % 2
         memory_needed_per_thread *= shape[2] + 2 * calculate_pad_size(shape=shape[1:3], sigma=max(sigma)) + shape[2] % 2
