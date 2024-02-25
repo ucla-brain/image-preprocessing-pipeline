@@ -712,7 +712,8 @@ def filter_subband(
             else:
                 device = f"cuda:0"
                 gpu_mem = cuda_get_device_properties(device).total_memory
-            if device != "cpu" and (gpu_mem > 48305274880 or prod(img_shape, dtype="uint32") * 2**9 * 1.437 < gpu_mem):
+            if device != "cpu" and (
+                    gpu_mem > 48305274880 or prod(img_shape, dtype="uint32") * 2 ** 9 * 1.437 < gpu_mem):
                 recode_with_cpu = False
 
         img = pt_from_numpy(img.copy()).to(device, non_blocking=False)
@@ -818,6 +819,9 @@ def filter_streaks(
         bleach_correction_clip_med: Union[float, int] = None,
         bleach_correction_clip_max: Union[float, int] = None,
         log1p_normalization_needed: bool = True,
+        enable_masking: bool = False,
+        close_steps: int = 50,
+        open_steps: int = 500,
         verbose: bool = False
 ) -> ndarray:
     """Filter horizontal streaks using wavelet-FFT filter and apply bleach correction
@@ -855,7 +859,14 @@ def filter_streaks(
         foreground max value
     log1p_normalization_needed: bool
         smooth the image using log plus 1 function.
-        It should be true in most cases except when img is already normalized with log1p function.
+        It should be true in most cases except for dual-band method combined with thresholding.
+    enable_masking: bool
+        Masking can clear the background for cases in which a large sample (for example a whole brain image) is
+        in the middle and surrounded by a dark background. It is very hard to automate it in my testing.
+    close_steps:
+        morphological operation to close the holes (like ventricles) in the image.
+    open_steps:
+        morphological operation to clear the noise in the background.
     verbose:
         if true explain to user what's going on
 
@@ -874,9 +885,21 @@ def filter_streaks(
     if log1p_normalization_needed:
         img = log1p_jit(img, dtype=float32)
 
-    mask = None
-    if bleach_correction_frequency is not None and bleach_correction_clip_med is not None:
-        mask = get_img_mask(img, bleach_correction_clip_med)
+    if (bleach_correction_frequency is not None and
+        (bleach_correction_clip_min is None or
+         bleach_correction_clip_med is None or
+         bleach_correction_clip_max is None)) or (enable_masking and bleach_correction_clip_med is None):
+
+        lb, mb, ub = threshold_multiotsu(img, classes=4)
+        if bleach_correction_clip_min is None:
+            bleach_correction_clip_min = lb
+        if bleach_correction_clip_med is None:
+            bleach_correction_clip_med = mb
+        if bleach_correction_clip_max is None:
+            bleach_correction_clip_max = ub
+
+    if enable_masking and close_steps is not None and open_steps is not None:
+        img *= get_img_mask(img, bleach_correction_clip_med, close_steps=close_steps, open_steps=open_steps)
 
     if not sigma1 == sigma2 == 0:
         # Need to pad image to multiple of 2. It is needed even for bleach correction non-max method
@@ -915,12 +938,8 @@ def filter_streaks(
             img = filter_streak_dual_band(
                 img, sigma1, sigma2, level, wavelet, crossover, threshold, gpu_semaphore, axes=-1)
 
-        # if bleach_correction_frequency is not None and not bidirectional:
-        #     img = filter_streak_dual_band(
-        #         img, sigma1, sigma1, level, wavelet, crossover, threshold, gpu_semaphore, axes=-2)
-
         if verbose:
-            print(f"de-striping applied: sigma={sigma}, level={level}, wavelet={wavelet}, crossover{crossover}, "
+            print(f"de-striping applied: sigma={sigma}, level={level}, wavelet={wavelet}, crossover={crossover}, "
                   f"threshold={threshold}, bidirectional={bidirectional}.")
 
         # undo padding
@@ -930,23 +949,7 @@ def filter_streaks(
                   base_pad: img.shape[1] - (base_pad + pad_x)]
             assert img.shape == img_shape
 
-    if mask is not None:
-        img *= mask
-        del mask
-
     if bleach_correction_frequency is not None:
-        # convert uint16 to log1p
-        if bleach_correction_clip_min is None or \
-                bleach_correction_clip_med is None or \
-                bleach_correction_clip_max is None:
-            lb, mb, ub = threshold_multiotsu(img, classes=4)
-            if bleach_correction_clip_min is None:
-                bleach_correction_clip_min = lb
-            if bleach_correction_clip_med is None:
-                bleach_correction_clip_med = mb
-            if bleach_correction_clip_max is None:
-                bleach_correction_clip_max = ub
-
         img = correct_bleaching(
             img,
             bleach_correction_frequency,
@@ -955,6 +958,7 @@ def filter_streaks(
             bleach_correction_clip_max,
             max_method=bleach_correction_max_method
         )
+
         if verbose:
             print(
                 f"bleach correction is applied: frequency={bleach_correction_frequency}, "
@@ -965,7 +969,9 @@ def filter_streaks(
             )
 
     # undo log plus 1
-    img = expm1_jit(img)
+    if log1p_normalization_needed:
+        img = expm1_jit(img)
+
     if np_d_type(d_type).kind in ("u", "i"):
         d_type_info = iinfo(d_type)
         clip(img, d_type_info.min, d_type_info.max, out=img)

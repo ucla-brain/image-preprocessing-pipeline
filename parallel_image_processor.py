@@ -22,7 +22,7 @@ from tifffile import natural_sorted
 from tqdm import tqdm
 
 from pystripe.core import (imread_tif_raw_png, imsave_tif, progress_manager, is_uniform_2d, is_uniform_3d,
-                           convert_to_8bit_fun,  convert_to_16bit_fun)
+                           convert_to_8bit_fun, convert_to_16bit_fun, filter_streaks)
 from supplements.cli_interface import PrintColors, date_time_now
 from tsv.volume import TSVVolume, VExtent
 
@@ -57,7 +57,8 @@ class MultiProcess(Process):
             needed_memory: int = None,
             save_images: bool = True,
             alternating_downsampling_method: bool = True,
-            down_sampled_dtype: str = "float32"
+            down_sampled_dtype: str = float32,
+            down_sampled_destriping_sigma: Tuple[int, int] = (0, 0)
     ):
         Process.__init__(self)
         self.daemon = False
@@ -103,6 +104,7 @@ class MultiProcess(Process):
             else:
                 self.calculate_down_sampling_target(shape, False, alternating_downsampling_method)
         self.rotation = rotation
+        self.down_sampled_destriping_sigma = down_sampled_destriping_sigma
 
     def calculate_down_sampling_target(self, new_shape: Tuple[int, int], is_rotated: bool,
                                        alternating_downsampling_method: bool):
@@ -343,6 +345,17 @@ class MultiProcess(Process):
                                 z_stack = block_reduce(z_stack, block_size=(2, 1, 1), func=z_method)
                         assert z_stack.shape[0] == 1
                         img = z_stack[0]
+
+                        img = filter_streaks(
+                            img,
+                            sigma=self.down_sampled_destriping_sigma,
+                            wavelet="coif15",
+                            bidirectional=True,
+                            gpu_semaphore=kwargs.get("gpu_semaphore", None),
+                            bleach_correction_frequency=None,
+                            enable_masking=False
+                        )
+
                         if self.down_sampled_dtype not in (float32, "float32"):
                             if self.down_sampled_dtype in (uint16, "uint16"):
                                 img = convert_to_16bit_fun(img)
@@ -356,6 +369,7 @@ class MultiProcess(Process):
                                       f"requested downsampled format is not supported"
                                       f"{PrintColors.ENDC}")
                                 raise RuntimeError
+
                         self.imsave_tif(down_sampled_tif_path, img, compression=compression)
 
             except (Empty, TimeoutError):
@@ -420,6 +434,7 @@ def parallel_image_processor(
         source_voxel: Union[Tuple[float, float, float], None] = None,
         target_voxel: Union[int, float, None] = None,
         downsampled_path: Union[Path, None] = None,
+        down_sampled_destriping_sigma: Tuple[int, int] = (2000, 2000),
         rotation: int = 0,
         timeout: Union[float, None] = None,
         max_processors: int = cpu_count(logical=False),
@@ -441,7 +456,11 @@ def parallel_image_processor(
     args: Tuple
         arguments of given function in correct order
     kwargs:
-        keyboard arguments of the given function
+        keyboard arguments of the given function. Add a "gpu_semaphore" if multi-GPU processing is required.
+        gpu_semaphore = Queue()
+        for i in range(torch.cuda.device_count()):
+            gpu_semaphore.put((f"cuda:{i}", torch.cuda.get_device_properties(i).total_memory))
+        {"gpu_semaphore": gpu_semaphore}
     tif_prefix: str
         prefix of the processed tif file
     channel: int
@@ -452,6 +471,8 @@ def parallel_image_processor(
         down-sampled isotropic voxel size in um.
     downsampled_path: Path
         path to save the downsampled image. If None destination path will be used.
+    down_sampled_destriping_sigma: Tuple[int fg, int bg]
+        filter stripes in the downsampled image. filter bandwidth(s) in pixels (larger gives more filtering)
     rotation: int
         Rotate the image. One of 0, 90, 180 or 270 degree values are accepted. Default is 0 (no rotation).
     timeout: float
@@ -563,8 +584,10 @@ def parallel_image_processor(
                 progress_queue, args_queue, semaphore, fun, images, destination, args, kwargs, shape, dtype,
                 rename=rename, tif_prefix=tif_prefix,
                 source_voxel=source_voxel, target_voxel=target_voxel, down_sampled_path=downsampled_path,
+                down_sampled_destriping_sigma=down_sampled_destriping_sigma,
                 rotation=rotation, channel=channel, timeout=timeout, compression=compression, resume=resume,
-                needed_memory=needed_memory, save_images=save_images).start()
+                needed_memory=needed_memory, save_images=save_images
+            ).start()
         else:
             print('\n the existing workers can finish the job! no more workers are needed.')
             workers = worker

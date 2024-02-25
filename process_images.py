@@ -650,7 +650,7 @@ def process_channel(
     (dark, right_bit_shift,
      bleach_correction_sigma, bleach_correction_clip_min, bleach_correction_clip_med, bleach_correction_clip_max,
      bleach_correction_frequency, free_ram, ram_needed_per_thread, n_cores) = estimate_img_related_params()
-
+    down_sampled_destriping_sigma = (2000, 2000) if need_bleach_correction else (0, 0)  # for 10 um target
     def expm1_int(x: float):
         return x if x is None else int(np_round(expm1(x)))
     p_log(
@@ -665,8 +665,8 @@ def process_channel(
         f"\tmax threads based on ram: \t{n_cores}\n"
         f"\ttsv volume shape (zyx): \t{shape}\n"
         f"\ttsv volume data type: \t\t{tsv_volume.dtype}\n"
-        f"\tbleach correction sigma fg: \t{bleach_correction_sigma[0]}\n"
-        f"\tbleach correction sigma bg: \t{bleach_correction_sigma[1]}\n"
+        f"\tbleach correction sigma main: \t{bleach_correction_sigma}\n"
+        f"\tbleach correction sigma down sampled: \t{down_sampled_destriping_sigma}\n"
         f"\tfg vs bg threshold: \t\t{expm1_int(bleach_correction_clip_med)}\n"
         f"\tbidirectional axes (-1, -2): \t{True if need_bleach_correction else False}\n"
         f"\tpadding mode: \t\t\t{padding_mode}\n"
@@ -718,6 +718,7 @@ def process_channel(
         source_voxel=(voxel_size_z, voxel_size_y, voxel_size_x),
         target_voxel=None if stitch_mip else isotropic_downsampling_resolution,
         downsampled_path=isotropic_downsampl_downsampled_path,
+        down_sampled_destriping_sigma=down_sampled_destriping_sigma,
         rotation=90 if need_rotation_stitched_tif else 0,
         timeout=timeout,
         max_processors=n_cores,
