@@ -682,7 +682,7 @@ def np_filter_coefficient(coef: ndarray, width_frac: float, axis=-1) -> ndarray:
     return coef
 
 
-def pt_filter_coefficient(coef: Tensor, width_frac: float, axis=-1, as_numpy: bool = False) -> ndarray:
+def pt_filter_coefficient(coef: Tensor, width_frac: float, axis=-1) -> Tensor:
     shape = coef.shape
     if axis == -1:
         sigma = coef.shape[1] * width_frac
@@ -696,8 +696,6 @@ def pt_filter_coefficient(coef: Tensor, width_frac: float, axis=-1, as_numpy: bo
     coef[0].real *= g
     del g
     coef = pt_irfft(coef, n=shape[axis], dim=axis)
-    if as_numpy:
-        coef = to_numpy(coef)
     return coef
 
 
@@ -742,10 +740,8 @@ def filter_subband(
                     coefficients[idx] = to_numpy(c)
                 else:
                     coefficients[idx] = (
-                        pt_filter_coefficient(c[0], sigma / img_shape[0], axis=-1, as_numpy=True
-                                              ) if -1 in axes else c[0],
-                        pt_filter_coefficient(c[1], sigma / img_shape[1], axis=-2, as_numpy=True
-                                              ) if -2 in axes else c[1],
+                        to_numpy(pt_filter_coefficient(c[0], sigma / img_shape[0], axis=-1) if -1 in axes else c[0]),
+                        to_numpy(pt_filter_coefficient(c[1], sigma / img_shape[1], axis=-2) if -2 in axes else c[1]),
                         to_numpy(c[2])
                     )
             if CUDA_IS_AVAILABLE_FOR_PT:
@@ -766,18 +762,15 @@ def filter_subband(
                     continue
                 else:
                     coefficients[idx] = (
-                        pt_filter_coefficient(c[0], sigma / img_shape[0], axis=-1, as_numpy=False
-                                              ) if -1 in axes else c[0],
-                        pt_filter_coefficient(c[1], sigma / img_shape[1], axis=-2, as_numpy=False
-                                              ) if -2 in axes else c[1],
+                        pt_filter_coefficient(c[0], sigma / img_shape[0], axis=-1) if -1 in axes else c[0],
+                        pt_filter_coefficient(c[1], sigma / img_shape[1], axis=-2) if -2 in axes else c[1],
                         c[2]
                     )
             img = pt_waverec2(coefficients, wavelet, axes=(-2, -1))
             img = to_numpy(img)
-            if CUDA_IS_AVAILABLE_FOR_PT:
-                cuda_empty_cache()
-                if gpu_semaphore is not None:
-                    gpu_semaphore.put((device, gpu_mem))
+            cuda_empty_cache()
+            if gpu_semaphore is not None:
+                gpu_semaphore.put((device, gpu_mem))
     else:
         coefficients = wavedec2(img, wavelet, mode='symmetric', level=None if level == 0 else level, axes=(-2, -1))
         # the first item (idx=0) is the details matrix
