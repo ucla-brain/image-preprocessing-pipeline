@@ -753,11 +753,7 @@ def filter_subband(
                         c[2]
                     )
             img = to_numpy(pt_waverec2(coefficients, wavelet, axes=(-2, -1)))
-            for idx, c in enumerate(coefficients):
-                if idx == 0:
-                    del c
-                else:
-                    del c[0], c[1], c[2]
+            del coefficients
             cuda_empty_cache()
             if gpu_semaphore is not None:
                 gpu_semaphore.put((device, gpu_mem))
