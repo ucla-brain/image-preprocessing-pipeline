@@ -8,7 +8,7 @@ import platform
 import sys
 from datetime import timedelta
 from math import floor
-from multiprocessing import freeze_support, Queue, Process, Pool
+from multiprocessing import freeze_support, Queue, Process, Pool, set_start_method
 from pathlib import Path
 from platform import uname
 from queue import Empty
@@ -445,6 +445,7 @@ def process_channel(
             convert_to_8bit=False,  # need_16bit_to_8bit_conversion
             bit_shift_to_right=8,
             compression=(compression_method, compression_level) if compression_level > 0 else None,
+            threads_per_gpu=8  # if sys.platform.lower() == "win32" else 1
         )
 
         if return_code != 0:
@@ -651,6 +652,7 @@ def process_channel(
      bleach_correction_sigma, bleach_correction_clip_min, bleach_correction_clip_med, bleach_correction_clip_max,
      bleach_correction_frequency, free_ram, ram_needed_per_thread, n_cores) = estimate_img_related_params()
     down_sampled_destriping_sigma = (2000, 2000) if need_bleach_correction else (0, 0)  # for 10 um target
+
     def expm1_int(x: float):
         return x if x is None else int(np_round(expm1(x)))
     p_log(
@@ -1451,6 +1453,7 @@ if __name__ == '__main__':
         teraconverter = "teraconverter.exe"
         nvidia_smi = "nvidia-smi.exe"
     elif sys.platform.lower() == 'linux':
+        set_start_method('spawn')
         os.environ["NUMPY_MADVISE_HUGEPAGE"] = "1"
         if 'microsoft' in uname().release.lower():
             print("Windows subsystem for Linux is detected.")
