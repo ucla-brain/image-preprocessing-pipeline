@@ -766,8 +766,7 @@ def filter_subband(
                         pt_filter_coefficient(c[1], sigma / img_shape[1], axis=-2) if -2 in axes else c[1],
                         c[2]
                     )
-            img = pt_waverec2(coefficients, wavelet, axes=(-2, -1))
-            img = to_numpy(img)
+            img = to_numpy(pt_waverec2(coefficients, wavelet, axes=(-2, -1)))
             cuda_empty_cache()
             if gpu_semaphore is not None:
                 gpu_semaphore.put((device, gpu_mem))
