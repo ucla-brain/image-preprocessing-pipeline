@@ -706,6 +706,7 @@ def filter_subband(
     recode_with_cpu = True
     if isinstance(axes, int):
         axes = (axes,)
+
     if USE_PYTORCH:
         device = "cpu"
         gpu_mem = 96305274880
@@ -719,7 +720,6 @@ def filter_subband(
                     gpu_mem > 48305274880 or prod(img_shape, dtype="uint32") * 2 ** 9 * 1.437 < gpu_mem):
                 recode_with_cpu = False
 
-        # img = pt_from_numpy(img.copy()).to(device, non_blocking=False)
         coefficients = pt_wavedec2(as_tensor(img, device=device, dtype=pt_float32),
                                    wavelet, mode='symmetric', level=None if level == 0 else level, axes=(-2, -1))
         # if CUDA_IS_AVAILABLE_FOR_PT:
@@ -728,13 +728,6 @@ def filter_subband(
         #     cuda_empty_cache()
 
         if recode_with_cpu:
-            # coefficients = list([
-            #     to_numpy(cfs) if idx == 0 else
-            #     tuple(pt_filter_coefficient(
-            #         cf, sigma / img_shape[i], axis=-1 - i, as_numpy=True) if -1 - i in axes else to_numpy(cf)
-            #           for i, cf in enumerate(cfs))
-            #     for idx, cfs in enumerate(coefficients)
-            # ])
             for idx, c in enumerate(coefficients):
                 if idx == 0:
                     coefficients[idx] = to_numpy(c)
@@ -750,13 +743,6 @@ def filter_subband(
                     gpu_semaphore.put((device, gpu_mem))
             img = waverec2(coefficients, wavelet, mode='symmetric', axes=(-2, -1)).astype(d_type)
         else:
-            # coefficients = list([
-            #     cfs if idx == 0 else
-            #     tuple(pt_filter_coefficient(
-            #         cf, sigma / img_shape[i], axis=-1 - i, as_numpy=False) if -1 - i in axes else cf
-            #           for i, cf in enumerate(cfs))
-            #     for idx, cfs in enumerate(coefficients)
-            # ])
             for idx, c in enumerate(coefficients):
                 if idx == 0:
                     continue
@@ -767,6 +753,11 @@ def filter_subband(
                         c[2]
                     )
             img = to_numpy(pt_waverec2(coefficients, wavelet, axes=(-2, -1)))
+            for idx, c in enumerate(coefficients):
+                if idx == 0:
+                    del c
+                else:
+                    del c[0], c[1], c[2]
             cuda_empty_cache()
             if gpu_semaphore is not None:
                 gpu_semaphore.put((device, gpu_mem))
@@ -774,12 +765,6 @@ def filter_subband(
         coefficients = wavedec2(img, wavelet, mode='symmetric', level=None if level == 0 else level, axes=(-2, -1))
         # the first item (idx=0) is the details matrix
         # the rest of items are tuples of horizontal, vertical and diagonal coefficients matrices
-        # coefficients = list([
-        #     cfs if idx == 0 else
-        #     tuple(np_filter_coefficient(cf, sigma / img_shape[i], axis=-1 - i) if -1 - i in axes else cf
-        #           for i, cf in enumerate(cfs))
-        #     for idx, cfs in enumerate(coefficients)
-        # ])
         for idx, c in enumerate(coefficients):
             if idx == 0:
                 continue
