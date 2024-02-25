@@ -666,7 +666,7 @@ def process_channel(
         f"\ttsv volume shape (zyx): \t{shape}\n"
         f"\ttsv volume data type: \t\t{tsv_volume.dtype}\n"
         f"\tbleach correction sigma main: \t{bleach_correction_sigma}\n"
-        f"\tbleach correction sigma down sampled: \t{down_sampled_destriping_sigma}\n"
+        f"\tbleach correction sigma down sampled: {down_sampled_destriping_sigma}\n"
         f"\tfg vs bg threshold: \t\t{expm1_int(bleach_correction_clip_med)}\n"
         f"\tbidirectional axes (-1, -2): \t{True if need_bleach_correction else False}\n"
         f"\tpadding mode: \t\t\t{padding_mode}\n"
