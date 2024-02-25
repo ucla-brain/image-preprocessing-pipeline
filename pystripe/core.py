@@ -1,3 +1,4 @@
+import sys
 from argparse import RawDescriptionHelpFormatter, ArgumentParser
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, TimeoutError
 from concurrent.futures.process import BrokenProcessPool
@@ -5,7 +6,7 @@ from functools import reduce
 from math import ceil, log, sqrt
 from multiprocessing import Process, Queue
 from operator import iconcat
-from os import scandir, DirEntry  # , environ
+from os import scandir, DirEntry
 from pathlib import Path
 from queue import Empty
 from re import compile, IGNORECASE
@@ -27,7 +28,7 @@ from numpy import min as np_min
 from numpy import (uint8, uint16, float32, float64, iinfo, ndarray, generic, broadcast_to, exp, expm1, log1p, tanh,
                    zeros, ones, cumsum, arange, unique, interp, pad, clip, where, rot90, flipud, dot, reshape, nonzero,
                    logical_not, prod)
-from psutil import cpu_count, virtual_memory
+from psutil import cpu_count
 from ptwt import wavedec2 as pt_wavedec2
 from ptwt import waverec2 as pt_waverec2
 from pywt import wavedec2, waverec2, Wavelet, dwt_max_level
@@ -38,12 +39,11 @@ from skimage.measure import block_reduce
 from skimage.transform import resize
 from tifffile import imread, imwrite
 from tifffile.tifffile import TiffFileError
-from torch import Tensor
+from torch import Tensor, as_tensor
 from torch import arange as pt_arange
 from torch import broadcast_to as pt_broadcast_to
 from torch import exp as pt_exp
 from torch import float32 as pt_float32
-from torch import from_numpy as pt_from_numpy
 from torch import reshape as pt_reshape
 from torch.cuda import device_count as cuda_device_count
 from torch.cuda import get_device_properties as cuda_get_device_properties
@@ -63,6 +63,9 @@ NUM_RETRIES: int = 40
 USE_NUMEXPR: bool = True
 USE_PYTORCH = True
 CUDA_IS_AVAILABLE_FOR_PT = cuda_is_available_for_pt()
+if sys.platform.lower() == "linux":
+    USE_PYTORCH = False
+    CUDA_IS_AVAILABLE_FOR_PT = False
 
 
 @jit(nopython=True)
@@ -691,6 +694,7 @@ def pt_filter_coefficient(coef: Tensor, width_frac: float, axis=-1, as_numpy: bo
     g = pt_gaussian_filter(shape=coef.shape[1:3], sigma=sigma / 2, device=coef.device, axis=axis)
     coef[0].imag *= g
     coef[0].real *= g
+    del g
     coef = pt_irfft(coef, n=shape[axis], dim=axis)
     if as_numpy:
         coef = to_numpy(coef)
@@ -706,6 +710,7 @@ def filter_subband(
         axes = (axes,)
     if USE_PYTORCH:
         device = "cpu"
+        gpu_mem = 96305274880
         if CUDA_IS_AVAILABLE_FOR_PT:
             if gpu_semaphore is not None:
                 device, gpu_mem = gpu_semaphore.get(block=True)
@@ -716,34 +721,57 @@ def filter_subband(
                     gpu_mem > 48305274880 or prod(img_shape, dtype="uint32") * 2 ** 9 * 1.437 < gpu_mem):
                 recode_with_cpu = False
 
-        img = pt_from_numpy(img.copy()).to(device, non_blocking=False)
-        coefficients = pt_wavedec2(img, wavelet, mode='symmetric', level=None if level == 0 else level, axes=(-2, -1))
-        if CUDA_IS_AVAILABLE_FOR_PT:
-            img.detach()
-            del img
-            cuda_empty_cache()
+        # img = pt_from_numpy(img.copy()).to(device, non_blocking=False)
+        coefficients = pt_wavedec2(as_tensor(img, device=device, dtype=pt_float32),
+                                   wavelet, mode='symmetric', level=None if level == 0 else level, axes=(-2, -1))
+        # if CUDA_IS_AVAILABLE_FOR_PT:
+        #     img.detach()
+        #     del img
+        #     cuda_empty_cache()
 
         if recode_with_cpu:
-            coefficients = list([
-                to_numpy(cfs) if idx == 0 else
-                tuple(pt_filter_coefficient(
-                    cf, sigma / img_shape[i], axis=-1 - i, as_numpy=True) if -1 - i in axes else to_numpy(cf)
-                      for i, cf in enumerate(cfs))
-                for idx, cfs in enumerate(coefficients)
-            ])
+            # coefficients = list([
+            #     to_numpy(cfs) if idx == 0 else
+            #     tuple(pt_filter_coefficient(
+            #         cf, sigma / img_shape[i], axis=-1 - i, as_numpy=True) if -1 - i in axes else to_numpy(cf)
+            #           for i, cf in enumerate(cfs))
+            #     for idx, cfs in enumerate(coefficients)
+            # ])
+            for idx, c in enumerate(coefficients):
+                if idx == 0:
+                    coefficients[idx] = to_numpy(c)
+                else:
+                    coefficients[idx] = (
+                        pt_filter_coefficient(c[0], sigma / img_shape[0], axis=-1, as_numpy=True
+                                              ) if -1 in axes else c[0],
+                        pt_filter_coefficient(c[1], sigma / img_shape[1], axis=-2, as_numpy=True
+                                              ) if -2 in axes else c[1],
+                        to_numpy(c[2])
+                    )
             if CUDA_IS_AVAILABLE_FOR_PT:
                 cuda_empty_cache()
                 if gpu_semaphore is not None:
                     gpu_semaphore.put((device, gpu_mem))
             img = waverec2(coefficients, wavelet, mode='symmetric', axes=(-2, -1)).astype(d_type)
         else:
-            coefficients = list([
-                cfs if idx == 0 else
-                tuple(pt_filter_coefficient(
-                    cf, sigma / img_shape[i], axis=-1 - i, as_numpy=False) if -1 - i in axes else cf
-                      for i, cf in enumerate(cfs))
-                for idx, cfs in enumerate(coefficients)
-            ])
+            # coefficients = list([
+            #     cfs if idx == 0 else
+            #     tuple(pt_filter_coefficient(
+            #         cf, sigma / img_shape[i], axis=-1 - i, as_numpy=False) if -1 - i in axes else cf
+            #           for i, cf in enumerate(cfs))
+            #     for idx, cfs in enumerate(coefficients)
+            # ])
+            for idx, c in enumerate(coefficients):
+                if idx == 0:
+                    continue
+                else:
+                    coefficients[idx] = (
+                        pt_filter_coefficient(c[0], sigma / img_shape[0], axis=-1, as_numpy=False
+                                              ) if -1 in axes else c[0],
+                        pt_filter_coefficient(c[1], sigma / img_shape[1], axis=-2, as_numpy=False
+                                              ) if -2 in axes else c[1],
+                        c[2]
+                    )
             img = pt_waverec2(coefficients, wavelet, axes=(-2, -1))
             img = to_numpy(img)
             if CUDA_IS_AVAILABLE_FOR_PT:
@@ -754,12 +782,21 @@ def filter_subband(
         coefficients = wavedec2(img, wavelet, mode='symmetric', level=None if level == 0 else level, axes=(-2, -1))
         # the first item (idx=0) is the details matrix
         # the rest of items are tuples of horizontal, vertical and diagonal coefficients matrices
-        coefficients = list([
-            cfs if idx == 0 else
-            tuple(np_filter_coefficient(cf, sigma / img_shape[i], axis=-1 - i) if -1 - i in axes else cf
-                  for i, cf in enumerate(cfs))
-            for idx, cfs in enumerate(coefficients)
-        ])
+        # coefficients = list([
+        #     cfs if idx == 0 else
+        #     tuple(np_filter_coefficient(cf, sigma / img_shape[i], axis=-1 - i) if -1 - i in axes else cf
+        #           for i, cf in enumerate(cfs))
+        #     for idx, cfs in enumerate(coefficients)
+        # ])
+        for idx, c in enumerate(coefficients):
+            if idx == 0:
+                continue
+            else:
+                coefficients[idx] = (
+                    np_filter_coefficient(c[0], sigma / img_shape[0], axis=-1) if -1 in axes else c[0],
+                    np_filter_coefficient(c[1], sigma / img_shape[1], axis=-2) if -2 in axes else c[1],
+                    c[2]
+                )
         img = waverec2(coefficients, wavelet, mode='symmetric', axes=(-2, -1)).astype(d_type)
     return img
 
@@ -1807,7 +1844,6 @@ def batch_filter(
         'print_input_file_names': print_input_file_names,
         'compression': compression
     }
-    # print(arg_dict_template)
 
     print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
           f"Scheduling jobs for images in \n\t{input_path}")
@@ -1842,7 +1878,7 @@ def batch_filter(
         for _ in range(threads_per_gpu):
             for i in range(cuda_device_count()):
                 gpu_semaphore.put((f"cuda:{i}", cuda_get_device_properties(i).total_memory))
-        # gpu_semaphore.put(("cpu", virtual_memory().available))
+        # gpu_semaphore.put(("cpu", 96305274880))
 
     workers = min(workers, num_images)
     progress_queue = Queue()
