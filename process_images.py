@@ -364,7 +364,8 @@ def process_channel(
         subvolume_depth: int = 1,
         print_input_file_names: bool = False,
         timeout: float = None,
-        nthreads: int = cpu_count(logical=False)
+        nthreads: int = cpu_count(logical=False),
+        exclude_gpus: list = []
 ):
     # preprocess each tile as needed using PyStripe --------------------------------------------------------------------
 
@@ -640,7 +641,7 @@ def process_channel(
                 # frequency = 1 / sig
 
         sigma = (int(sig * 2), ) * 2
-        memory_needed_per_thread = 24 if need_bleach_correction else 16
+        memory_needed_per_thread = 22 if need_bleach_correction else 16
         memory_needed_per_thread *= shape[1] + 2 * calculate_pad_size(shape=shape[1:3], sigma=max(sigma)) + shape[1] % 2
         memory_needed_per_thread *= shape[2] + 2 * calculate_pad_size(shape=shape[1:3], sigma=max(sigma)) + shape[2] % 2
         memory_needed_per_thread /= 1024 ** 3
@@ -692,8 +693,9 @@ def process_channel(
     gpu_semaphore = None
     if CUDA_IS_AVAILABLE_FOR_PT:
         gpu_semaphore = Queue()
-        for i in range(cuda_device_count()):
-            gpu_semaphore.put((f"cuda:{i}", cuda_get_device_properties(i).total_memory))
+        for gpu in range(cuda_device_count()):
+            if gpu not in exclude_gpus:
+                gpu_semaphore.put((f"cuda:{gpu}", cuda_get_device_properties(gpu).total_memory))
         if sys.platform.lower() != "win32" or (sys.platform.lower() == "win32" and get_cpu_sockets() == 1):
             gpu_semaphore.put(("cpu", virtual_memory().available))
 
@@ -1211,6 +1213,14 @@ def main(args):
             print(f"{PrintColors.FAIL}--terafly_path {args.terafly_path} does not exits!{PrintColors.ENDC}")
     terafly_path.joinpath("test").touch(exist_ok=False)
     terafly_path.joinpath("test").unlink()
+
+    exclude_gpus = tuple(map(int, args.exclude_gpus))
+    for gpu in exclude_gpus:
+        if gpu not in range(cuda_device_count()):
+            print(f"{PrintColors.FAIL}--exclude_gpus: {gpu} is not a valid gpu index. "
+                  f"Choose among {range(cuda_device_count())}")
+            raise RuntimeError
+
     # Start ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
     start_time = time()
@@ -1313,7 +1323,8 @@ def main(args):
             subvolume_depth=subvolume_depth,
             print_input_file_names=False,  # for debugging only
             timeout=args.timeout,
-            nthreads=args.nthreads
+            nthreads=args.nthreads,
+            exclude_gpus=exclude_gpus
         )
         stitched_tif_paths += [stitched_tif_path]
         channel_volume_shapes += [shape]
@@ -1645,4 +1656,6 @@ if __name__ == '__main__':
                         help="Skip confirmation message before beginning processing.")
     parser.add_argument("--skip_inspection", default=False, action=BooleanOptionalAction,
                         help="Skip inspecting unstitched image folders for missing tiles.")
+    parser.add_argument("--exclude_gpus", required=False, nargs='+', default=[],
+                        help="gpu indices that start from 0 and needs to be excluded.")
     main(parser.parse_args())
