@@ -14,6 +14,7 @@ from time import sleep, time
 from types import GeneratorType
 from typing import Tuple, Iterator, List, Callable, Union
 from warnings import filterwarnings
+# from gc import collect as gc_collect
 
 from cv2 import morphologyEx, MORPH_CLOSE, MORPH_OPEN, floodFill, GaussianBlur
 from dcimg import DCIMGFile
@@ -42,6 +43,7 @@ from tifffile.tifffile import TiffFileError
 from torch import Tensor, as_tensor
 from torch import arange as pt_arange
 from torch import broadcast_to as pt_broadcast_to
+from torch import complex as pt_complex
 from torch import exp as pt_exp
 from torch import float32 as pt_float32
 from torch import reshape as pt_reshape
@@ -636,7 +638,7 @@ def calculate_pad_size(shape: tuple, sigma: int, rise: float = 0.5):
     """
     x = shape[1] + 1
     y = shape[0] + 1
-    c = 2e15  # for 8GB float32 image which needs ~40 GB of vRAM in pt_wavedec2
+    c = 5e14  # 2e15 for 8GB float32 image which needs ~40 GB of vRAM in pt_wavedec2
     sqrt_xyc = sqrt(x ** 2 - 2 * x * y + y ** 2 + 4 * c)
     rise = min(round(1 - exp((x + y - sqrt_xyc) / (4 * sigma ** 2)), 2) - 0.01, rise)
     return notch_rise_point(sigma, rise)
@@ -687,7 +689,7 @@ def pt_gaussian_filter(shape: tuple, sigma: float, axis: int, device: str = "cpu
     if axis == -2:
         g = pt_reshape(g, shape=(shape[axis], 1))
     g = pt_broadcast_to(g, shape)
-    return g
+    return pt_complex(g, g)
 
 
 def np_filter_coefficient(coef: ndarray, width_frac: float, axis=-1) -> ndarray:
@@ -707,10 +709,7 @@ def pt_filter_coefficient(coef: Tensor, width_frac: float, axis=-1) -> Tensor:
     else:
         raise ValueError('axis must be -1 or -2')
     coef = pt_rfft(coef, n=shape[axis], dim=axis)
-    g = pt_gaussian_filter(shape=coef.shape[1:3], sigma=sigma / 2, device=coef.device, axis=axis)
-    coef[0].imag *= g
-    coef[0].real *= g
-    del g
+    coef[0] *= pt_gaussian_filter(shape=coef.shape[1:3], sigma=sigma / 2, device=coef.device, axis=axis)
     coef = pt_irfft(coef, n=shape[axis], dim=axis)
     return coef
 
@@ -826,13 +825,10 @@ def filter_subband(
             if device != "cpu" and (
                     gpu_mem > 48305274880 or prod(img_shape, dtype="uint32") * 2 ** 9 * 1.437 < gpu_mem):
                 recode_with_cpu = False
-
-        img = as_tensor(img, device=device, dtype=pt_float32)
-        coefficients = pt_wavedec2(img, wavelet, mode='symmetric', level=level, axes=(-2, -1))
-        if CUDA_IS_AVAILABLE_FOR_PT:
-            img.detach()
-            del img
             cuda_empty_cache()
+
+        coefficients = pt_wavedec2(as_tensor(img, device=device, dtype=pt_float32), wavelet,
+                                   mode='symmetric', level=level, axes=(-2, -1))
 
         if recode_with_cpu:
             for idx, c in enumerate(coefficients):
@@ -844,10 +840,8 @@ def filter_subband(
                         to_numpy(pt_filter_coefficient(c[1], sigma / img_shape[1], axis=-2) if -2 in axes else c[1]),
                         to_numpy(c[2])
                     )
-            if CUDA_IS_AVAILABLE_FOR_PT:
-                cuda_empty_cache()
-                if gpu_semaphore is not None:
-                    gpu_semaphore.put((device, gpu_mem))
+            if CUDA_IS_AVAILABLE_FOR_PT and gpu_semaphore is not None:
+                gpu_semaphore.put((device, gpu_mem))
             img = waverec2(coefficients, wavelet, mode='symmetric', axes=(-2, -1)).astype(d_type)
         else:
             for idx, c in enumerate(coefficients):
@@ -994,6 +988,8 @@ def filter_streaks(
     img : ndarray
         filtered image
     """
+    if not isinstance(sigma, (tuple, list)):
+        sigma = (sigma, ) * 2
     sigma1 = sigma[0]  # foreground
     sigma2 = sigma[1]  # background
     if sigma1 == sigma2 == 0 and bleach_correction_frequency is None:
