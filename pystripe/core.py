@@ -14,7 +14,7 @@ from time import sleep, time
 from types import GeneratorType
 from typing import Tuple, Iterator, List, Callable, Union
 from warnings import filterwarnings
-# from gc import collect as gc_collect
+from gc import collect as gc_collect
 
 from cv2 import morphologyEx, MORPH_CLOSE, MORPH_OPEN, floodFill, GaussianBlur
 from dcimg import DCIMGFile
@@ -839,8 +839,11 @@ def filter_subband(
                         to_numpy(pt_filter_coefficient(c[1], sigma / img_shape[1], axis=-2) if -2 in axes else c[1]),
                         to_numpy(c[2])
                     )
-            if CUDA_IS_AVAILABLE_FOR_PT and gpu_semaphore is not None:
-                gpu_semaphore.put((device, gpu_mem))
+            if CUDA_IS_AVAILABLE_FOR_PT:
+                if gpu_semaphore is not None:
+                    gpu_semaphore.put((device, gpu_mem))
+                gc_collect()
+                cuda_empty_cache()
             img = waverec2(coefficients, wavelet, mode='symmetric', axes=(-2, -1)).astype(d_type)
         else:
             for idx, c in enumerate(coefficients):
@@ -853,11 +856,11 @@ def filter_subband(
                         c[2]
                     )
             img = to_numpy(pt_waverec2(coefficients, wavelet, axes=(-2, -1)))
-            del coefficients
-            cuda_empty_cache()
             if gpu_semaphore is not None:
                 gpu_semaphore.put((device, gpu_mem))
-
+            del coefficients
+            gc_collect()
+            cuda_empty_cache()
         return img
 
     coefficients = wavedec2(img, wavelet, mode='symmetric', level=level, axes=(-2, -1))
