@@ -159,7 +159,7 @@ class MultiProcess(Process):
         free_ram_is_not_enough = False
         if self.needed_memory is not None and virtual_memory().available < self.needed_memory:
             free_ram_is_not_enough = True
-            sleep(1)
+            sleep(60)
         self.semaphore.put(1)
         return free_ram_is_not_enough
 
