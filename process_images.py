@@ -1229,7 +1229,7 @@ def main(args):
         f"\n\t\ttile size: {tile_size}"
         f"\n\t\tVoxel size x: {voxel_size_x} µm"
         f"\n\t\tVoxel size y: {voxel_size_y} µm"
-        f"\n\t\tVoxel size z: {voxel_size_z} µm"
+        f"\n\t\tVoxel size z: {PrintColors.WARNING}{voxel_size_z}{PrintColors.ENDC} µm"
         f"\n\tPreprocessed folder path:\n\t\t{preprocessed_path}"
         f"\n\t\tpreprocessing, gaussian: {args.gaussian}"
         f"\n\t\tpreprocessing, down sampling factors (y, x): {down_sampling_factor}"
