@@ -37,7 +37,7 @@ from parallel_image_processor import parallel_image_processor, jumpy_step_range
 from pystripe.core import (batch_filter, imread_tif_raw_png, imsave_tif, MultiProcessQueueRunner, progress_manager,
                            process_img, convert_to_8bit_fun, log1p_jit, prctl, np_max, np_mean, is_uniform_2d,
                            calculate_pad_size, cuda_get_device_properties, cuda_device_count,
-                           CUDA_IS_AVAILABLE_FOR_PT, USE_PYTORCH)
+                           CUDA_IS_AVAILABLE_FOR_PT, USE_PYTORCH, USE_JAX)
 from supplements.cli_interface import (ask_for_a_number_in_range, date_time_now, PrintColors)
 from supplements.tifstack import TifStack, imread_tif_stck
 from tsv.volume import TSVVolume, VExtent
@@ -1454,8 +1454,11 @@ if __name__ == '__main__':
         teraconverter = "teraconverter.exe"
         nvidia_smi = "nvidia-smi.exe"
     elif sys.platform.lower() == 'linux':
-        if USE_PYTORCH:
+        if USE_PYTORCH or USE_JAX:
             set_start_method('spawn')
+        if USE_JAX:
+            os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+            os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
         os.environ["NUMPY_MADVISE_HUGEPAGE"] = "1"
         if 'microsoft' in uname().release.lower():
             print("Windows subsystem for Linux is detected.")

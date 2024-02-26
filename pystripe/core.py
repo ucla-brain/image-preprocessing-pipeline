@@ -27,7 +27,7 @@ from numpy import median as np_median
 from numpy import min as np_min
 from numpy import (uint8, uint16, float32, float64, iinfo, ndarray, generic, broadcast_to, exp, expm1, log1p, tanh,
                    zeros, ones, cumsum, arange, unique, interp, pad, clip, where, rot90, flipud, dot, reshape, nonzero,
-                   logical_not, prod)
+                   logical_not, prod, asarray)
 from psutil import cpu_count
 from ptwt import wavedec2 as pt_wavedec2
 from ptwt import waverec2 as pt_waverec2
@@ -53,6 +53,20 @@ from torch.fft import irfft as pt_irfft
 from torch.fft import rfft as pt_rfft
 from tqdm import tqdm
 
+# from jax import local_devices, Array, default_device
+# from jax.numpy import broadcast_to as jx_broadcast_to
+# from jax.numpy import reshape as jx_reshape
+# from jax.numpy import arange as jx_arange
+# from jax.numpy import float32 as jx_float32
+# from jax.numpy import exp as jx_exp
+# from jax.numpy import asarray as jx_asarray
+# from jax.numpy import multiply as jx_multiply
+# from jax.lax import complex as jx_complex
+# from jax.numpy.fft import rfft as jx_rfft
+# from jax.numpy.fft import irfft as jx_irfft
+# from jaxwt import wavedec2 as jx_wavedec2
+# from jaxwt import waverec2 as jx_waverec2
+
 from pystripe.lightsheet_correct import correct_lightsheet, prctl
 from pystripe.raw import raw_imread
 from supplements.cli_interface import PrintColors, date_time_now
@@ -62,10 +76,12 @@ SUPPORTED_EXTENSIONS = ('.png', '.tif', '.tiff', '.raw', '.dcimg')
 NUM_RETRIES: int = 40
 USE_NUMEXPR: bool = True
 USE_PYTORCH = True
+USE_JAX = False
 CUDA_IS_AVAILABLE_FOR_PT = cuda_is_available_for_pt()
 if sys.platform.lower() == "linux":
     USE_PYTORCH = False
     CUDA_IS_AVAILABLE_FOR_PT = False
+    # USE_JAX = True
 
 
 @jit(nopython=True)
@@ -699,13 +715,104 @@ def pt_filter_coefficient(coef: Tensor, width_frac: float, axis=-1) -> Tensor:
     return coef
 
 
+# def jx_notch(length: int, sigma: float, device) -> Array:
+#     """Generates a 1D gaussian notch filter `n` pixels long
+#
+#     Parameters
+#     ----------
+#     length : int
+#         length of the gaussian notch filter
+#     sigma : float
+#         notch width
+#     device : jax device object
+#
+#     Returns
+#     -------
+#     g : Array
+#         (length,) array containing the gaussian notch filter
+#
+#     """
+#     if length <= 0:
+#         raise ValueError('pt_notch: length must be positive')
+#     if sigma <= 0:
+#         raise ValueError('pt_notch: sigma must be positive')
+#     with default_device(device):
+#         g = jx_arange(0, length, 1, dtype=jx_float32)
+#         g **= 2
+#         g /= -2 * sigma ** 2
+#         g = jx_exp(g)
+#         g = 1 - g
+#     return g
+#
+#
+# def jx_gaussian_filter(shape: tuple, sigma: float, axis: int, device) -> Array:
+#     """Create a gaussian notch filter
+#     Parameters
+#     ----------
+#     shape : tuple
+#         shape of the output filter
+#     sigma : float
+#         filter bandwidth
+#     axis: int
+#         axis of the filter. options: -1 or -2
+#     device : jax device object
+#
+#     Returns
+#     ----------
+#     g : Tensor
+#         the impulse response of the gaussian notch filter
+#     """
+#     g = jx_notch(length=shape[axis], sigma=sigma, device=device)
+#     if axis == -2:
+#         g = jx_reshape(g, newshape=(shape[axis], 1))
+#     g = jx_asarray([jx_broadcast_to(g, shape)])
+#     g = jx_complex(g, g)
+#     return g
+#
+#
+# def jx_filter_coefficient(coef: Array, width_frac: float, axis=-1) -> Array:
+#     shape = tuple(coef.shape)
+#     if axis == -1:
+#         sigma = coef.shape[1] * width_frac
+#     elif axis == -2:
+#         sigma = coef.shape[2] * width_frac
+#     else:
+#         raise ValueError('axis must be -1 or -2')
+#     coef = jx_rfft(coef, n=shape[axis], axis=axis)
+#     coef = jx_multiply(coef, jx_gaussian_filter(shape=coef.shape[1:3], sigma=sigma / 2, device=coef.device(), axis=axis))
+#     coef = jx_irfft(coef, n=shape[axis], axis=axis)
+#     return coef
+
+
 def filter_subband(
         img: ndarray, sigma: float, level: int, wavelet: str, gpu_semaphore: Queue, axes=-1) -> ndarray:
+    level = None if level == 0 else level
     d_type = img.dtype
     img_shape = tuple(img.shape)
     recode_with_cpu = True
     if isinstance(axes, int):
         axes = (axes,)
+
+    # if USE_JAX:
+    #     device = 0
+    #     if gpu_semaphore is not None:
+    #         device, _ = gpu_semaphore.get()
+    #
+    #     with default_device(local_devices()[device]):
+    #         coefficients = jx_wavedec2(jx_asarray(img, dtype=jx_float32), wavelet, mode='symmetric', level=level,
+    #                                    axes=(-2, -1))
+    #         for idx, c in enumerate(coefficients):
+    #             if idx == 0:
+    #                 continue
+    #             else:
+    #                 coefficients[idx] = (
+    #                     jx_filter_coefficient(c[0], sigma / img_shape[0], axis=-1) if -1 in axes else c[0],
+    #                     jx_filter_coefficient(c[1], sigma / img_shape[1], axis=-2) if -2 in axes else c[1],
+    #                     c[2]
+    #                 )
+    #         img = asarray(jx_waverec2(coefficients, wavelet=wavelet, axes=(-2, -1))[0])  # .block_until_ready()
+    #         gpu_semaphore.put((device, None))
+    #         return img
 
     if USE_PYTORCH:
         device = "cpu"
@@ -757,20 +864,22 @@ def filter_subband(
             cuda_empty_cache()
             if gpu_semaphore is not None:
                 gpu_semaphore.put((device, gpu_mem))
-    else:
-        coefficients = wavedec2(img, wavelet, mode='symmetric', level=None if level == 0 else level, axes=(-2, -1))
-        # the first item (idx=0) is the details matrix
-        # the rest of items are tuples of horizontal, vertical and diagonal coefficients matrices
-        for idx, c in enumerate(coefficients):
-            if idx == 0:
-                continue
-            else:
-                coefficients[idx] = (
-                    np_filter_coefficient(c[0], sigma / img_shape[0], axis=-1) if -1 in axes else c[0],
-                    np_filter_coefficient(c[1], sigma / img_shape[1], axis=-2) if -2 in axes else c[1],
-                    c[2]
-                )
-        img = waverec2(coefficients, wavelet, mode='symmetric', axes=(-2, -1)).astype(d_type)
+
+        return img
+
+    coefficients = wavedec2(img, wavelet, mode='symmetric', level=None if level == 0 else level, axes=(-2, -1))
+    # the first item (idx=0) is the details matrix
+    # the rest of items are tuples of horizontal, vertical and diagonal coefficients matrices
+    for idx, c in enumerate(coefficients):
+        if idx == 0:
+            continue
+        else:
+            coefficients[idx] = (
+                np_filter_coefficient(c[0], sigma / img_shape[0], axis=-1) if -1 in axes else c[0],
+                np_filter_coefficient(c[1], sigma / img_shape[1], axis=-2) if -2 in axes else c[1],
+                c[2]
+            )
+    img = waverec2(coefficients, wavelet, mode='symmetric', axes=(-2, -1)).astype(d_type)
     return img
 
 
@@ -1540,14 +1649,15 @@ class MultiProcessQueueRunner(Process):
         else:
             pool = ThreadPoolExecutor(max_workers=1)
         function = self.function
-        queue_timeout = 20
+        queue_timeout = None  # 20
         while not self.die and not self.args_queue.qsize() == 0:
             try:
                 queue_start_time = time()
                 args: dict = self.args_queue.get(block=True, timeout=queue_timeout)
                 if gpu_semaphore is not None:
                     args.update({"gpu_semaphore": gpu_semaphore})
-                queue_timeout = max(queue_timeout, 0.9 * queue_timeout + 0.3 * (time() - queue_start_time))
+                if queue_timeout is not None:
+                    queue_timeout = max(queue_timeout, 0.9 * queue_timeout + 0.3 * (time() - queue_start_time))
                 try:
                     start_time = time()
                     future = pool.submit(function, **args)
@@ -1846,12 +1956,16 @@ def batch_filter(
     del args_list
 
     gpu_semaphore = None
-    if cuda_is_available_for_pt:
+    if USE_PYTORCH and CUDA_IS_AVAILABLE_FOR_PT:
         gpu_semaphore = Queue()
         for _ in range(threads_per_gpu):
             for i in range(cuda_device_count()):
                 gpu_semaphore.put((f"cuda:{i}", cuda_get_device_properties(i).total_memory))
         # gpu_semaphore.put(("cpu", 96305274880))
+    elif USE_JAX:
+        gpu_semaphore = Queue()
+        for idx, device in enumerate(local_devices()):
+            gpu_semaphore.put((idx, None))
 
     workers = min(workers, num_images)
     progress_queue = Queue()
