@@ -120,18 +120,19 @@ def get_voxel_sizes(objective: str, path: Path, is_mip: bool):
         if y_folder.is_dir() and voxel_size_z is None:
             for x_folder in y_folder.iterdir():
                 if x_folder.is_dir():
-                    files = sorted([f for f in x_folder.iterdir() if
-                                    f.suffix.lower() in SUPPORTED_EXTENSIONS and f.is_file()])
-                    if len(files) > 1:
-                        try:
-                            voxel_size_z = (int(files[1].stem) - int(files[0].stem)) / 10
-                            break
-                        except ValueError as e:
-                            print(e)
-                            pass
-                        except OSError as e:
-                            print(e)
-                            pass
+                    try:
+                        files = sorted([f for f in x_folder.iterdir() if
+                                        f.suffix.lower() in SUPPORTED_EXTENSIONS and f.is_file()])
+                        if len(files) > 1:
+                            try:
+                                voxel_size_z = (int(files[1].stem) - int(files[0].stem)) / 10
+                                break
+                            except ValueError as e:
+                                print(e)
+                                pass
+                    except OSError as e:
+                        print(e)
+                        pass
 
     if voxel_size_z is None:
         voxel_size_z = ask_for_a_number_in_range(
