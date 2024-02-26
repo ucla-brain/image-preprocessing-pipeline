@@ -827,12 +827,12 @@ def filter_subband(
                     gpu_mem > 48305274880 or prod(img_shape, dtype="uint32") * 2 ** 9 * 1.437 < gpu_mem):
                 recode_with_cpu = False
 
-        coefficients = pt_wavedec2(as_tensor(img, device=device, dtype=pt_float32),
-                                   wavelet, mode='symmetric', level=None if level == 0 else level, axes=(-2, -1))
-        # if CUDA_IS_AVAILABLE_FOR_PT:
-        #     img.detach()
-        #     del img
-        #     cuda_empty_cache()
+        img = as_tensor(img, device=device, dtype=pt_float32)
+        coefficients = pt_wavedec2(img, wavelet, mode='symmetric', level=level, axes=(-2, -1))
+        if CUDA_IS_AVAILABLE_FOR_PT:
+            img.detach()
+            del img
+            cuda_empty_cache()
 
         if recode_with_cpu:
             for idx, c in enumerate(coefficients):
@@ -867,7 +867,7 @@ def filter_subband(
 
         return img
 
-    coefficients = wavedec2(img, wavelet, mode='symmetric', level=None if level == 0 else level, axes=(-2, -1))
+    coefficients = wavedec2(img, wavelet, mode='symmetric', level=level, axes=(-2, -1))
     # the first item (idx=0) is the details matrix
     # the rest of items are tuples of horizontal, vertical and diagonal coefficients matrices
     for idx, c in enumerate(coefficients):
@@ -1962,10 +1962,10 @@ def batch_filter(
             for i in range(cuda_device_count()):
                 gpu_semaphore.put((f"cuda:{i}", cuda_get_device_properties(i).total_memory))
         # gpu_semaphore.put(("cpu", 96305274880))
-    elif USE_JAX:
-        gpu_semaphore = Queue()
-        for idx, device in enumerate(local_devices()):
-            gpu_semaphore.put((idx, None))
+    # elif USE_JAX:
+    #     gpu_semaphore = Queue()
+    #     for idx, device in enumerate(local_devices()):
+    #         gpu_semaphore.put((idx, None))
 
     workers = min(workers, num_images)
     progress_queue = Queue()
