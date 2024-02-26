@@ -129,6 +129,9 @@ def get_voxel_sizes(objective: str, path: Path, is_mip: bool):
                         except ValueError as e:
                             print(e)
                             pass
+                        except OSError as e:
+                            print(e)
+                            pass
 
     if voxel_size_z is None:
         voxel_size_z = ask_for_a_number_in_range(
