@@ -826,8 +826,14 @@ def filter_subband(
                     gpu_mem > 48305274880 or prod(img_shape, dtype="uint32") * 2 ** 9 * 1.437 < gpu_mem):
                 recode_with_cpu = False
 
-        coefficients = pt_wavedec2(as_tensor(img, device=device, dtype=pt_float32), wavelet,
+        img = as_tensor(img, device=device, dtype=pt_float32)
+        coefficients = pt_wavedec2(img, wavelet,
                                    mode='symmetric', level=level, axes=(-2, -1))
+        if CUDA_IS_AVAILABLE_FOR_PT:
+            img.detach()
+            del img
+            gc_collect()
+            cuda_empty_cache()
 
         if recode_with_cpu:
             for idx, c in enumerate(coefficients):

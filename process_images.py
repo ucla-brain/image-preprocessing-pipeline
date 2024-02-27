@@ -31,6 +31,7 @@ from skimage.measure import block_reduce
 from skimage.transform import warp
 from skimage.filters import sobel
 from skimage.filters.thresholding import threshold_multiotsu
+from torch.cuda import set_per_process_memory_fraction as cuda_set_per_process_memory_fraction
 
 from flat import create_flat_img
 from parallel_image_processor import parallel_image_processor, jumpy_step_range
@@ -1049,7 +1050,6 @@ def commands_progress_manger(queue: Queue, progress_bars: List[tqdm], running_pr
 
 def main(args):
     global AllChannels
-
     source_path = Path(args.input)
     # make sure input path does not have "-" char in its name
     if source_path.exists() and "-" in source_path.name:
@@ -1221,6 +1221,11 @@ def main(args):
                   f"Choose among {range(cuda_device_count())}")
             raise RuntimeError
 
+    if 0 < args.vram_mem_fraction_gpu0 <= 1:
+        cuda_set_per_process_memory_fraction(args.vram_mem_fraction_gpu0, 0)
+    else:
+        print(f"{PrintColors.FAIL}--vram_mem_fraction_gpu0 should be a float between 0 and 1!{PrintColors.ENDC}")
+        raise ValueError
     # Start ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
     start_time = time()
@@ -1658,4 +1663,6 @@ if __name__ == '__main__':
                         help="Skip inspecting unstitched image folders for missing tiles.")
     parser.add_argument("--exclude_gpus", required=False, nargs='+', default=[],
                         help="gpu indices that start from 0 and needs to be excluded.")
+    parser.add_argument("--vram_mem_fraction_gpu0", required=False, type=float, default=1.0,
+                        help="reduce the memory usage for GPU0 so the computer remain responsive.")
     main(parser.parse_args())
