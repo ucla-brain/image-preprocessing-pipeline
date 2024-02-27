@@ -829,7 +829,7 @@ def filter_subband(
         img = as_tensor(img, device=device, dtype=pt_float32)
         coefficients = pt_wavedec2(img, wavelet,
                                    mode='symmetric', level=level, axes=(-2, -1))
-        if CUDA_IS_AVAILABLE_FOR_PT:
+        if CUDA_IS_AVAILABLE_FOR_PT and device != "cpu":
             img.detach()
             del img
             gc_collect()
