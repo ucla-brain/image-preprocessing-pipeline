@@ -829,7 +829,8 @@ def filter_subband(
         img = as_tensor(img, device=device, dtype=pt_float32)
         coefficients = pt_wavedec2(img, wavelet,
                                    mode='symmetric', level=level, axes=(-2, -1))
-        if CUDA_IS_AVAILABLE_FOR_PT and device != "cpu":
+        if (CUDA_IS_AVAILABLE_FOR_PT and device != "cpu" and prod(img_shape, dtype="uint32") > 9000000 and
+                gpu_mem <= 48305274880):
             img.detach()
             del img
             gc_collect()
@@ -1962,8 +1963,8 @@ def batch_filter(
     gpu_semaphore = None
     if USE_PYTORCH and CUDA_IS_AVAILABLE_FOR_PT:
         gpu_semaphore = Queue()
-        for _ in range(threads_per_gpu):
-            for i in range(cuda_device_count()):
+        for i in range(cuda_device_count()):
+            for _ in range(min(threads_per_gpu, int(cuda_get_device_properties(i).total_memory / (2.5 * 2**30)))):
                 gpu_semaphore.put((f"cuda:{i}", cuda_get_device_properties(i).total_memory))
         # gpu_semaphore.put(("cpu", 96305274880))
     # elif USE_JAX:
