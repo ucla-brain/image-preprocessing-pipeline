@@ -492,7 +492,7 @@ def process_channel(
             max_subvolume_depth = 100
             alignment_depth = int(10 if objective == '40x' else min(alignment_depth, max_subvolume_depth))
             alignment_cores: int = 1
-            memory_needed_per_thread = 34 * alignment_depth  # 48 or 32
+            memory_needed_per_thread = 48 * alignment_depth  # 48 or 34
             if isinstance(new_tile_size, tuple):
                 for resolution in new_tile_size:
                     memory_needed_per_thread *= resolution
