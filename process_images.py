@@ -697,8 +697,8 @@ def process_channel(
         for gpu in range(cuda_device_count()):
             if gpu not in exclude_gpus:
                 gpu_semaphore.put((f"cuda:{gpu}", cuda_get_device_properties(gpu).total_memory))
-        # if sys.platform.lower() != "win32" or (sys.platform.lower() == "win32" and get_cpu_sockets() == 1):
-        gpu_semaphore.put(("cpu", virtual_memory().available))
+        for cpu in range(get_cpu_sockets()):
+            gpu_semaphore.put(("cpu", virtual_memory().available))
 
     return_code = parallel_image_processor(
         source=tsv_volume,
