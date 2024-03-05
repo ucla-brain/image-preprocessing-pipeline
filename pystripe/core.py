@@ -260,7 +260,9 @@ def imsave_tif(path: Path, img: ndarray, compression: Union[Tuple[str, int], Non
     for attempt in range(1, NUM_RETRIES):
         try:
             # imwrite(path, data=img, compression=compression_method, compressionargs={'level': compression_level})
-            imwrite(path, data=img, compression=compression)
+            tmp_path = path.with_suffix(".tmp")
+            imwrite(tmp_path, data=img, compression=compression)
+            tmp_path.rename(path)
             return False  # do not die
         except KeyboardInterrupt:
             print(f"{PrintColors.WARNING}\ndying from imsave_tif{PrintColors.ENDC}")

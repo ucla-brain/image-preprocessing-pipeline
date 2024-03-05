@@ -14,7 +14,8 @@ from numpy import max as np_max
 from numpy import mean as np_mean
 from numpy import sqrt as np_sqrt
 from numpy import round as np_round
-from numpy import zeros, float32, dstack, rollaxis, savez_compressed, array, maximum, rot90, arange, uint8, uint16
+from numpy import (zeros, float32, dstack, rollaxis, savez_compressed, array, maximum, rot90, arange, uint8, uint16,
+                   ndarray)
 from psutil import cpu_count, virtual_memory
 from skimage.measure import block_reduce
 from skimage.transform import resize, resize_local_mean
@@ -139,7 +140,7 @@ class MultiProcess(Process):
 
         self.down_sampling_methods = down_sampling_methods
 
-    def imsave_tif(self, path, img, compression=None):
+    def imsave_tif(self, path: Path, img: ndarray, compression=None):
         die = imsave_tif(path, img, compression=compression)
         if die:
             self.die = True
