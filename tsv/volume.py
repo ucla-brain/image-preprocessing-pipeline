@@ -13,14 +13,17 @@ from pathlib import Path
 from xml.etree import ElementTree
 from .raw import raw_imread
 from numpy import ndarray, zeros, hstack, inf, arange, arctan2, sin, isinf, ones, float32, newaxis, minimum, finfo, \
-    iinfo, around, clip, int32, uint32, uint8, uint16
+    iinfo, clip, int32, uint32, uint8, uint16, float16, where
 from numpy import max as np_max
 from numpy import min as np_min
 from numpy import dtype as np_d_type
+from numpy import maximum
 from supplements.cli_interface import PrintColors
 from tifffile import imread, imwrite
-from typing import List, Union
 from pystripe.core import glob_re
+from typing import Union
+from numexpr import evaluate
+USE_NUMEXPR: bool = True
 
 
 def get_dim_tuple(element):
@@ -63,7 +66,7 @@ class VExtentBase(abc.ABC):
     """A volume extent (in voxels)"""
 
     def __init__(self):
-        super(abc.ABC, self).__init__()
+        super().__init__()
 
     def intersects(self, other):
         """Determine whether two extents intersect
@@ -197,12 +200,18 @@ class VExtent(VExtentBase):
 class TSVStackBase(VExtentBase):
     def __init__(self):
         super().__init__()
-        # self.paths = None
-        self._height = None
-        self._width = None
-        self.__x1 = None
-        self.__y1 = None
-        self.__dtype = None
+        self.input_plugin: str = ""
+        self.z0slice: int = 0
+        self.z1slice: int = 0
+        self._height: Union[int, None] = None
+        self._width: Union[int, None] = None
+        self.__x1: Union[int, None] = None
+        self.__y1: Union[int, None] = None
+        self.__dtype = uint16
+
+    @property
+    def paths(self):
+        return []
 
     def _set_x1y1(self):
         if self.__x1 is None:
@@ -281,7 +290,11 @@ class TSVStackBase(VExtentBase):
         if result is None:
             result = zeros(volume.shape, self.dtype)
         for z in range(volume.z0, volume.z1):
-            plane = self.read_plane(self.paths[z - self.z0])
+            plane_paths = self.paths[z - self.z0]
+            plane = self.read_plane(plane_paths)
+            if not isinstance(plane, ndarray):
+                print(f"{PrintColors.FAIL}following planes for z {z} are damaged:\n\t{plane_paths}{PrintColors.ENDC}")
+                continue
             result[z - volume.z0] = plane[
                                     volume.y0 - self.y0:volume.y1 - self.y0,
                                     volume.x0 - self.x0:volume.x1 - self.x0]
@@ -307,7 +320,7 @@ class TSVStack(TSVStackBase):
         z_step: int
             used to find missing files if there is any
         """
-        TSVStackBase.__init__(self)
+        super().__init__()
         self.root_dir = root_dir
         self.n_chans = int(element.attrib["N_CHANS"])
         self.bytes_per_chan = int(element.attrib["N_BYTESxCHAN"])
@@ -322,7 +335,8 @@ class TSVStack(TSVStackBase):
         self.__idxs_to_keep = zeros(0, int)
         self.z_step = z_step
         if len(z_ranges) == 0:
-            self.z0slice = self.z1slice = 0
+            self.z0slice = 0
+            self.z1slice = 0
         else:
             # format is [AAAA,BBBB);[AAAA,BBBB)
             # never seen (AAAA,BBBB], but it's coded
@@ -371,20 +385,24 @@ class TSVStack(TSVStackBase):
                         if not os.path.exists(file):
                             print(f"\t\tthe following missing files is replaced with a dummy (zeros) image:\n"
                                   f"\t\t\t{file}")
+                            Path(file).parent.mkdir(exist_ok=True, parents=True)
                             imwrite(file, zeros(self.shape[1:3], dtype=self.dtype))
                     # raise RuntimeError
                     redo_path = True
             if redo_path:
                 self.__paths = []
-                for idx in self.__idxs_to_keep:
-                    self.__paths += [my_paths[idx]]
+                if my_paths:
+                    for idx in self.__idxs_to_keep:
+                        if idx < len(my_paths):
+                            self.__paths += [my_paths[idx]]
+                # self.paths()
 
         return self.__paths
 
 
 class TSVSimpleStack(TSVStackBase):
     def __init__(self, row, column, x0, y0, z0, root):
-        TSVStackBase.__init__(self)
+        super().__init__()
         self.row = row
         self.column = column
         self._x0 = x0
@@ -392,7 +410,7 @@ class TSVSimpleStack(TSVStackBase):
         self._z0 = z0
         self.root: Path = root
         self.__paths = None
-        self.z0slice = 0
+        self.z0slice: int = 0
 
     @property
     def paths(self):
@@ -409,8 +427,9 @@ class TSVSimpleStack(TSVStackBase):
         return [str(_) for _ in self.__paths]
 
 
-def compute_cosine(volume: VExtentBase, stack: TSVStack, ostack: TSVStack, img: ndarray):
-    """Given two overlapping stacks, compute the cosine blend between them
+def compute_cosine(volume: TSVStackBase, stack: TSVStack, ostack: TSVStack, img: ndarray):
+    """
+    Given two overlapping stacks, compute the cosine blend between them
 
     volume:
         the volume being blended
@@ -441,11 +460,9 @@ def compute_cosine(volume: VExtentBase, stack: TSVStack, ostack: TSVStack, img: 
     #
     angle = arctan2(d, od)
     blending = sin(angle) ** 2
-    img[
-    iv.z0 - volume.z0:iv.z1 - volume.z0,
-    iv.y0 - volume.y0:iv.y1 - volume.y0,
-    iv.x0 - volume.x0:iv.x1 - volume.x0
-    ] *= blending.astype(img.dtype)
+    img[iv.z0 - volume.z0:iv.z1 - volume.z0,
+        iv.y0 - volume.y0:iv.y1 - volume.y0,
+        iv.x0 - volume.x0:iv.x1 - volume.x0] *= blending.astype(img.dtype)
 
 
 class Edge(enum.Flag):
@@ -540,9 +557,18 @@ def get_distance_from_edge(tgt: VExtentBase, stack: VExtentBase, ostack: VExtent
 
 class TSVVolumeBase:
 
-    def flattened_stacks(self):
-        """Return the stacks in row-major order
+    def __init__(self):
+        self.stacks = None
+        self.stacks_dir: str = ""
+        self.cosine_blending: bool = False
 
+    @property
+    def dtype(self):
+        return uint16
+
+    def flattened_stacks(self):
+        """
+        Return the stacks in row-major order
         """
         return sum(self.stacks, [])
 
@@ -557,44 +583,67 @@ class TSVVolumeBase:
         returns:
             the array corresponding to the volume (with zeros for data outside the array).
         """
-        result = zeros(volume.shape, float32)
-        multiplier = zeros(volume.shape, float32)
+
         intersections = []
         for stack in self.flattened_stacks():
             if stack.intersects(volume):
                 intersections.append((stack, stack.intersection(volume)))
 
-        for stack, intersection in intersections:
-            part = stack.imread(intersection).astype(float32)
-            mpart = ones(intersection.shape, float32)
-            #
-            # Look for overlaps and perform a cosine blending
-            #
-            inter_intersections = []
-            for ostack, ointersection in intersections:
-                if ostack == stack:
-                    continue
-                if ointersection.intersects(intersection):
-                    inter_intersections.append((ostack, ointersection))
-            if len(inter_intersections) > 0:
-                for ostack, ointersection in inter_intersections:
-                    compute_cosine(intersection, stack, ostack, part)
-                    compute_cosine(intersection, stack, ostack, mpart)
-            result[
-                intersection.z0 - volume.z0:intersection.z1 - volume.z0,
-                intersection.y0 - volume.y0:intersection.y1 - volume.y0,
-                intersection.x0 - volume.x0:intersection.x1 - volume.x0
-            ] += part
-            multiplier[
-                intersection.z0 - volume.z0:intersection.z1 - volume.z0,
-                intersection.y0 - volume.y0:intersection.y1 - volume.y0,
-                intersection.x0 - volume.x0:intersection.x1 - volume.x0
-            ] += mpart
-        result = result / (multiplier + finfo(float32).eps)
-        if result.dtype != dtype and np_d_type(dtype).kind in ("u", "i"):
-            result = around(result, 0)
-            clip(result, iinfo(dtype).min, iinfo(dtype).max, out=result)
-            result = result.astype(dtype)
+        if self.cosine_blending:
+            template = float32
+            if self.dtype in (uint8, uint16):
+                template = float16
+            epsilon = finfo(template).eps
+            result = zeros(volume.shape, dtype=template)
+            multiplier = zeros(volume.shape, dtype=template)
+            for stack, intersection in intersections:
+                part = stack.imread(intersection).astype(template)
+                mpart = ones(intersection.shape, dtype=template)
+                #
+                # Look for overlaps and perform a cosine blending
+                #
+                inter_intersections = []
+                for ostack, ointersection in intersections:
+                    if ostack == stack:
+                        continue
+                    if ointersection.intersects(intersection):
+                        inter_intersections.append((ostack, ointersection))
+                if len(inter_intersections) > 0:
+                    for ostack, ointersection in inter_intersections:
+                        compute_cosine(intersection, stack, ostack, part)
+                        compute_cosine(intersection, stack, ostack, mpart)
+                result[
+                    intersection.z0 - volume.z0:intersection.z1 - volume.z0,
+                    intersection.y0 - volume.y0:intersection.y1 - volume.y0,
+                    intersection.x0 - volume.x0:intersection.x1 - volume.x0
+                ] += part
+                multiplier[
+                    intersection.z0 - volume.z0:intersection.z1 - volume.z0,
+                    intersection.y0 - volume.y0:intersection.y1 - volume.y0,
+                    intersection.x0 - volume.x0:intersection.x1 - volume.x0
+                ] += mpart
+            if USE_NUMEXPR:
+                evaluate("where(multiplier > epsilon, result / multiplier,  result / epsilon)", out=result)
+            else:
+                result = where(multiplier > epsilon, result / multiplier,  result / epsilon)
+            if result.dtype != dtype and np_d_type(dtype).kind in ("u", "i"):
+                clip(result, iinfo(dtype).min, iinfo(dtype).max, out=result)
+                result = result.astype(dtype)
+        else:
+            result = zeros(volume.shape, dtype)
+            for stack, intersection in intersections:
+                part = stack.imread(intersection)
+                res_part = result[
+                    intersection.z0 - volume.z0:intersection.z1 - volume.z0,
+                    intersection.y0 - volume.y0:intersection.y1 - volume.y0,
+                    intersection.x0 - volume.x0:intersection.x1 - volume.x0
+                ]
+                result[
+                    intersection.z0 - volume.z0:intersection.z1 - volume.z0,
+                    intersection.y0 - volume.y0:intersection.y1 - volume.y0,
+                    intersection.x0 - volume.x0:intersection.x1 - volume.x0
+                ] = maximum(res_part, part)
+
         return result
 
     def make_diagnostic_img(self, volume: VExtentBase):
@@ -606,17 +655,15 @@ class TSVVolumeBase:
         row-major order.
         """
         stacks = [s for s in self.flattened_stacks() if s.intersects(volume)]
-        result = zeros(
-            (volume.shape[0], volume.shape[1], volume.shape[2], len(stacks)),
-            self.dtype)
+        result = zeros((volume.shape[0], volume.shape[1], volume.shape[2], len(stacks)), dtype=self.dtype)
         for idx, stack in enumerate(stacks):
             intersection = stack.intersection(volume)
             img = stack.imread(intersection)
             result[
-            intersection.z0 - volume.z0:intersection.z1 - volume.z0,
-            intersection.y0 - volume.y0:intersection.y1 - volume.y0,
-            intersection.x0 - volume.x0:intersection.x1 - volume.x0,
-            idx
+                intersection.z0 - volume.z0:intersection.z1 - volume.z0,
+                intersection.y0 - volume.y0:intersection.y1 - volume.y0,
+                intersection.x0 - volume.x0:intersection.x1 - volume.x0,
+                idx
             ] = img.astype(result.dtype)
         return result
 
@@ -636,40 +683,49 @@ class TSVVolumeBase:
 
 
 class TSVVolume(TSVVolumeBase):
-    def __init__(self, tree, ignore_z_offsets=False, alt_stack_dir=None):
+    def __init__(self, tree_xml_path,
+                 ignore_z_offsets: bool = False,
+                 alt_stack_dir: str = None,
+                 cosine_blending: bool = False):
         """
         Initialize from a xml.etree.ElementTree
 
         Parameters
         ----------
-        tree:
-            a tree, e.g. as loaded from ElementTree.parse(xml_path)
-        ignore_z_offsets:
+        tree_xml_path:
+            a xml tree generated by Terastitcher
+        ignore_z_offsets: bool
             if True, ignore Z offsets. (e.g. if the stage always returns to the same Z coordinate repeatably)
-        alt_stack_dir:
+        alt_stack_dir: str
             alternative directory of stacks for another channel
+        cosine_blending: bool
+            whether to use cosine blending between two tiles
         """
-        self.ignore_z_offsets = ignore_z_offsets
+        super().__init__()
+        tree = ElementTree.parse(tree_xml_path)
         root = tree.getroot()
         assert root.tag == "TeraStitcher"
-        self.voxel_dims = get_dim_tuple(root.find("voxel_dims"))  # zyx order
         dims = root.find("dimensions")
         self.stack_rows = int(dims.attrib["stack_rows"])
-        self.origin = get_dim_tuple(root.find("origin"))
         self.stack_columns = int(dims.attrib["stack_columns"])
-        self.stacks: List[List[Union[TSVStack, None]]] = [[None] * self.stack_columns for _ in range(self.stack_rows)]
-        self.input_plugin = root.attrib["input_plugin"]
-        self.volume_format = root.attrib["volume_format"]
+        self.stacks = [[TSVStack] * self.stack_columns for _ in range(self.stack_rows)]
+        self.offsets = [[Location] * self.stack_columns for _ in range(self.stack_rows)]
+        self.stack_slices = int(dims.attrib["stack_slices"])
+        self.voxel_dims = get_dim_tuple(root.find("voxel_dims"))  # zyx order
         if alt_stack_dir is None:
             self.stacks_dir = root.find("stacks_dir").attrib["value"]
         else:
             self.stacks_dir = alt_stack_dir
+        self.ignore_z_offsets = ignore_z_offsets
+        self.origin = get_dim_tuple(root.find("origin"))
+        self.input_plugin = root.attrib["input_plugin"]
+        self.volume_format = root.attrib["volume_format"]
+
         md = root.find("mechanical_displacements")
         self.mechanical_displacement_x = float(md.attrib["H"])
         self.mechanical_displacement_y = float(md.attrib["V"])
-        self.stack_slices = int(dims.attrib["stack_slices"])
         self.make_stacks(root)
-        self.offsets = None
+        self.cosine_blending = cosine_blending
 
     def make_stacks(self, root):
         """
@@ -682,8 +738,8 @@ class TSVVolume(TSVVolumeBase):
         """
         stacks = root.find("STACKS")
         selems = [[ElementTree.Element] * self.stack_columns for _ in range(self.stack_rows)]
-        self.stacks = [[None] * self.stack_columns for _ in range(self.stack_rows)]
-        self.offsets = [[None] * self.stack_columns for _ in range(self.stack_rows)]
+        # self.stacks = [[None] * self.stack_columns for _ in range(self.stack_rows)]
+        # self.offsets = [[None] * self.stack_columns for _ in range(self.stack_rows)]
         self.offsets[0][0] = Location(0, 0, 0)
         for child in stacks.iter(tag="Stack"):
             row = int(child.attrib["ROW"])
@@ -750,59 +806,41 @@ class TSVVolume(TSVVolumeBase):
         else:
             return uint32
 
-    @staticmethod
-    def load(path, ignore_z_offsets=False, alt_stack_dir=None):
-        """
-        Load a volume from an XML file
-
-        Parameters
-        ----------
-        path:
-            xml file path
-        ignore_z_offsets:
-            if True, ignore Z offsets. (e.g. if the stage always returns to the same Z coordinate repeatably)
-        alt_stack_dir:
-            alternative directory of stacks for another channel
-        """
-        tree = ElementTree.parse(path)
-        return TSVVolume(tree, ignore_z_offsets, alt_stack_dir)
-
 
 class TSVSimpleVolume(TSVVolumeBase):
     """
     A volume created from a directory parse + voxel size
     """
 
-    def __init__(self, root_dir, voxel_size_x, voxel_size_y, voxel_size_z):
+    def __init__(self, root_dir: str, voxel_size_x: float, voxel_size_y: float, voxel_size_z: float,
+                 cosine_blending: bool = False):
         """
-
         :param root_dir: The root directory of the directory tree. It should
         be laid out as <root_dir>/<x-location-in-tenths-of-microns>/
         <x-location-in-tenths-of-microns>_<y-location-in-tenths-of-microns>
         :param voxel_size_x: The size of a voxel in the x direction
         :param voxel_size_y: The size of a voxel in the Y direction
         :param voxel_size_z: The size of a voxel in the Z direction
+        :param cosine_blending: Whether to use cosine blending between two tiles
         """
-        self.voxel_dims = (voxel_size_y, voxel_size_y, voxel_size_z)
+        super().__init__()
+        self.stacks_dir = root_dir
+        self.voxel_dims = (voxel_size_z, voxel_size_y, voxel_size_x)
         root_path = Path(root_dir)
-        xdirs = sorted([_ for _ in root_path.glob("*")
-                        if _.is_dir() and re.match("[0-9]+", _.name)])
-        ydirs = [sorted([__ for __ in _.glob("*")
-                         if __.is_dir() and re.match("[0-9]+_[0-9]+", __.name)])
+        xdirs = sorted([_ for _ in root_path.glob("*") if _.is_dir() and re.match("[0-9]+", _.name)])
+        ydirs = [sorted([__ for __ in _.glob("*") if __.is_dir() and re.match("[0-9]+_[0-9]+", __.name)])
                  for _ in xdirs]
         self.stack_rows = len(ydirs[0])
         self.stack_columns = len(ydirs)
-        self.stacks = [[None] * self.stack_columns
-                       for _ in range(self.stack_rows)]
-        self.offsets = [[None] * self.stack_columns
-                        for _ in range(self.stack_rows)]
-        self.stacks_dir = root_dir
+        self.stacks = [[TSVSimpleStack] * self.stack_columns for _ in range(self.stack_rows)]
+        self.offsets = [[(0, 0, 0)] * self.stack_columns for _ in range(self.stack_rows)]
         self.stack_slices = len(list(ydirs[0][0].glob("*.raw")))
         if self.stack_slices == 0:
             self.stack_slices = len(list(ydirs[0][0].glob("*.tif*")))
         #
         # Make the offsets and the stacks
         #
+        x0, y0 = 0, 0
         for xi, yd in enumerate(ydirs):
             for yi, ydir in enumerate(yd):
                 x, y = [int(_) for _ in ydir.name.split("_")]
@@ -817,9 +855,6 @@ class TSVSimpleVolume(TSVVolumeBase):
                 else:
                     yloc = int((y - y0) / voxel_size_y / 10.0)
                 self.offsets[yi][xi] = (xloc, yloc, 0)
-                self.stacks[yi][xi] = \
-                    TSVSimpleStack(yi, xi, xloc, yloc, 0, ydir)
+                self.stacks[yi][xi] = TSVSimpleStack(yi, xi, xloc, yloc, 0, ydir)
 
-    @property
-    def dtype(self):
-        return uint16
+        self.cosine_blending = cosine_blending

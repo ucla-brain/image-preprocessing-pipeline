@@ -15,7 +15,8 @@ from tifffile import natural_sorted
 
 from parallel_image_processor import parallel_image_processor
 from process_images import get_imaris_command, MultiProcessCommandRunner, commands_progress_manger
-from pystripe.core import process_img, imread_tif_raw_png
+from pystripe.core import (process_img, imread_tif_raw_png, cuda_get_device_properties, cuda_device_count,
+                           cuda_is_available_for_pt)
 from supplements.cli_interface import PrintColors
 
 
@@ -64,12 +65,16 @@ def main(args: Namespace):
             args.dark > 0 or args.convert_to_8bit or
             new_size or down_sample or args.voxel_size_target or
             args.rotation or args.flip_upside_down or
-            args.gaussian or args.background_subtraction or args.de_stripe or args.bleach_correction or
-            args.compression_level > 0 or args.compression_method != "ADOBE_DEFLATE")
+            args.gaussian or args.background_subtraction or args.de_stripe or args.bleach_correction)
     ):
         if not args.tif:
             print(f"{PrintColors.FAIL}tif path is needed to continue.{PrintColors.ENDC}")
             raise RuntimeError
+
+        need_pre_processing = False
+        if args.dark > 0 or args.convert_to_8bit or down_sample or args.flip_upside_down or args.gaussian or \
+                args.background_subtraction or args.de_stripe or args.bleach_correction:
+            need_pre_processing = True
 
         de_striping_sigma = (0, 0)
         if args.de_stripe:
@@ -77,10 +82,16 @@ def main(args: Namespace):
         if args.bleach_correction:
             de_striping_sigma = (4000, 4000)
 
+        gpu_semaphore = None
+        if cuda_is_available_for_pt():
+            gpu_semaphore = Queue(maxsize=cuda_device_count())
+            for _ in range(args.threads_per_gpu):
+                for i in range(cuda_device_count()):
+                    gpu_semaphore.put((f"cuda:{i}", cuda_get_device_properties(i).total_memory))
         return_code = parallel_image_processor(
             source=input_path,
             destination=tif_2d_folder,
-            fun=process_img if args.channel >= 0 else lambda img: img,
+            fun=process_img if need_pre_processing else None,
             kwargs={
                 "gaussian_filter_2d": args.gaussian,
                 "down_sample": down_sample,
@@ -91,7 +102,7 @@ def main(args: Namespace):
                 "bidirectional": True if args.bleach_correction else False,
                 "dark": args.dark,
                 "lightsheet": args.background_subtraction,
-                "bleach_correction_frequency": 1/args.bleach_correction_period if args.bleach_correction else None,
+                "bleach_correction_frequency": 1 / args.bleach_correction_period if args.bleach_correction else None,
                 "bleach_correction_max_method": False,
                 "bleach_correction_clip_min": args.bleach_correction_clip_min,
                 "bleach_correction_clip_max": args.bleach_correction_clip_max,
@@ -100,7 +111,8 @@ def main(args: Namespace):
                 "flip_upside_down": args.flip_upside_down,
                 "convert_to_16bit": args.convert_to_16bit,
                 "convert_to_8bit": args.convert_to_8bit,
-                "bit_shift_to_right": args.bit_shift
+                "bit_shift_to_right": args.bit_shift,
+                "gpu_semaphore": gpu_semaphore
             } if args.channel >= 0 else None,
             rename=args.rename,
             max_processors=args.nthreads,
@@ -111,13 +123,17 @@ def main(args: Namespace):
             target_voxel=args.voxel_size_target,
             rotation=args.rotation,
             resume=args.resume,
-            needed_memory=args.needed_memory * 1024**3
+            needed_memory=args.needed_memory * 1024 ** 3,
+            save_images=args.save_images
         )
     elif input_path.is_dir():
         tif_2d_folder = input_path
 
     assert return_code == 0
     progress_queue = Queue()
+    running_proceses = 0
+    progressbar_position = 0
+    progress_bars = []
     if args.teraFly:
         command = [
             f"mpiexec -np {min(12, args.nthreads)} python -m mpi4py {paraconverter}",
@@ -137,8 +153,10 @@ def main(args: Namespace):
         ]
         command = " ".join(command)
 
-        if args.imaris:
+
+        if args.imaris or args.fnt:
             MultiProcessCommandRunner(progress_queue, command).start()
+            running_proceses += 1
         else:
             start_time = time()
             subprocess.call(command, shell=True)
@@ -146,8 +164,9 @@ def main(args: Namespace):
 
     if args.fnt:
         file_txt_sorted_tif_list = tif_2d_folder / "files.txt"
+        files = list(tif_2d_folder.glob("*.tif"))
         with open(file_txt_sorted_tif_list, "w") as f:
-            f.write("\n".join(natural_sorted(list(map(str, tif_2d_folder.glob("*.tif"))))))
+            f.write("\n".join(natural_sorted(list(map(str, files)))))
         command = [
             f"{fnt_slice2cube}",
             f"-i {file_txt_sorted_tif_list}",
@@ -158,20 +177,24 @@ def main(args: Namespace):
         ]
         command = " ".join(command)
         print(command)
-        if args.imaris:
-            MultiProcessCommandRunner(progress_queue, command).start()
-        else:
-            start_time = time()
-            subprocess.call(command, shell=True)
-            print(f"elapsed time = {round((time() - start_time) / 60, 1)}")
+        MultiProcessCommandRunner(progress_queue, command,
+                                  pattern=r"\[\d*:\d*:\d*.\d*]\s*Slices\s*\[\d*,\s+(\d+)\)\s*finished.\s*",
+                                  position=progressbar_position,
+                                  percent_conversion=100 / len(files),
+                                  check_stderr=True).start()
+        progress_bars += [tqdm(total=100, ascii=True, position=progressbar_position, unit=" %", smoothing=0.01,
+                               desc=f"FNT")]
+        progressbar_position += 1
+        running_proceses += 1
 
+    is_renamed: bool = False
+    files = []
     if args.imaris:
         ims_file = Path(args.imaris)
         files = list(tif_2d_folder.glob("*.tif"))
         files += list(tif_2d_folder.glob("*.tiff"))
         assert len(files) > 0
 
-        is_renamed: bool = False
         if compile(r"^\d+$").findall(files[0].name[:-len(files[0].suffix)]):
             files = [file.rename(file.parent / ("_" + file.name)) for file in files]
             is_renamed = True
@@ -187,10 +210,14 @@ def main(args: Namespace):
         print(f"\t{PrintColors.BLUE}tiff to ims conversion command:{PrintColors.ENDC}\n\t\t{command}\n")
 
         MultiProcessCommandRunner(progress_queue, command,
-                                  pattern=r"(WriteProgress:)\s+(\d*.\d+)\s*$", position=0).start()
-        progress_bars = [tqdm(total=100, ascii=True, position=0, unit=" %", smoothing=0.01, desc=f"imaris")]
-        commands_progress_manger(progress_queue, progress_bars, running_processes=2 if args.teraFly else 1)
+                                  pattern=r"WriteProgress:\s+(\d*.\d+)\s*$", position=progressbar_position).start()
+        progress_bars += [tqdm(total=100, ascii=True, position=progressbar_position, unit=" %", smoothing=0.01,
+                               desc=f"IMS")]
+        progressbar_position += 1
+        running_proceses += 1
 
+    if progressbar_position > 0:
+        commands_progress_manger(progress_queue, progress_bars, running_processes=running_proceses)
         if is_renamed:
             [file.rename(file.parent / file.name[1:]) for file in files]
 
@@ -198,14 +225,14 @@ def main(args: Namespace):
         movie_file = Path(args.movie)
         duration = args.movie_frame_duration
 
-        with open(tif_2d_folder/"ffmpeg_input.txt", "wb") as ffmpeg_input:
+        with open(tif_2d_folder / "ffmpeg_input.txt", "wb") as ffmpeg_input:
             for file in sorted(tif_2d_folder.glob("*.tif"))[args.movie_start:args.movie_end]:
                 ffmpeg_input.write(f"file '{file.absolute().as_posix()}'\n".encode())
                 ffmpeg_input.write(f"duration {duration}\n".encode())
 
         command = " ".join([
             f"ffmpeg -r 60 -f concat -safe 0",
-            f"-i {tif_2d_folder/'ffmpeg_input.txt'}",
+            f"-i {tif_2d_folder / 'ffmpeg_input.txt'}",
             f"{movie_file.absolute()}"
         ])
         print(f"{PrintColors.BLUE}{command}{PrintColors.ENDC}")
@@ -350,8 +377,8 @@ if __name__ == '__main__':
                              "one of 0, 90, 180 or 270 degree values are accepted. Default is 0.")
     parser.add_argument("--flip_upside_down", default=False, action=BooleanOptionalAction,
                         help="image pre-processing: flip the y-axis. Default is --no-flip_upside_down")
-    parser.add_argument("--compression_level", "-zl", type=int, default=0,
-                        help="image pre-processing: compression level for tif files. Default is 0.")
+    parser.add_argument("--compression_level", "-zl", type=int, default=1,
+                        help="image pre-processing: compression level for tif files. Default is 1.")
     parser.add_argument("--compression_method", "-zm", type=str, default="ADOBE_DEFLATE",
                         help="image pre-processing: compression method for tif files. Default is ADOBE_DEFLATE. "
                              "LZW and PackBits are also supported.")
@@ -380,4 +407,10 @@ if __name__ == '__main__':
                              "resume processing remaining files. Default is --no-resume.")
     parser.add_argument("--needed_memory", type=int, default=1,
                         help="Memory needed per thread in GB. Default is 1 GB.")
+    parser.add_argument("--save_images", default=True, action=BooleanOptionalAction,
+                        help="save the processed images. Default is --save_images. "
+                             "if you just need to do downsampling use --no-save_images.")
+    parser.add_argument("--threads_per_gpu", type=int, default=1,
+                        help="Number of images processed on one GPU at a time. Default is 1. "
+                             "Increase if the image sizes are small and multiple images fit into the vRAM.")
     main(parser.parse_args())

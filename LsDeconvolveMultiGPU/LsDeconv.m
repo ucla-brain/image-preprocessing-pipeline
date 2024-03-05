@@ -29,6 +29,7 @@ function [] = LsDeconv(varargin)
         disp(datetime('now'));
         disp(' ');
 
+        % make sure correct number of parameters specified
         if nargin < 23
             showinfo();
             if isdeployed
@@ -38,6 +39,7 @@ function [] = LsDeconv(varargin)
         end
 
         %read command line parameters
+        disp("assigning command line parameter strings")
         inpath = varargin{1};
         dxy = varargin{2};
         dz = varargin{3};
@@ -63,14 +65,18 @@ function [] = LsDeconv(varargin)
         convert_to_8bit = varargin{23};
         cache_drive = tempdir;
         if nargin > 23
-            cache_drive=varargin{24};
+            cache_drive = fullfile(inpath, varargin{24});
             if ~exist(cache_drive, "dir")
+                disp("making cache drive dir " + cache_drive)
                 mkdir(cache_drive);
             end
+            disp("cache drive dir created and/or exists " + cache_drive)            
         end
 
         %convert command line parameters from string to double
+        disp("Deployed? " + isdeployed);
         if isdeployed
+            disp("converting double command line parameters")
             dxy = str2double(strrep(dxy, ',', '.'));
             dz = str2double(strrep(dz, ',', '.'));
             numit = str2double(strrep(numit, ',', '.'));
@@ -91,6 +97,22 @@ function [] = LsDeconv(varargin)
             convert_to_8bit = str2double(strrep(convert_to_8bit, ',', '.'));
             filter.dark  = str2double(strrep(filter.dark, ',', '.'));
         end
+        
+        calledAs = "LsDeconvolve(folderPath=" + inpath + ", dxy=" + dxy + ...
+                ", dz=" + dz + ", numit=" + numit + ", lambda_ex=" + lambda_ex + ...
+                ", lambda_em=" + lambda_em + ", cache_drive_path=" + ...
+                cache_drive + ")";        
+        disp("Hello I was called as ");
+        disp(calledAs);
+
+        assert(isa(inpath, "string"), "wrong type " + class(inpath));
+        assert(isa(dxy, "double"), "wrong type " + class(dxy));
+        assert(isa(dz, "double"), "wrong type " + class(dz));
+        assert(isa(numit, "double"), "wrong type " + class(numit));
+        assert(isa(lambda_ex, "double"), "wrong type " + class(lambda_ex));
+        assert(isa(lambda_em, "double"), "wrong type " + class(lambda_em));
+        assert(isa(cache_drive, "string"), "wrong type " + class(cache_drive));
+        disp("All types correct");
 
         if isfolder(inpath)
             % make folder for results and make sure the outpath is writable
@@ -99,11 +121,13 @@ function [] = LsDeconv(varargin)
                 outpath = fullfile(inpath, 'deconvolved_fliped_upside_down');
             end
             if ~exist(outpath, 'dir')
+                disp("making folder " + outpath );
                 mkdir(outpath);
             end
-
+            disp("outpath folder created and/or exists " + outpath);
             log_file_path = fullfile(outpath, 'log.txt');
             log_file = fopen(log_file_path, 'w');
+            disp('made log file: ' + log_file)
             % get available resources
             [ram_available, ram_total]  = get_memory();
             p_log(log_file, 'system information ...');
@@ -153,11 +177,13 @@ function [] = LsDeconv(varargin)
         %     end
         end
 
+        disp("Logging image attributes");
         p_log(log_file, ['   image size (voxels): ' num2str(stack_info.x)  'x * ' num2str(stack_info.y) 'y * ' num2str(stack_info.z) 'z = ' num2str(stack_info.x * stack_info.y * stack_info.z)]);
         p_log(log_file, ['   voxel size (nm^3): ' num2str(dxy)  'x * ' num2str(dxy) 'y * ' num2str(dz) 'z = ' num2str(dxy^2*dz)]);
         p_log(log_file, ['   image bit depth: ' num2str(stack_info.bit_depth)]);
         p_log(log_file, ' ');
 
+        disp("Logging imaging system parameters");
         p_log(log_file, 'imaging system parameters ...')
         p_log(log_file, ['   focal length of cylinder lens (mm): ' num2str(fcyl)]);
         p_log(log_file, ['   width of slit aperture (mm): ' num2str(slitwidth)]);
@@ -260,7 +286,10 @@ function [] = LsDeconv(varargin)
         end
     catch ME
         % error handling
-        p_log(log_file, getReport(ME, 'extended', 'hyperlinks', 'off'));
+        disp(ME);
+        if exist('log_file', 'var')
+            p_log(log_file, getReport(ME, 'extended', 'hyperlinks', 'off'));
+        end
         if isdeployed
             exit(1);
         end

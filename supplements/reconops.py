@@ -1,10 +1,45 @@
+import os
+import sys
 from argparse import RawDescriptionHelpFormatter, ArgumentParser, Namespace, BooleanOptionalAction
 from pathlib import Path
-from pandas import read_csv, DataFrame, concat
+from re import compile, findall, IGNORECASE, MULTILINE
+from subprocess import Popen, PIPE, CalledProcessError, DEVNULL, run
+
 from numpy import where, empty, vstack, append
+from pandas import read_csv, DataFrame, concat
+
 from cli_interface import PrintColors
-from math import pi
+
 SWC_COLUMNS = ["id", "type", "x", "y", "z", "radius", "parent_id"]
+
+
+def execute(command):
+    popen = Popen(command, stdout=PIPE, stderr=DEVNULL, shell=True, text=True, universal_newlines=True, bufsize=1)
+    for stdout_line in iter(popen.stdout.readline, ""):
+        yield stdout_line
+    popen.stdout.close()
+    return_code = popen.wait()
+    if return_code:
+        print(f"\n{PrintColors.FAIL}Process failed for command:\n\t{command}{PrintColors.ENDC}\n")
+        raise CalledProcessError(return_code, command)
+
+
+def run_command(command: str, need_progress_dot=True, verbose=True):
+    if verbose:
+        pattern = compile(r"error|warning|fail", IGNORECASE | MULTILINE)
+        print(f"\t{command}", end="", flush=True)
+        for stdout in execute(command):
+            if need_progress_dot:
+                important_messages = findall(pattern, stdout)
+                if important_messages:
+                    print(f"\n{PrintColors.WARNING}{stdout}{PrintColors.ENDC}\n")
+                else:
+                    print(".", end="", flush=True)
+            else:
+                print(stdout)
+        print("")
+    else:
+        run(command, stdout=DEVNULL, stderr=DEVNULL)
 
 
 def is_overwrite_needed(file: Path, overwrite: bool) -> bool:
@@ -126,7 +161,7 @@ def main(args: Namespace):
             continue
 
         if args.input_extension == "eswc":
-            swc_df = read_csv(input_file, sep=r"\s+", comment="#",
+            swc_df = read_csv(input_file, sep=r"\s+", comment="#", index_col=False,
                               names=SWC_COLUMNS + ["seg_id", "level", "mode", "timestamp", "TFresindex"])
             if args.output_extension == "swc":
                 swc_df = swc_df[SWC_COLUMNS].copy()
@@ -138,7 +173,7 @@ def main(args: Namespace):
             swc_df["id"] = swc_df.reset_index().index + 1
             swc_df = swc_df[SWC_COLUMNS].copy()
         else:
-            swc_df = read_csv(input_file, sep=r"\s+", comment="#", names=SWC_COLUMNS)
+            swc_df = read_csv(input_file, sep=r"\s+", comment="#", names=SWC_COLUMNS, index_col=False)
 
         swc_df['x'] *= args.voxel_size_x_source / args.voxel_size_x_target
         swc_df['y'] *= args.voxel_size_y_source / args.voxel_size_y_target
@@ -151,13 +186,85 @@ def main(args: Namespace):
         if args.z_axis_length > 0:
             swc_df['z'] = args.z_axis_length * args.voxel_size_z_source / args.voxel_size_z_target - swc_df['z']
 
-        if args.sort:
+        # if args.Vaa3D_sort or (args.radii is not None and not args.sort):
+        #     # Put the node with the smallest parent_id (hopefully -1) and largest diameter on top of df
+        #     swc_df = swc_df.sort_values(['parent_id', 'radius'], ascending=[True, False])
+
+        if ((args.resample_step_size is not None and args.resample_step_size > 0) or args.Vaa3D_sort or
+                args.inter_node_pruning or args.N3Dfix):
+            v3d_file = output_file.parent / ("v3d_" + output_file.name)
+            with open(output_file, 'a'):
+                output_file.write_text("#")
+                swc_df.to_csv(output_file, sep=" ", mode="a", index=False)
+
+            if args.inter_node_pruning:
+                if sys.platform.lower() == "win32":
+                    cmd = f"{Vaa3D} /x inter_node_pruning /f pruning /i {output_file}"
+                else:
+                    cmd = f"{Vaa3D} -x inter_node_pruning -f pruning -i {output_file}"
+                run_command(cmd)
+                output_file.unlink()
+                (output_file.parent / (output_file.name + "_pruned.swc")).rename(output_file)
+
+            if args.Vaa3D_sort:
+                if sys.platform.lower() == "win32":
+                    cmd = f"{Vaa3D} /x sort_neuron_swc /f sort_swc /i {output_file} /o {v3d_file} /p 0 1"
+                else:
+                    cmd = f"{Vaa3D} -x sort_neuron_swc -f sort_swc -i {output_file} -o {v3d_file} -p 0 1"
+                run_command(cmd)
+                output_file.unlink()
+                v3d_file.rename(output_file)
+
+            if args.N3Dfix:
+                # Parameters:
+                #   normalized radius change [ratio to baseline] DEFAULT: 0.25
+                #   minimum fiber radius [in um] DEFAULT: 0.1
+                if sys.platform.lower() == "win32":
+                    cmd = f"{Vaa3D} /x N3DFix /f N3DFix /i {output_file} /o {v3d_file} /p 0.25 0.1"
+                else:
+                    cmd = f"{Vaa3D} -x N3DFix -f N3DFix -i {output_file} -o {v3d_file} -p 0.25 0.1"
+                run_command(cmd)
+                output_file.unlink()
+                v3d_file.rename(output_file)
+
+            if args.resample_step_size is not None and args.resample_step_size > 0:
+                if sys.platform.lower() == "win32":
+                    cmd = (f"{Vaa3D} /x resample_swc /f resample_swc /i {output_file} /o {v3d_file} "
+                           f"/p {args.resample_step_size}")
+                else:
+                    cmd = (f"{Vaa3D} -x resample_swc -f resample_swc -i {output_file} -o {v3d_file} "
+                           f"-p {args.resample_step_size}")
+                run_command(cmd)
+                output_file.unlink()
+                v3d_file.rename(output_file)
+
+            bs_columns = ["BS1", "BS2"]
+            swc_df = read_csv(output_file, sep=r" ", comment="#", names=SWC_COLUMNS + bs_columns, index_col=False)
+            swc_df = swc_df.drop(columns=bs_columns)
+            if v3d_file.exists():
+                v3d_file.unlink()
+            if output_file.exists():
+                output_file.unlink()
+
+        if args.sort or args.use_soma_info_as_name:
             try:
                 swc_df = sort_swc(swc_df)
             except Exception as e:
                 print(f"{PrintColors.FAIL}sorting failed! --> {input_file}\n"
                       f"error --> {e}{PrintColors.ENDC}")
                 continue
+
+        if args.radii is not None and swc_df.loc[0].radius < args.radii:
+            swc_df.at[0, 'radius'] = args.radii
+
+        if args.use_soma_info_as_name:
+            row = swc_df.loc[0]
+            output_file = output_file.parent / (f'[{row.x:08.1f},{row.y:08.1f},{row.z:08.1f}]-r={row.radius:04.1f}' +
+                                                output_file.suffix)
+
+        duplicated_count = swc_df.drop(columns=['id', 'type', 'radius', 'parent_id']).duplicated().sum()
+        if duplicated_count > 0:
+            print(f"{PrintColors.WARNING}found {duplicated_count} duplicate nodes {output_file.name}{PrintColors.ENDC}")
 
         if args.output_extension == "swc":
             with open(output_file, 'a'):
@@ -182,6 +289,7 @@ def main(args: Namespace):
                             output_file_new.write_text("#")
                             df2 = df1.copy()
                             df1["id"] = 1
+                            df1["type"] = 1
                             df1["parent_id"] = 0
                             df2["id"] = 2
                             df2["type"] = 2
@@ -216,18 +324,26 @@ def main(args: Namespace):
                 y = int(row.y + .5)
                 z = int(row.z + .5)
                 radii = row.radius
-                if args.radii is not None:
+                if args.radii is not None and radii < args.radii:
                     radii = args.radii
                 # radii = float(l_split[5])
-                volume = int(4 / 3 * pi * radii ** 3)
-                output_file = output_path / f"marker_{x}_{y}_{z}_{volume}"
+                # volume = int(4 / 3 * pi * radii ** 3)
+                output_file = output_path / f"[{x},{y},{z}]-r={radii}.swc"
                 with open(output_file, 'w') as marker_file:
-                    marker_file.write("# x,y,z,radius_um\n")
-                    marker_file.write(f"{x},{y},{z},{radii}")
+                    marker_file.write("#id type x y z radius_um parent_id\n")
+                    marker_file.write(f"1 1 {x} {y} {z} {radii} 1")
                     print(f"{args.input_extension} to {args.output_extension} -> {output_file}")
 
 
 if __name__ == '__main__':
+    if sys.platform.lower() == "win32":
+        Vaa3D = Path(".") / "Vaa3D" / "Windows" / "Vaa3D.exe"
+    else:
+        Vaa3D = Path(".") / "Vaa3D" / "Linux" / "Vaa3D-x"
+        print(f"{Vaa3D.parent.absolute() / 'lib'}")
+        print(f"{Vaa3D.parent.absolute() / 'plugins'}")
+        os.environ["LD_LIBRARY_PATH"] = f"{Vaa3D.parent.absolute() / 'lib'}"
+        os.environ["PLUGIN_PATH"] = f"{Vaa3D.parent.absolute() / 'plugins'}"
     parser = ArgumentParser(
         description="ReconOps, i.e. reconstruction operations, convert flip and scale swc and eswc files\n\n",
         formatter_class=RawDescriptionHelpFormatter,
@@ -255,9 +371,20 @@ if __name__ == '__main__':
                         help="Sort reconstructions. Default is --no-sort. "
                              "Makes sure if a node is upstream to another node, "
                              "it is never below the second node in the (e)swc file.")
+    parser.add_argument("--inter_node_pruning", default=False, action=BooleanOptionalAction,
+                        help="Inter node pruning via Vaa3D. Default is --no-inter_node_pruning.")
+    parser.add_argument("--N3Dfix", default=False, action=BooleanOptionalAction,
+                        help="Automatic removal of swelling artifacts in neuronal reconstructions via Vaa3D. "
+                             "Default is --no-N3Dfix.")
+    parser.add_argument("--Vaa3D_sort", default=False, action=BooleanOptionalAction,
+                        help="Sort reconstructions. Default is --no-Vaa3D_sort. Sort swcs files using Vaa3D.")
+    parser.add_argument("--resample_step_size", type=float, required=False, default=None,
+                        help="Resample reconstructions using the provided step size and Vaa3D plugin. Default is None.")
     parser.add_argument("--swc_to_seed", default=False, action=BooleanOptionalAction,
                         help="If you have a swc file containing only soma location, "
                              "then, each node will be converted to a separate swc file.")
+    parser.add_argument("--use_soma_info_as_name", default=False, action=BooleanOptionalAction,
+                        help="Use xyz and radius of the soma as file name. ")
     parser.add_argument("--voxel_size_x_source", "-dxs", type=float, required=False, default=1.0,
                         help="The voxel size on the x-axis of the image used for reconstruction. "
                              "Default value is 1.")
@@ -286,8 +413,8 @@ if __name__ == '__main__':
                         help="The length of z-axis in pixels of the source image. "
                              "If z>0 is provided z-axis will be flipped. Default is 0 --> no z-axis flipping")
     parser.add_argument("--radii", "-r", type=float, required=False, default=None,
-                        help="Force the radii to be a specific number in um during (e)swc to seed conversion. "
+                        help="If soma radius is smaller than the specified value the radius will be changed. "
                              "Default value is None which means: "
-                             "(1) for swc to seed conversion radius value from swc file will be used."
-                             "(2) fro apo to swc conversion the value of 12 will be used.")
+                             "(1) for swc to seed conversion radius value from swc file will be used. "
+                             "(2) for apo to swc conversion the value of 12 will be used.")
     main(parser.parse_args())

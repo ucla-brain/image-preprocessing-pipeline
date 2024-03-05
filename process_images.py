@@ -8,35 +8,38 @@ import platform
 import sys
 from datetime import timedelta
 from math import floor
-from multiprocessing import freeze_support, Queue, Process, Pool
+from multiprocessing import freeze_support, Queue, Process, Pool, set_start_method
 from pathlib import Path
 from platform import uname
 from queue import Empty
 from re import compile, match, findall, IGNORECASE, MULTILINE
 from subprocess import check_output, call, Popen, PIPE, CalledProcessError
 from time import time, sleep
-from typing import List, Tuple, Dict, Union
+from typing import List, Tuple, Union, LiteralString
+from argparse import RawDescriptionHelpFormatter, ArgumentParser, BooleanOptionalAction
 
 import mpi4py
 import psutil
 from cpufeature.extension import CPUFeature
 from cv2 import MOTION_TRANSLATION, findTransformECC, TERM_CRITERIA_COUNT, TERM_CRITERIA_EPS
-from numpy import ndarray, zeros, uint8, float32, eye, where, dstack, append, array, absolute
+from numpy import ndarray, zeros, uint8, float32, eye, dstack, append, array, absolute, expm1
 from numpy import round as np_round
-from numpy import mean as np_mean
 from numpy.linalg import inv
 from psutil import cpu_count, virtual_memory
 from tqdm import tqdm
 from skimage.measure import block_reduce
 from skimage.transform import warp
 from skimage.filters import sobel
+from skimage.filters.thresholding import threshold_multiotsu
+from torch.cuda import set_per_process_memory_fraction as cuda_set_per_process_memory_fraction
 
 from flat import create_flat_img
 from parallel_image_processor import parallel_image_processor, jumpy_step_range
 from pystripe.core import (batch_filter, imread_tif_raw_png, imsave_tif, MultiProcessQueueRunner, progress_manager,
-                           process_img, convert_to_8bit_fun, log1p_jit, expm1_jit, otsu_threshold, prctl)
-from supplements.cli_interface import (ask_for_a_number_in_range, date_time_now, select_multiple_among_list,
-                                       select_among_multiple_options, ask_true_false_question, PrintColors)
+                           process_img, convert_to_8bit_fun, log1p_jit, prctl, np_max, np_mean, is_uniform_2d,
+                           calculate_pad_size, cuda_get_device_properties, cuda_device_count,
+                           CUDA_IS_AVAILABLE_FOR_PT, USE_PYTORCH, USE_JAX)
+from supplements.cli_interface import (ask_for_a_number_in_range, date_time_now, PrintColors)
 from supplements.tifstack import TifStack, imread_tif_stck
 from tsv.volume import TSVVolume, VExtent
 
@@ -54,6 +57,7 @@ VoxelSizeX_9x, VoxelSizeY_9x = (0.72,) * 2
 VoxelSizeX_10x, VoxelSizeY_10x = (0.62,) * 2
 VoxelSizeX_15x, VoxelSizeY_15x = (0.41,) * 2
 VoxelSizeX_40x, VoxelSizeY_40x = (0.14, 0.14)  # 0.143, 0.12
+SUPPORTED_EXTENSIONS = ('.png', '.tif', '.tiff', '.raw')
 
 
 def p_log(txt: Union[str, list]):
@@ -78,59 +82,35 @@ def p_log(txt: Union[str, list]):
         break
 
 
-def get_base_name(file: Path):
-    return file.name[0:-len(file.suffix)]
-
-
-def get_voxel_sizes(path: Path, is_mip: bool):
-    objective = select_among_multiple_options(
-        "What is the Objective?",
-        [
-            f" 4x: Voxel Size X = {VoxelSizeX_4x:.3f}, Y = {VoxelSizeY_4x:.3f}, tile_size = 1600 x 2000",
-            f" 8x: Voxel Size X = {VoxelSizeX_8x:.3f}, Y = {VoxelSizeY_8x:.3f}, tile_size = 2000 x 2000",
-            f" 9x: Voxel Size X = {VoxelSizeX_9x:.3f}, Y = {VoxelSizeY_9x:.3f}, tile_size = 2000 x 2000",
-            f"10x: Voxel Size X = {VoxelSizeX_10x:.3f}, Y = {VoxelSizeY_10x:.3f}, tile_size = 2000 x 2000",
-            f"15x: Voxel Size X = {VoxelSizeX_15x:.3f}, Y = {VoxelSizeY_15x:.3f}, tile_size = 2000 x 2000",
-            f"40x: Voxel Size X = {VoxelSizeX_40x:.3f}, Y = {VoxelSizeY_40x:.3f}, tile_size = 2048 x 2048",
-            f"other: allows entering custom voxel sizes for custom tile_size"
-        ],
-        return_index=True
-    )
-
+def get_voxel_sizes(objective: str, path: Path, is_mip: bool):
     tile_size = (2000, 2000)
-    if objective == "0":
-        objective = "4x"
+    if objective == "4x":
         voxel_size_x = VoxelSizeX_4x
         voxel_size_y = VoxelSizeY_4x
         tile_size = (1600, 2000)  # y, x = tile_size
-    elif objective == "1":
-        objective = "8x"
+    elif objective == "8x":
         voxel_size_x = VoxelSizeX_8x
         voxel_size_y = VoxelSizeY_8x
-    elif objective == "2":
-        objective = "9x"
+    elif objective == "9x":
         voxel_size_x = VoxelSizeX_9x
         voxel_size_y = VoxelSizeY_9x
-    elif objective == "3":
-        objective = "10x"
+    elif objective == "10x":
         voxel_size_x = VoxelSizeX_10x
         voxel_size_y = VoxelSizeY_10x
-    elif objective == "4":
-        objective = "15x"
+    elif objective == "15x":
         voxel_size_x = VoxelSizeX_15x
         voxel_size_y = VoxelSizeY_15x
-    elif objective == "5":
-        objective = "40x"
+    elif objective == "40x":
         voxel_size_x = VoxelSizeX_40x
         voxel_size_y = VoxelSizeY_40x
         tile_size = (2048, 2048)
-    elif objective == "6":
-        objective = ""
-        tile_size_x = ask_for_a_number_in_range("what is the tile size on x axis in pixels?", (1, 2049), int)
-        tile_size_y = ask_for_a_number_in_range("what is the tile size on y axis in pixels?", (1, 2049), int)
-        voxel_size_x = ask_for_a_number_in_range("what is the x voxel size in µm?", (0.001, 1000), float)
-        voxel_size_y = ask_for_a_number_in_range("what is the y voxel size in µm?", (0.001, 1000), float)
-        tile_size = (tile_size_y, tile_size_x)
+    # elif objective == "6":
+    #     objective = ""
+    #     tile_size_x = ask_for_a_number_in_range("what is the tile size on x axis in pixels?", (1, 2049), int)
+    #     tile_size_y = ask_for_a_number_in_range("what is the tile size on y axis in pixels?", (1, 2049), int)
+    #     voxel_size_x = ask_for_a_number_in_range("what is the x voxel size in µm?", (0.001, 1000), float)
+    #     voxel_size_y = ask_for_a_number_in_range("what is the y voxel size in µm?", (0.001, 1000), float)
+    #     tile_size = (tile_size_y, tile_size_x)
     else:
         print("Error: unsupported objective")
         log.error("Error: unsupported objective")
@@ -141,15 +121,19 @@ def get_voxel_sizes(path: Path, is_mip: bool):
         if y_folder.is_dir() and voxel_size_z is None:
             for x_folder in y_folder.iterdir():
                 if x_folder.is_dir():
-                    files = sorted([f for f in x_folder.iterdir() if
-                                    f.is_file() and f.suffix.lower() in ['.png', '.tif', '.tiff', '.raw']])
-                    if len(files) > 1:
-                        try:
-                            voxel_size_z = (int(get_base_name(files[1])) - int(get_base_name(files[0]))) / 10
-                            break
-                        except ValueError as e:
-                            print(e)
-                            pass
+                    try:
+                        files = sorted([f for f in x_folder.iterdir() if
+                                        f.suffix.lower() in SUPPORTED_EXTENSIONS and f.is_file()])
+                        if len(files) > 1:
+                            try:
+                                voxel_size_z = (int(files[1].stem) - int(files[0].stem)) / 10
+                                break
+                            except ValueError as e:
+                                print(e)
+                                pass
+                    except OSError as e:
+                        print(e)
+                        pass
 
     if voxel_size_z is None:
         voxel_size_z = ask_for_a_number_in_range(
@@ -157,70 +141,11 @@ def get_voxel_sizes(path: Path, is_mip: bool):
             f"{PrintColors.BLUE}hint: z-step is {'400' if is_mip else 'typically 0.8'} µm for the "
             f"{'MIP' if is_mip else 'main'} images generated by SmartSPIM{PrintColors.ENDC}",
             (0.001, 1000), float)
-
-    p_log(
-        f"tile size is {tile_size}\n"
-        f"objective is {objective} "
-        f"voxel sizes are x = {voxel_size_x}, y = {voxel_size_y}, and z = {voxel_size_z} µm.\n"
-    )
-    return objective, voxel_size_x, voxel_size_y, voxel_size_z, tile_size
+    return voxel_size_x, voxel_size_y, voxel_size_z, tile_size
 
 
-def get_destination_path(folder_name_prefix, what_for='tif', posix='', default_path=Path('')):
-    path_exists = False
-    input_path = ''
-    drive_path = Path(input_path)
-    while not path_exists:
-        input_path = input(
-            f"\nEnter a valid destination path for {what_for}. "
-            f"for example: {CacheDriveExample}\n"
-            f"If nothing entered, {default_path.absolute()} will be used.\n").strip()
-        if input_path and sys.platform.lower() == "win32" and (
-                input_path.endswith(":") or not input_path.endswith("\\")):
-            input_path = input_path + "\\"
-        elif input_path and sys.platform.lower() == "linux" and not input_path.endswith("/"):
-            input_path = input_path + "/"
-        drive_path = Path(input_path)
-        path_exists = drive_path.exists()
-        if not path_exists and ask_true_false_question('The path did not exist! Do you want to create it?'):
-            try:
-                drive_path.mkdir(parents=True, exist_ok=True)
-                path_exists = drive_path.exists()
-            except PermissionError:
-                print('did not have permission to creat the path!')
-    if input_path == '':
-        destination_path = default_path.absolute()
-    else:
-        destination_path = drive_path / (folder_name_prefix + posix)
-    continue_process = False
-    if destination_path.exists():
-        is_ok_to_overwrite = ask_true_false_question(
-            f"The path {destination_path.absolute()} exists already. \n"
-            f"Do you want to put the processed images in this path?")
-        if is_ok_to_overwrite:
-            continue_process = ask_true_false_question(
-                "If processed images already exist in the path, do you want to process the remaining images?\n"
-                "Yes means process the remaining images. \n"
-                "No means start over from the beginning and overwrite files.")
-        else:
-            i = 0
-            while destination_path.exists():
-                i += 1
-                destination_path = destination_path.parent / (destination_path.name + '_' + str(i))
-    print(f"\nDestination path for {what_for} is:\n\t{destination_path.absolute()}\n")
-    try:
-        destination_path.mkdir(exist_ok=True, parents=True)
-    except PermissionError:
-        print("No permission to create the destination folder.")
-        raise RuntimeError
-    except Exception as e:
-        print(f"An unexpected error happened!\n{e}")
-        raise RuntimeError
-    return destination_path, continue_process
-
-
-def get_list_of_files(y_folder: Path, extensions=(".tif", ".tiff", ".raw", ".png")) -> List[Path]:
-    extensions: Tuple[str] = tuple(ext.lower() for ext in extensions)
+def get_list_of_files(y_folder: Path, extensions=SUPPORTED_EXTENSIONS) -> List[Path]:
+    extensions: Tuple[LiteralString, ...] = tuple(ext.lower() for ext in extensions)
     files_list = []
     for file in y_folder.iterdir():
         if file.suffix.lower() in extensions:
@@ -285,7 +210,8 @@ def worker(command: str):
 
 
 class MultiProcessCommandRunner(Process):
-    def __init__(self, queue, command, pattern="", position=None):
+    def __init__(self, queue, command, pattern: str = "", position: int = None, percent_conversion: float = 100,
+                 check_stderr: bool = False):
         Process.__init__(self)
         super().__init__()
         self.daemon = True
@@ -293,6 +219,8 @@ class MultiProcessCommandRunner(Process):
         self.command = command
         self.position = position
         self.pattern = pattern
+        self.percent_conversion = percent_conversion
+        self.check_stderr = check_stderr
 
     def run(self):
         return_code = None  # 0 == success and any other number is an error code
@@ -304,22 +232,40 @@ class MultiProcessCommandRunner(Process):
                 process = Popen(
                     self.command,
                     stdout=PIPE,
-                    # stderr=PIPE,
+                    stderr=PIPE,
                     shell=True,
-                    text=True)
-                pattern = compile(self.pattern, IGNORECASE)
+                    text=True,
+                    start_new_session=False,
+                    bufsize=0
+                )
+                pattern = compile(self.pattern, IGNORECASE | MULTILINE)
                 while return_code is None:
                     return_code = process.poll()
-                    m = match(pattern, process.stdout.readline())
-                    if m:
-                        percent = round(float(m[2]) * 100, 1)
+                    if self.check_stderr:
+                        output = process.stderr.readline()
+                        if not isinstance(output, str):
+                            output = str(output)
+                    else:
+                        output = process.stdout.readline()
+                    matches = match(pattern, output)
+                    if matches:
+                        percent = round(float(matches[1]) * self.percent_conversion, 1)
                         self.queue.put([percent - previous_percent, self.position, return_code, self.command])
                         previous_percent = percent
+                if not self.check_stderr:
+                    error = process.stderr.read()
+                    if error:
+                        print(f"{PrintColors.FAIL}Errors:\n{error}{PrintColors.ENDC}")
         except Exception as inst:
-            p_log(f'Process failed for {self.command}.')
-            print(type(inst))  # the exception instance
-            print(inst.args)  # arguments stored in .args
-            print(inst)
+            p_log(f"{PrintColors.FAIL}"
+                  f"Process failed for command:\n"
+                  f"\t{self.command}.\n"
+                  f"Error:\n"
+                  f"\ttype: {type(inst)}\n"
+                  f"\targs: {inst.args}\n"
+                  f"\t{inst}"
+                  f"{PrintColors.ENDC}")
+
         final_percent = 100 - previous_percent
         if return_code is not None and int(return_code) != 0:
             final_percent = 0
@@ -347,8 +293,8 @@ def run_command(command, need_progress_dot=True):
     pattern = compile(r"error|warning|fail", IGNORECASE | MULTILINE)
     for stdout in execute(command):
         if need_progress_dot:
-            m = findall(pattern, stdout)
-            if m:
+            important_messages = findall(pattern, stdout)
+            if important_messages:
                 p_log(f"\n{PrintColors.WARNING}{stdout}{PrintColors.ENDC}\n")
             else:
                 print(".", end="", flush=True)
@@ -357,18 +303,44 @@ def run_command(command, need_progress_dot=True):
     p_log("")
 
 
+def get_gradient(img: ndarray) -> ndarray:
+    # threshold: float = 98.5
+    # img_percentile = prctl(img, threshold)
+    img = img.astype(float32)
+    img = sobel(img)
+    # img_percentile = prctl(img, threshold)
+    # img = where(img >= img_percentile, 255, img / img_percentile * 255)  # scale images
+    return img
+
+
+def estimate_bit_shift(img, threshold: float, percentile=99.9):
+    try:
+        upper_bound = prctl(img[img > threshold], percentile)
+    except (ValueError, AssertionError):
+        upper_bound = np_max(img)
+    upper_bound = int(np_round(expm1(upper_bound)))
+    right_bit_shift: int = 8
+    for b in range(0, 9):
+        if 256 * 2 ** b >= upper_bound:
+            right_bit_shift = b
+            break
+    return right_bit_shift
+
+
 def process_channel(
         source_path: Path,
         channel: str,
+        channel_for_alignment: str,
         preprocessed_path: Path,
         stitched_path: Path,
         voxel_size_x: float,
         voxel_size_y: float,
         voxel_size_z: float,
         objective: str,
-        # tile_overlap_percent: float,
         queue: Queue,
         stitch_mip: bool,
+        isotropic_downsampl_downsampled_path: Path,
+        isotropic_downsampling_resolution: float = 10,
         files_list: List[Path] = None,
         need_flat_image_application: bool = False,
         image_classes_training_data_path=None,
@@ -379,22 +351,27 @@ def process_channel(
         new_tile_size: Tuple[int, int] = None,
         need_destriping: bool = False,
         need_raw_png_to_tiff_conversion: bool = False,
-        need_compression: bool = False,
+        compression_level: int = 1,
+        compression_method: str = "ADOBE_DEFLATE",
         need_bleach_correction: bool = False,
+        padding_mode: str = "wrap",
         need_lightsheet_cleaning: bool = True,
-        need_compression_stitched_tif: bool = True,
         need_rotation_stitched_tif: bool = False,
         need_16bit_to_8bit_conversion: bool = False,
-        right_bit_shift: int = 8,
         continue_process_pystripe: bool = True,
         continue_process_terastitcher: bool = True,
         need_tera_fly_conversion: bool = False,
+        terafly_path: Path = None,
+        subvolume_depth: int = 1,
         print_input_file_names: bool = False,
-        subvolume_depth: int = 1
+        timeout: float = None,
+        nthreads: int = cpu_count(logical=False),
+        exclude_gpus: list = []
 ):
     # preprocess each tile as needed using PyStripe --------------------------------------------------------------------
 
     assert source_path.joinpath(channel).exists()
+    assert isotropic_downsampl_downsampled_path.exists()
     if need_gaussian_filter_2d or need_destriping or need_flat_image_application or \
             need_raw_png_to_tiff_conversion or \
             down_sampling_factor not in (None, (1, 1)) or new_tile_size is not None:
@@ -416,68 +393,66 @@ def process_channel(
                     image_classes_training_data_path,
                     tile_size,
                     max_images=1024,  # the number of flat images averaged
-                    batch_size=cpu_logical_core_count,
-                    patience_before_skipping=cpu_logical_core_count - 1,
+                    batch_size=nthreads,
+                    patience_before_skipping=nthreads - 1,
                     # the number of non-flat images found successively before skipping
                     skips=256,  # the number of images should be skipped before testing again
                     sigma_spatial=1,  # the de-noising parameter
                     save_as_tiff=True
                 )
 
-        sigma = (0, 0)  # sigma=(foreground, background) Default is (0, 0), indicating no de-striping.
+        tile_destriping_sigma = (0, 0)  # sigma=(foreground, background) Default is (0, 0), indicating no de-striping.
         if need_destriping:
             if objective == "4x":
-                sigma = (100, 100)
+                tile_destriping_sigma = (100, 100)
             elif objective == "40x":
-                sigma = (128, 256)
+                tile_destriping_sigma = (128, 256)
             else:
-                sigma = (250, 250)
+                tile_destriping_sigma = (250, 250)
         p_log(
             f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
-            f"{channel}: started preprocessing images and converting them to tif.\n"
+            f"{channel}: started preprocessing tile images and converting them to tif.\n"
             f"\tsource: {source_path / channel}\n"
             f"\tdestination: {preprocessed_path / channel}\n"
-            f"\tcompression: (ADOBE_DEFLATE, {1 if need_compression else 0})\n"
+            f"\tcompression: ({compression_method}, {compression_level})\n"
             f"\tflat application: {img_flat is not None}\n"
             f"\tgaussian: {need_gaussian_filter_2d}\n"
             f"\tbaseline subtraction value: {dark}\n"
-            f"\ttile de-striping sigma: {sigma}\n"
+            f"\ttile de-striping sigma: {tile_destriping_sigma}\n"
             f"\ttile size: {tile_size}\n"
-            f"\tdown sampling factor: {down_sampling_factor}\n"
-            f"\tresizing target: {new_tile_size}"
+            f"\tdown sampling factor on xy-plane: {down_sampling_factor}\n"
+            f"\tresizing target on xy-plane: {new_tile_size}"
         )
 
         return_code = batch_filter(
             source_path / channel,
             preprocessed_path / channel,
             files_list=files_list,
-            workers=cpu_physical_core_count + 2,
+            workers=nthreads + get_cpu_sockets() * 2,
             continue_process=continue_process_pystripe,
             print_input_file_names=print_input_file_names,
-            timeout=None,  # 600.0,
+            timeout=timeout,  # 600.0,
             flat=img_flat,
             gaussian_filter_2d=need_gaussian_filter_2d,
-            dark=dark,
             bleach_correction_frequency=None,  # 0.0005
             bleach_correction_max_method=False,
-            sigma=sigma,
+            sigma=tile_destriping_sigma,
             level=0,
-            wavelet="db9" if objective == "40x" else "db10",
+            wavelet="db9",
             crossover=10,
             threshold=None,
             padding_mode="reflect",
-            bidirectional=True if objective == "40x" else False,
+            bidirectional=True,
+            dark=dark,
             lightsheet=False,
-            # artifact_length=artifact_length,
-            # percentile=0.25,
             down_sample=down_sampling_factor,
             tile_size=tile_size,
             new_size=new_tile_size,
             d_type="uint16",
-            # convert_to_16bit=False,  # defaults to False
             convert_to_8bit=False,  # need_16bit_to_8bit_conversion
-            bit_shift_to_right=right_bit_shift,
-            compression=('ADOBE_DEFLATE', 1) if need_compression else None,  # ('ZSTD', 1) conda install imagecodecs
+            bit_shift_to_right=8,
+            compression=(compression_method, compression_level) if compression_level > 0 else None,
+            threads_per_gpu=8  # if sys.platform.lower() == "win32" else 1
         )
 
         if return_code != 0:
@@ -486,17 +461,12 @@ def process_channel(
     inspect_for_missing_tiles_get_files_list(preprocessed_path / channel)
 
     # stitching: align the tiles GPU accelerated & parallel ------------------------------------------------------------
-    if not stitched_path.joinpath(f"{channel}_xml_import_step_5.xml").exists() or not continue_process_terastitcher:
+    if (not stitched_path.joinpath(f"{channel_for_alignment}_xml_import_step_5.xml").exists() or
+            not continue_process_terastitcher):
         p_log(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
-              f"{channel}: aligning tiles using parastitcher ...")
+              f"{channel_for_alignment}: aligning tiles using parastitcher ...")
 
-        # tile_overlap_y = int(tile_size[0] * tile_overlap_percent / 100)
-        # tile_overlap_x = int(tile_size[1] * tile_overlap_percent / 100)
-        # if new_tile_size is not None:
-        #     tile_overlap_y = int(new_tile_size[0] * tile_overlap_percent / 100)
-        #     tile_overlap_x = int(new_tile_size[1] * tile_overlap_percent / 100)
-
-        proj_out = stitched_path / f'{channel}_xml_import_step_1.xml'
+        proj_out = stitched_path / f'{channel_for_alignment}_xml_import_step_1.xml'
         command = [
             f"{terastitcher}",
             "-1",
@@ -507,76 +477,82 @@ def process_channel(
             f"--vxl2={voxel_size_x if objective == '40x' else voxel_size_y:.3f}",
             f"--vxl3={voxel_size_z}",
             "--sparse_data",
-            f"--volin={preprocessed_path / channel}",
+            f"--volin={preprocessed_path / channel_for_alignment}",
             f"--projout={proj_out}",
             "--noprogressbar"
         ]
         p_log(f"\t{PrintColors.BLUE}import command:{PrintColors.ENDC}\n\t\t" + " ".join(command))
         run_command(" ".join(command))
         if not proj_out.exists():
-            p_log(f"{PrintColors.FAIL}{channel}: importing tif files failed.{PrintColors.ENDC}")
+            p_log(f"{PrintColors.FAIL}{channel_for_alignment}: importing tif files failed.{PrintColors.ENDC}")
             raise RuntimeError
 
-        max_subvolume_depth = 100
-        subvolume_depth = int(10 if objective == '40x' else min(subvolume_depth, max_subvolume_depth))
-        alignment_cores: int = 1
-        memory_needed_per_thread = 34 * subvolume_depth  # 48 or 32
-        if isinstance(new_tile_size, tuple):
-            for resolution in new_tile_size:
-                memory_needed_per_thread *= resolution
-        elif isinstance(tile_size, tuple):
-            if isinstance(down_sampling_factor, tuple):
-                for resolution, factor in zip(tile_size, down_sampling_factor):
-                    memory_needed_per_thread *= resolution / factor
-            else:
-                for resolution in tile_size:
+        def calculate_subvol_and_threads(alignment_depth: int):
+            # just a scope to clear unneeded variables
+            max_subvolume_depth = 100
+            alignment_depth = int(10 if objective == '40x' else min(alignment_depth, max_subvolume_depth))
+            alignment_cores: int = 1
+            memory_needed_per_thread = 48 * alignment_depth  # 48 or 34
+            if isinstance(new_tile_size, tuple):
+                for resolution in new_tile_size:
                     memory_needed_per_thread *= resolution
-        else:
-            memory_needed_per_thread *= 2048 * 2048
-        # if TifStack(glob_re(r"\.tiff?$", preprocessed_path.joinpath(channel)).__next__().parent).dtype == uint8:
-        #     memory_needed_per_thread /= 2
-        memory_ram = virtual_memory().available // 1024 ** 3  # in GB
-        memory_needed_per_thread //= 1024 ** 3
-
-        if memory_needed_per_thread <= memory_ram:
-            alignment_cores = cpu_physical_core_count
-            if memory_needed_per_thread > 0:
-                alignment_cores = min(floor(memory_ram / memory_needed_per_thread), alignment_cores)
-            if num_gpus > 0 and sys.platform.lower() == 'linux':
-                while alignment_cores < 6 * num_gpus and subvolume_depth > max_subvolume_depth:
-                    subvolume_depth //= 2
-                    alignment_cores *= 2
+            elif isinstance(tile_size, tuple):
+                if isinstance(down_sampling_factor, tuple):
+                    for resolution, factor in zip(tile_size, down_sampling_factor):
+                        memory_needed_per_thread *= resolution / factor
+                else:
+                    for resolution in tile_size:
+                        memory_needed_per_thread *= resolution
             else:
-                while alignment_cores < cpu_physical_core_count and subvolume_depth > max_subvolume_depth:
-                    subvolume_depth //= 2
-                    alignment_cores *= 2
-        else:
-            memory_needed_per_thread //= subvolume_depth
-            while memory_needed_per_thread * subvolume_depth > memory_ram and subvolume_depth > max_subvolume_depth:
-                subvolume_depth //= 2
-            memory_needed_per_thread *= subvolume_depth
+                memory_needed_per_thread *= 2048 * 2048
+            # if TifStack(glob_re(r"\.tiff?$", preprocessed_path.joinpath(channel)).__next__().parent).dtype == uint8:
+            #     memory_needed_per_thread /= 2
+            memory_ram = virtual_memory().available // 1024 ** 3  # in GB
+            memory_needed_per_thread //= 1024 ** 3
 
-        if num_gpus > 0 and sys.platform.lower() == 'linux':
-            alignment_cores = min(alignment_cores, num_gpus * 16)
+            if memory_needed_per_thread <= memory_ram:
+                alignment_cores = nthreads
+                if memory_needed_per_thread > 0:
+                    alignment_cores = min(floor(memory_ram / memory_needed_per_thread), alignment_cores)
+                if num_gpus > 0 and sys.platform.lower() == 'linux':
+                    while alignment_cores < 6 * num_gpus and alignment_depth > max_subvolume_depth:
+                        alignment_depth //= 2
+                        alignment_cores *= 2
+                else:
+                    while alignment_cores < nthreads and alignment_depth > max_subvolume_depth:
+                        alignment_depth //= 2
+                        alignment_cores *= 2
+            else:
+                memory_needed_per_thread //= alignment_depth
+                while memory_needed_per_thread * alignment_depth > memory_ram and alignment_depth > max_subvolume_depth:
+                    alignment_depth //= 2
+                memory_needed_per_thread *= alignment_depth
+
+            if num_gpus > 0 and sys.platform.lower() == 'linux':
+                alignment_cores = min(alignment_cores, num_gpus * 16)
+
+            return memory_ram, memory_needed_per_thread, alignment_cores, alignment_depth
+
+        free_ram, ram_needed_per_thread, n_cores, subvolume_depth = calculate_subvol_and_threads(subvolume_depth)
 
         steps_str = ["alignment", "z-displacement", "threshold-displacement", "optimal tiles placement"]
         for step in [2, 3, 4, 5]:
             p_log(
                 f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
-                f"{channel}: starting step {step} of stitching ..." + ((
-                    f"\n\tmemory needed per thread = {memory_needed_per_thread} GB"
-                    f"\n\ttotal needed ram {alignment_cores * memory_needed_per_thread} GB"
-                    f"\n\tavailable ram = {memory_ram} GB"
+                f"{channel_for_alignment}: starting step {step} of stitching ..." + ((
+                    f"\n\tmemory needed per thread = {ram_needed_per_thread} GB"
+                    f"\n\ttotal needed ram {n_cores * ram_needed_per_thread} GB"
+                    f"\n\tavailable ram = {free_ram} GB"
                     f"\n\tsubvolume depth = {subvolume_depth} z-steps") if step == 2 else ""))
-            proj_in = stitched_path / f"{channel}_xml_import_step_{step - 1}.xml"
-            proj_out = stitched_path / f"{channel}_xml_import_step_{step}.xml"
+            proj_in = stitched_path / f"{channel_for_alignment}_xml_import_step_{step - 1}.xml"
+            proj_out = stitched_path / f"{channel_for_alignment}_xml_import_step_{step}.xml"
 
             assert proj_in.exists()
-            if step == 2 and alignment_cores > 1:
-                os.environ["slots"] = f"{cpu_logical_core_count}"
+            if step == 2 and n_cores > 1:
+                os.environ["slots"] = f"{cpu_count(logical=True)}"
                 command = [
-                    f"mpiexec{' --use-hwthread-cpus --oversubscribe ' if sys.platform.lower() == 'linux' else ''} "
-                    f"-np {int(alignment_cores + 1)} "  # one extra thread is needed for management
+                    f"mpiexec {'--bind-to none ' if sys.platform.lower() == 'linux' else ''}"
+                    f"-np {int(n_cores + 1)} "  # one extra thread is needed for management
                     f"python -m mpi4py {parastitcher}"
                 ]
             else:
@@ -616,111 +592,131 @@ def process_channel(
     stitched_tif_path = stitched_path / f"{channel}_tif"
     stitched_tif_path.mkdir(exist_ok=True)
 
-    tsv_volume = TSVVolume.load(
-        stitched_path / f'{channel}_xml_import_step_5.xml',
-        alt_stack_dir=preprocessed_path / channel
+    cosine_blending = False  # True if need_bleach_correction else False
+    tsv_volume = TSVVolume(
+        stitched_path / f'{channel_for_alignment}_xml_import_step_5.xml',
+        alt_stack_dir=preprocessed_path.joinpath(channel).__str__(),
+        cosine_blending=cosine_blending
     )
     shape: Tuple[int, int, int] = tsv_volume.volume.shape  # shape is in z y x format
 
-    bleach_correction_frequency = None
-    bleach_correction_sigma = (0, 0)
-    if need_bleach_correction:
-        if new_tile_size is not None:
-            bleach_correction_frequency = 1 / min(new_tile_size)
-        elif down_sampling_factor is not None:
-            bleach_correction_frequency = 1 / min(new_tile_size) * min(down_sampling_factor)
-        else:
-            bleach_correction_frequency = 1 / min(tile_size)
-        bleach_correction_sigma = (floor(1 // bleach_correction_frequency * 2),) * 2
-
-    bleach_correction_clip_min = bleach_correction_clip_max = None
-    if need_bleach_correction or need_16bit_to_8bit_conversion:
-        p_log(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
-              f"{channel}: calculating clip_min, clip_max, and right bit shift values ...")
-        img = tsv_volume.imread(
-            VExtent(
-                tsv_volume.volume.x0, tsv_volume.volume.x1,
-                tsv_volume.volume.y0, tsv_volume.volume.y1,
-                tsv_volume.volume.z0 + shape[0] // 2, tsv_volume.volume.z0 + shape[0] // 2 + 1),
-            tsv_volume.dtype)[0]
-        img = log1p_jit(img)
-        bleach_correction_clip_min = np_round(expm1_jit(otsu_threshold(img)))
-        if bleach_correction_clip_min > 0:
-            bleach_correction_clip_min -= 1
-        bleach_correction_clip_max = np_round(expm1_jit(prctl(img[img > log1p_jit(bleach_correction_clip_min)], 99.6)))
-        img_approximate_upper_bound = bleach_correction_clip_max
-        if need_bleach_correction and need_16bit_to_8bit_conversion:
-            img = process_img(
-                img,
-                exclude_dark_edges_set_them_to_zero=False,
-                sigma=bleach_correction_sigma,
-                bidirectional=True,
-                bleach_correction_frequency=bleach_correction_frequency,
-                bleach_correction_clip_min=float(bleach_correction_clip_min),
-                bleach_correction_clip_max=float(bleach_correction_clip_max),
-                log1p_normalization_needed=False,
-                lightsheet=need_lightsheet_cleaning,
-                tile_size=shape[1:3],
-                d_type=tsv_volume.dtype
-            )
-            # imsave_tif(stitched_tif_path/"test.tif", img)
+    def estimate_img_related_params():
+        # just a scope to clear unneeded variables
+        sig = 0
+        frequency = None
+        background, bit_shift, clip_min, clip_med, clip_max = 0, 8, None, None, None
+        if need_16bit_to_8bit_conversion or need_bleach_correction:
+            found_threshold = False
+            z1 = shape[0] // 2
+            while not found_threshold:
+                try:
+                    p_log(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
+                          f"calculating thresholding, and bit shift for 8-bit conversion using img_{z1:06n}.tif ...")
+                    img = tsv_volume.imread(
+                        VExtent(
+                            tsv_volume.volume.x0, tsv_volume.volume.x1,
+                            tsv_volume.volume.y0, tsv_volume.volume.y1,
+                            tsv_volume.volume.z0 + z1, tsv_volume.volume.z0 + z1 + 1),
+                        tsv_volume.dtype)[0]
+                    assert not is_uniform_2d(img)
+                    assert isinstance(img, ndarray)
+                    img = log1p_jit(img, dtype=float32)
+                    clip_min, clip_med, clip_max = threshold_multiotsu(img, classes=4)
+                    bit_shift = estimate_bit_shift(img, threshold=clip_max, percentile=99.9)
+                    assert isinstance(clip_min, float32)
+                    assert isinstance(clip_med, float32)
+                    assert isinstance(clip_max, float32)
+                    assert isinstance(bit_shift, int)
+                    assert 0 <= bit_shift <= 8
+                    found_threshold = True
+                except (ValueError, AssertionError):
+                    z1 += 1
             if need_bleach_correction:
-                img = where(img > bleach_correction_clip_min, img - bleach_correction_clip_min, 0)
-            img_approximate_upper_bound = np_round(prctl(img[img > 0], 99.99))
+                background = int(np_round(expm1(clip_min)))
+                if new_tile_size is not None:
+                    sig = min(new_tile_size)
+                elif down_sampling_factor is not None:
+                    sig = min(new_tile_size) // min(down_sampling_factor)
+                else:
+                    sig = min(tile_size)
+                # frequency = 1 / sig
 
-        del img
-        for b in range(0, 9):
-            if 256 * 2 ** b >= img_approximate_upper_bound:
-                right_bit_shift = b
-                break
+        sigma = (int(sig * 2), ) * 2
+        memory_needed_per_thread = 21 if need_bleach_correction else 16
+        memory_needed_per_thread *= shape[1] + 2 * calculate_pad_size(shape=shape[1:3], sigma=max(sigma)) + shape[1] % 2
+        memory_needed_per_thread *= shape[2] + 2 * calculate_pad_size(shape=shape[1:3], sigma=max(sigma)) + shape[2] % 2
+        memory_needed_per_thread /= 1024 ** 3
+        if tsv_volume.dtype in (uint8, "uint8"):
+            memory_needed_per_thread /= 2
+        memory_ram = virtual_memory().available / 1024 ** 3  # in GB
+        merge_step_cores = max(1, min(floor(memory_ram / memory_needed_per_thread), nthreads))
+        return (
+            background, bit_shift,
+            sigma, clip_min, clip_med, clip_max, frequency,
+            memory_ram, memory_needed_per_thread, merge_step_cores)
 
-    memory_needed_per_thread = 32 if need_bleach_correction else 16
-    memory_needed_per_thread *= shape[1] + 2 * max(bleach_correction_sigma) + 1
-    memory_needed_per_thread *= shape[2] + 2 * max(bleach_correction_sigma) + 1
-    memory_needed_per_thread /= 1024 ** 3
-    if tsv_volume.dtype in (uint8, "uint8"):
-        memory_needed_per_thread /= 2
-    memory_ram = virtual_memory().available / 1024 ** 3  # in GB
-    merge_step_cores = max(1, min(floor(memory_ram / memory_needed_per_thread), cpu_physical_core_count))
+    (dark, right_bit_shift,
+     bleach_correction_sigma, bleach_correction_clip_min, bleach_correction_clip_med, bleach_correction_clip_max,
+     bleach_correction_frequency, free_ram, ram_needed_per_thread, n_cores) = estimate_img_related_params()
+    down_sampled_destriping_sigma = (2000, 2000) if need_bleach_correction else (0, 0)  # for 10 um target
 
+    def expm1_int(x: float):
+        return x if x is None else int(np_round(expm1(x)))
     p_log(
         f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
         f"{channel}: starting step 6 of stitching, merging tiles into 2D tif series and "
         f"postprocessing the stitched images, using TSV ...\n"
         f"\tsource: {stitched_path / f'{channel}_xml_import_step_5.xml'}\n"
         f"\tdestination: {stitched_tif_path}\n"
-        f"\tmemory needed per thread = {memory_needed_per_thread:.1f} GB\n"
-        f"\tmemory needed total = {memory_needed_per_thread * merge_step_cores:.1f} GB\n"
-        f"\tavailable ram = {memory_ram:.1f} GB\n"
-        f"\ttsv volume shape (zyx): {shape}\n"
-        f"\ttsv volume data type: {tsv_volume.dtype}\n"
-        f"\t8-bit conversion: {need_16bit_to_8bit_conversion}\n"
-        f"\tbit-shift to right: {right_bit_shift}\n"
-        f"\tbleach correction frequency: {bleach_correction_frequency}\n"
-        f"\tbleach correction sigma: {bleach_correction_sigma}\n"
-        f"\tbleach correction clip min: {bleach_correction_clip_min}\n"
-        f"\tbleach correction clip max: {bleach_correction_clip_max}\n"
-        f"\tdark: {bleach_correction_clip_min if need_bleach_correction else 0}\n"
-        f"\tbackground subtraction: {need_lightsheet_cleaning}\n"
-        f"\trotate: {90 if need_rotation_stitched_tif else 0}"
+        f"\tmemory needed per thread: \t{ram_needed_per_thread:.1f} GB\n"
+        f"\tmemory needed total: \t\t{ram_needed_per_thread * min(n_cores, shape[0]):.1f} GB\n"
+        f"\tavailable ram: \t\t\t{free_ram:.1f} GB\n"
+        f"\tmax threads based on ram: \t{n_cores}\n"
+        f"\ttsv volume shape (zyx): \t{shape}\n"
+        f"\ttsv volume data type: \t\t{tsv_volume.dtype}\n"
+        f"\tbleach correction sigma main: \t{bleach_correction_sigma}\n"
+        f"\tbleach correction sigma down sampled: {down_sampled_destriping_sigma}\n"
+        f"\tfg vs bg threshold: \t\t{expm1_int(bleach_correction_clip_med)}\n"
+        f"\tbidirectional axes (-1, -2): \t{True if need_bleach_correction else False}\n"
+        f"\tpadding mode: \t\t\t{padding_mode}\n"
+        f"\tpadding size: \t\t\t{calculate_pad_size(shape=shape[1:3], sigma=max(bleach_correction_sigma))}\n"
+        f"\tbleach correction frequency: \t{bleach_correction_frequency}\n"
+        f"\tbleach correction clip min: \t{expm1_int(bleach_correction_clip_min)}\n"
+        f"\tbleach correction clip med: \t{expm1_int(bleach_correction_clip_med)}\n"
+        f"\tbleach correction clip max: \t{expm1_int(bleach_correction_clip_max)}\n"
+        f"\tbaseline subtraction: \t\t{dark}\n"
+        f"\tbackground subtraction: \t{need_lightsheet_cleaning}\n"
+        f"\t8-bit conversion: \t\t{need_16bit_to_8bit_conversion}\n"
+        f"\tbit-shift to right: \t\t{right_bit_shift}\n"
+        f"\trotate: \t\t\t{90 if need_rotation_stitched_tif else 0}"
     )
-    # need_lightsheet_cleaning
+
+    gpu_semaphore = None
+    if CUDA_IS_AVAILABLE_FOR_PT:
+        gpu_semaphore = Queue()
+        for gpu in range(cuda_device_count()):
+            if gpu not in exclude_gpus:
+                gpu_semaphore.put((f"cuda:{gpu}", cuda_get_device_properties(gpu).total_memory))
+        for cpu in range(get_cpu_sockets()):
+            gpu_semaphore.put(("cpu", virtual_memory().available))
+
     return_code = parallel_image_processor(
         source=tsv_volume,
         destination=stitched_tif_path,
         fun=process_img,
         kwargs={
-            # "exclude_dark_edges_set_them_to_zero": True if (
-            #         need_bleach_correction or need_lightsheet_cleaning) else False,
-            "threshold": None,
             "sigma": bleach_correction_sigma,
-            "padding_mode": "wrap",  # wrap reflect
+            "wavelet": "coif15",  # db37
+            "padding_mode": padding_mode,  # wrap reflect
+            "gpu_semaphore": gpu_semaphore,
             "bidirectional": True if need_bleach_correction else False,
+            "threshold": bleach_correction_clip_med,  # for dual-band sigma
             "bleach_correction_frequency": bleach_correction_frequency,
-            "bleach_correction_max_method": False,
             "bleach_correction_clip_min": bleach_correction_clip_min,
+            "bleach_correction_clip_med": bleach_correction_clip_med,
             "bleach_correction_clip_max": bleach_correction_clip_max,
-            "dark": bleach_correction_clip_min if need_bleach_correction else 0,
+            "bleach_correction_max_method": False,
+            "dark": dark,
             "lightsheet": need_lightsheet_cleaning,
             "percentile": 0.25,
             "rotate": 0,
@@ -730,13 +726,16 @@ def process_channel(
             "d_type": tsv_volume.dtype
         },
         source_voxel=(voxel_size_z, voxel_size_y, voxel_size_x),
-        target_voxel=None if stitch_mip else 20,
+        target_voxel=None if stitch_mip else isotropic_downsampling_resolution,
+        downsampled_path=isotropic_downsampl_downsampled_path,
+        down_sampled_destriping_sigma=down_sampled_destriping_sigma,
         rotation=90 if need_rotation_stitched_tif else 0,
-        timeout=None,
-        max_processors=merge_step_cores,
+        timeout=timeout,
+        max_processors=n_cores,
         progress_bar_name="TSV",
-        compression=("ADOBE_DEFLATE", 1) if need_compression_stitched_tif else None,
-        needed_memory=memory_needed_per_thread * 1024 ** 3
+        compression=(compression_method, compression_level) if compression_level > 0 else None,
+        resume=continue_process_terastitcher,
+        needed_memory=ram_needed_per_thread * 1024 ** 3 * 8
     )
     if need_rotation_stitched_tif:
         shape = (shape[0], shape[2], shape[1])
@@ -749,10 +748,13 @@ def process_channel(
     # TODO: Paraconverter: add a progress bar
     running_processes: int = 0
     if need_tera_fly_conversion:
-        tera_fly_path = stitched_path / f'{channel}_TeraFly'
-        tera_fly_path.mkdir(exist_ok=True)
+        if terafly_path is None:
+            terafly_path = stitched_path
+        terafly_path /= f'{channel}_TeraFly'
+        terafly_path.mkdir(exist_ok=True)
         command = " ".join([
-            f"mpiexec -np {min(11, merge_step_cores)}{' --oversubscribe' if sys.platform == 'linux' else ''} "
+            f"mpiexec {'--bind-to none ' if sys.platform == 'linux' else ''}"
+            f"-np {min(11, nthreads)} "
             f"python -m mpi4py {paraconverter}",
             # f"{teraconverter}",
             "--sfmt=\"TIFF (series, 2D)\"",
@@ -767,30 +769,19 @@ def process_channel(
             # "--width=256",
             # "--depth=256",
             f"-s={stitched_tif_path}",
-            f"-d={tera_fly_path}",
+            f"-d={terafly_path}",
         ])
         p_log(
             f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
             f"{channel}: starting to convert to TeraFly format ...\n"
             f"\tsource: {stitched_tif_path}\n"
-            f"\tdestination: {tera_fly_path}\n"
+            f"\tdestination: {terafly_path}\n"
             f"\t{PrintColors.BLUE}TeraFly conversion command:{PrintColors.ENDC}\n\t\t{command}\n"
         )
         MultiProcessCommandRunner(queue, command).start()
         running_processes += 1
 
     return stitched_tif_path, shape, running_processes
-
-
-def get_gradient(img: ndarray, threshold: float = 98.5) -> ndarray:
-    img_percentile = prctl(img, threshold)
-    img = where(img >= img_percentile, 1, img / img_percentile)  # scale images
-    img = sobel(img)
-    img = array(img)
-    img_percentile = prctl(img, threshold)
-    img = where(img >= img_percentile, 255, img / img_percentile * 255)  # scale images
-    img = img.astype(float32)
-    return img
 
 
 def get_transformation_matrix(reference: ndarray, subject: ndarray,
@@ -947,17 +938,23 @@ def merge_all_channels(
         assert len(right_bit_shifts) == len(tif_paths)
     with Pool(len(tif_paths)) as pool:
         tif_stacks = list(pool.starmap(TifStack, zip(tif_paths, z_offsets)))
-        assert all([tif_stack.nz > 0 for tif_stack in tif_stacks])
-        img_reference_idx = tif_stacks[0].nz // 2
-        print(f"reference image index = {img_reference_idx}")
-        assert img_reference_idx >= 0
-        img_samples = pool.starmap(imread_tif_stck, zip(tif_stacks, (img_reference_idx,) * len(tif_paths)))
-        img_samples = list(pool.map(get_gradient, img_samples))
+    assert all([tif_stack.nz > 0 for tif_stack in tif_stacks])
+
+    merged_tif_path.mkdir(exist_ok=True)
+    if resume and len(list(merged_tif_path.glob("*.tif"))) >= max([tif_stack.nz for tif_stack in tif_stacks]):
+        return
+
+    img_reference_idx = tif_stacks[0].nz // 2
+    if not all([tif_stack.nz > img_reference_idx for tif_stack in tif_stacks]):
+        img_reference_idx = min([tif_stack.nz for tif_stack in tif_stacks])
+    print(f"reference image index = {img_reference_idx}")
+    assert img_reference_idx >= 0
+    with Pool(len(tif_paths)) as pool:
+        img_samples = list(pool.starmap(imread_tif_stck, zip(tif_stacks, (img_reference_idx,) * len(tif_paths))))
+        img_samples = list(map(get_gradient, img_samples))
     assert all([img is not None for img in img_samples])
     transformation_matrices = [get_transformation_matrix(img_samples[0], img) for img in img_samples[1:]]
     del img_samples
-
-    merged_tif_path.mkdir(exist_ok=True)
 
     args_queue = Queue(maxsize=tif_stacks[0].nz)
     for idx in jumpy_step_range(0, tif_stacks[0].nz):
@@ -986,6 +983,7 @@ def merge_all_channels(
     if return_code != 0:
         p_log(f"{PrintColors.FAIL}merge_all_channels function failed{PrintColors.ENDC}")
         raise RuntimeError
+    # map(lambda arg: generate_composite_image(**arg), [args_queue.get() for _ in range(tif_stacks[0].nz)])
 
 
 def get_imaris_command(imaris_path: Path, input_path: Path, output_path: Path = None,
@@ -1019,8 +1017,7 @@ def get_imaris_command(imaris_path: Path, input_path: Path, output_path: Path = 
             command += ["--inputformat TiffSeries"]
 
         command += [
-            # f"--nthreads {workers if dtype == 'uint8' or sys.platform == 'win32' else 1}",
-            f"--nthreads {workers}",
+            f"--nthreads {workers if dtype == 'uint8' or sys.platform == 'win32' else 1}",
             f"--compression 3",
             f"--voxelsize {voxel_size_x:.2f}-{voxel_size_y:.2f}-{voxel_size_z:.2f}",  # x-y-z
             "--logprogress"
@@ -1039,127 +1036,132 @@ def commands_progress_manger(queue: Queue, progress_bars: List[tqdm], running_pr
     while running_processes > 0:
         try:
             [percent_addition, position, return_code, command] = queue.get()
+            if position is not None and 0 < len(progress_bars) <= position + 1:
+                progress_bars[position].update(percent_addition)
             if return_code is not None:
                 if return_code > 0:
                     p_log(f"\nFollowing command failed:\n\t{command}\n\treturn code: {return_code}\n")
                 else:
                     p_log(f"\nFollowing command succeeded:\n\t{command}\n")
                 running_processes -= 1
-            if position is not None and 0 < len(progress_bars) <= position + 1:
-                progress_bars[position].update(percent_addition)
         except Empty:
             sleep(1)  # waite one second before checking the queue again
 
 
-def main(source_path):
+def main(args):
+    global AllChannels
+    source_path = Path(args.input)
+    # make sure input path does not have "-" char in its name
     if source_path.exists() and "-" in source_path.name:
         source_path = source_path.rename(source_path.parent / source_path.name.replace("-", "_"))
-        print(f"{PrintColors.WARNING}input path renamed to replace '-' with '_'{PrintColors.ENDC}")
-    else:
-        source_path = source_path.parent / source_path.name.replace("-", "_")
-    if not (source_path.exists() and source_path.is_dir()):
-        print(f"{PrintColors.FAIL}input path should be an existing folder!{PrintColors.ENDC}")
+        print(f"{PrintColors.WARNING}--input path renamed to replace '-' with '_'{PrintColors.ENDC}")
+    if not source_path.exists():
+        print(f"{PrintColors.FAIL}--input path {source_path} does not exist!{PrintColors.ENDC}")
+        raise RuntimeError
+    if not source_path.is_dir():
+        print(f"{PrintColors.FAIL}--input path {source_path} should be a folder!{PrintColors.ENDC}")
+        raise RuntimeError
+    all_channels = [c for c, _ in AllChannels if source_path.joinpath(c).exists()]
+    if args.stitch_mip:
+        all_channels = [
+            channel + "_MIP" for channel, _ in AllChannels if source_path.joinpath(channel + "_MIP").exists()]
+    if not all_channels:
+        print(f"{PrintColors.FAIL}"
+              f"could not find unstitched files. --input path should have at least one of these folders "
+              f"{[c + '_MIP' for c, _ in AllChannels] if args.stitch_mip else [c for c, _ in AllChannels]}!"
+              f"{PrintColors.ENDC}")
         raise RuntimeError
 
-    # Ask questions ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+    if not Path(args.tmptif).exists():
+        print(f"{PrintColors.FAIL}--tmptif path {args.tmptif} does not exist!{PrintColors.ENDC}")
+        raise RuntimeError
+    preprocessed_path = Path(args.tmptif) / (source_path.name + "_tif")
+    preprocessed_path.mkdir(exist_ok=True)
 
-    global AllChannels
+    if not Path(args.stitched).exists():
+        print(f"{PrintColors.FAIL}--stitched path {args.stitched} does not exist!{PrintColors.ENDC}")
+        raise RuntimeError
+    stitched_path = Path(args.stitched) / (source_path.name + "_stitched")
+    stitched_path.mkdir(exist_ok=True)
+
+    need_composite_image = False
+    reference_channel = all_channels[0]
+    composite_path = Path(args.tmptif)
+    if len(all_channels) > 1:
+        if args.composite:
+            need_composite_image = True
+            composite_path = Path(args.composite)
+            if not composite_path.exists():
+                print(f"{PrintColors.FAIL}composite path {composite_path} did not exist.{PrintColors.ENDC}")
+                raise RuntimeError
+            composite_path /= source_path.name + "_composite" + ("_MIP" if args.stitch_mip else "")
+            composite_path.mkdir(exist_ok=True)
+        if args.reference_channel:
+            reference_channel = args.reference_channel
+        if reference_channel not in all_channels:
+            print(f"{PrintColors.FAIL}provided --reference_channel should be among: {all_channels} {PrintColors.ENDC}")
+            raise RuntimeError
     channel_color_dict = {channel: color for channel, color in AllChannels} | \
                          {channel + "_MIP": color for channel, color in AllChannels}
-    all_channels = [
-        channel + "_MIP" for channel, color in AllChannels if source_path.joinpath(channel + "_MIP").exists()]
-    stitch_mip = ask_true_false_question("Do you need to stitch the MIP image first?") if all_channels else False
-    if not stitch_mip:
-        all_channels = [channel for channel, color in AllChannels if source_path.joinpath(channel).exists()]
     channel_color_dict = {channel: channel_color_dict[channel] for channel in all_channels}
 
-    log_file = source_path / ("log_mip.txt" if stitch_mip else "log.txt")
+    need_imaris_conversion = False
+    imaris_files = None
+    if args.imaris:
+        need_imaris_conversion = True
+        imaris_files = [Path(args.imaris)]
+        if len(all_channels) > 1 and not need_composite_image:
+            imaris_files = [Path(args.imaris).parent / (channel + ".ims") for channel in all_channels]
+
+        for imaris_file in imaris_files:
+            if imaris_file.exists() and imaris_file.is_file():
+                print(f"{PrintColors.FAIL}"
+                      f"provided --imaris file already exist. You should not overwrite an existing image!"
+                      f"{PrintColors.ENDC}")
+                raise RuntimeError
+            elif not imaris_file.suffix.lower() == ".ims":
+                print(f"{PrintColors.FAIL}provided --imaris file should have .ims extension!{PrintColors.ENDC}")
+                raise RuntimeError
+            elif not imaris_file.parent.exists():
+                print(f"{PrintColors.FAIL}parent folder of --imaris file does not exist!{PrintColors.ENDC}")
+                raise RuntimeError
+            else:
+                # make sure the path is writable
+                imaris_file.touch(exist_ok=False)
+                imaris_file.unlink()
+
+    downsampled_path = stitched_path
+    if args.imaris:
+        downsampled_path = imaris_files[0].parent
+    downsampled_path /= "Downsampled"
+    downsampled_path.mkdir(exist_ok=True)
+
+    log_file = downsampled_path.parent / ("log_mip.txt" if args.stitch_mip else "log.txt")
     log.basicConfig(filename=str(log_file), level=log.INFO)
     log.FileHandler(str(log_file), mode="w")  # rewrite the file instead of appending
-    p_log(f"list of channels: {all_channels}")
-    p_log(f"color of channels: {channel_color_dict}")
 
-    objective, voxel_size_x, voxel_size_y, voxel_size_z, tile_size = get_voxel_sizes(
-        source_path / all_channels[0], stitch_mip)
+    objective = args.objective.lower()
+    voxel_size_x, voxel_size_y, voxel_size_z, tile_size = get_voxel_sizes(
+        objective, source_path / all_channels[0], args.stitch_mip)
+    if not args.stitch_mip:
+        assert 1 <= args.voxel_size_target
+        assert voxel_size_x < args.voxel_size_target
+        assert voxel_size_y < args.voxel_size_target
+        assert voxel_size_z < args.voxel_size_target
 
-    posix, what_for = "", ""
-    image_classes_training_data_path = source_path / FlatNonFlatTrainingData
-    need_flat_image_application = False  # ask_true_false_question("Do you need to apply a flat image?")
-    if need_flat_image_application:
-        posix += "_flat_applied"
-        flat_img_not_exist = []
-        for channel in all_channels:
-            flat_img_created_already = source_path.joinpath(channel + '_flat.tif')
-            flat_img_not_exist.append(not flat_img_created_already.exists())
-        if any(flat_img_not_exist):
-            if not image_classes_training_data_path.exists():
-                p_log(
-                    f'Looked for flat vs not-flat training data in {image_classes_training_data_path} '
-                    f'and it was missing!')
-                use_default_flat_classification_data = ask_true_false_question(
-                    "Do you want to use classification data that comes with this package? \n"
-                    "(It might not be compatible with your microscopes.)"
-                )
-                if use_default_flat_classification_data:
-                    image_classes_training_data_path = Path(__file__).parent / "image_classes.csv"
-                    p_log(f"default classification data path is:\n"
-                          f"{image_classes_training_data_path.absolute()}")
-                else:
-                    p_log("All images will be used for flat image generation!")
-                    image_classes_training_data_path = None
-
-    need_gaussian_filter_2d = ask_true_false_question(
-        f"Do you need to apply a 5x5 Gaussian filter to tiles before stitching to remove camera artifacts and "
-        f"produce up to two times smaller files?"
-    )
-    p_log(f"gaussian: {need_gaussian_filter_2d}")
-
-    def destination_name(name: str):
-        new_name = name
-        new_resolution: int = 0
-        re_match = compile(r"(\d+)[xX]_(\d+)").findall(name)
-        re_match2 = compile(r"(\d+)[xX]_([zZ])(\d+)").findall(name)
-        if re_match:
-            resolution, z_step = re_match[0]
-            if resolution:
-                new_resolution = int(round(int(resolution) / (voxel_size_z / voxel_size_x), 0))
-            if new_resolution:
-                new_name = name.replace(
-                    f"_{resolution}x_{z_step}", f"_{new_resolution}X_{z_step}").replace(
-                    f"_{resolution}X_{z_step}", f"_{new_resolution}X_{z_step}")
-
-        elif re_match2:
-            resolution, z, z_step = re_match2[0]
-            if resolution:
-                new_resolution = int(round(int(resolution) / (voxel_size_z / voxel_size_x), 0))
-            if new_resolution:
-                new_name = name.replace(
-                    f"_{resolution}x_{z}{z_step}", f"_{new_resolution}X_z{z_step}").replace(
-                    f"_{resolution}X_{z}{z_step}", f"_{new_resolution}X_z{z_step}")
-        return new_name
-
-    new_destination_name = destination_name(source_path.name)
     down_sampling_factor = None
-    need_down_sampling = False
-    need_up_sizing = False
     new_tile_size = None
     if voxel_size_z < voxel_size_x or voxel_size_z < voxel_size_y:
-        need_up_sizing = ask_true_false_question(
-            "Do you need to upsize images for isotropic voxel generation before stitching?")
+        need_up_sizing = args.isotropic
         if need_up_sizing:
-            posix += "_upsized"
-            what_for += "upsizing "
             new_tile_size = (
                 int(round(tile_size[0] * voxel_size_y / voxel_size_z, 0)),
                 int(round(tile_size[1] * voxel_size_x / voxel_size_z, 0))
             )
             voxel_size_x = voxel_size_y = voxel_size_z
     elif voxel_size_z > voxel_size_x or voxel_size_z > voxel_size_y:
-        need_down_sampling = ask_true_false_question(
-            "Do you need to down-sample and resize images for isotropic voxel generation before stitching?")
+        need_down_sampling = args.isotropic
         if need_down_sampling:
-            posix += "_downsampled"
-            what_for += "down-sampling "
             new_tile_size = (
                 int(round(tile_size[0] * voxel_size_y / voxel_size_z, 0)),
                 int(round(tile_size[1] * voxel_size_x / voxel_size_z, 0))
@@ -1169,157 +1171,121 @@ def main(source_path):
             if down_sampling_factor == (1, 1):
                 down_sampling_factor = None
     else:
-        print(f'{PrintColors.WARNING}make sure voxel sizes are really equal!{PrintColors.ENDC}')
+        p_log(f'{PrintColors.WARNING}'
+              f'voxel_size_x = {voxel_size_x}\n'
+              f'voxel_size_y = {voxel_size_y}\n'
+              f'voxel_size_z = {voxel_size_z}\n'
+              f'make sure voxel sizes are really equal!'
+              f'{PrintColors.ENDC}')
 
-    need_destriping = ask_true_false_question("Do you need to de-stripe tiles?")
-    if need_destriping:
-        posix += "_destriped"
-        what_for += "destriped "
-    p_log(f"tile de-striping: {need_destriping}")
+    def select_channels(needed: bool, channels: List[str], message: str) -> List[str]:
+        selected_channels: List[str] = []
+        if needed:
+            if len(all_channels) == 1:
+                selected_channels = all_channels.copy()
+            elif channels:
+                for channel in channels:
+                    if channel in all_channels:
+                        selected_channels += [channel]
+                    else:
+                        print(f"{PrintColors.FAIL}{message} channel {channel} is not among {all_channels}"
+                              f"{PrintColors.ENDC}")
+                        raise RuntimeError
+            else:
+                selected_channels = all_channels.copy()
+        return selected_channels
 
-    dark_threshold: Dict[str, int] = {channel: 0 for channel in all_channels}
-    need_baseline_subtraction = False  # ask_true_false_question("Do you need to subtract baseline value form tiles?")
-    if need_baseline_subtraction:
-        # pixel values smaller than the dark value (camera noise) will be set to 0 to increase compression and clarity
-        for channel in all_channels:
-            dark_threshold[channel] = ask_for_a_number_in_range(
-                f"Enter foreground vs background threshold (dark uint) for channel {channel}:", (0, 2 ** 16 - 1), int)
-    p_log(f"baseline subtraction value: {dark_threshold}")
+    channels_need_bleach_correction = select_channels(
+        args.bleach_correction, args.bleach_correction_channels, "bleach correction")
 
-    need_raw_png_to_tiff_conversion = ask_true_false_question(
-        "Are images in raw or png format that needs tif conversion before stitching?")
-    p_log(f"tif conversion requested: {need_raw_png_to_tiff_conversion}")
-    need_compression = True  # ask_true_false_question("Do you need to compress un-stitched tif tiles?")
-    p_log(f"tile tif compression: {need_compression}")
-    if need_raw_png_to_tiff_conversion:
-        posix += "_tif"
-        what_for += "tif "
+    channels_need_background_subtraction = select_channels(
+        args.background_subtraction, args.background_subtraction_channels, "background subtraction")
 
-    need_bleach_correction = ask_true_false_question(
-        f"Do you need to apply bleach correction algorithm to stitched images? \n"
-        f"{PrintColors.BLUE}TIP: Do not select sparely labeled channels.{PrintColors.ENDC}")
-    channels_need_bleach_correction = []
-    if need_bleach_correction:
-        channels_need_bleach_correction = select_multiple_among_list("bleach correction", all_channels)
-    p_log(f"bleach correction: {channels_need_bleach_correction}")
+    channels_need_tera_fly_conversion = select_channels(
+        True if args.terafly_channels else False, args.terafly_channels, "terafly conversion")
 
-    need_background_subtraction = ask_true_false_question(
-        "Do you need to apply background subtraction algorithm to stitched images?")
-    channels_need_background_subtraction: List[str] = []
-    if need_background_subtraction:
-        channels_need_background_subtraction = select_multiple_among_list("background subtraction", all_channels)
-    p_log(f"background subtraction: {channels_need_background_subtraction}")
+    terafly_path = stitched_path
+    if args.imaris:
+        terafly_path = imaris_files[0].parent
+    if channels_need_tera_fly_conversion and args.terafly_path:
+        terafly_path = Path(args.terafly_path)
+        if not terafly_path.exists():
+            print(f"{PrintColors.FAIL}--terafly_path {args.terafly_path} does not exits!{PrintColors.ENDC}")
+    terafly_path.joinpath("test").touch(exist_ok=False)
+    terafly_path.joinpath("test").unlink()
 
-    need_16bit_to_8bit_conversion = ask_true_false_question(
-        "Do you need to convert 16-bit images to 8-bit after stitching to reduce final file size?")
-    p_log(f"conversion to 8-bit: {need_16bit_to_8bit_conversion}")
-    right_bit_shift: Dict[str, int] = {channel: 8 for channel in all_channels}
-    # if need_16bit_to_8bit_conversion:
-    #     for channel in all_channels:
-    #         right_bit_shift[channel] = int(select_among_multiple_options(
-    #             f"{PrintColors.BLUE}\tFor{PrintColors.ENDC} {PrintColors.GREEN}{channel}{PrintColors.ENDC} channel, "
-    #             f"{PrintColors.BLUE}enter right bit shift [0 to 8] for 8-bit conversion:{PrintColors.ENDC} \n"
-    #             "\tbitshift smaller than 8 will increase the pixel brightness. "
-    #             "The smaller the value the brighter the pixels.\n"
-    #             "\tA small bitshift is less destructive for dim (axons) pixels.\n"
-    #             "\tWe suggest 0-4 for 3D images and 8 for max projection. \n",
-    #             [
-    #               "any value larger than   255 will be set to 255 in 8 bit, values smaller than 255 will not change",
-    #               "any value larger than   511 will be set to 255 in 8 bit, 0-  1 will be set to 0,   2-  3 to 1,...",
-    #               "any value larger than  1023 will be set to 255 in 8 bit, 0-  3 will be set to 0,   4-  7 to 1,...",
-    #               "any value larger than  2047 will be set to 255 in 8 bit, 0-  7 will be set to 0,   8- 15 to 1,...",
-    #               "any value larger than  4095 will be set to 255 in 8 bit, 0- 15 will be set to 0,  16- 31 to 1,...",
-    #               "any value larger than  8191 will be set to 255 in 8 bit, 0- 31 will be set to 0,  32- 63 to 1,...",
-    #               "any value larger than 16383 will be set to 255 in 8 bit, 0- 63 will be set to 0,  64-127 to 1,...",
-    #               "any value larger than 32767 will be set to 255 in 8 bit, 0-127 will be set to 0, 128-255 to 1,...",
-    #               "any value larger than 65535 will be set to 255 in 8 bit, 0-255 will be set to 0, 256-511 to 1,...",
-    #             ],
-    #             return_index=True
-    #         ))
-    #     # posix += "_bitshift." + ".".join(
-    #     #     [f"{channel_color_dict[channel]}{right_bit_shift[channel]}" for channel in all_channels])
-    # p_log(f"bit shift: {right_bit_shift}")
+    exclude_gpus = tuple(map(int, args.exclude_gpus))
+    for gpu in exclude_gpus:
+        if gpu not in range(cuda_device_count()):
+            print(f"{PrintColors.FAIL}--exclude_gpus: {gpu} is not a valid gpu index. "
+                  f"Choose among {range(cuda_device_count())}")
+            raise RuntimeError
 
-    need_rotation_stitched_tif = ask_true_false_question("Do you need to rotate stitched tif files for 90 degrees?")
-    p_log(f"rotation: {need_rotation_stitched_tif}")
-
-    need_compression_stitched_tif = True  # ask_true_false_question("Do you need to compress stitched tif files?")
-    p_log(f"compress stitched files: {need_compression_stitched_tif}")
-
-    preprocessed_path = source_path.parent / (source_path.name + posix)
-    continue_process_pystripe = False
-    stitched_path = source_path.parent / (source_path.name + "_stitched")
-    print_input_file_names = False
-
-    if need_destriping or need_flat_image_application or need_raw_png_to_tiff_conversion or \
-            need_down_sampling or need_gaussian_filter_2d or need_baseline_subtraction:
-
-        print_input_file_names = False  # ask_true_false_question(
-        # "Do you need to print raw or tif file names to find corrupt files during preprocessing stage?")
-        preprocessed_path, continue_process_pystripe = get_destination_path(
-            new_destination_name if need_down_sampling or need_up_sizing else source_path.name,
-            what_for=what_for + "files",
-            posix=posix,
-            default_path=preprocessed_path)
+    if 0 < args.vram_mem_fraction_gpu0 <= 1:
+        cuda_set_per_process_memory_fraction(args.vram_mem_fraction_gpu0, 0)
     else:
-        preprocessed_path = source_path
-
-    stitched_path, continue_process_terastitcher = get_destination_path(
-        new_destination_name if need_down_sampling or need_up_sizing else source_path.name,
-        what_for="stitched files",
-        posix="_MIP_stitched" if stitch_mip else "_stitched",
-        default_path=stitched_path)
-
-    need_tera_fly_conversion = ask_true_false_question("Do you need to convert a channel to TeraFly format?")
-    channels_need_tera_fly_conversion: list = []
-    if need_tera_fly_conversion:
-        if len(all_channels) == 1:
-            channels_need_tera_fly_conversion = all_channels.copy()
-        elif len(channels_need_background_subtraction) > 0 and ask_true_false_question(
-                "List of channels need TeraFly conversion is identical to the "
-                "list of channels need lightsheet cleaning?"):
-            channels_need_tera_fly_conversion = channels_need_background_subtraction.copy()
-        else:
-            for channel in all_channels:
-                if ask_true_false_question(f"Do you need to convert {channel} channel to TeraFly format?"):
-                    channels_need_tera_fly_conversion += [channel]
-
-        p_log(f"\n\n{' and '.join(channels_need_tera_fly_conversion)} "
-              f"channel{'s' if len(channels_need_tera_fly_conversion) > 1 else ''}"
-              f" will be converted to TeraFly format.\n")
-    need_merged_channels = False
-    need_compression_merged_channels = True
-    reference_channel = all_channels[0]
-    if len(all_channels) > 1:
-        need_merged_channels = ask_true_false_question("Do you need to merge channels to RGB color tiff?")
-        # if need_merged_channels:
-        #     need_compression_merged_channels = ask_true_false_question("Do you need to compress RGB color tif files?")
-        reference_channel = select_among_multiple_options("Choose the reference channel for alignment?", all_channels)
-        print(f"reference channel={reference_channel}")
-    need_imaris_conversion = ask_true_false_question("Do you need to convert to Imaris format?")
+        print(f"{PrintColors.FAIL}--vram_mem_fraction_gpu0 should be a float between 0 and 1!{PrintColors.ENDC}")
+        raise ValueError
     # Start ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
     start_time = time()
-    memory_ram = virtual_memory().available // 1024 ** 3  # in GB
     p_log(
-        f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
-        f"stitching started"
+        f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC} stitching started"
         f"\n\tRun on computer: {platform.node()}"
-        f"\n\tFree physical memory: {memory_ram} GB"
-        f"\n\tPhysical CPU core count: {cpu_physical_core_count}"
-        f"\n\tLogical CPU core count: {cpu_logical_core_count}"
+        f"\n\tFree physical memory: {virtual_memory().available // 1024 ** 3} GB"
+        f"\n\tPhysical CPU core count: {cpu_count(logical=False)}"
+        f"\n\tLogical CPU core count: {cpu_count(logical=True)}"
+        f"\n\tRequested CPU core count: {args.nthreads}"
+        f"\n\tmpi4py version: {mpi4py.__version__}"
+        f"\n\tcompression: {(args.compression_method, args.compression_level)}"
         f"\n\tSource folder path:\n\t\t{source_path}"
+        f"\n\t\tChannels: {all_channels}"
+        f"\n\t\tObjective: {objective}"
+        f"\n\t\ttile size: {tile_size}"
+        f"\n\t\tVoxel size x: {voxel_size_x} µm"
+        f"\n\t\tVoxel size y: {voxel_size_y} µm"
+        f"\n\t\tVoxel size z: {PrintColors.WARNING}{voxel_size_z}{PrintColors.ENDC} µm"
         f"\n\tPreprocessed folder path:\n\t\t{preprocessed_path}"
+        f"\n\t\tpreprocessing, gaussian: {args.gaussian}"
+        f"\n\t\tpreprocessing, down sampling factors (y, x): {down_sampling_factor}"
+        f"\n\t\tpreprocessing, new tile size (y, x): {new_tile_size}"
+        f"\n\t\tpreprocessing, tile destriping: {args.de_stripe}"
+        f"\n\t\tpreprocessing, tif conversion: {args.need_raw_png_to_tiff_conversion}"
         f"\n\tStitched folder path:\n\t\t{stitched_path}"
+        f"\n\t\tpostprocessing, bleach correction: {args.bleach_correction}"
+        f"\n\t\tpostprocessing, bleach correction channels: {channels_need_bleach_correction}"
+        f"\n\t\tpostprocessing, bleach correction padding mode: {args.padding_mode}"
+        f"\n\t\tpostprocessing, background subtraction: {args.background_subtraction}"
+        f"\n\t\tpostprocessing, background subtraction channels: {channels_need_background_subtraction}"
+        f"\n\t\tpostprocessing, conversion to 8-bit: {args.convert_to_8bit}"
+        f"\n\t\tpostprocessing, 90 degree rotation: {args.rot90}"
+        f"\n\tTerafly path:\n\t\t{terafly_path}"
+        f"\n\t\tChannels need terafly conversion: {channels_need_tera_fly_conversion}"
+        f"\n\tComposite folder path:\n\t\t{composite_path}"
+        f"\n\t\tReference channel:{reference_channel}"
+        f"\n\t\tChannel colors:{channel_color_dict}"
+        f"\n\tDownsampled path:\n\t\t{downsampled_path}"
+        f"\n\tImaris conversion: {need_imaris_conversion}"
+        f"\n\tImaris files:\n\t\t{imaris_files}"
+        f"\n\ttimeout: {args.timeout}"
+        f"\n\tresume: {args.resume}"
+        f"\n\tskipconf: {args.skipconf}"
     )
 
+    if not args.skipconf:
+        input(f"{PrintColors.BLUE}press enter to continue if everything is OK ... {PrintColors.ENDC}")
+    
     # stitch :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
     # channels need reconstruction will be stitched first to start slow TeraFly conversion as soon as possible
     all_channels = reorder_list(all_channels, channels_need_tera_fly_conversion)
-    files_list = list(map(
-        inspect_for_missing_tiles_get_files_list,
-        [source_path / channel for channel in all_channels]))
+    if args.stitch_based_on_reference_channel_alignment:
+        all_channels = reorder_list(all_channels, [reference_channel])
+    files_list = [(None, 100), ] * len(all_channels)
+    if not args.skip_inspection:
+        files_list = list(map(
+            inspect_for_missing_tiles_get_files_list,
+            [source_path / channel for channel in all_channels]))
     stitched_tif_paths, channel_volume_shapes = [], []
     queue = Queue()
     running_processes: int = 0
@@ -1327,36 +1293,43 @@ def main(source_path):
         stitched_tif_path, shape, running_processes_addition = process_channel(
             source_path,
             channel,
+            reference_channel if args.stitch_based_on_reference_channel_alignment else channel,
             preprocessed_path,
             stitched_path,
             voxel_size_x,
             voxel_size_y,
             voxel_size_z,
-            objective,
+            args.objective,
             queue,
-            stitch_mip,
+            args.stitch_mip,
+            isotropic_downsampl_downsampled_path=downsampled_path,
+            isotropic_downsampling_resolution=args.voxel_size_target,
             files_list=file_list,
-            need_flat_image_application=need_flat_image_application,
-            image_classes_training_data_path=image_classes_training_data_path,
-            need_gaussian_filter_2d=need_gaussian_filter_2d,
-            dark=dark_threshold[channel],
-            need_destriping=need_destriping,
+            need_flat_image_application=False,
+            image_classes_training_data_path=None,
+            need_gaussian_filter_2d=args.gaussian,
+            dark=0,
+            need_destriping=args.de_stripe,
             down_sampling_factor=down_sampling_factor,
             tile_size=tile_size,
             new_tile_size=new_tile_size,
-            need_raw_png_to_tiff_conversion=need_raw_png_to_tiff_conversion,
-            need_compression=need_compression,
+            need_raw_png_to_tiff_conversion=args.need_raw_png_to_tiff_conversion,
+            compression_level=args.compression_level,
+            compression_method=args.compression_method,
             need_lightsheet_cleaning=channel in channels_need_background_subtraction,
             need_bleach_correction=channel in channels_need_bleach_correction,
-            need_compression_stitched_tif=need_compression_stitched_tif,
-            need_rotation_stitched_tif=need_rotation_stitched_tif,
-            need_16bit_to_8bit_conversion=need_16bit_to_8bit_conversion,
-            right_bit_shift=right_bit_shift[channel],
-            continue_process_pystripe=continue_process_pystripe,
-            continue_process_terastitcher=continue_process_terastitcher,
+            padding_mode=args.padding_mode,
+            need_rotation_stitched_tif=args.rot90,
+            need_16bit_to_8bit_conversion=args.convert_to_8bit,
+            continue_process_pystripe=args.resume,
+            continue_process_terastitcher=args.resume,
             need_tera_fly_conversion=channel in channels_need_tera_fly_conversion,
-            print_input_file_names=print_input_file_names,
-            subvolume_depth=subvolume_depth
+            terafly_path=terafly_path,
+            subvolume_depth=subvolume_depth,
+            print_input_file_names=False,  # for debugging only
+            timeout=args.timeout,
+            nthreads=args.nthreads,
+            exclude_gpus=exclude_gpus
         )
         stitched_tif_paths += [stitched_tif_path]
         channel_volume_shapes += [shape]
@@ -1373,58 +1346,51 @@ def main(source_path):
     # merge channels to RGB ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
     memory_ram = virtual_memory().available // 1024 ** 3  # in GB
-    merge_channels_cores = cpu_physical_core_count if cpu_physical_core_count * 14 < memory_ram else memory_ram // 14
-    if need_16bit_to_8bit_conversion:
-        merge_channels_cores = cpu_physical_core_count if cpu_physical_core_count * 7 < memory_ram else memory_ram // 7
-    merge_channels_cores = min(merge_channels_cores, cpu_physical_core_count + 2)
+    memory_ram_needed_per_thread = 7 if args.convert_to_8bit else 14
+    merge_channels_cores = min(args.nthreads + 2, memory_ram // memory_ram_needed_per_thread)
 
-    merged_tif_paths = stitched_tif_paths
-    if need_merged_channels and len(stitched_tif_paths) > 1:
+    composite_tif_paths = stitched_tif_paths.copy()
+    if need_composite_image and len(stitched_tif_paths) > 1:
         p_log(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
-              f"merging channels to RGB started ...\n\t"
+              f"merging channels to composite RGB started ...\n\t"
               f"time elapsed so far {timedelta(seconds=time() - start_time)}")
-        merged_tif_paths = [stitched_path / (source_path.name + ("_MIP" if stitch_mip else ""))]
+        # make sure the reference channel is the first channel in stitched_tif_paths
+        stitched_tif_paths = [path for path in stitched_tif_paths if reference_channel.lower() in path.name.lower()] + \
+                             [path for path in stitched_tif_paths if reference_channel.lower() not in path.name.lower()]
+
         order_of_colors: str = channel_color_dict[reference_channel]
         for channel in all_channels:
             if channel != reference_channel:
                 order_of_colors += channel_color_dict[channel]
 
-        stitched_tif_paths = [
-                                 path for path in stitched_tif_paths if
-                                 reference_channel.lower() in path.name.lower()
-                             ] + [
-                                 path for path in stitched_tif_paths if
-                                 reference_channel.lower() not in path.name.lower()
-                             ]
-
-        print(stitched_tif_paths, order_of_colors)
+        # print(stitched_tif_paths, order_of_colors)
         if 1 < len(stitched_tif_paths) < 4:
             merge_all_channels(
                 stitched_tif_paths,
                 [0, ] * (len(stitched_tif_paths) - 1),
-                merged_tif_paths[0],
+                composite_path,
                 order_of_colors=order_of_colors,
                 workers=merge_channels_cores,
-                resume=continue_process_terastitcher,
-                compression=("ADOBE_DEFLATE", 1) if need_compression_merged_channels else None,
+                resume=args.resume,
+                compression=(args.compression_method, args.compression_level) if args.compression_level > 0 else None,
                 right_bit_shifts=None
             )
+            composite_tif_paths = [composite_path]
         elif len(stitched_tif_paths) >= 4:
-            p_log("Warning: since number of channels are more than 3 merging channels is impossible.\n\t"
-                  "merging the first 3 channels instead.")
+            p_log(f"{PrintColors.WARNING}"
+                  f"Warning: since number of channels are more than 3 merging the first 3 channels only."
+                  f"{PrintColors.ENDC}")
             merge_all_channels(
                 stitched_tif_paths[0:3],
                 [0, ] * 3,
-                merged_tif_paths[0],
+                composite_path,
                 order_of_colors=order_of_colors,
                 workers=merge_channels_cores,
-                resume=continue_process_terastitcher,
-                compression=("ADOBE_DEFLATE", 1) if need_compression_merged_channels else None,
+                resume=args.resume,
+                compression=(args.compression_method, args.compression_level) if args.compression_level > 0 else None,
                 right_bit_shifts=None
             )
-            merged_tif_paths += stitched_tif_paths[3:]
-        else:
-            merged_tif_paths = []
+            composite_tif_paths = [composite_path] + stitched_tif_paths[3:]
 
     # Imaris File Conversion :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
@@ -1432,27 +1398,28 @@ def main(source_path):
     if need_imaris_conversion:
         p_log(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
               f"started ims conversion ...")
-        for idx, merged_tif_path in enumerate(merged_tif_paths):
+        for idx, composite_tif_path in enumerate(composite_tif_paths):
             command = get_imaris_command(
                 imaris_path=imaris_converter,
-                input_path=merged_tif_path,
-                voxel_size_x=voxel_size_y if need_rotation_stitched_tif else voxel_size_x,
-                voxel_size_y=voxel_size_x if need_rotation_stitched_tif else voxel_size_y,
+                input_path=composite_tif_path,
+                output_path=imaris_files[idx] if idx < len(imaris_files) else None,
+                voxel_size_x=voxel_size_y if args.rot90 else voxel_size_x,
+                voxel_size_y=voxel_size_x if args.rot90 else voxel_size_y,
                 voxel_size_z=voxel_size_z,
-                workers=cpu_physical_core_count,
-                dtype='uint8' if need_16bit_to_8bit_conversion else 'uint16'
+                workers=args.nthreads,
+                dtype='uint8' if args.convert_to_8bit else 'uint16'
             )
             p_log(f"\t{PrintColors.BLUE}tiff to ims conversion command:{PrintColors.ENDC}\n\t\t{command}\n")
-            MultiProcessCommandRunner(queue, command, pattern=r"(WriteProgress:)\s+(\d*.\d+)\s*$", position=idx).start()
+            MultiProcessCommandRunner(queue, command, pattern=r"WriteProgress:\s+(\d*.\d+)\s*$", position=idx).start()
             running_processes += 1
             progress_bars += [
                 tqdm(total=100, ascii=True, position=idx, unit=" %", smoothing=0.01,
-                     desc=f"Imaris {(idx + 1) if len(merged_tif_paths) > 1 else ''}")]
+                     desc=f"IMS {(idx + 1) if len(composite_tif_paths) > 1 else ''}")]
 
     # waite for TeraFly and Imaris conversion to finish ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
     commands_progress_manger(queue, progress_bars, running_processes)
 
-    if need_tera_fly_conversion:
+    if channels_need_tera_fly_conversion:
         p_log(
             f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
             f"waiting for TeraFly conversion to finish.\n\t"
@@ -1460,32 +1427,45 @@ def main(source_path):
 
     # Done :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
-    p_log(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}done.\n\t"
+    p_log(f"\n{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}done.\n\t"
           f"Time elapsed: {timedelta(seconds=time() - start_time)}")
 
     stitched_path.joinpath(log_file.name).write_bytes(log_file.read_bytes())
 
 
+def get_cpu_sockets() -> int:
+    try:
+        # Execute a shell command to get the physical IDs
+        command = "grep \"physical id\" /proc/cpuinfo"
+        if sys.platform.lower() == "win32":
+            command = "wmic cpu get socketdesignation"
+        output: str = check_output(command, shell=True).decode()
+        # Count the unique physical IDs
+        sockets = len(set(output.strip().split('\n')[1:]))
+        return sockets
+    except Exception as inst:
+        print(f"{PrintColors.FAIL}Unable to determine the number of CPU sockets."
+              f"Error:\n"
+              f"\ttype: {type(inst)}\n"
+              f"\targs: {inst.args}\n"
+              f"\t{inst}{PrintColors.ENDC}")
+        return 1
+
+
 if __name__ == '__main__':
     freeze_support()
     FlatNonFlatTrainingData = "image_classes.csv"
-    cpu_physical_core_count = cpu_count(logical=False)
-    cpu_logical_core_count = cpu_count(logical=True)
-    # cpu_instruction = select_among_multiple_options(
-    #     "Select the best CPU instruction supported by your CPU:",
-    #     ["SSE2", "AVX", "AVX2", "AVX512f"]
-    # )
     cpu_instruction = "SSE2"
+    os.environ['NUMEXPR_NUM_THREADS'] = f'{cpu_count(logical=False) // get_cpu_sockets()}'
     for item in ["SSE2", "AVX", "AVX2", "AVX512f"]:
         cpu_instruction = item if CPUFeature[item] else cpu_instruction
     PyScriptPath = Path(r".") / "TeraStitcher" / "pyscripts"
     if sys.platform.lower() == "win32":
-        os.environ['MKL_NUM_THREADS'] = '1'
-        os.environ['NUMEXPR_NUM_THREADS'] = '1'
-        os.environ['OMP_NUM_THREADS'] = '1'
+        if get_cpu_sockets() > 1:
+            os.environ['MKL_NUM_THREADS'] = '1'
+            os.environ['OMP_NUM_THREADS'] = '1'
         print("Windows is detected.")
         psutil.Process().nice(getattr(psutil, "IDLE_PRIORITY_CLASS"))
-        CacheDriveExample = "D:\\"  # "W:\\3D_stitched\\"
         TeraStitcherPath = Path(r"TeraStitcher") / "Windows" / cpu_instruction
         os.environ["PATH"] = f"{os.environ['PATH']};{TeraStitcherPath.as_posix()}"
         os.environ["PATH"] = f"{os.environ['PATH']};{PyScriptPath.as_posix()}"
@@ -1494,14 +1474,17 @@ if __name__ == '__main__':
         teraconverter = "teraconverter.exe"
         nvidia_smi = "nvidia-smi.exe"
     elif sys.platform.lower() == 'linux':
+        if USE_PYTORCH or USE_JAX:
+            set_start_method('spawn')
+        if USE_JAX:
+            os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+            os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
         os.environ["NUMPY_MADVISE_HUGEPAGE"] = "1"
         if 'microsoft' in uname().release.lower():
             print("Windows subsystem for Linux is detected.")
-            CacheDriveExample = "/mnt/d/"
             nvidia_smi = "nvidia-smi.exe"
         else:
             print("Linux is detected.")
-            CacheDriveExample = "/data"
             nvidia_smi = "nvidia-smi"
         psutil.Process().nice(value=19)
         TeraStitcherPath = Path(r".") / "TeraStitcher" / "Linux" / cpu_instruction
@@ -1578,17 +1561,108 @@ if __name__ == '__main__':
     if not paraconverter.exists():
         log.error(f"Error: paraconverter.py not found\n{paraconverter}")
         raise RuntimeError
-    print(f"mpi4py version is {mpi4py.__version__}")
 
     imaris_converter = Path(r"imaris") / "ImarisConvertiv.exe"
     if not imaris_converter.exists():
         log.error("Error: ImarisConvertiv.exe not found")
         raise RuntimeError
 
-    if len(sys.argv) == 1:
-        main(source_path=Path(__file__).parent.absolute())
-    elif len(sys.argv) == 2:
-        main(source_path=Path(sys.argv[1]).absolute())
-    else:
-        print(f"{PrintColors.FAIL}Only one argument is allowed!{PrintColors.ENDC}")
-        raise RuntimeError
+    parser = ArgumentParser(
+        description="Imaris to tif and TeraFly converter (version 0.1.0)\n\n",
+        formatter_class=RawDescriptionHelpFormatter,
+        epilog="Developed 2022 by Keivan Moradi, Hongwei Dong Lab (B.R.A.I.N) at UCLA\n"
+    )
+    parser.add_argument("--objective", type=str, required=True,
+                        choices=("15x", "9x", "8x", "4x", "40x"),
+                        help="objective resolution that is used for imaging: 4x, 8x, 9x, 15x, or 40x.")
+    parser.add_argument("--input", "-i", type=str, required=True,
+                        help="path to unstitched image in terastither format.")
+    parser.add_argument("--tmptif", "-t", type=str, required=True,
+                        help="path to temporary preprocessed but unstitched tif files.")
+    parser.add_argument("--stitched", "-s", type=str, required=True,
+                        help="path to stitched tif files.")
+    parser.add_argument("--composite", type=str, required=False,
+                        help="path to the composite RGB tif files. "
+                             "If provided the image will be converted to a composite RGB color format.")
+    parser.add_argument("--reference_channel", type=str, required=False, default='',
+                        help="reference channel name for alignment. Applies to the composite image at the moment.")
+    parser.add_argument("--stitch_based_on_reference_channel_alignment", default=False,
+                        action=BooleanOptionalAction,
+                        help="Apply alignment (terastitcger xml) of the reference channel to the rest of channels. "
+                             "Works if more than one channels is acquired in one acquisition. "
+                             "Disable if channels are acquired in separate acquisitions. "
+                             "Default is --no-stitch_based_on_reference_channel_alignment.")
+    parser.add_argument("--imaris", "-o", type=str, required=False,
+                        help="path to imaris output file.")
+    parser.add_argument("--terafly_channels", "-f", required=False, nargs='+', default=[],
+                        help="list of channels that need terafly conversion")
+    parser.add_argument("--terafly_path", type=str, required=False, default='',
+                        help="terafly path. Imaris file parent folder by default.")
+    # parser.add_argument("--deconvolve", "-fnt", type=str, required=False, default='',
+    #                     help="path to output Fast Neurite Tracer files.")
+    # parser.add_argument("--fnt", "-fnt", type=str, required=False, default='',
+    #                     help="path to output Fast Neurite Tracer files.")
+    parser.add_argument("--nthreads", "-n", type=int, default=cpu_count(logical=False),
+                        help="number of threads. default is all physical cores for tif conversion and 12 for TeraFly.")
+    parser.add_argument("--stitch_mip", default=False, action=BooleanOptionalAction,
+                        help="stitch the MIP image. Default is --no-stitch_mip.")
+    parser.add_argument("--need_raw_png_to_tiff_conversion", default=True, action=BooleanOptionalAction,
+                        help="Image pre-processing: terastitcher cannot process raw of png file therefore tif "
+                             "conversion is needed. "
+                             "resume processing remaining files. Disable by --no-need_raw_png_to_tiff_conversion.")
+    parser.add_argument("--gaussian", "-g", default=True, action=BooleanOptionalAction,
+                        help="image pre-processing: apply Gaussian filter to denoise. Disabled by --no-gaussian.")
+    parser.add_argument("--de_stripe", default=True, action=BooleanOptionalAction,
+                        help="image pre-processing: apply de-striping algorithm. Disabled by --no-de_stripe")
+    parser.add_argument("--padding_mode", type=str, default='wrap',
+                        choices=("constant", "edge", "linear_ramp", "maximum", "mean", "median", "minimum", "reflect",
+                                 "symmetric", "wrap", "empty"),
+                        help="Padding method affects the edge artifacts during bleach correction. "
+                             "The default mode is wrap, but in some cases reflect method works better. "
+                             "Options: constant, edge, linear_ramp, maximum, mean, median, minimum, reflect, "
+                             "symmetric, wrap, and empty")
+    parser.add_argument("--isotropic", default=False, action=BooleanOptionalAction,
+                        help="image pre-processing: during png/raw to tif conversion downsize or upsize the image "
+                             "on xy plane so that voxel size on xy plane become identical to the z axis. "
+                             "Default is --no-isotropic")
+    parser.add_argument("--bleach_correction", default=True, action=BooleanOptionalAction,
+                        help="image post-processing: correct image bleaching. Disable by --no-bleach_correction.")
+    parser.add_argument("--bleach_correction_channels", required=False, nargs='+', default=[],
+                        help="image post-processing: list of channels that need bleach correction. "
+                             "All channels by default.")
+    parser.add_argument("--background_subtraction", default=False, action=BooleanOptionalAction,
+                        help="image post-processing: apply lightsheet cleaning algorithm. "
+                             "Default is --no-background_subtraction")
+    parser.add_argument("--background_subtraction_channels", required=False, nargs='+', default=[],
+                        help="image post-processing:  list of channels that need background subtraction. "
+                             "All channels by default.")
+    parser.add_argument("--convert_to_8bit", default=True, action=BooleanOptionalAction,
+                        help="Image post-processing: convert to 8-bit. Disable by --no-convert_to_8bit")
+    parser.add_argument("--rot90", default=True, action=BooleanOptionalAction,
+                        help="Image post-processing: rotate the stitched image for 90 degrees. Disable by --no-rot90")
+    parser.add_argument("--compression_method", "-zm", type=str, default="ADOBE_DEFLATE",
+                        choices=("ADOBE_DEFLATE", "LZW", "PackBits"),
+                        help="image pre/post-processing: compression method for tif files. Default is ADOBE_DEFLATE. "
+                             "LZW and PackBits are also supported.")
+    parser.add_argument("--compression_level", "-zl", type=int, default=1,
+                        choices=range(0, 10), metavar="[0-9]",
+                        help="image pre/post-processing: compression level for tif files. Default is 1.")
+    parser.add_argument("--voxel_size_target", "-dt", type=float, default=10,
+                        help="Image post-processing: target voxel size in µm for 3D downsampling & atlas registration.")
+    parser.add_argument("--resume", default=True, action=BooleanOptionalAction,
+                        help="Does not apply to FNT or IMS conversion. "
+                             "resume processing remaining files. Disable by --no-resume.")
+    parser.add_argument("--timeout", type=float, default=None,
+                        help="corrupt files: timeout in seconds for image reading. "
+                             "Applies to image series and tsv volumes (not ims). "
+                             "adds up to 30 percent overhead for copying the data from one process to another "
+                             "but if you have corrupt files you can find them this way.")
+    parser.add_argument("--skipconf", default=False, action=BooleanOptionalAction,
+                        help="Skip confirmation message before beginning processing.")
+    parser.add_argument("--skip_inspection", default=False, action=BooleanOptionalAction,
+                        help="Skip inspecting unstitched image folders for missing tiles.")
+    parser.add_argument("--exclude_gpus", required=False, nargs='+', default=[],
+                        help="gpu indices that start from 0 and needs to be excluded.")
+    parser.add_argument("--vram_mem_fraction_gpu0", required=False, type=float, default=1.0,
+                        help="reduce the memory usage for GPU0 so the computer remain responsive.")
+    main(parser.parse_args())

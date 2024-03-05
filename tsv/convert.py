@@ -1,7 +1,7 @@
 """convert.py - programs to convert stacks to output formats"""
 
 from sys import platform, argv
-from os import path, environ, makedirs
+from os import path, makedirs
 from argparse import ArgumentParser
 from itertools import product
 from multiprocessing import cpu_count, Pool
@@ -237,11 +237,11 @@ def make_diag_stack(
         mipmap_level=None,
         volume=None,
         dtype=None,
-        silent=False,
+        # silent=False,
         compression=4,
         cores=cpu_count()
 ):
-    v = TSVVolume.load(xml_path)
+    v = TSVVolume(xml_path)
     if volume is None:
         volume = v.volume
     if dtype is None:
@@ -283,17 +283,17 @@ def make_diag_plane(v, compression, decimation, dtype, mipmap_level, output_patt
 def main(args=argv[1:]):
     parser = ArgumentParser(description="Make a z-stack out of a Terastitcher volume")
     args, mipmap_level, volume = parse_args(parser, args)
-    v = TSVVolume.load(args.xml_path, args.ignore_z_offsets, args.input)
+    v = TSVVolume(args.xml_path, args.ignore_z_offsets, args.input)
 
     if not blockfs_present or args.precomputed_path is None:
         convert_to_2D_tif(v,
                           args.output_pattern,
                           mipmap_level=mipmap_level,
                           volume=volume,
-                          silent=args.silent,
+                          # silent=args.silent,
                           compression=args.compression,
                           cores=args.cpus,
-                          ignore_z_offsets=args.ignore_z_offsets,
+                          # ignore_z_offsets=args.ignore_z_offsets,
                           rotation=args.rotation)
     else:
         global V

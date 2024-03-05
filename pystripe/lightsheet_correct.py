@@ -238,8 +238,8 @@ def apply_local_function(
 
 
 @njit
-def prctl(data: ndarray, percentile: Union[List, Tuple, float]):
-    return np_percentile(data, percentile)
+def prctl(data: ndarray, percentiles: Union[int, float, List, Tuple]):
+    return np_percentile(data, percentiles)
 
 
 def local_percentile(
