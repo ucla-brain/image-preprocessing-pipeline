@@ -151,7 +151,7 @@ class MultiProcess(Process):
         else:
             file = Path(images[idx])
             if file.suffix.lower() in (".png", ".raw"):
-                return self.save_path / (file.name[0:-4] + ".tif")
+                return self.save_path / (file.stem + ".tif")
             else:
                 return self.save_path / file.name
 
