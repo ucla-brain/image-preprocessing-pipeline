@@ -638,6 +638,8 @@ def calculate_pad_size(shape: tuple, sigma: int, rise: float = 0.5):
     ---
     :return: pad size
     """
+    if (sigma == 0):
+        return 0
     x = shape[1] + 1
     y = shape[0] + 1
     c = 5e14  # 2e15 for 8GB float32 image which needs ~40 GB of vRAM in pt_wavedec2
