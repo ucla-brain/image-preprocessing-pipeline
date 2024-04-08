@@ -2,6 +2,52 @@ from numpy import ndarray, zeros, pad, copy
 from multiprocessing import Pool
 from process_images import get_gradient, get_transformation_matrix
 
+from pathlib import Path
+from numpy import min, max, uint8, zeros_like, ndarray, multiply
+from pystripe.core import get_img_mask, otsu_threshold
+from tifffile import imwrite
+
+from os.path import exists, isdir, join
+from os import listdir, system
+
+from supplements.tifstack import TifStack
+
+def write_to_file(images: list[ndarray], filepath: Path, verbose=False):
+    filepath.mkdir(parents=True, exist_ok=True)
+    for n, image in enumerate(images):
+        local = filepath / f'cha{n}'
+        local.mkdir(parents=True, exist_ok=True)
+        for layer in range(image.shape[0]):
+            path = local.absolute() / (str(layer) + ".tif")
+            imwrite(path, get_layer(layer, image, "yx"))
+        if verbose: print("wrote to file")
+
+
+# written by ChatGPT, modifies parameters
+def normalize_array_inplace(arr: ndarray):
+    min_val = min(arr)
+    max_val = max(arr)
+
+    arr -= min_val
+    arr /= (max_val - min_val)
+
+    # Scale the values to be between 0 and 255
+    arr *= 255
+    arr.astype(uint8, copy=False)
+
+
+def get_borders(img: ndarray, copy=False):
+    # print("get_borders")
+    mask = zeros_like(img)
+    for ind in range(img.shape[0]):
+        # print(f'layer {ind}')
+        mask[ind] = get_img_mask(img[ind], otsu_threshold(img[ind]))
+    if not copy:
+        multiply(img, mask, out=img)
+        return None
+    else:
+        return multiply(img, mask)
+
 
 # pads arr with zeroes evenly (as possible) on all sides to match pad_shape
 def pad_to_shape(pad_shape: tuple, arr: ndarray):
@@ -42,8 +88,8 @@ def roll_pad(arr: ndarray, move: int, axis: int = 0):
 def get_layer(
     index: int,          # layer of image requested
     image: ndarray,      # 3-D image (use TifStack.as_3d_numpy())
-    plane = "xy",        # must be "xy", "yx", "xz", "zx", "yz", "zy"
-    img_format = "zyx",  # xyz in some order
+    plane="xy",          # must be "xy", "yx", "xz", "zx", "yz", "zy"
+    img_format="zyx",    # xyz in some order
 ):
     # guards
     if plane not in {"xy", "yx", "xz", "zx", "yz", "zy"} or img_format not in {"zyx", "zxy", "yxz", "yzx", "xyz", "xzy"}:
@@ -197,3 +243,110 @@ def align_all_images(
         residuals.append(img_residual)
 
     return moves, residuals
+
+
+# entrance if run in terminal
+def main():
+    from argparse import ArgumentParser
+    parser = ArgumentParser("Align images")
+    parser.add_argument('input', type=str, help="Absolute file path of tiff stacks representing images to be aligned.  This directory must contain exactly three subfolders with the tiff files.")
+    parser.add_argument('output', type=str, help="Absolute file path of output")
+    parser.add_argument('--pad_only', action='store_true', help="If present, only pad images to same shape without aligning")
+    parser.add_argument('--max_iterations', type=int, default=50, help="Maximum iterations allowed for image alignment")
+    parser.add_argument('--generate_ims', action='store_true', help="If present, generate .ims files along with output")
+    parser.add_argument('--dx', type=int, default=10, help="dx for .ims file (if generated)")
+    parser.add_argument('--dy', type=int, default=10, help="dy for .ims file (if generated)")
+    parser.add_argument('--dz', type=int, default=10, help="dz for .ims file (if generated)")
+
+    args = parser.parse_args()
+
+    input_file = args.input
+    output_file = args.output
+    max_iterations = args.max_iterations
+    generate_ims = args.generate_ims
+    pad_only = args.pad_only
+    dx = args.dx
+    dy = args.dy
+    dz = args.dz
+
+    # Directory checking ------------------------------------------------------------------
+    if not exists(input_file) or not isdir(input_file):
+        print(f"Error: Input directory '{input_file}' is invalid.")
+        exit(1)
+
+    filepaths = []
+    num_dirs = 0
+
+    for item in listdir(input_file):
+        item_path = join(input_file, item)
+        if isdir(item_path):
+            num_dirs += 1
+            filepaths.append(item_path)
+
+    if num_dirs != 3:
+        print(f"Error: Input directory '{input_file}' contains more than three subdirectories.")
+        exit(1)
+
+    # Image Processing --------------------------------------------------------------------
+    print("Loading images...")
+    count = 0
+    try:
+        cha1 = TifStack(filepaths[0]).as_3d_numpy()
+        count = 1
+        cha2 = TifStack(filepaths[1]).as_3d_numpy()
+        count = 2
+        cha3 = TifStack(filepaths[2]).as_3d_numpy()
+        print("Images loaded")
+    except Exception:
+        print(f"Error: Invalid TifStack found at {filepaths[count]}")
+        exit(1)
+
+    output_path = Path(output_file)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    print(filepaths)
+
+    print("Resizing images...")
+
+    channels = resize_arrays([cha1, cha2, cha3])
+    print("Images resized")
+
+    if not pad_only:
+        print("Aligning images... (this may take a while)")
+        # TODO: FIX THIS
+        # for img in channels:
+            # get_borders(img)
+
+        # align images
+        alignments, residuals = align_all_images(channels, max_iter=max_iterations, verbose=False, make_copy=False)
+        print("Images aligned")
+
+    # normalize images and convert to uint8
+    print("Normalizing images")
+    for channel in channels: normalize_array_inplace(channel)
+    print("Images normalized")
+
+    print("Writing to file")
+    write_to_file(channels, output_path)
+    print("Wrote to file")
+
+    if generate_ims:
+        print("Generating .ims files")
+        system(f'python convert.py -i "{output_path}/cha0" -o "{output_path}/cha0.ims" -dx {dx} -dy {dy} -dz {dz}')
+        system(f'python convert.py -i "{output_path}/cha1" -o "{output_path}/cha1.ims" -dx {dx} -dy {dy} -dz {dz}')
+        system(f'python convert.py -i "{output_path}/cha2" -o "{output_path}/cha2.ims" -dx {dx} -dy {dy} -dz {dz}')
+        print(".ims files created")
+
+    print("Alignments:")
+    print(alignments)
+    print("\n\nOperation completed.")
+
+
+if __name__ == '__main__':
+    main()
+
+# TODO:
+# add tqdm progress bars
+# fix masking problems
+
+
