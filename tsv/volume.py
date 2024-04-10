@@ -22,6 +22,8 @@ from supplements.cli_interface import PrintColors
 from tifffile import imread, imwrite
 from pystripe.core import glob_re
 from typing import Union
+from numexpr import evaluate
+USE_NUMEXPR: bool = True
 
 
 def get_dim_tuple(element):
@@ -383,13 +385,17 @@ class TSVStack(TSVStackBase):
                         if not os.path.exists(file):
                             print(f"\t\tthe following missing files is replaced with a dummy (zeros) image:\n"
                                   f"\t\t\t{file}")
+                            Path(file).parent.mkdir(exist_ok=True, parents=True)
                             imwrite(file, zeros(self.shape[1:3], dtype=self.dtype))
                     # raise RuntimeError
                     redo_path = True
             if redo_path:
                 self.__paths = []
-                for idx in self.__idxs_to_keep:
-                    self.__paths += [my_paths[idx]]
+                if my_paths:
+                    for idx in self.__idxs_to_keep:
+                        if idx < len(my_paths):
+                            self.__paths += [my_paths[idx]]
+                # self.paths()
 
         return self.__paths
 
@@ -616,7 +622,10 @@ class TSVVolumeBase:
                     intersection.y0 - volume.y0:intersection.y1 - volume.y0,
                     intersection.x0 - volume.x0:intersection.x1 - volume.x0
                 ] += mpart
-            result = where(multiplier > epsilon, result / multiplier,  result / epsilon)
+            if USE_NUMEXPR:
+                evaluate("where(multiplier > epsilon, result / multiplier,  result / epsilon)", out=result)
+            else:
+                result = where(multiplier > epsilon, result / multiplier,  result / epsilon)
             if result.dtype != dtype and np_d_type(dtype).kind in ("u", "i"):
                 clip(result, iinfo(dtype).min, iinfo(dtype).max, out=result)
                 result = result.astype(dtype)

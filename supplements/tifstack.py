@@ -27,7 +27,7 @@ class TifStack:
         self.dtype = img.dtype
         self.nyx = img.shape
         self.nz = len(self.files)
-        self.shape = (self.nz, self.nyx[0], self.nyx[1])
+        self.shape = (self.nz, self.nyx[0], self.nyx[1])  # stack height, img_y, img_x
 
     def __getitem__(self, i):
         i += self.z_offset
