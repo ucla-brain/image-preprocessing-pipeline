@@ -1,16 +1,21 @@
-from numpy import ndarray, zeros, pad, copy
+from numpy import ndarray, zeros, pad, copy, percentile
 from multiprocessing import Pool
 from process_images import get_gradient, get_transformation_matrix
 
 from pathlib import Path
 from numpy import min, max, uint8, zeros_like, ndarray, multiply
-from pystripe.core import get_img_mask, otsu_threshold
-from tifffile import imwrite
+from pystripe.core import get_img_mask
 
+from skimage.filters.thresholding import threshold_multiotsu
+from skimage.filters import sobel
+
+from tifffile import imwrite
 from os.path import exists, isdir, join
 from os import listdir, system
 
 from supplements.tifstack import TifStack
+
+from matplotlib.pyplot import imshow
 
 def write_to_file(images: list[ndarray], filepath: Path, verbose=False):
     filepath.mkdir(parents=True, exist_ok=True)
@@ -36,17 +41,25 @@ def normalize_array_inplace(arr: ndarray):
     arr.astype(uint8, copy=False)
 
 
+icount = 0
 def get_borders(img: ndarray, copy=False):
+    global icount
     # print("get_borders")
     mask = zeros_like(img)
     for ind in range(img.shape[0]):
         # print(f'layer {ind}')
-        mask[ind] = get_img_mask(img[ind], otsu_threshold(img[ind]))
-    if not copy:
-        multiply(img, mask, out=img)
-        return None
-    else:
-        return multiply(img, mask)
+        try:
+            threshold = threshold_multiotsu(img[ind], classes=4)[0]
+            print("threshold", threshold)
+            mask[ind] = get_img_mask(img[ind], threshold, close_steps=3, open_steps=5, flood_fill_flag=4)
+        except ValueError:
+            # assume blank image since there will only be one pixel color.  keep mask as all zeros.
+            continue
+    print("got borders... displaying images")
+    # for i in range(0, img.shape[0]):
+    #     imwrite(f"D:/aligned_images/cha{icount}/{i}.tif", mask[i])
+    # icount += 1
+    img *= mask
 
 
 # pads arr with zeroes evenly (as possible) on all sides to match pad_shape
@@ -311,19 +324,23 @@ def main():
     channels = resize_arrays([cha1, cha2, cha3])
     print("Images resized")
 
-    if not pad_only:
-        print("Aligning images... (this may take a while)")
-        # TODO: FIX THIS
-        # for img in channels:
-            # get_borders(img)
-
-        # align images
-        alignments, residuals = align_all_images(channels, max_iter=max_iterations, verbose=False, make_copy=False)
-        print("Images aligned")
-
     # normalize images and convert to uint8
     print("Normalizing images")
     for channel in channels: normalize_array_inplace(channel)
+
+    if not pad_only:
+        print("Aligning images... (this may take a while)")
+        # TODO: FIX THIS
+        for i in range(len(channels)):
+            channels[i] *= (channels[i] > percentile(channels[i], 80))  # set all pixels below threshold to zero. (weeds out noise along edges)
+            get_borders(channels[i])
+            channels[i] = sobel(channels[i])
+
+        # # align images
+        # alignments, residuals = align_all_images(channels, max_iter=max_iterations, verbose=False, make_copy=False)
+        # print("Images aligned")
+
+
     print("Images normalized")
 
     print("Writing to file")
@@ -338,7 +355,7 @@ def main():
         print(".ims files created")
 
     print("Alignments:")
-    print(alignments)
+    # print(alignments)
     print("\n\nOperation completed.")
 
 
