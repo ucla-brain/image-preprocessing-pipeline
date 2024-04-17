@@ -268,6 +268,7 @@ def imsave_tif(path: Path, img: ndarray, compression: Union[Tuple[str, int], Non
             # imwrite(path, data=img, compression=compression_method, compressionargs={'level': compression_level})
             tmp_path = path.with_suffix(".tmp")
             imwrite(tmp_path, data=img, compression=compression)
+            os.chmod(tmp_path, 0o777)
             expected_permissions = 0o777
             assert_file_permissions(tmp_path, expected_permissions)
             tmp_path.rename(path)
