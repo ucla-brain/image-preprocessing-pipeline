@@ -14,8 +14,7 @@ from numpy import max as np_max
 from numpy import mean as np_mean
 from numpy import sqrt as np_sqrt
 from numpy import round as np_round
-from numpy import (zeros, float32, dstack, rollaxis, savez_compressed, array, maximum, rot90, arange, uint8, uint16,
-                   ndarray)
+from numpy import zeros, float32, dstack, rollaxis, savez_compressed, array, maximum, rot90, arange, uint8, uint16
 from psutil import cpu_count, virtual_memory
 from skimage.measure import block_reduce
 from skimage.transform import resize, resize_local_mean
@@ -23,10 +22,11 @@ from tifffile import natural_sorted
 from tqdm import tqdm
 
 from pystripe.core import (imread_tif_raw_png, imsave_tif, progress_manager, is_uniform_2d, is_uniform_3d,
-                           convert_to_8bit_fun, convert_to_16bit_fun, filter_streaks)
+                           convert_to_8bit_fun,  convert_to_16bit_fun)
 from supplements.cli_interface import PrintColors, date_time_now
 from tsv.volume import TSVVolume, VExtent
-
+import os
+import sys
 
 def imread_tsv(tsv_volume: TSVVolume, extent: VExtent, d_type: str):
     return tsv_volume.imread(extent, d_type)[0]
@@ -58,8 +58,7 @@ class MultiProcess(Process):
             needed_memory: int = None,
             save_images: bool = True,
             alternating_downsampling_method: bool = True,
-            down_sampled_dtype: str = float32,
-            down_sampled_destriping_sigma: Tuple[int, int] = (0, 0)
+            down_sampled_dtype: str = "float32"
     ):
         Process.__init__(self)
         self.daemon = False
@@ -105,7 +104,6 @@ class MultiProcess(Process):
             else:
                 self.calculate_down_sampling_target(shape, False, alternating_downsampling_method)
         self.rotation = rotation
-        self.down_sampled_destriping_sigma = down_sampled_destriping_sigma
 
     def calculate_down_sampling_target(self, new_shape: Tuple[int, int], is_rotated: bool,
                                        alternating_downsampling_method: bool):
@@ -140,7 +138,7 @@ class MultiProcess(Process):
 
         self.down_sampling_methods = down_sampling_methods
 
-    def imsave_tif(self, path: Path, img: ndarray, compression=None):
+    def imsave_tif(self, path, img, compression=None):
         die = imsave_tif(path, img, compression=compression)
         if die:
             self.die = True
@@ -151,7 +149,7 @@ class MultiProcess(Process):
         else:
             file = Path(images[idx])
             if file.suffix.lower() in (".png", ".raw"):
-                return self.save_path / (file.stem + ".tif")
+                return self.save_path / (file.name[0:-4] + ".tif")
             else:
                 return self.save_path / file.name
 
@@ -160,7 +158,7 @@ class MultiProcess(Process):
         free_ram_is_not_enough = False
         if self.needed_memory is not None and virtual_memory().available < self.needed_memory:
             free_ram_is_not_enough = True
-            sleep(60)
+            sleep(1)
         self.semaphore.put(1)
         return free_ram_is_not_enough
 
@@ -228,7 +226,9 @@ class MultiProcess(Process):
                                 self.progress_queue.put(running_next)
                             continue
                     z_stack = zeros((len(indices),) + self.target_shape, dtype=float32)
-
+                #print(f"Debug: dsp: {down_sampled_tif_path}")
+                # print(f"Debug: z-stack: {z_stack}")
+                #sys.exit()
                 for idx_z, idx in enumerate(indices):
                     if self.die:
                         break
@@ -282,8 +282,10 @@ class MultiProcess(Process):
                                 img = rot90(img, 3)
 
                             if save_images and (is_tsv or is_ims or function is not None or rotation in (90, 180, 270)):
+                                #print(f"debug: {tif_save_path}")
+                                #print(f"debug: {img}")
+                                #sys.exit()
                                 self.imsave_tif(tif_save_path, img, compression=compression)
-
                             if img.dtype != post_processed_d_type:
                                 post_processed_d_type = img.dtype
 
@@ -346,17 +348,6 @@ class MultiProcess(Process):
                                 z_stack = block_reduce(z_stack, block_size=(2, 1, 1), func=z_method)
                         assert z_stack.shape[0] == 1
                         img = z_stack[0]
-
-                        img = filter_streaks(
-                            img,
-                            sigma=self.down_sampled_destriping_sigma,
-                            wavelet="coif15",
-                            bidirectional=True,
-                            gpu_semaphore=kwargs.get("gpu_semaphore", None),
-                            bleach_correction_frequency=None,
-                            enable_masking=False
-                        )
-
                         if self.down_sampled_dtype not in (float32, "float32"):
                             if self.down_sampled_dtype in (uint16, "uint16"):
                                 img = convert_to_16bit_fun(img)
@@ -370,7 +361,6 @@ class MultiProcess(Process):
                                       f"requested downsampled format is not supported"
                                       f"{PrintColors.ENDC}")
                                 raise RuntimeError
-
                         self.imsave_tif(down_sampled_tif_path, img, compression=compression)
 
             except (Empty, TimeoutError):
@@ -438,7 +428,6 @@ def parallel_image_processor(
         down_sampled_dtype: str = "float32",
         
         alternating_downsampling_method: bool = True,
-        down_sampled_destriping_sigma: Tuple[int, int] = (2000, 2000),
         rotation: int = 0,
         timeout: Union[float, None] = None,
         max_processors: int = cpu_count(logical=False),
@@ -460,11 +449,7 @@ def parallel_image_processor(
     args: Tuple
         arguments of given function in correct order
     kwargs:
-        keyboard arguments of the given function. Add a "gpu_semaphore" if multi-GPU processing is required.
-        gpu_semaphore = Queue()
-        for i in range(torch.cuda.device_count()):
-            gpu_semaphore.put((f"cuda:{i}", torch.cuda.get_device_properties(i).total_memory))
-        {"gpu_semaphore": gpu_semaphore}
+        keyboard arguments of the given function
     tif_prefix: str
         prefix of the processed tif file
     channel: int
@@ -475,8 +460,6 @@ def parallel_image_processor(
         down-sampled isotropic voxel size in um.
     downsampled_path: Path
         path to save the downsampled image. If None destination path will be used.
-    down_sampled_destriping_sigma: Tuple[int fg, int bg]
-        filter stripes in the downsampled image. filter bandwidth(s) in pixels (larger gives more filtering)
     rotation: int
         Rotate the image. One of 0, 90, 180 or 270 degree values are accepted. Default is 0 (no rotation).
     timeout: float
@@ -497,9 +480,14 @@ def parallel_image_processor(
         destination = Path(destination)
     if destination is not None:
         Path(destination).mkdir(exist_ok=True)
+        print(f"Modifying destination: {destination}")
+        os.chmod(destination, 0o777)
     if isinstance(downsampled_path, str):
         downsampled_path = Path(downsampled_path)
     downsampled_path: Path = destination if downsampled_path is None else downsampled_path
+
+    #print(f"Debug: final dsp: {downsampled_path}")
+    #sys.exit()
 
     down_sampling_z_steps: int = 1
     need_down_sampling: bool = False
@@ -576,6 +564,8 @@ def parallel_image_processor(
         downsampled_path /= (
             f"{destination.stem}_z{down_sampling_z_steps * new_source_voxel[0]:.1f}_yx{target_voxel:.1f}um")
         downsampled_path.mkdir(exist_ok=True)
+        print(f"Modifying downsampled_path: {downsampled_path}")
+        os.chmod(downsampled_path, 0o777)
 
     progress_queue = Queue()
     semaphore = Queue()
@@ -584,14 +574,18 @@ def parallel_image_processor(
     print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}starting workers ...")
     for worker in tqdm(range(workers), desc=' workers'):
         if progress_queue.qsize() + worker < num_images:
+            #print(f"Debug print - images in multi process: {len(images)}")
+            #print(f"Debug print - destination in multi process: {destination}")
+            #print(f"Debug print - kwargs in multi process: {kwargs}")
+            #print(f"Debug print - args in multi process: {args}")
+            #print(f"Debug print - dsp in multi process: {downsampled_path}")
+            #sys.exit()
             MultiProcess(
                 progress_queue, args_queue, semaphore, fun, images, destination, args, kwargs, shape, dtype,
                 rename=rename, tif_prefix=tif_prefix,
                 source_voxel=source_voxel, target_voxel=target_voxel, down_sampled_path=downsampled_path,
-                down_sampled_destriping_sigma=down_sampled_destriping_sigma,
                 rotation=rotation, channel=channel, timeout=timeout, compression=compression, resume=resume,
-                needed_memory=needed_memory, save_images=save_images
-            ).start()
+                needed_memory=needed_memory, save_images=save_images).start()
         else:
             print('\n the existing workers can finish the job! no more workers are needed.')
             workers = worker
@@ -606,6 +600,9 @@ def parallel_image_processor(
     # down-sample on z accurately
     if return_code == 0 and need_down_sampling:
         npz_file = downsampled_path.parent / f"{destination.stem}_zyx{target_voxel:.1f}um.npz"
+        # print(f"Modifying npz file: {npz_file}")
+        # os.chmod(npz_file, 0o777)
+
         if resume and npz_file.exists():
             return return_code
         print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
@@ -618,10 +615,20 @@ def parallel_image_processor(
         ]
         if rotation in (90, 270):
             target_shape_3d[1], target_shape_3d[2] = target_shape_3d[2], target_shape_3d[1]
+            
+            
         files = sorted(downsampled_path.glob("*.tif"))
+        print(f"Debug: Number of files loaded = {len(files)}") 
+        print(f"Debug: path used: {downsampled_path}")
+            # Using a ThreadPoolExecutor to read and process files concurrently
         with ThreadPoolExecutor(max_processors) as pool:
             img_stack = list(pool.map(imread_tif_raw_png, tqdm(files, desc="loading", unit="images")))
+            # print(f"Debug: Shape of img_stack after loading = {img_stack[0].shape} if img_stack else 'Empty'")  # Debugging statement after list creation
+#            print(f"Debug: Shape of img_stack after loading = {img_stack.shape if img_stack else 'Empty'}")
+
             img_stack = dstack(img_stack)  # yxz format
+#           print(f"Debug: Dimensions of img_stack after dstack = {img_stack.shape}")  
+            
             img_stack = rollaxis(img_stack, -1)  # zyx format
             print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
                   f"{PrintColors.BLUE}down-sampling: {PrintColors.ENDC}"
@@ -635,6 +642,18 @@ def parallel_image_processor(
             print(f"{PrintColors.GREEN}{date_time_now()}:{PrintColors.ENDC}"
                   f"{PrintColors.BLUE} down-sampling: {PrintColors.ENDC}"
                   f"saving as npz.")
+            
+            if npz_file.exists():
+                stat_info = os.stat(npz_file)
+                permissions = oct(stat_info.st_mode)[-3:]
+                if permissions != '777':
+                    print(f"Permissions for '{npz_file}' are {permissions}. Must update permissions...")
+                    print(f"Modifying npz file: {npz_file}")
+                    os.chmod(npz_file, 0o777)
+                else:
+                    print(f"Permissions for '{file_path}' are correctly set to 777.")
+            else: 
+                print("Permission edit skipped")
             savez_compressed(
                 npz_file,
                 I=img_stack,
