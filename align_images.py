@@ -8,6 +8,7 @@ from pystripe.core import get_img_mask
 
 from skimage.filters.thresholding import threshold_multiotsu
 from skimage.filters import sobel
+from skimage import feature
 
 from tifffile import imwrite
 from os.path import exists, isdir, join
@@ -15,7 +16,8 @@ from os import listdir, system
 
 from supplements.tifstack import TifStack
 
-from matplotlib.pyplot import imshow
+from matplotlib.pyplot import imshow, show
+
 
 def write_to_file(images: list[ndarray], filepath: Path, verbose=False):
     filepath.mkdir(parents=True, exist_ok=True)
@@ -41,9 +43,7 @@ def normalize_array_inplace(arr: ndarray):
     arr.astype(uint8, copy=False)
 
 
-icount = 0
 def get_borders(img: ndarray, copy=False):
-    global icount
     # print("get_borders")
     mask = zeros_like(img)
     for ind in range(img.shape[0]):
@@ -55,10 +55,6 @@ def get_borders(img: ndarray, copy=False):
         except ValueError:
             # assume blank image since there will only be one pixel color.  keep mask as all zeros.
             continue
-    print("got borders... displaying images")
-    # for i in range(0, img.shape[0]):
-    #     imwrite(f"D:/aligned_images/cha{icount}/{i}.tif", mask[i])
-    # icount += 1
     img *= mask
 
 
@@ -154,6 +150,22 @@ def get_offsets(
     return transformation_matrices
 
 
+# applies canny edge detection algorithm on a 3d image (modifies image in parameter)
+def apply_canny(image: ndarray,
+                sigma=1.0,
+                low_threshold=None,
+                high_threshold=None,
+                mask=None,
+                use_quantiles=False,
+                *,
+                mode='constant',
+                cval=0.0):
+    for layer in range(image.shape[0]):
+        image[layer] = feature.canny(image[layer], sigma=sigma, low_threshold=low_threshold,
+                                     high_threshold=high_threshold, mask=mask, use_quantiles=use_quantiles,
+                                     mode=mode, cval=cval)
+
+
 # aligns images in 3d, using 2d alignment algorithm as a blackbox
 def align_images(img1_: ndarray, img2_: ndarray, max_iter: int = 50, make_copy: bool = False, verbose=False):
     # copy images if copy flag is true
@@ -165,11 +177,6 @@ def align_images(img1_: ndarray, img2_: ndarray, max_iter: int = 50, make_copy: 
         img2 = copy(img2_)
 
     # make images the same size
-    # pad_size = tuple((max(i) for i in zip(img1.shape, img2.shape)))
-    #
-    # img1 = pad_to_shape(pad_size, img1)
-    # img2 = pad_to_shape(pad_size, img2)
-
     resize_arrays([img1, img2])
 
     if verbose:
@@ -194,9 +201,9 @@ def align_images(img1_: ndarray, img2_: ndarray, max_iter: int = 50, make_copy: 
         xz_matrix = get_offsets([img1, img2], "xz", verbose=verbose)
         yz_matrix = get_offsets([img1, img2], "yz", verbose=verbose)
 
-        x_moves.append(-int((xy_matrix[0][0][2] + xz_matrix[0][0][2]) / 2))
-        y_moves.append(int((xy_matrix[0][1][2] + yz_matrix[0][1][2]) / 2))
-        z_moves.append(int((xz_matrix[0][1][2] + yz_matrix[0][0][2]) / 2))
+        x_moves.append(int(round(xy_matrix[0][1][2] + xz_matrix[0][1][2]) / 2))
+        y_moves.append(int(round(xy_matrix[0][0][2] + yz_matrix[0][1][2]) / 2))
+        z_moves.append(int(round(xz_matrix[0][0][2] + yz_matrix[0][0][2]) / 2))
 
         if verbose:
             print(x_moves[-1])
@@ -325,20 +332,26 @@ def main():
     print("Images resized")
 
     # normalize images and convert to uint8
-    print("Normalizing images")
-    for channel in channels: normalize_array_inplace(channel)
+    # print("Normalizing images")
+    # for channel in channels: normalize_array_inplace(channel)
 
     if not pad_only:
         print("Aligning images... (this may take a while)")
         # TODO: FIX THIS
         for i in range(len(channels)):
-            channels[i] *= (channels[i] > percentile(channels[i], 80))  # set all pixels below threshold to zero. (weeds out noise along edges)
-            get_borders(channels[i])
-            channels[i] = sobel(channels[i])
+            # channels[i] *= (channels[i] > percentile(channels[i], 80))  # set all pixels below threshold to zero. (weeds out noise along edges)
+            # get_borders(channels[i])
+            # channels[i] = sobel(channels[i])
+            # print(channels[i].shape)
+            # apply_canny(channels[i])
 
-        # # align images
-        # alignments, residuals = align_all_images(channels, max_iter=max_iterations, verbose=False, make_copy=False)
-        # print("Images aligned")
+            # imshow(channels[i][0, :, :])
+            # show()
+            pass
+
+        # align images
+        alignments, residuals = align_all_images(channels, max_iter=max_iterations, verbose=True, make_copy=False)
+        print("Images aligned")
 
 
     print("Images normalized")
@@ -355,7 +368,7 @@ def main():
         print(".ims files created")
 
     print("Alignments:")
-    # print(alignments)
+    print(alignments)
     print("\n\nOperation completed.")
 
 
