@@ -5,6 +5,7 @@ from process_images import get_gradient, get_transformation_matrix
 from pathlib import Path
 from numpy import min, max, uint8, zeros_like, ndarray, multiply
 from pystripe.core import get_img_mask
+from copy import deepcopy
 
 from skimage.filters.thresholding import threshold_multiotsu
 from skimage.filters import sobel
@@ -272,8 +273,10 @@ def main():
     parser.add_argument('input', type=str, help="Absolute file path of tiff stacks representing images to be aligned.  This directory must contain exactly three subfolders with the tiff files.")
     parser.add_argument('output', type=str, help="Absolute file path of output")
     parser.add_argument('--pad_only', action='store_true', help="If present, only pad images to same shape without aligning")
-    parser.add_argument('--max_iterations', type=int, default=50, help="Maximum iterations allowed for image alignment")
+    parser.add_argument('--sobel', action='store_true', help="If present, use sobel operator in alignment")
     parser.add_argument('--generate_ims', action='store_true', help="If present, generate .ims files along with output")
+    parser.add_argument('--max_iterations', type=int, default=10, help="Maximum iterations allowed for image alignment")
+    parser.add_argument('--reference', type=int, default=0, help="The channel to use as the reference image.  Default 0.")
     parser.add_argument('--dx', type=int, default=10, help="dx for .ims file (if generated)")
     parser.add_argument('--dy', type=int, default=10, help="dy for .ims file (if generated)")
     parser.add_argument('--dz', type=int, default=10, help="dz for .ims file (if generated)")
@@ -283,6 +286,8 @@ def main():
     input_file = args.input
     output_file = args.output
     max_iterations = args.max_iterations
+    use_sobel = args.sobel
+    reference = args.reference
     generate_ims = args.generate_ims
     pad_only = args.pad_only
     dx = args.dx
@@ -335,6 +340,8 @@ def main():
     # print("Normalizing images")
     # for channel in channels: normalize_array_inplace(channel)
 
+    copy_channels = [deepcopy(img) for img in channels]
+
     if not pad_only:
         print("Aligning images... (this may take a while)")
         # TODO: FIX THIS
@@ -350,8 +357,18 @@ def main():
             pass
 
         # align images
-        alignments, residuals = align_all_images(channels, max_iter=max_iterations, verbose=True, make_copy=False)
+        alignments, residuals = align_all_images(copy_channels, max_iter=max_iterations, reference=reference, verbose=True, make_copy=False)
         print("Images aligned")
+
+        # apply transformations to actual images
+        index = 0
+        for n, img in enumerate(channels):
+            if n == reference:
+                continue
+            roll_pad(img, alignments[index][0], axis=2)
+            roll_pad(img, alignments[index][1], axis=1)
+            roll_pad(img, alignments[index][2], axis=0)
+            index += 1
 
 
     print("Images normalized")
