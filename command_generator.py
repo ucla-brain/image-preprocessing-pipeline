@@ -7,7 +7,7 @@ import sys
 def main():
     GOALS = [0, 1, 2]
     COMPOSITE_PATH = ''
-    IMARIS_OUPUT_PATH = ''
+    IMARIS_OUTPUT_PATH = ''
     X_VOXEL = ''
     Y_VOXEL = ''
     Z_VOXEL = ''
@@ -34,18 +34,18 @@ def main():
         COMPOSITE_PATH = input(Fore.MAGENTA + "Enter the destination path to save the composite folder to save to ('\\composite\\' will be added to this path): " + Style.RESET_ALL)
         COMPOSITE_PATH = COMPOSITE_PATH + '\\composite\\'
         
-        mergeChannelsCMD = f"python .\\merge_channels.py" + (f" --red {redChannelPath}" if (redChannelPath != '0') else "") + (f" --green {greenChannelPath}" if (greenChannelPath != '0') else "") + (f" --blue {blueChannelPath}" if (blueChannelPath != '0') else "") + (f" --ouput_path {COMPOSITE_PATH}") 
+        mergeChannelsCMD = f"python .\\merge_channels.py" + (f" --red {redChannelPath}" if (redChannelPath != '0') else "") + (f" --green {greenChannelPath}" if (greenChannelPath != '0') else "") + (f" --blue {blueChannelPath}" if (blueChannelPath != '0') else "") + (f" --output_path {COMPOSITE_PATH}") 
 
     if (goal == 0) or (goal == 2):
         print('\nBuilding imaris conversion command...\n')
         if (goal == 2):
             COMPOSITE_PATH = input(Fore.MAGENTA + "Enter the path to the composite (merged/RGB) tiff channel: " + Style.RESET_ALL)
 
-        IMARIS_OUPUT_PATH = input(Fore.MAGENTA + "Enter the destination path for the converted imaris image (include imaris name in path): " + Style.RESET_ALL)
+        IMARIS_OUTPUT_PATH = input(Fore.MAGENTA + "Enter the destination path for the converted imaris image (include imaris name in path): " + Style.RESET_ALL)
         X_VOXEL = input(Fore.MAGENTA +"Enter x voxel value in microns (x.x um): " + Style.RESET_ALL)
         Y_VOXEL = input(Fore.MAGENTA +"Enter y voxel value in microns (x.x um): " + Style.RESET_ALL)
         Z_VOXEL = input(Fore.MAGENTA +"Enter z voxel value in microns (x.x um): " + Style.RESET_ALL)
-        imarisConversionCMD = f"python .\\convert.py -i {COMPOSITE_PATH} -o {IMARIS_OUPUT_PATH} -dx {X_VOXEL} -dy {Y_VOXEL} -dz {Z_VOXEL}"
+        imarisConversionCMD = f"python .\\convert.py -i {COMPOSITE_PATH} -o {IMARIS_OUTPUT_PATH} -dx {X_VOXEL} -dy {Y_VOXEL} -dz {Z_VOXEL}"
 
 
     print('\nCommand generated below. Copy, paste, then continue to begin processing:\n')
