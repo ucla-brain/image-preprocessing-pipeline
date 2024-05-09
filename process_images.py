@@ -728,7 +728,7 @@ def process_channel(
         source_voxel=(voxel_size_z, voxel_size_y, voxel_size_x),
         target_voxel=None if stitch_mip else isotropic_downsampling_resolution,
         downsampled_path=isotropic_downsampl_downsampled_path,
-        down_sampled_destriping_sigma=down_sampled_destriping_sigma,
+        # down_sampled_destriping_sigma=down_sampled_destriping_sigma,
         rotation=90 if need_rotation_stitched_tif else 0,
         timeout=timeout,
         max_processors=n_cores,
