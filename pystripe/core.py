@@ -78,7 +78,7 @@ filterwarnings("ignore")
 SUPPORTED_EXTENSIONS = ('.png', '.tif', '.tiff', '.raw', '.dcimg')
 NUM_RETRIES: int = 40
 USE_NUMEXPR: bool = True
-USE_PYTORCH = True
+USE_PYTORCH = False
 USE_JAX = False
 CUDA_IS_AVAILABLE_FOR_PT = cuda_is_available_for_pt()
 if sys.platform.lower() == "linux":
@@ -233,10 +233,10 @@ def imread_tif_raw_png(path: Path, dtype: str = None, shape: Tuple[int, int] = N
         print(f"after {attempt + 1} attempts failed to read file:\n{path}")
     return img
 
+
 def assert_file_permissions(file_path, expected_permissions):
     current_permissions = os.stat(file_path).st_mode & 0o777
     assert current_permissions == expected_permissions, f"File permissions for {file_path} must be {oct(expected_permissions)}, but are {oct(current_permissions)}."
-
 
 
 def imsave_tif(path: Path, img: ndarray, compression: Union[Tuple[str, int], None] = ('ADOBE_DEFLATE', 1)) -> bool:
@@ -268,10 +268,8 @@ def imsave_tif(path: Path, img: ndarray, compression: Union[Tuple[str, int], Non
             # imwrite(path, data=img, compression=compression_method, compressionargs={'level': compression_level})
             tmp_path = path.with_suffix(".tmp")
             imwrite(tmp_path, data=img, compression=compression)
-            os.chmod(tmp_path, 0o777)
-            expected_permissions = 0o777
-            assert_file_permissions(tmp_path, expected_permissions)
             tmp_path.rename(path)
+            assert path.exists()
             return False  # do not die
         except KeyboardInterrupt:
             print(f"{PrintColors.WARNING}\ndying from imsave_tif{PrintColors.ENDC}")
