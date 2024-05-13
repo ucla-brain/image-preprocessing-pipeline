@@ -11,6 +11,7 @@ from pandas import read_csv, DataFrame, concat
 from cli_interface import PrintColors
 
 SWC_COLUMNS = ["id", "type", "x", "y", "z", "radius", "parent_id"]
+ESWC_COLUMNS = ["seg_id", "level", "mode", "timestamp", "TFresindex"]
 
 
 def execute(command):
@@ -88,8 +89,9 @@ def sort_swc(swc_df: DataFrame) -> DataFrame:
     for i in Li1:
         if sorted_swc[i, 6] != -1:
             pids = where(sorted_swc[:, 0] == sorted_swc[i, 6])
-            pids = float(pids[0])
-            sRe[i] = pids + 1
+            pids = pids[0].astype(float)
+            # pids = float(pids[0])
+            sRe[i] = pids[0] + 1
     sorted_swc[:, 6] = sRe
     sorted_swc[:, 0] = Li
 
@@ -162,7 +164,7 @@ def main(args: Namespace):
 
         if args.input_extension == "eswc":
             swc_df = read_csv(input_file, sep=r"\s+", comment="#", index_col=False,
-                              names=SWC_COLUMNS + ["seg_id", "level", "mode", "timestamp", "TFresindex"])
+                              names=SWC_COLUMNS + ESWC_COLUMNS)
             if args.output_extension == "swc":
                 swc_df = swc_df[SWC_COLUMNS].copy()
         elif args.input_extension == "apo":
@@ -175,16 +177,16 @@ def main(args: Namespace):
         else:
             swc_df = read_csv(input_file, sep=r"\s+", comment="#", names=SWC_COLUMNS, index_col=False)
 
+        if args.x_axis_length > 0:
+            swc_df['x'] = args.x_axis_length - swc_df['x']
+        if args.y_axis_length > 0:
+            swc_df['y'] = args.y_axis_length - swc_df['y']
+        if args.z_axis_length > 0:
+            swc_df['z'] = args.z_axis_length - swc_df['z']
+
         swc_df['x'] *= args.voxel_size_x_source / args.voxel_size_x_target
         swc_df['y'] *= args.voxel_size_y_source / args.voxel_size_y_target
         swc_df['z'] *= args.voxel_size_z_source / args.voxel_size_z_target
-
-        if args.x_axis_length > 0:
-            swc_df['x'] = args.x_axis_length * args.voxel_size_x_source / args.voxel_size_x_target - swc_df['x']
-        if args.y_axis_length > 0:
-            swc_df['y'] = args.y_axis_length * args.voxel_size_y_source / args.voxel_size_y_target - swc_df['y']
-        if args.z_axis_length > 0:
-            swc_df['z'] = args.z_axis_length * args.voxel_size_z_source / args.voxel_size_z_target - swc_df['z']
 
         # if args.Vaa3D_sort or (args.radii is not None and not args.sort):
         #     # Put the node with the smallest parent_id (hopefully -1) and largest diameter on top of df
@@ -192,10 +194,13 @@ def main(args: Namespace):
 
         if ((args.resample_step_size is not None and args.resample_step_size > 0) or args.Vaa3D_sort or
                 args.inter_node_pruning or args.N3Dfix):
+
             v3d_file = output_file.parent / ("v3d_" + output_file.name)
-            with open(output_file, 'a'):
+            with open(output_file, "a"):
                 output_file.write_text("#")
                 swc_df.to_csv(output_file, sep=" ", mode="a", index=False)
+            # print(output_file, swc_df.head(5))
+            assert output_file.exists()
 
             if args.inter_node_pruning:
                 if sys.platform.lower() == "win32":
@@ -204,13 +209,15 @@ def main(args: Namespace):
                     cmd = f"{Vaa3D} -x inter_node_pruning -f pruning -i {output_file}"
                 run_command(cmd)
                 output_file.unlink()
-                (output_file.parent / (output_file.name + "_pruned.swc")).rename(output_file)
+                (output_file.parent / (output_file.name + "_pruned" + output_file.suffix)).rename(output_file)
 
             if args.Vaa3D_sort:
+                threshold = args.Vaa3D_sort_link_threshold
+                root = args.Vaa3D_sort_root_id
                 if sys.platform.lower() == "win32":
-                    cmd = f"{Vaa3D} /x sort_neuron_swc /f sort_swc /i {output_file} /o {v3d_file} /p 0 1"
+                    cmd = f"{Vaa3D} /x sort_neuron_swc /f sort_swc /i {output_file} /o {v3d_file} /p {threshold} {root}"
                 else:
-                    cmd = f"{Vaa3D} -x sort_neuron_swc -f sort_swc -i {output_file} -o {v3d_file} -p 0 1"
+                    cmd = f"{Vaa3D} -x sort_neuron_swc -f sort_swc -i {output_file} -o {v3d_file} -p {threshold} {root}"
                 run_command(cmd)
                 output_file.unlink()
                 v3d_file.rename(output_file)
@@ -378,6 +385,10 @@ if __name__ == '__main__':
                              "Default is --no-N3Dfix.")
     parser.add_argument("--Vaa3D_sort", default=False, action=BooleanOptionalAction,
                         help="Sort reconstructions. Default is --no-Vaa3D_sort. Sort swcs files using Vaa3D.")
+    parser.add_argument("--Vaa3D_sort_link_threshold", type=int, required=False, default=1,
+                        help="all points will be connected automatically if they are within this threshold.")
+    parser.add_argument("--Vaa3D_sort_root_id", type=int, required=False, default=1,
+                        help="use the default first root as the root id")
     parser.add_argument("--resample_step_size", type=float, required=False, default=None,
                         help="Resample reconstructions using the provided step size and Vaa3D plugin. Default is None.")
     parser.add_argument("--swc_to_seed", default=False, action=BooleanOptionalAction,

@@ -1,4 +1,5 @@
 import sys
+import os
 from argparse import RawDescriptionHelpFormatter, ArgumentParser
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, TimeoutError
 from concurrent.futures.process import BrokenProcessPool
@@ -77,7 +78,7 @@ filterwarnings("ignore")
 SUPPORTED_EXTENSIONS = ('.png', '.tif', '.tiff', '.raw', '.dcimg')
 NUM_RETRIES: int = 40
 USE_NUMEXPR: bool = True
-USE_PYTORCH = True
+USE_PYTORCH = False
 USE_JAX = False
 CUDA_IS_AVAILABLE_FOR_PT = cuda_is_available_for_pt()
 if sys.platform.lower() == "linux":
@@ -233,6 +234,11 @@ def imread_tif_raw_png(path: Path, dtype: str = None, shape: Tuple[int, int] = N
     return img
 
 
+def assert_file_permissions(file_path, expected_permissions):
+    current_permissions = os.stat(file_path).st_mode & 0o777
+    assert current_permissions == expected_permissions, f"File permissions for {file_path} must be {oct(expected_permissions)}, but are {oct(current_permissions)}."
+
+
 def imsave_tif(path: Path, img: ndarray, compression: Union[Tuple[str, int], None] = ('ADOBE_DEFLATE', 1)) -> bool:
     """Save an array as a tiff or raw image
 
@@ -263,6 +269,7 @@ def imsave_tif(path: Path, img: ndarray, compression: Union[Tuple[str, int], Non
             tmp_path = path.with_suffix(".tmp")
             imwrite(tmp_path, data=img, compression=compression)
             tmp_path.rename(path)
+            assert path.exists()
             return False  # do not die
         except KeyboardInterrupt:
             print(f"{PrintColors.WARNING}\ndying from imsave_tif{PrintColors.ENDC}")
@@ -638,6 +645,8 @@ def calculate_pad_size(shape: tuple, sigma: int, rise: float = 0.5):
     ---
     :return: pad size
     """
+    if (sigma == 0):
+        return 0
     x = shape[1] + 1
     y = shape[0] + 1
     c = 5e14  # 2e15 for 8GB float32 image which needs ~40 GB of vRAM in pt_wavedec2
