@@ -13,7 +13,8 @@ from psutil import cpu_count
 from skimage.filters import gaussian
 from tqdm import tqdm
 
-from pystripe.core import filter_streaks, is_uniform_2d, MultiProcessQueueRunner, progress_manager
+from pystripe.core import (filter_streaks, is_uniform_2d, MultiProcessQueueRunner, progress_manager, cuda_device_count,
+                           cuda_get_device_properties, USE_PYTORCH)
 
 
 def make_a_list_of_input_output_paths(args):
@@ -79,8 +80,15 @@ def main(args):
         del args_list
         workers = min(args.num_processes, num_images)
         progress_queue = Queue()
+        gpu_semaphore = None
+        # if args.use_gpu:
+        #     gpu_semaphore = Queue()
+        #     for i in range(cuda_device_count()):
+        #         for _ in range(args.threads_per_gpu):
+        #             gpu_semaphore.put((f"cuda:{i}", cuda_get_device_properties(i).total_memory))
         for _ in range(workers):
-            MultiProcessQueueRunner(progress_queue, args_queue, fun=process_cube, timeout=None).start()
+            MultiProcessQueueRunner(progress_queue, args_queue,
+                                    gpu_semaphore=gpu_semaphore, fun=process_cube, timeout=None).start()
         return_code = progress_manager(progress_queue, workers, num_images, desc="FNT Cube Processor", unit=" cubes")
         args_queue.cancel_join_thread()
         args_queue.close()
@@ -123,4 +131,9 @@ if __name__ == '__main__':
                         help="Apply a 3D gaussian filter after destriping. Default is --no_gaussian.")
     parser.add_argument("--video", "-v", default=False, action=BooleanOptionalAction,
                         help="Convert cubes to video format. Default is --no_video.")
+    parser.add_argument("--use_gpu", default=False, action=BooleanOptionalAction,
+                        help="Use gpu acceleration for destriping. Default is --no_use_gpu.")
+    parser.add_argument("--threads_per_gpu", type=int, required=False,
+                        default=8,
+                        help="Number of thread per GPU.")
     main(parser.parse_args())
