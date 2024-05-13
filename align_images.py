@@ -1,6 +1,81 @@
-from numpy import ndarray, zeros, pad, copy
+from numpy import zeros, pad, copy, stack, min, max, ndarray, uint8, uint16, uint32, float32, float64
 from multiprocessing import Pool
 from process_images import get_gradient, get_transformation_matrix
+
+from pathlib import Path
+
+from copy import deepcopy
+
+from skimage.filters import sobel
+from skimage import feature
+
+from tifffile import imwrite
+from os.path import exists, isdir, join
+from os import listdir, system
+
+from supplements.tifstack import TifStack
+
+# # for floodfill attempt
+# from pystripe.core import get_img_mask
+# from skimage.filters.thresholding import threshold_multiotsu
+def write_to_file(images: list[ndarray], filepath: Path, data_type, save_RGB=False, verbose=False):
+    filepath.mkdir(parents=True, exist_ok=True)
+    match data_type:
+        case 'uint8': dtype = uint8
+        case 'uint16': dtype = uint16
+        case 'uint32': dtype = uint32
+        case 'float32': dtype = float32
+        case 'float64': dtype = float64
+        case _:
+            print("Invalid data type provided!  Writing to file with uint8.")
+            dtype = uint8
+
+    for n, image in enumerate(images):
+        local = filepath / f'cha{n}'
+        local.mkdir(parents=True, exist_ok=True)
+        for layer in range(image.shape[0]):
+            path = local.absolute() / (str(layer) + ".tif")
+            imwrite(path, get_layer(layer, image, "yx").astype(dtype), dtype=dtype)
+
+    # save RGB file
+    if save_RGB and len(images) <= 3:
+        local = filepath / 'RGB'
+        local.mkdir(parents=True, exist_ok=True)
+        for layer in range(image.shape[0]):
+            composite = stack([get_layer(layer, image, "yx") for image in images], axis=-1)
+            path = local.absolute() / (str(layer) + ".tif")
+            imwrite(path, composite.astype(dtype), dtype=dtype)
+
+    if verbose: print("wrote to file")
+
+
+# written by ChatGPT, modifies parameters
+def normalize_array_inplace(arr: ndarray):
+    min_val = min(arr)
+    max_val = max(arr)
+
+    arr -= min_val
+    arr /= (max_val - min_val)
+
+    # Scale the values to be between 0 and 255
+    arr *= 255
+    arr.astype(uint8, copy=False)
+
+
+# # floodfill attempt
+# def get_borders(img: ndarray, copy=False):
+#     # print("get_borders")
+#     mask = zeros_like(img)
+#     for ind in range(img.shape[0]):
+#         # print(f'layer {ind}')
+#         try:
+#             threshold = threshold_multiotsu(img[ind], classes=4)[2]
+#             print("threshold", threshold)
+#             mask[ind] = get_img_mask(img[ind], threshold, close_steps=3, open_steps=5, flood_fill_flag=4)
+#         except ValueError:
+#             # assume blank image since there will only be one pixel color.  keep mask as all zeros.
+#             continue
+#     img *= mask
 
 
 # pads arr with zeroes evenly (as possible) on all sides to match pad_shape
@@ -42,8 +117,8 @@ def roll_pad(arr: ndarray, move: int, axis: int = 0):
 def get_layer(
     index: int,          # layer of image requested
     image: ndarray,      # 3-D image (use TifStack.as_3d_numpy())
-    plane = "xy",        # must be "xy", "yx", "xz", "zx", "yz", "zy"
-    img_format = "zyx",  # xyz in some order
+    plane="xy",          # must be "xy", "yx", "xz", "zx", "yz", "zy"
+    img_format="zyx",    # xyz in some order
 ):
     # guards
     if plane not in {"xy", "yx", "xz", "zx", "yz", "zy"} or img_format not in {"zyx", "zxy", "yxz", "yzx", "xyz", "xzy"}:
@@ -95,6 +170,55 @@ def get_offsets(
     return transformation_matrices
 
 
+# applies canny edge detection algorithm on a 3d image (modifies image in parameter)
+def apply_canny(image: ndarray,
+                sigma=1.0,
+                low_threshold=None,
+                high_threshold=None,
+                mask=None,
+                use_quantiles=False,
+                *,
+                mode='constant',
+                cval=0.0):
+    for layer in range(image.shape[0]):
+        image[layer] = feature.canny(image[layer], sigma=sigma, low_threshold=low_threshold,
+                                     high_threshold=high_threshold, mask=mask, use_quantiles=use_quantiles,
+                                     mode=mode, cval=cval)
+
+
+def write_alignments(channels: list[list], residuals: list[list], reference: int, filepath: str):
+    try:
+        f = open(filepath / 'alignments.txt', "x")
+        output_file = filepath / 'alignments.txt'
+        f.close()
+    except FileExistsError:
+        i = 1
+        while True:
+            try:
+                f = open(filepath / f"alignments ({i}).txt", "x")
+                output_file = filepath / f"alignments ({i}).txt"
+                f.close()
+                break
+            except FileExistsError:
+                i += 1
+
+    f = open(output_file, "a")
+    f.write(f"Number of channels: {len(channels) + 1}\n")
+    f.write(f"Reference channel: {reference}\n")
+
+    index = 0
+    for n in range(len(channels) + 1):
+        if n == reference:
+            continue
+        f.write(f'Channel {n}:\n')
+        f.write(f'\tx-alignment: {channels[index][0]}\t\t Residuals: {residuals[index][0]}\n')
+        f.write(f'\ty-alignment: {channels[index][1]}\t\t Residuals: {residuals[index][1]}\n')
+        f.write(f'\tz-alignment: {channels[index][2]}\t\t Residuals: {residuals[index][2]}\n\n')
+        index += 1
+
+    print(f"Alignments saved in file: {output_file}")
+
+
 # aligns images in 3d, using 2d alignment algorithm as a blackbox
 def align_images(img1_: ndarray, img2_: ndarray, max_iter: int = 50, make_copy: bool = False, verbose=False):
     # copy images if copy flag is true
@@ -106,11 +230,6 @@ def align_images(img1_: ndarray, img2_: ndarray, max_iter: int = 50, make_copy: 
         img2 = copy(img2_)
 
     # make images the same size
-    # pad_size = tuple((max(i) for i in zip(img1.shape, img2.shape)))
-    #
-    # img1 = pad_to_shape(pad_size, img1)
-    # img2 = pad_to_shape(pad_size, img2)
-
     resize_arrays([img1, img2])
 
     if verbose:
@@ -135,9 +254,9 @@ def align_images(img1_: ndarray, img2_: ndarray, max_iter: int = 50, make_copy: 
         xz_matrix = get_offsets([img1, img2], "xz", verbose=verbose)
         yz_matrix = get_offsets([img1, img2], "yz", verbose=verbose)
 
-        x_moves.append(-int((xy_matrix[0][0][2] + xz_matrix[0][0][2]) / 2))
-        y_moves.append(int((xy_matrix[0][1][2] + yz_matrix[0][1][2]) / 2))
-        z_moves.append(int((xz_matrix[0][1][2] + yz_matrix[0][0][2]) / 2))
+        x_moves.append(int(round(xy_matrix[0][1][2] + xz_matrix[0][1][2]) / 2))
+        y_moves.append(int(round(xy_matrix[0][0][2] + yz_matrix[0][1][2]) / 2))
+        z_moves.append(int(round(xz_matrix[0][0][2] + yz_matrix[0][0][2]) / 2))
 
         if verbose:
             print(x_moves[-1])
@@ -197,3 +316,133 @@ def align_all_images(
         residuals.append(img_residual)
 
     return moves, residuals
+
+
+# entrance if run in terminal
+def main():
+    from argparse import ArgumentParser
+    parser = ArgumentParser("Align images")
+    parser.add_argument('--input', '-i', required=True, type=str, help="Absolute file path of tiff stacks representing images to be aligned.  This directory must contain exactly three subfolders with the tiff files.")
+    parser.add_argument('--output', '-o', required=True, type=str, help="Absolute file path of output")
+    parser.add_argument('--num_channels', default=3, type=int, help="Number of channels to align")
+    parser.add_argument('--edge_detection', type=str, help="Selects which edge detection algorithm to use.  Options: 'sobel', 'canny'")
+    parser.add_argument('--pad_only', action='store_true', help="If present, only pad images to same shape without aligning")
+    parser.add_argument('--write_alignments', action='store_true', help="If present, write alignments to a .txt file.")
+    parser.add_argument('--generate_ims', action='store_true', help="If present, generate .ims files along with output.")
+    parser.add_argument('--max_iterations', type=int, default=10, help="Maximum iterations allowed for image alignment.")
+    parser.add_argument('--reference', type=int, default=0, help="The channel to use as the reference image.  Default 0.")
+    parser.add_argument('--save_rgb', action='store_true', help="If present, saves an RGB channel along with the single channel images.  (Must have <= 3 channels)")
+    parser.add_argument('--dtype', type=str, default='uint8', help="Data type of output tifs.  Options include 'uint8', 'uint16', 'uint32', 'float32', 'float64'")
+    parser.add_argument('--dx', type=int, default=10, help="dx for .ims file (if generated)")
+    parser.add_argument('--dy', type=int, default=10, help="dy for .ims file (if generated)")
+    parser.add_argument('--dz', type=int, default=10, help="dz for .ims file (if generated)")
+
+    args = parser.parse_args()
+
+    input_file = args.input
+    output_file = args.output
+    max_iterations = args.max_iterations
+    edge_detection = args.edge_detection
+    write_alignments_bool = args.write_alignments
+    reference = args.reference
+    num_channels = args.num_channels
+    generate_ims = args.generate_ims
+    pad_only = args.pad_only
+    save_rgb = args.save_rgb
+    data_type = args.dtype
+    dx = args.dx
+    dy = args.dy
+    dz = args.dz
+
+    # Directory checking ------------------------------------------------------------------
+    if not exists(input_file) or not isdir(input_file):
+        print(f"Error: Input directory '{input_file}' is invalid.")
+        exit(1)
+
+    filepaths = []
+    num_dirs = 0
+
+    for item in listdir(input_file):
+        item_path = join(input_file, item)
+        if isdir(item_path):
+            num_dirs += 1
+            filepaths.append(item_path)
+
+    if num_dirs != num_channels:
+        print(f"Error: Input directory '{input_file}' contains a different number of channels than the number specified.  Found: {num_dirs}.  Expected: {num_channels}")
+        exit(1)
+
+    # Image Processing --------------------------------------------------------------------
+    print("Loading images...")
+    count = 0
+    raw_channels = []
+    try:
+        while count < num_channels:
+            raw_channels.append(TifStack(filepaths[count]).as_3d_numpy())
+            count += 1
+        print("Images loaded")
+    except Exception:
+        print(f"Error: Invalid TifStack found at {filepaths[count]}")
+        exit(1)
+
+    output_path = Path(output_file)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    print(filepaths)
+
+    print("Resizing images...")
+
+    channels = resize_arrays(raw_channels)
+    print("Images resized")
+
+    copy_channels = [deepcopy(img) for img in channels]
+
+    if not pad_only:
+        print("Aligning images... (this may take a while)")
+        for i in range(len(channels)):
+            if edge_detection:
+                if edge_detection.lower() == 'sobel':
+                    if i == 0: print("Running Sobel Operator")
+                    copy_channels[i] = sobel(copy_channels[i])
+                elif edge_detection.lower() == 'canny':
+                    if i == 0: print("Running Canny Operator")
+                    apply_canny(copy_channels[i])
+
+        # align images
+        alignments, residuals = align_all_images(copy_channels, max_iter=max_iterations, reference=reference, verbose=True, make_copy=False)
+        print("Images aligned")
+
+        # apply transformations to actual images
+        index = 0
+        for n, img in enumerate(channels):
+            if n == reference:
+                continue
+            roll_pad(img, alignments[index][0], axis=2)
+            roll_pad(img, alignments[index][1], axis=1)
+            roll_pad(img, alignments[index][2], axis=0)
+            index += 1
+
+    print("Writing to file")
+    write_to_file(channels, output_path, data_type, save_RGB=save_rgb)
+
+    if write_alignments_bool:
+        write_alignments(alignments, residuals, reference, output_path)
+
+    print("Wrote to file")
+
+    if generate_ims:
+        print("Generating .ims files")
+        for i in range(len(channels)):
+            system(f'python convert.py -i "{output_path}/cha{i}" -o "{output_path}/cha{i}.ims" -dx {dx} -dy {dy} -dz {dz}')
+        if save_rgb:
+            system(f'python convert.py -i "{output_path}/RGB" -o "{output_path}/RGB.ims" -dx {dx} -dy {dy} -dz {dz}')
+        print(".ims files created")
+
+    if not pad_only:
+        print("Alignments:")
+        print(alignments)
+    print("\n\nOperation completed.")
+
+
+if __name__ == '__main__':
+    main()
