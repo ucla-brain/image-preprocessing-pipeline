@@ -1,5 +1,7 @@
-from colorama import Fore, Back, Style
+from colorama import Fore, Style
+import subprocess
 import sys
+import os
 import re
 
 
@@ -24,6 +26,9 @@ def build_fnt_conversion_cmd(fnt_output_path, fnt_channel_path):
 def build_merge_cmd(composite_path, imaris_output_path):
     return
 
+def compute_node_access(user, passwd):
+    return 0;
+
 def main():
     GOALS = [0, 1, 2, 3]
     COMPOSITE_PATH = ''
@@ -36,6 +41,7 @@ def main():
     mergeChannelsCMD = ''
     imarisConversionCMD = ''
     fntConversionCMD = ''
+    localCredentialsPath = 'tmp/creds.txt'
 
     # TODO: Update this script to also perform FNT conversions (will read from qnap3 temp drive and use a tiff channel), creat documentation, and update README.md
 
@@ -51,30 +57,27 @@ def main():
         print(Fore.RED + 'Invalid goal entered: ' + str(goal) + Style.RESET_ALL)
         sys.exit()
 
-
-    if goal in (0, 1):
-        print ('\nBuilding merge command. Enter individual RGB tiff channel paths. Use 0 for empty channel...\n')
-        redChannelPath = input(Fore.MAGENTA + "Enter the path of the " + Fore.RED + "RED" + Fore.MAGENTA + " channel to merge: "+ Style.RESET_ALL)
-        greenChannelPath = input(Fore.MAGENTA + "Enter the path of the " + Fore.GREEN + "GREEN" + Fore.MAGENTA + " channel to merge: "+ Style.RESET_ALL)
-        blueChannelPath = input(Fore.MAGENTA + "Enter the path of the " + Fore.BLUE + "BLUE" + Fore.MAGENTA + " channel to merge: "+ Style.RESET_ALL)
-        COMPOSITE_PATH = input(Fore.MAGENTA + "Enter the destination path to save the composite (merged tiffs) folder to save to ('\\composite\\' will be added to this path): " + Style.RESET_ALL)
-        COMPOSITE_PATH = COMPOSITE_PATH + '\\composite\\'
-        
-        mergeChannelsCMD = f"python .\\merge_channels.py" + (f" --red {redChannelPath}" if (redChannelPath != '0') else "") + (f" --green {greenChannelPath}" if (greenChannelPath != '0') else "") + (f" --blue {blueChannelPath}" if (blueChannelPath != '0') else "") + (f" --output_path {COMPOSITE_PATH}") 
-
-    if goal in (0,2):
-        print('\nBuilding imaris conversion command...\n')
-        if (goal == 2):
-            COMPOSITE_PATH = input(Fore.MAGENTA + "Enter the path to the composite (merged/RGB) tiff channel: " + Style.RESET_ALL)
-
-        IMARIS_OUTPUT_PATH = input(Fore.MAGENTA + "Enter the destination path for the converted imaris image (include imaris name in path: SWxxxxxx-xx.ims): " + Style.RESET_ALL)
-        X_VOXEL = input(Fore.MAGENTA +"Enter x voxel value in microns (x.x um): " + Style.RESET_ALL)
-        Y_VOXEL = input(Fore.MAGENTA +"Enter y voxel value in microns (x.x um): " + Style.RESET_ALL)
-        Z_VOXEL = input(Fore.MAGENTA +"Enter z voxel value in microns (x.x um): " + Style.RESET_ALL)
-        imarisConversionCMD = f"python .\\convert.py -i {COMPOSITE_PATH} -o {IMARIS_OUTPUT_PATH} -dx {X_VOXEL} -dy {Y_VOXEL} -dz {Z_VOXEL}"
-
     if goal in (0,3):
         print('\nBuilding FNT conversion command...\n')
+        # TODO: add mitch login step here...
+        # if saved pass file not found
+        # check if localCredentialsPath file exists
+        if (os.path.isfile(localCredentialsPath)):
+            userName = open(localCredentialsPath, 'r').read().split(':')[0]
+            password = open(localCredentialsPath, 'r').read().split(':')[1]
+            creds_choice = input(f'Credentials to access BMAP cluster found. Proceed with "{userName}" credentials? [0 for yes, 1 for no]: ')
+        
+        if (not (os.path.isfile(localCredentialsPath))) or (creds_choice == '1'):
+            print('FNT conversion requires access to BMAP cluster. Please enter your username and password to access the BMAP cluster to perform FNT conversion (Will be saved for future use): ')
+            userName = input('Username: ')
+            password = input('Password: ')
+            # create a file to store credentials with the text added in userName:password
+            with open(localCredentialsPath, 'w') as credsFile:
+                credsFile.write(f'{userName}:{password}')
+
+        # execute FNT conversion on compute node here
+
+
         if (goal == 3):
             FNT_CHANNEL_PATH = input(Fore.MAGENTA + "Enter the path to the tiff channel to convert to FNT (W:\path\Ex_xxx_Chx): " + Style.RESET_ALL)
             IMARIS_OUTPUT_PATH = input(Fore.MAGENTA + "Enter the destination path for the converted imaris image (include imaris name in path: SWxxxxxx-xx.ims). Required for FNT script: " + Style.RESET_ALL)
@@ -104,6 +107,27 @@ def main():
 
 
         fntConversionCMD = f"python .\\convert.py -i {IMARIS_OUTPUT_PATH} -t {FNT_OUTPUT_PATH}\{channel_folder}_FNT_tiff\ -fnt {FNT_OUTPUT_PATH}\{channel_folder}_FNT\ --channel {FNT_CHANNEL_PATH} -dx {X_VOXEL} -dy {Y_VOXEL} -dz {Z_VOXEL}"
+
+    if goal in (0, 1):
+        print ('\nBuilding merge command. Enter individual RGB tiff channel paths. Use 0 for empty channel...\n')
+        redChannelPath = input(Fore.MAGENTA + "Enter the path of the " + Fore.RED + "RED" + Fore.MAGENTA + " channel to merge: "+ Style.RESET_ALL)
+        greenChannelPath = input(Fore.MAGENTA + "Enter the path of the " + Fore.GREEN + "GREEN" + Fore.MAGENTA + " channel to merge: "+ Style.RESET_ALL)
+        blueChannelPath = input(Fore.MAGENTA + "Enter the path of the " + Fore.BLUE + "BLUE" + Fore.MAGENTA + " channel to merge: "+ Style.RESET_ALL)
+        COMPOSITE_PATH = input(Fore.MAGENTA + "Enter the destination path to save the composite (merged tiffs) folder to save to ('\\composite\\' will be added to this path): " + Style.RESET_ALL)
+        COMPOSITE_PATH = COMPOSITE_PATH + '\\composite\\'
+        
+        mergeChannelsCMD = f"python .\\merge_channels.py" + (f" --red {redChannelPath}" if (redChannelPath != '0') else "") + (f" --green {greenChannelPath}" if (greenChannelPath != '0') else "") + (f" --blue {blueChannelPath}" if (blueChannelPath != '0') else "") + (f" --output_path {COMPOSITE_PATH}") 
+
+    if goal in (0,2):
+        print('\nBuilding imaris conversion command...\n')
+        if (goal == 2):
+            COMPOSITE_PATH = input(Fore.MAGENTA + "Enter the path to the composite (merged/RGB) tiff channel: " + Style.RESET_ALL)
+
+        IMARIS_OUTPUT_PATH = input(Fore.MAGENTA + "Enter the destination path for the converted imaris image (include imaris name in path: SWxxxxxx-xx.ims): " + Style.RESET_ALL)
+        X_VOXEL = input(Fore.MAGENTA +"Enter x voxel value in microns (x.x um): " + Style.RESET_ALL)
+        Y_VOXEL = input(Fore.MAGENTA +"Enter y voxel value in microns (x.x um): " + Style.RESET_ALL)
+        Z_VOXEL = input(Fore.MAGENTA +"Enter z voxel value in microns (x.x um): " + Style.RESET_ALL)
+        imarisConversionCMD = f"python .\\convert.py -i {COMPOSITE_PATH} -o {IMARIS_OUTPUT_PATH} -dx {X_VOXEL} -dy {Y_VOXEL} -dz {Z_VOXEL}"
     
     
     # TODO: perform validations of the variables that require folder slashes... do this for all three
