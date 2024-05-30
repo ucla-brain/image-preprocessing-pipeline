@@ -8,9 +8,9 @@ import re
 def linux_path(path):
     windows_linux_drive_mappings = {
         'Z:\\': '/panfs/dong/',
-        'Y:\\': '/qnap3/',
+        'Y:\\': '/qnap/',
         'X:\\': '/qnap2/',
-        'W:\\': '/qnap3/',
+        'W:\\': '/qnap3/data/',
     }
     l_path = pathlib.PureWindowsPath(path)
     tmp = l_path.parts
@@ -127,7 +127,7 @@ def main():
 
         # fntConversionCMD = f"python convert.py -i {IMARIS_OUTPUT_PATH} -t {FNT_OUTPUT_PATH}/{channel_folder}_FNT_tiff/ -fnt {FNT_OUTPUT_PATH}/{channel_folder}_FNT/ --channel {FNT_CHANNEL_PATH}/ -dx {X_VOXEL} -dy {Y_VOXEL} -dz {Z_VOXEL}"
 
-        fntConversionCMD = f"python convert.py -i {linux_path(IMARIS_OUTPUT_PATH)} -t {linux_path(FNT_OUTPUT_PATH)}/{channel_folder}_FNT_tiff/ -fnt {linux_path(FNT_OUTPUT_PATH)}/{channel_folder}_FNT/ --channel {linux_path(FNT_CHANNEL_PATH)}/ -dx {X_VOXEL} -dy {Y_VOXEL} -dz {Z_VOXEL}"
+        fntConversionCMD = f"cd image-preprocessing-pipeline && conda activate stitching && python convert.py -i {linux_path(IMARIS_OUTPUT_PATH)} -t {linux_path(FNT_OUTPUT_PATH)}/{channel_folder}_FNT_tiff/ -fnt {linux_path(FNT_OUTPUT_PATH)}/{channel_folder}_FNT/ --channel {linux_path(FNT_CHANNEL_PATH)}/ -dx {X_VOXEL} -dy {Y_VOXEL} -dz {Z_VOXEL}"
 
         # print(fntConversionCMD)
 
