@@ -1,9 +1,25 @@
 from colorama import Fore, Style
 import subprocess
+import pathlib
 import sys
 import os
 import re
 
+def linux_path(path):
+    windows_linux_drive_mappings = {
+        'Z:\\': '/panfs/dong/',
+        'Y:\\': '/qnap3/',
+        'X:\\': '/qnap2/',
+        'W:\\': '/qnap3/',
+    }
+    l_path = pathlib.PureWindowsPath(path)
+    tmp = l_path.parts
+    if tmp[0] in windows_linux_drive_mappings:
+        newDrive = windows_linux_drive_mappings[tmp[0]]
+    # print(newDrive)
+    l_path = pathlib.PurePosixPath(newDrive, *tmp[1:])
+    # print(l_path)
+    return l_path
 
 def validate_paths(composite_path, imaris_output_path, fnt_output_path, fnt_channel_path):
     if imaris_output_path[-3:] != 'ims':
@@ -57,30 +73,34 @@ def main():
         print(Fore.RED + 'Invalid goal entered: ' + str(goal) + Style.RESET_ALL)
         sys.exit()
 
+    if goal in (0, 1):
+        print ('\nBuilding merge command. Enter individual RGB tiff channel paths. Use 0 for empty channel...\n')
+        redChannelPath = input(Fore.MAGENTA + "Enter the path of the " + Fore.RED + "RED" + Fore.MAGENTA + " channel to merge: "+ Style.RESET_ALL)
+        greenChannelPath = input(Fore.MAGENTA + "Enter the path of the " + Fore.GREEN + "GREEN" + Fore.MAGENTA + " channel to merge: "+ Style.RESET_ALL)
+        blueChannelPath = input(Fore.MAGENTA + "Enter the path of the " + Fore.BLUE + "BLUE" + Fore.MAGENTA + " channel to merge: "+ Style.RESET_ALL)
+        COMPOSITE_PATH = input(Fore.MAGENTA + "Enter the destination path to save the composite (merged tiffs) folder to save to ('\\composite\\' will be added to this path): " + Style.RESET_ALL)
+        COMPOSITE_PATH = COMPOSITE_PATH + '\\composite\\'
+        
+        mergeChannelsCMD = f"python .\\merge_channels.py" + (f" --red {redChannelPath}" if (redChannelPath != '0') else "") + (f" --green {greenChannelPath}" if (greenChannelPath != '0') else "") + (f" --blue {blueChannelPath}" if (blueChannelPath != '0') else "") + (f" --output_path {COMPOSITE_PATH}") 
+
+    if goal in (0,2):
+        print('\nBuilding imaris conversion command...\n')
+        if (goal == 2):
+            COMPOSITE_PATH = input(Fore.MAGENTA + "Enter the path to the composite (merged/RGB) tiff channel: " + Style.RESET_ALL)
+
+        IMARIS_OUTPUT_PATH = input(Fore.MAGENTA + "Enter the destination path for the converted imaris image (include imaris name in path: SWxxxxxx-xx.ims): " + Style.RESET_ALL)
+        X_VOXEL = input(Fore.MAGENTA +"Enter x voxel value in microns (x.x um): " + Style.RESET_ALL)
+        Y_VOXEL = input(Fore.MAGENTA +"Enter y voxel value in microns (x.x um): " + Style.RESET_ALL)
+        Z_VOXEL = input(Fore.MAGENTA +"Enter z voxel value in microns (x.x um): " + Style.RESET_ALL)
+        imarisConversionCMD = f"python .\\convert.py -i {COMPOSITE_PATH} -o {IMARIS_OUTPUT_PATH} -dx {X_VOXEL} -dy {Y_VOXEL} -dz {Z_VOXEL}"
+    
     if goal in (0,3):
         print('\nBuilding FNT conversion command...\n')
-        # TODO: add mitch login step here...
-        # if saved pass file not found
-        # check if localCredentialsPath file exists
-        if (os.path.isfile(localCredentialsPath)):
-            userName = open(localCredentialsPath, 'r').read().split(':')[0]
-            password = open(localCredentialsPath, 'r').read().split(':')[1]
-            creds_choice = input(f'Credentials to access BMAP cluster found. Proceed with "{userName}" credentials? [0 for yes, 1 for no]: ')
-        
-        if (not (os.path.isfile(localCredentialsPath))) or (creds_choice == '1'):
-            print('FNT conversion requires access to BMAP cluster. Please enter your username and password to access the BMAP cluster to perform FNT conversion (Will be saved for future use): ')
-            userName = input('Username: ')
-            password = input('Password: ')
-            # create a file to store credentials with the text added in userName:password
-            with open(localCredentialsPath, 'w') as credsFile:
-                credsFile.write(f'{userName}:{password}')
-
-        # execute FNT conversion on compute node here
-
+        print('The FNT command will be Generated at the end and another terminal window will be opened. Enter your BMAP password and copy and paste the command into the terminal window to perform the FNT conversion.\n')
 
         if (goal == 3):
             FNT_CHANNEL_PATH = input(Fore.MAGENTA + "Enter the path to the tiff channel to convert to FNT (W:\path\Ex_xxx_Chx): " + Style.RESET_ALL)
-            IMARIS_OUTPUT_PATH = input(Fore.MAGENTA + "Enter the destination path for the converted imaris image (include imaris name in path: SWxxxxxx-xx.ims). Required for FNT script: " + Style.RESET_ALL)
+            IMARIS_OUTPUT_PATH = input(Fore.MAGENTA + "Enter the destination path for the placeholder imaris image (include imaris name in path: SWxxxxxx-xx.ims). Required for FNT script: " + Style.RESET_ALL)
             X_VOXEL = input(Fore.MAGENTA +"Enter x voxel value in microns (x.x um): " + Style.RESET_ALL)
             Y_VOXEL = input(Fore.MAGENTA +"Enter y voxel value in microns (x.x um): " + Style.RESET_ALL)
             Z_VOXEL = input(Fore.MAGENTA +"Enter z voxel value in microns (x.x um): " + Style.RESET_ALL)
@@ -105,36 +125,48 @@ def main():
         channel_folder = match.group()
         FNT_OUTPUT_PATH = input(Fore.MAGENTA + "Enter the destination path for the converted FNT output ('Ex_xxx_Chx_FNT_tiff' will be added automatically to output path): " + Style.RESET_ALL)
 
+        # fntConversionCMD = f"python convert.py -i {IMARIS_OUTPUT_PATH} -t {FNT_OUTPUT_PATH}/{channel_folder}_FNT_tiff/ -fnt {FNT_OUTPUT_PATH}/{channel_folder}_FNT/ --channel {FNT_CHANNEL_PATH}/ -dx {X_VOXEL} -dy {Y_VOXEL} -dz {Z_VOXEL}"
 
-        fntConversionCMD = f"python .\\convert.py -i {IMARIS_OUTPUT_PATH} -t {FNT_OUTPUT_PATH}\{channel_folder}_FNT_tiff\ -fnt {FNT_OUTPUT_PATH}\{channel_folder}_FNT\ --channel {FNT_CHANNEL_PATH} -dx {X_VOXEL} -dy {Y_VOXEL} -dz {Z_VOXEL}"
+        fntConversionCMD = f"python convert.py -i {linux_path(IMARIS_OUTPUT_PATH)} -t {linux_path(FNT_OUTPUT_PATH)}/{channel_folder}_FNT_tiff/ -fnt {linux_path(FNT_OUTPUT_PATH)}/{channel_folder}_FNT/ --channel {linux_path(FNT_CHANNEL_PATH)}/ -dx {X_VOXEL} -dy {Y_VOXEL} -dz {Z_VOXEL}"
 
-    if goal in (0, 1):
-        print ('\nBuilding merge command. Enter individual RGB tiff channel paths. Use 0 for empty channel...\n')
-        redChannelPath = input(Fore.MAGENTA + "Enter the path of the " + Fore.RED + "RED" + Fore.MAGENTA + " channel to merge: "+ Style.RESET_ALL)
-        greenChannelPath = input(Fore.MAGENTA + "Enter the path of the " + Fore.GREEN + "GREEN" + Fore.MAGENTA + " channel to merge: "+ Style.RESET_ALL)
-        blueChannelPath = input(Fore.MAGENTA + "Enter the path of the " + Fore.BLUE + "BLUE" + Fore.MAGENTA + " channel to merge: "+ Style.RESET_ALL)
-        COMPOSITE_PATH = input(Fore.MAGENTA + "Enter the destination path to save the composite (merged tiffs) folder to save to ('\\composite\\' will be added to this path): " + Style.RESET_ALL)
-        COMPOSITE_PATH = COMPOSITE_PATH + '\\composite\\'
+        # print(fntConversionCMD)
+
+
+        # TODO: add mitch login step here...
+        # if saved pass file not found
+        # check if localCredentialsPath file exists
+        if (os.path.isfile(localCredentialsPath)):
+            userName = open(localCredentialsPath, 'r').read().split(':')[0]
+            # password = open(localCredentialsPath, 'r').read().split(':')[1]
+            creds_choice = input(f'Connection to BMAP compute nodes is need. Proceed with "{userName}" credentials? [1 for yes, 2 for no]: ')
         
-        mergeChannelsCMD = f"python .\\merge_channels.py" + (f" --red {redChannelPath}" if (redChannelPath != '0') else "") + (f" --green {greenChannelPath}" if (greenChannelPath != '0') else "") + (f" --blue {blueChannelPath}" if (blueChannelPath != '0') else "") + (f" --output_path {COMPOSITE_PATH}") 
+        if (not (os.path.isfile(localCredentialsPath))) or (creds_choice == '2'):
+            print('FNT conversion requires access to BMAP cluster. Please enter your username to access the BMAP cluster to perform FNT conversion (Will be saved for future use): ')
+            userName = input('Username: ')
+            # password = input('Password: ')
+            directory = os.path.dirname(localCredentialsPath)
+            os.makedirs(directory, exist_ok=True)
+            with open(localCredentialsPath, 'w') as credsFile:
+                credsFile.write(f'{userName}')
 
-    if goal in (0,2):
-        print('\nBuilding imaris conversion command...\n')
-        if (goal == 2):
-            COMPOSITE_PATH = input(Fore.MAGENTA + "Enter the path to the composite (merged/RGB) tiff channel: " + Style.RESET_ALL)
-
-        IMARIS_OUTPUT_PATH = input(Fore.MAGENTA + "Enter the destination path for the converted imaris image (include imaris name in path: SWxxxxxx-xx.ims): " + Style.RESET_ALL)
-        X_VOXEL = input(Fore.MAGENTA +"Enter x voxel value in microns (x.x um): " + Style.RESET_ALL)
-        Y_VOXEL = input(Fore.MAGENTA +"Enter y voxel value in microns (x.x um): " + Style.RESET_ALL)
-        Z_VOXEL = input(Fore.MAGENTA +"Enter z voxel value in microns (x.x um): " + Style.RESET_ALL)
-        imarisConversionCMD = f"python .\\convert.py -i {COMPOSITE_PATH} -o {IMARIS_OUTPUT_PATH} -dx {X_VOXEL} -dy {Y_VOXEL} -dz {Z_VOXEL}"
+        ssh_command = f'ssh {userName}:@cl.bmap.ucla.edu'
     
-    
-    # TODO: perform validations of the variables that require folder slashes... do this for all three
-    COMPOSITE_PATH, IMARIS_OUTPUT_PATH, FNT_OUTPUT_PATH, FNT_CHANNEL_PATH = validate_paths(COMPOSITE_PATH, IMARIS_OUTPUT_PATH, FNT_OUTPUT_PATH, FNT_CHANNEL_PATH)
+        os.system(f'start "Anaconda Prompt" cmd.exe /k "{ssh_command}"')
+    # TODO: perform validations of the variables that require folder slashes... and replace the drive letters with mount paths 
+    # COMPOSITE_PATH, IMARIS_OUTPUT_PATH, FNT_OUTPUT_PATH, FNT_CHANNEL_PATH = validate_paths(COMPOSITE_PATH, IMARIS_OUTPUT_PATH, FNT_OUTPUT_PATH, FNT_CHANNEL_PATH)
 
-    print('\nCommand generated below. Copy, paste into Anaconda Prompt, and run to begin processing:\n')
-    print(Fore.GREEN + (mergeChannelsCMD if (goal == 0) or (goal == 1) else "") + (" && " if goal == 0 else "") + (fntConversionCMD if (goal == 0) or (goal == 3) else "") + (" && " if goal == 0 else "") + (imarisConversionCMD if (goal == 0) or (goal == 2) else "") + Style.RESET_ALL + '\n')
+    # Print the command statement with FNT specified as running concurrently with merge/Imaris conversion, print FNT and merge/imaris seperately
+    if (goal == 0):
+        print('\nMerging channels + Imaris conversion commands generated below. Copy, paste into Anaconda Prompt (current window), and run to begin processing:\n')
+        print(Fore.GREEN + (mergeChannelsCMD if (goal == 0) or (goal == 1) else "") + (" && " if goal == 0 else "") + (" && " if goal == 0 else "") + (imarisConversionCMD if (goal == 0) or (goal == 2) else "") + Style.RESET_ALL + '\n')
+        print('\nFNT conversion command generated below. Copy, paste into Compute Node terminal, and run to begin processing (can be run at the same time as above):')
+        print(Fore.GREEN + fntConversionCMD + Style.RESET_ALL + '\n')
+    elif (goal == 3):
+        print('\nFNT conversion command generated below. Copy, paste into Compute Node terminal, and run to begin processing:')
+        print(Fore.GREEN + fntConversionCMD + Style.RESET_ALL + '\n')
+    else:
+        print('\n ' + ('Merge' if (goal == 1) else 'Imaris conversion') + ' command generated below. Copy, paste into Anaconda Prompt (current window), and run to begin processing:\n')
+        print(Fore.GREEN + (mergeChannelsCMD if (goal == 0) or (goal == 1) else "") + (" && " if goal == 0 else "") + (" && " if goal == 0 else "") + (imarisConversionCMD if (goal == 0) or (goal == 2) else "") + Style.RESET_ALL + '\n')
 
 if __name__ == "__main__":
     main()
