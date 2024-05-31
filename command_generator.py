@@ -46,7 +46,7 @@ def compute_node_access(user, passwd):
     return 0;
 
 def main():
-    GOALS = [0, 1, 2, 3]
+    GOALS = [0, 1, 2, 3, 4]
     COMPOSITE_PATH = ''
     IMARIS_OUTPUT_PATH = ''
     FNT_OUTPUT_PATH = ''
@@ -65,15 +65,16 @@ def main():
     print('Enter [0] if target command is merging + imaris conversion + FNT conversion')
     print('Enter [1] if target command is merging only')
     print('Enter [2] if target command is imaris conversion only')
-    print('Enter [3] if target command is FNT conversion only\n')
+    print('Enter [3] if target command is FNT conversion only')
+    print('Enter [4] if target command is merging + imaris conversion\n')
 
-    goal = int(input(Fore.MAGENTA + "Goal (0, 1, 2, or 3): " + Style.RESET_ALL))
+    goal = int(input(Fore.MAGENTA + "Goal (0, 1, 2, 3, or 4): " + Style.RESET_ALL))
 
     if goal not in GOALS:
         print(Fore.RED + 'Invalid goal entered: ' + str(goal) + Style.RESET_ALL)
         sys.exit()
 
-    if goal in (0, 1):
+    if goal in (0, 1, 4):
         print ('\nBuilding merge command. Enter individual RGB tiff channel paths. Use 0 for empty channel...\n')
         redChannelPath = input(Fore.MAGENTA + "Enter the path of the " + Fore.RED + "RED" + Fore.MAGENTA + " channel to merge: "+ Style.RESET_ALL)
         greenChannelPath = input(Fore.MAGENTA + "Enter the path of the " + Fore.GREEN + "GREEN" + Fore.MAGENTA + " channel to merge: "+ Style.RESET_ALL)
@@ -83,7 +84,7 @@ def main():
         
         mergeChannelsCMD = f"python .\\merge_channels.py" + (f" --red {redChannelPath}" if (redChannelPath != '0') else "") + (f" --green {greenChannelPath}" if (greenChannelPath != '0') else "") + (f" --blue {blueChannelPath}" if (blueChannelPath != '0') else "") + (f" --output_path {COMPOSITE_PATH}") 
 
-    if goal in (0,2):
+    if goal in (0, 2, 4):
         print('\nBuilding imaris conversion command...\n')
         if (goal == 2):
             COMPOSITE_PATH = input(Fore.MAGENTA + "Enter the path to the composite (merged/RGB) tiff channel: " + Style.RESET_ALL)
@@ -100,7 +101,7 @@ def main():
 
         if (goal == 3):
             FNT_CHANNEL_PATH = input(Fore.MAGENTA + "Enter the path to the tiff channel to convert to FNT (W:\path\Ex_xxx_Chx): " + Style.RESET_ALL)
-            IMARIS_OUTPUT_PATH = input(Fore.MAGENTA + "Enter the destination path for the placeholder imaris image (include imaris name in path: SWxxxxxx-xx.ims). Required for FNT script: " + Style.RESET_ALL)
+            # IMARIS_OUTPUT_PATH = input(Fore.MAGENTA + "Enter the destination path for the placeholder imaris image (include imaris name in path: SWxxxxxx-xx.ims). Required for FNT script: " + Style.RESET_ALL)
             X_VOXEL = input(Fore.MAGENTA +"Enter x voxel value in microns (x.x um): " + Style.RESET_ALL)
             Y_VOXEL = input(Fore.MAGENTA +"Enter y voxel value in microns (x.x um): " + Style.RESET_ALL)
             Z_VOXEL = input(Fore.MAGENTA +"Enter z voxel value in microns (x.x um): " + Style.RESET_ALL)
@@ -127,8 +128,11 @@ def main():
 
         # fntConversionCMD = f"python convert.py -i {IMARIS_OUTPUT_PATH} -t {FNT_OUTPUT_PATH}/{channel_folder}_FNT_tiff/ -fnt {FNT_OUTPUT_PATH}/{channel_folder}_FNT/ --channel {FNT_CHANNEL_PATH}/ -dx {X_VOXEL} -dy {Y_VOXEL} -dz {Z_VOXEL}"
 
-        fntConversionCMD = f"cd image-preprocessing-pipeline && conda activate stitching && python convert.py -i {linux_path(FNT_CHANNEL_PATH)}/ -fnt {linux_path(FNT_OUTPUT_PATH)}/{channel_folder}_FNT/ -dx {X_VOXEL} -dy {Y_VOXEL} -dz {Z_VOXEL}"
-
+        fntConversionCMD = f"""srun -p bigmem --mem=800G --pty bash <<EOF 
+        cd image-preprocessing-pipeline && conda activate stitching && python convert.py -i {linux_path(FNT_CHANNEL_PATH)}/ -fnt {linux_path(FNT_OUTPUT_PATH)}/{channel_folder}_FNT/ -dx {X_VOXEL} -dy {Y_VOXEL} -dz {Z_VOXEL} > {linux_path(FNT_OUTPUT_PATH)}output_fnt_log.txt
+        exit
+        EOF
+        """
         # print(fntConversionCMD)
 
 
@@ -164,7 +168,10 @@ def main():
     elif (goal == 3):
         print('\nFNT conversion command generated below. Copy, paste into Compute Node terminal, and run to begin processing:')
         print(Fore.GREEN + fntConversionCMD + Style.RESET_ALL + '\n')
-    else:
+    elif (goal == 4):
+        print('\nMerging channels + Imaris conversion commands generated below. Copy, paste into Anaconda Prompt (current window), and run to begin processing:\n')
+        print(Fore.GREEN + (mergeChannelsCMD)  + (" && ") + (imarisConversionCMD) + Style.RESET_ALL + '\n')
+    else: 
         print('\n ' + ('Merge' if (goal == 1) else 'Imaris conversion') + ' command generated below. Copy, paste into Anaconda Prompt (current window), and run to begin processing:\n')
         print(Fore.GREEN + (mergeChannelsCMD if (goal == 0) or (goal == 1) else "") + (" && " if goal == 0 else "") + (" && " if goal == 0 else "") + (imarisConversionCMD if (goal == 0) or (goal == 2) else "") + Style.RESET_ALL + '\n')
 
