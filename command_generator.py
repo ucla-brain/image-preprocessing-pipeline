@@ -128,11 +128,11 @@ def main():
 
         # fntConversionCMD = f"python convert.py -i {IMARIS_OUTPUT_PATH} -t {FNT_OUTPUT_PATH}/{channel_folder}_FNT_tiff/ -fnt {FNT_OUTPUT_PATH}/{channel_folder}_FNT/ --channel {FNT_CHANNEL_PATH}/ -dx {X_VOXEL} -dy {Y_VOXEL} -dz {Z_VOXEL}"
 
-        fntConversionCMD = f"""srun -p bigmem --mem=800G --pty bash <<EOF 
-        cd image-preprocessing-pipeline && conda activate stitching && python convert.py -i {linux_path(FNT_CHANNEL_PATH)}/ -fnt {linux_path(FNT_OUTPUT_PATH)}/{channel_folder}_FNT/ -dx {X_VOXEL} -dy {Y_VOXEL} -dz {Z_VOXEL} > {linux_path(FNT_OUTPUT_PATH)}output_fnt_log.txt
-        exit
-        EOF
-        """
+        fntConversionCMD = f"""
+srun -p bigmem --mem=800G --pty bash <<EOF 
+cd image-preprocessing-pipeline && conda activate stitching && python convert.py -i {linux_path(FNT_CHANNEL_PATH)}/ -fnt {linux_path(FNT_OUTPUT_PATH)}/{channel_folder}_FNT/ -dx {X_VOXEL} -dy {Y_VOXEL} -dz {Z_VOXEL} > {linux_path(FNT_OUTPUT_PATH)}/output_fnt_log.txt
+exit
+EOF"""
         # print(fntConversionCMD)
 
 
@@ -177,3 +177,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
