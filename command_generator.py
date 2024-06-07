@@ -82,7 +82,7 @@ def main():
         COMPOSITE_PATH = input(Fore.MAGENTA + "Enter the destination path to save the composite (merged tiffs) folder to save to ('\\composite\\' will be added to this path): " + Style.RESET_ALL)
         COMPOSITE_PATH = COMPOSITE_PATH + '\\composite\\'
         
-        mergeChannelsCMD = f"python .\\merge_channels.py" + (f" --red {redChannelPath}" if (redChannelPath != '0') else "") + (f" --green {greenChannelPath}" if (greenChannelPath != '0') else "") + (f" --blue {blueChannelPath}" if (blueChannelPath != '0') else "") + (f" --outtput_path {COMPOSITE_PATH}") 
+        mergeChannelsCMD = f"python .\\merge_channels.py" + (f" --red {redChannelPath}" if (redChannelPath != '0') else "") + (f" --green {greenChannelPath}" if (greenChannelPath != '0') else "") + (f" --blue {blueChannelPath}" if (blueChannelPath != '0') else "") + (f" --output_path {COMPOSITE_PATH}") 
 
     if goal in (0, 2, 4):
         print('\nBuilding imaris conversion command...\n')
