@@ -481,7 +481,11 @@ def parallel_image_processor(
     if destination is not None:
         Path(destination).mkdir(exist_ok=True)
         print(f"Modifying destination: {destination}")
-        os.chmod(destination, 0o777)
+        # Windows Permission Check
+        if os.name == 'nt':
+            os.chmod(destination, 0o666)
+        else:
+            os.chmod(destination, 0o777)
     if isinstance(downsampled_path, str):
         downsampled_path = Path(downsampled_path)
     downsampled_path: Path = destination if downsampled_path is None else downsampled_path
@@ -565,7 +569,11 @@ def parallel_image_processor(
             f"{destination.stem}_z{down_sampling_z_steps * new_source_voxel[0]:.1f}_yx{target_voxel:.1f}um")
         downsampled_path.mkdir(exist_ok=True)
         print(f"Modifying downsampled_path: {downsampled_path}")
-        os.chmod(downsampled_path, 0o777)
+        # Windows Permission Check
+        if os.name == 'nt':
+            os.chmod(downsampled_path, 0o666)
+        else:
+            os.chmod(downsampled_path, 0o777)
 
     progress_queue = Queue()
     semaphore = Queue()
@@ -646,10 +654,14 @@ def parallel_image_processor(
             if npz_file.exists():
                 stat_info = os.stat(npz_file)
                 permissions = oct(stat_info.st_mode)[-3:]
-                if permissions != '777':
+                if permissions != '666':
                     print(f"Permissions for '{npz_file}' are {permissions}. Must update permissions...")
                     print(f"Modifying npz file: {npz_file}")
-                    os.chmod(npz_file, 0o777)
+                    # Windows Permission Check
+                    if os.name == 'nt':
+                        os.chmod(npz_file, 0o666)
+                    else:
+                        os.chmod(npz_file, 0o777)
                 else:
                     print(f"Permissions for '{file_path}' are correctly set to 777.")
             else: 

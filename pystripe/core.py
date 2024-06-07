@@ -235,7 +235,11 @@ def imread_tif_raw_png(path: Path, dtype: str = None, shape: Tuple[int, int] = N
 
 
 def assert_file_permissions(file_path, expected_permissions):
-    current_permissions = os.stat(file_path).st_mode & 0o777
+    # Windows Permission Check
+    if os.name == 'nt':
+        current_permissions = os.stat(file_path).st_mode & 0o666
+    else:
+        current_permissions = os.stat(file_path).st_mode & 0o777
     assert current_permissions == expected_permissions, f"File permissions for {file_path} must be {oct(expected_permissions)}, but are {oct(current_permissions)}."
 
 
@@ -268,6 +272,14 @@ def imsave_tif(path: Path, img: ndarray, compression: Union[Tuple[str, int], Non
             # imwrite(path, data=img, compression=compression_method, compressionargs={'level': compression_level})
             tmp_path = path.with_suffix(".tmp")
             imwrite(tmp_path, data=img, compression=compression)
+            # Windows Permission Check
+            if os.name == 'nt':
+                os.chmod(tmp_path, 0o666)
+                expected_permissions = 0o666
+            else:
+                os.chmod(tmp_path, 0o777)
+                expected_permissions = 0o777
+            assert_file_permissions(tmp_path, expected_permissions)
             tmp_path.rename(path)
             assert path.exists()
             return False  # do not die
