@@ -82,7 +82,7 @@ def main():
         COMPOSITE_PATH = input(Fore.MAGENTA + "Enter the destination path to save the composite (merged tiffs) folder to save to ('\\composite\\' will be added to this path): " + Style.RESET_ALL)
         COMPOSITE_PATH = COMPOSITE_PATH + '\\composite\\'
         
-        mergeChannelsCMD = f"python .\\merge_channels.py" + (f" --red {redChannelPath}" if (redChannelPath != '0') else "") + (f" --green {greenChannelPath}" if (greenChannelPath != '0') else "") + (f" --blue {blueChannelPath}" if (blueChannelPath != '0') else "") + (f" --output_path {COMPOSITE_PATH}") 
+        mergeChannelsCMD = f"python .\\merge_channels.py" + (f" --red {redChannelPath}" if (redChannelPath != '0') else "") + (f" --green {greenChannelPath}" if (greenChannelPath != '0') else "") + (f" --blue {blueChannelPath}" if (blueChannelPath != '0') else "") + (f" --outtput_path {COMPOSITE_PATH}") 
 
     if goal in (0, 2, 4):
         print('\nBuilding imaris conversion command...\n')
@@ -130,7 +130,7 @@ def main():
 
         fntConversionCMD = f"""
 srun -p bigmem --mem=800G --pty bash <<EOF 
-cd image-preprocessing-pipeline && conda activate stitching && mkdir -p {linux_path(FNT_OUTPUT_PATH)} && chmod -R 777 {linux_path(FNT_OUTPUT_PATH)} && python convert.py -i {linux_path(FNT_CHANNEL_PATH)}/ -fnt {linux_path(FNT_OUTPUT_PATH)}/{channel_folder}_FNT/ -dx {X_VOXEL} -dy {Y_VOXEL} -dz {Z_VOXEL} > {linux_path(FNT_OUTPUT_PATH)}/output_fnt_log.txt
+cd image-preprocessing-pipeline && conda activate stitching && mkdir -p {linux_path(FNT_OUTPUT_PATH)} && chmod -R 777 {linux_path(FNT_CHANNEL_PATH)}/files.txt && python convert.py -i {linux_path(FNT_CHANNEL_PATH)}/ -fnt {linux_path(FNT_OUTPUT_PATH)}/{channel_folder}_FNT/ -dx {X_VOXEL} -dy {Y_VOXEL} -dz {Z_VOXEL} > {linux_path(FNT_OUTPUT_PATH)}/output_fnt_log.txt
 exit
 EOF"""
         # print(fntConversionCMD)
@@ -178,3 +178,5 @@ EOF"""
 if __name__ == "__main__":
     main()
     
+
+
