@@ -360,7 +360,7 @@ if __name__ == '__main__':
                         help="Image pre-processing: convert to 8-bit. Default is --no-convert_to_8bit")
     parser.add_argument("--bit_shift", "-b", type=int, default=8,
                         help="bit_shift for 8-bit conversion. An number between 0 and 8. "
-                             "Smaller values make images brighter compared with he original image. "
+                             "Smaller values make images brighter compared with the original image. "
                              "Default is 8 (no change in brightness).\n"
                              "0 any value larger than   255 will be set to 255 in 8 bit, values smaller than 255 "
                              "will not change.\n"
