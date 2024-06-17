@@ -280,15 +280,14 @@ def process_big_images(file_path_inputs: list[Path], file_path_output: Path, ref
             if 0 <= n_img < image_shapes[count][0]:
                 file = imread(file_paths[count][n_img])
                 # pad image to operation dimensions
-                pad_to_shape(operation_shape[1:], file)
+                file = pad_to_shape(operation_shape[1:], file)
 
                 # shift image in x and y directions
                 roll_pad(file, offsets[count][1], axis=0)
                 roll_pad(file, offsets[count][2], axis=1)
 
                 # reshape image to reference dimensions
-                trim_to_shape(image_shapes[reference_index][1:], file)
-
+                file = trim_to_shape(image_shapes[reference_index][1:], file)
                 combined_image.append(file)
             else:
                 # save zeroes for that layer if out of bounds
