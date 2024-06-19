@@ -1,5 +1,7 @@
 from numpy import zeros, pad, copy, stack, min, max, ndarray, uint8, uint16, uint32, float32, float64
 from multiprocessing import Pool
+from functools import partial
+
 from process_images import get_gradient, get_transformation_matrix
 
 from pathlib import Path
@@ -237,10 +239,67 @@ def write_alignments(channels: list[list], input_files: list[str], residuals: li
     print(f"Alignments saved in file: {output_file}")
 
 
+# helper function for process_big_images
+def process_single_big_image(n_ref: int,  # the only non-constant var between iterations
+                             file_paths: list[str],
+                             reference_index: int,
+                             pad_to_max: list[list[list[int]]],
+                             offsets: list[list[int]],
+                             image_shapes: list[list[int]],
+                             operation_shape: list[int],
+                             file_path_output: Path,
+                             data_type,  # dtype
+                             save_singles: bool,
+                             file_path_inputs: list[Path]):
+    n_orig = []
+    for i in range(len(file_paths)):
+        if i == reference_index:
+            n_orig.append(n_ref)
+            continue
+        n_orig.append(n_ref + pad_to_max[reference_index][0][0] - pad_to_max[i][0][0] - offsets[i][0])
+
+        # print(n_orig)
+    combined_image = []
+    for count, n_img in enumerate(n_orig):
+        if 0 <= n_img < image_shapes[count][0]:
+            file = imread(file_paths[count][n_img])
+            # pad image to operation dimensions
+            file = pad_to_shape(operation_shape[1:], file)
+
+            # shift image in x and y directions
+            roll_pad(file, offsets[count][1], axis=0)
+            roll_pad(file, offsets[count][2], axis=1)
+
+            # reshape image to reference dimensions
+            file = trim_to_shape(image_shapes[reference_index][1:], file)
+            combined_image.append(file)
+        else:
+            # save zeroes for that layer if out of bounds
+            combined_image.append(zeros(image_shapes[reference_index][1:]))
+
+    # save RGB image
+    local = file_path_output / 'RGB'
+    local.mkdir(parents=True, exist_ok=True)
+    composite = stack(combined_image, axis=-1)
+
+    path = local.absolute() / Path(file_paths[reference_index][n_ref]).name
+    imwrite(path, composite.astype(data_type), dtype=data_type)
+
+    # save individual images
+    if save_singles:
+        for n, channel_img in enumerate(combined_image):
+            # print(n)
+            local = file_path_output / file_path_inputs[n].name
+            local.mkdir(parents=True, exist_ok=True)
+            path = local.absolute() / Path(file_paths[reference_index][n_ref]).name
+            # print(path)
+            imwrite(path, channel_img.astype(data_type), dtype=data_type)
+
+
 # offsets must have shape (D, 3), where D is the number of file path inputs
 # offsets[reference_index] = [0, 0, 0], x-y-z order (NOT z-y-x)
 def process_big_images(file_path_inputs: list[Path], file_path_output: Path, reference_index: int,
-                       offsets: list[list[int]], save_singles=False):
+                       offsets: list[list[int]], num_threads=8, save_singles=False):
     # load image paths
     file_paths = []
     for input_path in file_path_inputs:
@@ -265,51 +324,42 @@ def process_big_images(file_path_inputs: list[Path], file_path_output: Path, ref
 
     # process layers
     print("Aligning large images...")
-    for n_ref in tqdm(range(len(file_paths[reference_index]))):
-        # calculate which orig layer to use for given final layer
-        n_orig = []
-        for i in range(len(file_paths)):
-            if i == reference_index:
-                n_orig.append(n_ref)
-                continue
-            n_orig.append(n_ref + pad_to_max[reference_index][0][0] - pad_to_max[i][0][0] - offsets[i][0])
 
-            # print(n_orig)
-        combined_image = []
-        for count, n_img in enumerate(n_orig):
-            if 0 <= n_img < image_shapes[count][0]:
-                file = imread(file_paths[count][n_img])
-                # pad image to operation dimensions
-                file = pad_to_shape(operation_shape[1:], file)
+    # fill in constant variables for partial function
+    partial_func = partial(process_single_big_image,
+                           file_paths=file_paths,
+                           reference_index=reference_index,
+                           pad_to_max=pad_to_max,
+                           offsets=offsets,
+                           image_shapes=image_shapes,
+                           operation_shape=operation_shape,
+                           file_path_output=file_path_output,
+                           data_type=data_type,
+                           save_singles=save_singles,
+                           file_path_inputs=file_path_inputs)
 
-                # shift image in x and y directions
-                roll_pad(file, offsets[count][1], axis=0)
-                roll_pad(file, offsets[count][2], axis=1)
-
-                # reshape image to reference dimensions
-                file = trim_to_shape(image_shapes[reference_index][1:], file)
-                combined_image.append(file)
-            else:
-                # save zeroes for that layer if out of bounds
-                combined_image.append(zeros(image_shapes[reference_index][1:]))
-
-        # save RGB image
-        local = file_path_output / 'RGB'
-        local.mkdir(parents=True, exist_ok=True)
-        composite = stack(combined_image, axis=-1)
-
-        path = local.absolute() / Path(file_paths[reference_index][n_ref]).name
-        imwrite(path, composite.astype(data_type), dtype=data_type)
-
-        # save individual images
-        if save_singles:
-            for n, channel_img in enumerate(combined_image):
-                # print(n)
-                local = file_path_output / file_path_inputs[n].name
-                local.mkdir(parents=True, exist_ok=True)
-                path = local.absolute() / Path(file_paths[reference_index][n_ref]).name
-                # print(path)
-                imwrite(path, channel_img.astype(data_type), dtype=data_type)
+    if num_threads <= 1:
+        for i in tqdm(range(len(file_paths[reference_index]))):
+            partial_func(i)
+    else:
+        pool = Pool(processes=num_threads)
+        try:
+            # need to convert to list so the tqdm iterator is consumed; otherwise progress bar doesn't update.
+            list(tqdm(
+                pool.imap_unordered(partial_func, range(len(file_paths[reference_index]))),
+                total=len(file_paths[reference_index])))
+        except KeyboardInterrupt:
+            print("KeyboardInterrupt detected, terminating thread pool...")
+            pool.terminate()
+            pool.join()
+        except Exception as e:  # this one ideally should never occur...
+            print("Thread pool for aligning large images encountered an error, terminating...")
+            print(e)
+            pool.terminate()
+            pool.join()
+        else:
+            pool.close()
+            pool.join()
 
 
 # aligns images in 3d, using 2d alignment algorithm as a blackbox
@@ -427,6 +477,7 @@ def main():
     parser.add_argument('--generate_ims', action='store_true', help="If present, generate .ims files along with output.")
     parser.add_argument('--max_iterations', type=int, default=10, help="Maximum iterations allowed for image alignment.")
     parser.add_argument('--reference', type=str, default='red', help="The channel to use as the reference image.  Default red.")
+    parser.add_argument('--num_threads', type=int, default=8, help="Number of threads to use for processing large images.  Default 8.")
     parser.add_argument('--save_singles', action='store_true', help="If present, saves single channels with the RGB channel.")
     parser.add_argument('--dtype', type=str, default='uint8', help="Data type of output tifs.  Options include 'uint8', 'uint16', 'uint32', 'float32', 'float64'")
     parser.add_argument('--dx', required=True, nargs=2, type=int, help="micrometers per x-dimension of voxel in original and downsampled images, respectively.")
@@ -445,6 +496,7 @@ def main():
     write_alignments_bool = args.write_alignments
     reference_str = args.reference
     num_channels = 3 #args.num_channels
+    num_threads = args.num_threads
     generate_ims = args.generate_ims
     # pad_only = args.pad_only
     save_singles = args.save_singles
@@ -574,7 +626,7 @@ def main():
     # print("Scaled Alignments: ", scaled_alignments)
     # print("Save singles: ", save_singles)
 
-    process_big_images(original_paths, original_output_path, reference, scaled_alignments, save_singles)
+    process_big_images(original_paths, original_output_path, reference, scaled_alignments, num_threads=num_threads, save_singles=save_singles)
 
     if generate_ims:
         print("Generating .ims files")
