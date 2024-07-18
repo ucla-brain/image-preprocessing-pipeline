@@ -1,4 +1,4 @@
-from numpy import zeros, pad, copy, stack, min, max, ndarray, uint8, uint16, uint32, float32, float64
+from numpy import zeros, zeros_like, pad, copy, stack, min, max, ndarray, uint8, uint16, uint32, float32, float64
 from multiprocessing import Pool
 from functools import partial
 
@@ -24,8 +24,11 @@ from tqdm import tqdm
 # from skimage.filters.thresholding import threshold_multiotsu
 
 
-def write_to_file(images: list[ndarray], input_files: list[str], filepath: Path, data_type, save_singles=False, verbose=False):
+def write_to_file(images: list[ndarray], input_files: list[str], reference: int, filepath: Path, data_type, save_singles=False, verbose=False):
     filepath.mkdir(parents=True, exist_ok=True)
+    print("Images:", len(images))
+    print("input_files:", input_files)
+
     match data_type:
         case 'uint8': dtype = uint8
         case 'uint16': dtype = uint16
@@ -38,20 +41,31 @@ def write_to_file(images: list[ndarray], input_files: list[str], filepath: Path,
 
     # save singles
     if save_singles:
-        for n, image in enumerate(images):
-            local = filepath / input_files[n].split('/')[-1]
+        for n, f in enumerate(input_files):
+            if f is None: continue
+            local = filepath / f.split('/')[-1]
             local.mkdir(parents=True, exist_ok=True)
-            for layer in range(image.shape[0]):
+            for layer in range(images[n].shape[0]):
                 path = local.absolute() / (str(layer) + ".tif")
-                imwrite(path, get_layer(layer, image, "yx").astype(dtype), dtype=dtype)
+                imwrite(path, get_layer(layer, images[n], "yx").astype(dtype), dtype=dtype)
 
     # save RGB file
     local = filepath / 'RGB'
     local.mkdir(parents=True, exist_ok=True)
-    for layer in range(images[0].shape[0]):
-        composite = stack([get_layer(layer, image, "yx") for image in images], axis=-1)
+    for layer in range(images[reference].shape[0]):
+        layers = []
+        for n, f in enumerate(input_files):
+            if f is None:
+                layers.append(zeros_like(images[reference][0]))
+            else:
+                layers.append(get_layer(layer, images[n], "yx"))
+        composite = stack(layers, axis=-1)
         path = local.absolute() / (str(layer) + ".tif")
         imwrite(path, composite.astype(dtype), dtype=dtype)
+
+        # composite = stack([get_layer(layer, image, "yx") for image in images], axis=-1)
+        # path = local.absolute() / (str(layer) + ".tif")
+        # imwrite(path, composite.astype(dtype), dtype=dtype)
 
     if verbose:
         print("wrote to file")
@@ -96,6 +110,7 @@ def pad_to_shape(pad_shape: tuple, arr: ndarray):
 
 
 def trim_to_shape(output_shape: tuple, arr: ndarray):
+    if arr is None: return None
     assert len(output_shape) == len(arr.shape)
     if output_shape == arr.shape: return arr
     trim_dim = [arr.shape[i] - output_shape[i] for i in range(len(output_shape))]
@@ -106,10 +121,15 @@ def trim_to_shape(output_shape: tuple, arr: ndarray):
 
 
 def resize_arrays(arrays: list[ndarray]):
-    shapes = [a.shape for a in arrays]
+    shapes = []
+    for a in arrays:
+        if a is None: continue
+        shapes.append(a.shape)
+    # shapes = [a.shape for a in arrays if a is not None]
     pad_size = tuple((max(i) for i in zip(*shapes)))
     for i in range(len(arrays)):
-        arrays[i] = pad_to_shape(pad_size, arrays[i])
+        if arrays[i] is not None:
+            arrays[i] = pad_to_shape(pad_size, arrays[i])
     return arrays
 
 
@@ -141,6 +161,8 @@ def get_layer(
     # guards
     if plane not in {"xy", "yx", "xz", "zx", "yz", "zy"} or img_format not in {"zyx", "zxy", "yxz", "yzx", "xyz", "xzy"}:
         print(f"Invalid plane selected in get_layer().  Plane: {plane}, Layer: {index}, Img_format: {img_format}\nReturning to caller...")
+        return None
+    if image is None:
         return None
 
     # get the layer
@@ -221,7 +243,7 @@ def write_alignments(channels: list[list], input_files: list[str], residuals: li
                 i += 1
 
     f = open(output_file, "a")
-    f.write(f"Number of channels: {len(channels) + 1}\n")
+    f.write(f"Number of channels: {len(channels)}\n")
     for i in range(len(channels)):
         f.write(f"\t Channel {i}: {input_files[i]}\n")
 
@@ -256,18 +278,25 @@ def process_single_big_image(n_ref: int,  # the only non-constant var between it
                              file_path_output: Path,
                              data_type,  # dtype
                              save_singles: bool,
-                             file_path_inputs: list[Path]):
+                             file_path_inputs: list[Path],
+                             missing_channel: str):
     n_orig = []
     for i in range(len(file_paths)):
+        if file_paths[i] is None:
+            n_orig.append(None)
+            continue
         if i == reference_index:
             n_orig.append(n_ref)
             continue
         n_orig.append(n_ref + pad_to_max[reference_index][0][0] - pad_to_max[i][0][0] - offsets[i][0])
 
-        # print(n_orig)
+    # print("n_ref: ", n_ref)
+    # print("n_orig: ", n_orig)
     combined_image = []
     for count, n_img in enumerate(n_orig):
-        if 0 <= n_img < image_shapes[count][0]:
+        if n_img is None:
+            combined_image.append(zeros(image_shapes[reference_index][1:]))
+        elif 0 <= n_img < image_shapes[count][0]:
             file = imread(file_paths[count][n_img])
             # pad image to operation dimensions
             file = pad_to_shape(operation_shape[1:], file)
@@ -282,6 +311,13 @@ def process_single_big_image(n_ref: int,  # the only non-constant var between it
         else:
             # save zeroes for that layer if out of bounds
             combined_image.append(zeros(image_shapes[reference_index][1:]))
+
+    # if missing_channel == 'r':
+    #     combined_image.insert(0, zeros(image_shapes[reference_index][1:]))
+    # elif missing_channel == 'g':
+    #     combined_image.insert(1, zeros(image_shapes[reference_index][1:]))
+    # elif missing_channel == 'b':
+    #     combined_image.insert(2, zeros(image_shapes[reference_index][1:]))
 
     # save RGB image
     local = file_path_output / 'RGB'
@@ -305,31 +341,46 @@ def process_single_big_image(n_ref: int,  # the only non-constant var between it
 # offsets must have shape (D, 3), where D is the number of file path inputs
 # offsets[reference_index] = [0, 0, 0], x-y-z order (NOT z-y-x)
 def process_big_images(file_path_inputs: list[Path], file_path_output: Path, reference_index: int,
-                       offsets: list[list[int]], num_threads=8, save_singles=False):
+                       offsets: list[list[int]], num_threads=8, save_singles=False, missing_channel=None):
     # load image paths
     file_paths = []
     for input_path in file_path_inputs:
-        temp = natural_sorted([file.__str__() for file in input_path.iterdir() if
-                               file.is_file() and file.suffix.lower() in (".tif", ".tiff")])
-        file_paths.append(temp)
+        if input_path:
+            temp = natural_sorted([file.__str__() for file in input_path.iterdir() if
+                                   file.is_file() and file.suffix.lower() in (".tif", ".tiff")])
+            file_paths.append(temp)
+        else:
+            file_paths.append(None)
 
     image_shapes = []  # list[tuple]
     data_type = imread(file_paths[reference_index][0]).dtype
     for image in file_paths:
-        temp_shape = (len(image), *imread(image[0]).shape)
-        image_shapes.append(temp_shape)
+        if image is None:
+            image_shapes.append(None)
+        else:
+            temp_shape = (len(image), *imread(image[0]).shape)
+            image_shapes.append(temp_shape)
 
     # calculate operation shape
-    operation_shape = [max(dim) for dim in zip(*image_shapes)]
+    operation_shape = [max(dim) for dim in zip(*filter(lambda x: x is not None, image_shapes))]
 
     # calculate pad amounts
     pad_to_max = []
     for image in range(len(file_paths)):
-        pad_dim = [operation_shape[i] - image_shapes[image][i] for i in range(len(image_shapes[image]))]
-        pad_to_max.append(list(map(lambda x: (x // 2, (x + 1) // 2), pad_dim)))
+        if image_shapes[image] is None:
+            pad_to_max.append(None)
+        else:
+            pad_dim = [operation_shape[i] - image_shapes[image][i] for i in range(len(image_shapes[image]))]
+            pad_to_max.append(list(map(lambda x: (x // 2, (x + 1) // 2), pad_dim)))
 
     # process layers
     print("Aligning large images...")
+
+    # print("file_paths ", len(file_paths))
+    # print("reference_index ", reference_index)
+    # print("pad_to_max ", pad_to_max)
+    # print("offsets ", offsets)
+    # print("image_shapes ", image_shapes)
 
     # fill in constant variables for partial function
     partial_func = partial(process_single_big_image,
@@ -342,7 +393,8 @@ def process_big_images(file_path_inputs: list[Path], file_path_output: Path, ref
                            file_path_output=file_path_output,
                            data_type=data_type,
                            save_singles=save_singles,
-                           file_path_inputs=file_path_inputs)
+                           file_path_inputs=file_path_inputs,
+                           missing_channel=missing_channel)
 
     if num_threads <= 1:
         for i in tqdm(range(len(file_paths[reference_index]))):
@@ -370,6 +422,8 @@ def process_big_images(file_path_inputs: list[Path], file_path_output: Path, ref
 
 # aligns images in 3d, using 2d alignment algorithm as a blackbox
 def align_images(img1_: ndarray, img2_: ndarray, max_iter: int = 50, make_copy: bool = False, verbose=False):
+    if img1_ is None or img2_ is None:
+        return None, None, None, None
     # copy images if copy flag is true
     if not make_copy:
         img1 = img1_
@@ -458,7 +512,9 @@ def align_all_images(
     moves = []
     residuals = []
     for i in range(len(images)):
-        if i == reference:
+        if images[i] is None or i == reference:
+            moves.append([None, None, None])
+            residuals.append(None)
             continue
         img_x_moves, img_y_moves, img_z_moves, img_residual = align_images(images[reference], images[i], max_iter, make_copy=make_copy, verbose=verbose)
         moves.append([sum(img_x_moves), sum(img_y_moves), sum(img_z_moves)])
@@ -470,19 +526,19 @@ def align_all_images(
 def main():
     from argparse import ArgumentParser
     parser = ArgumentParser("Align images")
-    parser.add_help
-    parser.add_argument('--red', '-r', required=True, nargs=2, type=str,
-                        help='Input file paths for the red original and downsampled images (in that order).  [REQUIRED]')
-    parser.add_argument('--green', '-g', required=True, nargs=2, type=str,
-                        help='Input file paths for the green original and downsampled images (in that order).  [REQUIRED]')
-    parser.add_argument('--blue', '-b', required=True, nargs=2, type=str,
-                        help='Input file paths for the blue original and downsampled images (in that order).  [REQUIRED]')
+    parser.add_help = True
+    parser.add_argument('--red', '-r', nargs=2, default=[None, None],
+                        help='Input file paths for the red original and downsampled images (in that order).')
+    parser.add_argument('--green', '-g', nargs=2, default=[None, None],
+                        help='Input file paths for the green original and downsampled images (in that order).')
+    parser.add_argument('--blue', '-b', nargs=2, default=[None, None],
+                        help='Input file paths for the blue original and downsampled images (in that order).')
     # parser.add_argument('--input', '-i', required=True, type=str, help="Absolute file path of tiff stacks representing images to be aligned.  This directory must contain exactly three subfolders with the tiff files."
     parser.add_argument('--output', '-o', required=True, type=str,
                         help="Absolute file path of output.  [REQUIRED]")
     # parser.add_argument('--num_channels', default=3, type=int, help="Number of channels to align")
-    parser.add_argument('--edge_detection', type=str,
-                        help="Selects which edge detection algorithm to use.  Options: 'sobel', 'canny'.  [REQUIRED]")
+    # parser.add_argument('--edge_detection', type=str,
+    #                     help="Selects which edge detection algorithm to use.  Options: 'sobel', 'canny'.  [REQUIRED]")
     # parser.add_argument('--pad_only', action='store_true', help="If present, only pad images to same shape without aligning")
     parser.add_argument('--write_alignments', action='store_true',
                         help="If present, write alignments to a .txt file.")
@@ -513,7 +569,7 @@ def main():
     blue_paths = args.blue
     output_file = args.output
     max_iterations = args.max_iterations
-    edge_detection = args.edge_detection
+    # edge_detection = args.edge_detection
     write_alignments_bool = args.write_alignments
     reference_str = args.reference
     num_channels = 3 #args.num_channels
@@ -526,8 +582,20 @@ def main():
     dy = args.dy
     dz = args.dz
 
+    # Ensure there are 2 or 3 channels
+    if sum(map(lambda x: bool(x[0]), [red_paths, green_paths, blue_paths])) < 2:
+        print("You must select at least two channels to align.")
+        exit(1)
+
+    missing_channel = None
+    if red_paths[0] is None: missing_channel = 'r'
+    if green_paths[0] is None: missing_channel = 'g'
+    if blue_paths[0] is None: missing_channel = 'b'
+
     # Directory checking ------------------------------------------------------------------
     for i in red_paths + green_paths + blue_paths:
+        if i is None:
+            continue
         if not exists(i) or not isdir(i):
             print(f"Error: Input directory '{i}' is invalid.")
             exit(1)
@@ -550,6 +618,10 @@ def main():
             print(reference_str.lower().strip())
             exit(1)
 
+    if reference == 0 and red_paths[0] is None or reference == 1 and green_paths[0] is None or reference == 2 and blue_paths[0] is None:
+        print("Error: Reference channel selected does not exist.")
+        exit(1)
+
     # filepaths = []
     # num_dirs = 0
 
@@ -569,7 +641,10 @@ def main():
     raw_channels = []
     try:
         while count < num_channels:
-            raw_channels.append(TifStack(downsampled_input[count]).as_3d_numpy())
+            if downsampled_input[count]:
+                raw_channels.append(TifStack(downsampled_input[count]).as_3d_numpy())
+            else:
+                raw_channels.append(None)
             count += 1
         print("Images loaded")
     except Exception:
@@ -591,28 +666,26 @@ def main():
 
 
     print("Finding alignments... (this may take a while)")
-    for i in range(len(channels)):
-        if edge_detection:
-            if edge_detection.lower() == 'sobel':
-                if i == 0: print("Running Sobel Operator")
-                copy_channels[i] = sobel(copy_channels[i])
-            elif edge_detection.lower() == 'canny':
-                if i == 0: print("Running Canny Operator")
-                apply_canny(copy_channels[i])
+    # for i in range(len(channels)):
+    #     if edge_detection:
+    #         if edge_detection.lower() == 'sobel':
+    #             if i == 0: print("Running Sobel Operator")
+    #             copy_channels[i] = sobel(copy_channels[i])
+    #         elif edge_detection.lower() == 'canny':
+    #             if i == 0: print("Running Canny Operator")
+    #             apply_canny(copy_channels[i])
 
     # align images
     alignments, residuals = align_all_images(copy_channels, max_iter=max_iterations, reference=reference, verbose=True, make_copy=False)
 
     # apply transformations to actual images
-    index = 0
     print("Aligning downsampled images...")
     for n, img in tqdm(enumerate(channels)):
-        if n == reference:
+        if not n or n == reference:
             continue
-        roll_pad(img, alignments[index][0], axis=2)
-        roll_pad(img, alignments[index][1], axis=1)
-        roll_pad(img, alignments[index][2], axis=0)
-        index += 1
+        roll_pad(img, alignments[n][0], axis=2)
+        roll_pad(img, alignments[n][1], axis=1)
+        roll_pad(img, alignments[n][2], axis=0)
 
     # reshape downsampled to reference
         for n, img in enumerate(channels):
@@ -620,7 +693,7 @@ def main():
 
     # write downsampled to file
     print("Writing downsampled images to file...")
-    write_to_file(channels, downsampled_input, output_path / "downsampled", data_type, save_singles=save_singles)
+    write_to_file(channels, downsampled_input, reference, output_path / "downsampled", data_type, save_singles=save_singles)
 
     if write_alignments_bool:
         write_alignments(alignments, downsampled_input, residuals, reference, output_path)
@@ -629,16 +702,21 @@ def main():
     print("Preparing to process large images...")
     ratios = [float(o) / d for o, d in [dx, dy, dz]]
     scaled_alignments = []
-    index = 0
     for n in range(len(original_input)):
-        if n == reference:
+        if n == reference or alignments[n][0] is None:
             scaled_alignments.append([0 for i in range(len(alignments[0]))])
         else:
             # alignments and ratios in x-y-z order, we want it in z-y-x order.  iterate backwards.
-            scaled_alignments.append([int(alignments[index][i] / ratios[i]) for i in range(len(alignments[0]) - 1, -1, -1)])
-            index += 1
+            scaled_alignments.append([int(alignments[n][i] / ratios[i]) for i in range(len(alignments[0]) - 1, -1, -1)])
 
-    original_paths = [Path(o) for o in original_input]
+    print("alignments: ", alignments)
+    print("scaled alignments: ", scaled_alignments)
+    original_paths = []
+    for o in original_input:
+        if o:
+            original_paths.append(Path(o))
+        else:
+            original_paths.append(None)
     original_output_path = output_path / "original"
 
     # print("Original paths: ", original_paths)
@@ -647,7 +725,7 @@ def main():
     # print("Scaled Alignments: ", scaled_alignments)
     # print("Save singles: ", save_singles)
 
-    process_big_images(original_paths, original_output_path, reference, scaled_alignments, num_threads=num_threads, save_singles=save_singles)
+    process_big_images(original_paths, original_output_path, reference, scaled_alignments, num_threads=num_threads, save_singles=save_singles, missing_channel=missing_channel)
 
     if generate_ims:
         print("Generating .ims files")
@@ -655,9 +733,11 @@ def main():
         system(f'python convert.py -i "{output_path}/original/RGB" -o "{output_path}/original/RGB.ims" -dx {dx[0]} -dy {dy[0]} -dz {dz[0]}')
         if save_singles:
             for i in range(len(channels)):
+                if not downsampled_input[i]: continue
                 temp = Path(downsampled_input[i]).name
                 system(f'python convert.py -i "{output_path}/downsampled/{temp}" -o "{output_path}/downsampled/{temp}.ims" -dx {dx[1]} -dy {dy[1]} -dz {dz[1]}')
             for i in range(len(channels)):
+                if not original_input[i]: continue
                 temp = Path(original_input[i]).name
                 system(f'python convert.py -i "{output_path}/original/{temp}" -o "{output_path}/original/{temp}.ims" -dx {dx[0]} -dy {dy[0]} -dz {dz[0]}')
 
