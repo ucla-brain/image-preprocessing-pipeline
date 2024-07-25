@@ -130,7 +130,7 @@ def main():
 
         fntConversionCMD = f"""
 srun -p bigmem --mem=800G --pty bash <<EOF 
-cd image-preprocessing-pipeline && conda activate stitching && mkdir -p {linux_path(FNT_OUTPUT_PATH)} && chmod -R 777 {linux_path(FNT_OUTPUT_PATH)} && python convert.py -i {linux_path(FNT_CHANNEL_PATH)}/ -fnt {linux_path(FNT_OUTPUT_PATH)}/{channel_folder}_FNT/ -dx {X_VOXEL} -dy {Y_VOXEL} -dz {Z_VOXEL} > {linux_path(FNT_OUTPUT_PATH)}/output_fnt_log.txt
+cd image-preprocessing-pipeline && conda activate stitching && mkdir -p {linux_path(FNT_OUTPUT_PATH)} && touch {linux_path(FNT_CHANNEL_PATH)}/files.txt && chmod -R 777 {linux_path(FNT_CHANNEL_PATH)}/files.txt && python convert.py -i {linux_path(FNT_CHANNEL_PATH)}/ -fnt {linux_path(FNT_OUTPUT_PATH)}/{channel_folder}_FNT/ -dx {X_VOXEL} -dy {Y_VOXEL} -dz {Z_VOXEL} > {linux_path(FNT_OUTPUT_PATH)}/output_fnt_log.txt
 exit
 EOF"""
         # print(fntConversionCMD)
@@ -178,3 +178,5 @@ EOF"""
 if __name__ == "__main__":
     main()
     
+
+
