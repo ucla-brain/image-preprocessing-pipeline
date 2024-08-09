@@ -14,7 +14,7 @@ from numpy import max as np_max
 from numpy import mean as np_mean
 from numpy import sqrt as np_sqrt
 from numpy import round as np_round
-from numpy import zeros, float32, dstack, rollaxis, savez_compressed, array, maximum, rot90, arange, uint8, uint16
+from numpy import zeros, float32, dstack, rollaxis, savez_compressed, array, maximum, rot90, arange, uint8, uint16, flip
 from psutil import cpu_count, virtual_memory
 from skimage.measure import block_reduce
 from skimage.transform import resize, resize_local_mean
@@ -30,6 +30,11 @@ import sys
 
 def imread_tsv(tsv_volume: TSVVolume, extent: VExtent, d_type: str):
     return tsv_volume.imread(extent, d_type)[0]
+
+
+# Combines byte strings in a list: [b'1', b'6', b'0', b'0'] -> '1600'
+def combine_bytes(lst):
+    return ''.join(byte.decode('utf-8') for byte in lst)
 
 
 class MultiProcess(Process):
@@ -58,7 +63,8 @@ class MultiProcess(Process):
             needed_memory: int = None,
             save_images: bool = True,
             alternating_downsampling_method: bool = True,
-            down_sampled_dtype: str = "float32"
+            down_sampled_dtype: str = "float32",
+            enable_axis_correction: bool = True
     ):
         Process.__init__(self)
         self.daemon = False
@@ -104,6 +110,7 @@ class MultiProcess(Process):
             else:
                 self.calculate_down_sampling_target(shape, False, alternating_downsampling_method)
         self.rotation = rotation
+        self.enable_axis_correction = enable_axis_correction
 
     def calculate_down_sampling_target(self, new_shape: Tuple[int, int], is_rotated: bool,
                                        alternating_downsampling_method: bool):
@@ -143,11 +150,17 @@ class MultiProcess(Process):
         if die:
             self.die = True
 
-    def tif_save_path(self, idx: int, images: List[Path]):
+    def tif_save_path(self, idx: int, images: List[Path], flip_z: bool = False):
         if self.is_tsv or self.is_ims or self.rename:
-            return self.save_path / f"{self.tif_prefix}_{idx:06}.tif"
+            if flip_z:
+                return self.save_path / f"{self.tif_prefix}_{(len(images) - idx):06}.tif"
+            else:
+                return self.save_path / f"{self.tif_prefix}_{idx:06}.tif"
         else:
-            file = Path(images[idx])
+            if flip_z:
+                file = Path(images[len(images) - idx - 1])
+            else:
+                file = Path(images[idx])
             if file.suffix.lower() in (".png", ".raw"):
                 return self.save_path / (file.name[0:-4] + ".tif")
             else:
@@ -204,6 +217,26 @@ class MultiProcess(Process):
         if is_ims:
             file = h5py.File(images)
             images = file[f"DataSet/ResolutionLevel 0/TimePoint 0/Channel {channel}/Data"]
+
+            # check if images are flipped
+            flip_x, flip_y, flip_z = [False] * 3
+
+            attrs = file[f"DataSetInfo/Image"].attrs
+            if (self.enable_axis_correction and
+                    all(key in attrs for key in ['ExtMin0', 'ExtMax0', 'ExtMin1', 'ExtMax1', 'ExtMin2', 'ExtMax2'])):
+                x_min = float(combine_bytes(attrs['ExtMin0']))
+                x_max = float(combine_bytes(attrs['ExtMax0']))
+                y_min = float(combine_bytes(attrs['ExtMin1']))
+                y_max = float(combine_bytes(attrs['ExtMax1']))
+                z_min = float(combine_bytes(attrs['ExtMin2']))
+                z_max = float(combine_bytes(attrs['ExtMax2']))
+
+                flip_x = abs(x_min) > abs(x_max)
+                flip_y = abs(y_min) > abs(y_max)
+                flip_z = abs(z_min) > abs(z_max)
+
+                num_images = int(combine_bytes(attrs['Z']))
+
         queue_time_out = 20
         while not self.die and self.args_queue.qsize() > 0:
             if self.free_ram_is_not_enough():
@@ -215,11 +248,14 @@ class MultiProcess(Process):
                 z_stack = None
                 down_sampled_tif_path = Path()
                 if need_down_sampling and down_sampled_path is not None:
-                    down_sampled_tif_path = down_sampled_path / f"{tif_prefix}_{idx_down_sampled:06}.tif"
+                    if flip_z:
+                        down_sampled_tif_path = down_sampled_path / f"{tif_prefix}_{(num_images - idx_down_sampled):06}.tif"
+                    else:
+                        down_sampled_tif_path = down_sampled_path / f"{tif_prefix}_{idx_down_sampled:06}.tif"
                     if resume and down_sampled_tif_path.exists():
                         exist_count = 0
                         for idx_z, idx in enumerate(indices):
-                            if self.tif_save_path(idx, images).exists():
+                            if self.tif_save_path(idx, images, flip_z=flip_z).exists():
                                 exist_count += 1
                         if len(indices) == exist_count:
                             for _ in range(exist_count):
@@ -236,7 +272,8 @@ class MultiProcess(Process):
                         continue
                     if self.die:
                         break
-                    tif_save_path = self.tif_save_path(idx, images)
+                    tif_save_path = self.tif_save_path(idx, images, flip_z=flip_z)
+                    print(tif_save_path)
                     if resume and tif_save_path.exists() and not need_down_sampling:  # function is not None and
                         self.progress_queue.put(running_next)
                         continue
@@ -274,6 +311,7 @@ class MultiProcess(Process):
                                 else:
                                     img = function(img)
 
+                            # apply rotations
                             if rotation == 90:
                                 img = rot90(img, 1)
                             elif rotation == 180:
@@ -281,6 +319,13 @@ class MultiProcess(Process):
                             elif rotation == 270:
                                 img = rot90(img, 3)
 
+                            # apply flips
+                            if flip_x:
+                                img = flip(img, axis=1)
+                            if flip_y:
+                                img = flip(img, axis=0)
+
+                            # save image
                             if save_images and (is_tsv or is_ims or function is not None or rotation in (90, 180, 270)):
                                 #print(f"debug: {tif_save_path}")
                                 #print(f"debug: {img}")
