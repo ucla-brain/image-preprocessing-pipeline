@@ -735,7 +735,8 @@ def process_channel(
         progress_bar_name="TSV",
         compression=(compression_method, compression_level) if compression_level > 0 else None,
         resume=continue_process_terastitcher,
-        needed_memory=ram_needed_per_thread * 1024 ** 3 * 8
+        needed_memory=ram_needed_per_thread * 1024 ** 3 * 8,
+        enable_axis_correction=False  # set to true to have axis correction
     )
     if need_rotation_stitched_tif:
         shape = (shape[0], shape[2], shape[1])

@@ -127,7 +127,8 @@ def main(args: Namespace):
             save_images=args.save_images,
             downsampled_path=args.downsample_path,
             alternating_downsampling_method=False if args.downsample_method else True,
-            down_sampled_dtype=args.downsample_dtype
+            down_sampled_dtype=args.downsample_dtype,
+            enable_axis_correction=args.enable_axis_correction
         )
     elif input_path.is_dir():
         tif_2d_folder = input_path
@@ -421,4 +422,6 @@ if __name__ == '__main__':
     parser.add_argument("--threads_per_gpu", type=int, default=1,
                         help="Number of images processed on one GPU at a time. Default is 1. "
                              "Increase if the image sizes are small and multiple images fit into the vRAM.")
+    parser.add_argument("--enable_axis_correction", default=False, action=BooleanOptionalAction,
+                        help="include to automatically flip axes if necessary when processing .ims files")
     main(parser.parse_args())

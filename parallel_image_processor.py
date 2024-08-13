@@ -153,7 +153,7 @@ class MultiProcess(Process):
     def tif_save_path(self, idx: int, images: List[Path], flip_z: bool = False):
         if self.is_tsv or self.is_ims or self.rename:
             if flip_z:
-                return self.save_path / f"{self.tif_prefix}_{(len(images) - idx):06}.tif"
+                return self.save_path / f"{self.tif_prefix}_{(len(images) - idx - 1):06}.tif"
             else:
                 return self.save_path / f"{self.tif_prefix}_{idx:06}.tif"
         else:
@@ -249,7 +249,7 @@ class MultiProcess(Process):
                 down_sampled_tif_path = Path()
                 if need_down_sampling and down_sampled_path is not None:
                     if flip_z:
-                        down_sampled_tif_path = down_sampled_path / f"{tif_prefix}_{(num_images - idx_down_sampled):06}.tif"
+                        down_sampled_tif_path = down_sampled_path / f"{tif_prefix}_{(num_images - idx_down_sampled - 1):06}.tif"
                     else:
                         down_sampled_tif_path = down_sampled_path / f"{tif_prefix}_{idx_down_sampled:06}.tif"
                     if resume and down_sampled_tif_path.exists():
@@ -273,7 +273,7 @@ class MultiProcess(Process):
                     if self.die:
                         break
                     tif_save_path = self.tif_save_path(idx, images, flip_z=flip_z)
-                    print(tif_save_path)
+                    # print(tif_save_path)
                     if resume and tif_save_path.exists() and not need_down_sampling:  # function is not None and
                         self.progress_queue.put(running_next)
                         continue
@@ -481,6 +481,7 @@ def parallel_image_processor(
         resume: bool = True,
         needed_memory: int = None,
         save_images: bool = True,
+        enable_axis_correction: bool = True
 ):
     """
     fun: Callable
@@ -638,7 +639,7 @@ def parallel_image_processor(
                 rename=rename, tif_prefix=tif_prefix,
                 source_voxel=source_voxel, target_voxel=target_voxel, down_sampled_path=downsampled_path,
                 rotation=rotation, channel=channel, timeout=timeout, compression=compression, resume=resume,
-                needed_memory=needed_memory, save_images=save_images).start()
+                needed_memory=needed_memory, save_images=save_images, enable_axis_correction=enable_axis_correction).start()
         else:
             print('\n the existing workers can finish the job! no more workers are needed.')
             workers = worker
