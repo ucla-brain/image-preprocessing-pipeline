@@ -366,7 +366,8 @@ def process_channel(
         print_input_file_names: bool = False,
         timeout: float = None,
         nthreads: int = cpu_count(logical=False),
-        exclude_gpus: list = []
+        exclude_gpus: list = [],
+        enable_axis_correction: bool = False
 ):
     # preprocess each tile as needed using PyStripe --------------------------------------------------------------------
 
@@ -736,7 +737,7 @@ def process_channel(
         compression=(compression_method, compression_level) if compression_level > 0 else None,
         resume=continue_process_terastitcher,
         needed_memory=ram_needed_per_thread * 1024 ** 3 * 8,
-        enable_axis_correction=False  # set to true to have axis correction
+        enable_axis_correction=enable_axis_correction
     )
     if need_rotation_stitched_tif:
         shape = (shape[0], shape[2], shape[1])
@@ -1330,7 +1331,8 @@ def main(args):
             print_input_file_names=False,  # for debugging only
             timeout=args.timeout,
             nthreads=args.nthreads,
-            exclude_gpus=exclude_gpus
+            exclude_gpus=exclude_gpus,
+            enable_axis_correction=args.enable_axis_correction
         )
         stitched_tif_paths += [stitched_tif_path]
         channel_volume_shapes += [shape]
@@ -1666,4 +1668,6 @@ if __name__ == '__main__':
                         help="gpu indices that start from 0 and needs to be excluded.")
     parser.add_argument("--vram_mem_fraction_gpu0", required=False, type=float, default=1.0,
                         help="reduce the memory usage for GPU0 so the computer remain responsive.")
+    parser.add_argument("--enable_axis_correction", default=False, action=BooleanOptionalAction,
+                        help="include to automatically flip axes if necessary when processing .ims files")
     main(parser.parse_args())
