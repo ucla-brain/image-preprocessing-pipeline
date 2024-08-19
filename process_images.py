@@ -1367,6 +1367,7 @@ def main(args):
                 order_of_colors += channel_color_dict[channel]
 
         # print(stitched_tif_paths, order_of_colors)
+        print("stitched_tif_paths: ", stitched_tif_paths)
         if 1 < len(stitched_tif_paths) < 4:
             merge_all_channels(
                 stitched_tif_paths,

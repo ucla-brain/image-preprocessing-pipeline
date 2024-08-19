@@ -16,6 +16,7 @@ from os.path import exists, isdir, join
 from os import listdir, system
 
 from supplements.tifstack import TifStack
+from argparse import ArgumentParser, Namespace
 
 from tqdm import tqdm
 
@@ -522,47 +523,9 @@ def align_all_images(
 
     return moves, residuals
 
+
 # entrance if run in terminal
-def main():
-    from argparse import ArgumentParser
-    parser = ArgumentParser("Align images")
-    parser.add_help = True
-    parser.add_argument('--red', '-r', nargs=2, default=[None, None],
-                        help='Input file paths for the red original and downsampled images (in that order).')
-    parser.add_argument('--green', '-g', nargs=2, default=[None, None],
-                        help='Input file paths for the green original and downsampled images (in that order).')
-    parser.add_argument('--blue', '-b', nargs=2, default=[None, None],
-                        help='Input file paths for the blue original and downsampled images (in that order).')
-    # parser.add_argument('--input', '-i', required=True, type=str, help="Absolute file path of tiff stacks representing images to be aligned.  This directory must contain exactly three subfolders with the tiff files."
-    parser.add_argument('--output', '-o', required=True, type=str,
-                        help="Absolute file path of output.  [REQUIRED]")
-    # parser.add_argument('--num_channels', default=3, type=int, help="Number of channels to align")
-    # parser.add_argument('--edge_detection', type=str,
-    #                     help="Selects which edge detection algorithm to use.  Options: 'sobel', 'canny'.  [REQUIRED]")
-    # parser.add_argument('--pad_only', action='store_true', help="If present, only pad images to same shape without aligning")
-    parser.add_argument('--write_alignments', action='store_true',
-                        help="If present, write alignments to a .txt file.")
-    parser.add_argument('--generate_ims', action='store_true',
-                        help="If present, generate .ims files along with output.")
-    parser.add_argument('--max_iterations', type=int, default=10,
-                        help="Maximum iterations allowed for image alignment.")
-    parser.add_argument('--reference', type=str, default='red',
-                        help="The channel to use as the reference image.  Default red.")
-    parser.add_argument('--num_threads', type=int, default=8,
-                        help="Number of threads to use for processing large images.  Default 8.")
-    parser.add_argument('--save_singles', action='store_true',
-                        help="If present, saves single channels with the RGB channel.")
-    parser.add_argument('--dtype', type=str, default='uint8',
-                        help="Data type of output tifs.  Options include 'uint8', 'uint16', 'uint32', 'float32', 'float64'")
-    parser.add_argument('--dx', required=True, nargs=2, type=int,
-                        help="micrometers per x-dimension of voxel in original and downsampled images, respectively.  [REQUIRED]")
-    parser.add_argument('--dy', required=True, nargs=2, type=int,
-                        help="micrometers per y-dimension of voxel in original and downsampled images, respectively.  [REQUIRED]")
-    parser.add_argument('--dz', required=True, nargs=2, type=int,
-                        help="micrometers per z-dimension of voxel in original and downsampled images, respectively.  [REQUIRED]")
-
-    args = parser.parse_args()
-
+def main(args: Namespace):
     # input_file = args.input
     red_paths = args.red
     green_paths = args.green
@@ -751,4 +714,40 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    parser = ArgumentParser("Align images")
+    parser.add_help = True
+    parser.add_argument('--red', '-r', nargs=2, default=[None, None],
+                        help='Input file paths for the red original and downsampled images (in that order).')
+    parser.add_argument('--green', '-g', nargs=2, default=[None, None],
+                        help='Input file paths for the green original and downsampled images (in that order).')
+    parser.add_argument('--blue', '-b', nargs=2, default=[None, None],
+                        help='Input file paths for the blue original and downsampled images (in that order).')
+    # parser.add_argument('--input', '-i', required=True, type=str, help="Absolute file path of tiff stacks representing images to be aligned.  This directory must contain exactly three subfolders with the tiff files."
+    parser.add_argument('--output', '-o', required=True, type=str,
+                        help="Absolute file path of output.  [REQUIRED]")
+    # parser.add_argument('--num_channels', default=3, type=int, help="Number of channels to align")
+    # parser.add_argument('--edge_detection', type=str,
+    #                     help="Selects which edge detection algorithm to use.  Options: 'sobel', 'canny'.  [REQUIRED]")
+    # parser.add_argument('--pad_only', action='store_true', help="If present, only pad images to same shape without aligning")
+    parser.add_argument('--write_alignments', action='store_true',
+                        help="If present, write alignments to a .txt file.")
+    parser.add_argument('--generate_ims', action='store_true',
+                        help="If present, generate .ims files along with output.")
+    parser.add_argument('--max_iterations', type=int, default=10,
+                        help="Maximum iterations allowed for image alignment.")
+    parser.add_argument('--reference', type=str, default='red',
+                        help="The channel to use as the reference image.  Default red.")
+    parser.add_argument('--num_threads', type=int, default=8,
+                        help="Number of threads to use for processing large images.  Default 8.")
+    parser.add_argument('--save_singles', action='store_true',
+                        help="If present, saves single channels with the RGB channel.")
+    parser.add_argument('--dtype', type=str, default='uint8',
+                        help="Data type of output tifs.  Options include 'uint8', 'uint16', 'uint32', 'float32', 'float64'")
+    parser.add_argument('--dx', required=True, nargs=2, type=int,
+                        help="micrometers per x-dimension of voxel in original and downsampled images, respectively.  [REQUIRED]")
+    parser.add_argument('--dy', required=True, nargs=2, type=int,
+                        help="micrometers per y-dimension of voxel in original and downsampled images, respectively.  [REQUIRED]")
+    parser.add_argument('--dz', required=True, nargs=2, type=int,
+                        help="micrometers per z-dimension of voxel in original and downsampled images, respectively.  [REQUIRED]")
+
+    main(parser.parse_args())
