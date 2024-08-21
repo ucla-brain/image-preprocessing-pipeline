@@ -212,14 +212,15 @@ class MultiProcess(Process):
 
         file = None
         x0, x1, y0, y1 = 0, 0, 0, 0
+
+        # check if images are flipped
+        flip_x, flip_y, flip_z = [False] * 3
+
         if is_tsv:
             x0, x1, y0, y1 = images.volume.x0, images.volume.x1, images.volume.y0, images.volume.y1
         if is_ims:
             file = h5py.File(images)
             images = file[f"DataSet/ResolutionLevel 0/TimePoint 0/Channel {channel}/Data"]
-
-            # check if images are flipped
-            flip_x, flip_y, flip_z = [False] * 3
 
             attrs = file[f"DataSetInfo/Image"].attrs
             if (self.enable_axis_correction and

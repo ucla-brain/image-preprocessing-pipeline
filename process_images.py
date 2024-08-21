@@ -43,6 +43,9 @@ from supplements.cli_interface import (ask_for_a_number_in_range, date_time_now,
 from supplements.tifstack import TifStack, imread_tif_stck
 from tsv.volume import TSVVolume, VExtent
 
+# for testing purposes
+print("Current working directory: ", os.getcwd())
+
 # experiment setup: user needs to set them right
 # AllChannels = [(channel folder name, rgb color)]
 AllChannels: List[Tuple[str, str]] = [
@@ -1367,7 +1370,8 @@ def main(args):
                 order_of_colors += channel_color_dict[channel]
 
         # print(stitched_tif_paths, order_of_colors)
-        print("stitched_tif_paths: ", stitched_tif_paths)
+        with open("./log.txt", 'w') as f:
+            f.write("stitched_tif_paths: ", stitched_tif_paths)
         if 1 < len(stitched_tif_paths) < 4:
             merge_all_channels(
                 stitched_tif_paths,
