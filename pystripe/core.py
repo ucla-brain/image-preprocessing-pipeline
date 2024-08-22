@@ -270,7 +270,8 @@ def imsave_tif(path: Path, img: ndarray, compression: Union[Tuple[str, int], Non
     for attempt in range(1, NUM_RETRIES):
         try:
             # imwrite(path, data=img, compression=compression_method, compressionargs={'level': compression_level})
-            tmp_path = path.with_suffix(".tmp")
+            # tmp_path = path.with_suffix(".tmp")
+            tmp_path = path.with_suffix(".tif")
             imwrite(tmp_path, data=img, compression=compression)
             # Windows Permission Check
             if os.name == 'nt':
