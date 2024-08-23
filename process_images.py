@@ -607,30 +607,38 @@ def process_channel(
         background, bit_shift, clip_min, clip_med, clip_max = 0, 8, None, None, None
         if need_16bit_to_8bit_conversion or need_bleach_correction:
             found_threshold = False
-            z1 = shape[0] // 2
-            while not found_threshold:
-                try:
-                    p_log(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
-                          f"calculating thresholding, and bit shift for 8-bit conversion using img_{z1:06n}.tif ...")
-                    img = tsv_volume.imread(
-                        VExtent(
-                            tsv_volume.volume.x0, tsv_volume.volume.x1,
-                            tsv_volume.volume.y0, tsv_volume.volume.y1,
-                            tsv_volume.volume.z0 + z1, tsv_volume.volume.z0 + z1 + 1),
-                        tsv_volume.dtype)[0]
-                    assert not is_uniform_2d(img)
-                    assert isinstance(img, ndarray)
-                    img = log1p_jit(img, dtype=float32)
-                    clip_min, clip_med, clip_max = threshold_multiotsu(img, classes=4)
-                    bit_shift = estimate_bit_shift(img, threshold=clip_max, percentile=99.9)
-                    assert isinstance(clip_min, float32)
-                    assert isinstance(clip_med, float32)
-                    assert isinstance(clip_max, float32)
-                    assert isinstance(bit_shift, int)
-                    assert 0 <= bit_shift <= 8
-                    found_threshold = True
-                except (ValueError, AssertionError):
-                    z1 += 1
+            # Calculate highest bitshift value at 3 various z-level indecies
+            z = [floor(shape[0] * 0.25), floor(shape[0] * 0.5), floor(shape[0] * 0.75)]
+            z_bitshift_vals = []
+            for i in range(0, 3):
+                found_threshold = false
+                while not found_threshold:
+                    try:
+                        p_log(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
+                            f"calculating thresholding, and bit shift for 8-bit conversion using img_{z[i]:06n}.tif ...")
+                        img = tsv_volume.imread(
+                            VExtent(
+                                tsv_volume.volume.x0, tsv_volume.volume.x1,
+                                tsv_volume.volume.y0, tsv_volume.volume.y1,
+                                tsv_volume.volume.z0 + z[i], tsv_volume.volume.z0 + z[i] + 1),
+                            tsv_volume.dtype)[0]
+                        assert not is_uniform_2d(img)
+                        assert isinstance(img, ndarray)
+                        img = log1p_jit(img, dtype=float32)
+                        clip_min, clip_med, clip_max = threshold_multiotsu(img, classes=4)
+                        bit_shift = estimate_bit_shift(img, threshold=clip_max, percentile=99.99)
+                        z_bitshift_vals.append(bit_shift)
+                        assert isinstance(clip_min, float32)
+                        assert isinstance(clip_med, float32)
+                        assert isinstance(clip_max, float32)
+                        assert isinstance(bit_shift, int)
+                        assert 0 <= bit_shift <= 8
+                        found_threshold = True
+                    except (ValueError, AssertionError):
+                        z[i] += 1
+            
+            bit_shift = max(z_bitshift_vals)
+            # print(f'DEBUG: using {bit_shift} of max({z_bitshift_vals}) at 25, 50, and 75% zsteps respectively')
             if need_bleach_correction:
                 background = int(np_round(expm1(clip_min)))
                 if new_tile_size is not None:
