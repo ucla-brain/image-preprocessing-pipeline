@@ -1371,7 +1371,9 @@ def main(args):
 
         # print(stitched_tif_paths, order_of_colors)
         with open("./log.txt", 'w') as f:
-            f.write("stitched_tif_paths: ", stitched_tif_paths)
+            f.write(f"Type: {type(stitched_tif_paths[0])}")
+            for a in stitched_tif_paths:
+                f.write(str(a) + "\n")
         if 1 < len(stitched_tif_paths) < 4:
             merge_all_channels(
                 stitched_tif_paths,
