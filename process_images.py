@@ -1377,6 +1377,7 @@ def main(args):
                 f.write(str(a) + "\n")
             f.write(f"downsampled path: {downsampled_path}\n")
             f.write(f"Stitched_tif_base: {stitched_tif_base}\n")
+            f.write(f"composite_path: {composite_path}\n")
 
         # align_namespace = Namespace(
         #     red=,
