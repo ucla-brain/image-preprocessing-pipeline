@@ -1370,7 +1370,7 @@ def main(args):
                 order_of_colors += channel_color_dict[channel]
 
         # print(stitched_tif_paths, order_of_colors)
-        stitched_tif_base = stitched_tif_paths[0] / '..'
+        stitched_tif_base = stitched_tif_paths[0].parent
         with open("./log.txt", 'w') as f:
             f.write(f"Type: {type(stitched_tif_paths[0])}")
             for a in stitched_tif_paths:
