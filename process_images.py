@@ -1375,7 +1375,8 @@ def main(args):
             f.write(f"Type: {type(stitched_tif_paths[0])}")
             for a in stitched_tif_paths:
                 f.write(str(a) + "\n")
-            f.write(f"Stitched_tif_base: {stitched_tif_base}")
+            f.write(f"downsampled path: {downsampled_path}\n")
+            f.write(f"Stitched_tif_base: {stitched_tif_base}\n")
 
         # align_namespace = Namespace(
         #     red=,
@@ -1389,9 +1390,9 @@ def main(args):
         #     num_threads=,
         #     save_singles=False,
         #     dtype=,
-        #     dx=,
-        #     dy=,
-        #     dz=
+        #     dx=voxel_size_x,
+        #     dy=voxel_size_y,
+        #     dz=voxel_size_z
         # )
 
         if 1 < len(stitched_tif_paths) < 4:
