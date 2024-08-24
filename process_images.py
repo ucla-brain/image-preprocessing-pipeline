@@ -16,7 +16,7 @@ from re import compile, match, findall, IGNORECASE, MULTILINE
 from subprocess import check_output, call, Popen, PIPE, CalledProcessError
 from time import time, sleep
 from typing import List, Tuple, Union, LiteralString
-from argparse import RawDescriptionHelpFormatter, ArgumentParser, BooleanOptionalAction
+from argparse import RawDescriptionHelpFormatter, ArgumentParser, BooleanOptionalAction, Namespace
 
 import mpi4py
 import psutil
@@ -1370,10 +1370,30 @@ def main(args):
                 order_of_colors += channel_color_dict[channel]
 
         # print(stitched_tif_paths, order_of_colors)
+        stitched_tif_base = stitched_tif_paths[0] / '..'
         with open("./log.txt", 'w') as f:
             f.write(f"Type: {type(stitched_tif_paths[0])}")
             for a in stitched_tif_paths:
                 f.write(str(a) + "\n")
+            f.write(f"Stitched_tif_base: {stitched_tif_base}")
+
+        # align_namespace = Namespace(
+        #     red=,
+        #     green=,
+        #     blue=,
+        #     output=,
+        #     write_alignments=True,
+        #     generate_ims=False,
+        #     max_iterations=10,
+        #     reference='red',
+        #     num_threads=,
+        #     save_singles=False,
+        #     dtype=,
+        #     dx=,
+        #     dy=,
+        #     dz=
+        # )
+
         if 1 < len(stitched_tif_paths) < 4:
             merge_all_channels(
                 stitched_tif_paths,
