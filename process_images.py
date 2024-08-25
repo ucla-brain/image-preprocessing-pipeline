@@ -1378,12 +1378,13 @@ def main(args):
             f.write(f"downsampled path: {downsampled_path}\n")
             f.write(f"Stitched_tif_base: {stitched_tif_base}\n")
             f.write(f"composite_path: {composite_path}\n")
+            f.write(f"voxel_sizes: {voxel_size_x}, {voxel_size_y}, {voxel_size_z}")
 
         # align_namespace = Namespace(
         #     red=,
         #     green=,
         #     blue=,
-        #     output=,
+        #     output=composite_path,
         #     write_alignments=True,
         #     generate_ims=False,
         #     max_iterations=10,
