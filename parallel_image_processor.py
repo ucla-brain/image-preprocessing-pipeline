@@ -660,6 +660,9 @@ def parallel_image_processor(
         # os.chmod(npz_file, 0o777)
 
         if resume and npz_file.exists():
+            if return_downsampled_path:
+                print("returning downsampled path")
+                return return_code, downsampled_path
             return return_code
         print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
               f"{PrintColors.BLUE}down-sampling: {PrintColors.ENDC}"
@@ -719,6 +722,7 @@ def parallel_image_processor(
                 I=img_stack,
                 xI=array(axes_spacing, dtype='object')  # note specify object to avoid "ragged" warning
             )
+
     if return_downsampled_path:
         print("returning downsampled path")
         return return_code, downsampled_path
