@@ -482,7 +482,8 @@ def parallel_image_processor(
         resume: bool = True,
         needed_memory: int = None,
         save_images: bool = True,
-        enable_axis_correction: bool = True
+        enable_axis_correction: bool = True,
+        return_downsampled_path: bool = False
 ):
     """
     fun: Callable
@@ -718,7 +719,8 @@ def parallel_image_processor(
                 I=img_stack,
                 xI=array(axes_spacing, dtype='object')  # note specify object to avoid "ragged" warning
             )
-
+    if return_downsampled_path:
+        return return_code, downsampled_path
     return return_code
 
 

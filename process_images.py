@@ -704,7 +704,7 @@ def process_channel(
         for cpu in range(get_cpu_sockets()):
             gpu_semaphore.put(("cpu", virtual_memory().available))
 
-    return_code = parallel_image_processor(
+    return_code, downsampled_subpaths = parallel_image_processor(
         source=tsv_volume,
         destination=stitched_tif_path,
         fun=process_img,
@@ -740,7 +740,8 @@ def process_channel(
         compression=(compression_method, compression_level) if compression_level > 0 else None,
         resume=continue_process_terastitcher,
         needed_memory=ram_needed_per_thread * 1024 ** 3 * 8,
-        enable_axis_correction=enable_axis_correction
+        enable_axis_correction=enable_axis_correction,
+        return_downsampled_path=True
     )
     if need_rotation_stitched_tif:
         shape = (shape[0], shape[2], shape[1])
@@ -786,7 +787,7 @@ def process_channel(
         MultiProcessCommandRunner(queue, command).start()
         running_processes += 1
 
-    return stitched_tif_path, shape, running_processes
+    return stitched_tif_path, shape, running_processes, downsampled_subpaths
 
 
 def get_transformation_matrix(reference: ndarray, subject: ndarray,
@@ -1294,8 +1295,9 @@ def main(args):
     stitched_tif_paths, channel_volume_shapes = [], []
     queue = Queue()
     running_processes: int = 0
+    downsampled_subpaths = []
     for channel, (file_list, subvolume_depth) in zip(all_channels, files_list):
-        stitched_tif_path, shape, running_processes_addition = process_channel(
+        stitched_tif_path, shape, running_processes_addition, downsampled_subpath = process_channel(
             source_path,
             channel,
             reference_channel if args.stitch_based_on_reference_channel_alignment else channel,
@@ -1340,6 +1342,7 @@ def main(args):
         stitched_tif_paths += [stitched_tif_path]
         channel_volume_shapes += [shape]
         running_processes += running_processes_addition
+        downsampled_subpaths += [downsampled_subpath]
     del files_list, file_list
 
     if not channel_volume_shapes.count(channel_volume_shapes[0]) == len(channel_volume_shapes):
@@ -1375,7 +1378,7 @@ def main(args):
             f.write(f"Type: {type(stitched_tif_paths[0])}")
             for a in stitched_tif_paths:
                 f.write(str(a) + "\n")
-            f.write(f"downsampled path: {downsampled_path}\n")
+            f.write(f"downsampled path: {downsampled_subpaths}\n")
             f.write(f"Stitched_tif_base: {stitched_tif_base}\n")
             f.write(f"composite_path: {composite_path}\n")
             f.write(f"voxel_sizes: {voxel_size_x}, {voxel_size_y}, {voxel_size_z}")
