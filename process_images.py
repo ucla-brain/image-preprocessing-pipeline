@@ -43,8 +43,10 @@ from supplements.cli_interface import (ask_for_a_number_in_range, date_time_now,
 from supplements.tifstack import TifStack, imread_tif_stck
 from tsv.volume import TSVVolume, VExtent
 
+from align_images import main as align_main
+
 # for testing purposes
-print("Current working directory: ", os.getcwd())
+# print("Current working directory: ", os.getcwd())
 
 # experiment setup: user needs to set them right
 # AllChannels = [(channel folder name, rgb color)]
@@ -1373,60 +1375,70 @@ def main(args):
                 order_of_colors += channel_color_dict[channel]
 
         # print(stitched_tif_paths, order_of_colors)
-        stitched_tif_base = stitched_tif_paths[0].parent
-        with open("./log.txt", 'w') as f:
-            f.write(f"Type: {type(stitched_tif_paths[0])}")
-            for a in stitched_tif_paths:
-                f.write(str(a) + "\n")
-            f.write(f"downsampled path: {downsampled_subpaths}\n")
-            f.write(f"Stitched_tif_base: {stitched_tif_base}\n")
-            f.write(f"composite_path: {composite_path}\n")
-            f.write(f"voxel_sizes: {voxel_size_x}, {voxel_size_y}, {voxel_size_z}")
+        # with open("./log.txt", 'w') as f:
+        #     f.write(f"Type: {type(stitched_tif_paths[0])}")
+        #     for a in stitched_tif_paths:
+        #         f.write(str(a) + "\n")
+        #     f.write(f"downsampled path: {downsampled_subpaths}\n")
+        #     f.write(f"composite_path: {composite_path}\n")
+        #     f.write(f"voxel_sizes: {voxel_size_x}, {voxel_size_y}, {voxel_size_z}")
 
-        # align_namespace = Namespace(
-        #     red=,
-        #     green=,
-        #     blue=,
-        #     output=composite_path,
-        #     write_alignments=True,
-        #     generate_ims=False,
-        #     max_iterations=10,
-        #     reference='red',
-        #     num_threads=,
-        #     save_singles=False,
-        #     dtype=,
-        #     dx=voxel_size_x,
-        #     dy=voxel_size_y,
-        #     dz=voxel_size_z
-        # )
+        align_namespace = Namespace(
+            red=(stitched_tif_paths[0], downsampled_subpaths[0]),
+            green=(stitched_tif_paths[1], downsampled_subpaths[1]),
+            blue=(stitched_tif_paths[2], downsampled_subpaths[2]),
+            output=composite_path,
+            write_alignments=True,
+            generate_ims=False,
+            max_iterations=10,
+            reference='red',
+            num_threads=8,
+            save_singles=False,
+            dtype='uint32',
+            dx=voxel_size_x,
+            dy=voxel_size_y,
+            dz=voxel_size_z
+        )
 
-        if 1 < len(stitched_tif_paths) < 4:
-            merge_all_channels(
-                stitched_tif_paths,
-                [0, ] * (len(stitched_tif_paths) - 1),
-                composite_path,
-                order_of_colors=order_of_colors,
-                workers=merge_channels_cores,
-                resume=args.resume,
-                compression=(args.compression_method, args.compression_level) if args.compression_level > 0 else None,
-                right_bit_shifts=None
-            )
-            composite_tif_paths = [composite_path]
-        elif len(stitched_tif_paths) >= 4:
+        if len(stitched_tif_paths) >= 4:
             p_log(f"{PrintColors.WARNING}"
                   f"Warning: since number of channels are more than 3 merging the first 3 channels only."
                   f"{PrintColors.ENDC}")
-            merge_all_channels(
-                stitched_tif_paths[0:3],
-                [0, ] * 3,
-                composite_path,
-                order_of_colors=order_of_colors,
-                workers=merge_channels_cores,
-                resume=args.resume,
-                compression=(args.compression_method, args.compression_level) if args.compression_level > 0 else None,
-                right_bit_shifts=None
-            )
             composite_tif_paths = [composite_path] + stitched_tif_paths[3:]
+        else:
+            composite_tif_paths = [composite_path]
+
+        align_main(align_namespace)
+
+
+
+        # if 1 < len(stitched_tif_paths) < 4:
+        #     merge_all_channels(
+        #         stitched_tif_paths,
+        #         [0, ] * (len(stitched_tif_paths) - 1),
+        #         composite_path,
+        #         order_of_colors=order_of_colors,
+        #         workers=merge_channels_cores,
+        #         resume=args.resume,
+        #         compression=(args.compression_method, args.compression_level) if args.compression_level > 0 else None,
+        #         right_bit_shifts=None
+        #     )
+        #     composite_tif_paths = [composite_path]
+        # elif len(stitched_tif_paths) >= 4:
+        #     p_log(f"{PrintColors.WARNING}"
+        #           f"Warning: since number of channels are more than 3 merging the first 3 channels only."
+        #           f"{PrintColors.ENDC}")
+        #     merge_all_channels(
+        #         stitched_tif_paths[0:3],
+        #         [0, ] * 3,
+        #         composite_path,
+        #         order_of_colors=order_of_colors,
+        #         workers=merge_channels_cores,
+        #         resume=args.resume,
+        #         compression=(args.compression_method, args.compression_level) if args.compression_level > 0 else None,
+        #         right_bit_shifts=None
+        #     )
+        #     composite_tif_paths = [composite_path] + stitched_tif_paths[3:]
 
     # Imaris File Conversion :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 

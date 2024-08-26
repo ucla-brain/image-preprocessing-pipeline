@@ -661,7 +661,6 @@ def parallel_image_processor(
 
         if resume and npz_file.exists():
             if return_downsampled_path:
-                print("returning downsampled path")
                 return return_code, downsampled_path
             return return_code
         print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
@@ -724,9 +723,7 @@ def parallel_image_processor(
             )
 
     if return_downsampled_path:
-        print("returning downsampled path")
         return return_code, downsampled_path
-    print(f"Did not return downsampled path, {return_downsampled_path}")
     return return_code
 
 
