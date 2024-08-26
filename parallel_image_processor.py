@@ -720,6 +720,7 @@ def parallel_image_processor(
                 xI=array(axes_spacing, dtype='object')  # note specify object to avoid "ragged" warning
             )
     if return_downsampled_path:
+        print("returning downsampled path")
         return return_code, downsampled_path
     return return_code
 

@@ -704,7 +704,7 @@ def process_channel(
         for cpu in range(get_cpu_sockets()):
             gpu_semaphore.put(("cpu", virtual_memory().available))
 
-    return_code, downsampled_subpaths = parallel_image_processor(
+    return_code, downsampled_subpath = parallel_image_processor(
         source=tsv_volume,
         destination=stitched_tif_path,
         fun=process_img,
@@ -787,7 +787,7 @@ def process_channel(
         MultiProcessCommandRunner(queue, command).start()
         running_processes += 1
 
-    return stitched_tif_path, shape, running_processes, downsampled_subpaths
+    return stitched_tif_path, shape, running_processes, downsampled_subpath
 
 
 def get_transformation_matrix(reference: ndarray, subject: ndarray,
