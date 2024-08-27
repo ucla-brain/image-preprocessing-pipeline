@@ -482,7 +482,8 @@ def parallel_image_processor(
         resume: bool = True,
         needed_memory: int = None,
         save_images: bool = True,
-        enable_axis_correction: bool = True
+        enable_axis_correction: bool = True,
+        return_downsampled_path: bool = False
 ):
     """
     fun: Callable
@@ -659,6 +660,8 @@ def parallel_image_processor(
         # os.chmod(npz_file, 0o777)
 
         if resume and npz_file.exists():
+            if return_downsampled_path:
+                return return_code, downsampled_path
             return return_code
         print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
               f"{PrintColors.BLUE}down-sampling: {PrintColors.ENDC}"
@@ -719,6 +722,8 @@ def parallel_image_processor(
                 xI=array(axes_spacing, dtype='object')  # note specify object to avoid "ragged" warning
             )
 
+    if return_downsampled_path:
+        return return_code, downsampled_path
     return return_code
 
 

@@ -2,8 +2,6 @@ from numpy import zeros, zeros_like, pad, copy, stack, min, max, ndarray, uint8,
 from multiprocessing import Pool
 from functools import partial
 
-from process_images import get_gradient, get_transformation_matrix
-
 from pathlib import Path
 
 from copy import deepcopy
@@ -187,6 +185,7 @@ def get_offsets(
         plane: str,
         verbose=False,
 ):
+    from process_images import get_gradient, get_transformation_matrix
     assert(len(images) > 1)
     assert(plane in {'xy', 'xz', 'yz'})
 
