@@ -1410,8 +1410,6 @@ def main(args):
 
         align_main(align_namespace)
 
-
-
         # if 1 < len(stitched_tif_paths) < 4:
         #     merge_all_channels(
         #         stitched_tif_paths,
