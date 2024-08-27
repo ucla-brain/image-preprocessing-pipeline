@@ -1395,8 +1395,8 @@ def main(args):
             num_threads=8,
             save_singles=False,
             dtype='uint32',
-            dx=(voxel_size_x, voxel_size_x * down_sampling_factor[0] if down_sampling_factor[0] else voxel_size_x),
-            dy=(voxel_size_y, voxel_size_y * down_sampling_factor[1] if down_sampling_factor[1] else voxel_size_y),
+            dx=(voxel_size_x, voxel_size_x * down_sampling_factor[0] if down_sampling_factor else voxel_size_x),
+            dy=(voxel_size_y, voxel_size_y * down_sampling_factor[1] if down_sampling_factor else voxel_size_y),
             dz=(voxel_size_z, voxel_size_z)
         )
 
