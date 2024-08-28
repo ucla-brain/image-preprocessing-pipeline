@@ -16,7 +16,7 @@ from re import compile, match, findall, IGNORECASE, MULTILINE
 from subprocess import check_output, call, Popen, PIPE, CalledProcessError
 from time import time, sleep
 from typing import List, Tuple, Union, LiteralString
-from argparse import RawDescriptionHelpFormatter, ArgumentParser, BooleanOptionalAction
+from argparse import RawDescriptionHelpFormatter, ArgumentParser, BooleanOptionalAction, Namespace
 
 import mpi4py
 import psutil
@@ -42,6 +42,11 @@ from pystripe.core import (batch_filter, imread_tif_raw_png, imsave_tif, MultiPr
 from supplements.cli_interface import (ask_for_a_number_in_range, date_time_now, PrintColors)
 from supplements.tifstack import TifStack, imread_tif_stck
 from tsv.volume import TSVVolume, VExtent
+
+from align_images import main as align_main
+
+# for testing purposes
+# print("Current working directory: ", os.getcwd())
 
 # experiment setup: user needs to set them right
 # AllChannels = [(channel folder name, rgb color)]
@@ -366,7 +371,8 @@ def process_channel(
         print_input_file_names: bool = False,
         timeout: float = None,
         nthreads: int = cpu_count(logical=False),
-        exclude_gpus: list = []
+        exclude_gpus: list = [],
+        enable_axis_correction: bool = False
 ):
     # preprocess each tile as needed using PyStripe --------------------------------------------------------------------
 
@@ -700,7 +706,7 @@ def process_channel(
         for cpu in range(get_cpu_sockets()):
             gpu_semaphore.put(("cpu", virtual_memory().available))
 
-    return_code = parallel_image_processor(
+    return_code, downsampled_subpath = parallel_image_processor(
         source=tsv_volume,
         destination=stitched_tif_path,
         fun=process_img,
@@ -735,7 +741,9 @@ def process_channel(
         progress_bar_name="TSV",
         compression=(compression_method, compression_level) if compression_level > 0 else None,
         resume=continue_process_terastitcher,
-        needed_memory=ram_needed_per_thread * 1024 ** 3 * 8
+        needed_memory=ram_needed_per_thread * 1024 ** 3 * 8,
+        enable_axis_correction=enable_axis_correction,
+        return_downsampled_path=True
     )
     if need_rotation_stitched_tif:
         shape = (shape[0], shape[2], shape[1])
@@ -781,7 +789,7 @@ def process_channel(
         MultiProcessCommandRunner(queue, command).start()
         running_processes += 1
 
-    return stitched_tif_path, shape, running_processes
+    return stitched_tif_path, shape, running_processes, downsampled_subpath
 
 
 def get_transformation_matrix(reference: ndarray, subject: ndarray,
@@ -1289,8 +1297,9 @@ def main(args):
     stitched_tif_paths, channel_volume_shapes = [], []
     queue = Queue()
     running_processes: int = 0
+    downsampled_subpaths = []
     for channel, (file_list, subvolume_depth) in zip(all_channels, files_list):
-        stitched_tif_path, shape, running_processes_addition = process_channel(
+        stitched_tif_path, shape, running_processes_addition, downsampled_subpath = process_channel(
             source_path,
             channel,
             reference_channel if args.stitch_based_on_reference_channel_alignment else channel,
@@ -1329,11 +1338,13 @@ def main(args):
             print_input_file_names=False,  # for debugging only
             timeout=args.timeout,
             nthreads=args.nthreads,
-            exclude_gpus=exclude_gpus
+            exclude_gpus=exclude_gpus,
+            enable_axis_correction=args.enable_axis_correction
         )
         stitched_tif_paths += [stitched_tif_path]
         channel_volume_shapes += [shape]
         running_processes += running_processes_addition
+        downsampled_subpaths += [downsampled_subpath]
     del files_list, file_list
 
     if not channel_volume_shapes.count(channel_volume_shapes[0]) == len(channel_volume_shapes):
@@ -1364,33 +1375,68 @@ def main(args):
                 order_of_colors += channel_color_dict[channel]
 
         # print(stitched_tif_paths, order_of_colors)
-        if 1 < len(stitched_tif_paths) < 4:
-            merge_all_channels(
-                stitched_tif_paths,
-                [0, ] * (len(stitched_tif_paths) - 1),
-                composite_path,
-                order_of_colors=order_of_colors,
-                workers=merge_channels_cores,
-                resume=args.resume,
-                compression=(args.compression_method, args.compression_level) if args.compression_level > 0 else None,
-                right_bit_shifts=None
-            )
-            composite_tif_paths = [composite_path]
-        elif len(stitched_tif_paths) >= 4:
+        # with open("./log.txt", 'w') as f:
+        #     f.write(f"Type: {type(stitched_tif_paths[0])}")
+        #     for a in stitched_tif_paths:
+        #         f.write(str(a) + "\n")
+        #     f.write(f"downsampled path: {downsampled_subpaths}\n")
+        #     f.write(f"composite_path: {composite_path}\n")
+        #     f.write(f"voxel_sizes: {voxel_size_x}, {voxel_size_y}, {voxel_size_z}")
+
+        align_namespace = Namespace(
+            red=(stitched_tif_paths[0], downsampled_subpaths[0]),
+            green=(stitched_tif_paths[1], downsampled_subpaths[1]),
+            blue=(stitched_tif_paths[2], downsampled_subpaths[2]),
+            output=composite_path,
+            write_alignments=True,
+            generate_ims=False,
+            max_iterations=10,
+            reference='red',
+            num_threads=8,
+            save_singles=False,
+            dtype='uint32',
+            dx=(voxel_size_x, voxel_size_x * down_sampling_factor[0] if down_sampling_factor else voxel_size_x),
+            dy=(voxel_size_y, voxel_size_y * down_sampling_factor[1] if down_sampling_factor else voxel_size_y),
+            dz=(voxel_size_z, voxel_size_z)
+        )
+
+        if len(stitched_tif_paths) >= 4:
             p_log(f"{PrintColors.WARNING}"
                   f"Warning: since number of channels are more than 3 merging the first 3 channels only."
                   f"{PrintColors.ENDC}")
-            merge_all_channels(
-                stitched_tif_paths[0:3],
-                [0, ] * 3,
-                composite_path,
-                order_of_colors=order_of_colors,
-                workers=merge_channels_cores,
-                resume=args.resume,
-                compression=(args.compression_method, args.compression_level) if args.compression_level > 0 else None,
-                right_bit_shifts=None
-            )
-            composite_tif_paths = [composite_path] + stitched_tif_paths[3:]
+            composite_tif_paths = [composite_path / "original/RGB"] + stitched_tif_paths[3:]
+        else:
+            composite_tif_paths = [composite_path / "original/RGB"]
+
+        align_main(align_namespace)
+
+        # if 1 < len(stitched_tif_paths) < 4:
+        #     merge_all_channels(
+        #         stitched_tif_paths,
+        #         [0, ] * (len(stitched_tif_paths) - 1),
+        #         composite_path,
+        #         order_of_colors=order_of_colors,
+        #         workers=merge_channels_cores,
+        #         resume=args.resume,
+        #         compression=(args.compression_method, args.compression_level) if args.compression_level > 0 else None,
+        #         right_bit_shifts=None
+        #     )
+        #     composite_tif_paths = [composite_path]
+        # elif len(stitched_tif_paths) >= 4:
+        #     p_log(f"{PrintColors.WARNING}"
+        #           f"Warning: since number of channels are more than 3 merging the first 3 channels only."
+        #           f"{PrintColors.ENDC}")
+        #     merge_all_channels(
+        #         stitched_tif_paths[0:3],
+        #         [0, ] * 3,
+        #         composite_path,
+        #         order_of_colors=order_of_colors,
+        #         workers=merge_channels_cores,
+        #         resume=args.resume,
+        #         compression=(args.compression_method, args.compression_level) if args.compression_level > 0 else None,
+        #         right_bit_shifts=None
+        #     )
+        #     composite_tif_paths = [composite_path] + stitched_tif_paths[3:]
 
     # Imaris File Conversion :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
@@ -1665,4 +1711,6 @@ if __name__ == '__main__':
                         help="gpu indices that start from 0 and needs to be excluded.")
     parser.add_argument("--vram_mem_fraction_gpu0", required=False, type=float, default=1.0,
                         help="reduce the memory usage for GPU0 so the computer remain responsive.")
+    parser.add_argument("--enable_axis_correction", default=False, action=BooleanOptionalAction,
+                        help="include to automatically flip axes if necessary when processing .ims files")
     main(parser.parse_args())

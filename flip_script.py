@@ -24,7 +24,6 @@ def flip_paired_image(path_to_image1: Path, path_to_image2: Path, axis=[False, F
     if path_to_image1.samefile(path_to_image2):
         return flip_single_image(path_to_image1, path_to_image2, axis=axis)
 
-
     img1 = imread(path_to_image1.absolute())
     img2 = imread(path_to_image2.absolute())
     if axis[0]:
