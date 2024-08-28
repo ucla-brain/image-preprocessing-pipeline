@@ -1404,12 +1404,12 @@ def main(args):
             p_log(f"{PrintColors.WARNING}"
                   f"Warning: since number of channels are more than 3 merging the first 3 channels only."
                   f"{PrintColors.ENDC}")
-            composite_tif_paths = [composite_path] + stitched_tif_paths[3:]
+            composite_tif_paths = [composite_path / "original/RGB"] + stitched_tif_paths[3:]
         else:
-            composite_tif_paths = [composite_path]
+            composite_tif_paths = [composite_path / "original/RGB"]
 
         align_main(align_namespace)
-    
+
         # if 1 < len(stitched_tif_paths) < 4:
         #     merge_all_channels(
         #         stitched_tif_paths,
