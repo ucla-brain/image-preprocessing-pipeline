@@ -266,8 +266,7 @@ def main(args: Namespace):
 
         if args.use_soma_info_as_name:
             row = swc_df.loc[0]
-            output_file = output_file.parent / (f'[{row.x:08.1f},{row.y:08.1f},{row.z:08.1f}]-r={row.radius:04.1f}' +
-                                                output_file.suffix)
+            output_file = output_file.parent / (f'x{row.x:.0f}-y{row.y:.0f}-z{row.z:.0f}' + output_file.suffix)
 
         duplicated_count = swc_df.drop(columns=['id', 'type', 'radius', 'parent_id']).duplicated().sum()
         if duplicated_count > 0:
@@ -360,9 +359,9 @@ if __name__ == '__main__':
                         help="Path folder containing all swc or eswc files.")
     parser.add_argument("--output", "-o", type=str, required=False,
                         help="Output folder for converted files.")
-    parser.add_argument("--input_extension", "-ie", type=str, required=False, default="eswc",
-                        help="Input extension options are eswc, swc, and apo. Default is eswc.")
-    parser.add_argument("--output_extension", "-oe", type=str, required=False,
+    parser.add_argument("--input_extension", "-ie", type=str, required=False, default="swc",
+                        help="Input extension options are eswc, swc, and apo. Default is swc.")
+    parser.add_argument("--output_extension", "-oe", type=str, required=False, default="swc",
                         help="Output extension options are eswc, swc and seed. "
                              "Default is swc if input_extension is eswc and vice versa. "
                              "Apo files can be converted to swc and seed. "
