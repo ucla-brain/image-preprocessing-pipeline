@@ -87,7 +87,7 @@ def get_surface_meshes(surfaces: Path):
         if not obj_file.exists():
             convert_wrl_to_obj(wrl_file, obj_file)
         obj_mesh = load_mesh(obj_file)
-        print([obj_mesh.center])
+        print(f"obj: {obj_file.name} --> center: {obj_mesh.center}")
         surface_meshes += [DotDict({
             'file_name': obj_file.name,
             'mesh': obj_mesh
