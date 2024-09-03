@@ -168,6 +168,8 @@ def main(args: Namespace):
     if args.fnt:
         file_txt_sorted_tif_list = tif_2d_folder / "files.txt"
         files = list(tif_2d_folder.glob("*.tif"))
+        if len(files) == 0:
+            files = list(tif_2d_folder.glob("*.tiff"))
         with open(file_txt_sorted_tif_list, "w") as f:
             f.write("\n".join(natural_sorted(list(map(str, files)))))
         command = [
