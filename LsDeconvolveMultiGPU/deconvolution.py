@@ -3,7 +3,8 @@ from tifffile import imwrite, imread
 from scipy.optimize import fsolve
 import scipy.special as sp
 from scipy.integrate import quad
-import numpy as np
+from numpy import real, imag, array, ndarray, zeros, flip, sum
+
 import subprocess
 import math
 import cmath
@@ -15,10 +16,10 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
 def complex_quadrature(func, a, b, **kwargs):
     def real_func(x):
-        return np.real(func(x))
+        return real(func(x))
 
     def imag_func(x):
-        return np.imag(func(x))
+        return imag(func(x))
 
     real_integral = quad(real_func, a, b, **kwargs)
     imag_integral = quad(imag_func, a, b, **kwargs)
@@ -136,8 +137,8 @@ def determine_psf_size(
         return ls_psf_eq(
             0, 0, x, numerical_aperture, refractive_index, lambda_ex, lambda_em, numerical_aperture_ls) - half_max
 
-    full_half_with_maxima_xy = 2 * abs(fsolve(fxy, np.array([resolution_xy/2], dtype='single'))[0])
-    full_half_with_maxima_z = 2 * abs(fsolve(fz, np.array([resolution_z/2], dtype='single'))[0])
+    full_half_with_maxima_xy = 2 * abs(fsolve(fxy, array([resolution_xy/2], dtype='single'))[0])
+    full_half_with_maxima_z = 2 * abs(fsolve(fz, array([resolution_z/2], dtype='single'))[0])
 
     nxy = math.ceil(grid_size_xy * full_half_with_maxima_xy / dxy_psf)
     nz = math.ceil(grid_size_z * full_half_with_maxima_z / dz)
@@ -158,7 +159,7 @@ def sample_psf(
         print(f'function sample_psf: nxy is {nxy} and nz is {nz}, but must be odd!')
         raise RuntimeError
 
-    psf = np.zeros(
+    psf = zeros(
         [(nz - 1) // 2 + 1, (nxy - 1) // 2 + 1, (nxy - 1) // 2 + 1],
         dtype='single')
 
@@ -173,17 +174,17 @@ def sample_psf(
     psf = mirror8(psf)
 
     # normalize psf to integral one
-    psf = psf / np.sum(psf)
+    psf = psf / sum(psf)
     return psf
 
 
 def mirror8(psf_quadrant):
     """mirrors the content of the first quadrant to all other quadrants to obtain the complete PSF
     """
-    sx, sy, sz = np.array(psf_quadrant.shape, dtype='int') * 2 - 1
-    cx, cy, cz = np.array([sx, sy, sz]) // 2
+    sx, sy, sz = array(psf_quadrant.shape, dtype='int') * 2 - 1
+    cx, cy, cz = array([sx, sy, sz]) // 2
 
-    result = np.zeros([sx, sy, sz], dtype='single')
+    result = zeros([sx, sy, sz], dtype='single')
     result[cx:sx, cy:sy, cz:sz] = psf_quadrant
     result[cx:sx, 0:cy + 1, cz:sz] = flip_3d(psf_quadrant, 0, 1, 0)
     result[0:cx + 1, 0:cy + 1, cz:sz] = flip_3d(psf_quadrant, 1, 1, 0)
@@ -198,30 +199,21 @@ def mirror8(psf_quadrant):
 def flip_3d(data, x, y, z):
     result = data
     if x:
-        result = np.flip(result, axis=0)
+        result = flip(result, axis=0)
     if y:
-        result = np.flip(result, axis=1)
+        result = flip(result, axis=1)
     if z:
-        result = np.flip(result, axis=2)
+        result = flip(result, axis=2)
     return result
 
 
 def new_deconvolution(
-        input_path: Union[Path, str],
-        output_path: Union[Path, str],
+        input_img: ndarray,
         psf,
-        dxy_psf,
-        convert_ims: bool = False
-):
-    if type(input_path) == str:
-        input_path = Path(input_path)
-    if type(output_path) == str:
-        output_path = Path(output_path)
-
-    vol = imread(input_path.absolute())
-
-    result = decon(
-        vol,
+        dxy_psf
+) -> ndarray:
+    output_img = decon(
+        input_img,
         psf,  # '/mnt/md0/psf_ex642_em680.tif',  #
         n_iters=9,  # int: Number of iterations, by default 10
         # fpattern='*.tif',  # str: used to filter files in a directory, by default "*.tif"
@@ -255,16 +247,9 @@ def new_deconvolution(
         # max_otf_size=60000,  # int: Make sure OTF is smaller than this many bytes.
         # # Deconvolution may fail if the OTF is larger than 60KB (default: 60000)
     )
-    imwrite(output_path, result)
 
-    if convert_ims:
-        subprocess.call(
-       r"wine "
-            r"./imaris/ImarisConvertiv.exe "
-            r"-i /mnt/md0/hpc_ex642_em680_04_04_1_deconvolved.tif "
-            r"-o /mnt/md0/hpc_ex642_em680_04_04_1_deconvolved.ims",
-            shell=True
-        )
+    return output_img
+
 
 #
 # def deconvolution():
@@ -357,8 +342,8 @@ def main():
     # psf = psf.flatten()
     # for elem in zip(PSF, psf):
     #     print(f"{elem[0]:.4f}, {elem[1]:.4f}")
-    deconvolution()
-
+    # deconvolution()
+    pass
 
 
 if __name__ == "__main__":

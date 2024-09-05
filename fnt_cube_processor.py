@@ -42,7 +42,9 @@ def process_cube(
         need_destripe: bool = False,
         need_gaussian: bool = False,
         need_video: bool = False,
-        need_deconvolution: bool = False
+        need_deconvolution: bool = False,
+        psf=None,                           # required iff need_deconvolution=True
+        dxy_psf=None                        # required iff need_deconvolution=True
 ):
     return_code = 0
     if not output_file.exists():
@@ -61,21 +63,16 @@ def process_cube(
                     img = img.astype(float32)
                 gaussian(img, 1, output=img)
                 img = img.astype(dtype)
-            write(filename=output_file.__str__(), data=img, header=header, compression_level=1)
             if need_deconvolution:
-                psf, dxy_psf, full_half_with_maxima_xy, full_half_with_maxima_z = generate_psf(
-                     dxy=422.0,
-                     f_cylinder_lens=240.0,
-                     slit_width=12.0,
-                 )
-                # TODO: FIX THIS
-                new_deconvolution(
-                    input_path=None,
-                    output_path=None,
-                    psf=psf,
-                    dxy_psf=dxy_psf,
-                    convert_ims=False
-                )
+                if psf is None or dxy_psf is None:
+                    print("psf or dxy_psf is not provided for deconvolution; skipping this step...")
+                else:
+                    img = new_deconvolution(
+                        input_img=img,
+                        psf=psf,
+                        dxy_psf=dxy_psf,
+                    )
+            write(filename=output_file.__str__(), data=img, header=header, compression_level=1)
             if need_video:
                 input_file = output_file
         if need_video:
@@ -155,3 +152,10 @@ if __name__ == '__main__':
                         default=8,
                         help="Number of thread per GPU.")
     main(parser.parse_args())
+
+    # psf, dxy_psf, full_half_with_maxima_xy, full_half_with_maxima_z = generate_psf(
+    #     dxy=422.0,
+    #     f_cylinder_lens=240.0,
+    #     slit_width=12.0,
+    # )
+
