@@ -8,6 +8,8 @@ import subprocess
 import math
 import cmath
 import os
+from pathlib import Path
+from typing import Union
 os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
 
@@ -204,24 +206,31 @@ def flip_3d(data, x, y, z):
     return result
 
 
-def deconvolution():
-    psf, dxy_psf, full_half_with_maxima_xy, full_half_with_maxima_z = generate_psf(
-        dxy=422.0,
-        f_cylinder_lens=240.0,
-        slit_width=12.0,
-    )
-    vol = imread('/mnt/md0/hpc_ex642_em680_04_04_1.tif')
+def new_deconvolution(
+        input_path: Union[Path, str],
+        output_path: Union[Path, str],
+        psf,
+        dxy_psf,
+        convert_ims: bool = False
+):
+    if type(input_path) == str:
+        input_path = Path(input_path)
+    if type(output_path) == str:
+        output_path = Path(output_path)
+
+    vol = imread(input_path.absolute())
+
     result = decon(
         vol,
         psf,  # '/mnt/md0/psf_ex642_em680.tif',  #
         n_iters=9,  # int: Number of iterations, by default 10
         # fpattern='*.tif',  # str: used to filter files in a directory, by default "*.tif"
-        dzdata=1000.0/1000.0,  # float: Z-step size of data, by default 0.5 um
-        dxdata=422.0/1000.0,  # float: XY pixel size of data, by default 0.1 um
-        dzpsf=1000.0/1000.0,  # float: Z-step size of the OTF, by default 0.1 um
-        dxpsf=dxy_psf/1000.0,  # float: XY pixel size of the OTF, by default 0.1 um
+        dzdata=1000.0 / 1000.0,  # float: Z-step size of data, by default 0.5 um
+        dxdata=422.0 / 1000.0,  # float: XY pixel size of data, by default 0.1 um
+        dzpsf=1000.0 / 1000.0,  # float: Z-step size of the OTF, by default 0.1 um
+        dxpsf=dxy_psf / 1000.0,  # float: XY pixel size of the OTF, by default 0.1 um
         background=115,  # int or 'auto': User-supplied background to subtract.
-                         # If 'auto', the median value of the last Z plane will be used as background. by default 80
+        # If 'auto', the median value of the last Z plane will be used as background. by default 80
         # rotate=0.0,
         # # float: Rotation angle; if not 0.0 then rotation will be performed around Y axis after deconvolution, by default 0
         # deskew=0.0,
@@ -246,32 +255,86 @@ def deconvolution():
         # max_otf_size=60000,  # int: Make sure OTF is smaller than this many bytes.
         # # Deconvolution may fail if the OTF is larger than 60KB (default: 60000)
     )
-    imwrite('/mnt/md0/hpc_ex642_em680_04_04_1_deconvolved.tif', result)
-    subprocess.call(
-        r"wine "
-        r"./imaris/ImarisConvertiv.exe "
-        r"-i /mnt/md0/hpc_ex642_em680_04_04_1_deconvolved.tif "
-        r"-o /mnt/md0/hpc_ex642_em680_04_04_1_deconvolved.ims",
-        shell=True
-    )
+    imwrite(output_path, result)
 
-    # from pydecon.decon import richardson_lucy
-    # import cupy as cp
-    # psf = cp.asarray(psf)
-    # result = richardson_lucy(vol, psf, iterations=9)
+    if convert_ims:
+        subprocess.call(
+       r"wine "
+            r"./imaris/ImarisConvertiv.exe "
+            r"-i /mnt/md0/hpc_ex642_em680_04_04_1_deconvolved.tif "
+            r"-o /mnt/md0/hpc_ex642_em680_04_04_1_deconvolved.ims",
+            shell=True
+        )
 
-    # import tensorflow as tf
-    # from flowdec import restoration as tfd_restoration
-    # from flowdec import data as fd_data
-    # algo = tfd_restoration.RichardsonLucyDeconvolver(n_dims=3).initialize()
-    # result = algo.run(
-    #     fd_data.Acquisition(data=vol, kernel=psf),
-    #     niter=9,
-    #     #session_config=tf.ConfigProto(device_count={'GPU': 0})
-    # )
+#
+# def deconvolution():
+#     psf, dxy_psf, full_half_with_maxima_xy, full_half_with_maxima_z = generate_psf(
+#         dxy=422.0,
+#         f_cylinder_lens=240.0,
+#         slit_width=12.0,
+#     )
+#     vol = imread('/mnt/md0/hpc_ex642_em680_04_04_1.tif')
+#     result = decon(
+#         vol,
+#         psf,  # '/mnt/md0/psf_ex642_em680.tif',  #
+#         n_iters=9,  # int: Number of iterations, by default 10
+#         # fpattern='*.tif',  # str: used to filter files in a directory, by default "*.tif"
+#         dzdata=1000.0/1000.0,  # float: Z-step size of data, by default 0.5 um
+#         dxdata=422.0/1000.0,  # float: XY pixel size of data, by default 0.1 um
+#         dzpsf=1000.0/1000.0,  # float: Z-step size of the OTF, by default 0.1 um
+#         dxpsf=dxy_psf/1000.0,  # float: XY pixel size of the OTF, by default 0.1 um
+#         background=115,  # int or 'auto': User-supplied background to subtract.
+#                          # If 'auto', the median value of the last Z plane will be used as background. by default 80
+#         # rotate=0.0,
+#         # # float: Rotation angle; if not 0.0 then rotation will be performed around Y axis after deconvolution, by default 0
+#         # deskew=0.0,
+#         # # float: Deskew angle. If not 0.0 then deskewing will be performed before deconvolution, by default 0
+#         # width=0,  # int: If deskewed, the output image's width, by default 0 (do not crop)
+#         # shift=0,  # int: If deskewed, the output image's extra shift in X (positive->left), by default 0
+#         # pad_val=0.0,  # float: Value with which to pad image when deskewing, by default 0.0
+#         # save_deskewed=False,  # bool: Save deskewed raw data as well as deconvolution result, by default False
+#         napodize=8,  # int: Number of pixels to soften edge with, by default 15
+#         # nz_blend=27,  # int: Number of top and bottom sections to blend in to reduce axial ringing, by default 0
+#         # dup_rev_z=True,  # bool: Duplicate reversed stack prior to decon to reduce axial ringing, by default False
+#
+#         wavelength=642,  # int: Emission wavelength in nm (default: {520})
+#         na=0.4,  # float: Numerical Aperture (default: {1.25})
+#         nimm=1.52,  # float: Refractive index of immersion medium (default: {1.3})
+#         # otf_bgrd=None,  # int, None: Background to subtract. "None" = autodetect. (default: {None})
+#         # krmax=0,
+#         # # int: Pixels outside this limit will be zeroed (overwriting estimated value from NA and NIMM) (default: {0})
+#         # fixorigin=8,
+#         # # int: for all kz, extrapolate using pixels kr=1 to this pixel to get value for kr=0 (default: {10})
+#         # cleanup_otf=True,  # bool: Clean-up outside OTF support (default: {False})
+#         # max_otf_size=60000,  # int: Make sure OTF is smaller than this many bytes.
+#         # # Deconvolution may fail if the OTF is larger than 60KB (default: 60000)
+#     )
+#     imwrite('/mnt/md0/hpc_ex642_em680_04_04_1_deconvolved.tif', result)
+#     subprocess.call(
+#         r"wine "
+#         r"./imaris/ImarisConvertiv.exe "
+#         r"-i /mnt/md0/hpc_ex642_em680_04_04_1_deconvolved.tif "
+#         r"-o /mnt/md0/hpc_ex642_em680_04_04_1_deconvolved.ims",
+#         shell=True
+#     )
+#
+#     # from pydecon.decon import richardson_lucy
+#     # import cupy as cp
+#     # psf = cp.asarray(psf)
+#     # result = richardson_lucy(vol, psf, iterations=9)
+#
+#     # import tensorflow as tf
+#     # from flowdec import restoration as tfd_restoration
+#     # from flowdec import data as fd_data
+#     # algo = tfd_restoration.RichardsonLucyDeconvolver(n_dims=3).initialize()
+#     # result = algo.run(
+#     #     fd_data.Acquisition(data=vol, kernel=psf),
+#     #     niter=9,
+#     #     #session_config=tf.ConfigProto(device_count={'GPU': 0})
+#     # )
 
 
-if __name__ == "__main__":
+def main():
     # My_PSF = generate_psf(
     #     lambda_em=488,
     #     lambda_ex=525
@@ -295,3 +358,8 @@ if __name__ == "__main__":
     # for elem in zip(PSF, psf):
     #     print(f"{elem[0]:.4f}, {elem[1]:.4f}")
     deconvolution()
+
+
+
+if __name__ == "__main__":
+    main()

@@ -14,7 +14,7 @@ from os.path import exists, isdir, join
 from os import listdir, system
 
 from supplements.tifstack import TifStack
-from argparse import ArgumentParser, Namespace
+from argparse import ArgumentParser, Namespace, RawDescriptionHelpFormatter
 
 from tqdm import tqdm
 
@@ -713,7 +713,9 @@ def main(args: Namespace):
 
 
 if __name__ == '__main__':
-    parser = ArgumentParser("Align images")
+    parser = ArgumentParser(description="Align 3D images using iterative search with Python-OpenCV\n\n",
+                            formatter_class=RawDescriptionHelpFormatter,
+                            epilog="Developed by Aidan Jan, 2024, Hongwei Dong Lab (B.R.A.I.N) at UCLA\n")
     parser.add_help = True
     parser.add_argument('--red', '-r', nargs=2, default=[None, None],
                         help='Input file paths for the red original and downsampled images (in that order).')

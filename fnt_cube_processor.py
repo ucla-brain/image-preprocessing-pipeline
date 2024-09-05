@@ -16,6 +16,9 @@ from tqdm import tqdm
 from pystripe.core import (filter_streaks, is_uniform_2d, MultiProcessQueueRunner, progress_manager, cuda_device_count,
                            cuda_get_device_properties, USE_PYTORCH)
 
+from LsDeconvolveMultiGPU.deconvolution import new_deconvolution, generate_psf
+
+
 
 def make_a_list_of_input_output_paths(args):
     input_folder = Path(args.input)
@@ -38,7 +41,8 @@ def process_cube(
         output_file: Path,
         need_destripe: bool = False,
         need_gaussian: bool = False,
-        need_video: bool = False
+        need_video: bool = False,
+        need_deconvolution: bool = False
 ):
     return_code = 0
     if not output_file.exists():
@@ -58,6 +62,20 @@ def process_cube(
                 gaussian(img, 1, output=img)
                 img = img.astype(dtype)
             write(filename=output_file.__str__(), data=img, header=header, compression_level=1)
+            if need_deconvolution:
+                psf, dxy_psf, full_half_with_maxima_xy, full_half_with_maxima_z = generate_psf(
+                     dxy=422.0,
+                     f_cylinder_lens=240.0,
+                     slit_width=12.0,
+                 )
+                # TODO: FIX THIS
+                new_deconvolution(
+                    input_path=None,
+                    output_path=None,
+                    psf=psf,
+                    dxy_psf=dxy_psf,
+                    convert_ims=False
+                )
             if need_video:
                 input_file = output_file
         if need_video:
