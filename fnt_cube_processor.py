@@ -8,7 +8,8 @@ from subprocess import call
 
 from nrrd import read, write
 import psutil
-from numpy import rot90, float32, ndarray, swapaxes
+from numpy import rot90, float32, iinfo, clip
+from numpy import dtype as np_d_type
 from psutil import cpu_count
 from skimage.filters import gaussian
 from tqdm import tqdm
@@ -34,9 +35,9 @@ def make_a_list_of_input_output_paths(args):
             slit_width=args.slit_width,
         )
     psf = rot90(psf, k=1, axes=(0, 2))
-    print(output_folder)
+    # print(output_folder)
     psf_filepath = (output_folder / 'temp' / 'psf.tif').__str__()
-    print(psf_filepath)
+    # print(psf_filepath)
     (output_folder / r"temp").mkdir(parents=True, exist_ok=True)
     imwrite(psf_filepath, psf)
 
@@ -138,6 +139,7 @@ def process_cube(
                 if deconvolution_args is None:
                     print("deconvolution arguments are not provided for deconvolution; skipping this step...")
                 else:
+                    # os.environ["CUDA_VISIBLE_DEVICES"] = "1"
                     img = decon(
                         img,
                         deconvolution_args['otf'],  # '/mnt/md0/psf_ex642_em680.tif',  #
@@ -173,7 +175,10 @@ def process_cube(
                         # cleanup_otf=True,  # bool: Clean-up outside OTF support (default: {False})
                         # max_otf_size=60000,  # int: Make sure OTF is smaller than this many bytes.
                         # # Deconvolution may fail if the OTF is larger than 60KB (default: 60000)
-                    ).astype(dtype)
+                    )
+                    if img.dtype != dtype and np_d_type(dtype).kind in ("u", "i"):
+                        clip(img, iinfo(dtype).min, iinfo(dtype).max, out=img)
+                        img = img.astype(dtype)
 
             write(filename=output_file.__str__(), data=img, header=header, compression_level=1)
             if need_video:
@@ -253,6 +258,8 @@ if __name__ == '__main__':
                         help="Convert cubes to video format. Default is --no_video.")
     parser.add_argument("--use_gpu", default=False, action=BooleanOptionalAction,
                         help="Use gpu acceleration for destriping. Default is --no_use_gpu.")
+    parser.add_argument("--exclude_gpus", default=False,  # action=List[int],
+                        help="Exclude GPUs during deconvolution.")
     parser.add_argument("--threads_per_gpu", type=int, required=False,
                         default=8,
                         help="Number of thread per GPU.")
