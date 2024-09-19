@@ -22,6 +22,7 @@ from skimage.transform import resize, resize_local_mean
 from tifffile import natural_sorted
 from tqdm import tqdm
 from PIL import Image
+Image.MAX_IMAGE_PIXELS = None
 from pystripe.core import (imread_tif_raw_png, imsave_tif, progress_manager, is_uniform_2d, is_uniform_3d,
                            convert_to_8bit_fun,  convert_to_16bit_fun)
 from supplements.cli_interface import PrintColors, date_time_now
