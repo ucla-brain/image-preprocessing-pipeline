@@ -3,20 +3,23 @@ from tifffile import imwrite, imread
 from scipy.optimize import fsolve
 import scipy.special as sp
 from scipy.integrate import quad
-import numpy as np
+from numpy import real, imag, array, ndarray, zeros, flip, sum
+
 import subprocess
 import math
 import cmath
 import os
+
+from argparse import ArgumentParser
 os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
 
 def complex_quadrature(func, a, b, **kwargs):
     def real_func(x):
-        return np.real(func(x))
+        return real(func(x))
 
     def imag_func(x):
-        return np.imag(func(x))
+        return imag(func(x))
 
     real_integral = quad(real_func, a, b, **kwargs)
     imag_integral = quad(imag_func, a, b, **kwargs)
@@ -134,8 +137,8 @@ def determine_psf_size(
         return ls_psf_eq(
             0, 0, x, numerical_aperture, refractive_index, lambda_ex, lambda_em, numerical_aperture_ls) - half_max
 
-    full_half_with_maxima_xy = 2 * abs(fsolve(fxy, np.array([resolution_xy/2], dtype='single'))[0])
-    full_half_with_maxima_z = 2 * abs(fsolve(fz, np.array([resolution_z/2], dtype='single'))[0])
+    full_half_with_maxima_xy = 2 * abs(fsolve(fxy, array([resolution_xy/2], dtype='single'))[0])
+    full_half_with_maxima_z = 2 * abs(fsolve(fz, array([resolution_z/2], dtype='single'))[0])
 
     nxy = math.ceil(grid_size_xy * full_half_with_maxima_xy / dxy_psf)
     nz = math.ceil(grid_size_z * full_half_with_maxima_z / dz)
@@ -156,7 +159,7 @@ def sample_psf(
         print(f'function sample_psf: nxy is {nxy} and nz is {nz}, but must be odd!')
         raise RuntimeError
 
-    psf = np.zeros(
+    psf = zeros(
         [(nz - 1) // 2 + 1, (nxy - 1) // 2 + 1, (nxy - 1) // 2 + 1],
         dtype='single')
 
@@ -171,17 +174,17 @@ def sample_psf(
     psf = mirror8(psf)
 
     # normalize psf to integral one
-    psf = psf / np.sum(psf)
+    psf = psf / sum(psf)
     return psf
 
 
 def mirror8(psf_quadrant):
     """mirrors the content of the first quadrant to all other quadrants to obtain the complete PSF
     """
-    sx, sy, sz = np.array(psf_quadrant.shape, dtype='int') * 2 - 1
-    cx, cy, cz = np.array([sx, sy, sz]) // 2
+    sx, sy, sz = array(psf_quadrant.shape, dtype='int') * 2 - 1
+    cx, cy, cz = array([sx, sy, sz]) // 2
 
-    result = np.zeros([sx, sy, sz], dtype='single')
+    result = zeros([sx, sy, sz], dtype='single')
     result[cx:sx, cy:sy, cz:sz] = psf_quadrant
     result[cx:sx, 0:cy + 1, cz:sz] = flip_3d(psf_quadrant, 0, 1, 0)
     result[0:cx + 1, 0:cy + 1, cz:sz] = flip_3d(psf_quadrant, 1, 1, 0)
@@ -196,102 +199,47 @@ def mirror8(psf_quadrant):
 def flip_3d(data, x, y, z):
     result = data
     if x:
-        result = np.flip(result, axis=0)
+        result = flip(result, axis=0)
     if y:
-        result = np.flip(result, axis=1)
+        result = flip(result, axis=1)
     if z:
-        result = np.flip(result, axis=2)
+        result = flip(result, axis=2)
     return result
 
 
-def deconvolution():
-    psf, dxy_psf, full_half_with_maxima_xy, full_half_with_maxima_z = generate_psf(
-        dxy=422.0,
-        f_cylinder_lens=240.0,
-        slit_width=12.0,
-    )
-    vol = imread('/mnt/md0/hpc_ex642_em680_04_04_1.tif')
-    result = decon(
-        vol,
-        psf,  # '/mnt/md0/psf_ex642_em680.tif',  #
-        n_iters=9,  # int: Number of iterations, by default 10
-        # fpattern='*.tif',  # str: used to filter files in a directory, by default "*.tif"
-        dzdata=1000.0/1000.0,  # float: Z-step size of data, by default 0.5 um
-        dxdata=422.0/1000.0,  # float: XY pixel size of data, by default 0.1 um
-        dzpsf=1000.0/1000.0,  # float: Z-step size of the OTF, by default 0.1 um
-        dxpsf=dxy_psf/1000.0,  # float: XY pixel size of the OTF, by default 0.1 um
-        background=115,  # int or 'auto': User-supplied background to subtract.
-                         # If 'auto', the median value of the last Z plane will be used as background. by default 80
-        # rotate=0.0,
-        # # float: Rotation angle; if not 0.0 then rotation will be performed around Y axis after deconvolution, by default 0
-        # deskew=0.0,
-        # # float: Deskew angle. If not 0.0 then deskewing will be performed before deconvolution, by default 0
-        # width=0,  # int: If deskewed, the output image's width, by default 0 (do not crop)
-        # shift=0,  # int: If deskewed, the output image's extra shift in X (positive->left), by default 0
-        # pad_val=0.0,  # float: Value with which to pad image when deskewing, by default 0.0
-        # save_deskewed=False,  # bool: Save deskewed raw data as well as deconvolution result, by default False
-        napodize=8,  # int: Number of pixels to soften edge with, by default 15
-        # nz_blend=27,  # int: Number of top and bottom sections to blend in to reduce axial ringing, by default 0
-        # dup_rev_z=True,  # bool: Duplicate reversed stack prior to decon to reduce axial ringing, by default False
-
-        wavelength=642,  # int: Emission wavelength in nm (default: {520})
-        na=0.4,  # float: Numerical Aperture (default: {1.25})
-        nimm=1.52,  # float: Refractive index of immersion medium (default: {1.3})
-        # otf_bgrd=None,  # int, None: Background to subtract. "None" = autodetect. (default: {None})
-        # krmax=0,
-        # # int: Pixels outside this limit will be zeroed (overwriting estimated value from NA and NIMM) (default: {0})
-        # fixorigin=8,
-        # # int: for all kz, extrapolate using pixels kr=1 to this pixel to get value for kr=0 (default: {10})
-        # cleanup_otf=True,  # bool: Clean-up outside OTF support (default: {False})
-        # max_otf_size=60000,  # int: Make sure OTF is smaller than this many bytes.
-        # # Deconvolution may fail if the OTF is larger than 60KB (default: 60000)
-    )
-    imwrite('/mnt/md0/hpc_ex642_em680_04_04_1_deconvolved.tif', result)
-    subprocess.call(
-        r"wine "
-        r"./imaris/ImarisConvertiv.exe "
-        r"-i /mnt/md0/hpc_ex642_em680_04_04_1_deconvolved.tif "
-        r"-o /mnt/md0/hpc_ex642_em680_04_04_1_deconvolved.ims",
-        shell=True
-    )
-
-    # from pydecon.decon import richardson_lucy
-    # import cupy as cp
-    # psf = cp.asarray(psf)
-    # result = richardson_lucy(vol, psf, iterations=9)
-
-    # import tensorflow as tf
-    # from flowdec import restoration as tfd_restoration
-    # from flowdec import data as fd_data
-    # algo = tfd_restoration.RichardsonLucyDeconvolver(n_dims=3).initialize()
-    # result = algo.run(
-    #     fd_data.Acquisition(data=vol, kernel=psf),
-    #     niter=9,
-    #     #session_config=tf.ConfigProto(device_count={'GPU': 0})
-    # )
-
-
 if __name__ == "__main__":
-    # My_PSF = generate_psf(
-    #     lambda_em=488,
-    #     lambda_ex=525
-    # )[0]
-    # print(My_PSF.flatten())
-    # imwrite('/home/kmoradi/my_psf_ex642_em680.tif', My_PSF)
-    # subprocess.call(
-    #     r"wine "
-    #     r"./imaris/ImarisConvertiv.exe "
-    #     r"-i /home/kmoradi/my_psf_ex642_em680.tif "
-    #     r"-o /home/kmoradi/my_psf_ex642_em680.ims",
-    #     shell=True
-    # )
-    # PSF = sample_psf()
-    # from tifffile import imread
-    # psf = imread('/mnt/md0/psf_ex642_em680.tif')
-    # img = imread('/mnt/md0/hpc_ex642_em680_04_04.tif')
-    # print(PSF.shape, psf.shape)
-    # PSF = PSF.flatten()
-    # psf = psf.flatten()
-    # for elem in zip(PSF, psf):
-    #     print(f"{elem[0]:.4f}, {elem[1]:.4f}")
-    deconvolution()
+    parser = ArgumentParser()
+    parser.add_argument('--output', '-o', type=str, required=True,
+                        help='output directory psf tif will be written to')
+    parser.add_argument('--lambda_em', '-em', default=642.0, type=float,
+                        help='the wavelength of the emitted light in nm')
+    parser.add_argument('--lambda_ex', '-ex', default=680.0, type=float,
+                        help='the wavelength of the emitted light in nm')
+    parser.add_argument('--numerical_aperture', '-n', default=0.4, type=float,
+                        help='numerical aperture objective of the lens')
+    parser.add_argument('--dxy', '-dx', default=422.0, type=float,
+                        help='voxel size in x and y dimensions in nm (of the camera pixels)')
+    parser.add_argument('--dz', '-dz', default=1000.0, type=float,
+                        help='voxel size in z dimensions in nm (or the z-steps)')
+    parser.add_argument('--refractive_index', '-ri', default=1.52, type=float,
+                        help='the refractive index of immersion medium')
+    parser.add_argument('--f_cylinder_lens', '-f', default=240, type=float,
+                        help='F cylinder lens in mm')
+    parser.add_argument('--slit_width', '-s', default=12.0, type=float,
+                        help='slit aperture width in mm')
+    args = parser.parse_args()
+
+    psf, dxy_psf = generate_psf(
+        lambda_em=args.lambda_em,
+        lambda_ex=args.lambda_ex,
+        numerical_aperture=args.numerical_aperture,
+        dxy=args.dxy,
+        dz=args.dz,
+        refractive_index=args.refractive_index,  # 1.45 of the lens
+        f_cylinder_lens=args.f_cylinder_lens,  # 240
+        slit_width=args.slit_width,
+    )
+
+    imwrite((args.output / 'psf.tif').__str__(), psf)
+    print(f"psf written to {args.output}")
+    print(f"dxy_psf: {dxy_psf}")
