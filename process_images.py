@@ -1341,6 +1341,9 @@ def main(args):
             exclude_gpus=exclude_gpus,
             enable_axis_correction=args.enable_axis_correction
         )
+        # with open("./log.txt", 'a') as f:
+        #     f.write("---------------------------------------\n")
+        #     f.write(f"Stitched_tif_path: {stitched_tif_path}\n")
         stitched_tif_paths += [stitched_tif_path]
         channel_volume_shapes += [shape]
         running_processes += running_processes_addition
@@ -1407,6 +1410,7 @@ def main(args):
             composite_tif_paths = [composite_path / "original/RGB"] + stitched_tif_paths[3:]
         else:
             composite_tif_paths = [composite_path / "original/RGB"]
+
 
         align_main(align_namespace)
 
