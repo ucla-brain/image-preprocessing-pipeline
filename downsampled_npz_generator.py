@@ -22,6 +22,7 @@ from skimage.transform import resize, resize_local_mean
 from tifffile import natural_sorted
 from tqdm import tqdm
 from PIL import Image
+Image.MAX_IMAGE_PIXELS = None
 from pystripe.core import (imread_tif_raw_png, imsave_tif, progress_manager, is_uniform_2d, is_uniform_3d,
                            convert_to_8bit_fun,  convert_to_16bit_fun)
 from supplements.cli_interface import PrintColors, date_time_now
@@ -82,14 +83,17 @@ def gen_npz(downsampled_path, destination, target_voxel, source_voxel, max_proce
     print('target_shape_3d: ' + str(target_shape_3d))
     print('num_images: ' + str(num_images))
     print('target_voxel: ' + str(target_voxel))
-    print('source voxels (x,y,z): ' + str(source_voxel))
-        
+    print('source voxels (z,y,x): ' + str(source_voxel))
+
     files = sorted(downsampled_path.glob("*.tif"))
+    if len(files) == 0:
+        files = sorted(downsampled_path.glob("*.tiff"))
     print(f"Debug: Number of files loaded = {len(files)}") 
     print(f"Debug: path used: {downsampled_path}")
         # Using a ThreadPoolExecutor to read and process files concurrently
     with ThreadPoolExecutor(max_processors) as pool:
         img_stack = list(pool.map(imread_tif_raw_png, tqdm(files, desc="loading", unit="images")))
+        print(img_stack)
         img_stack = dstack(img_stack)
         img_stack = rollaxis(img_stack, -1) 
         print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
