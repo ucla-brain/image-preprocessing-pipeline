@@ -316,5 +316,3 @@ if __name__ == '__main__':
                         default=10,
                         help="int: Number of iterations, by default 10")
     main(parser.parse_args())
-
-# Y:\3D_stitched_LS\20230724_SM230601_05_LS_15x_800z_B5\Ex_488_Em_525_FNT
