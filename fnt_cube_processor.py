@@ -9,7 +9,7 @@ from platform import uname
 import psutil
 from nrrd import read, write
 from numpy import dtype as np_d_type
-from numpy import rot90, float32, iinfo, clip
+from numpy import rot90, float32, iinfo, clip, ndarray
 from psutil import cpu_count
 from pycudadecon import make_otf, decon
 from skimage.filters import gaussian
@@ -50,10 +50,12 @@ def make_a_list_of_input_output_paths(args):
             dxpsf=dxy_psf / 1000.0,
             wavelength=args.wavelength_em,
             na=args.na,
-            nimm=args.nimm
+            nimm=args.nimm,
+            fixorigin=0,
         )
 
         deconvolution_args = make_deconvolution_args(
+            # psf,
             otf_file,
             n_iters=args.n_iters,
             dz_data=args.dz,
@@ -87,6 +89,7 @@ def make_a_list_of_input_output_paths(args):
 
 
 def make_deconvolution_args(
+        # psf: ndarray,
         otf: str,
         n_iters: int = 9,
         dz_data: float = 0.7,
@@ -99,6 +102,7 @@ def make_deconvolution_args(
         nimm: float = 1.42
 ) -> dict:
     return {
+        # 'psf': psf,
         'otf': otf,
         'n_iters': n_iters,
         'dz_data': dz_data,
@@ -176,9 +180,10 @@ def process_cube(
                 if img.dtype != float32:
                     img = img.astype(float32)
                 with suppress_output():
-                    img = decon(
+                    img_decon = decon(
                         img,
-                        deconvolution_args['otf'],  # '/mnt/md0/psf_ex642_em680.tif',  #
+                        deconvolution_args['otf'],
+                        # deconvolution_args['psf'],
                         fpattern=None,  # str: used to filter files in a directory, by default "*.tif"
                         n_iters=deconvolution_args['n_iters'],  # int: Number of iterations, by default 10
                         dzdata=deconvolution_args['dz_data'],  # float: Z-step size of data, by default 0.5 um
@@ -186,30 +191,13 @@ def process_cube(
                         dzpsf=deconvolution_args['dz_psf'],  # float: Z-step size of the OTF, by default 0.1 um
                         dxpsf=deconvolution_args['dxy_psf'],  # float: XY pixel size of the OTF, by default 0.1 um
                         background=deconvolution_args['background'], # int or 'auto': User-supplied background to subtract.
-                        # If 'auto', the median value of the last Z plane will be used as background. by default 80
-                        # rotate=0.0,
-                        # # float: Rotation angle; if not 0.0 then rotation will be performed around Y axis after deconvolution, by default 0
-                        # deskew=0.0,
-                        # # float: Deskew angle. If not 0.0 then deskewing will be performed before deconvolution, by default 0
-                        # width=0,  # int: If deskewed, the output image's width, by default 0 (do not crop)
-                        # shift=0,  # int: If deskewed, the output image's extra shift in X (positive->left), by default 0
-                        # pad_val=0.0,  # float: Value with which to pad image when deskewing, by default 0.0
-                        # save_deskewed=False,  # bool: Save deskewed raw data as well as deconvolution result, by default False
-                        napodize=8,  # int: Number of pixels to soften edge with, by default 15
-                        # nz_blend=27,  # int: Number of top and bottom sections to blend in to reduce axial ringing, by default 0
-                        # dup_rev_z=True,  # bool: Duplicate reversed stack prior to decon to reduce axial ringing, by default False
-
-                        wavelength=deconvolution_args['wavelength_em'],  # 642 int: Emission wavelength in nm (default: {520})
+                        wavelength=deconvolution_args['wavelength_em'],  # int: Emission wavelength in nm
                         na=deconvolution_args['na'],  # float: Numerical Aperture (default: {1.5})
                         nimm=deconvolution_args['nimm'],  # float: Refractive index of immersion medium (default: {1.3})
-                        # otf_bgrd=None,  # int, None: Background to subtract. "None" = autodetect. (default: {None})
-                        # krmax=0,  # int: Pixels outside this limit will be zeroed (overwriting estimated value from NA and NIMM) (default: {0})
-                        # fixorigin=8,
-                        # # int: for all kz, extrapolate using pixels kr=1 to this pixel to get value for kr=0 (default: {10})
-                        # cleanup_otf=True,  # bool: Clean-up outside OTF support (default: {False})
-                        # max_otf_size=60000,  # int: Make sure OTF is smaller than this many bytes.
-                        # # Deconvolution may fail if the OTF is larger than 60KB (default: 60000)
                     )
+                img[0: img_decon.shape[0],
+                    0: img_decon.shape[1],
+                    0: img_decon.shape[2]] = img_decon
                 if gpu_semaphore is not None:
                     gpu_semaphore.put(gpu)
 
@@ -249,7 +237,8 @@ def main(args):
         progress_queue = Queue()
         for _ in range(workers):
             MultiProcessQueueRunner(progress_queue, args_queue,
-                                    gpu_semaphore=gpu_semaphore, fun=process_cube, timeout=None).start()
+                                    gpu_semaphore=gpu_semaphore, fun=process_cube, timeout=None,
+                                    replace_timeout_with_dummy=False).start()
         return_code = progress_manager(progress_queue, workers, num_images, desc="FNT Cube Processor", unit=" cubes")
         args_queue.cancel_join_thread()
         args_queue.close()
