@@ -19,6 +19,7 @@ from shutil import copy
 
 from LsDeconvolveMultiGPU.psf_generation import generate_psf
 from pystripe.core import filter_streaks, is_uniform_2d, is_uniform_3d, MultiProcessQueueRunner, progress_manager
+from subprocess import check_output
 
 
 def make_a_list_of_input_output_paths(args):
@@ -51,9 +52,6 @@ def make_a_list_of_input_output_paths(args):
             na=args.na,
             nimm=args.nimm
         )
-        # otf = imread(otf_file)
-
-        print(f"dxy_psf: {dxy_psf}")
 
         deconvolution_args = make_deconvolution_args(
             otf_file,
@@ -68,33 +66,37 @@ def make_a_list_of_input_output_paths(args):
             nimm=args.nimm
         )
 
-    def output_file(input_file: Path):
-        return {
-            "input_file": input_file,
-            "output_file": (output_folder / input_file.relative_to(input_folder)),
-            "need_destripe": args.destripe,
-            "need_gaussian": args.gaussian,
-            "need_deconvolution": args.deconvolution,
-            "deconvolution_args": deconvolution_args
-        }
+    def get_args(input_file: Path):
+        output_file = output_folder / input_file.relative_to(input_folder)
+        if output_file.exists():
+            return None
+        else:
+            return {
+                "input_file": input_file,
+                "output_file": output_file,
+                "need_destripe": args.destripe,
+                "need_gaussian": args.gaussian,
+                "need_deconvolution": args.deconvolution,
+                "deconvolution_args": deconvolution_args
+            }
 
-    print("Deconvolution args:")
-    print(deconvolution_args)
+    # print("Deconvolution args:")
+    # print(deconvolution_args)
 
-    return tuple(map(output_file, input_folder.rglob("*.nrrd")))
+    return tuple(item for item in map(get_args, input_folder.rglob("*.nrrd")) if item is not None)
 
 
 def make_deconvolution_args(
         otf: str,
         n_iters: int = 9,
-        dz_data: float = 1.0,
-        dx_data: float = 1.0,
-        dz_psf: float = 1.0,
-        dxy_psf: float = 1.0,
+        dz_data: float = 0.7,
+        dx_data: float = 0.7,
+        dz_psf: float = 1.8,
+        dxy_psf: float = 0.2,
         background: int = 0,
-        wavelength_em: int = 642,
+        wavelength_em: int = 525,
         na: float = 0.4,
-        nimm: float = 1.52
+        nimm: float = 1.42
 ) -> dict:
     return {
         'otf': otf,
@@ -144,78 +146,94 @@ def process_cube(
         need_gaussian: bool = False,
         need_deconvolution: bool = False,
         deconvolution_args: dict = None,
+        gpu_semaphore: Queue = None
 ):
     return_code = 0
-    if not output_file.exists():
-        output_file.parent.mkdir(exist_ok=True, parents=True)
-        if need_destripe or need_gaussian or need_deconvolution:
-            img, header = read(input_file.__str__())
-            dtype = img.dtype
+    output_file.parent.mkdir(exist_ok=True, parents=True)
+    if need_destripe or need_gaussian or need_deconvolution:
+        img, header = read(input_file.__str__())
+        dtype = img.dtype
+        if is_uniform_3d(img):
+            copy(input_file, output_file)
+        else:
+            if need_gaussian:
+                if img.dtype != float32:
+                    img = img.astype(float32)
+                gaussian(img, .5, output=img)
 
-            if is_uniform_3d(img):
-                copy(input_file, output_file)
-            else:
-                if need_gaussian:
-                    if img.dtype != float32:
-                        img = img.astype(float32)
-                    gaussian(img, .5, output=img)
+            if need_destripe:
+                img = rot90(img, k=1, axes=(1, 2))
+                for idx in range(0, img.shape[0], 1):
+                    if not is_uniform_2d(img[idx]):
+                        img[idx] = filter_streaks(img[idx], sigma=(1, 1), wavelet="db9", bidirectional=True)
+                img = rot90(img, k=-1, axes=(1, 2))
 
-                if need_destripe:
-                    img = rot90(img, k=1, axes=(1, 2))
-                    for idx in range(0, img.shape[0], 1):
-                        if not is_uniform_2d(img[idx]):
-                            img[idx] = filter_streaks(img[idx], sigma=(1, 1), wavelet="db9", bidirectional=True)
-                    img = rot90(img, k=-1, axes=(1, 2))
+            if need_deconvolution and deconvolution_args is not None:
+                gpu = 1
+                if gpu_semaphore is not None:
+                    gpu = gpu_semaphore.get(block=True)
+                os.environ["CUDA_VISIBLE_DEVICES"] = f"{gpu}"
+                if img.dtype != float32:
+                    img = img.astype(float32)
+                with suppress_output():
+                    img = decon(
+                        img,
+                        deconvolution_args['otf'],  # '/mnt/md0/psf_ex642_em680.tif',  #
+                        fpattern=None,  # str: used to filter files in a directory, by default "*.tif"
+                        n_iters=deconvolution_args['n_iters'],  # int: Number of iterations, by default 10
+                        dzdata=deconvolution_args['dz_data'],  # float: Z-step size of data, by default 0.5 um
+                        dxdata=deconvolution_args['dx_data'],  # float: XY pixel size of data, by default 0.1 um
+                        dzpsf=deconvolution_args['dz_psf'],  # float: Z-step size of the OTF, by default 0.1 um
+                        dxpsf=deconvolution_args['dxy_psf'],  # float: XY pixel size of the OTF, by default 0.1 um
+                        background=deconvolution_args['background'], # int or 'auto': User-supplied background to subtract.
+                        # If 'auto', the median value of the last Z plane will be used as background. by default 80
+                        # rotate=0.0,
+                        # # float: Rotation angle; if not 0.0 then rotation will be performed around Y axis after deconvolution, by default 0
+                        # deskew=0.0,
+                        # # float: Deskew angle. If not 0.0 then deskewing will be performed before deconvolution, by default 0
+                        # width=0,  # int: If deskewed, the output image's width, by default 0 (do not crop)
+                        # shift=0,  # int: If deskewed, the output image's extra shift in X (positive->left), by default 0
+                        # pad_val=0.0,  # float: Value with which to pad image when deskewing, by default 0.0
+                        # save_deskewed=False,  # bool: Save deskewed raw data as well as deconvolution result, by default False
+                        napodize=8,  # int: Number of pixels to soften edge with, by default 15
+                        # nz_blend=27,  # int: Number of top and bottom sections to blend in to reduce axial ringing, by default 0
+                        # dup_rev_z=True,  # bool: Duplicate reversed stack prior to decon to reduce axial ringing, by default False
 
-                if need_deconvolution and deconvolution_args is not None:
-                    os.environ["CUDA_VISIBLE_DEVICES"] = "1"
-                    if img.dtype != float32:
-                        img = img.astype(float32)
-                    with suppress_output():
-                        img = decon(
-                            img,
-                            deconvolution_args['otf'],  # '/mnt/md0/psf_ex642_em680.tif',  #
-                            fpattern=None,  # str: used to filter files in a directory, by default "*.tif"
-                            n_iters=deconvolution_args['n_iters'],  # int: Number of iterations, by default 10
-                            dzdata=deconvolution_args['dz_data'],  # float: Z-step size of data, by default 0.5 um
-                            dxdata=deconvolution_args['dx_data'],  # float: XY pixel size of data, by default 0.1 um
-                            dzpsf=deconvolution_args['dz_psf'],  # float: Z-step size of the OTF, by default 0.1 um
-                            dxpsf=deconvolution_args['dxy_psf'],  # float: XY pixel size of the OTF, by default 0.1 um
-                            background=deconvolution_args['background'], # int or 'auto': User-supplied background to subtract.
-                            # If 'auto', the median value of the last Z plane will be used as background. by default 80
-                            # rotate=0.0,
-                            # # float: Rotation angle; if not 0.0 then rotation will be performed around Y axis after deconvolution, by default 0
-                            # deskew=0.0,
-                            # # float: Deskew angle. If not 0.0 then deskewing will be performed before deconvolution, by default 0
-                            # width=0,  # int: If deskewed, the output image's width, by default 0 (do not crop)
-                            # shift=0,  # int: If deskewed, the output image's extra shift in X (positive->left), by default 0
-                            # pad_val=0.0,  # float: Value with which to pad image when deskewing, by default 0.0
-                            # save_deskewed=False,  # bool: Save deskewed raw data as well as deconvolution result, by default False
-                            napodize=8,  # int: Number of pixels to soften edge with, by default 15
-                            # nz_blend=27,  # int: Number of top and bottom sections to blend in to reduce axial ringing, by default 0
-                            # dup_rev_z=True,  # bool: Duplicate reversed stack prior to decon to reduce axial ringing, by default False
+                        wavelength=deconvolution_args['wavelength_em'],  # 642 int: Emission wavelength in nm (default: {520})
+                        na=deconvolution_args['na'],  # float: Numerical Aperture (default: {1.5})
+                        nimm=deconvolution_args['nimm'],  # float: Refractive index of immersion medium (default: {1.3})
+                        # otf_bgrd=None,  # int, None: Background to subtract. "None" = autodetect. (default: {None})
+                        # krmax=0,  # int: Pixels outside this limit will be zeroed (overwriting estimated value from NA and NIMM) (default: {0})
+                        # fixorigin=8,
+                        # # int: for all kz, extrapolate using pixels kr=1 to this pixel to get value for kr=0 (default: {10})
+                        # cleanup_otf=True,  # bool: Clean-up outside OTF support (default: {False})
+                        # max_otf_size=60000,  # int: Make sure OTF is smaller than this many bytes.
+                        # # Deconvolution may fail if the OTF is larger than 60KB (default: 60000)
+                    )
+                if gpu_semaphore is not None:
+                    gpu_semaphore.put(gpu)
 
-                            wavelength=deconvolution_args['wavelength_em'],  # 642 int: Emission wavelength in nm (default: {520})
-                            na=deconvolution_args['na'],  # float: Numerical Aperture (default: {1.5})
-                            nimm=deconvolution_args['nimm'],  # float: Refractive index of immersion medium (default: {1.3})
-                            # otf_bgrd=None,  # int, None: Background to subtract. "None" = autodetect. (default: {None})
-                            # krmax=0,  # int: Pixels outside this limit will be zeroed (overwriting estimated value from NA and NIMM) (default: {0})
-                            # fixorigin=8,
-                            # # int: for all kz, extrapolate using pixels kr=1 to this pixel to get value for kr=0 (default: {10})
-                            # cleanup_otf=True,  # bool: Clean-up outside OTF support (default: {False})
-                            # max_otf_size=60000,  # int: Make sure OTF is smaller than this many bytes.
-                            # # Deconvolution may fail if the OTF is larger than 60KB (default: 60000)
-                        )
+            if img.dtype != dtype and np_d_type(dtype).kind in ("u", "i"):
+                clip(img, iinfo(dtype).min, iinfo(dtype).max, out=img)
+                img = img.astype(dtype)
+            tmp_file = output_file.parent / (output_file.name + ".tmp")
+            write(file=tmp_file.__str__(), data=img, header=header, compression_level=1)
+            tmp_file.rename(output_file)
 
-                if img.dtype != dtype and np_d_type(dtype).kind in ("u", "i"):
-                    clip(img, iinfo(dtype).min, iinfo(dtype).max, out=img)
-                    img = img.astype(dtype)
-                write(file=output_file.__str__(), data=img, header=header, compression_level=1)
     return return_code
 
 
 def main(args):
     return_code = 0
+
+    # gpu_semaphore = None
+    # print(f"args.threads_per_gpu: {args.threads_per_gpu}, cuda_device_count: {num_gpus}, args.exclude_gpus: {args.exclude_gpus}")
+    gpus = tuple(gpu for gpu in range(num_gpus) if str(gpu) not in args.exclude_gpus)
+    gpu_semaphore = Queue(maxsize=len(gpus) * args.threads_per_gpu)
+    for _ in range(args.threads_per_gpu):
+        for gpu in gpus:
+            gpu_semaphore.put(gpu)
+
     args_list = make_a_list_of_input_output_paths(args)
     num_images = len(args_list)
     if args.num_processes == 1:
@@ -229,12 +247,6 @@ def main(args):
         del args_list
         workers = min(args.num_processes, num_images)
         progress_queue = Queue()
-        gpu_semaphore = None
-        # if args.use_gpu:
-        #     gpu_semaphore = Queue()
-        #     for i in range(cuda_device_count()):
-        #         for _ in range(args.threads_per_gpu):
-        #             gpu_semaphore.put((f"cuda:{i}", cuda_get_device_properties(i).total_memory))
         for _ in range(workers):
             MultiProcessQueueRunner(progress_queue, args_queue,
                                     gpu_semaphore=gpu_semaphore, fun=process_cube, timeout=None).start()
@@ -253,24 +265,29 @@ if __name__ == '__main__':
         os.environ['MKL_NUM_THREADS'] = '1'
         os.environ['NUMEXPR_NUM_THREADS'] = '1'
         os.environ['OMP_NUM_THREADS'] = '1'
+        nvidia_smi = "nvidia-smi.exe"
     elif sys.platform == 'linux' and 'microsoft' not in uname().release.lower():
         psutil.Process().nice(value=19)
         os.environ["NUMPY_MADVISE_HUGEPAGE"] = "1"
         os.environ["TERM"] = "xterm"
+        nvidia_smi = "nvidia-smi"
     else:
         print("yet unsupported OS")
         raise RuntimeError
+
+    num_gpus = str(check_output([nvidia_smi, "-L"])).count('UUID')
     parser = ArgumentParser(
         description="Process FNT cubes in parallel\n\n",
         formatter_class=RawDescriptionHelpFormatter,
         epilog="Developed 2023 by Keivan Moradi at UCLA, Hongwei Dong Lab (B.R.A.I.N.) \n"
     )
+    num_processes = cpu_count(logical=False) + 4
     parser.add_argument("--input", "-i", type=str, required=True,
                         help="Path folder containing all nrrd files.")
     parser.add_argument("--output", "-o", type=str, required=True,
                         help="Output folder for converted files.")
     parser.add_argument("--num_processes", "-n", type=int, required=False,
-                        default=cpu_count(logical=False) + 4,
+                        default=num_processes,
                         help="Number of CPU cores.")
     parser.add_argument("--destripe", default=True, action=BooleanOptionalAction,
                         help="Destripe the image by default. Disable by --no-destripe.")
@@ -278,12 +295,11 @@ if __name__ == '__main__':
                         help="Apply a 3D gaussian filter after destriping. Default is --no-gaussian.")
     parser.add_argument("--deconvolution", "-d", default=False, action=BooleanOptionalAction,
                         help="Apply a deconvolution after destriping.  Default is --no-deconvolution.")
-    parser.add_argument("--use_gpu", default=False, action=BooleanOptionalAction,
-                        help="Use gpu acceleration for destriping. Default is --no-use-gpu.")
-    parser.add_argument("--exclude_gpus", default=False,  # action=List[int],
+    parser.add_argument("--exclude_gpus", nargs='*',
+                        default=[],
                         help="Exclude GPUs during deconvolution.")
     parser.add_argument("--threads_per_gpu", type=int, required=False,
-                        default=8,
+                        default=num_processes // num_gpus,
                         help="Number of thread per GPU.")
     parser.add_argument("--dxy", type=float, required=False,
                         default=0.4,
