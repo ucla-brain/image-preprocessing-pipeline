@@ -290,34 +290,35 @@ if __name__ == '__main__':
     parser.add_argument("--threads_per_gpu", type=int, required=False,
                         default=num_processes // num_gpus,
                         help="Number of thread per GPU.")
-    parser.add_argument("--dxy", type=float, required=False,
-                        default=0.4,
-                        help="Voxel size of x and y dimensions in micrometers")
-    parser.add_argument("--dz", type=float, required=False,
-                        default=0.8,
-                        help="Voxel size of z dimension in micrometers")
-    parser.add_argument("--f_cylinder_lens", type=float, required=False,
+    parser.add_argument("--dxy", "-dxy", type=float, required=False,
+                        default=0.7,
+                        help="Voxel size of x and y dimensions in micrometers: "
+                             "0.4 for 15x and 0.7 (default) for 9x lenses.")
+    parser.add_argument("--dz", "-dz", type=float, required=False,
+                        default=1.4,
+                        help="Voxel size of z dimension in micrometers.")
+    parser.add_argument("--f_cylinder_lens", "-fc", type=float, required=False,
                         default=240.0,
-                        help="f cylinder lens dimension")
-    parser.add_argument("--slit_width", type=float, required=False,
+                        help="f cylinder lens dimension.")
+    parser.add_argument("--slit_width", "-dw", type=float, required=False,
                         default=12.0,
                         help="Slit width.")
-    parser.add_argument("--wavelength_ex", type=float, required=False,
+    parser.add_argument("--wavelength_ex", "-ex", type=float, required=False,
                         default=488,
-                        help="Excitation wavelength in nm, by default 488")
-    parser.add_argument("--wavelength_em", type=float, required=False,
+                        help="Excitation wavelength in nm, by default 488.")
+    parser.add_argument("--wavelength_em", "-em", type=float, required=False,
                         default=525,
-                        help="Emission wavelength in nm, by default 525")
-    parser.add_argument("--na", type=float, required=False,
+                        help="Emission wavelength in nm, by default 525.")
+    parser.add_argument("--na", "-na", type=float, required=False,
                         default=0.40,
-                        help="Numerical Aperture, by default 0.4")
-    parser.add_argument("--nimm", type=float, required=False,
+                        help="Numerical Aperture, by default 0.4.")
+    parser.add_argument("--nimm", "-im", type=float, required=False,
                         default=1.42,
-                        help="Refractive index of immersion medium, by default 1.42")
-    parser.add_argument("--background", type=float, required=False,
+                        help="Refractive index of immersion medium, by default 1.42.")
+    parser.add_argument("--background", "-b", type=float, required=False,
                         default=0,
-                        help="int or 'auto': User-supplied background to subtract")
-    parser.add_argument("--n_iters", type=float, required=False,
+                        help="int or 'auto': User-supplied background to subtract.")
+    parser.add_argument("--n_iters", "-it", type=float, required=False,
                         default=10,
                         help="int: Number of iterations, by default 10")
     main(parser.parse_args())
