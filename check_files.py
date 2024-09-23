@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import List
 
 from psutil import cpu_count
+from nrrd import read as read_nrrd
 
 from pystripe.core import imread_tif_raw_png, glob_re
 from supplements.cli_interface import PrintColors
@@ -19,7 +20,10 @@ def test_image(file: Path):
         if not isinstance(file, Path):
             file = Path(file)
         with ThreadPoolExecutor(1) as tp:
-            future = tp.submit(imread_tif_raw_png, file)
+            if file.suffix.lower() in (".tif", ".tiff", ".raw", ".png"):
+                future = tp.submit(imread_tif_raw_png, file)
+            if file.suffix.lower() == ".nrrd":
+                future = tp.submit(read_nrrd, file)
             future.result(timeout=200)
     except Exception as e:
         print(f"{file} {type(e)} {e.args} {e}\n")
