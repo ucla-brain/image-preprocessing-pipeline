@@ -38,7 +38,7 @@ def make_a_list_of_input_output_paths(args):
             f_cylinder_lens=args.f_cylinder_lens,
             slit_width=args.slit_width,
         )
-        psf = rot90(psf, k=1, axes=(0, 2))
+        psf: ndarray = rot90(psf, k=1, axes=(0, 2))
         psf_filepath = (output_folder / 'temp' / 'psf.tif').__str__()
         (output_folder / r"temp").mkdir(parents=True, exist_ok=True)
         imwrite(psf_filepath, psf)
