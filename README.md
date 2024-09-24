@@ -17,7 +17,7 @@ Python code for stitching and image enhancement of Light Sheet data
     
    `pip install dcimg cpufeature pyvista ptwt`
    
-   `conda install jaxlib=*=*cuda* jax cuda-nvcc -c conda-forge -c nvidia`
+  # `conda install jaxlib=*=*cuda* jax cuda-nvcc -c conda-forge -c nvidia`
    
    **Note:** The last time I checked, Microsoft MPI installed fom conda-forge was functional. However, if mpi4py was not functional on Windows, try installing the latest [Microsoft MPI from GitHub](https://github.com/microsoft/Microsoft-MPI).
    

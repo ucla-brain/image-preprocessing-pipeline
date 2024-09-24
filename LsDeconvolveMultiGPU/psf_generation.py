@@ -100,7 +100,7 @@ def generate_psf(
 
     dxy_psf = min(dxy, resolution_xy / 3)  # the voxel size of PSF should be smaller than the diffraction-limited
 
-    nxy, nz, full_half_with_maxima_xy, full_half_with_maxima_z = determine_psf_size(
+    nxy, nz, full_half_width_maxima_xy, full_half_width_maxima_z = determine_psf_size(
         dxy_psf, dz, numerical_aperture, refractive_index, lambda_ex, lambda_em, f_cylinder_lens, slit_width,
         resolution_xy, resolution_z
     )
@@ -110,10 +110,10 @@ def generate_psf(
     psf = sample_psf(dxy_psf, dz, nxy, nz, numerical_aperture, refractive_index, lambda_ex, lambda_em,
                      numerical_aperture_ls)
 
-    print(f"full width half maxima of xy-plane is {full_half_with_maxima_xy:.1f} nm.\n"
-          f"full width half maxima of z-axis is {full_half_with_maxima_z:.1f} nm.")
+    print(f"full width half maxima of xy-plane is {full_half_width_maxima_xy:.1f} nm.\n"
+          f"full width half maxima of z-axis is {full_half_width_maxima_z:.1f} nm.")
 
-    return psf, dxy_psf, full_half_with_maxima_xy, full_half_with_maxima_z
+    return psf, dxy_psf
 
 
 def determine_psf_size(
