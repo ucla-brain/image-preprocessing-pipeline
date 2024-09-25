@@ -163,7 +163,7 @@ def process_cube(
             if need_gaussian:
                 if img.dtype != float32:
                     img = img.astype(float32)
-                gaussian(img, .5, output=img)
+                gaussian(img, 0.5, output=img)
 
             if need_destripe:
                 img = rot90(img, k=1, axes=(1, 2))
@@ -185,7 +185,24 @@ def process_cube(
                         deconvolution_args['otf'],
                         # deconvolution_args['psf'],
                         fpattern=None,  # str: used to filter files in a directory, by default "*.tif"
-                        n_iters=deconvolution_args['n_iters'],  # int: Number of iterations, by default 10
+                        n_iters=deconvolution_args['n_iters']//2,  # int: Number of iterations, by default 10
+                        dzdata=deconvolution_args['dz_data'],  # float: Z-step size of data, by default 0.5 um
+                        dxdata=deconvolution_args['dx_data'],  # float: XY pixel size of data, by default 0.1 um
+                        dzpsf=deconvolution_args['dz_psf'],  # float: Z-step size of the OTF, by default 0.1 um
+                        dxpsf=deconvolution_args['dxy_psf'],  # float: XY pixel size of the OTF, by default 0.1 um
+                        background=deconvolution_args['background'], # int or 'auto': User-supplied background to subtract.
+                        wavelength=deconvolution_args['wavelength_em'],  # int: Emission wavelength in nm
+                        na=deconvolution_args['na'],  # float: Numerical Aperture (default: {1.5})
+                        nimm=deconvolution_args['nimm'],  # float: Refractive index of immersion medium (default: {1.3})
+                    )
+                gaussian(img_decon, 0.5, output=img_decon)
+                with suppress_output():
+                    img_decon = decon(
+                        img_decon,
+                        deconvolution_args['otf'],
+                        # deconvolution_args['psf'],
+                        fpattern=None,  # str: used to filter files in a directory, by default "*.tif"
+                        n_iters=deconvolution_args['n_iters']//2,  # int: Number of iterations, by default 10
                         dzdata=deconvolution_args['dz_data'],  # float: Z-step size of data, by default 0.5 um
                         dxdata=deconvolution_args['dx_data'],  # float: XY pixel size of data, by default 0.1 um
                         dzpsf=deconvolution_args['dz_psf'],  # float: Z-step size of the OTF, by default 0.1 um
@@ -318,7 +335,7 @@ if __name__ == '__main__':
     parser.add_argument("--background", "-b", type=float, required=False,
                         default=0,
                         help="int or 'auto': User-supplied background to subtract.")
-    parser.add_argument("--n_iters", "-it", type=float, required=False,
+    parser.add_argument("--n_iters", "-it", type=int, required=False,
                         default=10,
                         help="int: Number of iterations, by default 10")
     main(parser.parse_args())
