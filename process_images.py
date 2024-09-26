@@ -901,6 +901,9 @@ def generate_composite_image(
     if len(tif_stacks) == 3:
         color_idx = {color: idx for idx, color in enumerate(order_of_colors.lower())}
         images = [images[color_idx[color]] for color in "rgb"]
+    elif len(tif_stacks) == 4:
+        color_idx = {color: idx for idx, color in enumerate(order_of_colors.lower())}
+        images = [images[color_idx[color]] for color in "cmyk"]
     elif len(tif_stacks) == 2:
         images += [zeros(img_shape, dtype=img_dtype)]
     images = dstack(images)
@@ -1674,3 +1677,4 @@ if __name__ == '__main__':
     parser.add_argument("--vram_mem_fraction_gpu0", required=False, type=float, default=1.0,
                         help="reduce the memory usage for GPU0 so the computer remain responsive.")
     main(parser.parse_args())
+
