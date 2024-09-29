@@ -195,9 +195,10 @@ def process_cube(
                         na=deconvolution_args['na'],  # float: Numerical Aperture (default: {1.5})
                         nimm=deconvolution_args['nimm'],  # float: Refractive index of immersion medium (default: {1.3})
                     )
+
                 img[0: img_decon.shape[0],
                     0: img_decon.shape[1],
-                    0: img_decon.shape[2]] = img_decon
+                    0: img_decon.shape[2]] = img_decon   # TODO: FIX THIS (maybe write bug report)
                 if gpu_semaphore is not None:
                     gpu_semaphore.put(gpu)
 
