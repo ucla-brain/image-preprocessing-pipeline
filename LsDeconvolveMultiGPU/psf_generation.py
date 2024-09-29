@@ -1,17 +1,12 @@
-from pycudadecon import decon
-from tifffile import imwrite, imread
-from scipy.optimize import fsolve
-import scipy.special as sp
-from scipy.integrate import quad
-from numpy import real, imag, array, ndarray, zeros, flip, sum
-
-import subprocess
-import math
 import cmath
-import os
-
+import math
 from argparse import ArgumentParser
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+
+import scipy.special as sp
+from numpy import real, imag, array, ndarray, zeros, flip, sum
+from scipy.integrate import quad
+from scipy.optimize import fsolve
+from tifffile import imwrite
 
 
 def complex_quadrature(func, a, b, **kwargs):
@@ -24,7 +19,7 @@ def complex_quadrature(func, a, b, **kwargs):
     real_integral = quad(real_func, a, b, **kwargs)
     imag_integral = quad(imag_func, a, b, **kwargs)
 
-    return real_integral[0] + 1j*imag_integral[0], real_integral[1:], imag_integral[1:]
+    return real_integral[0] + 1j * imag_integral[0], real_integral[1:], imag_integral[1:]
 
 
 def f1(p, x, y, z, lambda_val, numerical_aperture, refractive_index):
@@ -35,13 +30,12 @@ def f1(p, x, y, z, lambda_val, numerical_aperture, refractive_index):
 
 
 def psf_eq(x, y, z, numerical_aperture, refractive_index, lambda_val):
-
     def f2(p):
         return f1(p, x, y, z, lambda_val, numerical_aperture, refractive_index)
 
     integral = complex_quadrature(f2, 0.0, 1.0)  # 'AbsTol', 1e-3
 
-    return 4 * abs(integral[0])**2
+    return 4 * abs(integral[0]) ** 2
 
 
 def ls_psf_eq(x, y, z, numerical_aperture_obj, refractive_index, lambda_ex, lambda_em, numerical_aperture_ls):
@@ -120,7 +114,6 @@ def determine_psf_size(
         dxy_psf, dz, numerical_aperture, refractive_index, lambda_ex, lambda_em, f_cylinder_lens, slit_width,
         resolution_xy, resolution_z
 ):
-
     grid_size_xy = 2
     grid_size_z = 2
 
@@ -137,8 +130,8 @@ def determine_psf_size(
         return ls_psf_eq(
             0, 0, x, numerical_aperture, refractive_index, lambda_ex, lambda_em, numerical_aperture_ls) - half_max
 
-    full_half_with_maxima_xy = 2 * abs(fsolve(fxy, array([resolution_xy/2], dtype='single'))[0])
-    full_half_with_maxima_z = 2 * abs(fsolve(fz, array([resolution_z/2], dtype='single'))[0])
+    full_half_with_maxima_xy = 2 * abs(fsolve(fxy, array([resolution_xy / 2], dtype='single'))[0])
+    full_half_with_maxima_z = 2 * abs(fsolve(fz, array([resolution_z / 2], dtype='single'))[0])
 
     nxy = math.ceil(grid_size_xy * full_half_with_maxima_xy / dxy_psf)
     nz = math.ceil(grid_size_z * full_half_with_maxima_z / dz)
@@ -154,7 +147,6 @@ def determine_psf_size(
 def sample_psf(
         dxy=1.0, dz=1.0, nxy=5, nz=7,
         numerical_aperture_obj=1.0, rf=1.0, lambda_ex=1.0, lambda_em=1.0, numerical_aperture_ls=1.0):
-
     if nxy % 2 == 0 or nz % 2 == 0:
         print(f'function sample_psf: nxy is {nxy} and nz is {nz}, but must be odd!')
         raise RuntimeError
@@ -229,7 +221,7 @@ if __name__ == "__main__":
                         help='slit aperture width in mm')
     args = parser.parse_args()
 
-    psf, dxy_psf = generate_psf(
+    psf_, dxy_psf_ = generate_psf(
         lambda_em=args.lambda_em,
         lambda_ex=args.lambda_ex,
         numerical_aperture=args.numerical_aperture,
@@ -240,6 +232,6 @@ if __name__ == "__main__":
         slit_width=args.slit_width,
     )
 
-    imwrite((args.output / 'psf.tif').__str__(), psf)
+    imwrite((args.output / 'psf.tif').__str__(), psf_)
     print(f"psf written to {args.output}")
-    print(f"dxy_psf: {dxy_psf}")
+    print(f"dxy_psf: {dxy_psf_}")
