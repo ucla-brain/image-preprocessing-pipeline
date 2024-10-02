@@ -9,11 +9,11 @@ from platform import uname
 import psutil
 from nrrd import read, write
 from numpy import dtype as np_d_type
-from numpy import rot90, float32, iinfo, clip, ndarray
+from numpy import rot90, float32, iinfo, clip, ndarray, array, pad
 from psutil import cpu_count
 from pycudadecon import make_otf, decon
 from skimage.filters import gaussian
-from tifffile import imwrite
+from tifffile import imwrite, TiffFile
 from tqdm import tqdm
 from shutil import copy
 
@@ -101,9 +101,13 @@ def make_deconvolution_args(
         na: float = 0.4,
         nimm: float = 1.42
 ) -> dict:
+    # the 0 is for the z-axis since otf is actually 2D
+    otf_shape = (0, ) + TiffFile(otf).asarray().shape
+    print("otf shape: ", otf_shape)
     return {
         # 'psf': psf,
         'otf': otf,
+        'otf_shape': otf_shape,
         'n_iters': n_iters,
         'dz_data': dz_data,
         'dx_data': dx_data,
@@ -179,9 +183,19 @@ def process_cube(
                 os.environ["CUDA_VISIBLE_DEVICES"] = f"{gpu}"
                 if img.dtype != float32:
                     img = img.astype(float32)
+
+                # pad the array by half the otf size to fix the border problem
+                pad_amount = tuple((s // 2, s // 2) for s in deconvolution_args['otf_shape'])
+
+                print("image size before pad: ", img.shape)
+
+                img_decon = pad(img, pad_amount, 'reflect')
+
+                print("image size after pad: ", img_decon.shape)
+
                 with suppress_output():
                     img_decon = decon(
-                        img,
+                        img_decon,
                         deconvolution_args['otf'],
                         # deconvolution_args['psf'],
                         fpattern=None,  # str: used to filter files in a directory, by default "*.tif"
@@ -213,9 +227,19 @@ def process_cube(
                         nimm=deconvolution_args['nimm'],  # float: Refractive index of immersion medium (default: {1.3})
                     )
 
+                # crop the array back down to size
+                print("img size before crop: ", img_decon.shape)
+                img_decon = img_decon[:, pad_amount[1][0]: -pad_amount[1][1], pad_amount[2][0]: -pad_amount[2][1]]
+
+                print("img size after crop: ", img_decon.shape)
+
                 img[0: img_decon.shape[0],
                     0: img_decon.shape[1],
-                    0: img_decon.shape[2]] = img_decon   # TODO: FIX THIS (maybe write bug report)
+                    0: img_decon.shape[2]] = img_decon
+
+                print("pad amount: ", pad_amount)
+                print("image shape: ", img.shape)
+
                 if gpu_semaphore is not None:
                     gpu_semaphore.put(gpu)
 
@@ -223,7 +247,7 @@ def process_cube(
                 clip(img, iinfo(dtype).min, iinfo(dtype).max, out=img)
                 img = img.astype(dtype)
             tmp_file = output_file.parent / (output_file.name + ".tmp")
-            write(file=tmp_file.__str__(), data=img, header=header, compression_level=1)
+            write(filename=tmp_file.__str__(), data=img, header=header, compression_level=1)
             tmp_file.rename(output_file)
 
     return return_code
