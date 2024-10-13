@@ -20,7 +20,17 @@ from shutil import copy
 from LsDeconvolveMultiGPU.psf_generation import generate_psf
 from pystripe.core import filter_streaks, is_uniform_2d, is_uniform_3d, MultiProcessQueueRunner, progress_manager
 from subprocess import check_output
+from align_images import trim_to_shape, pad_to_shape
 
+
+# pass in a target and a ndarray, and this function attempts to pad/trim to make the target shape.
+def crop_to_shape(target_shape: tuple, arr: ndarray):
+    assert len(target_shape) == len(arr.shape)
+    pad_shape = tuple(max([arr.shape[i], target_shape[i]]) for i in range(len(arr.shape)))
+    arr = pad_to_shape(pad_shape, arr, mode='reflect')
+    trim_shape = tuple(min([arr.shape[i], target_shape[i]]) for i in range(len(arr.shape)))
+    arr = trim_to_shape(trim_shape, arr)
+    return arr
 
 def make_a_list_of_input_output_paths(args):
     input_folder = Path(args.input)
@@ -177,7 +187,7 @@ def process_cube(
                 img = rot90(img, k=-1, axes=(1, 2))
 
             if need_deconvolution and deconvolution_args is not None:
-                gpu = 1
+                gpu = 0
                 if gpu_semaphore is not None:
                     gpu = gpu_semaphore.get(block=True)
                 os.environ["CUDA_VISIBLE_DEVICES"] = f"{gpu}"
@@ -185,13 +195,13 @@ def process_cube(
                     img = img.astype(float32)
 
                 # pad the array by half the otf size to fix the border problem
-                pad_amount = tuple((s // 2, s // 2) for s in deconvolution_args['otf_shape'])
-
-                print("image size before pad: ", img.shape)
+                # pad_amount = tuple((s // 2, s // 2) for s in deconvolution_args['otf_shape'])
+                pad_amount = tuple((4, 4) for s in deconvolution_args['otf_shape'])
+                # print("image size before pad: ", img.shape)
 
                 img_decon = pad(img, pad_amount, 'reflect')
 
-                print("image size after pad: ", img_decon.shape)
+                # print("image size after pad: ", img_decon.shape)
 
                 with suppress_output():
                     img_decon = decon(
@@ -208,8 +218,11 @@ def process_cube(
                         wavelength=deconvolution_args['wavelength_em'],  # int: Emission wavelength in nm
                         na=deconvolution_args['na'],  # float: Numerical Aperture (default: {1.5})
                         nimm=deconvolution_args['nimm'],  # float: Refractive index of immersion medium (default: {1.3})
+                        # pad_val=10
                     )
+                # print("image size after first decon: ", img_decon.shape)
                 gaussian(img_decon, 0.5, output=img_decon)
+                # print("image size after gaussian: ", img_decon.shape)
                 with suppress_output():
                     img_decon = decon(
                         img_decon,
@@ -227,19 +240,12 @@ def process_cube(
                         nimm=deconvolution_args['nimm'],  # float: Refractive index of immersion medium (default: {1.3})
                     )
 
-                # crop the array back down to size
-                print("img size before crop: ", img_decon.shape)
-                img_decon = img_decon[:, pad_amount[1][0]: -pad_amount[1][1], pad_amount[2][0]: -pad_amount[2][1]]
+                # print("image size after second decon: ", img_decon.shape)
 
-                print("img size after crop: ", img_decon.shape)
+                # resize image to match original
+                img = crop_to_shape(img.shape, img_decon)
 
-                img[0: img_decon.shape[0],
-                    0: img_decon.shape[1],
-                    0: img_decon.shape[2]] = img_decon
-
-                print("pad amount: ", pad_amount)
-                print("image shape: ", img.shape)
-
+                # print("img size after crop: ", img.shape)
                 if gpu_semaphore is not None:
                     gpu_semaphore.put(gpu)
 
