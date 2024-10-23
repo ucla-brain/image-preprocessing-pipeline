@@ -1,4 +1,4 @@
-# For Stitching Light Sheet data
+﻿# For Stitching Light Sheet data
 # Version 2 by Keivan Moradi on July 2022
 # Please read the readme file for more information:
 # https://github.com/ucla-brain/image-preprocessing-pipeline/blob/main/README.md
@@ -899,13 +899,16 @@ def generate_composite_image(
         assert images[idx].shape == img_shape
 
     if len(tif_stacks) == 3:
+        # Dynamically create color_idx
+        available_colors = order_of_colors.lower()[:3] 
         color_idx = {color: idx for idx, color in enumerate(order_of_colors.lower())}
-        images = [images[color_idx[color]] for color in "rgb"]
+        images = [images[color_idx[color]] for color in available_colors]
     elif len(tif_stacks) == 4:
         color_idx = {color: idx for idx, color in enumerate(order_of_colors.lower())}
         images = [images[color_idx[color]] for color in "cmyk"]
     elif len(tif_stacks) == 2:
         images += [zeros(img_shape, dtype=img_dtype)]
+
     images = dstack(images)
     imsave_tif(save_path, images, compression=compression)
 
