@@ -20,16 +20,44 @@ from shutil import copy
 from LsDeconvolveMultiGPU.psf_generation import generate_psf
 from pystripe.core import filter_streaks, is_uniform_2d, is_uniform_3d, MultiProcessQueueRunner, progress_manager
 from subprocess import check_output
-from align_images import trim_to_shape, pad_to_shape
+
+
+# Good dimension is defined as one that can be factorized int 2s, 3s, 5s, and 7s.
+# According to CUFFT manual, such dimension would warrant fast FFT
+# see https://github.com/scopetools/cudadecon/blob/main/src/RL-Biggs-Andrews.cpp
+def get_next_good_dim(n: int):
+    while True:
+        temp = n
+        for prime in [2, 3, 5, 7]:
+            while temp % prime == 0:
+                temp //= prime
+        if temp != 1:
+            n += 1
+        else:
+            break
+    return n
+
+
+def pad_to_good_dim(arr: ndarray):
+    shape = arr.shape
+    output_shape = []
+    # must add 1 for the edge case where n is a good dim, and therefore will have pixels cut off from the convolution
+    for dim in shape:
+        output_shape.append(get_next_good_dim(dim + 1))
+
+    assert(len(output_shape) == len(shape))
+
+    pad_amount = tuple((0, s[0] - s[1]) for s in zip(output_shape, shape))
+    return pad(arr, pad_amount, 'reflect')
 
 
 # pass in a target and a ndarray, and this function attempts to pad/trim to make the target shape.
 def crop_to_shape(target_shape: tuple, arr: ndarray):
     assert len(target_shape) == len(arr.shape)
-    pad_shape = tuple(max([arr.shape[i], target_shape[i]]) for i in range(len(arr.shape)))
-    arr = pad_to_shape(pad_shape, arr, mode='reflect')
-    trim_shape = tuple(min([arr.shape[i], target_shape[i]]) for i in range(len(arr.shape)))
-    arr = trim_to_shape(trim_shape, arr)
+    pad_amount = tuple(map(lambda s, a: (0, s - a if s > a else 0), target_shape, arr.shape))
+    # pad_amount = tuple([(0, s[0] - s[1] if s[0] > s[1] else 0) for s in zip(target_shape, arr)])
+    arr = pad(arr, pad_width=pad_amount, mode='reflect')
+    arr = arr[0:target_shape[0], 0: target_shape[1], 0: target_shape[2]]
     return arr
 
 def make_a_list_of_input_output_paths(args):
@@ -78,6 +106,7 @@ def make_a_list_of_input_output_paths(args):
             nimm=args.nimm
         )
 
+
     def get_args(input_file: Path):
         output_file = output_folder / input_file.relative_to(input_folder)
         if output_file.exists():
@@ -89,7 +118,7 @@ def make_a_list_of_input_output_paths(args):
                 "need_destripe": args.destripe,
                 "need_gaussian": args.gaussian,
                 "need_deconvolution": args.deconvolution,
-                "deconvolution_args": deconvolution_args
+                "deconvolution_args": deconvolution_args,
             }
 
     # print("Deconvolution args:")
@@ -164,7 +193,7 @@ def process_cube(
         need_gaussian: bool = False,
         need_deconvolution: bool = False,
         deconvolution_args: dict = None,
-        gpu_semaphore: Queue = None
+        gpu_semaphore: Queue = None,
 ):
     return_code = 0
     output_file.parent.mkdir(exist_ok=True, parents=True)
@@ -196,10 +225,9 @@ def process_cube(
 
                 # pad the array by half the otf size to fix the border problem
                 # pad_amount = tuple((s // 2, s // 2) for s in deconvolution_args['otf_shape'])
-                pad_amount = tuple((4, 4) for s in deconvolution_args['otf_shape'])
                 # print("image size before pad: ", img.shape)
 
-                img_decon = pad(img, pad_amount, 'reflect')
+                img_decon = pad_to_good_dim(img)
 
                 # print("image size after pad: ", img_decon.shape)
 
@@ -245,7 +273,8 @@ def process_cube(
                 # resize image to match original
                 img = crop_to_shape(img.shape, img_decon)
 
-                # print("img size after crop: ", img.shape)
+                # print("image size after crop: ", img.shape)
+
                 if gpu_semaphore is not None:
                     gpu_semaphore.put(gpu)
 
