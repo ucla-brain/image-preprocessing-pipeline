@@ -21,6 +21,7 @@ from LsDeconvolveMultiGPU.psf_generation import generate_psf
 from pystripe.core import filter_streaks, is_uniform_2d, is_uniform_3d, MultiProcessQueueRunner, progress_manager
 from subprocess import check_output
 
+from align_images import trim_to_shape
 
 # Good dimension is defined as one that can be factorized int 2s, 3s, 5s, and 7s.
 # According to CUFFT manual, such dimension would warrant fast FFT
@@ -38,16 +39,17 @@ def get_next_good_dim(n: int):
     return n
 
 
-def pad_to_good_dim(arr: ndarray):
+def pad_to_good_dim(arr: ndarray, otf_shape: tuple):
     shape = arr.shape
     output_shape = []
     # must add 1 for the edge case where n is a good dim, and therefore will have pixels cut off from the convolution
-    for dim in shape:
-        output_shape.append(get_next_good_dim(dim + 1))
+
+    for n, dim in enumerate(shape):
+        output_shape.append(get_next_good_dim(dim + max(4, otf_shape[n])))
 
     assert(len(output_shape) == len(shape))
 
-    pad_amount = tuple((0, s[0] - s[1]) for s in zip(output_shape, shape))
+    pad_amount = tuple(((s[0] - s[1]) // 2, (s[0] - s[1] + 1) // 2) for s in zip(output_shape, shape))
     return pad(arr, pad_amount, 'reflect')
 
 
@@ -227,7 +229,7 @@ def process_cube(
                 # pad_amount = tuple((s // 2, s // 2) for s in deconvolution_args['otf_shape'])
                 # print("image size before pad: ", img.shape)
 
-                img_decon = pad_to_good_dim(img)
+                img_decon = pad_to_good_dim(img, deconvolution_args['otf_shape'])
 
                 # print("image size after pad: ", img_decon.shape)
 
@@ -271,7 +273,7 @@ def process_cube(
                 # print("image size after second decon: ", img_decon.shape)
 
                 # resize image to match original
-                img = crop_to_shape(img.shape, img_decon)
+                img = trim_to_shape(img.shape, img_decon)
 
                 # print("image size after crop: ", img.shape)
 
