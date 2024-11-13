@@ -163,7 +163,7 @@ def process_cube(
             if need_gaussian:
                 if img.dtype != float32:
                     img = img.astype(float32)
-                gaussian(img, 0.5, output=img)
+                gaussian(img, 1, output=img)
 
             if need_destripe:
                 img = rot90(img, k=1, axes=(1, 2))
@@ -190,12 +190,16 @@ def process_cube(
                         dxdata=deconvolution_args['dx_data'],  # float: XY pixel size of data, by default 0.1 um
                         dzpsf=deconvolution_args['dz_psf'],  # float: Z-step size of the OTF, by default 0.1 um
                         dxpsf=deconvolution_args['dxy_psf'],  # float: XY pixel size of the OTF, by default 0.1 um
-                        background=deconvolution_args['background'], # int or 'auto': User-supplied background to subtract.
+                        background=deconvolution_args['background'] / 2, # int or 'auto': User-supplied background to subtract.
                         wavelength=deconvolution_args['wavelength_em'],  # int: Emission wavelength in nm
                         na=deconvolution_args['na'],  # float: Numerical Aperture (default: {1.5})
                         nimm=deconvolution_args['nimm'],  # float: Refractive index of immersion medium (default: {1.3})
                     )
+                if gpu_semaphore is not None:
+                    gpu_semaphore.put(gpu)
                 gaussian(img_decon, 0.5, output=img_decon)
+                if gpu_semaphore is not None:
+                    gpu = gpu_semaphore.get(block=True)
                 with suppress_output():
                     img_decon = decon(
                         img_decon,
@@ -207,7 +211,7 @@ def process_cube(
                         dxdata=deconvolution_args['dx_data'],  # float: XY pixel size of data, by default 0.1 um
                         dzpsf=deconvolution_args['dz_psf'],  # float: Z-step size of the OTF, by default 0.1 um
                         dxpsf=deconvolution_args['dxy_psf'],  # float: XY pixel size of the OTF, by default 0.1 um
-                        background=deconvolution_args['background'], # int or 'auto': User-supplied background to subtract.
+                        background=deconvolution_args['background'] / 2, # int or 'auto': User-supplied background to subtract.
                         wavelength=deconvolution_args['wavelength_em'],  # int: Emission wavelength in nm
                         na=deconvolution_args['na'],  # float: Numerical Aperture (default: {1.5})
                         nimm=deconvolution_args['nimm'],  # float: Refractive index of immersion medium (default: {1.3})
