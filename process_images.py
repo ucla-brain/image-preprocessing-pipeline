@@ -33,7 +33,6 @@ from skimage.filters import sobel
 from skimage.filters.thresholding import threshold_multiotsu
 from torch.cuda import set_per_process_memory_fraction as cuda_set_per_process_memory_fraction
 
-from flat import create_flat_img
 from parallel_image_processor import parallel_image_processor, jumpy_step_range
 from pystripe.core import (batch_filter, imread_tif_raw_png, imsave_tif, MultiProcessQueueRunner, progress_manager,
                            process_img, convert_to_8bit_fun, log1p_jit, prctl, np_max, np_mean, is_uniform_2d,
@@ -394,18 +393,6 @@ def process_channel(
             else:
                 p_log(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
                       f"{channel}: creating a new flat image.")
-                img_flat, dark = create_flat_img(
-                    source_path / channel,
-                    image_classes_training_data_path,
-                    tile_size,
-                    max_images=1024,  # the number of flat images averaged
-                    batch_size=nthreads,
-                    patience_before_skipping=nthreads - 1,
-                    # the number of non-flat images found successively before skipping
-                    skips=256,  # the number of images should be skipped before testing again
-                    sigma_spatial=1,  # the de-noising parameter
-                    save_as_tiff=True
-                )
 
         tile_destriping_sigma = (0, 0)  # sigma=(foreground, background) Default is (0, 0), indicating no de-striping.
         if need_destriping:
@@ -438,7 +425,6 @@ def process_channel(
             continue_process=continue_process_pystripe,
             print_input_file_names=print_input_file_names,
             timeout=timeout,  # 600.0,
-            flat=img_flat,
             gaussian_filter_2d=need_gaussian_filter_2d,
             bleach_correction_frequency=None,  # 0.0005
             bleach_correction_max_method=False,
@@ -449,7 +435,6 @@ def process_channel(
             threshold=None,
             padding_mode="reflect",
             bidirectional=True,
-            dark=dark,
             lightsheet=False,
             down_sample=down_sampling_factor,
             tile_size=tile_size,

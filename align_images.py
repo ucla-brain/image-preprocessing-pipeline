@@ -100,12 +100,12 @@ def write_to_file(images: list[ndarray], input_files: list[str], reference: int,
 
 
 # pads arr with zeroes evenly (as possible) on all sides to match pad_shape
-def pad_to_shape(pad_shape: tuple, arr: ndarray):
+def pad_to_shape(pad_shape: tuple, arr: ndarray, mode='constant'):
     assert len(pad_shape) == len(arr.shape)
     if pad_shape == arr.shape: return arr
     pad_dim = [pad_shape[i] - arr.shape[i] for i in range(len(pad_shape))]
     pad0 = list(map(lambda x: (x // 2, (x + 1) // 2), pad_dim))
-    return pad(arr, pad_width=pad0, mode='constant')
+    return pad(arr, pad_width=pad0, mode=mode)
 
 
 def trim_to_shape(output_shape: tuple, arr: ndarray):
