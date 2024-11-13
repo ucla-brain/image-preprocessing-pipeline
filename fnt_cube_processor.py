@@ -9,11 +9,11 @@ from platform import uname
 import psutil
 from nrrd import read, write
 from numpy import dtype as np_d_type
-from numpy import rot90, float32, iinfo, clip, ndarray
+from numpy import rot90, float32, iinfo, clip, ndarray, pad
 from psutil import cpu_count
 from pycudadecon import make_otf, decon
 from skimage.filters import gaussian
-from tifffile import imwrite
+from tifffile import imwrite, TiffFile
 from tqdm import tqdm
 from shutil import copy
 
@@ -225,13 +225,7 @@ def process_cube(
                 if img.dtype != float32:
                     img = img.astype(float32)
 
-                # pad the array by half the otf size to fix the border problem
-                # pad_amount = tuple((s // 2, s // 2) for s in deconvolution_args['otf_shape'])
-                # print("image size before pad: ", img.shape)
-
                 img_decon = pad_to_good_dim(img, deconvolution_args['otf_shape'])
-
-                # print("image size after pad: ", img_decon.shape)
 
                 with suppress_output():
                     img_decon = decon(
@@ -271,12 +265,8 @@ def process_cube(
                         nimm=deconvolution_args['nimm'],  # float: Refractive index of immersion medium (default: {1.3})
                     )
 
-                # print("image size after second decon: ", img_decon.shape)
-
                 # resize image to match original
                 img = trim_to_shape(img.shape, img_decon)
-
-                # print("image size after crop: ", img.shape)
 
                 if gpu_semaphore is not None:
                     gpu_semaphore.put(gpu)
@@ -379,10 +369,10 @@ if __name__ == '__main__':
                         help="Voxel size of z dimension in micrometers.")
     parser.add_argument("--f_cylinder_lens", "-fc", type=float, required=False,
                         default=240.0,
-                        help="f cylinder lens dimension.")
+                        help="f cylinder lens dimension. Default value is 240.")
     parser.add_argument("--slit_width", "-dw", type=float, required=False,
                         default=12.0,
-                        help="Slit width.")
+                        help="Slit width.  Default value is 12.")
     parser.add_argument("--wavelength_ex", "-ex", type=float, required=False,
                         default=488,
                         help="Excitation wavelength in nm, by default 488.")
