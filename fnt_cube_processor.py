@@ -123,10 +123,8 @@ def make_a_list_of_input_output_paths(args):
                 "deconvolution_args": deconvolution_args,
             }
 
-    # print("Deconvolution args:")
-    # print(deconvolution_args)
-
-    return tuple(item for item in map(get_args, input_folder.rglob("*.nrrd")) if item is not None)
+    return tuple(c for c in tqdm(map(get_args, input_folder.rglob("*.nrrd")),
+                                 desc="Finding cubes", unit=" Paths") if c is not None)
 
 
 def make_deconvolution_args(
@@ -277,7 +275,6 @@ def process_cube(
             tmp_file = output_file.parent / (output_file.name + ".tmp")
             write(file=tmp_file.__str__(), data=img, header=header, compression_level=1)
             tmp_file.rename(output_file)
-
     return return_code
 
 
@@ -359,7 +356,7 @@ if __name__ == '__main__':
                         help="Exclude GPUs during deconvolution.")
     parser.add_argument("--threads_per_gpu", type=int, required=False,
                         default=num_processes // num_gpus,
-                        help="Number of thread per GPU.")
+                        help=f"Number of thread per GPU. Default is {num_processes // num_gpus}")
     parser.add_argument("--dxy", "-dxy", type=float, required=False,
                         default=0.7,
                         help="Voxel size of x and y dimensions in micrometers: "
