@@ -236,7 +236,7 @@ def process_cube(
                         dxdata=deconvolution_args['dx_data'],  # float: XY pixel size of data, by default 0.1 um
                         dzpsf=deconvolution_args['dz_psf'],  # float: Z-step size of the OTF, by default 0.1 um
                         dxpsf=deconvolution_args['dxy_psf'],  # float: XY pixel size of the OTF, by default 0.1 um
-                        background=deconvolution_args['background'] / 2, # int or 'auto': User-supplied background to subtract.
+                        background=deconvolution_args['background'] / 2,  # int or 'auto': background to subtract.
                         wavelength=deconvolution_args['wavelength_em'],  # int: Emission wavelength in nm
                         na=deconvolution_args['na'],  # float: Numerical Aperture (default: {1.5})
                         nimm=deconvolution_args['nimm'],  # float: Refractive index of immersion medium (default: {1.3})
@@ -246,6 +246,7 @@ def process_cube(
                 gaussian(img_decon, 0.5, output=img_decon)
                 if gpu_semaphore is not None:
                     gpu = gpu_semaphore.get(block=True)
+                os.environ["CUDA_VISIBLE_DEVICES"] = f"{gpu}"
                 with suppress_output():
                     img_decon = decon(
                         img_decon,
@@ -262,12 +263,11 @@ def process_cube(
                         na=deconvolution_args['na'],  # float: Numerical Aperture (default: {1.5})
                         nimm=deconvolution_args['nimm'],  # float: Refractive index of immersion medium (default: {1.3})
                     )
+                if gpu_semaphore is not None:
+                    gpu_semaphore.put(gpu)
 
                 # resize image to match original
                 img = trim_to_shape(img.shape, img_decon)
-
-                if gpu_semaphore is not None:
-                    gpu_semaphore.put(gpu)
 
             if img.dtype != dtype and np_d_type(dtype).kind in ("u", "i"):
                 clip(img, iinfo(dtype).min, iinfo(dtype).max, out=img)
