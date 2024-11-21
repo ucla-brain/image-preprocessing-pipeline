@@ -216,16 +216,16 @@ def process_cube(
                 img = rot90(img, k=-1, axes=(1, 2))
 
             if need_deconvolution and deconvolution_args is not None:
-                gpu = 0
-                if gpu_semaphore is not None:
-                    gpu = gpu_semaphore.get(block=True)
-                os.environ["CUDA_VISIBLE_DEVICES"] = f"{gpu}"
                 if img.dtype != float32:
                     img = img.astype(float32)
 
                 img_decon = pad_to_good_dim(img, deconvolution_args['otf_shape'])
 
+                gpu = 0
+                if gpu_semaphore is not None:
+                    gpu = gpu_semaphore.get(block=True)
                 with suppress_output():
+                    os.environ["CUDA_VISIBLE_DEVICES"] = f"{gpu}"
                     img_decon = decon(
                         img_decon,
                         deconvolution_args['otf'],
@@ -242,12 +242,14 @@ def process_cube(
                         nimm=deconvolution_args['nimm'],  # float: Refractive index of immersion medium (default: {1.3})
                     )
                 if gpu_semaphore is not None:
-                    gpu_semaphore.put(gpu)
+                    gpu_semaphore.put(gpu, block=True)
+
                 gaussian(img_decon, 0.5, output=img_decon)
+
                 if gpu_semaphore is not None:
                     gpu = gpu_semaphore.get(block=True)
-                os.environ["CUDA_VISIBLE_DEVICES"] = f"{gpu}"
                 with suppress_output():
+                    os.environ["CUDA_VISIBLE_DEVICES"] = f"{gpu}"
                     img_decon = decon(
                         img_decon,
                         deconvolution_args['otf'],
@@ -258,13 +260,13 @@ def process_cube(
                         dxdata=deconvolution_args['dx_data'],  # float: XY pixel size of data, by default 0.1 um
                         dzpsf=deconvolution_args['dz_psf'],  # float: Z-step size of the OTF, by default 0.1 um
                         dxpsf=deconvolution_args['dxy_psf'],  # float: XY pixel size of the OTF, by default 0.1 um
-                        background=deconvolution_args['background'] / 2, # int or 'auto': User-supplied background to subtract.
+                        background=deconvolution_args['background'] / 2,  # int or 'auto': background to subtract.
                         wavelength=deconvolution_args['wavelength_em'],  # int: Emission wavelength in nm
                         na=deconvolution_args['na'],  # float: Numerical Aperture (default: {1.5})
                         nimm=deconvolution_args['nimm'],  # float: Refractive index of immersion medium (default: {1.3})
                     )
                 if gpu_semaphore is not None:
-                    gpu_semaphore.put(gpu)
+                    gpu_semaphore.put(gpu, block=True)
 
                 # resize image to match original
                 img = trim_to_shape(img.shape, img_decon)
@@ -332,6 +334,7 @@ if __name__ == '__main__':
         raise RuntimeError
 
     num_gpus = str(check_output([nvidia_smi, "-L"])).count('UUID')
+    os.environ["CUDA_VISIBLE_DEVICES"] = f"{','.join(map(str, range(num_gpus)))}"
     parser = ArgumentParser(
         description="Process FNT cubes in parallel\n\n",
         formatter_class=RawDescriptionHelpFormatter,
