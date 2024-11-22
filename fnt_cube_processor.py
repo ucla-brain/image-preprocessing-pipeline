@@ -242,7 +242,7 @@ def process_cube(
                         nimm=deconvolution_args['nimm'],  # float: Refractive index of immersion medium (default: {1.3})
                     )
                 if gpu_semaphore is not None:
-                    gpu_semaphore.put(gpu, block=True)
+                    gpu_semaphore.put(gpu)
 
                 gaussian(img_decon, 0.5, output=img_decon)
 
@@ -266,7 +266,7 @@ def process_cube(
                         nimm=deconvolution_args['nimm'],  # float: Refractive index of immersion medium (default: {1.3})
                     )
                 if gpu_semaphore is not None:
-                    gpu_semaphore.put(gpu, block=True)
+                    gpu_semaphore.put(gpu)
 
                 # resize image to match original
                 img = trim_to_shape(img.shape, img_decon)
