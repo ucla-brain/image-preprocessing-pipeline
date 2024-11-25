@@ -347,7 +347,6 @@ def process_channel(
         isotropic_downsampling_resolution: float = 10,
         files_list: List[Path] = None,
         need_flat_image_application: bool = False,
-        image_classes_training_data_path=None,
         need_gaussian_filter_2d: bool = True,
         dark: int = 0,
         down_sampling_factor: Tuple[int, int] = None,
@@ -371,7 +370,8 @@ def process_channel(
         timeout: float = None,
         nthreads: int = cpu_count(logical=False),
         exclude_gpus: list = [],
-        enable_axis_correction: bool = False
+        enable_axis_correction: bool = False,
+        cosine_blending: bool = False,
 ):
     # preprocess each tile as needed using PyStripe --------------------------------------------------------------------
 
@@ -583,7 +583,7 @@ def process_channel(
     stitched_tif_path = stitched_path / f"{channel}_tif"
     stitched_tif_path.mkdir(exist_ok=True)
 
-    cosine_blending = False  # True if need_bleach_correction else False
+    # cosine_blending = False  # True if need_bleach_correction else False
     tsv_volume = TSVVolume(
         stitched_path / f'{channel_for_alignment}_xml_import_step_5.xml',
         alt_stack_dir=preprocessed_path.joinpath(channel).__str__(),
@@ -1324,7 +1324,8 @@ def main(args):
             timeout=args.timeout,
             nthreads=args.nthreads,
             exclude_gpus=exclude_gpus,
-            enable_axis_correction=args.enable_axis_correction
+            enable_axis_correction=args.enable_axis_correction,
+            cosine_blending=args.cosine_blending
         )
         # with open("./log.txt", 'a') as f:
         #     f.write("---------------------------------------\n")
@@ -1702,4 +1703,6 @@ if __name__ == '__main__':
                         help="reduce the memory usage for GPU0 so the computer remain responsive.")
     parser.add_argument("--enable_axis_correction", default=False, action=BooleanOptionalAction,
                         help="include to automatically flip axes if necessary when processing .ims files")
+    parser.add_argument("--cosine_blending", default=False, action=BooleanOptionalAction,
+                        help="Enable cosine blending to reduce tile boundaries. Disable by --no-cosine_blending.")
     main(parser.parse_args())
