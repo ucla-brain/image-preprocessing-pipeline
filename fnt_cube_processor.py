@@ -206,6 +206,7 @@ def process_cube(
             if need_gaussian:
                 if img.dtype != float32:
                     img = img.astype(float32)
+                    img /= 2
                 gaussian(img, 1, output=img)
 
             if need_destripe:
