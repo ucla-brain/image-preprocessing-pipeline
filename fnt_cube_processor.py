@@ -118,7 +118,7 @@ def make_a_list_of_input_output_paths(args):
                 "input_file": input_file,
                 "output_file": output_file,
                 "need_destripe": args.destripe,
-                "need_gaussian": args.gaussian,
+                "gaussian_sigma": args.gaussian,
                 "need_deconvolution": args.deconvolution,
                 "deconvolution_args": deconvolution_args,
             }
@@ -190,24 +190,24 @@ def process_cube(
         input_file: Path,
         output_file: Path,
         need_destripe: bool = False,
-        need_gaussian: bool = False,
+        gaussian_sigma: float = 0,
         need_deconvolution: bool = False,
         deconvolution_args: dict = None,
         gpu_semaphore: Queue = None,
 ):
     return_code = 0
     output_file.parent.mkdir(exist_ok=True, parents=True)
-    if need_destripe or need_gaussian or need_deconvolution:
+    if need_destripe or gaussian_sigma > 0 or need_deconvolution:
         img, header = read(input_file.__str__())
         dtype = img.dtype
         if is_uniform_3d(img):
             copy(input_file, output_file)
         else:
-            if need_gaussian:
+            if gaussian_sigma > 0:
                 if img.dtype != float32:
                     img = img.astype(float32)
-                    img /= 2
-                gaussian(img, 1, output=img)
+                    # img /= 4
+                gaussian(img, gaussian_sigma, output=img)
 
             if need_destripe:
                 img = rot90(img, k=1, axes=(1, 2))
@@ -349,10 +349,11 @@ if __name__ == '__main__':
     parser.add_argument("--num_processes", "-n", type=int, required=False,
                         default=num_processes,
                         help="Number of CPU cores.")
+    parser.add_argument("--gaussian", "-g", type=float, required=False,
+                        default=0.0,
+                        help="Sigma of a 3D gaussian filter. Default is 0.0 which means no gaussian.")
     parser.add_argument("--destripe", default=True, action=BooleanOptionalAction,
                         help="Destripe the image by default. Disable by --no-destripe.")
-    parser.add_argument("--gaussian", "-g", default=False, action=BooleanOptionalAction,
-                        help="Apply a 3D gaussian filter after destriping. Default is --no-gaussian.")
     parser.add_argument("--deconvolution", "-d", default=False, action=BooleanOptionalAction,
                         help="Apply a deconvolution after destriping.  Default is --no-deconvolution.")
     parser.add_argument("--exclude_gpus", nargs='*',
