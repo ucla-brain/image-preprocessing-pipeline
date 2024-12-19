@@ -245,7 +245,7 @@ def process_cube(
                 if gpu_semaphore is not None:
                     gpu_semaphore.put(gpu)
 
-                gaussian(img_decon, 0.5, output=img_decon)
+                gaussian(img_decon, gaussian_sigma, output=img_decon)
 
                 if gpu_semaphore is not None:
                     gpu = gpu_semaphore.get(block=True)
