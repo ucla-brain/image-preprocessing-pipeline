@@ -952,6 +952,10 @@ def merge_all_channels(
         assert len(right_bit_shifts) == len(tif_paths)
     with Pool(len(tif_paths)) as pool:
         tif_stacks = list(pool.starmap(TifStack, zip(tif_paths, z_offsets)))
+        # Close the pool to prevent further tasks
+        pool.close()
+        pool.join()
+      
     assert all([tif_stack.nz > 0 for tif_stack in tif_stacks])
 
     merged_tif_path.mkdir(exist_ok=True)
