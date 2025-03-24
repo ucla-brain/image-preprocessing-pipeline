@@ -12,7 +12,8 @@ from numpy import dtype as np_d_type
 from numpy import rot90, float32, iinfo, clip, ndarray, pad
 from psutil import cpu_count
 from pycudadecon import make_otf, decon
-from skimage.filters import gaussian
+# from skimage.filters import gaussian
+from scipy.ndimage import gaussian_filter as gaussian
 from tifffile import imwrite, TiffFile
 from tqdm import tqdm
 from shutil import copy
@@ -186,6 +187,32 @@ def suppress_output():
         os.close(saved_stderr_fd)
 
 
+def apply_deconvolution(img, deconvolution_args, gpu_semaphore, num_gaussian_decons):
+    gpu = 0
+    if gpu_semaphore is not None:
+        gpu = gpu_semaphore.get(block=True)
+    with suppress_output():
+        os.environ["CUDA_VISIBLE_DEVICES"] = f"{gpu}"
+        img = decon(
+            img,
+            deconvolution_args['otf'],
+            # deconvolution_args['psf'],
+            fpattern=None,  # str: used to filter files in a directory, by default "*.tif"
+            n_iters=deconvolution_args['n_iters'] // num_gaussian_decons,  # int: Number of iterations, by default 10
+            dzdata=deconvolution_args['dz_data'],  # float: Z-step size of data, by default 0.5 um
+            dxdata=deconvolution_args['dx_data'],  # float: XY pixel size of data, by default 0.1 um
+            dzpsf=deconvolution_args['dz_psf'],  # float: Z-step size of the OTF, by default 0.1 um
+            dxpsf=deconvolution_args['dxy_psf'],  # float: XY pixel size of the OTF, by default 0.1 um
+            background=deconvolution_args['background'] / num_gaussian_decons,  # int or 'auto': background to subtract.
+            wavelength=deconvolution_args['wavelength_em'],  # int: Emission wavelength in nm
+            na=deconvolution_args['na'],  # float: Numerical Aperture (default: {1.5})
+            nimm=deconvolution_args['nimm'],  # float: Refractive index of immersion medium (default: {1.3})
+        )
+    if gpu_semaphore is not None:
+        gpu_semaphore.put(gpu)
+    return img
+
+
 def process_cube(
         input_file: Path,
         output_file: Path,
@@ -203,11 +230,8 @@ def process_cube(
         if is_uniform_3d(img):
             copy(input_file, output_file)
         else:
-            if gaussian_sigma > 0:
-                if img.dtype != float32:
-                    img = img.astype(float32)
-                    # img /= 4
-                gaussian(img, gaussian_sigma, output=img)
+            if img.dtype != float32:
+                img = img.astype(float32)
 
             if need_destripe:
                 img = rot90(img, k=1, axes=(1, 2))
@@ -216,61 +240,22 @@ def process_cube(
                         img[idx] = filter_streaks(img[idx], sigma=(1, 1), wavelet="db9", bidirectional=True)
                 img = rot90(img, k=-1, axes=(1, 2))
 
+            sigma = (gaussian_sigma, gaussian_sigma, round(gaussian_sigma, 0) + 1.5)
             if need_deconvolution and deconvolution_args is not None:
-                if img.dtype != float32:
-                    img = img.astype(float32)
 
                 img_decon = pad_to_good_dim(img, deconvolution_args['otf_shape'])
 
-                gpu = 0
-                if gpu_semaphore is not None:
-                    gpu = gpu_semaphore.get(block=True)
-                with suppress_output():
-                    os.environ["CUDA_VISIBLE_DEVICES"] = f"{gpu}"
-                    img_decon = decon(
-                        img_decon,
-                        deconvolution_args['otf'],
-                        # deconvolution_args['psf'],
-                        fpattern=None,  # str: used to filter files in a directory, by default "*.tif"
-                        n_iters=deconvolution_args['n_iters']//2,  # int: Number of iterations, by default 10
-                        dzdata=deconvolution_args['dz_data'],  # float: Z-step size of data, by default 0.5 um
-                        dxdata=deconvolution_args['dx_data'],  # float: XY pixel size of data, by default 0.1 um
-                        dzpsf=deconvolution_args['dz_psf'],  # float: Z-step size of the OTF, by default 0.1 um
-                        dxpsf=deconvolution_args['dxy_psf'],  # float: XY pixel size of the OTF, by default 0.1 um
-                        background=deconvolution_args['background'] / 2,  # int or 'auto': background to subtract.
-                        wavelength=deconvolution_args['wavelength_em'],  # int: Emission wavelength in nm
-                        na=deconvolution_args['na'],  # float: Numerical Aperture (default: {1.5})
-                        nimm=deconvolution_args['nimm'],  # float: Refractive index of immersion medium (default: {1.3})
-                    )
-                if gpu_semaphore is not None:
-                    gpu_semaphore.put(gpu)
+                num_gaussian_decons = max(1, deconvolution_args['n_iters'] // 4)
+                for i in range(num_gaussian_decons):
+                    if gaussian_sigma > 0:
+                        gaussian(img_decon, sigma=sigma, output=img_decon)
 
-                gaussian(img_decon, gaussian_sigma, output=img_decon)
-
-                if gpu_semaphore is not None:
-                    gpu = gpu_semaphore.get(block=True)
-                with suppress_output():
-                    os.environ["CUDA_VISIBLE_DEVICES"] = f"{gpu}"
-                    img_decon = decon(
-                        img_decon,
-                        deconvolution_args['otf'],
-                        # deconvolution_args['psf'],
-                        fpattern=None,  # str: used to filter files in a directory, by default "*.tif"
-                        n_iters=deconvolution_args['n_iters']//2,  # int: Number of iterations, by default 10
-                        dzdata=deconvolution_args['dz_data'],  # float: Z-step size of data, by default 0.5 um
-                        dxdata=deconvolution_args['dx_data'],  # float: XY pixel size of data, by default 0.1 um
-                        dzpsf=deconvolution_args['dz_psf'],  # float: Z-step size of the OTF, by default 0.1 um
-                        dxpsf=deconvolution_args['dxy_psf'],  # float: XY pixel size of the OTF, by default 0.1 um
-                        background=deconvolution_args['background'] / 2,  # int or 'auto': background to subtract.
-                        wavelength=deconvolution_args['wavelength_em'],  # int: Emission wavelength in nm
-                        na=deconvolution_args['na'],  # float: Numerical Aperture (default: {1.5})
-                        nimm=deconvolution_args['nimm'],  # float: Refractive index of immersion medium (default: {1.3})
-                    )
-                if gpu_semaphore is not None:
-                    gpu_semaphore.put(gpu)
+                    img_decon = apply_deconvolution(img_decon, deconvolution_args, gpu_semaphore, num_gaussian_decons)
 
                 # resize image to match original
                 img = trim_to_shape(img.shape, img_decon)
+            elif gaussian_sigma > 0:
+                gaussian(img, sigma=gaussian_sigma, output=img)
 
             if img.dtype != dtype and np_d_type(dtype).kind in ("u", "i"):
                 clip(img, iinfo(dtype).min, iinfo(dtype).max, out=img)
