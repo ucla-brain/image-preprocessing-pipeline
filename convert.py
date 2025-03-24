@@ -79,8 +79,8 @@ def main(args: Namespace):
         de_striping_sigma = (0, 0)
         if args.de_stripe:
             de_striping_sigma = (250, 250)
-        if args.bleach_correction:
-            de_striping_sigma = (4000, 4000)
+        # if args.bleach_correction:
+        #    de_striping_sigma = (4000, 4000)
 
         gpu_semaphore = None
         if cuda_is_available_for_pt():
@@ -99,7 +99,7 @@ def main(args: Namespace):
                 "new_size": new_size,
                 "sigma": de_striping_sigma,
                 "padding_mode": args.padding_mode,
-                "bidirectional": True if args.bleach_correction else False,
+                "bidirectional": True, # if args.bleach_correction else False
                 "dark": args.dark,
                 "lightsheet": args.background_subtraction,
                 "bleach_correction_frequency": 1 / args.bleach_correction_period if args.bleach_correction else None,
@@ -422,6 +422,6 @@ if __name__ == '__main__':
     parser.add_argument("--threads_per_gpu", type=int, default=1,
                         help="Number of images processed on one GPU at a time. Default is 1. "
                              "Increase if the image sizes are small and multiple images fit into the vRAM.")
-    parser.add_argument("--enable_axis_correction", default=False, action=BooleanOptionalAction,
+    parser.add_argument("--enable_axis_correction", default=True, action=BooleanOptionalAction,
                         help="include to automatically flip axes if necessary when processing .ims files")
     main(parser.parse_args())
