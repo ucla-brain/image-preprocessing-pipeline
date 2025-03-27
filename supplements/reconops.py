@@ -266,8 +266,7 @@ def main(args: Namespace):
 
         if args.use_soma_info_as_name:
             row = swc_df.loc[0]
-            output_file = output_file.parent / (f'[{row.x:08.1f},{row.y:08.1f},{row.z:08.1f}]-r={row.radius:04.1f}' +
-                                                output_file.suffix)
+            output_file = output_file.parent / (f'x{row.x:.0f}-y{row.y:.0f}-z{row.z:.0f}' + output_file.suffix)
 
         duplicated_count = swc_df.drop(columns=['id', 'type', 'radius', 'parent_id']).duplicated().sum()
         if duplicated_count > 0:
@@ -395,7 +394,7 @@ if __name__ == '__main__':
                         help="If you have a swc file containing only soma location, "
                              "then, each node will be converted to a separate swc file.")
     parser.add_argument("--use_soma_info_as_name", default=False, action=BooleanOptionalAction,
-                        help="Use xyz and radius of the soma as file name. ")
+                        help="Use xyz the soma as file name.")
     parser.add_argument("--voxel_size_x_source", "-dxs", type=float, required=False, default=1.0,
                         help="The voxel size on the x-axis of the image used for reconstruction. "
                              "Default value is 1.")
