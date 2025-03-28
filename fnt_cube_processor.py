@@ -345,8 +345,8 @@ if __name__ == '__main__':
     parser.add_argument("--gaussian", "-g", type=float, required=False,
                         default=0.0,
                         help="Sigma of a 3D gaussian filter. Default is 0.0 which means no gaussian.")
-    parser.add_argument("--destripe", default=True, action=BooleanOptionalAction,
-                        help="Destripe the image by default. Disable by --no-destripe.")
+    parser.add_argument("--destripe", "-ds", default=False, action=BooleanOptionalAction,
+                        help="Enables axial image destriping.")
     parser.add_argument("--deconvolution", "-d", default=False, action=BooleanOptionalAction,
                         help="Apply a deconvolution after destriping.  Default is --no-deconvolution.")
     parser.add_argument("--exclude_gpus", nargs='*',
