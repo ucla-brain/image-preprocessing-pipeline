@@ -106,7 +106,9 @@ def make_a_list_of_input_output_paths(args):
             background=args.background,
             wavelength_em=args.wavelength_em,
             na=args.na,
-            nimm=args.nimm
+            nimm=args.nimm,
+            dg_interation=args.dg_interation,
+            contrast_enhancement_factor=args.contrast_enhancement_factor
         )
 
 
@@ -139,7 +141,9 @@ def make_deconvolution_args(
         background: int = 0,
         wavelength_em: int = 525,
         na: float = 0.4,
-        nimm: float = 1.42
+        nimm: float = 1.42,
+        contrast_enhancement_factor: float = 1.0,
+        dg_interation: int = 4,
 ) -> dict:
     # the 0 is for the z-axis since otf is actually 2D
     otf_shape = (0, ) + TiffFile(otf).asarray().shape
@@ -156,7 +160,9 @@ def make_deconvolution_args(
         'background': background,
         'wavelength_em': wavelength_em,
         'na': na,
-        'nimm': nimm
+        'nimm': nimm,
+        'contrast_enhancement_factor': contrast_enhancement_factor,
+        'dg_interation': dg_interation
     }
 
 
@@ -242,10 +248,12 @@ def process_cube(
 
             sigma = (gaussian_sigma, gaussian_sigma, round(gaussian_sigma, 0) + 1.5)
             if need_deconvolution and deconvolution_args is not None:
+                if deconvolution_args['contrast_enhancement_factor'] > 1:
+                    img /= deconvolution_args['contrast_enhancement_factor']
 
                 img_decon = pad_to_good_dim(img, deconvolution_args['otf_shape'])
 
-                num_gaussian_decons = max(1, deconvolution_args['n_iters'] // 4)
+                num_gaussian_decons = max(1, deconvolution_args['n_iters'] // deconvolution_args['dg_interation'])
                 for i in range(num_gaussian_decons):
                     if gaussian_sigma > 0:
                         gaussian(img_decon, sigma=sigma, output=img_decon)
@@ -376,6 +384,16 @@ if __name__ == '__main__':
                         default=0,
                         help="int or 'auto': User-supplied background to subtract.")
     parser.add_argument("--n_iters", "-it", type=int, required=False,
-                        default=10,
-                        help="int: Number of iterations, by default 10")
+                        default=12,
+                        help="int: Number of iterations, by default 12")
+    parser.add_argument("--dg_interation", "-dgi", type=int, required=False,
+                        default=4,
+                        help="int: Apply the 3D Gaussian filter after every dg_interation of deconvolution, "
+                             "by default 4")
+    parser.add_argument("--contrast_enhancement_factor", "-cef", type=float, required=False,
+                        default=1,
+                        help="float: Divide the image by this value before deconvolution to reduce background intensity. "
+                             "This helps control contrast enhancement, as deconvolution amplifies the foreground signal. "
+                             "by default 1. Suggested values are 2 to 4.")
+
     main(parser.parse_args())
