@@ -370,10 +370,10 @@ if __name__ == '__main__':
                         help="Slit width.  Default value is 12.")
     parser.add_argument("--wavelength_ex", "-ex", type=float, required=False,
                         default=488,
-                        help="Excitation wavelength in nm, by default 488.")
+                        help="Excitation wavelength in nm. For example 488, 561, and 647. by default 488.")
     parser.add_argument("--wavelength_em", "-em", type=float, required=False,
                         default=525,
-                        help="Emission wavelength in nm, by default 525.")
+                        help="Emission wavelength in nm. For example 525, 600, and 690. by default 525.")
     parser.add_argument("--na", "-na", type=float, required=False,
                         default=0.40,
                         help="Numerical Aperture, by default 0.4.")
