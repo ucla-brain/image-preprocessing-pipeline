@@ -342,6 +342,7 @@ if __name__ == '__main__':
 
     num_gpus = str(check_output([nvidia_smi, "-L"])).count('UUID')
     os.environ["CUDA_VISIBLE_DEVICES"] = f"{','.join(map(str, range(num_gpus)))}"
+    print(f"{','.join(map(str, range(num_gpus)))}")
     parser = ArgumentParser(
         description="Process FNT cubes in parallel\n\n",
         formatter_class=RawDescriptionHelpFormatter,
