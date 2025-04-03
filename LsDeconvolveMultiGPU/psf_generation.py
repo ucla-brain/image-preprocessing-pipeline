@@ -6,6 +6,7 @@ import scipy.special as sp
 from numpy import real, imag, array, ndarray, zeros, flip, sum
 from scipy.integrate import quad
 from scipy.optimize import fsolve
+from scipy.ndimage import gaussian_filter as gaussian
 from tifffile import imwrite
 
 
@@ -146,7 +147,8 @@ def determine_psf_size(
 
 def sample_psf(
         dxy=1.0, dz=1.0, nxy=5, nz=7,
-        numerical_aperture_obj=1.0, rf=1.0, lambda_ex=1.0, lambda_em=1.0, numerical_aperture_ls=1.0):
+        numerical_aperture_obj=1.0, rf=1.0, lambda_ex=1.0, lambda_em=1.0, numerical_aperture_ls=1.0,
+        doupling_effect=True):
     if nxy % 2 == 0 or nz % 2 == 0:
         print(f'function sample_psf: nxy is {nxy} and nz is {nz}, but must be odd!')
         raise RuntimeError
@@ -165,8 +167,19 @@ def sample_psf(
     # The other 7 Octanes are obtained by mirroring around the respective axes
     psf = mirror8(psf)
 
+    if doupling_effect:
+        gaussian_sigma = 1.0
+        sigma = (gaussian_sigma, gaussian_sigma, round(gaussian_sigma, 0) + 2.0)
+        gaussian(psf, sigma=sigma, output=psf)
+        psf_shape = list(psf.shape)
+        psf_shape[0] *= 2
+        doubled_psf = zeros(psf_shape, dtype='single')
+        doubled_psf[0:psf_shape[0]//2, :, :] = psf
+        doubled_psf[psf_shape[0]//2: psf_shape[0], :, :] = psf
+        psf = doubled_psf
+
     # normalize psf to integral one
-    psf = psf / sum(psf)
+    psf /= sum(psf)
     return psf
 
 
