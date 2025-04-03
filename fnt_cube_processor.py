@@ -78,6 +78,8 @@ def make_a_list_of_input_output_paths(args):
             refractive_index=args.nimm,
             f_cylinder_lens=args.f_cylinder_lens,
             slit_width=args.slit_width,
+            gaussian_sgima=args.gaussian,
+            doubled_psf=args.doubled_psf
         )
         psf: ndarray = rot90(psf, k=1, axes=(0, 2))
         psf_filepath = (output_folder / 'temp' / 'psf.tif').__str__()
@@ -339,7 +341,7 @@ if __name__ == '__main__':
         raise RuntimeError
 
     num_gpus = str(check_output([nvidia_smi, "-L"])).count('UUID')
-    os.environ["CUDA_VISIBLE_DEVICES"] = f"{','.join(map(str, range(num_gpus)))}"
+    os.environ["CUDA_VISIBLE_DEVICES"] = ','.join(map(str, range(num_gpus)))
     parser = ArgumentParser(
         description="Process FNT cubes in parallel\n\n",
         formatter_class=RawDescriptionHelpFormatter,
@@ -398,7 +400,7 @@ if __name__ == '__main__':
                         default=12,
                         help="int: Number of iterations, by default 12")
     parser.add_argument("--dg_interation", "-dgi", type=int, required=False,
-                        default=4,
+                        default=3,
                         help="int: Apply the 3D Gaussian filter after every dg_interation of deconvolution, "
                              "by default 4")
     parser.add_argument("--contrast_enhancement_factor", "-cef", type=float, required=False,
@@ -406,5 +408,7 @@ if __name__ == '__main__':
                         help="float: Divide the image by this value before deconvolution to reduce background intensity. "
                              "This helps control contrast enhancement, as deconvolution amplifies the foreground signal. "
                              "by default 1. Suggested values are 2 to 4.")
+    parser.add_argument("--doubled_psf", "-dpsf", default=False, action=BooleanOptionalAction,
+                        help="Use a specific psf that can better eliminate the doubling. default is --no-doubled_psf.")
 
     main(parser.parse_args())

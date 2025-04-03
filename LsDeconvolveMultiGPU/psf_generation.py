@@ -48,14 +48,16 @@ def ls_psf_eq(x, y, z, numerical_aperture_obj, refractive_index, lambda_ex, lamb
 
 
 def generate_psf(
-        lambda_em=642.0,
-        lambda_ex=680.0,
-        numerical_aperture=0.4,
-        dxy=422.0,
-        dz=1000.0,
-        refractive_index=1.52,  # 1.45 of the lens
-        f_cylinder_lens=240.0,  # 240
-        slit_width=12.0,
+        lambda_em: float = 642.0,
+        lambda_ex: float = 680.0,
+        numerical_aperture: float = 0.4,
+        dxy: float = 422.0,
+        dz: float = 1000.0,
+        refractive_index: float = 1.42,  # 1.45 of the lens
+        f_cylinder_lens: float = 240.0,  # 240
+        slit_width: float = 12.0,
+        gaussian_sgima: float = 0,
+        doubled_psf: bool = False
 ):
     """generate point spread function matrix
 
@@ -77,6 +79,13 @@ def generate_psf(
         F cylinder lens in mm
     slit_width:
         slit aperture width in mm
+    gaussian_sgima: float
+        Specifies the standard deviation for the Gaussian filter to be applied to the image.
+        If the filter is applied, the Point Spread Function (PSF) will be adjusted accordingly
+        to enhance the image quality.
+    doubled_psf: bool
+        Indicates whether the objects are doubled along the axial axis. If set to True,
+        the PSF will be doubled to effectively mitigate the doubling effect.
 
     Returns
     -------
@@ -102,8 +111,9 @@ def generate_psf(
 
     numerical_aperture_ls = math.sin(math.atan(slit_width / (2.0 * f_cylinder_lens)))
 
-    psf = sample_psf(dxy_psf, dz, nxy, nz, numerical_aperture, refractive_index, lambda_ex, lambda_em,
-                     numerical_aperture_ls)
+    psf = sample_psf(dxy=dxy_psf, dz=dz, nxy=nxy, nz=nz, numerical_aperture_obj=numerical_aperture, rf=refractive_index,
+                     lambda_ex=lambda_ex, lambda_em=lambda_em, numerical_aperture_ls=numerical_aperture_ls,
+                     doubling_effect=doubled_psf, gaussian_sigma=gaussian_sgima)
 
     print(f"full width half maxima of xy-plane is {full_half_width_maxima_xy:.1f} nm.\n"
           f"full width half maxima of z-axis is {full_half_width_maxima_z:.1f} nm.")
@@ -146,16 +156,15 @@ def determine_psf_size(
 
 
 def sample_psf(
-        dxy=1.0, dz=1.0, nxy=5, nz=7,
-        numerical_aperture_obj=1.0, rf=1.0, lambda_ex=1.0, lambda_em=1.0, numerical_aperture_ls=1.0,
-        doupling_effect=True):
+        dxy: float = 0.7, dz: float = 1.4, nxy: float = 5, nz: float = 7,
+        numerical_aperture_obj: float = 0.4, rf: float = 1.42, lambda_ex: float = 642.0, lambda_em: float = 680.0,
+        numerical_aperture_ls: float = 1.0, gaussian_sigma: float = 0.5, doubling_effect: bool = True,
+):
     if nxy % 2 == 0 or nz % 2 == 0:
         print(f'function sample_psf: nxy is {nxy} and nz is {nz}, but must be odd!')
         raise RuntimeError
 
-    psf = zeros(
-        [(nz - 1) // 2 + 1, (nxy - 1) // 2 + 1, (nxy - 1) // 2 + 1],
-        dtype='single')
+    psf = zeros([(nz - 1) // 2 + 1, (nxy - 1) // 2 + 1, (nxy - 1) // 2 + 1], dtype="single")
 
     for z in range(0, (nz - 1) // 2 + 1):
         for y in range(0, (nxy - 1) // 2 + 1):
@@ -167,10 +176,11 @@ def sample_psf(
     # The other 7 Octanes are obtained by mirroring around the respective axes
     psf = mirror8(psf)
 
-    if doupling_effect:
-        gaussian_sigma = 1.0
+    if gaussian_sigma > 0:
         sigma = (gaussian_sigma, gaussian_sigma, round(gaussian_sigma, 0) + 2.0)
         gaussian(psf, sigma=sigma, output=psf)
+
+    if doubling_effect:
         psf_shape = list(psf.shape)
         psf_shape[0] *= 2
         doubled_psf = zeros(psf_shape, dtype='single')
