@@ -16,12 +16,14 @@ from skimage.filters import gaussian
 from tifffile import imwrite, TiffFile
 from tqdm import tqdm
 from shutil import copy
+from PIL import Image
 
 from LsDeconvolveMultiGPU.psf_generation import generate_psf
 from pystripe.core import filter_streaks, is_uniform_2d, is_uniform_3d, MultiProcessQueueRunner, progress_manager
 from subprocess import check_output
 
 from align_images import trim_to_shape
+
 
 # Good dimension is defined as one that can be factorized int 2s, 3s, 5s, and 7s.
 # According to CUFFT manual, such dimension would warrant fast FFT
@@ -323,6 +325,17 @@ def main(args):
         args_queue.close()
         progress_queue.cancel_join_thread()
         progress_queue.close()
+
+    if args.convert_tif:
+        output = Path(args.output)
+        for file in output.glob("*.nrrd"):
+            img, header = read(file)
+            # imwrite(output / (file.stem + ".tif"), img, compression="LZW")
+            image_stack = [Image.fromarray(_) for _ in img]
+            image_stack[0].save(output / (file.stem + ".tif"), save_all=True, append_images=image_stack[1:],
+                                compression='tiff_lzw')
+            file.unlink()
+
     return return_code
 
 
@@ -400,4 +413,6 @@ if __name__ == '__main__':
     parser.add_argument("--n_iters", "-it", type=int, required=False,
                         default=10,
                         help="int: Number of iterations, by default 10")
+    parser.add_argument("--convert_tif", "-ct", default=False, type=bool, required=False,
+                        help="Set to true to convert .nrrd files in the output folder to tif.")
     main(parser.parse_args())
