@@ -18,7 +18,7 @@ from tifffile import imwrite, TiffFile
 from tqdm import tqdm
 from shutil import copy
 
-from LsDeconvolveMultiGPU.psf_generation import generate_psf
+from LsDeconvolveMultiGPU.psf_generator import generate_psf
 from pystripe.core import filter_streaks, is_uniform_2d, is_uniform_3d, MultiProcessQueueRunner, progress_manager
 from subprocess import check_output
 
