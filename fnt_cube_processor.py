@@ -2,7 +2,7 @@ import os
 import sys
 import contextlib
 from argparse import RawDescriptionHelpFormatter, ArgumentParser, BooleanOptionalAction
-from multiprocessing import freeze_support, Queue
+from multiprocessing import freeze_support, Queue, set_start_method
 from pathlib import Path
 from platform import uname
 
@@ -323,6 +323,7 @@ def main(args):
 
 
 if __name__ == '__main__':
+    set_start_method("spawn")
     freeze_support()
     if sys.platform == "win32":
         psutil.Process().nice(getattr(psutil, "IDLE_PRIORITY_CLASS"))
