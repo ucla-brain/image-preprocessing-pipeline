@@ -12,7 +12,6 @@ from numpy import dtype as np_d_type
 from numpy import rot90, float32, iinfo, clip, ndarray, pad
 from psutil import cpu_count
 from pycudadecon import make_otf, decon
-# from skimage.filters import gaussian
 from scipy.ndimage import gaussian_filter as gaussian
 from tifffile import imwrite, TiffFile
 from tqdm import tqdm
