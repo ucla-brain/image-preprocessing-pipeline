@@ -1655,10 +1655,12 @@ def process_dc_images(input_file: Path, input_path: Path, output_path: Path, arg
 class MultiProcessQueueRunner(Process):
     def __init__(self, progress_queue: Queue, args_queue: Queue,
                  gpu_semaphore: Queue = None,
+                 gpu: int = None,
                  fun: Callable = read_filter_save,
                  timeout: float = None,
                  replace_timeout_with_dummy: bool = True):
-        os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+        if gpu is not None:
+            os.environ["CUDA_VISIBLE_DEVICES"] = f"{gpu}"
         Process.__init__(self)
         self.daemon = False
         self.progress_queue = progress_queue

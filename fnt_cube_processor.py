@@ -5,6 +5,7 @@ from argparse import RawDescriptionHelpFormatter, ArgumentParser, BooleanOptiona
 from multiprocessing import freeze_support, Queue, set_start_method
 from pathlib import Path
 from platform import uname
+from itertools import cycle
 
 import psutil
 from nrrd import read, write
@@ -310,9 +311,10 @@ def main(args):
         del args_list
         workers = min(args.num_processes, num_images)
         progress_queue = Queue()
+        cycling_gpus = cycle(gpus)
         for _ in range(workers):
             MultiProcessQueueRunner(progress_queue, args_queue,
-                                    gpu_semaphore=gpu_semaphore, fun=process_cube, timeout=None,
+                                    gpu_semaphore=gpu_semaphore, gpu=next(cycling_gpus), fun=process_cube, timeout=None,
                                     replace_timeout_with_dummy=False).start()
         return_code = progress_manager(progress_queue, workers, num_images, desc="FNT Cube Processor", unit=" cubes")
         args_queue.cancel_join_thread()
