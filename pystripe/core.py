@@ -1658,6 +1658,7 @@ class MultiProcessQueueRunner(Process):
                  fun: Callable = read_filter_save,
                  timeout: float = None,
                  replace_timeout_with_dummy: bool = True):
+        os.environ["CUDA_VISIBLE_DEVICES"] = "1"
         Process.__init__(self)
         self.daemon = False
         self.progress_queue = progress_queue
