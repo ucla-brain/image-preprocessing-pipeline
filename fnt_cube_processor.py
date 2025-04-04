@@ -293,6 +293,7 @@ def main(args):
     # gpu_semaphore = None
     # print(f"args.threads_per_gpu: {args.threads_per_gpu}, cuda_device_count: {num_gpus}, args.exclude_gpus: {args.exclude_gpus}")
     gpus = tuple(gpu for gpu in range(num_gpus) if str(gpu) not in args.exclude_gpus)
+    cycling_gpus = cycle(gpus)
     gpu_semaphore = Queue(maxsize=len(gpus) * args.threads_per_gpu)
     for _ in range(args.threads_per_gpu):
         for gpu in gpus:
@@ -311,7 +312,6 @@ def main(args):
         del args_list
         workers = min(args.num_processes, num_images)
         progress_queue = Queue()
-        cycling_gpus = cycle(gpus)
         for _ in range(workers):
             MultiProcessQueueRunner(progress_queue, args_queue,
                                     gpu_semaphore=gpu_semaphore, gpu=next(cycling_gpus), fun=process_cube, timeout=None,
