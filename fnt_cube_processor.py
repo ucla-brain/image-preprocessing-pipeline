@@ -405,7 +405,7 @@ if __name__ == '__main__':
     parser.add_argument("--dg_interation", "-dgi", type=int, required=False,
                         default=3,
                         help="int: Apply the 3D Gaussian filter after every dg_interation of deconvolution, "
-                             "by default 4")
+                             "by default 3")
     parser.add_argument("--contrast_enhancement_factor", "-cef", type=float, required=False,
                         default=1,
                         help="float: Divide the image by this value before deconvolution to reduce background intensity. "
