@@ -177,7 +177,9 @@ def sample_psf(
     psf = mirror8(psf)
 
     if gaussian_sigma > 0:
-        sigma = (gaussian_sigma, gaussian_sigma, round(gaussian_sigma, 0) + 2.0)
+        sigma = (gaussian_sigma, gaussian_sigma, round(gaussian_sigma, 0) + 1.5)
+        if doubling_effect:
+            sigma = (gaussian_sigma, gaussian_sigma, round(gaussian_sigma, 0) + 2.0)
         gaussian(psf, sigma=sigma, output=psf)
 
     if doubling_effect:

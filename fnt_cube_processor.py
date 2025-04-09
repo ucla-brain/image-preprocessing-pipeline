@@ -257,7 +257,7 @@ def process_cube(
                 num_gaussian_decons = max(1, deconvolution_args['n_iters'] // deconvolution_args['dg_interation'])
                 for i in range(num_gaussian_decons):
                     if gaussian_sigma > 0:
-                        sigma = (gaussian_sigma, gaussian_sigma, round(gaussian_sigma, 0) + 2.0)
+                        sigma = (gaussian_sigma, gaussian_sigma, round(gaussian_sigma, 0) + 1.5) # 2 --> dpsf
                         gaussian(img_decon, sigma=sigma, output=img_decon)
 
                     img_decon = apply_deconvolution(img_decon, deconvolution_args, gpu_semaphore, num_gaussian_decons)
