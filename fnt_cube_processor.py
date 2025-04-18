@@ -269,16 +269,16 @@ def process_cube(
 
                     img_decon = apply_deconvolution(img_decon, deconvolution_args, gpu_semaphore, num_gaussian_decons)
 
-                    from PIL import Image
-                    img = trim_to_shape(img.shape, img_decon.copy())
-                    if img.dtype != dtype and np_d_type(dtype).kind in ("u", "i"):
-                        clip(img, iinfo(dtype).min, iinfo(dtype).max, out=img)
-                        img = img.astype(dtype)
-                    image_stack = [Image.fromarray(_) for _ in img]
-                    image_stack[0].save(output_file.parent / (output_file.stem + f"_{i}.tif"),
-                                        save_all=True,
-                                        append_images=image_stack[1:],
-                                        compression='tiff_lzw')
+                    # from PIL import Image
+                    # img = trim_to_shape(img.shape, img_decon.copy())
+                    # if img.dtype != dtype and np_d_type(dtype).kind in ("u", "i"):
+                    #     clip(img, iinfo(dtype).min, iinfo(dtype).max, out=img)
+                    #     img = img.astype(dtype)
+                    # image_stack = [Image.fromarray(_) for _ in img]
+                    # image_stack[0].save(output_file.parent / (output_file.stem + f"_{i}.tif"),
+                    #                     save_all=True,
+                    #                     append_images=image_stack[1:],
+                    #                     compression='tiff_lzw')
 
                 # resize image to match original
                 img = trim_to_shape(img.shape, img_decon)
