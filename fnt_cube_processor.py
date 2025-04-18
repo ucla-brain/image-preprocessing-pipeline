@@ -110,7 +110,8 @@ def make_a_list_of_input_output_paths(args):
             na=args.na,
             nimm=args.nimm,
             dg_interation=args.dg_interation,
-            contrast_enhancement_factor=args.contrast_enhancement_factor
+            contrast_enhancement_factor=args.contrast_enhancement_factor,
+            doubled_psf=args.doubled_psf
         )
 
 
@@ -146,6 +147,7 @@ def make_deconvolution_args(
         nimm: float = 1.42,
         contrast_enhancement_factor: float = 1.0,
         dg_interation: int = 4,
+        doubled_psf: bool = False,
 ) -> dict:
     # the 0 is for the z-axis since otf is actually 2D
     otf_shape = (0, ) + TiffFile(otf).asarray().shape
@@ -164,7 +166,8 @@ def make_deconvolution_args(
         'na': na,
         'nimm': nimm,
         'contrast_enhancement_factor': contrast_enhancement_factor,
-        'dg_interation': dg_interation
+        'dg_interation': dg_interation,
+        'doubled_psf': doubled_psf
     }
 
 
@@ -257,21 +260,25 @@ def process_cube(
                 num_gaussian_decons = max(1, deconvolution_args['n_iters'] // deconvolution_args['dg_interation'])
                 for i in range(num_gaussian_decons):
                     if gaussian_sigma > 0:
-                        sigma = (gaussian_sigma, gaussian_sigma, round(gaussian_sigma, 0) + 1.5) # 2 --> dpsf
+                        sigma = (
+                            gaussian_sigma,
+                            gaussian_sigma,
+                            round(gaussian_sigma, 0) + (2.0 if deconvolution_args['doubled_psf'] else 1.5)
+                        ) # 2 --> dpsf
                         gaussian(img_decon, sigma=sigma, output=img_decon)
 
                     img_decon = apply_deconvolution(img_decon, deconvolution_args, gpu_semaphore, num_gaussian_decons)
 
-                    # from PIL import Image
-                    # img = trim_to_shape(img.shape, img_decon.copy())
-                    # if img.dtype != dtype and np_d_type(dtype).kind in ("u", "i"):
-                    #     clip(img, iinfo(dtype).min, iinfo(dtype).max, out=img)
-                    #     img = img.astype(dtype)
-                    # image_stack = [Image.fromarray(_) for _ in img]
-                    # image_stack[0].save(output_file.parent / (output_file.stem + f"_{i}.tif"),
-                    #                     save_all=True,
-                    #                     append_images=image_stack[1:],
-                    #                     compression='tiff_lzw')
+                    from PIL import Image
+                    img = trim_to_shape(img.shape, img_decon.copy())
+                    if img.dtype != dtype and np_d_type(dtype).kind in ("u", "i"):
+                        clip(img, iinfo(dtype).min, iinfo(dtype).max, out=img)
+                        img = img.astype(dtype)
+                    image_stack = [Image.fromarray(_) for _ in img]
+                    image_stack[0].save(output_file.parent / (output_file.stem + f"_{i}.tif"),
+                                        save_all=True,
+                                        append_images=image_stack[1:],
+                                        compression='tiff_lzw')
 
                 # resize image to match original
                 img = trim_to_shape(img.shape, img_decon)
