@@ -170,9 +170,9 @@ def main():
                         words = second_line.split()
                         
                         if len(words) >= 4:
-                            # x_y_voxels = words[2]  # 3rd word
-                            x_y_voxels = words[3] 
-                            z_voxel = words[3]  # 4th word
+                            x_y_voxels = words[2] 
+                            z_voxel = words[2]  # 3rd word
+                            # z_voxels = words[3]  # 3rd word
                             x_y_voxels = round(float(x_y_voxels), 1)
                             z_voxel = round(float(z_voxel), 1)
             if z_voxel != '':
