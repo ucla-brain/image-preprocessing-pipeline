@@ -279,7 +279,7 @@ function [] = LsDeconv(varargin)
             amplification, filter, resume, starting_block);
 
         fclose(log_file);
-        open(log_file_path);
+        % open(log_file_path);
 
         if isdeployed
             exit(0);

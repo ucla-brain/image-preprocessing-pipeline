@@ -9,7 +9,7 @@ def construct_cache_drive_folder_name(brain_name, lambda_ex, lambda_em):
 
 
 def main():
-    magnifications = {'15x': (400, 800), '9x': (800, 800)}
+    magnifications = {'15x': (400, 1200), '9x': (700, 1400), '4x': (1800, 1800)}
     lambda_ex_choices = [488, 561, 642]
     lambda_em_choices = [525, 600, 690]
 
@@ -19,7 +19,7 @@ def main():
                         help='Path to the folder containing the images.')
     parser.add_argument('magnification', type=str, 
                         choices=magnifications.keys(), 
-                        help='Magnification used, either 15x or 9x.')
+                        help='Magnification used, either 15x, 9x, or 4x.')
     parser.add_argument('numit', type=int, 
                         choices=range(1, 51), metavar="[1-50]", 
                         help='Number of iterations, between 1 and 50.')
