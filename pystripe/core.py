@@ -29,7 +29,7 @@ from numpy import median as np_median
 from numpy import min as np_min
 from numpy import (uint8, uint16, float32, float64, iinfo, ndarray, generic, broadcast_to, exp, expm1, log1p, tanh,
                    zeros, ones, cumsum, arange, unique, interp, pad, clip, where, rot90, flipud, dot, reshape, nonzero,
-                   logical_not, prod, asarray)
+                   logical_not, prod, rint)
 from psutil import cpu_count
 from ptwt import wavedec2 as pt_wavedec2
 from ptwt import waverec2 as pt_waverec2
@@ -1120,6 +1120,7 @@ def filter_streaks(
         img = expm1_jit(img)
 
     if np_d_type(d_type).kind in ("u", "i"):
+        img = rint(img)
         d_type_info = iinfo(d_type)
         clip(img, d_type_info.min, d_type_info.max, out=img)
     if img.dtype != d_type:
