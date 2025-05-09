@@ -219,8 +219,8 @@ void mexFunction( int nlhs,       mxArray *plhs[],
 				mexErrMsgIdAndTxt("MATLAB:semaphore:post", "Unable to post the semaphore with key #%s due to system error #%d \"%s\".", semkeyStr, lastError, (LPCTSTR)lpMsgBuf);
 				LocalFree(lpMsgBuf);
 			}
-			CloseHandle(hSemaphore);
 		}
+		CloseHandle(hSemaphore);
 #endif
 		break;
 	case 'd': /* Destroy */
