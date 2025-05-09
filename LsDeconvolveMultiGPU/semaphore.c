@@ -215,11 +215,13 @@ void mexFunction( int nlhs,       mxArray *plhs[],
 								(LPTSTR) &lpMsgBuf,
 								0,
 								NULL);
-				CloseHandle(hSemaphore);
+				//Keivan
+				//CloseHandle(hSemaphore);
 				mexErrMsgIdAndTxt("MATLAB:semaphore:post", "Unable to post the semaphore with key #%s due to system error #%d \"%s\".", semkeyStr, lastError, (LPCTSTR)lpMsgBuf);
 				LocalFree(lpMsgBuf);
 			}
 		}
+		//Keivan
 		CloseHandle(hSemaphore);
 #endif
 		break;
