@@ -57,7 +57,7 @@
  */
 
  /*
- Debugged in 2025 by Keivan Moradi @ UCLA Brain and Artificial Nexus lab @ UCLA
+ Debugged in 2025 by Keivan Moradi @ Brain Research and Artificial Intelligence Nexus lab @ UCLA
  */
 
 #ifdef _CRT_SECURE_NO_DEPRECATE
@@ -66,7 +66,7 @@
 
 #ifndef WIN32
 	#include <sys/shm.h>
-  #include <semaphore.h>
+    #include <semaphore.h>
 #else
 	#include <windows.h>
 	#include <stdio.h>
@@ -83,7 +83,7 @@
 /* ------------------------------------------------------------------------- */
 /* Matlab gateway function                                                   */
 /*                                                                           */
-/* (see semaphore.m for description)                                      */
+/* (see semaphore.m for description)                                         */
 /* ------------------------------------------------------------------------- */
 void mexFunction(
     int nlhs,       mxArray *plhs[],
@@ -120,7 +120,8 @@ void mexFunction(
 		mexErrMsgIdAndTxt("MATLAB:semaphore", "Second input argument must be a valid integral key.");
 #endif
 	/* check outputs */
-	if(nlhs > 1) mexErrMsgIdAndTxt("MATLAB:semaphore", "Function returns only one value.");
+	if (nlhs > 1)
+	    mexErrMsgIdAndTxt("MATLAB:semaphore", "Function returns only one value.");
 	/* clone, attach, detach, free */
 	switch(tolower(directive[0])) {
 	case 'c': /* Create */
@@ -146,7 +147,7 @@ void mexFunction(
 #else
 		//Keivan
 		hSemaphore = CreateSemaphore(NULL, semval, semval, semkeyStr);
-        if (hSemaphore == NULL) {
+        if (NULL == hSemaphore) {
 			if (GetLastError() != ERROR_INVALID_HANDLE) {
 				lastError = GetLastError();
 				FormatMessage(
@@ -195,7 +196,7 @@ void mexFunction(
 #else
 		//Keivan
 		hSemaphore = OpenSemaphore(SYNCHRONIZE, FALSE, semkeyStr);
-        if (hSemaphore == NULL) {
+        if (NULL == hSemaphore) {
 			mexErrMsgIdAndTxt("MATLAB:semaphore:wait", "Unable to open the semaphore handle.");
 		} else {
 			if (WAIT_FAILED==WaitForSingleObject(hSemaphore, INFINITE))
@@ -228,7 +229,7 @@ void mexFunction(
 		plhs[0] = mxCreateDoubleMatrix(0, 0, mxREAL);
 #else
         hSemaphore = OpenSemaphore(SEMAPHORE_MODIFY_STATE, FALSE, semkeyStr);
-		if (hSemaphore == NULL) {
+		if (NULL == hSemaphore) {
 			mexErrMsgIdAndTxt("MATLAB:semaphore:post", "Unable to open the semaphore handle.");
 		} else {
 			BOOL result = ReleaseSemaphore(hSemaphore, 1, NULL);
@@ -278,7 +279,7 @@ void mexFunction(
 #else
 		// Windows: Open the handle and close it
         hSemaphore = OpenSemaphore(SEMAPHORE_ALL_ACCESS, FALSE, semkeyStr);
-        if (hSemaphore == NULL) {
+        if (NULL == hSemaphore) {
             mexErrMsgIdAndTxt("MATLAB:semaphore:destroy", "Unable to open semaphore handle for destruction.");
         } else {
             if (!CloseHandle(hSemaphore)) {
