@@ -30,7 +30,7 @@ function [] = deconvolve(folderPath, dxy, dz, numit, lambda_ex, lambda_em, ...
         1,    ... % 0 not resume, 1 = resume
         1,    ... % starting block should be greater than 0 for multiGPU processing
         0,    ... % 1 flip the deconvolved image upside down. 0 do not.
-        1,    ... % 1 convert_to_8bit, 0 keep as is
+        0,    ... % 1 convert_to_8bit, 0 keep as is
         convertCharsToStrings(cache_drive_path) ... % cache drive (optional)
     );
 end
