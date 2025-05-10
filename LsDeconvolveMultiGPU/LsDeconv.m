@@ -1411,7 +1411,7 @@ function pad_size = gaussian_pad_size(image_size, filter_size)
 end
 
 function [lb, ub] = deconvolved_stats(deconvolved)
-    stats = prctile(deconvolved, [0.1 99.9], "all");
+    stats = prctile(deconvolved, [0.1 99.99], "all");
     if isgpuarray(stats)
         stats = gather(stats);
     end
