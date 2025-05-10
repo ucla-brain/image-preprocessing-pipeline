@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2011 Joshua V Dillon
- * Copyright (c) 2014 Andrew Smart (besed on "semaphore.c" by Joshua V. Dillon)
+ * Copyright (c) 2014 Andrew Smart (based on "semaphore.c" by Joshua V. Dillon)
  * All rights reserved.
  * 
  * Redistribution and use in source and binary forms, with or
@@ -132,7 +132,7 @@ void mexFunction(
 #ifndef WIN32
         /* create the shared memory segment */
 		semflg = semflg|IPC_CREAT|IPC_EXCL;
-		if ( (semid = shmget(semkey, sizeof(sem_t), semflg )) < 0)
+		if ( (semid = shmget(semkey, sizeof(sem_t), semflg )) < 0 )
 		    mexErrMsgIdAndTxt("MATLAB:semaphore:create", "Unable to create shared memory segment.");
 		/* attach the shared memory segment to this dataspace */
 		sem = (sem_t*)shmat(semid,NULL,0);
@@ -158,19 +158,22 @@ void mexFunction(
                     0,
                     NULL
                 );
-				mexErrMsgIdAndTxt("MATLAB:semaphore:post", "Unable to post the semaphore with key #%s due to system error #%d \"%s\".", semkeyStr, lastError, (LPCTSTR)lpMsgBuf);
+				mexErrMsgIdAndTxt("MATLAB:semaphore:create", "Unable to create the semaphore with key #%s due to system error #%d \"%s\".", semkeyStr, lastError, (LPCTSTR)lpMsgBuf);
 				LocalFree(lpMsgBuf);
 			} else
 				mexErrMsgIdAndTxt("MATLAB:semaphore:create", "Unable to create semaphore due to ERROR_INVALID_HANDLE.");
 		} else {
-		    CloseHandle(hSemaphore);
+		    if (!CloseHandle(hSemaphore)) {
+                mexErrMsgIdAndTxt("MATLAB:semaphore:create", "Failed to close semaphore handle.");
+            }
+		    plhs[0] = mxCreateDoubleMatrix(0, 0, mxREAL);
 		}
 #endif
 		break;
 	case 'w': /* Wait */
 #ifndef WIN32
 		/* locate the shared memory segment */
-		if ((semid = shmget(semkey, sizeof(sem_t), semflg)) < 0)
+		if ( (semid = shmget(semkey, sizeof(sem_t), semflg)) < 0 )
 		    mexErrMsgIdAndTxt("MATLAB:semaphore:wait", "Unable to locate shared memory segment.");
 		/* attach the shared memory segment to this dataspace */
 		sem = (sem_t*)shmat(semid, NULL, 0);
@@ -179,13 +182,6 @@ void mexFunction(
 		/* wait on the semaphore */
 
 		// Keivan
-		/*
-		while((semflg=sem_wait(sem)) !=0) {
-			// the lock wasn't acquired
-			if(semflg != EINVAL) mexErrMsgIdAndTxt("MATLAB:semaphore:wait", "Error wating for semaphore.");
-			else mexWarnMsgIdAndTxt("MATLAB:semaphore:wait", "Wait interrupted; resuming wait.");
-		}
-		*/
 		while (sem_wait(sem) != 0) {
             if (errno != EINTR)  // EINTR = interrupted system call, which is retryable
                 mexErrMsgIdAndTxt("MATLAB:semaphore:wait", "Error waiting for semaphore: %s", strerror(errno));
@@ -200,12 +196,15 @@ void mexFunction(
 		//Keivan
 		hSemaphore = OpenSemaphore(SYNCHRONIZE, FALSE, semkeyStr);
         if (hSemaphore == NULL) {
-			mexErrMsgIdAndTxt("MATLAB:semaphore:post", "Unable to open the semaphore handle.");
+			mexErrMsgIdAndTxt("MATLAB:semaphore:wait", "Unable to open the semaphore handle.");
 		} else {
 			if (WAIT_FAILED==WaitForSingleObject(hSemaphore, INFINITE))
-				mexErrMsgIdAndTxt("MATLAB:semaphore:post", "Unable to open the semaphore due to failure.");
+				mexErrMsgIdAndTxt("MATLAB:semaphore:wait", "Unable to open the semaphore due to failure.");
 			//Keivan
-		    CloseHandle(hSemaphore);
+		    if (!CloseHandle(hSemaphore)) {
+                mexErrMsgIdAndTxt("MATLAB:semaphore:wait", "Failed to close semaphore handle.");
+            }
+            plhs[0] = mxCreateDoubleMatrix(0, 0, mxREAL);
 		}
 #endif
 		break;
@@ -228,7 +227,7 @@ void mexFunction(
 		/* assign the output */
 		plhs[0] = mxCreateDoubleMatrix(0, 0, mxREAL);
 #else
-        hSemaphore = OpenSemaphore(SEMAPHORE_MODIFY_STATE,false,semkeyStr);
+        hSemaphore = OpenSemaphore(SEMAPHORE_MODIFY_STATE, FALSE, semkeyStr);
 		if (hSemaphore == NULL) {
 			mexErrMsgIdAndTxt("MATLAB:semaphore:post", "Unable to open the semaphore handle.");
 		} else {
@@ -248,7 +247,10 @@ void mexFunction(
 				LocalFree(lpMsgBuf);
 			}
 			//Keivan
-		    CloseHandle(hSemaphore);
+		    if (!CloseHandle(hSemaphore)) {
+                mexErrMsgIdAndTxt("MATLAB:semaphore:post", "Failed to close semaphore handle.");
+            }
+		    plhs[0] = mxCreateDoubleMatrix(0, 0, mxREAL);
 		}
 #endif
 		break;
@@ -256,7 +258,7 @@ void mexFunction(
 #ifndef WIN32
 		/* locate the shared memory segment */
 		semid = shmget(semkey, sizeof(sem_t), semflg);
-        if (semid < 0)
+        if ( semid < 0 )
 		    mexErrMsgIdAndTxt("MATLAB:semaphore:destroy", "Unable to locate shared memory segment.");
 		/* attach the shared memory segment to this dataspace */
 		sem = (sem_t*)shmat(semid, NULL, 0);
@@ -269,7 +271,7 @@ void mexFunction(
 		if ( shmdt(sem) != 0 )
 		    mexErrMsgIdAndTxt("MATLAB:semaphore:destroy", "Unable to detach shared memory.");
 		/* free shared memory */
-		if ( (shmctl(semid,IPC_RMID,(struct shmid_ds *)NULL)) != 0 )
+		if ( (shmctl(semid, IPC_RMID, (struct shmid_ds *)NULL)) != 0 )
 		    mexErrMsgIdAndTxt("MATLAB:semaphore:destroy", "Unable to destroy shared memory.");
 		/* assign the output */
 		plhs[0] = mxCreateDoubleMatrix(0, 0, mxREAL);
