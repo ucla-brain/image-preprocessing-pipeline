@@ -56,6 +56,10 @@
  *
  */
 
+ /*
+ Debugged in 2025 by Keivan Moradi @ UCLA Brain and Artificial Nexus lab @ UCLA
+ */
+
 #ifdef _CRT_SECURE_NO_DEPRECATE
 	#define WIN32
 #endif
@@ -141,18 +145,19 @@ void mexFunction(
 		plhs[0] = mxCreateDoubleScalar((double)semflg);
 #else
 		//Keivan
-		// if(0==CreateSemaphore(NULL, semval, semval, semkeyStr)) {
 		hSemaphore = CreateSemaphore(NULL, semval, semval, semkeyStr);
         if (hSemaphore == NULL) {
-			if(GetLastError() != ERROR_INVALID_HANDLE) {
+			if (GetLastError() != ERROR_INVALID_HANDLE) {
 				lastError = GetLastError();
-				FormatMessage(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS | FORMAT_MESSAGE_MAX_WIDTH_MASK,
-								NULL,
-								lastError,
-								MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), /* Default language */
-								(LPTSTR) &lpMsgBuf,
-								0,
-								NULL);
+				FormatMessage(
+				    FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS | FORMAT_MESSAGE_MAX_WIDTH_MASK,
+				    NULL,
+                    lastError,
+                    MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), /* Default language */
+                    (LPTSTR) &lpMsgBuf,
+                    0,
+                    NULL
+                );
 				mexErrMsgIdAndTxt("MATLAB:semaphore:post", "Unable to post the semaphore with key #%s due to system error #%d \"%s\".", semkeyStr, lastError, (LPCTSTR)lpMsgBuf);
 				LocalFree(lpMsgBuf);
 			} else
@@ -195,7 +200,6 @@ void mexFunction(
 		//Keivan
 		hSemaphore = OpenSemaphore(SYNCHRONIZE, FALSE, semkeyStr);
         if (hSemaphore == NULL) {
-		// if (0 == (hSemaphore=OpenSemaphore(SYNCHRONIZE, false, semkeyStr))) {
 			mexErrMsgIdAndTxt("MATLAB:semaphore:post", "Unable to open the semaphore handle.");
 		} else {
 			if (WAIT_FAILED==WaitForSingleObject(hSemaphore, INFINITE))
@@ -222,7 +226,7 @@ void mexFunction(
 		if ( shmdt(sem) != 0 )
 		    mexErrMsgIdAndTxt("MATLAB:semaphore:post", "Unable to detach shared memory.");
 		/* assign the output */
-		plhs[0] = mxCreateDoubleMatrix(0,0,mxREAL);
+		plhs[0] = mxCreateDoubleMatrix(0, 0, mxREAL);
 #else
         hSemaphore = OpenSemaphore(SEMAPHORE_MODIFY_STATE,false,semkeyStr);
 		if (hSemaphore == NULL) {
