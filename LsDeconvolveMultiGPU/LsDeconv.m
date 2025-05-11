@@ -694,7 +694,7 @@ end
 
 function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criterion, gpu, filter)
     bl_size = size(bl);
-    % bl = filter_subband_3d_xz(bl, 1, 0, "db9", [1, 2])
+    bl = filter_subband_3d_z(bl, 1, 0, "db9")
     if gpu
         gpu_device = gpuDevice(gpu);
         memory_needed_for_full_acceleration = 35e9;
@@ -1460,19 +1460,25 @@ function R = convFFT(data , otf)
     R = ifftn(otf .* fftn(data));
 end
 
-function img3d = filter_subband_3d_xz(img3d, sigma, levels, wavelet, axes)
+function img3d = filter_subband_3d_z(img3d, sigma, levels, wavelet)
     % Applies filter_subband to each XZ slice (along Y-axis)
     % In-place update version to avoid extra allocation
     % axes typically use [1] to filter vertically along Z in XZ plane
 
     [X, Y, Z] = size(img3d);
     original_class = class(img3d);
+    for x = 1:X
+        % Work directly with a slice reference
+        slice = squeeze(img3d(x, :, :));  % (Y × Z), possibly transposed memory
+        % Apply filtering (cast ensures matching type inside filter_subband)
+        img3d(:, y, :) = cast(filter_subband(slice, sigma, levels, wavelet, [2]), original_class);
+    end
 
     for y = 1:Y
         % Work directly with a slice reference
         slice = squeeze(img3d(:, y, :));  % (X × Z), possibly transposed memory
         % Apply filtering (cast ensures matching type inside filter_subband)
-        img3d(:, y, :) = cast(filter_subband(slice, sigma, levels, wavelet, axes), original_class);
+        img3d(:, y, :) = cast(filter_subband(slice, sigma, levels, wavelet, [2]), original_class);
     end
 end
 
