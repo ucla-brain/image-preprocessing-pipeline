@@ -1463,7 +1463,6 @@ end
 function img3d = filter_subband_3d_z(img3d, sigma, levels, wavelet)
     % Applies filter_subband to each XZ slice (along Y-axis)
     % In-place update version to avoid extra allocation
-    % axes typically use [1] to filter vertically along Z in XZ plane
 
     [X, Y, Z] = size(img3d);
     original_class = class(img3d);
