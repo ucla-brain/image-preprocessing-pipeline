@@ -1471,7 +1471,7 @@ function img3d = filter_subband_3d_z(img3d, sigma, levels, wavelet)
         % Work directly with a slice reference
         slice = squeeze(img3d(x, :, :));  % (Y × Z), possibly transposed memory
         % Apply filtering (cast ensures matching type inside filter_subband)
-        img3d(:, y, :) = cast(filter_subband(slice, sigma, levels, wavelet, [2]), original_class);
+        img3d(x, :, :) = cast(filter_subband(slice, sigma, levels, wavelet, [2]), original_class);
     end
 
     for y = 1:Y
