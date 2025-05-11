@@ -22,7 +22,7 @@ function [] = deconvolve(folderPath, dxy, dz, numit, lambda_ex, lambda_em, ...
         0,    ... % clipval
         0,    ... % stop_criterion
         intmax('int32')-10^6,... % block_size_max=max number of elements in the block. GPU arrays on MATLAB are limited to intmax('int32') as the max size.
-        [repmat(1:8, 1, 5)],  ... % [repmat(1:8, 1, 5) zeros(1, 64)] gpu index in gpuDeviceTable, 0 means CPU
+        [repmat(1:8, 1, 10)],  ... % [repmat(1:8, 1, 5) zeros(1, 64)] gpu index in gpuDeviceTable, 0 means CPU
         1.0,  ... % signal amplification if clipval=0. clipval=1 means no amplification.
         [0.5, 0.5, 1.5], ... % x y z sigma of the 3D gaussian filter applied before deconvolution. filter_size = ceil(sigma * 4 + 1)
         [5, 5, 9], ... % filter_size
