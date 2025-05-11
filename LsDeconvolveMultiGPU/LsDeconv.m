@@ -694,6 +694,7 @@ end
 
 function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criterion, gpu, filter)
     bl_size = size(bl);
+    bl = filter_subband_3d_xz(bl, 1, 0, "db9", [1, 2])
     if gpu
         gpu_device = gpuDevice(gpu);
         memory_needed_for_full_acceleration = 35e9;
@@ -1459,82 +1460,117 @@ function R = convFFT(data , otf)
     R = ifftn(otf .* fftn(data));
 end
 
-% function img = filter_subband(img, sigma, level, wavelet)
-%     % img: is a 2D matrix
-%     % sigma: is a positive integer determines smooting degree. Larger = more
-%     % smoothing
-%     % level: decomposition level. 0 = max level
-%     % wavelet: a string determins the name of wavelet
-%     width_frac_h = sigma / size(img, 2);
-%     if level == 0
-%         level = wmaxlev(size(img), wavelet);
-%     end
-%     [c, s] = wavedec2(img, level, wavelet);
-%     for n_level = 2 : level
-%         [ch, cv, cd] = detcoef2('all', c, s, n_level);
-%         sigma_h = size(ch, 2) * width_frac_h;
-%         ch_fft = fft(ch);
-%         g = gaussian_filter(size(ch_fft), sigma_h);
-%         ch_fft = ch_fft * g;
-%         ch_filt = irfft(ch_fft, true); %, axis=-1 = x axis
-%     end
-% 
-% end
-% 
-% function filter = gaussian_filter(shape, sigma)
-%     % Create a gaussian notch filter
-%     % 
-%     % Parameters
-%     % ----------
-%     % shape : tuple
-%     %     shape of the output filter
-%     % sigma : float
-%     %     filter bandwidth
-%     % 
-%     % Returns
-%     % -------
-%     % g : ndarray
-%     %     the impulse response of the gaussian notch filter
-% 
-%     g = gaussian_notch_filter_1d(shape(0), sigma);
-%     filter = repmat(g, shape(1), 1);
-% end
-% 
-% function filter = gaussian_notch_filter_1d(n, sigma)
-%     % Generates a 1D gaussian notch filter `n` pixels long
-%     % 
-%     % Parameters
-%     % ----------
-%     % n : int
-%     %     length of the gaussian notch filter
-%     % sigma : float
-%     %     notch width
-%     % 
-%     % Returns
-%     % -------
-%     % g : ndarray
-%     %     (n,) array containing the gaussian notch filter
-% 
-%     assert(n > 0, 'n must be positive');
-%     assert(sigma > 0, 'sigma must be positive');
-%     n = int32(n);
-%     filter = 0:n-1;
-%     filter = 1 - exp(-filter.^2 / (2 * sigma^2));
-% end
-% 
-% function irfft = irfft(x, even)
-%      % n is the output length
-%      % s is the variable that will hold the index of the highest
-%      % frequency below N/2, s = floor((n+1)/2)
-%      if (even)
-%         n = 2 * (length(x) - 1 );
-%         s = length(x) - 1;
-%      else
-%         n = 2 * (length(x) - 1 )+1;
-%         s = length(x);
-%      end
-%      xn = zeros(1,n);
-%      xn(1:length(x)) = x;
-%      xn(length(x)+1:n) = conj(x(s:-1:2));
-%      irfft  = ifft(xn);
-% end
+function out = filter_subband_3d_xz(img3d, sigma, levels, wavelet, axes)
+    % Applies filter_subband to each XZ slice (i.e., along Y-axis)
+    % img3d: input 3D volume (X × Y × Z)
+    % sigma, levels, wavelet, axes: same as in filter_subband
+    % axes: typically use [1] to filter vertically along Z in XZ plane
+
+    [X, Y, Z] = size(img3d);
+    out = zeros(X, Y, Z, class(img3d));  % preserve original type
+
+    for y = 1:Y
+        % Extract XZ slice
+        slice = squeeze(img3d(:, y, :));  % (X × Z)
+        % Apply filtering
+        filtered = filter_subband(slice, sigma, levels, wavelet, axes);
+        % Store back
+        out(:, y, :) = cast(filtered, class(img3d));
+    end
+end
+
+function img = filter_subband(img, sigma, levels, wavelet, axes)
+    % Applies Gaussian notch filtering to wavelet subbands
+    % axes: [1] for vertical filtering, [2] for horizontal filtering
+
+    % Store original image info
+    % original_class = class(img);
+
+    % Convert to single for processing
+    % img = im2single(img);
+
+    % Apply log1p for dynamic range compression
+    % img = log1p(img);
+
+    % Determine number of levels
+    if levels == 0
+        levels = wmaxlev(size(img), wavelet);
+    end
+
+    % Perform wavelet decomposition
+    [C, S] = wavedec2(img, levels, wavelet);
+
+    % Extract approximation coefficients
+    A = appcoef2(C, S, wavelet, levels);
+
+    % Initialize detail coefficient containers
+    H_all = cell(1, levels);
+    V_all = cell(1, levels);
+    D_all = cell(1, levels);
+
+    for n = 1:levels
+        [H, V, D] = detcoef2('all', C, S, n);
+
+        % Apply filtering if the axis is requested
+        if ismember(2, axes)  % Horizontal filtering
+            H = filter_coefficient(H, sigma / size(H, 2), 2);
+        end
+        if ismember(1, axes)  % Vertical filtering
+            V = filter_coefficient(V, sigma / size(V, 1), 1);
+        end
+
+        H_all{n} = H;
+        V_all{n} = V;
+        D_all{n} = D;
+    end
+
+    % Reconstruct coefficient vector and bookkeeping matrix
+    C = A(:);
+    S = [size(A)];
+    for n = levels:-1:1
+        C = [C; H_all{n}(:); V_all{n}(:); D_all{n}(:)];
+        S = [S; size(H_all{n})];
+    end
+
+    % Perform wavelet reconstruction
+    img = waverec2(C, S, wavelet);
+
+    % Undo log1p
+    % img = expm1(img);
+
+    % Convert back to original class with proper scaling
+    % switch original_class
+    %     case 'uint8'
+    %         img = im2uint8(img);
+    %     case 'uint16'
+    %         img = im2uint16(img);
+    %     case 'double'
+    %         img = im2double(img);
+    %     otherwise
+    %         % Assume image already in [0, 1] range
+    %         img = max(min(img, 1), 0);
+    % end
+end
+
+function filtered = filter_coefficient(mat, sigma, axis)
+    sz = size(mat);
+    if axis == 1
+        g = gaussian_notch_filter_1d(sz(1), sigma);
+        g = repmat(g(:), 1, sz(2));
+    elseif axis == 2
+        g = gaussian_notch_filter_1d(sz(2), sigma);
+        g = repmat(g, sz(1), 1);
+    else
+        error('Unsupported axis');
+    end
+    g = complex(g);
+    r = fft(mat, [], axis);
+    filtered = real(ifft(r .* g, [], axis));
+end
+
+function g = gaussian_notch_filter_1d(n, sigma)
+    % Generates a 1D gaussian notch filter of length n
+    assert(n > 0 && sigma > 0, 'Inputs must be positive');
+    g = 0:(n - 1);
+    g = 1 - exp(-(g .^ 2) / (2 * sigma ^ 2));
+end
