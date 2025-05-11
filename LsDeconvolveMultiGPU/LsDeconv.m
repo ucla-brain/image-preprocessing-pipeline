@@ -1460,22 +1460,19 @@ function R = convFFT(data , otf)
     R = ifftn(otf .* fftn(data));
 end
 
-function out = filter_subband_3d_xz(img3d, sigma, levels, wavelet, axes)
-    % Applies filter_subband to each XZ slice (i.e., along Y-axis)
-    % img3d: input 3D volume (X × Y × Z)
-    % sigma, levels, wavelet, axes: same as in filter_subband
-    % axes: typically use [1] to filter vertically along Z in XZ plane
+function img3d = filter_subband_3d_xz(img3d, sigma, levels, wavelet, axes)
+    % Applies filter_subband to each XZ slice (along Y-axis)
+    % In-place update version to avoid extra allocation
+    % axes typically use [1] to filter vertically along Z in XZ plane
 
     [X, Y, Z] = size(img3d);
-    out = zeros(X, Y, Z, class(img3d));  % preserve original type
+    original_class = class(img3d);
 
     for y = 1:Y
-        % Extract XZ slice
-        slice = squeeze(img3d(:, y, :));  % (X × Z)
-        % Apply filtering
-        filtered = filter_subband(slice, sigma, levels, wavelet, axes);
-        % Store back
-        out(:, y, :) = cast(filtered, class(img3d));
+        % Work directly with a slice reference
+        slice = squeeze(img3d(:, y, :));  % (X × Z), possibly transposed memory
+        % Apply filtering (cast ensures matching type inside filter_subband)
+        img3d(:, y, :) = cast(filter_subband(slice, sigma, levels, wavelet, axes), original_class);
     end
 end
 
@@ -1483,62 +1480,62 @@ function img = filter_subband(img, sigma, levels, wavelet, axes)
     % Applies Gaussian notch filtering to wavelet subbands
     % axes: [1] for vertical filtering, [2] for horizontal filtering
 
-    % Store original image info
     % original_class = class(img);
-
-    % Convert to single for processing
     % img = im2single(img);
+    original_size = size(img);
 
-    % Apply log1p for dynamic range compression
-    % img = log1p(img);
+    % Pad image to even dimensions
+    pad_x = mod(original_size(1), 2);
+    pad_y = mod(original_size(2), 2);
+    img = padarray(img, [pad_x, pad_y], 'post');
 
-    % Determine number of levels
+    % Dynamic range compression
+    img = log1p(img);
+
+    % Wavelet decomposition
     if levels == 0
         levels = wmaxlev(size(img), wavelet);
     end
-
-    % Perform wavelet decomposition
     [C, S] = wavedec2(img, levels, wavelet);
 
-    % Extract approximation coefficients
-    A = appcoef2(C, S, wavelet, levels);
-
-    % Initialize detail coefficient containers
-    H_all = cell(1, levels);
-    V_all = cell(1, levels);
-    D_all = cell(1, levels);
-
+    % Track starting index in C (skip approximation part)
+    start_idx = prod(S(1, :));
     for n = 1:levels
-        [H, V, D] = detcoef2('all', C, S, n);
+        sz = prod(S(n + 1, :));
 
-        % Apply filtering if the axis is requested
-        if ismember(2, axes)  % Horizontal filtering
+        % Indices for detail coefficients at level n
+        idxH = start_idx + (1:sz);
+        idxV = idxH(end) + (1:sz);
+        idxD = idxV(end) + (1:sz);
+
+        % Reshape from C
+        H = reshape(C(idxH), S(n + 1, :));
+        V = reshape(C(idxV), S(n + 1, :));
+        D = reshape(C(idxD), S(n + 1, :));
+
+        % Apply filtering
+        if ismember(2, axes)
             H = filter_coefficient(H, sigma / size(H, 2), 2);
         end
-        if ismember(1, axes)  % Vertical filtering
+        if ismember(1, axes)
             V = filter_coefficient(V, sigma / size(V, 1), 1);
         end
 
-        H_all{n} = H;
-        V_all{n} = V;
-        D_all{n} = D;
+        % Overwrite filtered values in C
+        C(idxH) = H(:);
+        C(idxV) = V(:);
+
+        start_idx = idxD(end);  % Move to next level
     end
 
-    % Reconstruct coefficient vector and bookkeeping matrix
-    C = A(:);
-    S = [size(A)];
-    for n = levels:-1:1
-        C = [C; H_all{n}(:); V_all{n}(:); D_all{n}(:)];
-        S = [S; size(H_all{n})];
-    end
-
-    % Perform wavelet reconstruction
+    % Wavelet reconstruction
     img = waverec2(C, S, wavelet);
+    img = expm1(img);
 
-    % Undo log1p
-    % img = expm1(img);
+    % Crop
+    img = img(1:end - pad_x, 1:end - pad_y);
 
-    % Convert back to original class with proper scaling
+    % Restore class
     % switch original_class
     %     case 'uint8'
     %         img = im2uint8(img);
@@ -1547,30 +1544,30 @@ function img = filter_subband(img, sigma, levels, wavelet, axes)
     %     case 'double'
     %         img = im2double(img);
     %     otherwise
-    %         % Assume image already in [0, 1] range
     %         img = max(min(img, 1), 0);
     % end
 end
 
-function filtered = filter_coefficient(mat, sigma, axis)
-    sz = size(mat);
+function mat = filter_coefficient(mat, sigma, axis)
+    n = size(mat, axis);
+    mat = fft(mat, n, axis);
+
+    % Gaussian filter
+    g = gaussian_notch_filter_1d(n, sigma);
     if axis == 1
-        g = gaussian_notch_filter_1d(sz(1), sigma);
-        g = repmat(g(:), 1, sz(2));
+        g = repmat(g(:), 1, size(mat, 2));
     elseif axis == 2
-        g = gaussian_notch_filter_1d(sz(2), sigma);
-        g = repmat(g, sz(1), 1);
+        g = repmat(g, size(mat, 1), 1);
     else
-        error('Unsupported axis');
+        error('Invalid axis');
     end
-    g = complex(g);
-    r = fft(mat, [], axis);
-    filtered = real(ifft(r .* g, [], axis));
+
+    % Apply filter to complex spectrum
+    mat = mat .* complex(g, g);
+    mat = real(ifft(mat, n, axis));
 end
 
 function g = gaussian_notch_filter_1d(n, sigma)
-    % Generates a 1D gaussian notch filter of length n
-    assert(n > 0 && sigma > 0, 'Inputs must be positive');
-    g = 0:(n - 1);
-    g = 1 - exp(-(g .^ 2) / (2 * sigma ^ 2));
+    x = 0:(n - 1);
+    g = 1 - exp(-(x .^ 2) / (2 * sigma ^ 2));
 end
