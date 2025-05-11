@@ -9,7 +9,11 @@ def construct_cache_drive_folder_name(brain_name, lambda_ex, lambda_em):
 
 
 def main():
-    magnifications = {'15x': (400, 1200), '9x': (700, 1400), '4x': (1800, 1800)}
+    magnifications = {
+        '15x': (400, 1200),
+        '9x': (700, 1400),
+        '4.5x': (1400, 1400),
+        '4x': (1800, 1800)}
     lambda_ex_choices = [488, 561, 642]
     lambda_em_choices = [525, 600, 690]
 
