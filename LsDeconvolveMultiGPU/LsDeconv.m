@@ -701,7 +701,7 @@ end
 
 function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criterion, gpu, filter)
     bl_size = size(bl);
-    bl = filter_subband_3d_z(bl, 1, 0, "db9")
+    bl = filter_subband_3d_z(bl, 1, 0, "db9");
     if gpu
         gpu_device = gpuDevice(gpu);
         memory_needed_for_full_acceleration = 35e9;
