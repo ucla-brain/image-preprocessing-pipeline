@@ -1,22 +1,29 @@
-% Program for Deconvolution of Light Sheet Microscopy Stacks. Copyright
-% TU-Wien 2019, written using MATLAB 2018b by Klaus
-% Becker(klaus.becker@tuwien.ac.at) Keivan Moradi at UCLA B.R.A.I.N (Dong
-% lab) patched it in MATLAB V2022b. kmoradi@mednet.ucla.edu. Main changes
-% by Keivan Moradi: Multi-GPU, resume, and 3D gaussian filter support
-% LsDeconv is free software: you can redistribute it and/or modify it under
-% the terms of the GNU General Publ`ic License as published by the Free
-% Software Foundation, either version 3 of the License, or at your option)
-% any later version. LsDeconv is distributed in the hope that it will be
-% useful, but WITHOUT ANY WARRANTY; without even the implied warranty of
-% MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
-% Public License for more details. You should have received a copy of the
-% GNU General Public License along with this file. If not, see
-% <http://www.gnu.org/licenses/>.
-% TODO: save both flipped and non-flipped
-% TODO: Test SmartSPIM PSF
-% TODO: resume saving consider images saved already in save_image function
-% TODO: Update showinfo function
-% TODO: test applying gaussian every 10 it
+% Program for Deconvolution of Light Sheet Microscopy Stacks.
+%
+% Copyright TU-Wien 2019. Originally written in MATLAB 2018b by
+% Klaus Becker (klaus.becker@tuwien.ac.at).
+%
+% Patched by Keivan Moradi at UCLA B.R.A.I.N (Dong lab) using MATLAB 2022b.
+% Contact: kmoradi@mednet.ucla.edu
+%
+% Main modifications by Keivan Moradi:
+%   - Multi-GPU support
+%   - Resume capability
+%   - 3D Gaussian filter support
+%   - Destripe function specifically along the z-axis
+%
+% LsDeconv is free software: you can redistribute it and/or modify it
+% under the terms of the GNU General Public License as published by
+% the Free Software Foundation, either version 3 of the License, or
+% (at your option) any later version.
+%
+% LsDeconv is distributed in the hope that it will be useful,
+% but WITHOUT ANY WARRANTY; without even the implied warranty of
+% MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+%
+% See the GNU General Public License for more details.
+% You should have received a copy of the GNU General Public License
+% along with this file. If not, see <http://www.gnu.org/licenses/>.
 
 function [] = LsDeconv(varargin)
     try
