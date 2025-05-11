@@ -263,7 +263,7 @@ def process_cube(
                         sigma = (
                             gaussian_sigma,
                             gaussian_sigma,
-                            round(gaussian_sigma, 0) + (2.0 if deconvolution_args['doubled_psf'] else 1.5)
+                            round(gaussian_sigma, 0) + (2.0 if deconvolution_args['doubled_psf'] else 0) if i==0 else 0
                         ) # 2 --> dpsf
                         gaussian(img_decon, sigma=sigma, output=img_decon)
 
