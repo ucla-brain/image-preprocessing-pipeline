@@ -1467,6 +1467,7 @@ function img3d = filter_subband_3d_z(img3d, sigma, levels, wavelet)
 
     [X, Y, Z] = size(img3d);
     original_class = class(img3d);
+    img3d = log1p(img3d);
     for x = 1:X
         % Work directly with a slice reference
         slice = squeeze(img3d(x, :, :));  % (Y × Z), possibly transposed memory
@@ -1480,6 +1481,8 @@ function img3d = filter_subband_3d_z(img3d, sigma, levels, wavelet)
         % Apply filtering (cast ensures matching type inside filter_subband)
         img3d(:, y, :) = cast(filter_subband(slice, sigma, levels, wavelet, [2]), original_class);
     end
+    img3d = expm1(img3d);
+    img3d = cast(img3d, original_class);
 end
 
 function img = filter_subband(img, sigma, levels, wavelet, axes)
@@ -1496,7 +1499,7 @@ function img = filter_subband(img, sigma, levels, wavelet, axes)
     img = padarray(img, [pad_x, pad_y], 'post');
 
     % Dynamic range compression
-    img = log1p(img);
+    % img = log1p(img);
 
     % Wavelet decomposition
     if levels == 0
@@ -1536,7 +1539,7 @@ function img = filter_subband(img, sigma, levels, wavelet, axes)
 
     % Wavelet reconstruction
     img = waverec2(C, S, wavelet);
-    img = expm1(img);
+    % img = expm1(img);
 
     % Crop
     img = img(1:end - pad_x, 1:end - pad_y);
