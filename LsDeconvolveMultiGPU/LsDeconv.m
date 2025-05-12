@@ -1474,18 +1474,21 @@ function img3d = filter_subband_3d_z(img3d, sigma, levels, wavelet)
     [X, Y, Z] = size(img3d);
     original_class = class(img3d);
     img3d = log1p(img3d);
-    for x = 1:X
-        % Work directly with a slice reference
-        slice = squeeze(img3d(x, :, :));  % (Y × Z), possibly transposed memory
-        % Apply filtering (cast ensures matching type inside filter_subband)
-        img3d(x, :, :) = cast(filter_subband(slice, sigma, levels, wavelet, [2]), original_class);
-    end
+    %for x = 1:X
+    %    % Work directly with a slice reference
+    %    slice = squeeze(img3d(x, :, :));  % (Y × Z), possibly transposed memory
+    %    % Apply filtering (cast ensures matching type inside filter_subband)
+    %    slice = filter_subband(slice, sigma, levels, wavelet, [2]);
+    %    img3d(x, :, :) = cast(slice, original_class);
+    %end
 
     for y = 1:Y
         % Work directly with a slice reference
         slice = squeeze(img3d(:, y, :));  % (X × Z), possibly transposed memory
-        % Apply filtering (cast ensures matching type inside filter_subband)
-        img3d(:, y, :) = cast(filter_subband(slice, sigma, levels, wavelet, [2]), original_class);
+        % Apply filtering
+        slice = filter_subband(slice, sigma, levels, wavelet, [2]);
+        % cast ensures matching type inside filter_subband
+        img3d(:, y, :) = cast(slice, original_class);
     end
     img3d = expm1(img3d);
     img3d = cast(img3d, original_class);
@@ -1564,6 +1567,8 @@ function img = filter_subband(img, sigma, levels, wavelet, axes)
 end
 
 function mat = filter_coefficient(mat, sigma, axis)
+    % clamping sigma to avoid potential division by zero or numerical instability
+    sigma = max(sigma, 1e-5);
     n = size(mat, axis);
     mat = fft(mat, n, axis);
 
