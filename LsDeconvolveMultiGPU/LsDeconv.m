@@ -1493,7 +1493,7 @@ function img3d = filter_subband_3d_z(img3d, sigma, levels, wavelet)
     img3d = expm1(img3d);
 
     % Restore original data type
-    if ~strcmp(class(img3d), original_class)
+    if ~isa(img3d, original_class)
         img3d = cast(img3d, original_class);
     end
 end
