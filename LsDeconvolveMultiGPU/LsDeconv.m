@@ -671,7 +671,9 @@ function deconvolve(filelist, psf, numit, damping, ...
                 % consolidate and save block stats
                 deconvmax = max(ub, deconvmax);
                 deconvmin = min(lb, deconvmin);
-                save(min_max_path, "deconvmin", "deconvmax", "rawmax", "-v7.3", "-nocompression");
+                tmp_min_max_path = [min_max_path, '.tmp'];
+                save(tmp_min_max_path, "deconvmin", "deconvmax", "rawmax", "-v7.3", "-nocompression");
+                movefile(tmp_min_max_path, min_max_path, 'f');
                 could_not_save = false;
             catch
                 send(queue, "could not load or save min_max file. Retrying ...")
