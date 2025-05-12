@@ -1241,8 +1241,8 @@ end
 
 %utility function for LsPSFeq
 function R = f1(p, x, y, z, lambda, NA, n)
-    R = besselj(0, 2 .* pi .* NA .* sqrt(x.^2 + y.^2) .* p ./ (lambda .* n))...
-        .* exp(1i .* (-pi .* p.^2 .* z .* NA.^2) ./ (lambda .* n.^2)) .* p;
+    R = besselj(0, 2 .* single(pi) .* NA .* sqrt(x.^2 + y.^2) .* p ./ (lambda .* n))...
+        .* exp(1i .* (-single(pi) .* p.^2 .* z .* NA.^2) ./ (lambda .* n.^2)) .* p;
 end
 
 function [x, y, z, bit_depth] = getstackinfo(datadir)
@@ -1473,25 +1473,27 @@ function img3d = filter_subband_3d_z(img3d, sigma, levels, wavelet)
 
     [X, Y, Z] = size(img3d);
     original_class = class(img3d);
-    img3d = log1p(img3d);
-    %for x = 1:X
-    %    % Work directly with a slice reference
-    %    slice = squeeze(img3d(x, :, :));  % (Y × Z), possibly transposed memory
-    %    % Apply filtering (cast ensures matching type inside filter_subband)
-    %    slice = filter_subband(slice, sigma, levels, wavelet, [2]);
-    %    img3d(x, :, :) = cast(slice, original_class);
-    %end
-
-    for y = 1:Y
-        % Work directly with a slice reference
-        slice = squeeze(img3d(:, y, :));  % (X × Z), possibly transposed memory
-        % Apply filtering
-        slice = filter_subband(slice, sigma, levels, wavelet, [2]);
-        % cast ensures matching type inside filter_subband
-        img3d(:, y, :) = cast(slice, original_class);
+    if ~isa(img3d, 'single')
+        img3d = single(img3d);
     end
+
+    % Dynamic range compression
+    img3d = log1p(img3d);
+
+    % Apply filtering across Y axis
+    for y = 1:Y
+        slice = reshape(img3d(:, y, :), [X, Z]);
+        slice = filter_subband(slice, sigma, levels, wavelet, [2]);
+        img3d(:, y, :) = slice;
+    end
+
+    % Undo compression
     img3d = expm1(img3d);
-    img3d = cast(img3d, original_class);
+
+    % Restore original data type
+    if ~strcmp(class(img3d), original_class)
+        img3d = cast(img3d, original_class);
+    end
 end
 
 function img = filter_subband(img, sigma, levels, wavelet, axes)
