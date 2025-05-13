@@ -31,8 +31,8 @@ def get_all_gpu_indices():
     try:
         result = subprocess.run(
             ["nvidia-smi", "--query-gpu=index", "--format=csv,noheader"],
-            # stdout=subprocess.PIPE,
-            # stderr=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             check=True
         )
@@ -160,7 +160,6 @@ def main():
     total_workers_requested = len(final_gpu_indices)
     total_cores = psutil.cpu_count(logical=False)
     if total_workers_requested < 1:
-        print(final_gpu_indices)
         raise RuntimeError("At least one GPU or CPU worker must be specified.")
     if total_workers_requested > total_cores:
         print(f"WARNING: You requested {total_workers_requested} workers but only have {total_cores} physical cores.")
@@ -200,8 +199,8 @@ def main():
         result = subprocess.run(
             ' '.join(matlab_cmd) if is_windows else matlab_cmd,
             shell=is_windows,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            # stdout=subprocess.PIPE,
+            # stderr=subprocess.PIPE,
             text=True
         )
         print("MATLAB STDOUT:\n", result.stdout)
