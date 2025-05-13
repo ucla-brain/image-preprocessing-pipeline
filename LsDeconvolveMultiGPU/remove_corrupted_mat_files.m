@@ -1,7 +1,7 @@
 % === Script: remove_corrupted_mat_files_parallel.m ===
 
 % Specify folder
-folder_path = 'U:\tif\ADT5_9x_AAV_ds\cache_deconvolution_ADT5_Ex_561_Em_600';
+folder_path = '/path/to/file';
 
 % Get sorted list of .mat files
 mat_structs = natsortfiles(dir(fullfile(folder_path, '*.mat')));
@@ -13,7 +13,9 @@ parfor k = 1:length(file_names)
     full_path = fullfile(folder_path, file_name);
     try
         % Load to a struct instead of workspace
-        S = load(full_path, '-mat');
+        if exist(full_path, 'file')
+            bl = importdata(full_path);
+        end
     catch
         % Use warning or simple log
         warning('Deleting corrupted file: %s\n', file_name);
