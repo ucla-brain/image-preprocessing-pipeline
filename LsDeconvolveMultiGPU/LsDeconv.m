@@ -708,7 +708,7 @@ end
 function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criterion, gpu, filter)
     bl_size = size(bl);
     bl = filter_subband_3d_z(bl, 1, 0, "db9");
-    if gpu
+    if gpu && (min(filter.sigma(:)) > 0 || niter > 0)
         gpu_device = gpuDevice(gpu);
         memory_needed_for_full_acceleration = 35e9;
         memory_needed_for_semi_acceleration = 24e9;
@@ -1495,7 +1495,7 @@ function img3d = filter_subband_3d_z(img3d, sigma, levels, wavelet)
     % Apply filtering across Y axis
     for y = 1:Y
         slice = reshape(img3d(:, y, :), [X, Z]);
-        slice = filter_subband(slice, sigma, levels, wavelet, [2]);
+        slice = filter_subband(slice, sigma, levels, wavelet, [1, 2]);
         img3d(:, y, :) = slice;
     end
 

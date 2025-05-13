@@ -1,71 +1,167 @@
-import os
 import argparse
 import subprocess
+import platform
+import shutil
+from pathlib import Path
+import psutil
 
+is_windows = platform.system() == "Windows"
 
-def construct_cache_drive_folder_name(brain_name, lambda_ex, lambda_em):
-    """Construct name using brain name and wavelengths."""
-    return f"cache_deconvolution_{brain_name}_Ex_{lambda_ex}_Em_{lambda_em}"
+def construct_cache_drive_folder_name(lambda_ex, lambda_em, brain_name=None):
+    if brain_name:
+        return f"cache_deconvolution_{brain_name}_Ex_{lambda_ex}_Em_{lambda_em}"
+    else:
+        return f"cache_deconvolution_Ex_{lambda_ex}_Em_{lambda_em}"
 
+def find_matlab_executable():
+    matlab_exec = "matlab.exe" if is_windows else "matlab"
+    if shutil.which(matlab_exec):
+        return matlab_exec
+    possible_paths = [
+        Path("C:/Program Files/MATLAB/R2023a/bin/matlab.exe"),
+        Path("/usr/local/MATLAB/R2023a/bin/matlab"),
+        Path("/opt/MATLAB/R2023a/bin/matlab")
+    ]
+    for path in possible_paths:
+        if path.exists():
+            return str(path)
+    raise RuntimeError("MATLAB executable not found. Add it to your PATH or update the script.")
+
+def get_all_gpu_indices():
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=index", "--format=csv,noheader"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=True
+        )
+        indices = [int(line.strip()) + 1 for line in result.stdout.strip().splitlines()]
+        return indices
+    except Exception:
+        return []
 
 def main():
-    magnifications = {
-        '15x': (400, 1200),
-        '9x': (700, 1400),
-        '4.5x': (1400, 1400),
-        '4x': (1800, 1800)
-    }
-    lambda_ex_choices = [488, 561, 642]
-    lambda_em_choices = [525, 600, 690]
+    default_gpu_indices = get_all_gpu_indices()
+    default_cores = psutil.cpu_count(logical=False)
+    default_workers_per_gpu = (
+        default_cores // len(default_gpu_indices)
+        if len(default_gpu_indices) > 0 else 0
+    )
 
-    parser = argparse.ArgumentParser(
-        description='Python wrapper for MATLAB deconvolution.')
-    parser.add_argument('folderPath', type=str, 
-                        help='Path to the folder containing the images.')
-    parser.add_argument('magnification', type=str, 
-                        choices=magnifications.keys(), 
-                        help='Magnification used, either 15x, 9x, or 4x.')
-    parser.add_argument('numit', type=int, 
-                        choices=range(1, 51), metavar="[1-50]", 
-                        help='Number of iterations, between 1 and 50.')
-    parser.add_argument('lambda_ex', type=int, 
-                        choices=lambda_ex_choices, 
-                        help='Excitation wavelength.')
-    parser.add_argument('lambda_em', type=int, 
-                        choices=lambda_em_choices, 
-                        help='Emission wavelength.')
-    parser.add_argument('brain_name', type=str, 
-                        help='Brain name for cache path construction.')
+    parser = argparse.ArgumentParser(description='Python wrapper for MATLAB deconvolution.')
+
+    # Required
+    parser.add_argument('-i', '--input', type=Path, required=True, help='Path to the input image folder')
+    parser.add_argument('--dxy', type=float, required=True, help='Lateral resolution (μm)')
+    parser.add_argument('--dz', type=float, required=True, help='Axial resolution (μm)')
+
+    # Optional
+    parser.add_argument('--brain_name', type=str, default=None, help='Optional brain name for cache path')
+    parser.add_argument('--numit', '-it', type=int, default=10, help='Number of iterations [1-50]')
+    parser.add_argument('--lambda_ex', '-ex', type=int, default=488,
+                        help='Excitation wavelength. Allowed: 488, 561, 642')
+    parser.add_argument('--lambda_em', '-em', type=int, default=525,
+                        help='Emission wavelength. Allowed: 525, 600, 690')
+    parser.add_argument('--na', type=float, default=0.40, help='Numerical aperture')
+    parser.add_argument('--rf', type=float, default=1.42, help='Refractive index')
+    parser.add_argument('--fcyl', type=int, default=240, help='Cylinder focal length')
+    parser.add_argument('--slitwidth', type=float, default=12.0, help='Slit width (mm)')
+    parser.add_argument('--lambda_damping', type=float, default=0.0, help='Damping percent')
+    parser.add_argument('--clipval', type=int, default=0, help='Clip value')
+    parser.add_argument('--stop_criterion', type=int, default=0, help='Stop criterion')
+    parser.add_argument('--block_size_max', type=int, default=2**31 - 10**6, help='Max block size')
+
+    parser.add_argument('--gpu-indices', type=int, nargs='+', default=default_gpu_indices,
+                        help='List of GPU indices to use (e.g., 1 2)')
+    parser.add_argument('--gpu-workers-per-gpu', type=int, default=default_workers_per_gpu,
+                        help='Workers per GPU (default: physical cores ÷ number of GPUs)')
+    parser.add_argument('--cpu-workers', type=int, default=0,
+                        help='Number of CPU workers (default: 0 = disable CPU)')
+
+    parser.add_argument('--signal_amp', type=float, default=1.0, help='Signal amplification')
+    parser.add_argument('--sigma', type=float, nargs=3, default=[0.5, 0.5, 1.5],
+                        help='3D Gaussian filter sigma in μm. Use "0 0 0" to disable filtering.')
+    parser.add_argument('--filter_size', type=int, nargs=3, default=[5, 5, 15], help='Filter size')
+    parser.add_argument('--denoise_strength', type=int, default=1, help='Denoising strength')
+
+    parser.add_argument('--no-resume', dest='resume', action='store_false',
+                        help='Disable resuming deconvolution (default: resume enabled)')
+    parser.set_defaults(resume=True)
+
+    parser.add_argument('--flip', action='store_true',
+                        help='Flip output image vertically (default: no flip)')
+    parser.add_argument('--convert-to-8bit', action='store_true',
+                        help='Convert output to 8-bit (default: preserve original bit depth, usually 16-bit)')
+    parser.add_argument('--start_block', type=int, default=1, help='Starting block index')
+    parser.add_argument('--dry-run', action='store_true', help='Print the MATLAB command but do not execute it')
+
     args = parser.parse_args()
 
-    if not (os.path.exists(args.folderPath) and os.path.isdir(args.folderPath)):
-        print(f"ERROR: {args.folderPath} does not exist or is not a folder")
-        exit(1)
-    
-    # set dxy and dz from the map based on magnification
-    dxy, dz = magnifications[args.magnification]
-    
-    # Construct cache drive path
-    cache_drive_folder = construct_cache_drive_folder_name(
-        args.brain_name, str(args.lambda_ex), str(args.lambda_em))
+    if not (args.input.exists() and args.input.is_dir()):
+        raise RuntimeError(f"Input path {args.input} does not exist or is not a folder")
 
-    # Match lambda_ex and lambda_em by their positions in the lists
-    if lambda_ex_choices.index(args.lambda_ex) != lambda_em_choices.index(args.lambda_em):
-        print(f"ERROR: Ex {args.lambda_ex} and Em {args.lambda_em} wavelengths do not match.")
-        exit(1)
+    if args.lambda_ex not in [488, 561, 642] or args.lambda_em not in [525, 600, 690]:
+        raise RuntimeError("Unsupported excitation or emission wavelength")
 
-    # Construct the MATLAB command
-    matlab_command = (f"matlab -nodisplay -r \"deconvolve('{args.folderPath}', '{dxy}', '{dz}', "
-                      f"'{args.numit}', '{args.lambda_ex}', '{args.lambda_em}', "
-                      f"'{cache_drive_folder}'); exit;\"")
-    
+    if [488, 561, 642].index(args.lambda_ex) != [525, 600, 690].index(args.lambda_em):
+        raise RuntimeError(f"Ex {args.lambda_ex} and Em {args.lambda_em} do not match.")
+
+    gpu_worker_list = sum([[gpu] * args.gpu_workers_per_gpu for gpu in args.gpu_indices], [])
+    cpu_worker_list = [0] * args.cpu_workers
+    final_gpu_indices = gpu_worker_list + cpu_worker_list
+
+    total_workers_requested = len(final_gpu_indices)
+    total_cores = psutil.cpu_count(logical=False)
+    if total_workers_requested < 1:
+        raise RuntimeError("At least one GPU or CPU worker must be specified.")
+    if total_workers_requested > total_cores:
+        print(f"WARNING: You requested {total_workers_requested} workers but only have {total_cores} physical cores.")
+
+    gpu_indices_str = ' '.join(str(i) for i in final_gpu_indices)
+    sigma_str = ' '.join(str(i) for i in args.sigma)
+    filter_size_str = ' '.join(str(i) for i in args.filter_size)
+    cache_drive_folder = construct_cache_drive_folder_name(args.lambda_ex, args.lambda_em, args.brain_name)
+    deconvolve_dir = Path(__file__).resolve().parent.as_posix()
+
+    matlab_code = (
+        f"addpath('{deconvolve_dir}'); "
+        f"deconvolve('{args.input.resolve().as_posix()}', '{args.dxy * 1000}', '{args.dz * 1000}', "
+        f"'{args.numit}', '{args.lambda_ex}', '{args.lambda_em}', '{cache_drive_folder}', "
+        f"'{args.na}', '{args.rf}', '{args.fcyl}', '{args.slitwidth}', '{args.lambda_damping}', "
+        f"'{args.clipval}', '{args.stop_criterion}', '{args.block_size_max}', "
+        f"[{gpu_indices_str}], '{args.signal_amp}', [{sigma_str}], [{filter_size_str}], "
+        f"'{args.denoise_strength}', '{int(args.resume)}', '{args.start_block}', "
+        f"'{int(args.flip)}', '{int(args.convert_to_8bit)}', '{cache_drive_folder}'); exit;"
+    )
+
+    matlab_exec = find_matlab_executable()
+    matlab_cmd = [matlab_exec, "-nodisplay", "-r", matlab_code]
+
+    print("MATLAB command:")
+    print(' '.join(matlab_cmd) if is_windows else matlab_cmd)
+
+    if args.dry_run:
+        print("Dry run enabled. Command was not executed.")
+        return
+
     try:
-        print("decwrap.py running deconvolution...")
-        subprocess.run(matlab_command, shell=True, check=True)
-        print("decwrap.py done.")
+        print("Running MATLAB deconvolution...")
+        result = subprocess.run(
+            ' '.join(matlab_cmd) if is_windows else matlab_cmd,
+            shell=is_windows,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        print("MATLAB STDOUT:\n", result.stdout)
+        print("MATLAB STDERR:\n", result.stderr)
+        result.check_returncode()
+        print("Deconvolution completed successfully.")
     except subprocess.CalledProcessError as e:
-        print(f"An error occurred while running the deconvolution: {e}")
-
+        print("MATLAB exited with error:")
+        print(e.stderr)
+        exit(1)
 
 if __name__ == "__main__":
     main()
