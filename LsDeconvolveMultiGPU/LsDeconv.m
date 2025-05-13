@@ -1103,8 +1103,14 @@ end
 
 function bl = load_bl(path, semkey)
     semaphore('wait', semkey);
-    bl = importdata(path);
-    semaphore('post', semkey);
+    cleanup = onCleanup(@() semaphore('post', semkey));
+    try
+        bl = importdata(path);
+    catch
+        % Use warning or simple log
+        delete(path);
+        error('Deleting corrupted file: %s\n', path);
+    end
 end
 
 %calculates a theoretical point spread function
