@@ -160,6 +160,7 @@ def main():
     total_workers_requested = len(final_gpu_indices)
     total_cores = psutil.cpu_count(logical=False)
     if total_workers_requested < 1:
+        print(total_workers_requested)
         raise RuntimeError("At least one GPU or CPU worker must be specified.")
     if total_workers_requested > total_cores:
         print(f"WARNING: You requested {total_workers_requested} workers but only have {total_cores} physical cores.")
