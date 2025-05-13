@@ -31,8 +31,8 @@ def get_all_gpu_indices():
     try:
         result = subprocess.run(
             ["nvidia-smi", "--query-gpu=index", "--format=csv,noheader"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            # stdout=subprocess.PIPE,
+            # stderr=subprocess.PIPE,
             text=True,
             check=True
         )
