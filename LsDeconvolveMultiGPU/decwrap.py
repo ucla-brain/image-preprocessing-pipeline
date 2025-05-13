@@ -49,7 +49,10 @@ def main():
         if len(default_gpu_indices) > 0 else 0
     )
 
-    parser = argparse.ArgumentParser(description='Python wrapper for MATLAB deconvolution.')
+    parser = argparse.ArgumentParser(
+        description='Python wrapper for MATLAB deconvolution.',
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
 
     # Required
     parser.add_argument('-i', '--input', type=Path, required=True, help='Path to the input image folder')
