@@ -671,7 +671,7 @@ function deconvolve(filelist, psf, numit, damping, ...
                 % consolidate and save block stats
                 deconvmax = max(ub, deconvmax);
                 deconvmin = min(lb, deconvmin);
-                tmp_min_max_path = [min_max_path, '.tmp'];
+                tmp_min_max_path = [min_max_path, '.tmp.mat'];
                 save(tmp_min_max_path, "deconvmin", "deconvmax", "rawmax", "-v7.3", "-nocompression");
                 if exist(min_max_path, 'file')
                     delete(min_max_path);
