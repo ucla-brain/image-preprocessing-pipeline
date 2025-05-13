@@ -41,6 +41,29 @@ def get_all_gpu_indices():
     except Exception:
         return []
 
+def estimate_block_size_max(gpu_indices, bytes_per_element=4, target_fraction=0.179):
+    max_allowed = 2**31 - 10**6
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=True
+        )
+        all_memories = [int(x.strip()) for x in result.stdout.strip().splitlines()]  # in MiB
+        selected_memories = [all_memories[i - 1] for i in gpu_indices if 0 <= i - 1 < len(all_memories)]
+        if not selected_memories:
+            return max_allowed
+
+        min_vram_mib = min(selected_memories)
+        usable_bytes = min_vram_mib * 1024**2 * target_fraction
+        estimated = int(usable_bytes / bytes_per_element)
+        return min(estimated, max_allowed)
+    except Exception as e:
+        print("WARNING: Could not estimate GPU memory, using safe default.")
+        return max_allowed
+
 def main():
     default_gpu_indices = get_all_gpu_indices()
     default_cores = psutil.cpu_count(logical=False)
@@ -48,6 +71,7 @@ def main():
         default_cores // len(default_gpu_indices)
         if len(default_gpu_indices) > 0 else 0
     )
+    block_size_default = estimate_block_size_max(default_gpu_indices)
 
     parser = argparse.ArgumentParser(
         description='Python wrapper for MATLAB deconvolution.',
@@ -85,8 +109,8 @@ def main():
         help='Clipping value (0 = disabled)')
     parser.add_argument('--stop_criterion', type=int, default=0,
         help='Early stopping criterion (0 = disabled)')
-    parser.add_argument('--block_size_max', type=int, default=2**31 - 10**6,
-        help='Max elements in a memory block (for GPU limits)')
+    parser.add_argument('--block_size_max', type=int, default=block_size_default,
+        help='Max number of elements per GPU block (estimated from GPU memory)')
 
     parser.add_argument('--gpu-indices', type=int, nargs='+', default=default_gpu_indices,
         help='List of GPU device indices to use (e.g., 1 2). Default: all detected GPUs.')
@@ -145,6 +169,9 @@ def main():
     filter_size_str = ' '.join(str(i) for i in args.filter_size)
     cache_drive_folder = construct_cache_drive_folder_name(args.lambda_ex, args.lambda_em, args.brain_name)
     deconvolve_dir = Path(__file__).resolve().parent.as_posix()
+
+    if args.dry_run:
+        print(f"Estimated block_size_max: {args.block_size_max}")
 
     matlab_code = (
         f"addpath('{deconvolve_dir}'); "
