@@ -21,6 +21,6 @@ setenv('MW_ALLOW_ANY_CUDA', '1');
 
 % Compile
 mex('-O', '-v', src_semaphore);
-mexcuda('-v', '-g', '-G', '-f', build_xml, '-R2018a', src_wavedec2,       ['-I' root_dir], ['-I' include_dir]);
-mexcuda('-v', '-g', '-G', '-f', build_xml, '-R2018a', src_waverec2,       ['-I' root_dir], ['-I' include_dir]);
-mexcuda('-v', '-g', '-G', '-f', build_xml, '-R2018a', src_filter_subband, ['-I' root_dir], ['-I' include_dir]);
+%mexcuda('-v', '-g', '-G', '-f', build_xml, '-R2018a', src_wavedec2,       ['-I' root_dir], ['-I' include_dir]);
+%mexcuda('-v', '-g', '-G', '-f', build_xml, '-R2018a', src_waverec2,       ['-I' root_dir], ['-I' include_dir]);
+%mexcuda('-v', '-g', '-G', '-f', build_xml, '-R2018a', src_filter_subband, ['-I' root_dir], ['-I' include_dir]);
