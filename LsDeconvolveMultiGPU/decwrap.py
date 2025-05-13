@@ -81,9 +81,9 @@ def main():
     # Required
     parser.add_argument('-i', '--input', type=Path, required=True,
         help='Path to the input image folder')
-    parser.add_argument('--dxy', type=float, required=True,
+    parser.add_argument('-dxy', '--dxy', type=float, required=True,
         help='Lateral resolution in micrometers (μm)')
-    parser.add_argument('--dz', type=float, required=True,
+    parser.add_argument('-dz', '--dz', type=float, required=True,
         help='Axial resolution in micrometers (μm)')
 
     # Optional
