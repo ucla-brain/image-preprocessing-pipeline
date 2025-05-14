@@ -710,20 +710,23 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
     bl = filter_subband_3d_z(bl, 1, 0, "db9");
     if gpu && (min(filter.sigma(:)) > 0 || niter > 0)
         gpu_device = gpuDevice(gpu);
-        memory_needed_for_full_acceleration = 35e9;
-        memory_needed_for_semi_acceleration = 24e9;
-        num_full_accelerated_blocks = floor(gpu_device.TotalMemory / memory_needed_for_full_acceleration);
-        if num_full_accelerated_blocks > 0
-            num_semi_accelerated_blocks = floor(mod(gpu_device.TotalMemory, memory_needed_for_full_acceleration) / memory_needed_for_semi_acceleration);
-        else
-            num_semi_accelerated_blocks = floor(gpu_device.TotalMemory / memory_needed_for_semi_acceleration);
-        end
+        % memory_needed_for_full_acceleration = 35e9;
+        % memory_needed_for_semi_acceleration = 24e9;
+        % num_full_accelerated_blocks = floor(gpu_device.TotalMemory / memory_needed_for_full_acceleration);
+        % if num_full_accelerated_blocks > 0
+        %     num_semi_accelerated_blocks = floor(mod(gpu_device.TotalMemory, memory_needed_for_full_acceleration) / memory_needed_for_semi_acceleration);
+        % else
+        %     num_semi_accelerated_blocks = floor(gpu_device.TotalMemory / memory_needed_for_semi_acceleration);
+        % end
 
         % for gaussian filter 
-        if num_full_accelerated_blocks > 0
-            semaphore('wait', gpu);
-            bl = gpuArray(bl);
-        end
+        % if num_full_accelerated_blocks > 0
+        %     semaphore('wait', gpu);
+        %     bl = gpuArray(bl);
+        % end
+
+        semaphore('wait', gpu);
+        bl = gpuArray(bl);
     end
 
     if min(filter.sigma(:)) > 0
@@ -767,12 +770,12 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
         if gpu && isgpuarray(bl)
             % block is already on GPU and no GPU allocation is needed
             bl = deconGPU(bl, psf, niter, lambda, stop_criterion, gpu);
-        elseif gpu && num_semi_accelerated_blocks > 0
-            semaphore('wait', gpu);
-            bl = deconGPU(bl, psf, niter, lambda, stop_criterion, gpu);
-            bl = gather(bl);
-            gpuDevice(gpu);  % free GPU memory
-            semaphore('post', gpu);
+        % elseif gpu && num_semi_accelerated_blocks > 0
+        %     semaphore('wait', gpu);
+        %     bl = deconGPU(bl, psf, niter, lambda, stop_criterion, gpu);
+        %     bl = gather(bl);
+        %     gpuDevice(gpu);  % free GPU memory
+        %     semaphore('post', gpu);
         else
             % GPU acceleration is requested by the user but the GPU
             % cannot handle the block at the time of the request
