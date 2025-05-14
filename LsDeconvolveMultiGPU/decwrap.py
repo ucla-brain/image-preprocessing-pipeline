@@ -41,7 +41,7 @@ def get_all_gpu_indices():
     except Exception:
         return []
 
-def estimate_block_size_max(gpu_indices, num_workers, bytes_per_element=4, base_reserve_gb=0, per_worker_mib=512):
+def estimate_block_size_max(gpu_indices, num_workers, bytes_per_element=4, base_reserve_gb=.5, per_worker_mib=156):
     max_allowed = 2**31 - 10**6
     try:
         result = subprocess.run(
