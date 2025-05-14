@@ -213,11 +213,9 @@ def main():
     except NameError:
         deconvolve_dir = Path.cwd().as_posix()
 
-    if args.dry_run:
-        log.info(f"Estimated block_size_max: {args.block_size_max}")
-
-    script_path = Path(deconvolve_dir) / "deconv_batch_script.m"
-    script_path.write_text(
+    tmp_script_path = args.input / cache_drive_folder / "deconv_batch_script.m"
+    Path(cache_drive_folder).mkdir(parents=True, exist_ok=True)
+    tmp_script_path.write_text(
         f"addpath('{deconvolve_dir}');\n"
         f"deconvolve('{args.input.as_posix()}', '{args.dxy * 1000}', '{args.dz * 1000}', "
         f"'{args.numit}', '{args.lambda_ex}', '{args.lambda_em}', '{cache_drive_folder}', "
@@ -228,12 +226,12 @@ def main():
         f"'{int(args.flip)}', '{int(args.convert_to_8bit)}', '{cache_drive_folder}');\n"
     )
 
-    try:
-        matlab_exec = find_matlab_executable()
-    except RuntimeError as e:
-        raise SystemExit(str(e))
-
-    matlab_cmd = [matlab_exec, "-batch", f"run('{script_path.stem}')"]
+    matlab_exec = find_matlab_executable()
+    matlab_cmd = [
+        matlab_exec,
+        "-batch",
+        f"addpath('{tmp_script_path.parent.as_posix()}'); run('{tmp_script_path.stem}')"
+    ]
 
     log.info("MATLAB command:")
     log.info(' '.join(matlab_cmd) if is_windows else matlab_cmd)
