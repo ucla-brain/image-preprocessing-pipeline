@@ -1,11 +1,12 @@
 import argparse
-import subprocess
+import logging
 import platform
 import shutil
-from pathlib import Path
-import psutil
-import logging
+import subprocess
 from json import dump
+from pathlib import Path
+
+import psutil
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -50,7 +51,7 @@ def get_all_gpu_indices():
         log.warning(f"GPU index detection failed: {e}")
         return []
 
-def estimate_block_size_max(gpu_indices, num_workers, bytes_per_element=4, base_reserve_gb=0, per_worker_mib=157,
+def estimate_block_size_max(gpu_indices, num_workers, bytes_per_element=4, base_reserve_gb=0.1, per_worker_mib=160,
                             num_blocks_on_gpu=3):
     max_allowed = 2**31 - 10**6
     try:
