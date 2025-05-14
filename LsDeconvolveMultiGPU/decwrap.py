@@ -229,7 +229,7 @@ def main():
     matlab_cmd = [
         matlab_exec,
         "-batch",
-        f"eval({tmp_script_path.stem})"
+        f"run('{tmp_script_path.stem}')"
     ]
 
     log.info("MATLAB command:")
