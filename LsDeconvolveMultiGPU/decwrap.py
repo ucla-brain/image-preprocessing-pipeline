@@ -232,7 +232,7 @@ def main():
     except RuntimeError as e:
         raise SystemExit(str(e))
 
-    matlab_cmd = [matlab_exec, "-nodisplay", "-r", matlab_code]
+    matlab_cmd = [matlab_exec, "-batch", matlab_code]
 
     log.info("MATLAB command:")
     log.info(' '.join(matlab_cmd) if is_windows else matlab_cmd)
