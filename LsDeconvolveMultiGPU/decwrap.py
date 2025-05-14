@@ -230,7 +230,7 @@ def main():
     matlab_cmd = [
         matlab_exec,
         "-batch",
-        f"eval(\"addpath('{tmp_script_path.parent.as_posix()}'); run('{tmp_script_path.stem}')\")"
+        f"feval(@() (addpath('{tmp_script_path.parent.as_posix()}'); run('{tmp_script_path.stem}')))"
     ]
 
     log.info("MATLAB command:")
