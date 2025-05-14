@@ -213,8 +213,7 @@ def main():
     except NameError:
         deconvolve_dir = Path.cwd().as_posix()
 
-    tmp_script_path = args.input / cache_drive_folder / "deconv_batch_script.m"
-    Path(cache_drive_folder).mkdir(parents=True, exist_ok=True)
+    tmp_script_path = Path("deconv_batch_script.m")
     tmp_script_path.write_text(
         f"addpath('{deconvolve_dir}');\n"
         f"deconvolve('{args.input.as_posix()}', '{args.dxy * 1000}', '{args.dz * 1000}', "
@@ -230,7 +229,7 @@ def main():
     matlab_cmd = [
         matlab_exec,
         "-batch",
-        f"addpath('{tmp_script_path.parent.as_posix()}'); run('{tmp_script_path.stem}')"
+        f"eval({tmp_script_path.stem})"
     ]
 
     log.info("MATLAB command:")
@@ -251,7 +250,9 @@ def main():
             text=True,
             check=True
         )
+
         log.info("Deconvolution completed successfully.")
+        tmp_script_path.unlink(missing_ok=True)
     except subprocess.CalledProcessError as e:
         log.error("MATLAB exited with error:")
         raise SystemExit(e)
