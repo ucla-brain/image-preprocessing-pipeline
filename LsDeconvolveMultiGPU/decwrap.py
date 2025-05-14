@@ -75,7 +75,7 @@ def main():
         default_cores // len(default_gpu_indices)
         if len(default_gpu_indices) > 0 else 0
     )
-    block_size_default = estimate_block_size_max(default_gpu_indices)
+    block_size_default = estimate_block_size_max(default_gpu_indices, default_workers_per_gpu * len(default_gpu_indices))
 
     parser = argparse.ArgumentParser(
         description='Python wrapper for MATLAB deconvolution.',
