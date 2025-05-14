@@ -210,7 +210,7 @@ def main():
     log.info(' '.join(matlab_cmd) if is_windows else matlab_cmd)
 
     with open("deconvolution_config.json", "w") as f:
-        dump(vars(args), f, indent=2)
+        dump({k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()}, f, indent=2)
 
     if args.dry_run:
         log.info("Dry run enabled. Command was not executed.")
