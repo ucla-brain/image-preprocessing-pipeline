@@ -216,8 +216,7 @@ def main():
     if args.dry_run:
         log.info(f"Estimated block_size_max: {args.block_size_max}")
 
-    matlab_code = (
-        "eval(\""
+    raw_matlab_code = (
         f"addpath('{deconvolve_dir}'); "
         f"deconvolve('{args.input.as_posix()}', '{args.dxy * 1000}', '{args.dz * 1000}', "
         f"'{args.numit}', '{args.lambda_ex}', '{args.lambda_em}', '{cache_drive_folder}', "
@@ -226,8 +225,11 @@ def main():
         f"[{gpu_indices_str}], '{args.signal_amp}', [{sigma_str}], [{filter_size_str}], "
         f"'{args.denoise_strength}', '{int(args.resume)}', '{args.start_block}', "
         f"'{int(args.flip)}', '{int(args.convert_to_8bit)}', '{cache_drive_folder}');"
-        "\")"
     )
+
+    # Escape all single quotes for MATLAB eval
+    escaped_matlab_code = raw_matlab_code.replace("'", "''")
+    matlab_code = f"eval('{escaped_matlab_code}')"
 
     try:
         matlab_exec = find_matlab_executable()
