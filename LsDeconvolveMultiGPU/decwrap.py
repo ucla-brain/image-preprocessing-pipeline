@@ -117,36 +117,63 @@ def main():
     parser.add_argument('--version', action='version', version='DeconvWrapper v1.2')
 
     # Required
-    parser.add_argument('-i', '--input', type=Path, required=True, help='Path to the input image folder')
-    parser.add_argument('-dxy', '--dxy', type=float, required=True, help='Lateral resolution in micrometers (μm)')
-    parser.add_argument('-dz', '--dz', type=float, required=True, help='Axial resolution in micrometers (μm)')
+    parser.add_argument('-i', '--input', type=Path, required=True,
+        help='Path to the input image folder')
+    parser.add_argument('-dxy', '--dxy', type=float, required=True,
+        help='Lateral resolution in micrometers (μm)')
+    parser.add_argument('-dz', '--dz', type=float, required=True,
+        help='Axial resolution in micrometers (μm)')
 
     # Optional
-    parser.add_argument('--brain_name', type=str, default=None)
-    parser.add_argument('--numit', '-it', type=int, default=10)
-    parser.add_argument('--lambda_ex', '-ex', type=int, default=488)
-    parser.add_argument('--lambda_em', '-em', type=int, default=525)
-    parser.add_argument('--na', type=float, default=0.40)
-    parser.add_argument('--rf', type=float, default=1.42)
-    parser.add_argument('--fcyl', type=int, default=240)
-    parser.add_argument('--slitwidth', type=float, default=12.0)
-    parser.add_argument('--lambda_damping', type=float, default=0.0)
-    parser.add_argument('--clipval', type=int, default=0)
-    parser.add_argument('--stop_criterion', type=int, default=0)
-    parser.add_argument('--block_size_max', type=int, default=block_size_default)
-    parser.add_argument('--gpu-indices', type=int, nargs='+', default=default_gpu_indices, help='List of GPU device indices to use (e.g., 1 2). Default: all detected GPUs.')
-    parser.add_argument('--gpu-workers-per-gpu', type=int, default=default_workers_per_gpu, help='Number of parallel workers per selected GPU')
-    parser.add_argument('--cpu-workers', type=int, default=0)
-    parser.add_argument('--signal_amp', type=float, default=1.0)
-    parser.add_argument('--sigma', type=float, nargs=3, default=[0.5, 0.5, 1.5])
-    parser.add_argument('--filter_size', type=int, nargs=3, default=[5, 5, 15])
-    parser.add_argument('--denoise_strength', type=int, default=1)
-    parser.add_argument('--no-resume', dest='resume', action='store_false')
+    parser.add_argument('--brain_name', type=str, default=None,
+        help='Optional brain name for cache path construction')
+    parser.add_argument('--numit', '-it', type=int, default=10,
+        help='Number of deconvolution iterations [1-50]')
+    parser.add_argument('--lambda_ex', '-ex', type=int, default=488,
+        help='Excitation wavelength (488, 561, 642)')
+    parser.add_argument('--lambda_em', '-em', type=int, default=525,
+        help='Emission wavelength (525, 600, 690)')
+    parser.add_argument('--na', type=float, default=0.40,
+        help='Numerical aperture of the objective lens')
+    parser.add_argument('--rf', type=float, default=1.42,
+        help='Refractive index of the sample medium')
+    parser.add_argument('--fcyl', type=int, default=240,
+        help='Focal length of the cylindrical lens (in mm)')
+    parser.add_argument('--slitwidth', type=float, default=12.0,
+        help='Slit width in millimeters')
+    parser.add_argument('--lambda_damping', type=float, default=0.0,
+        help='Damping parameter (0 = off)')
+    parser.add_argument('--clipval', type=int, default=0,
+        help='Clipping value (0 = disabled)')
+    parser.add_argument('--stop_criterion', type=int, default=0,
+        help='Early stopping criterion (0 = disabled)')
+    parser.add_argument('--block_size_max', type=int, default=block_size_default,
+        help='Max number of elements per GPU block (estimated from GPU memory)')
+    parser.add_argument('--gpu-indices', type=int, nargs='+', default=default_gpu_indices,
+        help='List of GPU device indices to use (e.g., 1 2). Default: all detected GPUs.')
+    parser.add_argument('--gpu-workers-per-gpu', type=int, default=default_workers_per_gpu,
+        help='Number of parallel workers per selected GPU')
+    parser.add_argument('--cpu-workers', type=int, default=0,
+        help='Number of CPU workers to use (0 disables CPU deconvolution)')
+    parser.add_argument('--signal_amp', type=float, default=1.0,
+        help='Signal amplification factor')
+    parser.add_argument('--sigma', type=float, nargs=3, default=[0.5, 0.5, 1.5],
+        help='3D Gaussian filter sigma in voxel unit (e.g., 0.5 0.5 1.5). Use 0 0 0 to disable filtering.')
+    parser.add_argument('--filter_size', type=int, nargs=3, default=[5, 5, 15],
+        help='Size of the 3D Gaussian filter kernel in voxel unit')
+    parser.add_argument('--denoise_strength', type=int, default=1,
+        help='Denoising strength (e.g., 1 to 255 for 8-bit images)')
+    parser.add_argument('--no-resume', dest='resume', action='store_false',
+        help='Disable resuming from previous cache (default: resume is enabled)')
     parser.set_defaults(resume=True)
-    parser.add_argument('--flip', action='store_true')
-    parser.add_argument('--convert-to-8bit', action='store_true')
-    parser.add_argument('--start_block', type=int, default=1)
-    parser.add_argument('--dry-run', action='store_true')
+    parser.add_argument('--flip', action='store_true',
+        help='Flip output image vertically after deconvolution')
+    parser.add_argument('--convert-to-8bit', action='store_true',
+        help='Convert output to 8-bit (default keeps original bit depth, usually 16-bit)')
+    parser.add_argument('--start_block', type=int, default=1,
+        help='Starting block index for multi-GPU chunking')
+    parser.add_argument('--dry-run', action='store_true',
+        help='Print the MATLAB command and exit without executing it')
 
     args = parser.parse_args()
 
