@@ -41,7 +41,7 @@ def get_all_gpu_indices():
     except Exception:
         return []
 
-def estimate_block_size_max(gpu_indices, num_workers, bytes_per_element=4, base_reserve_gb=1, per_worker_mib=350):
+def estimate_block_size_max(gpu_indices, num_workers, bytes_per_element=4, base_reserve_gb=0, per_worker_mib=157):
     max_allowed = 2**31 - 10**6
     try:
         result = subprocess.run(
@@ -62,7 +62,7 @@ def estimate_block_size_max(gpu_indices, num_workers, bytes_per_element=4, base_
             return max_allowed
 
         usable_bytes = usable_mib * 1024**2
-        estimated = int(usable_bytes / bytes_per_element)
+        estimated = int(usable_bytes / bytes_per_element / 2)
         return min(estimated, max_allowed)
     except Exception:
         print("WARNING: Could not estimate GPU memory, using safe default.")
