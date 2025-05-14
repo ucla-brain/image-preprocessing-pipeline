@@ -62,7 +62,7 @@ def estimate_block_size_max(gpu_indices, num_workers, bytes_per_element=4, base_
             return max_allowed
 
         usable_bytes = usable_mib * 1024**2
-        estimated = int(usable_bytes / bytes_per_element / 2)
+        estimated = int(usable_bytes / bytes_per_element / 3)
         return min(estimated, max_allowed)
     except Exception:
         print("WARNING: Could not estimate GPU memory, using safe default.")
