@@ -134,8 +134,8 @@ def main():
     parser.add_argument('--clipval', type=int, default=0)
     parser.add_argument('--stop_criterion', type=int, default=0)
     parser.add_argument('--block_size_max', type=int, default=block_size_default)
-    parser.add_argument('--gpu-indices', type=int, nargs='+', default=default_gpu_indices)
-    parser.add_argument('--gpu-workers-per-gpu', type=int, default=default_workers_per_gpu)
+    parser.add_argument('--gpu-indices', type=int, nargs='+', default=default_gpu_indices, help='List of GPU device indices to use (e.g., 1 2). Default: all detected GPUs.')
+    parser.add_argument('--gpu-workers-per-gpu', type=int, default=default_workers_per_gpu, help='Number of parallel workers per selected GPU')
     parser.add_argument('--cpu-workers', type=int, default=0)
     parser.add_argument('--signal_amp', type=float, default=1.0)
     parser.add_argument('--sigma', type=float, nargs=3, default=[0.5, 0.5, 1.5])
@@ -219,7 +219,7 @@ def main():
 
     try:
         log.info("Running MATLAB deconvolution...")
-        result = subprocess.run(
+        subprocess.run(
             ' '.join(matlab_cmd) if is_windows else matlab_cmd,
             shell=is_windows,
             text=True,
