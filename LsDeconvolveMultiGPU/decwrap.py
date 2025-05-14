@@ -2,6 +2,7 @@ import argparse
 import logging
 import platform
 import shutil
+import signal
 import subprocess
 from json import dump
 from pathlib import Path
@@ -242,20 +243,43 @@ def main():
         log.info("Dry run enabled. Command was not executed.")
         return
 
+    proc = None  # Declare outside so it's visible in finally block
     try:
         log.info("Running MATLAB deconvolution...")
-        subprocess.run(
+        proc = subprocess.Popen(
             ' '.join(matlab_cmd) if is_windows else matlab_cmd,
             shell=is_windows,
-            text=True,
-            check=True
+            text=True
         )
-
+        proc.wait()
         log.info("Deconvolution completed successfully.")
-        tmp_script_path.unlink(missing_ok=True)
-    except subprocess.CalledProcessError as e:
-        log.error("MATLAB exited with error:")
-        raise SystemExit(e)
+
+    except KeyboardInterrupt:
+        log.warning("Interrupted by user (Ctrl+C). Terminating MATLAB...")
+
+        if proc and proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+
+        # Kill all background MATLAB workers (aggressive)
+        try:
+            if is_windows:
+                subprocess.run(["taskkill", "/f", "/im", "MATLAB.exe"], shell=True)
+            else:
+                subprocess.run(["pkill", "-f", "MATLAB"])
+        except Exception as kill_err:
+            log.warning(f"Failed to kill background MATLAB processes: {kill_err}")
+
+        raise SystemExit("Execution interrupted by user.")
+
+    finally:
+        if not args.dry_run and tmp_script_path.exists():
+            log.info("Cleaning up temporary MATLAB script...")
+            tmp_script_path.unlink(missing_ok=True)
+
 
 if __name__ == "__main__":
     main()
