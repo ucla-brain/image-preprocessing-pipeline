@@ -29,7 +29,7 @@ from numpy import median as np_median
 from numpy import min as np_min
 from numpy import (uint8, uint16, float32, float64, iinfo, ndarray, generic, broadcast_to, exp, expm1, log1p, tanh,
                    zeros, ones, cumsum, arange, unique, interp, pad, clip, where, rot90, flipud, dot, reshape, nonzero,
-                   logical_not, prod, rint)
+                   logical_not, prod, rint, array)
 from psutil import cpu_count
 from ptwt import wavedec2 as pt_wavedec2
 from ptwt import waverec2 as pt_waverec2
@@ -234,7 +234,9 @@ def imread_tif_raw_png(path: Path, dtype: str = None, shape: Tuple[int, int] = N
                         else:
                             print(f"{PrintColors.WARNING}[tifffile] Failed to read {path}: {type(e).__name__} - {e}{PrintColors.ENDC}")
                     try:
-                        img = iio_imread(path, plugin="pillow")
+                        with Image.open(path) as im:
+                            im.load()  # Forces loading into memory
+                            img = array(im)
                     except (OSError, ValueError) as e2:
                         if attempt == 0:
                             print(f"{PrintColors.WARNING}[pillow] Also failed to read {path}: {type(e2).__name__} - {e2}{PrintColors.ENDC}")
