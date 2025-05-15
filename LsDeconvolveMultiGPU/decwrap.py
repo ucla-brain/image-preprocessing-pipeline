@@ -242,7 +242,9 @@ def main():
     log.info("MATLAB command:")
     log.info(' '.join(matlab_cmd) if is_windows else matlab_cmd)
 
-    with open(args.input/"deconvolved"/"deconvolution_config.json", "w") as f:
+    decon_path = args.input / "deconvolved"
+    decon_path.mkdir(exist_ok=True)
+    with open(decon_path/"deconvolution_config.json", "w") as f:
         dump({k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()}, f, indent=2)
 
     if args.dry_run:
