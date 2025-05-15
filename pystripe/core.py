@@ -215,16 +215,16 @@ def imread_tif_raw_png(path: Path, dtype: str = None, shape: Tuple[int, int] = N
                 except (TiffFileError, RuntimeError) as e:
                     if attempt == 0:
                         if 'imcd_lzw_decode' in str(e):
-                            print(f"{PrintColors.WARNING}LZW decode error with tifffile/imagecodecs: {e}{PrintColors.ENDC}")
+                            print(f"{PrintColors.WARNING}[imagecodecs]: file: {path.name} LZW decode error: {e}{PrintColors.ENDC}")
                         else:
-                            print(f"{PrintColors.WARNING}[tifffile] Failed to read {path}: {type(e).__name__} - {e}{PrintColors.ENDC}")
+                            print(f"{PrintColors.WARNING}[tifffile]: file: {path.name} failed to read: {type(e).__name__} - {e}{PrintColors.ENDC}")
                     try:
                         with Image.open(path) as im:
                             im.load()
                             img = array(im)
                     except (OSError, ValueError) as e2:
                         if attempt == 0:
-                            print(f"{PrintColors.WARNING}[pillow] Also failed to read {path}: {type(e2).__name__} - {e2}{PrintColors.ENDC}")
+                            print(f"{PrintColors.WARNING}[pillow]: file: {path.name} also failed to read: {type(e2).__name__} - {e2}{PrintColors.ENDC}")
                         # 🛠 Try bfconvert as last resort
                         bfconvert = shutil.which("bfconvert")
                         if bfconvert:
@@ -243,16 +243,16 @@ def imread_tif_raw_png(path: Path, dtype: str = None, shape: Tuple[int, int] = N
                                         [bfconvert, str(fixed_path), "-compression", "LZW", str(path)],
                                         check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
                                     )
-                                    print(f"{PrintColors.BLUE}File fixed and recompressed with bfconvert: {path.name}{PrintColors.ENDC}")
+                                    print(f"{PrintColors.BLUE}[bfconvert]: file: {path.name} fixed and recompressed: {PrintColors.ENDC}")
                                     continue  # Retry reading the repaired file
                             except subprocess.CalledProcessError as e3:
-                                print(f"{PrintColors.FAIL}bfconvert failed: {e3}{PrintColors.ENDC}")
+                                print(f"{PrintColors.FAIL}[bfconvert]: file: {path.name} failed to fix: {e3}{PrintColors.ENDC}")
                         raise
 
             else:
                 print(f"{PrintColors.WARNING}Unsupported file format: {extension}{PrintColors.ENDC}")
         except (OSError, TypeError, PermissionError) as e:
-            print(f"[Attempt {attempt+1}] Read error for {path}: {type(e).__name__} - {e}")
+            print(f"[Attempt {attempt+1}]: file: {path.name} Read error: {type(e).__name__} - {e}")
             sleep(0.1)
             continue
 
