@@ -260,7 +260,7 @@ def imread_tif_raw_png(path: Path, dtype: str = None, shape: Tuple[int, int] = N
             break
 
     if img is None:
-        print(f"{PrintColors.FAIL}Failed to load image after {attempt + 1} attempts:\n{path}{PrintColors.ENDC}")
+        print(f"{PrintColors.FAIL}Failed to load image after {attempt + 1} attempts:\n{path.name}{PrintColors.ENDC}")
     return img
 
 
