@@ -19,7 +19,8 @@ from gc import collect as gc_collect
 
 from cv2 import morphologyEx, MORPH_CLOSE, MORPH_OPEN, floodFill, GaussianBlur
 from dcimg import DCIMGFile
-from imageio.v3 import imread as png_imread
+from imagecodecs import ImcdError
+from imageio.v3 import imread as iio_imread
 from numba import jit
 from numexpr import evaluate
 from numpy import dtype as np_d_type
@@ -39,7 +40,7 @@ from scipy.signal import butter, sosfiltfilt
 from skimage.filters import threshold_otsu, threshold_multiotsu
 from skimage.measure import block_reduce
 from skimage.transform import resize
-from tifffile import imread, imwrite
+from tifffile import imwrite
 from tifffile.tifffile import TiffFileError
 from torch import Tensor, as_tensor
 from torch import arange as pt_arange
@@ -194,43 +195,57 @@ def log1p_jit(img: ndarray, dtype=float32):
 
 
 def imread_tif_raw_png(path: Path, dtype: str = None, shape: Tuple[int, int] = None):
-    """Load a tiff or raw image
+    """
+    Load a TIFF, RAW, or PNG image file with retry and fallback support.
 
     Parameters
     ----------
     path : Path
-        path to tiff, raw or png image
-    dtype: str or None,
-        optional. If given will reduce the raw to tif conversion time.
-    shape : tuple (int, int) or None
-        optional. If given will reduce the raw to tif conversion time.
+        Path to the image file.
+    dtype : str, optional
+        Optional dtype hint for raw files.
+    shape : tuple of int, optional
+        Optional shape hint for raw files.
 
     Returns
     -------
     img : ndarray
-        image as a numpy array
-
+        Loaded image as NumPy array, or None if loading failed.
     """
+    extension = path.suffix.lower()
     img = None
-    # for NAS
-    attempt = 0
+
     for attempt in range(NUM_RETRIES):
         try:
-            extension = path.suffix.lower()
             if extension == '.raw':
                 img = raw_imread(path, dtype=dtype, shape=shape)
+
             elif extension == '.png':
-                img = png_imread(path, extension='.png', plugin='PNG-FI')
-            elif extension in ['.tif', '.tiff']:
-                img = imread(path.__str__())
+                img = iio_imread(path, extension='.png', plugin='PNG-FI')
+
+            elif extension in ('.tif', '.tiff'):
+                try:
+                    img = iio_imread(path, plugin="tifffile")
+                except (TiffFileError, ImcdError) as e:
+                    print(f"[tifffile] Failed to read {path}: {type(e).__name__} - {e}")
+                    try:
+                        img = iio_imread(path, plugin="pillow")
+                    except (OSError, ValueError) as e2:
+                        print(f"[pillow] Also failed to read {path}: {type(e2).__name__} - {e2}")
+                        raise
+
             else:
-                print(f"{PrintColors.WARNING}encountered unsupported file format: {extension}{PrintColors.ENDC}")
-        except (OSError, TypeError, PermissionError):
+                print(f"{PrintColors.WARNING}Unsupported file format: {extension}{PrintColors.ENDC}")
+        except (OSError, TypeError, PermissionError) as e:
+            print(f"[Attempt {attempt+1}] Read error for {path}: {type(e).__name__} - {e}")
             sleep(0.1)
             continue
-        break
+
+        if img is not None:
+            break  # Exit retry loop on success
+
     if img is None:
-        print(f"after {attempt + 1} attempts failed to read file:\n{path}")
+        print(f"Failed to load image after {attempt + 1} attempts:\n{path}")
     return img
 
 
