@@ -237,8 +237,13 @@ def imread_tif_raw_png(path: Path, dtype: str = None, shape: Tuple[int, int] = N
                                     check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
                                 )
                                 if fixed_path.exists():
-                                    shutil.move(str(fixed_path), str(path))
-                                    print(f"{PrintColors.BLUE}File fixed with bfconvert: {path.name}{PrintColors.ENDC}")
+                                    if path.exists():
+                                        path.unlink()
+                                    subprocess.run(
+                                        [bfconvert, str(fixed_path), "-compression", "LZW", str(path)],
+                                        check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                                    )
+                                    print(f"{PrintColors.BLUE}File fixed and recompressed with bfconvert: {path.name}{PrintColors.ENDC}")
                                     continue  # Retry reading the repaired file
                             except subprocess.CalledProcessError as e3:
                                 print(f"{PrintColors.FAIL}bfconvert failed: {e3}{PrintColors.ENDC}")
@@ -256,10 +261,6 @@ def imread_tif_raw_png(path: Path, dtype: str = None, shape: Tuple[int, int] = N
 
     if img is None:
         print(f"{PrintColors.FAIL}Failed to load image after {attempt + 1} attempts:\n{path}{PrintColors.ENDC}")
-    return img
-
-    if img is None:
-        print(f"Failed to load image after {attempt + 1} attempts:\n{path}")
     return img
 
 
