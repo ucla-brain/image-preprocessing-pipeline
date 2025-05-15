@@ -19,7 +19,6 @@ from gc import collect as gc_collect
 
 from cv2 import morphologyEx, MORPH_CLOSE, MORPH_OPEN, floodFill, GaussianBlur
 from dcimg import DCIMGFile
-from imagecodecs import ImcdError
 from imageio.v3 import imread as iio_imread
 from numba import jit
 from numexpr import evaluate
@@ -226,8 +225,11 @@ def imread_tif_raw_png(path: Path, dtype: str = None, shape: Tuple[int, int] = N
             elif extension in ('.tif', '.tiff'):
                 try:
                     img = iio_imread(path, plugin="tifffile")
-                except (TiffFileError, ImcdError) as e:
-                    print(f"[tifffile] Failed to read {path}: {type(e).__name__} - {e}")
+                except (TiffFileError, RuntimeError) as e:
+                    if 'imcd_lzw_decode' in str(e):
+                        print(f"LZW decode error with tifffile/imagecodecs: {e}")
+                    else:
+                        print(f"[tifffile] Failed to read {path}: {type(e).__name__} - {e}")
                     try:
                         img = iio_imread(path, plugin="pillow")
                     except (OSError, ValueError) as e2:
