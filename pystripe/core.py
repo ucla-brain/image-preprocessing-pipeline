@@ -226,14 +226,16 @@ def imread_tif_raw_png(path: Path, dtype: str = None, shape: Tuple[int, int] = N
                 try:
                     img = iio_imread(path, plugin="tifffile")
                 except (TiffFileError, RuntimeError) as e:
-                    if 'imcd_lzw_decode' in str(e):
-                        print(f"LZW decode error with tifffile/imagecodecs: {e}")
-                    else:
-                        print(f"[tifffile] Failed to read {path}: {type(e).__name__} - {e}")
+                    if attempt == 0:
+                        if 'imcd_lzw_decode' in str(e):
+                            print(f"{PrintColors.WARNING}LZW decode error with tifffile/imagecodecs: {e}{PrintColors.ENDC}")
+                        else:
+                            print(f"{PrintColors.WARNING}[tifffile] Failed to read {path}: {type(e).__name__} - {e}{PrintColors.ENDC}")
                     try:
                         img = iio_imread(path, plugin="pillow")
                     except (OSError, ValueError) as e2:
-                        print(f"[pillow] Also failed to read {path}: {type(e2).__name__} - {e2}")
+                        if attempt == 0:
+                            print(f"{PrintColors.WARNING}[pillow] Also failed to read {path}: {type(e2).__name__} - {e2}{PrintColors.ENDC}")
                         raise
 
             else:
