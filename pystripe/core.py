@@ -243,7 +243,7 @@ def imread_tif_raw_png(path: Path, dtype: str = None, shape: Tuple[int, int] = N
                                         [bfconvert, str(fixed_path), "-compression", "LZW", str(path)],
                                         check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
                                     )
-                                    print(f"{PrintColors.BLUE}[bfconvert]: file: {path.name} fixed and recompressed: {PrintColors.ENDC}")
+                                    print(f"{PrintColors.BLUE}[bfconvert]: file: {path.name} fixed and recompressed.{PrintColors.ENDC}")
                                     continue  # Retry reading the repaired file
                             except subprocess.CalledProcessError as e3:
                                 print(f"{PrintColors.FAIL}[bfconvert]: file: {path.name} failed to fix: {e3}{PrintColors.ENDC}")
