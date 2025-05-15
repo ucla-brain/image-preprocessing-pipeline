@@ -55,6 +55,8 @@ from torch.cuda import is_available as cuda_is_available_for_pt
 from torch.fft import irfft as pt_irfft
 from torch.fft import rfft as pt_rfft
 from tqdm import tqdm
+from PIL import Image
+Image.MAX_IMAGE_PIXELS = None
 
 # from jax import local_devices, Array, default_device
 # from jax.numpy import broadcast_to as jx_broadcast_to
