@@ -213,8 +213,8 @@ function [] = LsDeconv(varargin)
         clear Rxy dxy_corr FWHMxy FWHMz;
 
         % plot_matrix(psf);
-        options.overwrite = true;
-        saveastiff(psf, 'psf.tif', options);
+        % options.overwrite = true;
+        % saveastiff(psf, 'psf.tif', options);
         p_log(log_file, ' ');
 
         % disp(psf)

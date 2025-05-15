@@ -2,10 +2,10 @@ import argparse
 import logging
 import platform
 import shutil
-import signal
 import subprocess
 from json import dump
 from pathlib import Path
+from subprocess import CalledProcessError
 
 import psutil
 
@@ -54,7 +54,7 @@ def get_all_gpu_indices():
 
 def estimate_block_size_max(gpu_indices, num_workers, bytes_per_element=4, base_reserve_gb=0.1, per_worker_mib=160,
                             num_blocks_on_gpu=3):
-    max_allowed = 2**31 # - 10**6
+    max_allowed = 2**31
     try:
         result = subprocess.run(
             ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
@@ -66,19 +66,25 @@ def estimate_block_size_max(gpu_indices, num_workers, bytes_per_element=4, base_
         all_memories = [int(x.strip()) for x in result.stdout.strip().splitlines()]
         selected_memories = [all_memories[i - 1] for i in gpu_indices if 0 <= i - 1 < len(all_memories)]
         if not selected_memories:
+            log.warning("No matching GPU indices found in nvidia-smi output.")
             return max_allowed
 
         min_vram_mib = min(selected_memories)
         usable_mib = min_vram_mib - base_reserve_gb * 1024 - num_workers * per_worker_mib
         if usable_mib <= 0:
+            log.warning("Usable GPU memory is too low.")
             return max_allowed
 
         usable_bytes = usable_mib * 1024**2
         estimated = int(usable_bytes / bytes_per_element / num_blocks_on_gpu)
         return min(estimated, max_allowed)
-    except Exception:
-        log.warning("Could not estimate GPU memory, using safe default.")
-        return max_allowed
+
+    except (CalledProcessError, FileNotFoundError) as e:
+        log.warning(f"nvidia-smi failed: {e}. Using safe default.")
+    except (ValueError, IndexError) as e:
+        log.warning(f"Unexpected output from nvidia-smi: {e}. Using safe default.")
+
+    return max_allowed
 
 def resolve_path(p):
     p = Path(p)
@@ -236,7 +242,7 @@ def main():
     log.info("MATLAB command:")
     log.info(' '.join(matlab_cmd) if is_windows else matlab_cmd)
 
-    with open("deconvolution_config.json", "w") as f:
+    with open(args.input/"deconvolved"/"deconvolution_config.json", "w") as f:
         dump({k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()}, f, indent=2)
 
     if args.dry_run:
