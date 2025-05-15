@@ -1,5 +1,7 @@
 import sys
 import os
+import shutil
+import subprocess
 from argparse import RawDescriptionHelpFormatter, ArgumentParser
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, TimeoutError
 from concurrent.futures.process import BrokenProcessPool
@@ -196,23 +198,6 @@ def log1p_jit(img: ndarray, dtype=float32):
 
 
 def imread_tif_raw_png(path: Path, dtype: str = None, shape: Tuple[int, int] = None):
-    """
-    Load a TIFF, RAW, or PNG image file with retry and fallback support.
-
-    Parameters
-    ----------
-    path : Path
-        Path to the image file.
-    dtype : str, optional
-        Optional dtype hint for raw files.
-    shape : tuple of int, optional
-        Optional shape hint for raw files.
-
-    Returns
-    -------
-    img : ndarray
-        Loaded image as NumPy array, or None if loading failed.
-    """
     extension = path.suffix.lower()
     img = None
 
@@ -235,11 +220,28 @@ def imread_tif_raw_png(path: Path, dtype: str = None, shape: Tuple[int, int] = N
                             print(f"{PrintColors.WARNING}[tifffile] Failed to read {path}: {type(e).__name__} - {e}{PrintColors.ENDC}")
                     try:
                         with Image.open(path) as im:
-                            im.load()  # Forces loading into memory
+                            im.load()
                             img = array(im)
                     except (OSError, ValueError) as e2:
                         if attempt == 0:
                             print(f"{PrintColors.WARNING}[pillow] Also failed to read {path}: {type(e2).__name__} - {e2}{PrintColors.ENDC}")
+                        # 🛠 Try bfconvert as last resort
+                        bfconvert = shutil.which("bfconvert")
+                        if bfconvert:
+                            fixed_path = path.with_suffix('.bf.tif')
+                            if fixed_path.exists():
+                                fixed_path.unlink()
+                            try:
+                                subprocess.run(
+                                    [bfconvert, str(path), str(fixed_path)],
+                                    check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                                )
+                                if fixed_path.exists():
+                                    shutil.move(str(fixed_path), str(path))
+                                    print(f"{PrintColors.BLUE}File fixed with bfconvert: {path.name}{PrintColors.ENDC}")
+                                    continue  # Retry reading the repaired file
+                            except subprocess.CalledProcessError as e3:
+                                print(f"{PrintColors.FAIL}bfconvert failed: {e3}{PrintColors.ENDC}")
                         raise
 
             else:
@@ -250,7 +252,11 @@ def imread_tif_raw_png(path: Path, dtype: str = None, shape: Tuple[int, int] = N
             continue
 
         if img is not None:
-            break  # Exit retry loop on success
+            break
+
+    if img is None:
+        print(f"{PrintColors.FAIL}Failed to load image after {attempt + 1} attempts:\n{path}{PrintColors.ENDC}")
+    return img
 
     if img is None:
         print(f"Failed to load image after {attempt + 1} attempts:\n{path}")
