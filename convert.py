@@ -65,7 +65,7 @@ def main(args: Namespace):
             args.dark > 0 or args.convert_to_8bit or
             new_size or down_sample or args.voxel_size_target or
             args.rotation or args.flip_upside_down or
-            args.gaussian or args.background_subtraction or args.de_stripe or args.bleach_correction)
+            args.gaussian or args.background_subtraction or args.destripe or args.bleach_correction)
     ):
         if not args.tif:
             print(f"{PrintColors.FAIL}tif path is needed to continue.{PrintColors.ENDC}")
@@ -73,11 +73,11 @@ def main(args: Namespace):
 
         need_pre_processing = False
         if args.dark > 0 or args.convert_to_8bit or down_sample or args.flip_upside_down or args.gaussian or \
-                args.background_subtraction or args.de_stripe or args.bleach_correction:
+                args.background_subtraction or args.destripe or args.bleach_correction:
             need_pre_processing = True
 
         de_striping_sigma = (0, 0)
-        if args.de_stripe:
+        if args.destripe:
             de_striping_sigma = (250, 250)
         # if args.bleach_correction:
         #    de_striping_sigma = (4000, 4000)
@@ -318,8 +318,8 @@ if __name__ == '__main__':
                              "Only compression is tested for RGB.")
     parser.add_argument("--gaussian", "-g", default=False, action=BooleanOptionalAction,
                         help="image pre-processing: apply Gaussian filter to denoise. Default is --no-gaussian.")
-    parser.add_argument("--de_stripe", default=False, action=BooleanOptionalAction,
-                        help="image pre-processing: apply de-striping algorithm. Default is --no-de_stripe")
+    parser.add_argument("--destripe", default=False, action=BooleanOptionalAction,
+                        help="image pre-processing: apply de-striping algorithm. Default is --no-destripe")
     parser.add_argument("--padding_mode", "-w", type=str, default='reflect',
                         help="Padding method affects the edge artifacts during de-stripping and bleach correction. "
                              "The default mode is reflect, but in some cases wrap method works better. "
