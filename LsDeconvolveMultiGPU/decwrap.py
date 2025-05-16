@@ -222,7 +222,7 @@ def main():
     tmp_script_path = Path("deconv_batch_script.m")
     tmp_script_path.write_text(
         f"addpath('{deconvolve_dir}');\n"
-        f"LsDeconv( ..."
+        f"LsDeconv( ...\n"
         f"    convertCharsToStrings({args.input.as_posix()}), ...\n"
         f"    {args.dxy * 1000}, ...\n"
         f"    {args.dz * 1000}, ...\n"
@@ -247,7 +247,7 @@ def main():
         f"    {int(args.flip)}, ...\n"
         f"    {int(args.convert_to_8bit)}, ...\n"
         f"    convertCharsToStrings({cache_drive_folder}) ...\n"
-        f");"
+        f");\n"
     )
 
     matlab_exec = find_matlab_executable()
