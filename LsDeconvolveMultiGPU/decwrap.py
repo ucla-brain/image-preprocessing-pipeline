@@ -115,7 +115,7 @@ def main():
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
 
-    parser.add_argument('--version', action='version', version='DeconvWrapper v1.2')
+    parser.add_argument('--version', action='version', version='DeconvWrapper v1.3')
 
     # Required
     parser.add_argument('-i', '--input', type=Path, required=True,
