@@ -15,3 +15,4 @@
 */semaphore.mex*
 .idea/
 __pycache__/
+/LsDeconvolveMultiGPU/queue.mexw64
