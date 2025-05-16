@@ -510,8 +510,10 @@ function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
     semkey_single = 1e3;
     semkey_loading_base = 1e4;
     semaphore_create(semkey_single, 1);
+    gpu_queue_key = 999;
+    queue('create', gpu_queue_key, unique_gpus);
     for gpu = unique_gpus
-        semaphore_create(gpu, 1);
+        % semaphore_create(gpu, 1);
         semaphore_create(gpu + semkey_loading_base, 3);
     end
 
@@ -541,15 +543,14 @@ function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
         if remaining_blocks > 0
             gpus = gpus(1:min(numel(gpus), remaining_blocks));
             pool = parpool('local', numel(gpus), 'IdleTimeout', Inf);
-            queue = parallel.pool.DataQueue;
-            afterEach(queue, @disp);
+            dQueue = parallel.pool.DataQueue;
+            afterEach(dQueue, @disp);
             parfor idx = 1 : numel(gpus)
                 deconvolve( ...
                     filelist, psf, numit, damping, ...
                     block, stack_info, p1, p2, min_max_path, ...
-                    stop_criterion, gpus(idx), cache_drive, ...
-                    filter, ...
-                    starting_block + idx - 1, queue);
+                    stop_criterion, gpus(idx), gpu_queue_key, ...
+                    cache_drive, filter, starting_block + idx - 1, dQueue);
             end
             delete(pool);
         end
@@ -559,9 +560,10 @@ function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
     % clear locks and semaphors
     semaphore_destroy(semkey_single);
     for gpu = unique_gpus
-        semaphore_destroy(gpu);
+        % semaphore_destroy(gpu);
         semaphore_destroy(gpu + semkey_loading_base);
     end
+    queue('destry', gpu_queue_key);
 
     % postprocess and write tif files
     % delete(gcp('nocreate'));
@@ -579,8 +581,8 @@ end
 
 function deconvolve(filelist, psf, numit, damping, ...
     block, stack_info, p1, p2, min_max_path, ...
-    stop_criterion, gpu, cache_drive, ...
-    filter, starting_block, queue)
+    stop_criterion, gpu, gpu_queue_key, cache_drive, ...
+    filter, starting_block, dQueue)
     
     semkey_single = 1e3;
     semkey_loading_base = 1e4;
@@ -618,10 +620,10 @@ function deconvolve(filelist, psf, numit, damping, ...
         y1     = startp(y);     y2 = endp(y);
         z1     = startp(z);     z2 = endp(z);
         semaphore('wait', semkey_loading);
-        send(queue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' is loading ...']);
+        send(dQueue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' is loading ...']);
         loading_start = tic;
         bl = load_block(filelist, x1, x2, y1, y2, z1, z2);
-        send(queue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' is loaded in ' num2str(round(toc(loading_start), 1))]);
+        send(dQueue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' is loaded in ' num2str(round(toc(loading_start), 1))]);
         semaphore('post', semkey_loading);
 
         % get min-max of raw data stack
@@ -636,7 +638,7 @@ function deconvolve(filelist, psf, numit, damping, ...
             continue
         end
         block_processing_start = tic;
-        [bl, lb, ub] = process_block(bl, block, psf, numit, damping, stop_criterion, gpu, filter);
+        [bl, lb, ub] = process_block(bl, block, psf, numit, damping, stop_criterion, gpu, gpu_queue_key, filter);
         send(queue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' filters applied in ' num2str(round(toc(block_processing_start), 1))]);
         
         save_start = tic;
@@ -705,27 +707,13 @@ function deconvolve(filelist, psf, numit, damping, ...
     end
 end
 
-function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criterion, gpu, filter)
+function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criterion, gpu, gpu_queue_key, filter)
     bl_size = size(bl);
     bl = filter_subband_3d_z(bl, 1, 0, "db9");
     if gpu && (min(filter.sigma(:)) > 0 || niter > 0)
-        gpu_device = gpuDevice(gpu);
-        % memory_needed_for_full_acceleration = 35e9;
-        % memory_needed_for_semi_acceleration = 24e9;
-        % num_full_accelerated_blocks = floor(gpu_device.TotalMemory / memory_needed_for_full_acceleration);
-        % if num_full_accelerated_blocks > 0
-        %     num_semi_accelerated_blocks = floor(mod(gpu_device.TotalMemory, memory_needed_for_full_acceleration) / memory_needed_for_semi_acceleration);
-        % else
-        %     num_semi_accelerated_blocks = floor(gpu_device.TotalMemory / memory_needed_for_semi_acceleration);
-        % end
-
-        % for gaussian filter 
-        % if num_full_accelerated_blocks > 0
-        %     semaphore('wait', gpu);
-        %     bl = gpuArray(bl);
-        % end
-
-        semaphore('wait', gpu);
+        % get the next available gpu
+        gpu_id = queue('w', gpu_queue_key);
+        gpu_device = gpuDevice(gpu_id);
         bl = gpuArray(bl);
     end
 
@@ -768,17 +756,8 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
     
         % deconvolve block using Lucy-Richardson algorithm
         if gpu && isgpuarray(bl)
-            % block is already on GPU and no GPU allocation is needed
-            bl = deconGPU(bl, psf, niter, lambda, stop_criterion, gpu);
-        % elseif gpu && num_semi_accelerated_blocks > 0
-        %     semaphore('wait', gpu);
-        %     bl = deconGPU(bl, psf, niter, lambda, stop_criterion, gpu);
-        %     bl = gather(bl);
-        %     gpuDevice(gpu);  % free GPU memory
-        %     semaphore('post', gpu);
+            bl = deconGPU(bl, psf, niter, lambda, stop_criterion, gpu_id);
         else
-            % GPU acceleration is requested by the user but the GPU
-            % cannot handle the block at the time of the request
             bl = deconCPU(bl, psf, niter, lambda, stop_criterion);
         end
 
@@ -789,14 +768,13 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
             floor(pad_z) + 1 : end - ceil(pad_z));
     end
     if gpu && isgpuarray(bl) && gpu_device.TotalMemory < 60e9
-        % try hard to run deconvolved_stats on GPU, which needs 43e9 ram.
         % Reseting the GPU
         bl = gather(bl);
         reset(gpu_device);  % to free 2 extra copies of bl in gpu
         if gpu_device.TotalMemory > 43e9
             bl = gpuArray(bl);
         else
-            semaphore('post', gpu);
+            queue('post', gpu_queue_key, gpu_id);
         end
     end
     [lb, ub] = deconvolved_stats(bl);
@@ -805,9 +783,9 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
     if gpu && isgpuarray(bl)
         bl = gather(bl);
         reset(gpu_device);  % to free gpu memory
-        semaphore('post', gpu);
+        queue('post', gpu_queue_key, gpu_id);
     end
-    assert(all(size(bl) == bl_size), 'block size mismatch!');
+    assert(all(size(bl) == bl_size), '[process_block]: block size mismatch!');
 end
 
 %Lucy-Richardson deconvolution
@@ -1150,7 +1128,7 @@ end
 function device = current_device(gpu)
     device = 'CPU';
     if gpu > 0
-        device = ['GPU' num2str(gpu)];
+        device = 'GPU';
     end
 end
 
