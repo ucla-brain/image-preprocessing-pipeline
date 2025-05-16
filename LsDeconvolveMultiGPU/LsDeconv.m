@@ -630,7 +630,7 @@ function deconvolve(filelist, psf, numit, damping, ...
         if ~ismember(stack_info.bit_depth, [8, 16])
             rawmax_start = tic;
             rawmax = max(max(bl(:)), rawmax);
-            send(queue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' rawmax calculated in ' num2str(round(toc(rawmax_start), 1))]);
+            send(dQueue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' rawmax calculated in ' num2str(round(toc(rawmax_start), 1))]);
         end
 
         % deconvolve current block of data
@@ -639,7 +639,7 @@ function deconvolve(filelist, psf, numit, damping, ...
         end
         block_processing_start = tic;
         [bl, lb, ub] = process_block(bl, block, psf, numit, damping, stop_criterion, gpu, gpu_queue_key, filter);
-        send(queue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' filters applied in ' num2str(round(toc(block_processing_start), 1))]);
+        send(dQueue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' filters applied in ' num2str(round(toc(block_processing_start), 1))]);
         
         save_start = tic;
         % delete block z_pad
@@ -682,7 +682,7 @@ function deconvolve(filelist, psf, numit, damping, ...
                 save(min_max_path, "deconvmin", "deconvmax", "rawmax", "-v7.3", "-nocompression");
                 could_not_save = false;
             catch
-                send(queue, "could not load or save min_max file. Retrying ...")
+                send(dQueue, "could not load or save min_max file. Retrying ...")
                 pause(1);
             end
         end
@@ -697,10 +697,10 @@ function deconvolve(filelist, psf, numit, damping, ...
             try
                 save(block_path_tmp, 'bl', '-v7.3');  % , '-nocompression'
                 movefile(block_path_tmp, block_path, 'f');
-                send(queue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' saved in ' num2str(round(toc(save_start), 1))]);
+                send(dQueue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' saved in ' num2str(round(toc(save_start), 1))]);
                 could_not_save = false;
             catch
-                send(queue, ['could not save ' block_path '! Retrying ...']);
+                send(dQueue, ['could not save ' block_path '! Retrying ...']);
                 pause(1);
             end
         end
