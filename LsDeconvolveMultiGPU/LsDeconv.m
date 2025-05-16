@@ -375,7 +375,7 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad] = autosplit(stack_info, psf_
     if block_size_max <= 0
         error(['block size should be larger than zero and smaller than ' num2str(intmax("int32")) ' for GPU computing']);
     end
-    if block_size_max > intmax("int32")
+    if block_size_max > (double(intmax("int32"))+1)
         warning(['block size should be smaller than ' num2str(intmax("int32")) ' for GPU computing']);
     end
 
