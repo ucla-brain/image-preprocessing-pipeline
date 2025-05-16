@@ -52,7 +52,7 @@ def get_all_gpu_indices():
         log.warning(f"GPU index detection failed: {e}")
         return []
 
-def estimate_block_size_max(gpu_indices, num_workers, bytes_per_element=4, base_reserve_gb=1.2, per_worker_mib=160,
+def estimate_block_size_max(gpu_indices, num_workers, bytes_per_element=4, base_reserve_gb=.1, per_worker_mib=320,
                             num_blocks_on_gpu=3):
     max_allowed = 2**31
     try:
