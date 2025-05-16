@@ -974,7 +974,6 @@ function postprocess_save(...
     clear num_tif_files;
     
     num_workers = feature('numcores');
-    needed_ram_per_thread = stack_info.x * stack_info.y * 8 * 4;
     pool = parpool('local', num_workers, 'IdleTimeout', Inf);
     async_load(1 : block.nx * block.ny) = parallel.FevalFuture;
     for nz = starting_z_block : block.nz
@@ -1001,12 +1000,8 @@ function postprocess_save(...
                 file_path_parts = strsplit(blocklist(blnr), '/');
             end
             file_name = char(file_path_parts(end));
-            % time_out_start = tic;
-            % data = async_load(j).fetchOutputs;
-            % loading_time = round(toc(time_out_start), 1);
             asigment_time_start = tic;
             R(p1(blnr, x) : p2(blnr, x), p1(blnr, y) : p2(blnr, y), :) = async_load(j).fetchOutputs;
-            % disp(['   block ' num2str(j) ':' num2str(block.nx * block.ny) ' file: ' file_name ' loaded in ' num2str(loading_time) ' asinged in ' num2str(round(toc(asigment_time_start), 1))]);
             disp(['   block ' num2str(j) ':' num2str(block.nx * block.ny) ' file: ' file_name ' loaded and asinged in ' num2str(round(toc(asigment_time_start), 1))]);
             blnr = blnr + 1;
         end
@@ -1053,19 +1048,8 @@ function postprocess_save(...
             if exist(save_path, "file")
                 continue
             end
-            
-            % make sure there is enough ram before copying img to the
-            % process that saving the image
-            %semaphore('wait', semkey_single);
-            %[ram_available, ~] = get_memory();
-            %while ram_available < needed_ram_per_thread
-            %    pause(1);
-            %    [ram_available, ~] = get_memory();
-            %end
-            % semaphore will be released once the data copied to the
-            % save_image_2d process
 
-            message = save_image_2d(R(:,:,k), save_path, s, rawmax, save_time, semkey_single);
+            message = save_image_2d(R(:,:,k), save_path, s, rawmax, save_time);
             disp(message);
         end
 
@@ -1420,8 +1404,7 @@ function [lb, ub] = deconvolved_stats(deconvolved)
     ub = stats(2);
 end
 
-function message = save_image_2d(im, path, s, rawmax, save_time, semkey_single)
-    %semaphore('post', semkey_single);
+function message = save_image_2d(im, path, s, rawmax, save_time)
     im = squeeze(im);
     im = im';
     for num_retries = 1 : 40
@@ -1436,7 +1419,6 @@ function message = save_image_2d(im, path, s, rawmax, save_time, semkey_single)
             break
         catch
             pause(1);
-            continue
         end
     end
     message = ['   saved img_' s ' in ' num2str(round(toc(save_time), 1)) ' seconds and after ' num2str(num_retries) ' attempts.'];
