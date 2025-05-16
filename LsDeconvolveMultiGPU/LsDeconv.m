@@ -563,7 +563,7 @@ function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
         % semaphore_destroy(gpu);
         semaphore_destroy(gpu + semkey_loading_base);
     end
-    queue('destry', gpu_queue_key);
+    queue('destroy', gpu_queue_key);
 
     % postprocess and write tif files
     % delete(gcp('nocreate'));
