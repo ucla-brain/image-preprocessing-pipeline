@@ -14,12 +14,6 @@ log = logging.getLogger(__name__)
 
 is_windows = platform.system() == "Windows"
 
-def construct_cache_drive_folder_name(lambda_ex, lambda_em, brain_name=None):
-    if brain_name:
-        return f"cache_deconvolution_{brain_name}_Ex_{lambda_ex}_Em_{lambda_em}"
-    else:
-        return f"cache_deconvolution_Ex_{lambda_ex}_Em_{lambda_em}"
-
 def find_matlab_executable():
     matlab_exec = "matlab.exe" if is_windows else "matlab"
     if shutil.which(matlab_exec):
@@ -132,7 +126,7 @@ def main():
         help='Axial resolution in micrometers (μm)')
 
     # Optional
-    parser.add_argument('--brain_name', type=str, default=None,
+    parser.add_argument('--cache_drive', type=str, default=None,
         help='Optional brain name for cache path construction')
     parser.add_argument('--numit', '-it', type=int, default=10,
         help='Number of deconvolution iterations [1-50]')
@@ -214,7 +208,11 @@ def main():
     gpu_indices_str = ' '.join(str(i) for i in final_gpu_indices)
     sigma_str = ' '.join(str(i) for i in args.sigma)
     filter_size_str = ' '.join(str(i) for i in args.filter_size)
-    cache_drive_folder = construct_cache_drive_folder_name(args.lambda_ex, args.lambda_em, args.brain_name)
+    cache_drive_folder = Path(args.input) / f"cache_deconvolution_Ex_{args.lambda_ex}_Em_{args.lambda_em}"
+    if args.cache_drive:
+        if not Path(args.cache_drive).exists():
+            raise RuntimeError(f"Cache drive folder does not exist: {args.cache_drive}")
+        cache_drive_folder = Path(args.cache_drive) / cache_drive_folder.name
 
     try:
         deconvolve_dir = Path(__file__).resolve().parent.as_posix()
@@ -224,13 +222,32 @@ def main():
     tmp_script_path = Path("deconv_batch_script.m")
     tmp_script_path.write_text(
         f"addpath('{deconvolve_dir}');\n"
-        f"deconvolve('{args.input.as_posix()}', '{args.dxy * 1000}', '{args.dz * 1000}', "
-        f"'{args.numit}', '{args.lambda_ex}', '{args.lambda_em}', '{cache_drive_folder}', "
-        f"'{args.na}', '{args.rf}', '{args.fcyl}', '{args.slitwidth}', '{args.lambda_damping}', "
-        f"'{args.clipval}', '{args.stop_criterion}', '{args.block_size_max}', "
-        f"[{gpu_indices_str}], '{args.signal_amp}', [{sigma_str}], [{filter_size_str}], "
-        f"'{args.denoise_strength}', '{int(args.resume)}', '{args.start_block}', "
-        f"'{int(args.flip)}', '{int(args.convert_to_8bit)}', '{cache_drive_folder}');\n"
+        f"LsDeconv( ..."
+        f"    convertCharsToStrings({args.input.as_posix()}), ..."
+        f"    {args.dxy * 1000}, ..."
+        f"    {args.dz * 1000}, ..."
+        f"    {args.numit}, ..."
+        f"    {args.na}, ..."
+        f"    {args.rf}, ..."
+        f"    {args.lambda_ex}, ..."
+        f"    {args.lambda_em}, ..."
+        f"    {args.fcyl}, ..."
+        f"    {args.slitwidth}, ..."
+        f"    {args.lambda_damping}, ..."
+        f"    {args.clipval}, ..."
+        f"    {args.stop_criterion}, ..."
+        f"    {args.block_size_max}, ..."
+        f"    [{gpu_indices_str}], ..."
+        f"    {args.signal_amp}, ..."
+        f"    [{sigma_str}], ..."
+        f"    [{filter_size_str}], ..."
+        f"    {args.denoise_strength}, ..."
+        f"    {int(args.resume)}, ..."
+        f"    {args.start_block}, ..."
+        f"    {int(args.flip)}, ..."
+        f"    {int(args.convert_to_8bit)}, ..."
+        f"    convertCharsToStrings({cache_drive_folder}) ..."
+        f");"
     )
 
     matlab_exec = find_matlab_executable()

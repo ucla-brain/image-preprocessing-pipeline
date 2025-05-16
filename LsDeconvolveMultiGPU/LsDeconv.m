@@ -70,9 +70,9 @@ function [] = LsDeconv(varargin)
         starting_block = varargin{21};
         flip_upside_down = varargin{22};
         convert_to_8bit = varargin{23};
-        cache_drive = tempdir;
+        cache_drive = fullfile(tempdir, 'decon_cache');
         if nargin > 23
-            cache_drive = fullfile(inpath, varargin{24});
+            cache_drive = varargin{24};
             if ~exist(cache_drive, "dir")
                 disp("making cache drive dir " + cache_drive)
                 mkdir(cache_drive);
