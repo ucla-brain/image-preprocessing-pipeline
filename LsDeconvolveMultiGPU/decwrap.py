@@ -223,7 +223,7 @@ def main():
     tmp_script_path.write_text(
         f"addpath('{deconvolve_dir}');\n"
         f"LsDeconv( ...\n"
-        f"    convertCharsToStrings({args.input.as_posix()}), ...\n"
+        f"    convertCharsToStrings('{args.input.as_posix()}'), ...\n"
         f"    {args.dxy * 1000}, ...\n"
         f"    {args.dz * 1000}, ...\n"
         f"    {args.numit}, ...\n"
@@ -246,7 +246,7 @@ def main():
         f"    {args.start_block}, ...\n"
         f"    {int(args.flip)}, ...\n"
         f"    {int(args.convert_to_8bit)}, ...\n"
-        f"    convertCharsToStrings({cache_drive_folder}) ...\n"
+        f"    convertCharsToStrings('{cache_drive_folder}') ...\n"
         f");\n"
     )
 
