@@ -193,7 +193,8 @@ def main():
     if user_specified_subset and not user_overrode_block_size:
         args.block_size_max = estimate_block_size_max(
             args.gpu_indices,
-            args.gpu_workers_per_gpu * len(args.gpu_indices)
+            args.gpu_workers_per_gpu * len(args.gpu_indices),
+            num_blocks_on_gpu=4 if args.stop_criterion > 0 else 3,
         )
         log.info(f"Re-estimated block_size_max: {args.block_size_max}")
 
