@@ -510,7 +510,7 @@ function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
     semkey_single = 1e3;
     semkey_loading_base = 1e4;
     semaphore_create(semkey_single, 1);
-    gpu_queue_key = 999;
+    gpu_queue_key = 6969;
     queue('create', gpu_queue_key, unique_gpus);
     for gpu = unique_gpus
         % semaphore_create(gpu, 1);
@@ -712,7 +712,7 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
     bl = filter_subband_3d_z(bl, 1, 0, "db9");
     if gpu && (min(filter.sigma(:)) > 0 || niter > 0)
         % get the next available gpu
-        gpu_id = queue('w', gpu_queue_key);
+        gpu_id = queue('wait', gpu_queue_key);
         gpu_device = gpuDevice(gpu_id);
         bl = gpuArray(bl);
     end
