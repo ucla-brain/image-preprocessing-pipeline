@@ -78,6 +78,7 @@
 #endif
 
 #define MAXDIRECTIVELEN 256
+#define SEM_NAME_PREFIX "Local\\LSDCONVMULTIGPU_semaphore_mem_"
 
 void winFormatError(const char *id, const char *msgPrefix, DWORD errorCode) {
     LPVOID lpMsgBuf = NULL;
@@ -90,6 +91,11 @@ void winFormatError(const char *id, const char *msgPrefix, DWORD errorCode) {
 
     mexErrMsgIdAndTxt(id, "%s System error #%d: \"%s\".", msgPrefix, errorCode, (LPCTSTR)lpMsgBuf);
     LocalFree(lpMsgBuf);
+}
+
+void get_key_string(double key, char* out) {
+    int k = (int)(key + 0.5);
+    snprintf(out, MAXDIRECTIVELEN, SEM_NAME_PREFIX "%d", k);
 }
 
 void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
@@ -117,8 +123,7 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
 #ifndef WIN32
     semkey = (key_t)(mxGetScalar(prhs[1]) + 0.5);
 #else
-    if (snprintf(semkeyStr, MAXDIRECTIVELEN, "%d", (int)(mxGetScalar(prhs[1]) + 0.5)) < 0)
-        mexErrMsgIdAndTxt("MATLAB:semaphore", "Failed to format semaphore key string.");
+    get_key_string(mxGetScalar(prhs[1]), semkeyStr);
 #endif
 
     if (nlhs > 1)
