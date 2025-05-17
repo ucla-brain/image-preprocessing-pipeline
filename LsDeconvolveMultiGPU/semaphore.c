@@ -1,113 +1,97 @@
 /*
- * Copyright (c) 2011 Joshua V Dillon
- * Copyright (c) 2014 Andrew Smart (based on "semaphore.c" by Joshua V. Dillon)
- * All rights reserved.
+ * semaphore.c - POSIX and Windows MEX semaphore support
  *
- * Redistribution and use in source and binary forms, with or
- * without modification, are permitted provided that the
- * following conditions are met:
- *  * Redistributions of source code must retain the above
- *    copyright notice, this list of conditions and the
- *    following disclaimer.
- *  * Redistributions in binary form must reproduce the above
- *    copyright notice, this list of conditions and the
- *    following disclaimer in the documentation and/or other
- *    materials provided with the distribution.
- *  * Neither the name of the author nor the names of its
- *    contributors may be used to endorse or promote products
- *    derived from this software without specific prior written
- *    permission.
+ * Refactored and extended by Keivan Moradi (2025) @ Brain Research and Artificial Intelligence Nexus lab @ UCLA
+ * - Cross-platform implementation for MATLAB MEX
+ * - Uses POSIX named semaphores on Linux/macOS
+ * - Uses named Win32 semaphores on Windows
+ * - Clean, centralized error handling for both platforms
  *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS ''AS IS'' AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
- * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL JOSHUA
- * V DILLON BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
- * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- */
-
-
-/*
- * This code can be compiled from within Matlab or command-line, assuming the
- * system is appropriately setup.  To compile, invoke:
- *
- * For 32-bit machines:
- *     mex -O -v semaphore.c
- * For 64-bit machines:
+ * Compilation:
+ *   You can compile this file from the MATLAB command line using:
  *     mex -O -v semaphore.c
  *
- */
-
-
-/*
- * Programmer's Notes:
+ * References:
+ *   - MATLAB MEX C API: https://www.mathworks.com/help/matlab/write-cc-mex-files.html
  *
- * MEX C API:
- * http://www.mathworks.com/access/helpdesk/help/techdoc/apiref/bqoqnz0.html
+ * License:
+ *   This program is free software: you can redistribute it and/or modify
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation, either version 3 of the License, or
+ *   (at your option) any later version.
  *
- * Testing:
+ *   This program is distributed in the hope that it will be useful,
+ *   but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ *   GNU General Public License for more details.
  *
+ *   You should have received a copy of the GNU General Public License
+ *   along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
-
- /*
- Debugged in 2025 by Keivan Moradi @ Brain Research and Artificial Intelligence Nexus lab @ UCLA
- */
-
-/* semaphore.c - Revised with persistent handle fixes, secure string formatting, and shared FormatMessage buffer */
-#define MAXDIRECTIVELEN 256
-#define SEM_NAME_PREFIX "Local\\LSDCONVMULTIGPU_semaphore_mem_"
 
 #include <errno.h>
 #include "mex.h"
 
 #if defined(_WIN32) || defined(_WIN64)
-    #define WIN32
-#endif
-
-#ifndef WIN32
-    #include <sys/shm.h>
-    #include <semaphore.h>
-#else
     #include <windows.h>
     #include <stdio.h>
+    #define IS_WINDOWS 1
+#else
+    #include <semaphore.h>
+    #include <fcntl.h>      // O_CREAT, O_EXCL
+    #include <sys/stat.h>   // mode constants
+    #include <unistd.h>
+    #include <string.h>
+    #include <ctype.h>
+    #define IS_WINDOWS 0
+#endif
 
-    void winFormatError(const char *id, const char *msgPrefix, DWORD errorCode) {
-        LPVOID lpMsgBuf = NULL;
-        FormatMessage(
-            FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
-            FORMAT_MESSAGE_IGNORE_INSERTS | FORMAT_MESSAGE_MAX_WIDTH_MASK,
-            NULL, errorCode,
-            MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-            (LPTSTR)&lpMsgBuf, 0, NULL);
+#define MAXDIRECTIVELEN 256
+#define SEM_NAME_PREFIX_WIN "Local\\LSDCONVMULTIGPU_semaphore_mem_"
+#define SEM_NAME_PREFIX_POSIX "/LSDCONVMULTIGPU_semaphore_mem_"
 
-        mexErrMsgIdAndTxt(id, "%s System error #%d: \"%s\".", msgPrefix, errorCode, (LPCTSTR)lpMsgBuf);
-        LocalFree(lpMsgBuf);
-    }
+#if IS_WINDOWS
+void winLastErrorExit(const char *id, const char *msgPrefix) {
+    DWORD errorCode = GetLastError();
+    LPVOID lpMsgBuf = NULL;
+    FormatMessage(
+        FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
+        FORMAT_MESSAGE_IGNORE_INSERTS | FORMAT_MESSAGE_MAX_WIDTH_MASK,
+        NULL, errorCode,
+        MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+        (LPTSTR)&lpMsgBuf, 0, NULL);
 
-    void get_key_string(double key, char* out) {
-        int k = (int)(key + 0.5);
-        snprintf(out, MAXDIRECTIVELEN, SEM_NAME_PREFIX "%d", k);
-    }
+    mexErrMsgIdAndTxt(id, "%s System error #%d: \"%s\".", msgPrefix, errorCode, (LPCTSTR)lpMsgBuf);
+    LocalFree(lpMsgBuf);
+}
+#else
+void posixLastErrorExit(const char *id, const char *msgPrefix) {
+    int errcode = errno;
+    mexErrMsgIdAndTxt(id, "%s POSIX error #%d: \"%s\".", msgPrefix, errcode, strerror(errcode));
+}
+#endif
+
+#if IS_WINDOWS
+void get_key_string(double key, char* out) {
+    int k = (int)(key + 0.5);
+    snprintf(out, MAXDIRECTIVELEN, SEM_NAME_PREFIX_WIN "%d", k);
+}
+#else
+void get_key_string(double key, char* out) {
+    int k = (int)(key + 0.5);
+    snprintf(out, MAXDIRECTIVELEN, SEM_NAME_PREFIX_POSIX "%d", k);
+}
 #endif
 
 void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
     char directive[MAXDIRECTIVELEN + 1];
     int semval = 1;
-#ifndef WIN32
-    key_t semkey = 0;
-    int semid;
-    int semflg = 0644;
-    sem_t *sem = NULL;
-#else
     char semkeyStr[MAXDIRECTIVELEN];
+
+#if IS_WINDOWS
     HANDLE hSemaphore = NULL;
+#else
+    sem_t *sem = NULL;
 #endif
 
     if (nrhs < 2)
@@ -119,11 +103,7 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
     if (mxGetNumberOfElements(prhs[1]) != 1 || !mxIsNumeric(prhs[1]))
         mexErrMsgIdAndTxt("MATLAB:semaphore", "Second input argument must be a valid integral key.");
 
-#ifndef WIN32
-    semkey = (key_t)(mxGetScalar(prhs[1]) + 0.5);
-#else
     get_key_string(mxGetScalar(prhs[1]), semkeyStr);
-#endif
 
     if (nlhs > 1)
         mexErrMsgIdAndTxt("MATLAB:semaphore", "Function returns only one value.");
@@ -134,122 +114,72 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
             semval = (int)(mxGetScalar(prhs[2]) + 0.5);
         else
             mexErrMsgIdAndTxt("MATLAB:semaphore:create", "Third input argument must be initial semaphore value (numeric scalar).");
-#ifndef WIN32
-        semflg |= IPC_CREAT | IPC_EXCL;
-        if ((semid = shmget(semkey, sizeof(sem_t), semflg)) < 0)
-            mexErrMsgIdAndTxt("MATLAB:semaphore:create", "Unable to create shared memory segment.");
-
-        sem = (sem_t *)shmat(semid, NULL, 0);
-        if (sem == (sem_t *)-1)
-            mexErrMsgIdAndTxt("MATLAB:semaphore:create", "Unable to attach shared memory to data space.");
-
-        if ((semflg = sem_init(sem, 1, semval)) < 0)
-            mexErrMsgIdAndTxt("MATLAB:semaphore:create", "Unable to create semaphore.");
-
-        plhs[0] = mxCreateDoubleScalar((double)semflg);
-#else
+#if IS_WINDOWS
         hSemaphore = CreateSemaphore(NULL, semval, semval, semkeyStr);
-        if (hSemaphore == NULL) {
-            DWORD err = GetLastError();
-            winFormatError("MATLAB:semaphore:create", "Unable to create the semaphore.", err);
-        }
-        plhs[0] = mxCreateDoubleMatrix(0, 0, mxREAL);
+        if (hSemaphore == NULL)
+            winLastErrorExit("MATLAB:semaphore:create", "Unable to create the semaphore.");
+#else
+        sem = sem_open(semkeyStr, O_CREAT | O_EXCL, 0644, semval);
+        if (sem == SEM_FAILED)
+            posixLastErrorExit("MATLAB:semaphore:create", "Unable to create POSIX semaphore.");
+        sem_close(sem);
 #endif
+        plhs[0] = mxCreateDoubleMatrix(0, 0, mxREAL);
         break;
 
     case 'w':
-#ifndef WIN32
-        if ((semid = shmget(semkey, sizeof(sem_t), semflg)) < 0)
-            mexErrMsgIdAndTxt("MATLAB:semaphore:wait", "Unable to locate shared memory segment.");
-
-        sem = (sem_t *)shmat(semid, NULL, 0);
-        if (sem == (sem_t *)-1)
-            mexErrMsgIdAndTxt("MATLAB:semaphore:wait", "Unable to attach shared memory to data space.");
+#if IS_WINDOWS
+        hSemaphore = OpenSemaphore(SYNCHRONIZE, FALSE, semkeyStr);
+        if (hSemaphore == NULL)
+            winLastErrorExit("MATLAB:semaphore:wait", "Unable to open the semaphore handle.");
+        if (WaitForSingleObject(hSemaphore, INFINITE) == WAIT_FAILED)
+            mexErrMsgIdAndTxt("MATLAB:semaphore:wait", "Semaphore wait failed.");
+#else
+        sem = sem_open(semkeyStr, 0);
+        if (sem == SEM_FAILED)
+            posixLastErrorExit("MATLAB:semaphore:wait", "Unable to open POSIX semaphore.");
 
         while (sem_wait(sem) != 0) {
             if (errno != EINTR)
-                mexErrMsgIdAndTxt("MATLAB:semaphore:wait", "Error waiting for semaphore: %s", strerror(errno));
+                posixLastErrorExit("MATLAB:semaphore:wait", "Error waiting for semaphore.");
         }
-
-        if (shmdt(sem) != 0)
-            mexErrMsgIdAndTxt("MATLAB:semaphore:wait", "Unable to detach shared memory.");
-
-        plhs[0] = mxCreateDoubleMatrix(0, 0, mxREAL);
-#else
-        hSemaphore = OpenSemaphore(SYNCHRONIZE, FALSE, semkeyStr);
-        if (hSemaphore == NULL) {
-            DWORD err = GetLastError();
-            winFormatError("MATLAB:semaphore:wait", "Unable to open the semaphore handle.", err);
-        }
-        if (WaitForSingleObject(hSemaphore, INFINITE) == WAIT_FAILED)
-            mexErrMsgIdAndTxt("MATLAB:semaphore:wait", "Semaphore wait failed.");
-
-        plhs[0] = mxCreateDoubleMatrix(0, 0, mxREAL);
+        sem_close(sem);
 #endif
+        plhs[0] = mxCreateDoubleMatrix(0, 0, mxREAL);
         break;
 
     case 'p':
-#ifndef WIN32
-        semid = shmget(semkey, sizeof(sem_t), semflg);
-        if (semid < 0)
-            mexErrMsgIdAndTxt("MATLAB:semaphore:post", "Unable to locate shared memory segment.");
-
-        sem = (sem_t *)shmat(semid, NULL, 0);
-        if (sem == (sem_t *)-1)
-            mexErrMsgIdAndTxt("MATLAB:semaphore:post", "Unable to attach shared memory to data space.");
-
-        if (sem_post(sem) < 0)
-            mexErrMsgIdAndTxt("MATLAB:semaphore:post", "Unable to post the semaphore.");
-
-        if (shmdt(sem) != 0)
-            mexErrMsgIdAndTxt("MATLAB:semaphore:post", "Unable to detach shared memory.");
-
-        plhs[0] = mxCreateDoubleMatrix(0, 0, mxREAL);
-#else
+#if IS_WINDOWS
         hSemaphore = OpenSemaphore(SEMAPHORE_MODIFY_STATE, FALSE, semkeyStr);
-        if (hSemaphore == NULL) {
-            DWORD err = GetLastError();
-            winFormatError("MATLAB:semaphore:post", "Unable to open the semaphore handle.", err);
-        }
-        if (!ReleaseSemaphore(hSemaphore, 1, NULL)) {
-            DWORD err = GetLastError();
-            winFormatError("MATLAB:semaphore:post", "Unable to post the semaphore.", err);
-        }
-        plhs[0] = mxCreateDoubleMatrix(0, 0, mxREAL);
+        if (hSemaphore == NULL)
+            winLastErrorExit("MATLAB:semaphore:post", "Unable to open the semaphore handle.");
+        if (!ReleaseSemaphore(hSemaphore, 1, NULL))
+            winLastErrorExit("MATLAB:semaphore:post", "Unable to post the semaphore.");
+#else
+        sem = sem_open(semkeyStr, 0);
+        if (sem == SEM_FAILED)
+            posixLastErrorExit("MATLAB:semaphore:post", "Unable to open POSIX semaphore.");
+
+        if (sem_post(sem) != 0)
+            posixLastErrorExit("MATLAB:semaphore:post", "Unable to post POSIX semaphore.");
+
+        sem_close(sem);
 #endif
+        plhs[0] = mxCreateDoubleMatrix(0, 0, mxREAL);
         break;
 
     case 'd':
-#ifndef WIN32
-        semid = shmget(semkey, sizeof(sem_t), semflg);
-        if (semid < 0)
-            mexErrMsgIdAndTxt("MATLAB:semaphore:destroy", "Unable to locate shared memory segment.");
-
-        sem = (sem_t *)shmat(semid, NULL, 0);
-        if (sem == (sem_t *)-1)
-            mexErrMsgIdAndTxt("MATLAB:semaphore:destroy", "Unable to attach shared memory to data space.");
-
-        if (sem_destroy(sem) < 0)
-            mexErrMsgIdAndTxt("MATLAB:semaphore:destroy", "Unable to destroy the semaphore.");
-
-        if (shmdt(sem) != 0)
-            mexErrMsgIdAndTxt("MATLAB:semaphore:destroy", "Unable to detach shared memory.");
-
-        if (shmctl(semid, IPC_RMID, NULL) != 0)
-            mexErrMsgIdAndTxt("MATLAB:semaphore:destroy", "Unable to destroy shared memory.");
-
-        plhs[0] = mxCreateDoubleMatrix(0, 0, mxREAL);
-#else
+#if IS_WINDOWS
         hSemaphore = OpenSemaphore(SEMAPHORE_ALL_ACCESS, FALSE, semkeyStr);
-        if (hSemaphore == NULL) {
-            DWORD err = GetLastError();
-            winFormatError("MATLAB:semaphore:destroy", "Unable to open semaphore handle for destruction.", err);
-        }
+        if (hSemaphore == NULL)
+            winLastErrorExit("MATLAB:semaphore:destroy", "Unable to open semaphore handle for destruction.");
         if (!CloseHandle(hSemaphore))
             mexErrMsgIdAndTxt("MATLAB:semaphore:destroy", "Failed to close semaphore handle.");
-
-        plhs[0] = mxCreateDoubleMatrix(0, 0, mxREAL);
+#else
+        if (sem_unlink(semkeyStr) != 0)
+            posixLastErrorExit("MATLAB:semaphore:destroy", "Unable to unlink POSIX semaphore.");
 #endif
+        plhs[0] = mxCreateDoubleMatrix(0, 0, mxREAL);
         break;
 
     default:
