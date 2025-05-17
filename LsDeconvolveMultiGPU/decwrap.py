@@ -1,5 +1,6 @@
 import argparse
 import logging
+import os
 import platform
 import shutil
 import subprocess
@@ -251,30 +252,48 @@ def main():
     )
 
     matlab_exec = find_matlab_executable()
-    matlab_cmd = [
-        matlab_exec,
-        "-batch",
-        f"run('{tmp_script_path.stem}')"
-    ]
+
+    # === Insert Linux-specific optimizations ===
+    env = os.environ.copy()
+    if not is_windows:
+        # Set glibc tuning to reduce fragmentation
+        env["MALLOC_ARENA_MAX"] = "4"
+
+        # Use numactl for better memory distribution on NUMA systems
+        # Wrap the matlab command with numactl only on Linux
+        matlab_cmd = [
+            "numactl", "--interleave=all",
+            matlab_exec,
+            "-batch",
+            f"run('{tmp_script_path.stem}')"
+        ]
+    else:
+        # Windows-compatible MATLAB command
+        matlab_cmd = [
+            matlab_exec,
+            "-batch",
+            f"run('{tmp_script_path.stem}')"
+        ]
 
     log.info("MATLAB command:")
     log.info(' '.join(matlab_cmd) if is_windows else matlab_cmd)
 
     decon_path = args.input / "deconvolved"
     decon_path.mkdir(exist_ok=True)
-    with open(decon_path/"deconvolution_config.json", "w") as f:
+    with open(decon_path / "deconvolution_config.json", "w") as f:
         dump({k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()}, f, indent=2)
 
     if args.dry_run:
         log.info("Dry run enabled. Command was not executed.")
         return
 
-    proc = None  # Declare outside so it's visible in finally block
+    proc = None
     try:
         log.info("Running MATLAB deconvolution...")
         proc = subprocess.Popen(
             ' '.join(matlab_cmd) if is_windows else matlab_cmd,
             shell=is_windows,
+            env=env,  # Pass the modified environment
             text=True
         )
         proc.wait()
