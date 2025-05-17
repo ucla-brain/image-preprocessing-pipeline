@@ -132,7 +132,7 @@ def main():
     # Optional
     parser.add_argument('--cache_drive', type=str, default=None,
         help='Optional brain name for cache path construction')
-    parser.add_argument('--numit', '-it', type=int, default=10,
+    parser.add_argument('--numit', '-it', type=int, default=12,
         help='Number of deconvolution iterations [1-50]')
     parser.add_argument('--na', type=float, default=0.40,
         help='Numerical aperture of the objective lens')
@@ -158,7 +158,7 @@ def main():
         help='Number of CPU workers to use (0 disables CPU deconvolution)')
     parser.add_argument('--signal_amp', type=float, default=1.0,
         help='Signal amplification factor')
-    parser.add_argument('--sigma', type=float, nargs=3, default=[0.5, 0.5, 1.5],
+    parser.add_argument('--sigma', type=float, nargs=3, default=[0.5, 0.5, 2.0],
         help='3D Gaussian filter sigma in voxel unit (e.g., 0.5 0.5 1.5). Use 0 0 0 to disable filtering.')
     parser.add_argument('--filter_size', type=int, nargs=3, default=[5, 5, 15],
         help='Size of the 3D Gaussian filter kernel in voxel unit')
