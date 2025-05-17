@@ -1,7 +1,7 @@
 /*
  * semaphore.c - POSIX and Windows MEX semaphore support
  *
- * Refactored and extended by Keivan Moradi (2025) @ Brain Research and Artificial Intelligence Nexus lab @ UCLA
+ * Keivan Moradi (2025) @ Brain Research and Artificial Intelligence Nexus lab @ UCLA
  * - Cross-platform implementation for MATLAB MEX
  * - Uses POSIX named semaphores on Linux/macOS
  * - Uses named Win32 semaphores on Windows
