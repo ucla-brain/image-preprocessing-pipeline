@@ -1015,6 +1015,7 @@ function postprocess_save(...
             end
         end
         R = R - amplification;
+        R = round(R);
         R = min(R, scal);
         R = max(R, 0);
         if stack_info.flip_upside_down
