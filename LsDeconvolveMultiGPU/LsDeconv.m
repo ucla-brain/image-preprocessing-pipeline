@@ -709,7 +709,6 @@ end
 
 function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criterion, gpu, gpu_queue_key, filter)
     bl_size = size(bl);
-    bl = filter_subband_3d_z(bl, 1, 0, "db9");
     if gpu && (min(filter.sigma(:)) > 0 || niter > 0)
         % get the next available gpu
         gpu_id = queue('wait', gpu_queue_key);
@@ -785,6 +784,7 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
         reset(gpu_device);  % to free gpu memory
         queue('post', gpu_queue_key, gpu_id);
     end
+    bl = filter_subband_3d_z(bl, 0.5, 0, "db9");
     assert(all(size(bl) == bl_size), '[process_block]: block size mismatch!');
 end
 
