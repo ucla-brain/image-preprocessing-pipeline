@@ -77,33 +77,33 @@ function [] = LsDeconv(varargin)
                 disp("making cache drive dir " + cache_drive)
                 mkdir(cache_drive);
             end
-            disp("cache drive dir created and/or exists " + cache_drive)            
+            disp("cache drive dir created and/or exists " + cache_drive)
         end
 
         %convert command line parameters from string to double
-        disp("Deployed? " + isdeployed);
-        if isdeployed
-            disp("converting double command line parameters")
-            dxy = str2double(strrep(dxy, ',', '.'));
-            dz = str2double(strrep(dz, ',', '.'));
-            numit = str2double(strrep(numit, ',', '.'));
-            NA = str2double(strrep(NA, ',', '.'));
-            rf = str2double(strrep(rf, ',', '.'));
-            lambda_ex = str2double(strrep(lambda_ex, ',', '.'));
-            lambda_em = str2double(strrep(lambda_em, ',', '.'));
-            fcyl = str2double(strrep(fcyl, ',', '.'));
-            slitwidth = str2double(strrep(slitwidth, ',', '.'));
-            damping = str2double(strrep(damping, ',', '.'))/100;
-            clipval = str2double(strrep(clipval, ',', '.'));
-            stop_criterion = str2double(strrep(stop_criterion, ',', '.'));
-            block_size_max = str2double(strrep(block_size_max, ',', '.'));
-            amplification = str2double(strrep(amplification, ',', '.'));
-            resume = str2double(strrep(resume, ',', '.'));
-            starting_block = str2double(strrep(starting_block, ',', '.'));
-            flip_upside_down = str2double(strrep(flip_upside_down, ',', '.'));
-            convert_to_8bit = str2double(strrep(convert_to_8bit, ',', '.'));
-            filter.dark  = str2double(strrep(filter.dark, ',', '.'));
-        end
+        % disp("Deployed? " + isdeployed);
+        % if isdeployed
+        %     disp("converting double command line parameters")
+        %     dxy = str2double(strrep(dxy, ',', '.'));
+        %     dz = str2double(strrep(dz, ',', '.'));
+        %     numit = str2double(strrep(numit, ',', '.'));
+        %     NA = str2double(strrep(NA, ',', '.'));
+        %     rf = str2double(strrep(rf, ',', '.'));
+        %     lambda_ex = str2double(strrep(lambda_ex, ',', '.'));
+        %     lambda_em = str2double(strrep(lambda_em, ',', '.'));
+        %     fcyl = str2double(strrep(fcyl, ',', '.'));
+        %     slitwidth = str2double(strrep(slitwidth, ',', '.'));
+        %     damping = str2double(strrep(damping, ',', '.'))/100;
+        %     clipval = str2double(strrep(clipval, ',', '.'));
+        %     stop_criterion = str2double(strrep(stop_criterion, ',', '.'));
+        %     block_size_max = str2double(strrep(block_size_max, ',', '.'));
+        %     amplification = str2double(strrep(amplification, ',', '.'));
+        %     resume = str2double(strrep(resume, ',', '.'));
+        %     starting_block = str2double(strrep(starting_block, ',', '.'));
+        %     flip_upside_down = str2double(strrep(flip_upside_down, ',', '.'));
+        %     convert_to_8bit = str2double(strrep(convert_to_8bit, ',', '.'));
+        %     filter.dark  = str2double(strrep(filter.dark, ',', '.'));
+        % end
         
         assert(isa(inpath, "string"), "wrong type " + class(inpath));
         assert(isa(dxy, "double"), "wrong type " + class(dxy));
@@ -120,13 +120,13 @@ function [] = LsDeconv(varargin)
                 outpath = fullfile(inpath, 'deconvolved_fliped_upside_down');
             end
             if ~exist(outpath, 'dir')
-                disp("making folder " + outpath );
+                disp("making folder " + outpath )
                 mkdir(outpath);
             end
             disp("outpath folder created and/or exists " + outpath);
             log_file_path = fullfile(outpath, 'log.txt');
             log_file = fopen(log_file_path, 'w');
-            disp('made log file: ' + log_file)
+            disp('made log file: ' + log_file_path)
             % get available resources
             [ram_available, ram_total]  = get_memory();
             p_log(log_file, 'system information ...');
