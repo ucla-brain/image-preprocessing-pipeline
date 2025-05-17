@@ -61,11 +61,13 @@
  */
 
 /* semaphore.c - Revised with persistent handle fixes, secure string formatting, and shared FormatMessage buffer */
+#define MAXDIRECTIVELEN 256
+#define SEM_NAME_PREFIX "Local\\LSDCONVMULTIGPU_semaphore_mem_"
 
 #include <errno.h>
 #include "mex.h"
 
-#ifdef _CRT_SECURE_NO_DEPRECATE
+#if defined(_WIN32) || defined(_WIN64)
     #define WIN32
 #endif
 
@@ -75,28 +77,25 @@
 #else
     #include <windows.h>
     #include <stdio.h>
+
+    void winFormatError(const char *id, const char *msgPrefix, DWORD errorCode) {
+        LPVOID lpMsgBuf = NULL;
+        FormatMessage(
+            FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
+            FORMAT_MESSAGE_IGNORE_INSERTS | FORMAT_MESSAGE_MAX_WIDTH_MASK,
+            NULL, errorCode,
+            MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+            (LPTSTR)&lpMsgBuf, 0, NULL);
+
+        mexErrMsgIdAndTxt(id, "%s System error #%d: \"%s\".", msgPrefix, errorCode, (LPCTSTR)lpMsgBuf);
+        LocalFree(lpMsgBuf);
+    }
+
+    void get_key_string(double key, char* out) {
+        int k = (int)(key + 0.5);
+        snprintf(out, MAXDIRECTIVELEN, SEM_NAME_PREFIX "%d", k);
+    }
 #endif
-
-#define MAXDIRECTIVELEN 256
-#define SEM_NAME_PREFIX "Local\\LSDCONVMULTIGPU_semaphore_mem_"
-
-void winFormatError(const char *id, const char *msgPrefix, DWORD errorCode) {
-    LPVOID lpMsgBuf = NULL;
-    FormatMessage(
-        FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
-        FORMAT_MESSAGE_IGNORE_INSERTS | FORMAT_MESSAGE_MAX_WIDTH_MASK,
-        NULL, errorCode,
-        MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-        (LPTSTR)&lpMsgBuf, 0, NULL);
-
-    mexErrMsgIdAndTxt(id, "%s System error #%d: \"%s\".", msgPrefix, errorCode, (LPCTSTR)lpMsgBuf);
-    LocalFree(lpMsgBuf);
-}
-
-void get_key_string(double key, char* out) {
-    int k = (int)(key + 0.5);
-    snprintf(out, MAXDIRECTIVELEN, SEM_NAME_PREFIX "%d", k);
-}
 
 void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
     char directive[MAXDIRECTIVELEN + 1];
