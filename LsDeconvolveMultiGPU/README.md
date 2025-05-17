@@ -41,7 +41,7 @@ Key scripts check file paths, validate image data, and provide meaningful error 
 ## Requirements
 
 - MATLAB 2023a (tested)
-- CUDA-compatible NVIDIA GPUs (with at least 16 GB VRAM recommended)
+- CUDA-compatible NVIDIA GPUs (with at least 12 GB vRAM recommended)
 - `nvidia-smi` available in system path (for Python wrapper)
 - MATLAB Parallel Computing Toolbox
 
@@ -62,17 +62,24 @@ Key scripts check file paths, validate image data, and provide meaningful error 
    run('build_mex.m')
    ```
 
-   This will compile the CUDA-accelerated MEX files needed for GPU execution.
+   This will compile the MEX files needed for interprocess communication.
 
 ---
 
 ## Python Wrapper
 
-The `decwrap.py` script allows easy execution of MATLAB-based deconvolution from the command line using Python.
+The `decwrap.py` script provides a convenient Python interface for running the MATLAB-based deconvolution pipeline directly from the command line. **Using this Python wrapper is strongly recommended over launching MATLAB manually**, as it includes critical features such as:
+
+- Automatic calculation of optimal block sizes based on available system memory and image dimensions.
+- Intelligent handling of multi-socket systems to ensure NUMA-aware execution and efficient CPU-GPU data movement.
+- Streamlined integration with shell scripts or batch processing environments.
+
+This ensures more reliable performance and reproducibility, especially on high-performance computing setups.
+
 
 ### Example:
 ```bash
-python decwrap.py   -i /mnt/data/my_sample_stack   --dxy 0.4 --dz 1.2   --lambda_ex 561 --lambda_em 600   --gpu-indices 1 2 --gpu-workers-per-gpu 4   --resume --sigma 0.5 0.5 1.5 --filter_size 5 5 15
+python decwrap.py -i /mnt/data/2D_tif_series --dxy 0.4 --dz 1.2 --lambda_ex 561 --lambda_em 600 --gpu-indices 1 2 --gpu-workers-per-gpu 4 --resume --sigma 0.5 0.5 1.5 --filter_size 5 5 15
 ```
 
 ### Key Features of the Wrapper:
@@ -98,22 +105,116 @@ python decwrap.py   -i /mnt/data/my_sample_stack   --dxy 0.4 --dz 1.2   --lambda
   - Some files may remain in GPU memory unless MATLAB is restarted.
   - Use `nvidia-smi` to monitor GPU memory usage.
 
-- For very large samples requiring block splitting, border artifacts may appear (⚠️ to-do).
+---
+## 🧠 System Configuration for Optimal Memory Management (Linux)
+
+**LsDeconv** benefits significantly from a well-tuned Linux memory management setup, 
+particularly on systems with large amounts of RAM and high I/O throughput.
+
+### 🔧 Why This Matters
+
+- **Large memory systems** (e.g., ≥ 256 GB RAM) can suffer from fragmentation that prevents large memory block allocations.
+- **GPU allocations**, **transparent hugepages (THP)**, and **CUDA workloads** require large contiguous physical memory regions.
+- **Proactive memory compaction** is essential and **requires swap to be enabled**, even if the system rarely uses it.
 
 ---
 
-## Suggested Enhancements
+### ✅ Enable Continuous Memory Compaction
 
-1. **Detailed Installation Instructions**  
-   Expand on MATLAB and Python environment setup, including dependencies, CUDA toolkit versions, and `nvidia-smi` usage.
+You can manually trigger memory compaction once using:
 
-2. **Usage Examples with Sample Data**  
-   Provide links to or include sample datasets to help users test the full pipeline end-to-end.
+```bash
+echo 1 | sudo tee /proc/sys/vm/compact_memory
+```
 
-3. **Visualization of Workflow**  
-   Add a flowchart or schematic to illustrate how different components (MATLAB scripts, MEX files, Python wrapper) interact.
+To keep compaction active in the background, set:
+
+```conf
+# Enable proactive compaction (0–100)
+vm.compaction_proactiveness = 80
+
+# Start compacting when fragmentation index falls below this (0–1000)
+vm.extfrag_threshold = 300
+```
 
 ---
+
+### 🛠 Recommended `sysctl.conf` Settings
+
+Add these settings to a file such as `/etc/sysctl.d/99-lsdeconv.conf` and apply them using:
+
+```bash
+sudo sysctl --system
+```
+
+---
+
+#### 🔄 Dual Socket System (4 TB RAM, Enterprise SSDs)
+
+```conf
+# Aggressive inode/dentry cache pruning
+vm.vfs_cache_pressure = 200
+
+# Lower latency writeback for dirty pages
+vm.dirty_writeback_centisecs = 10
+vm.dirty_expire_centisecs = 500
+vm.dirty_ratio = 5
+vm.dirty_background_ratio = 3
+
+# Improve memory compaction for large page allocation
+vm.compaction_proactiveness = 80
+vm.extfrag_threshold = 300
+```
+
+---
+
+#### 💻 Single Socket System (512 GB RAM, User-grade SSDs)
+
+```conf
+# Moderate cache retention for mid-range systems
+vm.vfs_cache_pressure = 125
+
+# Balanced I/O writeback for consumer SSDs
+vm.dirty_writeback_centisecs = 100
+vm.dirty_expire_centisecs = 1000
+vm.dirty_ratio = 4
+vm.dirty_background_ratio = 2
+
+# Improve memory compaction for large page allocation
+vm.compaction_proactiveness = 80
+vm.extfrag_threshold = 300
+```
+
+---
+
+### 💾 Swap is Required
+
+Linux requires swap to perform memory compaction effectively, even if you don’t expect to use it.
+
+**To check if swap is enabled:**
+
+```bash
+swapon --show
+```
+
+**To create a 4 GB swapfile:**
+
+```bash
+sudo fallocate -l 4G /swapfile
+sudo chmod 600 /swapfile
+sudo mkswap /swapfile
+sudo swapon /swapfile
+```
+
+**To make it persistent:**
+
+```bash
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+```
+
+---
+
+These settings will help prevent memory allocation failures during GPU-intensive processing and ensure more reliable performance for large dataset deconvolution.
 
 ## Licensing and Attribution
 
@@ -148,7 +249,7 @@ If not, see <http://www.gnu.org/licenses/>.
 
 ## Citation
 
-If you use this software in your research, please cite the original TU Wien implementation and acknowledge modifications by UCLA B.R.A.I.N.
+If you use this software in your research, please cite the following papers.
 
 ---
 
@@ -158,4 +259,3 @@ If you use this software in your research, please cite the original TU Wien impl
 
 - Marrett, K., Moradi, K., Park, C. S., Yan, M., Choi, C., Zhu, M., Akram, M., Nanda, S., Xue, Q., Mun, H.-S., Gutierrez, A. E., Rudd, M., Zingg, B., Magat, G., Wijaya, K., Dong, H., Yang, X. W., & Cong, J. (2024). *Gossamer: Scaling Image Processing and Reconstruction to Whole Brains*. bioRxiv. [View article](https://scholar.google.com/citations?view_op=view_citation&hl=en&user=Ypb3C2gAAAAJ&sortby=pubdate&citation_for_view=Ypb3C2gAAAAJ:Y5dfb0dijaUC)
 
-- Goodwin, B., Jones, S. A., Price, R. R., Watson, M. A., McKee, D. D., Moore, L. B., Galardi, C., Wilson, J. G., Lewis, M. C., Roth, M. E., Maloney, P. R., Willson, T. M., & Kliewer, S. A. (2000). *A regulatory cascade of the nuclear receptors FXR, SHP-1, and LRH-1 represses bile acid biosynthesis*. Molecular Cell, **6**(3), 517–526. [https://doi.org/10.1016/s1097-2765(00)00051-4](https://europepmc.org/abstract/MED/11030332)
