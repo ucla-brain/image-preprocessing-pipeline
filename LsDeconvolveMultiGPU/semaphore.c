@@ -115,10 +115,18 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
         else
             mexErrMsgIdAndTxt("MATLAB:semaphore:create", "Third input argument must be initial semaphore value (numeric scalar).");
 #if IS_WINDOWS
+        // Destroy existing if present
+        hSemaphore = OpenSemaphore(SEMAPHORE_ALL_ACCESS, FALSE, semkeyStr);
+        if (hSemaphore)
+            CloseHandle(hSemaphore);  // not an actual delete, but drops all open handles
+
         hSemaphore = CreateSemaphore(NULL, semval, semval, semkeyStr);
         if (hSemaphore == NULL)
             winLastErrorExit("MATLAB:semaphore:create", "Unable to create the semaphore.");
 #else
+        // destroy first
+        sem_unlink(semkeyStr);  // Ignore error if not present
+
         sem = sem_open(semkeyStr, O_CREAT | O_EXCL, 0644, semval);
         if (sem == SEM_FAILED)
             posixLastErrorExit("MATLAB:semaphore:create", "Unable to create POSIX semaphore.");
