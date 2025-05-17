@@ -105,13 +105,6 @@ function [] = LsDeconv(varargin)
             filter.dark  = str2double(strrep(filter.dark, ',', '.'));
         end
         
-        calledAs = "LsDeconvolve(folderPath=" + inpath + ", dxy=" + dxy + ...
-                ", dz=" + dz + ", numit=" + numit + ", lambda_ex=" + lambda_ex + ...
-                ", lambda_em=" + lambda_em + ", cache_drive_path=" + ...
-                cache_drive + ")";        
-        disp("Hello I was called as ");
-        disp(calledAs);
-
         assert(isa(inpath, "string"), "wrong type " + class(inpath));
         assert(isa(dxy, "double"), "wrong type " + class(dxy));
         assert(isa(dz, "double"), "wrong type " + class(dz));
@@ -119,7 +112,6 @@ function [] = LsDeconv(varargin)
         assert(isa(lambda_ex, "double"), "wrong type " + class(lambda_ex));
         assert(isa(lambda_em, "double"), "wrong type " + class(lambda_em));
         assert(isa(cache_drive, "string"), "wrong type " + class(cache_drive));
-        disp("All types correct");
 
         if isfolder(inpath)
             % make folder for results and make sure the outpath is writable
