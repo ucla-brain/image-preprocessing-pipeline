@@ -160,7 +160,7 @@ def main():
         help='Signal amplification factor')
     parser.add_argument('--sigma', type=float, nargs=3, default=[0.5, 0.5, 2.0],
         help='3D Gaussian filter sigma in voxel unit (e.g., 0.5 0.5 1.5). Use 0 0 0 to disable filtering.')
-    parser.add_argument('--filter_size', type=int, nargs=3, default=[5, 5, 15],
+    parser.add_argument('--filter_size', type=int, nargs=3, default=[5, 5, 25],
         help='Size of the 3D Gaussian filter kernel in voxel unit')
     parser.add_argument('--denoise_strength', type=int, default=1,
         help='Denoising strength (e.g., 1 to 255 for 8-bit images)')
