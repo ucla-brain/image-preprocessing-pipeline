@@ -329,7 +329,7 @@ if __name__ == '__main__':
                         help="image pre-processing: 2D down-sampling factor for x-axis. Default is 0.")
     parser.add_argument("--downsample_y", "-dsy", type=int, default=0,
                         help="image pre-processing: 2D down-sampling factor for y-axis. Default is 0.")
-    parser.add_argument("--downsample_method", "-dsm", type=str, default='max',
+    parser.add_argument("--downsample_method", "-dsm", type=str, default='mean',
                         help="image pre-processing: down-sampling method. "
                              "options are max, min, mean, median. Default is max.")
     parser.add_argument("--downsample_dtype", "-dsdt", type=str, default='float32',
