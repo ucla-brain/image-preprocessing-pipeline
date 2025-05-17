@@ -123,18 +123,17 @@ def main():
         help='Path to the input image folder')
     parser.add_argument('-dxy', '--dxy', type=float, required=True,
         help='Lateral resolution in micrometers (μm)')
-    parser.add_argument('-dz', '--dz', type=float, required=True,
+    parser.add_argument('-dz', '--dz', type=float,
         help='Axial resolution in micrometers (μm)')
-
+    parser.add_argument('-ex', '--lambda_ex', type=int, required=True,
+                        help='Excitation wavelength (488, 561, 642)')
+    parser.add_argument('-em', '--lambda_em', type=int, required=True,
+                        help='Emission wavelength (525, 600, 690)')
     # Optional
     parser.add_argument('--cache_drive', type=str, default=None,
         help='Optional brain name for cache path construction')
     parser.add_argument('--numit', '-it', type=int, default=10,
         help='Number of deconvolution iterations [1-50]')
-    parser.add_argument('--lambda_ex', '-ex', type=int, default=488,
-        help='Excitation wavelength (488, 561, 642)')
-    parser.add_argument('--lambda_em', '-em', type=int, default=525,
-        help='Emission wavelength (525, 600, 690)')
     parser.add_argument('--na', type=float, default=0.40,
         help='Numerical aperture of the objective lens')
     parser.add_argument('--rf', type=float, default=1.42,
