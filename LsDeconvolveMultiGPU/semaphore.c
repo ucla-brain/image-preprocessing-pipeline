@@ -1,196 +1,372 @@
-/*
- * semaphore.c - POSIX and Windows MEX semaphore support
- *
- * Keivan Moradi (2025) @ Brain Research and Artificial Intelligence Nexus lab @ UCLA
- * - Cross-platform implementation for MATLAB MEX
- * - Uses POSIX named semaphores on Linux/macOS
- * - Uses named Win32 semaphores on Windows
- * - Clean, centralized error handling for both platforms
- *
- * Compilation:
- *   You can compile this file from the MATLAB command line using:
- *     mex -O -v semaphore.c
- *
- * References:
- *   - MATLAB MEX C API: https://www.mathworks.com/help/matlab/write-cc-mex-files.html
- *
- * License:
- *   This program is free software: you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License as published by
- *   the Free Software Foundation, either version 3 of the License, or
- *   (at your option) any later version.
- *
- *   This program is distributed in the hope that it will be useful,
- *   but WITHOUT ANY WARRANTY; without even the implied warranty of
- *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- *   GNU General Public License for more details.
- *
- *   You should have received a copy of the GNU General Public License
- *   along with this program. If not, see <https://www.gnu.org/licenses/>.
- */
+// semaphore.c - Cross-platform shared memory semaphore for MATLAB MEX
+//
+// Author: Keivan Moradi (2025) @ B.R.A.I.N. Lab, UCLA
+// License: GPLv3
 
 #include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <string.h>
+#include <ctype.h>
 #include "mex.h"
 
-#if defined(_WIN32) || defined(_WIN64)
-    #include <windows.h>
-    #include <stdio.h>
-    #define IS_WINDOWS 1
+#define SEMAPHORE_KEY_NAME_FMT "MATLAB_MEX_SEM_%d"
+
+#if defined(_WIN32)
+#  define IS_WINDOWS 1
+#  include <windows.h>
+#  include <strsafe.h>
+#  define MUTEX_NAME_PREFIX "Local\\"
+#  define EVENT_NAME_PREFIX "Local\\"
+#  define SHM_NAME_PREFIX   "Local\\"
 #else
-    #include <semaphore.h>
-    #include <fcntl.h>      // O_CREAT, O_EXCL
-    #include <sys/stat.h>   // mode constants
-    #include <unistd.h>
-    #include <string.h>
-    #include <ctype.h>
-    #define IS_WINDOWS 0
+#  define IS_WINDOWS 0
+#  include <pthread.h>
+#  include <fcntl.h>
+#  include <sys/mman.h>
+#  include <sys/stat.h>
+#  include <unistd.h>
+#  include <sys/file.h>
+#  include <sys/types.h>
+#  include <sys/time.h>
 #endif
 
-#define MAXDIRECTIVELEN 256
-#define SEM_NAME_PREFIX_WIN "Local\\LSDCONVMULTIGPU_semaphore_mem_"
-#define SEM_NAME_PREFIX_POSIX "/LSDCONVMULTIGPU_semaphore_mem_"
-
-#if IS_WINDOWS
-void winLastErrorExit(const char *id, const char *msgPrefix) {
-    DWORD errorCode = GetLastError();
-    LPVOID lpMsgBuf = NULL;
-    FormatMessage(
-        FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
-        FORMAT_MESSAGE_IGNORE_INSERTS | FORMAT_MESSAGE_MAX_WIDTH_MASK,
-        NULL, errorCode,
-        MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-        (LPTSTR)&lpMsgBuf, 0, NULL);
-
-    mexErrMsgIdAndTxt(id, "%s System error #%d: \"%s\".", msgPrefix, errorCode, (LPCTSTR)lpMsgBuf);
-    LocalFree(lpMsgBuf);
-}
-#else
-void posixLastErrorExit(const char *id, const char *msgPrefix) {
-    int errcode = errno;
-    mexErrMsgIdAndTxt(id, "%s POSIX error #%d: \"%s\".", msgPrefix, errcode, strerror(errcode));
-}
+typedef struct {
+    int initialized;
+    int count;
+    int max;
+    volatile int terminate;
+#if !IS_WINDOWS
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
 #endif
+} shared_semaphore_t;
 
 #if IS_WINDOWS
-void get_key_string(double key, char* out) {
-    int k = (int)(key + 0.5);
-    snprintf(out, MAXDIRECTIVELEN, SEM_NAME_PREFIX_WIN "%d", k);
+
+typedef struct {
+    shared_semaphore_t* sem;
+    HANDLE hMap;
+    HANDLE hMutex;
+    HANDLE hEvent;
+    BOOL is_new;
+} semaphore_map_result_t;
+
+static void close_handles(semaphore_map_result_t* mapped) {
+    if (mapped->sem) UnmapViewOfFile(mapped->sem);
+    if (mapped->hMutex) CloseHandle(mapped->hMutex);
+    if (mapped->hEvent) CloseHandle(mapped->hEvent);
+    if (mapped->hMap)   CloseHandle(mapped->hMap);
 }
-#else
-void get_key_string(double key, char* out) {
-    int k = (int)(key + 0.5);
-    snprintf(out, MAXDIRECTIVELEN, SEM_NAME_PREFIX_POSIX "%d", k);
+
+static semaphore_map_result_t map_shared_semaphore(int key, BOOL create) {
+    semaphore_map_result_t result = {0};
+    size_t size = sizeof(shared_semaphore_t);
+    char basename[64], shmname[128], mname[128], ename[128];
+
+    snprintf(basename, sizeof(basename), SEMAPHORE_KEY_NAME_FMT, key);
+    StringCchPrintfA(shmname, 128, "%s%s", SHM_NAME_PREFIX, basename);
+    StringCchPrintfA(mname, 128, "%s%s_MUTEX", MUTEX_NAME_PREFIX, basename);
+    StringCchPrintfA(ename, 128, "%s%s_EVENT", EVENT_NAME_PREFIX, basename);
+
+    if (create) {
+        result.hMap = CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, (DWORD)size, shmname);
+        if (!result.hMap)
+            mexErrMsgIdAndTxt("semaphore:create", "Failed to create file mapping");
+        result.is_new = (GetLastError() != ERROR_ALREADY_EXISTS);
+    } else {
+        result.hMap = OpenFileMappingA(FILE_MAP_ALL_ACCESS, FALSE, shmname);
+        if (!result.hMap)
+            mexErrMsgIdAndTxt("semaphore:notfound", "Semaphore %d not found. Use 'create' first.", key);
+        result.is_new = FALSE;
+    }
+
+    void* base = MapViewOfFile(result.hMap, FILE_MAP_ALL_ACCESS, 0, 0, size);
+    if (!base)
+        mexErrMsgIdAndTxt("semaphore:map", "Failed to map shared memory for key %d", key);
+
+    result.sem = (shared_semaphore_t*)base;
+
+    result.hMutex = CreateMutexA(NULL, FALSE, mname);
+    if (!result.hMutex)
+        mexErrMsgIdAndTxt("semaphore:mutex", "Failed to create/open named mutex");
+
+    result.hEvent = CreateEventA(NULL, TRUE, FALSE, ename);
+    if (!result.hEvent)
+        mexErrMsgIdAndTxt("semaphore:event", "Failed to create/open named event");
+
+    WaitForSingleObject(result.hMutex, INFINITE);
+    return result;
 }
+
+shared_semaphore_t* create_semaphore(int key, int initval, int* out_count) {
+    semaphore_map_result_t mapped = map_shared_semaphore(key, TRUE);
+
+    if (!mapped.sem->initialized || mapped.is_new) {
+        ZeroMemory(mapped.sem, sizeof(shared_semaphore_t));
+        mapped.sem->count = initval;
+        mapped.sem->max = initval;
+        mapped.sem->initialized = 1;
+    } else {
+        mapped.sem->count = initval;
+        mapped.sem->terminate = 0;
+        SetEvent(mapped.hEvent);
+    }
+
+    if (out_count) *out_count = mapped.sem->count;
+    ReleaseMutex(mapped.hMutex);
+    return mapped.sem;
+}
+
+semaphore_map_result_t get_semaphore(int key) {
+    semaphore_map_result_t mapped = map_shared_semaphore(key, FALSE);
+
+    if (!mapped.sem->initialized) {
+        ReleaseMutex(mapped.hMutex);
+        close_handles(&mapped);
+        mexErrMsgIdAndTxt("semaphore:uninitialized", "Semaphore %d exists but is not initialized.", key);
+    }
+
+    return mapped;
+}
+
+static int wait_semaphore(int key) {
+    semaphore_map_result_t mapped = get_semaphore(key);
+
+    if (mapped.sem->terminate) {
+        ReleaseMutex(mapped.hMutex);
+        close_handles(&mapped);
+        mexErrMsgIdAndTxt("semaphore:terminated", "Semaphore %d has been destroyed.", key);
+    }
+
+    int current_count = -1;
+
+    while (1) {
+        if (mapped.sem->terminate) {
+            ReleaseMutex(mapped.hMutex);
+            close_handles(&mapped);
+            mexErrMsgIdAndTxt("semaphore:terminated", "Semaphore %d has been destroyed.", key);
+        }
+
+        if (mapped.sem->count > 0) {
+            mapped.sem->count--;
+            current_count = mapped.sem->count;
+            if (mapped.sem->count == 0)
+                ResetEvent(mapped.hEvent);
+            ReleaseMutex(mapped.hMutex);
+            close_handles(&mapped);
+            return current_count;
+        }
+
+        ReleaseMutex(mapped.hMutex);
+        WaitForSingleObject(mapped.hEvent, INFINITE);
+        WaitForSingleObject(mapped.hMutex, INFINITE);
+    }
+}
+
+static int post_semaphore(int key) {
+    semaphore_map_result_t mapped = get_semaphore(key);
+
+    if (mapped.sem->terminate) {
+        ReleaseMutex(mapped.hMutex);
+        close_handles(&mapped);
+        mexErrMsgIdAndTxt("semaphore:terminated", "Semaphore %d has been destroyed.", key);
+    }
+
+    if (mapped.sem->count >= mapped.sem->max) {
+        mexWarnMsgIdAndTxt("semaphore:post",
+            "Cannot post: semaphore %d already at maximum count (%d).", key, mapped.sem->max);
+    } else {
+        mapped.sem->count++;
+    }
+
+    int current_count = mapped.sem->count;
+    SetEvent(mapped.hEvent);
+    ReleaseMutex(mapped.hMutex);
+    close_handles(&mapped);
+    return current_count;
+}
+
+
+static void destroy_semaphore(int key) {
+    semaphore_map_result_t mapped = get_semaphore(key);
+    mapped.sem->terminate = 1;
+    SetEvent(mapped.hEvent);
+    ReleaseMutex(mapped.hMutex);
+    close_handles(&mapped);
+}
+
+#else  // POSIX
+
+#define SHM_NAME_PREFIX_POSIX "/matlab_mex_sem_"
+
+static shared_semaphore_t* map_posix_semaphore(int key, int create, int* is_new, int* fd_out) {
+    char name[64];
+    snprintf(name, sizeof(name), SHM_NAME_PREFIX_POSIX SEMAPHORE_KEY_NAME_FMT, key);
+
+    int fd = shm_open(name, create ? (O_CREAT | O_RDWR) : O_RDWR, 0666);
+    if (fd == -1)
+        mexErrMsgIdAndTxt("semaphore:shm_open", "Failed to open shared memory for key %d", key);
+
+    if (create) ftruncate(fd, sizeof(shared_semaphore_t));
+    void* addr = mmap(NULL, sizeof(shared_semaphore_t), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (addr == MAP_FAILED)
+        mexErrMsgIdAndTxt("semaphore:mmap", "Failed to map shared memory for key %d", key);
+
+    *is_new = create;
+    *fd_out = fd;
+    return (shared_semaphore_t*)addr;
+}
+
+shared_semaphore_t* create_semaphore(int key, int initval, int* out_count) {
+    int is_new = 0, fd = -1;
+    shared_semaphore_t* sem = map_posix_semaphore(key, 1, &is_new, &fd);
+
+    flock(fd, LOCK_EX);
+    if (!sem->initialized || is_new) {
+        memset(sem, 0, sizeof(shared_semaphore_t));
+        sem->count = initval;
+        sem->max = initval;
+        pthread_mutexattr_t mattr;
+        pthread_condattr_t cattr;
+        pthread_mutexattr_init(&mattr);
+        pthread_mutexattr_setpshared(&mattr, PTHREAD_PROCESS_SHARED);
+        pthread_condattr_init(&cattr);
+        pthread_condattr_setpshared(&cattr, PTHREAD_PROCESS_SHARED);
+        pthread_mutex_init(&sem->mutex, &mattr);
+        pthread_cond_init(&sem->cond, &cattr);
+        sem->initialized = 1;
+    } else {
+        sem->count = initval;
+        sem->terminate = 0;
+        pthread_cond_broadcast(&sem->cond);
+    }
+    flock(fd, LOCK_UN);
+    if (out_count) *out_count = sem->count;
+    close(fd);
+    return sem;
+}
+
+shared_semaphore_t* get_semaphore(int key) {
+    int is_new = 0, fd = -1;
+    shared_semaphore_t* sem = map_posix_semaphore(key, 0, &is_new, &fd);
+
+    if (!sem->initialized) {
+        close(fd);
+        mexErrMsgIdAndTxt("semaphore:uninitialized", "Semaphore %d exists but is not initialized.", key);
+    }
+
+    close(fd);
+    return sem;
+}
+
+static int wait_semaphore(int key) {
+    int fd = -1;
+    shared_semaphore_t* sem = map_posix_semaphore(key, 0, &(int){0}, &fd);
+    pthread_mutex_lock(&sem->mutex);
+
+    if (sem->terminate) {
+        pthread_mutex_unlock(&sem->mutex);
+        close(fd);
+        mexErrMsgIdAndTxt("semaphore:terminated", "Semaphore %d has been destroyed.", key);
+    }
+
+    while (sem->count <= 0 && !sem->terminate)
+        pthread_cond_wait(&sem->cond, &sem->mutex);
+
+    if (sem->terminate) {
+        pthread_mutex_unlock(&sem->mutex);
+        close(fd);
+        mexErrMsgIdAndTxt("semaphore:terminated", "Semaphore %d has been destroyed.", key);
+    }
+
+    sem->count--;
+    int count = sem->count;
+    pthread_mutex_unlock(&sem->mutex);
+    close(fd);
+    return count;
+}
+
+static int post_semaphore(int key) {
+    int fd = -1;
+    shared_semaphore_t* sem = map_posix_semaphore(key, 0, &(int){0}, &fd);
+    pthread_mutex_lock(&sem->mutex);
+
+    if (sem->terminate) {
+        pthread_mutex_unlock(&sem->mutex);
+        close(fd);
+        mexErrMsgIdAndTxt("semaphore:terminated", "Semaphore %d has been destroyed.", key);
+    }
+
+    if (sem->count >= sem->max) {
+        mexWarnMsgIdAndTxt("semaphore:post",
+            "Cannot post: semaphore %d already at maximum count (%d).", key, sem->max);
+    } else {
+        sem->count++;
+    }
+
+    int count = sem->count;
+    pthread_cond_signal(&sem->cond);
+    pthread_mutex_unlock(&sem->mutex);
+    close(fd);
+    return count;
+}
+
+static void destroy_semaphore(int key) {
+    int fd = -1;
+    shared_semaphore_t* sem = map_posix_semaphore(key, 0, &(int){0}, &fd);
+    pthread_mutex_lock(&sem->mutex);
+    sem->terminate = 1;
+    pthread_cond_broadcast(&sem->cond);
+    pthread_mutex_unlock(&sem->mutex);
+    close(fd);
+
+    char name[64];
+    snprintf(name, sizeof(name), SHM_NAME_PREFIX_POSIX SEMAPHORE_KEY_NAME_FMT, key);
+    shm_unlink(name);
+}
+
 #endif
 
 void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
-    char directive[MAXDIRECTIVELEN + 1];
-    int semval = 1;
-    char semkeyStr[MAXDIRECTIVELEN];
-
-#if IS_WINDOWS
-    HANDLE hSemaphore = NULL;
-#else
-    sem_t *sem = NULL;
-#endif
-
     if (nrhs < 2)
-        mexErrMsgIdAndTxt("MATLAB:semaphore", "Minimum input arguments missing; must supply directive and key.");
+        mexErrMsgTxt("Requires at least 2 inputs: directive and key.");
 
-    if (mxGetString(prhs[0], directive, MAXDIRECTIVELEN) != 0)
-        mexErrMsgIdAndTxt("MATLAB:semaphore", "First input argument must be one of {'create','wait','post','destroy'}.");
+    char directive[16];
+    if (mxGetString(prhs[0], directive, sizeof(directive)) != 0)
+        mexErrMsgTxt("Failed to parse directive string.");
 
-    if (mxGetNumberOfElements(prhs[1]) != 1 || !mxIsNumeric(prhs[1]))
-        mexErrMsgIdAndTxt("MATLAB:semaphore", "Second input argument must be a valid integral key.");
+    directive[0] = (char)tolower(directive[0]);
+    int key = (int)(mxGetScalar(prhs[1]) + 0.5);
 
-    get_key_string(mxGetScalar(prhs[1]), semkeyStr);
+    int count = -1;
 
-    if (nlhs > 1)
-        mexErrMsgIdAndTxt("MATLAB:semaphore", "Function returns only one value.");
-
-    switch (tolower(directive[0])) {
-    case 'c':
-        if (nrhs > 2 && mxIsNumeric(prhs[2]) && mxGetNumberOfElements(prhs[2]) == 1)
-            semval = (int)(mxGetScalar(prhs[2]) + 0.5);
-        else
-            mexErrMsgIdAndTxt("MATLAB:semaphore:create", "Third input argument must be initial semaphore value (numeric scalar).");
-#if IS_WINDOWS
-        // Destroy existing if present
-        hSemaphore = OpenSemaphore(SEMAPHORE_ALL_ACCESS, FALSE, semkeyStr);
-        if (hSemaphore)
-            CloseHandle(hSemaphore);  // not an actual delete, but drops all open handles
-
-        hSemaphore = CreateSemaphore(NULL, semval, semval, semkeyStr);
-        if (hSemaphore == NULL)
-            winLastErrorExit("MATLAB:semaphore:create", "Unable to create the semaphore.");
-#else
-        // destroy first
-        sem_unlink(semkeyStr);  // Ignore error if not present
-
-        sem = sem_open(semkeyStr, O_CREAT | O_EXCL, 0644, semval);
-        if (sem == SEM_FAILED)
-            posixLastErrorExit("MATLAB:semaphore:create", "Unable to create POSIX semaphore.");
-        sem_close(sem);
-#endif
-        plhs[0] = mxCreateDoubleMatrix(0, 0, mxREAL);
-        break;
-
-    case 'w':
-#if IS_WINDOWS
-        hSemaphore = OpenSemaphore(SYNCHRONIZE, FALSE, semkeyStr);
-        if (hSemaphore == NULL)
-            winLastErrorExit("MATLAB:semaphore:wait", "Unable to open the semaphore handle.");
-        if (WaitForSingleObject(hSemaphore, INFINITE) == WAIT_FAILED)
-            mexErrMsgIdAndTxt("MATLAB:semaphore:wait", "Semaphore wait failed.");
-#else
-        sem = sem_open(semkeyStr, 0);
-        if (sem == SEM_FAILED)
-            posixLastErrorExit("MATLAB:semaphore:wait", "Unable to open POSIX semaphore.");
-
-        while (sem_wait(sem) != 0) {
-            if (errno != EINTR)
-                posixLastErrorExit("MATLAB:semaphore:wait", "Error waiting for semaphore.");
+    switch (directive[0]) {
+        case 'c': {
+            int initval = 1;
+            if (nrhs > 2)
+                initval = (int)(mxGetScalar(prhs[2]) + 0.5);
+            create_semaphore(key, initval, &count);
+            break;
         }
-        sem_close(sem);
-#endif
-        plhs[0] = mxCreateDoubleMatrix(0, 0, mxREAL);
-        break;
+        case 'w':
+            count = wait_semaphore(key);
+            break;
+        case 'p':
+            count = post_semaphore(key);
+            break;
+        case 'd':
+            destroy_semaphore(key);
+            break;
+        default:
+            mexErrMsgTxt("Unknown directive. Use 'create', 'wait', 'post', or 'destroy'.");
+    }
 
-    case 'p':
-#if IS_WINDOWS
-        hSemaphore = OpenSemaphore(SEMAPHORE_MODIFY_STATE, FALSE, semkeyStr);
-        if (hSemaphore == NULL)
-            winLastErrorExit("MATLAB:semaphore:post", "Unable to open the semaphore handle.");
-        if (!ReleaseSemaphore(hSemaphore, 1, NULL))
-            winLastErrorExit("MATLAB:semaphore:post", "Unable to post the semaphore.");
-#else
-        sem = sem_open(semkeyStr, 0);
-        if (sem == SEM_FAILED)
-            posixLastErrorExit("MATLAB:semaphore:post", "Unable to open POSIX semaphore.");
-
-        if (sem_post(sem) != 0)
-            posixLastErrorExit("MATLAB:semaphore:post", "Unable to post POSIX semaphore.");
-
-        sem_close(sem);
-#endif
-        plhs[0] = mxCreateDoubleMatrix(0, 0, mxREAL);
-        break;
-
-    case 'd':
-#if IS_WINDOWS
-        hSemaphore = OpenSemaphore(SEMAPHORE_ALL_ACCESS, FALSE, semkeyStr);
-        if (hSemaphore == NULL)
-            winLastErrorExit("MATLAB:semaphore:destroy", "Unable to open semaphore handle for destruction.");
-        if (!CloseHandle(hSemaphore))
-            mexErrMsgIdAndTxt("MATLAB:semaphore:destroy", "Failed to close semaphore handle.");
-#else
-        if (sem_unlink(semkeyStr) != 0)
-            posixLastErrorExit("MATLAB:semaphore:destroy", "Unable to unlink POSIX semaphore.");
-#endif
-        plhs[0] = mxCreateDoubleMatrix(0, 0, mxREAL);
-        break;
-
-    default:
-        mexErrMsgIdAndTxt("MATLAB:semaphore", "Unrecognized directive.");
+    if (nlhs > 0) {
+        if (count >= 0)
+            plhs[0] = mxCreateDoubleScalar((double)count);
+        else
+            plhs[0] = mxCreateDoubleMatrix(0, 0, mxREAL);
     }
 }
