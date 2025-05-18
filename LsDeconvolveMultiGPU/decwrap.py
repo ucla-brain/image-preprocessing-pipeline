@@ -96,11 +96,11 @@ def validate_args(args):
     if [488, 561, 642].index(args.lambda_ex) != [525, 600, 690].index(args.lambda_em):
         raise RuntimeError(f"Ex {args.lambda_ex} and Em {args.lambda_em} do not match.")
 
-    if len(args.sigma) != 3:
-        raise ValueError("Sigma must be a triplet, e.g., --sigma 0.5 0.5 1.5")
+    if len(args.gaussian_sigma) != 3:
+        raise ValueError("Gaussian sigma must be a triplet, e.g., --gaussian_sigma 0.5 0.5 1.5")
 
-    if len(args.filter_size) != 3:
-        raise ValueError("Filter size must be a triplet, e.g., --filter_size 5 5 15")
+    if len(args.gaussian_filter_size) != 3:
+        raise ValueError("Gaussian filter size must be a triplet, e.g., --gaussian_filter_size 5 5 15")
 
 def main():
     default_gpu_indices = get_all_gpu_indices()
