@@ -34,12 +34,12 @@ def find_matlab_executable():
     raise RuntimeError("MATLAB executable not found. Add it to your PATH or update the script.")
 
 
-def find_jemalloc():
+def find_allocator(libname):
     candidates = [
-        "/usr/lib/x86_64-linux-gnu/libjemalloc.so",
-        "/usr/lib/libjemalloc.so",
-        "/lib/x86_64-linux-gnu/libjemalloc.so",
-        "/usr/local/lib/libjemalloc.so",
+        f"/usr/lib/x86_64-linux-gnu/lib{libname}.so",
+        f"/usr/lib/lib{libname}.so",
+        f"/lib/x86_64-linux-gnu/lib{libname}.so",
+        f"/usr/local/lib/lib{libname}.so",
     ]
     for path in candidates:
         if Path(path).exists():
@@ -47,22 +47,22 @@ def find_jemalloc():
     try:
         output = subprocess.check_output(["ldconfig", "-p"], text=True)
         for line in output.splitlines():
-            if "jemalloc" in line:
+            if libname in line:
                 parts = line.strip().split(" => ")
                 if len(parts) == 2 and Path(parts[1]).exists():
                     return parts[1]
     except Exception as e:
-        log.warning(f"Failed to run ldconfig: {e}")
+        log.warning(f"Failed to run ldconfig for {libname}: {e}")
 
     try:
-        jemalloc_lib = ctypes.util.find_library("jemalloc")
-        if jemalloc_lib:
+        lib = ctypes.util.find_library(libname)
+        if lib:
             for directory in ["/usr/lib", "/usr/local/lib", "/lib", "/lib64"]:
-                candidate_path = Path(directory) / jemalloc_lib
+                candidate_path = Path(directory) / lib
                 if candidate_path.exists():
                     return str(candidate_path)
     except Exception as e:
-        log.warning(f"ctypes.util.find_library failed: {e}")
+        log.warning(f"ctypes.util.find_library failed for {libname}: {e}")
 
     return None
 
@@ -222,6 +222,8 @@ def main():
                         help='Print the MATLAB command and exit without executing it')
     parser.add_argument('--use-jemalloc', action='store_true', default=False,
                         help='Use jemalloc allocator (Linux only)')
+    parser.add_argument('--use-tcmalloc', action='store_true', default=False,
+                        help='Use tcmalloc allocator (Linux only)')
 
     args = parser.parse_args()
 
@@ -299,12 +301,24 @@ def main():
     )
 
     matlab_exec = find_matlab_executable()
-    jemalloc_path = find_jemalloc() if is_linux and args.use_jemalloc else None
+
+    if args.use_jemalloc and args.use_tcmalloc:
+        raise RuntimeError("Cannot use both jemalloc and tcmalloc simultaneously. Choose one.")
+
+    jemalloc_path = find_allocator("jemalloc") if is_linux and args.use_jemalloc else None
+    tcmalloc_path = find_allocator("tcmalloc") if is_linux and args.use_tcmalloc else None
+
     if args.use_jemalloc and is_linux:
         if jemalloc_path:
             log.info(f"Using jemalloc allocator at: {jemalloc_path}")
         else:
             log.warning("jemalloc requested but not found. To install on Ubuntu: sudo apt install libjemalloc2.")
+
+    if args.use_tcmalloc and is_linux:
+        if tcmalloc_path:
+            log.info(f"Using tcmalloc allocator at: {tcmalloc_path}")
+        else:
+            log.warning("tcmalloc requested but not found. To install on Ubuntu: sudo apt install google-perftools.")
 
     # === Insert Linux-specific optimizations ===
     env = os.environ.copy()
@@ -313,6 +327,8 @@ def main():
         env["MALLOC_ARENA_MAX"] = "4"
         if jemalloc_path:
             env["LD_PRELOAD"] = jemalloc_path
+        if tcmalloc_path:
+            env["LD_PRELOAD"] = tcmalloc_path
 
         # Use numactl for better memory distribution on NUMA systems
         # Wrap the matlab command with numactl only on Linux
