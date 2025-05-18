@@ -1,4 +1,5 @@
 import argparse
+import ctypes.util
 import logging
 import os
 import platform
@@ -14,6 +15,8 @@ logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
 
 is_windows = platform.system() == "Windows"
+is_linux = platform.system() == "Linux"
+
 
 def find_matlab_executable():
     matlab_exec = "matlab.exe" if is_windows else "matlab"
@@ -28,6 +31,40 @@ def find_matlab_executable():
         if path.exists():
             return str(path)
     raise RuntimeError("MATLAB executable not found. Add it to your PATH or update the script.")
+
+
+def find_jemalloc():
+    candidates = [
+        "/usr/lib/x86_64-linux-gnu/libjemalloc.so",
+        "/usr/lib/libjemalloc.so",
+        "/lib/x86_64-linux-gnu/libjemalloc.so",
+        "/usr/local/lib/libjemalloc.so",
+    ]
+    for path in candidates:
+        if Path(path).exists():
+            return path
+    try:
+        output = subprocess.check_output(["ldconfig", "-p"], text=True)
+        for line in output.splitlines():
+            if "jemalloc" in line:
+                parts = line.strip().split(" => ")
+                if len(parts) == 2 and Path(parts[1]).exists():
+                    return parts[1]
+    except Exception as e:
+        log.warning(f"Failed to run ldconfig: {e}")
+
+    try:
+        jemalloc_lib = ctypes.util.find_library("jemalloc")
+        if jemalloc_lib:
+            for directory in ["/usr/lib", "/usr/local/lib", "/lib", "/lib64"]:
+                candidate_path = Path(directory) / jemalloc_lib
+                if candidate_path.exists():
+                    return str(candidate_path)
+    except Exception as e:
+        log.warning(f"ctypes.util.find_library failed: {e}")
+
+    return None
+
 
 def get_all_gpu_indices():
     try:
@@ -47,9 +84,10 @@ def get_all_gpu_indices():
         log.warning(f"GPU index detection failed: {e}")
         return []
 
+
 def estimate_block_size_max(gpu_indices, num_workers, bytes_per_element=4, base_reserve_gb=1.4, per_worker_mib=160,
                             num_blocks_on_gpu=3):
-    max_allowed = 2**31
+    max_allowed = 2 ** 31
     try:
         result = subprocess.run(
             ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
@@ -70,7 +108,7 @@ def estimate_block_size_max(gpu_indices, num_workers, bytes_per_element=4, base_
             log.warning("Usable GPU memory is too low.")
             return max_allowed
 
-        usable_bytes = usable_mib * 1024**2
+        usable_bytes = usable_mib * 1024 ** 2
         estimated = int(usable_bytes / bytes_per_element / num_blocks_on_gpu)
         return min(estimated, max_allowed)
 
@@ -81,11 +119,13 @@ def estimate_block_size_max(gpu_indices, num_workers, bytes_per_element=4, base_
 
     return max_allowed
 
+
 def resolve_path(p):
     p = Path(p)
     if not p.exists():
         raise ValueError(f"Path does not exist: {p}")
     return p.resolve()
+
 
 def validate_args(args):
     args.input = resolve_path(args.input)
@@ -102,6 +142,7 @@ def validate_args(args):
     if len(args.gaussian_filter_size) != 3:
         raise ValueError("Gaussian filter size must be a triplet, e.g., --gaussian_filter_size 5 5 15")
 
+
 def main():
     default_gpu_indices = get_all_gpu_indices()
     default_cores = psutil.cpu_count(logical=False)
@@ -109,7 +150,8 @@ def main():
         default_cores // len(default_gpu_indices)
         if len(default_gpu_indices) > 0 else 0
     )
-    block_size_default = estimate_block_size_max(default_gpu_indices, default_workers_per_gpu * len(default_gpu_indices))
+    block_size_default = estimate_block_size_max(default_gpu_indices,
+                                                 default_workers_per_gpu * len(default_gpu_indices))
 
     parser = argparse.ArgumentParser(
         description='Python wrapper for MATLAB deconvolution.',
@@ -120,70 +162,72 @@ def main():
 
     # Required
     parser.add_argument('-i', '--input', type=Path, required=True,
-        help='Path to the input image folder')
+                        help='Path to the input image folder')
     parser.add_argument('-dxy', '--dxy', type=float, required=True,
-        help='Lateral resolution in micrometers (μm)')
+                        help='Lateral resolution in micrometers (μm)')
     parser.add_argument('-dz', '--dz', type=float,
-        help='Axial resolution in micrometers (μm)')
+                        help='Axial resolution in micrometers (μm)')
     parser.add_argument('-ex', '--lambda_ex', type=int, required=True,
                         help='Excitation wavelength (488, 561, 642)')
     parser.add_argument('-em', '--lambda_em', type=int, required=True,
                         help='Emission wavelength (525, 600, 690)')
     # Optional
     parser.add_argument('--cache_drive', type=str, default=None,
-        help='Optional brain name for cache path construction')
+                        help='Optional brain name for cache path construction')
     parser.add_argument('--numit', '-it', type=int, default=12,
-        help='Number of deconvolution iterations [1-50]')
+                        help='Number of deconvolution iterations [1-50]')
     parser.add_argument('--na', type=float, default=0.40,
-        help='Numerical aperture of the objective lens')
+                        help='Numerical aperture of the objective lens')
     parser.add_argument('--rf', type=float, default=1.42,
-        help='Refractive index of the sample medium')
+                        help='Refractive index of the sample medium')
     parser.add_argument('--fcyl', type=int, default=240,
-        help='Focal length of the cylindrical lens (in mm)')
+                        help='Focal length of the cylindrical lens (in mm)')
     parser.add_argument('--slitwidth', type=float, default=12.0,
-        help='Slit width in millimeters')
+                        help='Slit width in millimeters')
     parser.add_argument('--lambda_damping', type=float, default=0.0,
-        help='Damping parameter (0 = off)')
+                        help='Damping parameter (0 = off)')
     parser.add_argument('--clipval', type=int, default=0,
-        help='Clipping value (0 = disabled)')
+                        help='Clipping value (0 = disabled)')
     parser.add_argument('--stop_criterion', type=int, default=0,
-        help='Early stopping criterion (0 = disabled)')
+                        help='Early stopping criterion (0 = disabled)')
     parser.add_argument('--block_size_max', type=int, default=block_size_default,
-        help='Max number of elements per GPU block (estimated from GPU memory)')
+                        help='Max number of elements per GPU block (estimated from GPU memory)')
     parser.add_argument('--gpu-indices', type=int, nargs='+', default=default_gpu_indices,
-        help='List of GPU device indices to use (e.g., 1 2). Default: all detected GPUs.')
+                        help='List of GPU device indices to use (e.g., 1 2). Default: all detected GPUs.')
     parser.add_argument('--gpu-workers-per-gpu', type=int, default=default_workers_per_gpu,
-        help='Number of parallel workers per selected GPU')
+                        help='Number of parallel workers per selected GPU')
     parser.add_argument('--cpu-workers', type=int, default=0,
-        help='Number of CPU workers to use (0 disables CPU deconvolution)')
+                        help='Number of CPU workers to use (0 disables CPU deconvolution)')
     parser.add_argument('--signal_amp', type=float, default=1.0,
-        help='Signal amplification factor')
+                        help='Signal amplification factor')
     parser.add_argument('--gaussian_sigma', type=float, nargs=3, default=[0.5, 0.5, 2.0],
-        help='3D Gaussian filter sigma in voxel unit (e.g., 0.5 0.5 1.5). Use 0 0 0 to disable filtering.')
+                        help='3D Gaussian filter sigma in voxel unit (e.g., 0.5 0.5 1.5). Use 0 0 0 to disable filtering.')
     parser.add_argument('--gaussian_filter_size', type=int, nargs=3, default=[5, 5, 25],
-        help='Size of the 3D Gaussian filter kernel in voxel unit')
+                        help='Size of the 3D Gaussian filter kernel in voxel unit')
     parser.add_argument('--destripe_sigma', type=float, default=0.5,
                         help='Sigma of destriping filter along the z-axis. Use 0 to disable filtering.')
     parser.add_argument('--denoise_strength', type=int, default=1,
-        help='Denoising strength (e.g., 1 to 255 for 8-bit images)')
+                        help='Denoising strength (e.g., 1 to 255 for 8-bit images)')
     parser.add_argument('--no-resume', dest='resume', action='store_false',
-        help='Disable resuming from previous cache (default: resume is enabled)')
+                        help='Disable resuming from previous cache (default: resume is enabled)')
     parser.set_defaults(resume=True)
     parser.add_argument('--flip', action='store_true',
-        help='Flip output image vertically after deconvolution')
+                        help='Flip output image vertically after deconvolution')
     parser.add_argument('--convert-to-8bit', action='store_true',
-        help='Convert output to 8-bit (default keeps original bit depth, usually 16-bit)')
+                        help='Convert output to 8-bit (default keeps original bit depth, usually 16-bit)')
     parser.add_argument('--start_block', type=int, default=1,
-        help='Starting block index for multi-GPU chunking')
+                        help='Starting block index for multi-GPU chunking')
     parser.add_argument('--dry-run', action='store_true',
-        help='Print the MATLAB command and exit without executing it')
+                        help='Print the MATLAB command and exit without executing it')
+    parser.add_argument('--use-jemalloc', action='store_true', default=False,
+                        help='Use jemalloc allocator (Linux only)')
 
     args = parser.parse_args()
 
     # Re-estimate block size if user selected subset of GPUs and did not override block size
     user_specified_subset = (
-        set(args.gpu_indices) != set(default_gpu_indices)
-        and set(args.gpu_indices).issubset(set(default_gpu_indices))
+            set(args.gpu_indices) != set(default_gpu_indices)
+            and set(args.gpu_indices).issubset(set(default_gpu_indices))
     )
     user_overrode_block_size = args.block_size_max != block_size_default
     if user_specified_subset and not user_overrode_block_size:
@@ -254,12 +298,20 @@ def main():
     )
 
     matlab_exec = find_matlab_executable()
+    jemalloc_path = find_jemalloc() if is_linux and args.use_jemalloc else None
+    if args.use_jemalloc and is_linux:
+        if jemalloc_path:
+            log.info(f"Using jemalloc allocator at: {jemalloc_path}")
+        else:
+            log.warning("jemalloc requested but not found. To install on Ubuntu: sudo apt install libjemalloc2.")
 
     # === Insert Linux-specific optimizations ===
     env = os.environ.copy()
     if not is_windows:
         # Set glibc tuning to reduce fragmentation
         env["MALLOC_ARENA_MAX"] = "4"
+        if jemalloc_path:
+            env["LD_PRELOAD"] = jemalloc_path
 
         # Use numactl for better memory distribution on NUMA systems
         # Wrap the matlab command with numactl only on Linux
@@ -282,6 +334,7 @@ def main():
 
     decon_path = args.input / "deconvolved"
     decon_path.mkdir(exist_ok=True)
+
     with open(decon_path / "deconvolution_config.json", "w") as f:
         dump({k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()}, f, indent=2)
 
