@@ -158,10 +158,12 @@ def main():
         help='Number of CPU workers to use (0 disables CPU deconvolution)')
     parser.add_argument('--signal_amp', type=float, default=1.0,
         help='Signal amplification factor')
-    parser.add_argument('--sigma', type=float, nargs=3, default=[0.5, 0.5, 2.0],
+    parser.add_argument('--gaussian_sigma', type=float, nargs=3, default=[0.5, 0.5, 2.0],
         help='3D Gaussian filter sigma in voxel unit (e.g., 0.5 0.5 1.5). Use 0 0 0 to disable filtering.')
-    parser.add_argument('--filter_size', type=int, nargs=3, default=[5, 5, 25],
+    parser.add_argument('--gaussian_filter_size', type=int, nargs=3, default=[5, 5, 25],
         help='Size of the 3D Gaussian filter kernel in voxel unit')
+    parser.add_argument('--destripe_sigma', type=float, default=0.5,
+                        help='Sigma of destriping filter along the z-axis. Use 0 to disable filtering.')
     parser.add_argument('--denoise_strength', type=int, default=1,
         help='Denoising strength (e.g., 1 to 255 for 8-bit images)')
     parser.add_argument('--no-resume', dest='resume', action='store_false',
@@ -206,8 +208,8 @@ def main():
         log.warning(f"You requested {total_workers_requested} workers but only have {total_cores} physical cores.")
 
     gpu_indices_str = ' '.join(str(i) for i in final_gpu_indices)
-    sigma_str = ' '.join(str(i) for i in args.sigma)
-    filter_size_str = ' '.join(str(i) for i in args.filter_size)
+    gaussian_sigma_str = ' '.join(str(i) for i in args.gaussian_sigma)
+    gaussian_filter_size_str = ' '.join(str(i) for i in args.gaussian_filter_size)
     cache_drive_folder = Path(args.input) / f"cache_deconvolution_Ex_{args.lambda_ex}_Em_{args.lambda_em}"
     if args.cache_drive:
         if not Path(args.cache_drive).exists():
@@ -239,8 +241,9 @@ def main():
         f"    {args.block_size_max}, ...\n"
         f"    [{gpu_indices_str}], ...\n"
         f"    {args.signal_amp}, ...\n"
-        f"    [{sigma_str}], ...\n"
-        f"    [{filter_size_str}], ...\n"
+        f"    [{gaussian_sigma_str}], ...\n"
+        f"    [{gaussian_filter_size_str}], ...\n"
+        f"    {args.destripe_sigma}, ...\n"
         f"    {args.denoise_strength}, ...\n"
         f"    {int(args.resume)}, ...\n"
         f"    {args.start_block}, ...\n"

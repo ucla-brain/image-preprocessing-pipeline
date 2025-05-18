@@ -37,7 +37,7 @@ function [] = LsDeconv(varargin)
         disp(' ');
 
         % make sure correct number of parameters specified
-        if nargin < 23
+        if nargin < 24
             showinfo();
             if isdeployed
                 exit(1);
@@ -63,47 +63,23 @@ function [] = LsDeconv(varargin)
         block_size_max = double(varargin{14});
         gpus = varargin{15};
         amplification = varargin{16};
-        filter.sigma = varargin{17};
-        filter.size = varargin{18};
-        filter.dark = varargin{19};
-        resume = varargin{20};
-        starting_block = varargin{21};
-        flip_upside_down = varargin{22};
-        convert_to_8bit = varargin{23};
+        filter.gaussian_sigma = varargin{17};
+        filter.gaussian_size = varargin{18};
+        filter.destripe_sigma = varargin{19};
+        filter.dark = varargin{20};
+        resume = varargin{21};
+        starting_block = varargin{22};
+        flip_upside_down = varargin{23};
+        convert_to_8bit = varargin{24};
         cache_drive = fullfile(tempdir, 'decon_cache');
-        if nargin > 23
-            cache_drive = varargin{24};
+        if nargin > 24
+            cache_drive = varargin{25};
             if ~exist(cache_drive, "dir")
                 disp("making cache drive dir " + cache_drive)
                 mkdir(cache_drive);
             end
             disp("cache drive dir created and/or exists " + cache_drive)
         end
-
-        %convert command line parameters from string to double
-        % disp("Deployed? " + isdeployed);
-        % if isdeployed
-        %     disp("converting double command line parameters")
-        %     dxy = str2double(strrep(dxy, ',', '.'));
-        %     dz = str2double(strrep(dz, ',', '.'));
-        %     numit = str2double(strrep(numit, ',', '.'));
-        %     NA = str2double(strrep(NA, ',', '.'));
-        %     rf = str2double(strrep(rf, ',', '.'));
-        %     lambda_ex = str2double(strrep(lambda_ex, ',', '.'));
-        %     lambda_em = str2double(strrep(lambda_em, ',', '.'));
-        %     fcyl = str2double(strrep(fcyl, ',', '.'));
-        %     slitwidth = str2double(strrep(slitwidth, ',', '.'));
-        %     damping = str2double(strrep(damping, ',', '.'))/100;
-        %     clipval = str2double(strrep(clipval, ',', '.'));
-        %     stop_criterion = str2double(strrep(stop_criterion, ',', '.'));
-        %     block_size_max = str2double(strrep(block_size_max, ',', '.'));
-        %     amplification = str2double(strrep(amplification, ',', '.'));
-        %     resume = str2double(strrep(resume, ',', '.'));
-        %     starting_block = str2double(strrep(starting_block, ',', '.'));
-        %     flip_upside_down = str2double(strrep(flip_upside_down, ',', '.'));
-        %     convert_to_8bit = str2double(strrep(convert_to_8bit, ',', '.'));
-        %     filter.dark  = str2double(strrep(filter.dark, ',', '.'));
-        % end
         
         assert(isa(inpath, "string"), "wrong type " + class(inpath));
         assert(isa(dxy, "double"), "wrong type " + class(dxy));
@@ -239,9 +215,10 @@ function [] = LsDeconv(varargin)
         % start image processing
         filter.dark = dark(filter, stack_info.bit_depth);
         p_log(log_file, 'preprocessing params ...')
-        p_log(log_file, ['   3D gaussian filter sigma: ' num2str(filter.sigma, 3)]);
-        p_log(log_file, ['   3D gaussian filter size: ' num2str(filter.size, 3)]);
+        p_log(log_file, ['   3D gaussian filter sigma: ' num2str(filter.gaussian_sigma, 3)]);
+        p_log(log_file, ['   3D gaussian filter size: ' num2str(filter.gaussian_size, 3)]);
         p_log(log_file, ['   post filter baseline subtraction (denoising): ' num2str(filter.dark)]);
+        p_log(log_file, ['   destrip along the z-axis sigma: ' num2str(filter.destripe_sigma)]);
         p_log(log_file, ' ');
 
         p_log(log_file, 'deconvolution params ...')
@@ -300,11 +277,11 @@ function [x, y, x_pad, y_pad] = calculate_xy_size(z, z_pad, stack_info, block_si
     function size = max_pad_size(x, psf_size, filter_size)
         size = max(pad_size(x, psf_size), gaussian_pad_size(x, filter_size));
     end
-    z_max = z + 2 * gaussian_pad_size(z, filter.size(3));
+    z_max = z + 2 * gaussian_pad_size(z, filter.gaussian_size(3));
     function size = block_size(x, y)
         size = ...
-            (x + 2 * max_pad_size(x, psf_size(1), filter.size(1))) * ...
-            (y + 2 * max_pad_size(y, psf_size(2), filter.size(2))) * ...
+            (x + 2 * max_pad_size(x, psf_size(1), filter.gaussian_size(1))) * ...
+            (y + 2 * max_pad_size(y, psf_size(2), filter.gaussian_size(2))) * ...
             z_max;
     end
 
@@ -394,9 +371,9 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad] = autosplit(stack_info, psf_
     % be considred in calculating block size
     function size = block_size(x, y, z, x_pad, y_pad)
         size = ...
-            (x + 2 * max(x_pad, gaussian_pad_size(x, filter.size(1)))) * ...
-            (y + 2 * max(y_pad, gaussian_pad_size(y, filter.size(2)))) * ...
-            (z + 2 *            gaussian_pad_size(z, filter.size(3)));
+            (x + 2 * max(x_pad, gaussian_pad_size(x, filter.gaussian_size(1)))) * ...
+            (y + 2 * max(y_pad, gaussian_pad_size(y, filter.gaussian_size(2)))) * ...
+            (z + 2 *            gaussian_pad_size(z, filter.gaussian_size(3)));
     end
 
     z_min = 2 * psf_size(3) + 1;
@@ -701,15 +678,15 @@ end
 
 function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criterion, gpu, gpu_queue_key, filter)
     bl_size = size(bl);
-    if gpu && (min(filter.sigma(:)) > 0 || niter > 0)
+    if gpu && (min(filter.gaussian_sigma(:)) > 0 || niter > 0)
         % get the next available gpu
         gpu_id = queue('wait', gpu_queue_key);
         gpu_device = gpuDevice(gpu_id);
         bl = gpuArray(bl);
     end
 
-    if min(filter.sigma(:)) > 0
-        bl = imgaussfilt3(bl, filter.sigma, 'FilterSize', filter.size, 'Padding', 'symmetric'); %circular
+    if min(filter.gaussian_sigma(:)) > 0
+        bl = imgaussfilt3(bl, filter.gaussian_sigma, 'FilterSize', filter.gaussian_size, 'Padding', 'symmetric'); %circular
         bl = bl - filter.dark;
         bl = max(bl, 0);
     end
@@ -776,7 +753,11 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
         reset(gpu_device);  % to free gpu memory
         queue('post', gpu_queue_key, gpu_id);
     end
-    bl = filter_subband_3d_z(bl, 0.5, 0, "db9");
+
+    if filter.destripe_sigma > 0
+        bl = filter_subband_3d_z(bl, filter.destripe_sigma, 0, "db9");
+    end
+
     assert(all(size(bl) == bl_size), '[process_block]: block size mismatch!');
 end
 
@@ -1335,17 +1316,17 @@ end
 
 function dark_ = dark(filter, bit_depth)
     if bit_depth == 8
-        a=zeros(filter.size, "uint8");
+        a=zeros(filter.gaussian_size, "uint8");
     elseif bit_depth == 16
-        a=zeros(filter.size, "uint16");
+        a=zeros(filter.gaussian_size, "uint16");
     else
         warning('unsupported image bit depth');
-        a=zeros(filter.size);
+        a=zeros(filter.gaussian_size);
     end
     % dark is a value greater than 10 surrounded by zeros
-    a(ceil(filter.size(1)/2), ceil(filter.size(2)/2), ceil(filter.size(3)/2)) = filter.dark;
+    a(ceil(filter.gaussian_size(1)/2), ceil(filter.gaussian_size(2)/2), ceil(filter.gaussian_size(3)/2)) = filter.dark;
     a=im2single(a);
-    a=imgaussfilt3(a, filter.sigma, 'FilterSize', filter.size, 'Padding', 'circular');
+    a=imgaussfilt3(a, filter.gaussian_sigma, 'FilterSize', filter.gaussian_size, 'Padding', 'circular');
     dark_ = max(a(:));
 end
 
