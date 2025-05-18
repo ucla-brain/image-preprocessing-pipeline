@@ -2,6 +2,41 @@
 //
 // Author: Keivan Moradi (2025) @ B.R.A.I.N. Lab, UCLA
 // License: GPLv3
+/*
+ * This file implements a named semaphore mechanism that works on both
+ * Windows and POSIX (Linux/macOS) platforms using shared memory and
+ * synchronization primitives. It is designed for use in parallel and
+ * multi-process MATLAB environments where native semaphores are either
+ * unavailable or incompatible.
+ *
+ * Core Concepts:
+ * - Each semaphore is identified by a unique integer key.
+ * - A shared memory region holds the semaphore structure (count, max, flags).
+ * - Mutual exclusion is achieved using a cross-platform mutex.
+ * - Notification of waiting threads/processes is done using platform-specific events:
+ *     - Windows: Event objects + Mutex + memory mapping
+ *     - POSIX: pthread mutex + condition variable in shared memory
+ *
+ * Supported Operations:
+ * 1. create: Initializes (or recreates) the semaphore. If it already exists,
+ *    it is reset and any waiting threads are released. Safe to call multiple times.
+ *
+ * 2. post: Increments the semaphore count. If already at maximum, a warning is issued
+ *    but the operation is still successful. Waiting threads are signaled.
+ *
+ * 3. wait: Decrements the semaphore count, blocking the caller if count is zero.
+ *    Wakes up when post() occurs or if the semaphore is destroyed.
+ *
+ * 4. destroy: Marks the semaphore as terminated and releases all waiting threads.
+ *    Also cleans up shared memory and synchronization primitives.
+ *
+ * Platform Compatibility:
+ * - Windows implementation uses named file mappings, mutexes, and events.
+ * - POSIX implementation uses shm_open, mmap, pthread_mutex, and pthread_cond.
+ *
+ * All behaviors are carefully matched across platforms to ensure identical
+ * semantics and reliability under concurrent access.
+ */
 
 #include <errno.h>
 #include <stdio.h>
