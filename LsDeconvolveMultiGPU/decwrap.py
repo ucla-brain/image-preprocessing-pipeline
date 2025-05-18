@@ -324,7 +324,9 @@ def main():
     env = os.environ.copy()
     if not is_windows:
         # Set glibc tuning to reduce fragmentation
-        env["MALLOC_ARENA_MAX"] = "4"
+        env["MALLOC_ARENA_MAX"] = "2"  # keep fragmentation down with fewer arenas
+        env["MALLOC_MMAP_THRESHOLD_"] = "134217728"  # 128 MB — prefer heap for big blocks
+        env["MALLOC_TRIM_THRESHOLD_"] = "-1"  # never trim — hold on to memory
         if jemalloc_path:
             env["LD_PRELOAD"] = jemalloc_path
         if tcmalloc_path:
