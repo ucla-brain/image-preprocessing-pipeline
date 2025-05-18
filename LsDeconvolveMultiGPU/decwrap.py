@@ -3,6 +3,7 @@ import ctypes.util
 import logging
 import os
 import platform
+import signal
 import shutil
 import subprocess
 from json import dump
@@ -349,7 +350,8 @@ def main():
             ' '.join(matlab_cmd) if is_windows else matlab_cmd,
             shell=is_windows,
             env=env,  # Pass the modified environment
-            text=True
+            text=True,
+            preexec_fn=os.setsid if not is_windows else None
         )
         proc.wait()
         log.info("Deconvolution completed successfully.")
@@ -358,20 +360,25 @@ def main():
         log.warning("Interrupted by user (Ctrl+C). Terminating MATLAB...")
 
         if proc and proc.poll() is None:
-            proc.terminate()
+            killed = False
             try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                proc.kill()
+                log.info("Terminating MATLAB process tree...")
+                if is_windows:
+                    subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], shell=True)
+                else:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+                killed = True
+            except Exception as e:
+                log.warning(f"Failed to terminate MATLAB process: {e}")
 
-        # Kill all background MATLAB workers (aggressive)
-        try:
-            if is_windows:
-                subprocess.run(["taskkill", "/f", "/im", "MATLAB.exe"], shell=True)
-            else:
-                subprocess.run(["pkill", "-f", "MATLAB"])
-        except Exception as kill_err:
-            log.warning(f"Failed to kill background MATLAB processes: {kill_err}")
+            if not killed:
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                except Exception as e:
+                    log.warning(f"Fallback termination also failed: {e}")
 
         raise SystemExit("Execution interrupted by user.")
 
