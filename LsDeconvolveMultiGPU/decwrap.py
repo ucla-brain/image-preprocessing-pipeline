@@ -175,7 +175,7 @@ def main():
     # Optional
     parser.add_argument('--cache_drive', type=str, default=None,
                         help='Optional brain name for cache path construction')
-    parser.add_argument('--numit', '-it', type=int, default=12,
+    parser.add_argument('--numit', '-it', type=int, default=13,
                         help='Number of deconvolution iterations [1-50]')
     parser.add_argument('--na', type=float, default=0.40,
                         help='Numerical aperture of the objective lens')
