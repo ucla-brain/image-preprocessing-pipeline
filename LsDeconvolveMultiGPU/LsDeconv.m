@@ -762,39 +762,41 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
 end
 
 %Lucy-Richardson deconvolution
-function deconvolved = deconCPU(bl, psf, niter, lambda, stop_criterion)
-    deconvolved = bl;
+function bl = deconCPU(bl, psf, niter, lambda, stop_criterion)
     OTF = single(psf2otf(psf, size(bl)));
     R = 1/26 * ones(3, 3, 3, 'single');
     R(2,2,2) = single(0);
 
+    mid_iter = ceil(niter / 2);
+    delta_prev = []; % Initialize scalar-based change tracking
+
     for i = 1 : niter
         start_time = tic;
-        if stop_criterion > 0
-            deconvolved_old = deconvolved;
-        end
-        denom = convFFT(deconvolved, OTF);
+
+        denom = convFFT(bl, OTF);
         denom = max(denom, eps('single')); % protect against division by zero
         denom = bl ./ denom;
         denom = convFFT(denom, conj(OTF));
+
         if lambda > 0
-            deconvolved = deconvolved .* denom .* (1 - lambda) + ...
-                          convn(deconvolved, R, 'same') .* lambda;
+            reg_term = convn(bl, R, 'same');
+            bl = bl .* denom .* (1 - lambda) + reg_term .* lambda;
+            clear reg_term;
         else
-            deconvolved = deconvolved .* denom;
+            bl = bl .* denom;
         end
-        % clear denom; % for 25% temporarily reduction in RAM memory usage
-        deconvolved = abs(deconvolved); % get rid of imaginary artifacts
+        clear denom; % temporary memory usage reduction
+        bl = abs(bl); % remove imaginary artifacts
 
         if stop_criterion > 0
             % estimate quality criterion
-            delta = rmse(deconvolved, deconvolved_old, 'all');
-            if i == 1
+            delta_current = norm(bl(:));
+            if isempty(delta_prev)
                 delta_rel = 0;
             else
-                delta_rel = (deltaL - delta) / deltaL * 100;
+                delta_rel = abs(delta_prev - delta_current) / delta_prev * 100;
             end
-            deltaL = delta;
+            delta_prev = delta_current;
 
             disp(['CPU: iteration: ' num2str(i) ' duration: ' num2str(round(toc(start_time), 1)) ' delta: ' num2str(delta_rel, 3)]);
 
@@ -805,51 +807,69 @@ function deconvolved = deconCPU(bl, psf, niter, lambda, stop_criterion)
         else
             disp(['CPU: iteration: ' num2str(i) ' duration: ' num2str(round(toc(start_time), 1))]);
         end
+
+        if i == mid_iter
+            bl = imgaussfilt3(bl, 0.5);
+        end
     end
 end
 
-function deconvolved = deconGPU(bl, psf, niter, lambda, stop_criterion, gpu)
-    deconvolved = gpuArray(bl);
-    psf_inv = psf(end:-1:1, end:-1:1, end:-1:1); % spatially reversed psf
-    R = 1/26 * ones(3, 3, 3, 'single');
+function bl = deconGPU(bl, psf, niter, lambda, stop_criterion, gpu)
+    % Explicit GPU array copies upfront
+    if ~isa(bl, 'gpuArray')
+        bl = gpuArray(bl);
+    end
+    psf = gpuArray(psf);
+    psf_inv = gpuArray(psf(end:-1:1, end:-1:1, end:-1:1));
+    R = gpuArray(single(1/26 * ones(3, 3, 3)));
     R(2,2,2) = single(0);
+
+    mid_iter = ceil(niter / 2);
+    delta_prev = []; % <--- Initialize here
 
     for i = 1 : niter
         start_time = tic;
-        if stop_criterion > 0
-            deconvolved_old = deconvolved;
-        end
-        denom = convn(deconvolved, psf, 'same');
+
+        denom = convn(bl, psf, 'same');
         denom = max(denom, eps('single')); % protect against division by zero
         denom = bl ./ denom;
         denom = convn(denom, psf_inv, 'same');
+
         if lambda > 0
-            deconvolved = deconvolved .* denom .* (1 - lambda) + ...
-                          convn(deconvolved, R, 'same') .* lambda;
+            reg_term = convn(bl, R, 'same');
+            bl = bl .* denom .* (1 - lambda) + reg_term .* lambda;
+            clear reg_term;
         else
-            deconvolved = deconvolved .* denom;
+            bl = bl .* denom;
         end
-        % clear denom; % for 25% temporarily reduction in GPU memory usage
-        deconvolved = abs(deconvolved); % get rid of imaginary artifacts
+        clear denom; % temporarily reduce GPU memory usage
+        bl = abs(bl); % eliminate imaginary artifacts
 
         if stop_criterion > 0
             % estimate quality criterion
-            delta = rmse(deconvolved, deconvolved_old, 'all');
-            if i == 1
+            delta_current = norm(bl(:)); % single scalar
+            if isempty(delta_prev)
                 delta_rel = 0;
             else
-                delta_rel = (deltaL - delta) / deltaL * 100;
+                delta_rel = abs(delta_prev - delta_current) / delta_prev * 100;
             end
-            deltaL = delta;
+            delta_prev = delta_current;
 
-            disp(['GPU' num2str(gpu) ': iteration: ' num2str(i) ' duration: ' num2str(round(toc(start_time), 1)) ' delta: ' num2str(delta_rel, 3)]);
+            disp(['GPU' num2str(gpu) ': iteration: ' num2str(i) ...
+                  ' duration: ' num2str(round(toc(start_time), 1)) ...
+                  ' delta: ' num2str(delta_rel, 3)]);
 
             if i > 1 && delta_rel <= stop_criterion
                 disp('stop criterion reached. Finishing iterations.');
                 break
             end
         else
-            disp(['GPU' num2str(gpu) ': iteration: ' num2str(i) ' duration: ' num2str(round(toc(start_time), 1))]);
+            disp(['GPU' num2str(gpu) ': iteration: ' num2str(i) ...
+                  ' duration: ' num2str(round(toc(start_time), 1))]);
+        end
+
+        if i == mid_iter
+            bl = imgaussfilt3(bl, 0.5);
         end
     end
 end

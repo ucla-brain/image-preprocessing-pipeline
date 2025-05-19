@@ -87,7 +87,7 @@ def get_all_gpu_indices():
 
 
 def estimate_block_size_max(gpu_indices, num_workers, bytes_per_element=4, base_reserve_gb=1.4, per_worker_mib=160,
-                            num_blocks_on_gpu=3):
+                            num_blocks_on_gpu=2):
     max_allowed = 2 ** 31
     try:
         result = subprocess.run(
@@ -236,8 +236,7 @@ def main():
     if user_specified_subset and not user_overrode_block_size:
         args.block_size_max = estimate_block_size_max(
             args.gpu_indices,
-            args.gpu_workers_per_gpu * len(args.gpu_indices),
-            num_blocks_on_gpu=4 if args.stop_criterion > 0 else 3,
+            args.gpu_workers_per_gpu * len(args.gpu_indices)
         )
         log.info(f"Re-estimated block_size_max: {args.block_size_max}")
 
