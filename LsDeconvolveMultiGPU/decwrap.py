@@ -233,6 +233,8 @@ def main():
                         help='Use jemalloc allocator (Linux only)')
     parser.add_argument('--use-tcmalloc', action='store_true', default=False,
                         help='Use tcmalloc allocator (Linux only)')
+    parser.add_argument('--use-fft', action='store_true', default=False,
+                        help='use FFT-based convolution, which is faster but uses more memory.')
 
     args = parser.parse_args()
 
@@ -245,7 +247,8 @@ def main():
     if user_specified_subset and not user_overrode_block_size:
         args.block_size_max = estimate_block_size_max(
             args.gpu_indices,
-            args.gpu_workers_per_gpu * len(args.gpu_indices)
+            args.gpu_workers_per_gpu * len(args.gpu_indices),
+            num_blocks_on_gpu=(5 if args.use_fft else 2) + (1 if args.lambda_damping else 0),
         )
         log.info(f"Re-estimated block_size_max: {args.block_size_max}")
 
@@ -305,6 +308,7 @@ def main():
         f"    {args.start_block}, ...\n"
         f"    {int(args.flip)}, ...\n"
         f"    {int(args.convert_to_8bit)}, ...\n"
+        f"    {int(args.use_fft)}, ...\n"
         f"    convertCharsToStrings('{cache_drive_folder}') ...\n"
         f");\n"
     )

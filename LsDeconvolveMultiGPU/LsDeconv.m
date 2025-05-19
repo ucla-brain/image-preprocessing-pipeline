@@ -37,7 +37,7 @@ function [] = LsDeconv(varargin)
         disp(' ');
 
         % make sure correct number of parameters specified
-        if nargin < 25
+        if nargin < 26
             showinfo();
             if isdeployed
                 exit(1);
@@ -72,9 +72,10 @@ function [] = LsDeconv(varargin)
         starting_block = varargin{23};
         flip_upside_down = varargin{24};
         convert_to_8bit = varargin{25};
+        filter.use_fft = varargin{26};
         cache_drive = fullfile(tempdir, 'decon_cache');
-        if nargin > 25
-            cache_drive = varargin{26};
+        if nargin > 26
+            cache_drive = varargin{27};
             if ~exist(cache_drive, "dir")
                 disp("making cache drive dir " + cache_drive)
                 mkdir(cache_drive);
@@ -725,7 +726,7 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
         bl = padarray(bl, [ceil(pad_x) ceil(pad_y) ceil(pad_z)], 'post', 'symmetric');
     
         % deconvolve block using Lucy-Richardson or blind algorithm
-        bl = decon(bl, psf, niter, lambda, stop_criterion, filter.regularize_interval, gpu_id, false);
+        bl = decon(bl, psf, niter, lambda, stop_criterion, filter.regularize_interval, gpu_id, filter.use_fft);
 
         % remove padding
         bl = bl(...
