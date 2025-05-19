@@ -1,4 +1,4 @@
-function bl = decon(bl, psf, niter, lambda, stop_criterion, regularize_interval, device_id)
+function bl = decon(bl, psf, niter, lambda, stop_criterion, regularize_interval, device_id, use_fft)
     % Performs Richardson-Lucy or blind deconvolution (with optional Tikhonov regularization).
     %
     % Inputs:
@@ -9,6 +9,7 @@ function bl = decon(bl, psf, niter, lambda, stop_criterion, regularize_interval,
     % - stop_criterion: early stopping threshold in % change (0 disables)
     % - regularize_interval: enables blind mode when > 0 (with PSF updates + smoothing)
     % - device_id: string label for logging (e.g. 'GPU0', 'CPU')
+    % - use_fft: true = use FFT-based convolution (faster, more memory), false = use convn (slower, low-memory)
 
     % === Device detection and type consistency ===
     use_gpu = isa(bl, 'gpuArray');
@@ -23,9 +24,11 @@ function bl = decon(bl, psf, niter, lambda, stop_criterion, regularize_interval,
 
     imsize = size(bl);
 
-    % === Precompute FFT of padded PSF ===
-    otf = fftn(padPSF(psf, imsize));
-    otf_conj = conj(otf);  % flipped PSF in Fourier domain
+    % === Precompute FFT of padded PSF if needed ===
+    if use_fft
+        otf = fftn(padPSF(psf, imsize));
+        otf_conj = conj(otf);  % flipped PSF in Fourier domain
+    end
 
     % === Tikhonov kernel: 3D Laplacian-like stencil ===
     R = single(1/26 * ones(3,3,3)); R(2,2,2) = 0;
@@ -42,27 +45,33 @@ function bl = decon(bl, psf, niter, lambda, stop_criterion, regularize_interval,
             bl = imgaussfilt3(bl, 0.5);
 
             % === buf: ratio = bl / conv(bl, psf) ===
-            buf = convFFT(bl, otf);                        % forward convolution
+            if use_fft
+                buf = convFFT(bl, otf);                        % forward convolution (FFT)
+            else
+                buf = convn(bl, psf, 'same');                 % forward convolution (spatial)
+            end
             buf = max(buf, eps('single'));
-            buf = bl ./ buf;                               % RL ratio
+            buf = bl ./ buf;                                 % RL ratio
 
             % === Blind PSF update ===
-            psf = psf .* convn(flipall(bl), buf, 'same');  % spatial update
+            psf = psf .* convn(flipall(bl), buf, 'same');    % spatial update (always convn)
             psf = max(psf, 0);
             psf = psf / sum(psf(:));
-            psf = imgaussfilt3(psf, 0.5);                  % smooth PSF
-            psf = psf / sum(psf(:));                       % normalize again
+            psf = imgaussfilt3(psf, 0.5);                    % smooth PSF
+            psf = psf / sum(psf(:));                         % normalize again
 
             % === Recompute OTF after PSF change ===
-            otf = fftn(padPSF(psf, imsize));
-            otf_conj = conj(otf);
-
-            % === RL update: buf = conv(buf, flip(psf)) ===
-            buf = convFFT(buf, otf_conj);                  % backward convolution
+            if use_fft
+                otf = fftn(padPSF(psf, imsize));
+                otf_conj = conj(otf);
+                buf = convFFT(buf, otf_conj);                % backward convolution (FFT)
+            else
+                buf = convn(buf, flipall(psf), 'same');      % backward convolution (spatial)
+            end
 
             % === Apply RL update with optional Tikhonov ===
             if lambda > 0
-                reg = convn(bl, R, 'same');                % regularization term
+                reg = convn(bl, R, 'same');                  % regularization term
                 bl = bl .* buf .* (1 - lambda) + reg .* lambda;
             else
                 bl = bl .* buf;
@@ -70,10 +79,17 @@ function bl = decon(bl, psf, niter, lambda, stop_criterion, regularize_interval,
 
         else
             % === Standard RL update ===
-            buf = convFFT(bl, otf);                        % forward blur
-            buf = max(buf, eps('single'));
-            buf = bl ./ buf;                               % RL ratio
-            buf = convFFT(buf, otf_conj);                  % deblur
+            if use_fft
+                buf = convFFT(bl, otf);                      % forward blur
+                buf = max(buf, eps('single'));
+                buf = bl ./ buf;                             % RL ratio
+                buf = convFFT(buf, otf_conj);                % deblur
+            else
+                buf = convn(bl, psf, 'same');                % forward blur
+                buf = max(buf, eps('single'));
+                buf = bl ./ buf;                             % RL ratio
+                buf = convn(buf, flipall(psf), 'same');      % deblur
+            end
             bl = bl .* buf;
         end
 

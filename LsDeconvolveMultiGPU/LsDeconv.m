@@ -725,7 +725,7 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
         bl = padarray(bl, [ceil(pad_x) ceil(pad_y) ceil(pad_z)], 'post', 'symmetric');
     
         % deconvolve block using Lucy-Richardson or blind algorithm
-        bl = decon(bl, psf, niter, lambda, stop_criterion, filter.regularize_interval, gpu_id);
+        bl = decon(bl, psf, niter, lambda, stop_criterion, filter.regularize_interval, gpu_id, false);
 
         % remove padding
         bl = bl(...
