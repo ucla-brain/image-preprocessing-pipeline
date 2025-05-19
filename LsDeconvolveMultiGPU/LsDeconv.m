@@ -767,7 +767,7 @@ function bl = deconCPU(bl, psf, niter, lambda, stop_criterion)
     R = 1/26 * ones(3, 3, 3, 'single');
     R(2,2,2) = single(0);
 
-    mid_iter = ceil(niter / 2);
+    mid_iter = floor(niter / 2);
     delta_prev = []; % Initialize scalar-based change tracking
 
     for i = 1 : niter
@@ -824,7 +824,7 @@ function bl = deconGPU(bl, psf, niter, lambda, stop_criterion, gpu)
     R = gpuArray(single(1/26 * ones(3, 3, 3)));
     R(2,2,2) = single(0);
 
-    mid_iter = ceil(niter / 2);
+    mid_iter = floor(niter / 2);
     delta_prev = []; % <--- Initialize here
 
     for i = 1 : niter
