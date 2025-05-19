@@ -267,7 +267,9 @@ static void ensure_mutex_locked(shared_semaphore_t* sem, int fd) {
 
         pthread_mutexattr_init(&mattr);
         pthread_mutexattr_setpshared(&mattr, PTHREAD_PROCESS_SHARED);
-        if (pthread_mutexattr_setrobust(&mattr, PTHREAD_MUTEX_ROBUST) != 0) {
+        int robust_result = pthread_mutexattr_setrobust(&mattr, PTHREAD_MUTEX_ROBUST);
+        if (robust_result != 0) {
+            mexPrintf("pthread_mutexattr_setrobust failed with code %d\n", robust_result);
             mexWarnMsgIdAndTxt("semaphore:robust", "PTHREAD_MUTEX_ROBUST not supported. Crash recovery disabled.");
         }
 
@@ -294,17 +296,22 @@ shared_semaphore_t* create_semaphore(int key, int initval, int* out_count) {
     shared_semaphore_t* sem = map_posix_semaphore(key, 1, &is_new, &fd);
 
     flock(fd, LOCK_EX);
-    if (!sem->initialized || is_new) {
+
+    // Defensive reinit if semaphore was forcibly reset (e.g., in destroy)
+    if (!sem->initialized) {
         memset(sem, 0, sizeof(shared_semaphore_t));
         sem->count = initval;
         sem->max = initval;
 
         pthread_mutexattr_t mattr;
         pthread_condattr_t cattr;
+
         pthread_mutexattr_init(&mattr);
         pthread_mutexattr_setpshared(&mattr, PTHREAD_PROCESS_SHARED);
-        if (pthread_mutexattr_setrobust(&mattr, PTHREAD_MUTEX_ROBUST) != 0) {
-            mexWarnMsgIdAndTxt("semaphore:robust", "PTHREAD_MUTEX_ROBUST not supported on this platform. Crash recovery disabled.");
+        int robust_result = pthread_mutexattr_setrobust(&mattr, PTHREAD_MUTEX_ROBUST);
+        if (robust_result != 0) {
+            mexPrintf("pthread_mutexattr_setrobust failed with code %d\n", robust_result);
+            mexWarnMsgIdAndTxt("semaphore:robust", "PTHREAD_MUTEX_ROBUST not supported. Crash recovery disabled.");
         }
 
         pthread_condattr_init(&cattr);
@@ -319,11 +326,13 @@ shared_semaphore_t* create_semaphore(int key, int initval, int* out_count) {
         sem->terminate = 0;
         pthread_cond_broadcast(&sem->cond);
     }
+
     flock(fd, LOCK_UN);
     if (out_count) *out_count = sem->count;
     close(fd);
     return sem;
 }
+
 
 shared_semaphore_t* get_semaphore(int key) {
     int is_new = 0, fd = -1;
@@ -393,10 +402,43 @@ static int post_semaphore(int key) {
 static void destroy_semaphore(int key) {
     int fd = -1;
     shared_semaphore_t* sem = map_posix_semaphore(key, 0, &(int){0}, &fd);
-    ensure_mutex_locked(sem, fd);
-    sem->terminate = 1;
-    pthread_cond_broadcast(&sem->cond);
-    pthread_mutex_unlock(&sem->mutex);
+    int err = pthread_mutex_trylock(&sem->mutex);
+
+    if (err == EBUSY) {
+        mexWarnMsgIdAndTxt("semaphore:destroy", "Semaphore %d is currently locked and may be abandoned. Forcing reset.", key);
+        memset(sem, 0, sizeof(shared_semaphore_t));
+
+        pthread_mutexattr_t mattr;
+        pthread_condattr_t cattr;
+
+        pthread_mutexattr_init(&mattr);
+        pthread_mutexattr_setpshared(&mattr, PTHREAD_PROCESS_SHARED);
+        pthread_mutexattr_setrobust(&mattr, PTHREAD_MUTEX_ROBUST);
+
+        pthread_condattr_init(&cattr);
+        pthread_condattr_setpshared(&cattr, PTHREAD_PROCESS_SHARED);
+
+        pthread_mutex_init(&sem->mutex, &mattr);
+        pthread_cond_init(&sem->cond, &cattr);
+
+        sem->initialized = 1;
+        sem->terminate = 1;
+        pthread_cond_broadcast(&sem->cond);
+    } else if (err == EOWNERDEAD) {
+        pthread_mutex_consistent(&sem->mutex);
+        sem->terminate = 1;
+        pthread_cond_broadcast(&sem->cond);
+        pthread_mutex_unlock(&sem->mutex);
+    } else if (err == 0) {
+        sem->terminate = 1;
+        pthread_cond_broadcast(&sem->cond);
+        pthread_mutex_unlock(&sem->mutex);
+    } else if (err == EINVAL) {
+        mexWarnMsgIdAndTxt("semaphore:destroy", "Mutex structure is invalid.");
+    } else {
+        mexErrMsgIdAndTxt("semaphore:destroy", "Unexpected error locking mutex: %d", err);
+    }
+
     close(fd);
 
     char name[64];
