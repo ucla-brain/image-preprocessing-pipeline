@@ -40,7 +40,7 @@ function bl = decon(bl, psf, niter, lambda, stop_criterion, regularize_interval,
         start_time = tic;
 
         % === Blind update path (PSF + smoothing + optional Tikhonov) ===
-        if regularize_interval > 0 && mod(i, regularize_interval) == 0 && i > regularize_interval
+        if regularize_interval > 0 && mod(i, regularize_interval) == 0
             % === Regularize image ===
             bl = imgaussfilt3(bl, 0.5);
 
