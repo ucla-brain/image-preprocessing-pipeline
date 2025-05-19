@@ -186,7 +186,10 @@ def main():
     parser.add_argument('--slitwidth', type=float, default=12.0,
                         help='Slit width in millimeters')
     parser.add_argument('--lambda_damping', type=float, default=0.0,
-                        help='Damping parameter (0 = off)')
+                        help='Tikhonov (L2) regularization weight in the range [0, 1]. '
+                             'Applies only during blind deconvolution (enabled when --regularize_interval > 0). '
+                             'Blends each RL update with a smoothed version of the image to suppress noise. '
+                             'Set to 0 to disable.')
     parser.add_argument('--clipval', type=int, default=0,
                         help='Clipping value (0 = disabled)')
     parser.add_argument('--stop_criterion', type=float, default=0,

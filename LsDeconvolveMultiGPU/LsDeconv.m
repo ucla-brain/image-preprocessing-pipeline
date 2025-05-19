@@ -679,6 +679,7 @@ end
 
 function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criterion, gpu, gpu_queue_key, filter)
     bl_size = size(bl);
+    gpu_id = 0
     if gpu && (min(filter.gaussian_sigma(:)) > 0 || niter > 0)
         % get the next available gpu
         gpu_id = queue('wait', gpu_queue_key);
@@ -719,16 +720,12 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
                 pad_z = (block.z - blz)/2;
             end
         end
-    
+
         bl = padarray(bl, [floor(pad_x) floor(pad_y) floor(pad_z)], 'pre', 'symmetric');
         bl = padarray(bl, [ceil(pad_x) ceil(pad_y) ceil(pad_z)], 'post', 'symmetric');
     
-        % deconvolve block using Lucy-Richardson algorithm
-        if gpu && isgpuarray(bl)
-            bl = deconGPU(bl, psf, niter, lambda, stop_criterion, filter.regularize_interval, gpu_id);
-        else
-            bl = deconCPU(bl, psf, niter, lambda, stop_criterion, filter.regularize_interval);
-        end
+        % deconvolve block using Lucy-Richardson or blind algorithm
+        bl = decon(bl, psf, niter, lambda, stop_criterion, filter.regularize_interval, gpu_id);
 
         % remove padding
         bl = bl(...
@@ -736,6 +733,7 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
             floor(pad_y) + 1 : end - ceil(pad_y), ...
             floor(pad_z) + 1 : end - ceil(pad_z));
     end
+
     if gpu && isgpuarray(bl) && gpu_device.TotalMemory < 60e9
         % Reseting the GPU
         bl = gather(bl);
@@ -761,173 +759,6 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
 
     assert(all(size(bl) == bl_size), '[process_block]: block size mismatch!');
 end
-
-function bl = deconCPU(bl, psf, niter, lambda, stop_criterion, regularize_interval)
-    % Inputs:
-    % - bl: initial image estimate or observed image (3D)
-    % - psf: initial PSF guess
-    % - niter: number of iterations
-    % - lambda: Tikhonov regularization weight (0 to disable)
-    % - stop_criterion: relative delta threshold (0 to disable)
-    % - regularize_interval: Gaussian smoothing every N iterations (0 to disable)
-
-    if ~isa(bl, 'single'), bl = single(bl); end
-    if ~isa(psf, 'single'), psf = single(psf); end
-
-    psf_size = size(bl);
-    otf = psf2otf(psf, psf_size);
-    otf_conj = conj(otf);
-
-    R = single(1/26 * ones(3,3,3)); R(2,2,2) = 0;
-
-    delta_prev = [];
-
-    for i = 1:niter
-        start_time = tic;
-
-        % === RL Update using FFTs ===
-        tmp = convFFT(bl, otf);
-        tmp = max(tmp, eps('single'));
-        tmp = bl ./ tmp;
-        update = convFFT(tmp, otf_conj);
-
-        if lambda > 0
-            tmp = convn(bl, R, 'same');  % reuse tmp as reg_term
-            bl = bl .* update .* (1 - lambda) + tmp .* lambda;
-        else
-            bl = bl .* update;
-        end
-
-        bl = abs(bl);
-
-        % === Optional image regularization and blind PSF update ===
-        if regularize_interval > 0 && mod(i, regularize_interval) == 0 && i > 2
-            bl = imgaussfilt3(bl, 0.5);
-
-            % Blind PSF update
-            tmp = convFFT(bl, otf);
-            tmp = max(tmp, eps('single'));
-            tmp = bl ./ tmp;
-            psf = psf .* convn(flipall(bl), tmp, 'same');
-            psf = max(psf, 0);
-            psf = psf / sum(psf(:));
-            psf = imgaussfilt3(psf, 0.5);
-            psf = psf / sum(psf(:));
-            otf = psf2otf(psf, psf_size);        % update OTF
-            otf_conj = conj(otf);
-        end
-
-        % === Early stopping ===
-        if stop_criterion > 0
-            delta_current = norm(bl(:));
-            if isempty(delta_prev)
-                delta_rel = 0;
-            else
-                delta_rel = abs(delta_prev - delta_current) / delta_prev * 100;
-            end
-            delta_prev = delta_current;
-
-            disp(['CPU : Iter ' num2str(i) ...
-                ', Δ: ' num2str(delta_rel,3) ...
-                ', Time: ' num2str(round(toc(start_time),1)) 's']);
-            if i > 1 && delta_rel <= stop_criterion
-                disp('Stop criterion reached. Finishing iterations.');
-                break
-            end
-        else
-            disp(['CPU : Iter ' num2str(i) ...
-                ', Time: ' num2str(round(toc(start_time),1)) 's']);
-        end
-    end
-end
-
-function out = convFFT(data, otf)
-    out = real(ifftn(fftn(data) .* otf));
-end
-
-function bl = deconGPU(bl, psf, niter, lambda, stop_criterion, regularize_interval, gpu)
-    % Inputs:
-    % - bl: initial image estimate or observed image (3D)
-    % - psf: initial PSF guess
-    % - niter: number of iterations
-    % - lambda: Tikhonov regularization weight (0 to disable)
-    % - stop_criterion: relative delta threshold (0 to disable)
-    % - regularize_interval: apply Gaussian smoothing every N iterations (0 to disable)
-    % - gpu: GPU index for logging
-
-    % === Ensure GPU and correct type ===
-    if ~isa(bl, 'single'), bl = single(bl); end
-    if ~isgpuarray(bl), bl = gpuArray(bl); end
-    if ~isa(psf, 'single'), psf = single(psf); end
-    if ~isgpuarray(psf), psf = gpuArray(psf); end
-
-    R = gpuArray(single(1/26 * ones(3,3,3))); R(2,2,2) = 0;
-
-    delta_prev = [];
-
-    for i = 1:niter
-        start_time = tic;
-
-        % === Richardson–Lucy update ===
-        tmp = convn(bl, psf, 'same');
-        tmp = max(tmp, eps('single'));
-        tmp = bl ./ tmp;
-        update = convn(tmp, flipall(psf), 'same');
-
-        if lambda > 0
-            tmp = convn(bl, R, 'same');
-            bl = bl .* update .* (1 - lambda) + tmp .* lambda;
-        else
-            bl = bl .* update;
-        end
-
-        bl = abs(bl);
-
-        % === Optional image regularization and blind PSF update ===
-        if regularize_interval > 0 && mod(i, regularize_interval) == 0 && i > 2
-            bl = imgaussfilt3(bl, 0.5);
-
-            % Blind PSF update
-            tmp = convn(bl, psf, 'same');
-            tmp = max(tmp, eps('single'));
-            tmp = bl ./ tmp;
-            psf = psf .* convn(flipall(bl), tmp, 'same');
-            psf = max(psf, 0);
-            psf = psf / sum(psf(:));
-            psf = imgaussfilt3(psf, 0.5);
-            psf = psf / sum(psf(:));
-        end
-
-        % === Early stopping ===
-        if stop_criterion > 0
-            delta_current = norm(bl(:));
-            if isempty(delta_prev)
-                delta_rel = 0;
-            else
-                delta_rel = abs(delta_prev - delta_current) / delta_prev * 100;
-            end
-            delta_prev = delta_current;
-
-            disp(['GPU' num2str(gpu) ': Iter ' num2str(i) ...
-                  ', Δ: ' num2str(delta_rel,3) ...
-                  ', Time: ' num2str(round(toc(start_time),1)) 's']);
-            if i > 1 && delta_rel <= stop_criterion
-                disp('Stop criterion reached. Finishing iterations.');
-                break
-            end
-        else
-            disp(['GPU' num2str(gpu) ': Iter ' num2str(i) ...
-                  ', Time: ' num2str(round(toc(start_time),1)) 's']);
-        end
-    end
-end
-
-function x = flipall(x)
-    for d = 1:ndims(x)
-        x = flip(x, d);
-    end
-end
-
 
 function postprocess_save(...
     outpath, cache_drive, min_max_path, log_file, clipval, ...
