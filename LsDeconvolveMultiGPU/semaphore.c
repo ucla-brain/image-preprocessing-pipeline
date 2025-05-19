@@ -267,6 +267,7 @@ shared_semaphore_t* create_semaphore(int key, int initval, int* out_count) {
         pthread_condattr_t cattr;
         pthread_mutexattr_init(&mattr);
         pthread_mutexattr_setpshared(&mattr, PTHREAD_PROCESS_SHARED);
+        pthread_mutexattr_setrobust(&mattr, PTHREAD_MUTEX_ROBUST);
         pthread_condattr_init(&cattr);
         pthread_condattr_setpshared(&cattr, PTHREAD_PROCESS_SHARED);
         pthread_mutex_init(&sem->mutex, &mattr);
@@ -299,7 +300,12 @@ shared_semaphore_t* get_semaphore(int key) {
 static int wait_semaphore(int key) {
     int fd = -1;
     shared_semaphore_t* sem = map_posix_semaphore(key, 0, &(int){0}, &fd);
-    pthread_mutex_lock(&sem->mutex);
+    int err = pthread_mutex_lock(&sem->mutex);
+    if (err == EOWNERDEAD) {
+        pthread_mutex_consistent(&sem->mutex);
+    } else if (err != 0) {
+        mexErrMsgIdAndTxt("semaphore:mutex_lock", "Failed to lock mutex: %d", err);
+    }
 
     if (sem->terminate) {
         pthread_mutex_unlock(&sem->mutex);
@@ -326,7 +332,12 @@ static int wait_semaphore(int key) {
 static int post_semaphore(int key) {
     int fd = -1;
     shared_semaphore_t* sem = map_posix_semaphore(key, 0, &(int){0}, &fd);
-    pthread_mutex_lock(&sem->mutex);
+    int err = pthread_mutex_lock(&sem->mutex);
+    if (err == EOWNERDEAD) {
+        pthread_mutex_consistent(&sem->mutex);
+    } else if (err != 0) {
+        mexErrMsgIdAndTxt("semaphore:mutex_lock", "Failed to lock mutex: %d", err);
+    }
 
     if (sem->terminate) {
         pthread_mutex_unlock(&sem->mutex);
@@ -351,7 +362,12 @@ static int post_semaphore(int key) {
 static void destroy_semaphore(int key) {
     int fd = -1;
     shared_semaphore_t* sem = map_posix_semaphore(key, 0, &(int){0}, &fd);
-    pthread_mutex_lock(&sem->mutex);
+    int err = pthread_mutex_lock(&sem->mutex);
+    if (err == EOWNERDEAD) {
+        pthread_mutex_consistent(&sem->mutex);
+    } else if (err != 0) {
+        mexErrMsgIdAndTxt("semaphore:mutex_lock", "Failed to lock mutex: %d", err);
+    }
     sem->terminate = 1;
     pthread_cond_broadcast(&sem->cond);
     pthread_mutex_unlock(&sem->mutex);
