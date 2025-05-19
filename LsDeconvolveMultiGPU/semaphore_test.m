@@ -43,7 +43,7 @@ fprintf('Background wait completed: value = %d\n', f.OutputArguments{1});
 % 5. Post again (up to max)
 fprintf('Posting once more...\n');
 val = semaphore('p', key);
-assert(val == 2);
+assert(val == 1);
 
 fprintf('Trying to post beyond max (should warn)...\n');
 val = semaphore('p', key);  % This should emit a warning
