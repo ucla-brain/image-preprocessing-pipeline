@@ -1,10 +1,10 @@
 % Program for Deconvolution of Light Sheet Microscopy Stacks.
 %
-% Copyright TU-Wien 2019. Originally written in MATLAB 2018b by
-% Klaus Becker (klaus.becker@tuwien.ac.at).
+% Originally written in MATLAB 2018b by
+% Klaus Becker klaus.becker at tuwien.ac.at
 %
-% Patched by Keivan Moradi at UCLA B.R.A.I.N (Dong lab) using MATLAB 2022b.
-% Contact: kmoradi@mednet.ucla.edu
+% Enhanced by Keivan Moradi at UCLA B.R.A.I.N. (Dong lab) in MATLAB 2023a.
+% Contact: kmoradi at mednet.ucla.edu
 %
 % Main modifications by Keivan Moradi:
 %   - Multi-GPU support
@@ -37,7 +37,7 @@ function [] = LsDeconv(varargin)
         disp(' ');
 
         % make sure correct number of parameters specified
-        if nargin < 24
+        if nargin < 25
             showinfo();
             if isdeployed
                 exit(1);
@@ -65,15 +65,16 @@ function [] = LsDeconv(varargin)
         amplification = varargin{16};
         filter.gaussian_sigma = varargin{17};
         filter.gaussian_size = varargin{18};
-        filter.destripe_sigma = varargin{19};
-        filter.dark = varargin{20};
-        resume = varargin{21};
-        starting_block = varargin{22};
-        flip_upside_down = varargin{23};
-        convert_to_8bit = varargin{24};
+        filter.dark = varargin{19};
+        filter.destripe_sigma = varargin{20};
+        filter.regularize_interval = varargin{21};
+        resume = varargin{22};
+        starting_block = varargin{23};
+        flip_upside_down = varargin{24};
+        convert_to_8bit = varargin{25};
         cache_drive = fullfile(tempdir, 'decon_cache');
-        if nargin > 24
-            cache_drive = varargin{25};
+        if nargin > 25
+            cache_drive = varargin{26};
             if ~exist(cache_drive, "dir")
                 disp("making cache drive dir " + cache_drive)
                 mkdir(cache_drive);
@@ -724,9 +725,9 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
     
         % deconvolve block using Lucy-Richardson algorithm
         if gpu && isgpuarray(bl)
-            bl = deconGPU(bl, psf, niter, lambda, stop_criterion, gpu_id);
+            bl = deconGPU(bl, psf, niter, lambda, stop_criterion, filter.regularize_interval, gpu_id);
         else
-            bl = deconCPU(bl, psf, niter, lambda, stop_criterion);
+            bl = deconCPU(bl, psf, niter, lambda, stop_criterion, filter.regularize_interval);
         end
 
         % remove padding
@@ -762,14 +763,12 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
 end
 
 %Lucy-Richardson deconvolution
-function bl = deconCPU(bl, psf, niter, lambda, stop_criterion)
+function bl = deconCPU(bl, psf, niter, lambda, stop_criterion, regularize_interval)
     OTF = single(psf2otf(psf, size(bl)));
     R = 1/26 * ones(3, 3, 3, 'single');
     R(2,2,2) = single(0);
 
-    mid_iter = floor(niter / 2);
     delta_prev = []; % Initialize scalar-based change tracking
-
     for i = 1 : niter
         start_time = tic;
 
@@ -807,14 +806,14 @@ function bl = deconCPU(bl, psf, niter, lambda, stop_criterion)
             disp(['CPU: iteration: ' num2str(i) ' duration: ' num2str(round(toc(start_time), 1))]);
         end
 
-        if i == mid_iter
+        if mod(i, regularize_interval) == 0
             clear denom; % temporary memory usage reduction
             bl = imgaussfilt3(bl, 0.5);
         end
     end
 end
 
-function bl = deconGPU(bl, psf, niter, lambda, stop_criterion, gpu)
+function bl = deconGPU(bl, psf, niter, lambda, stop_criterion, regularize_interval, gpu)
     % Explicit GPU array copies upfront
     if ~isa(bl, 'gpuArray')
         bl = gpuArray(bl);
@@ -824,9 +823,7 @@ function bl = deconGPU(bl, psf, niter, lambda, stop_criterion, gpu)
     R = gpuArray(single(1/26 * ones(3, 3, 3)));
     R(2,2,2) = single(0);
 
-    mid_iter = floor(niter / 2);
     delta_prev = []; % <--- Initialize here
-
     for i = 1 : niter
         start_time = tic;
 
@@ -867,7 +864,7 @@ function bl = deconGPU(bl, psf, niter, lambda, stop_criterion, gpu)
                   ' duration: ' num2str(round(toc(start_time), 1))]);
         end
 
-        if i == mid_iter
+        if mod(i, regularize_interval) == 0
             clear denom; % temporarily reduce GPU memory usage
             bl = imgaussfilt3(bl, 0.5);
         end

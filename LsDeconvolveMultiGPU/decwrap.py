@@ -189,8 +189,10 @@ def main():
                         help='Damping parameter (0 = off)')
     parser.add_argument('--clipval', type=int, default=0,
                         help='Clipping value (0 = disabled)')
-    parser.add_argument('--stop_criterion', type=int, default=0,
-                        help='Early stopping criterion (0 = disabled)')
+    parser.add_argument('--stop_criterion', type=float, default=0,
+                        help='Early stopping threshold as a percentage change in loss between iterations. '
+                             'Training stops if the relative change falls below this value. '
+                             'Set to 0 to disable early stopping.')
     parser.add_argument('--block_size_max', type=int, default=block_size_default,
                         help='Max number of elements per GPU block (estimated from GPU memory)')
     parser.add_argument('--gpu-indices', type=int, nargs='+', default=default_gpu_indices,
@@ -205,10 +207,13 @@ def main():
                         help='3D Gaussian filter sigma in voxel unit (e.g., 0.5 0.5 1.5). Use 0 0 0 to disable filtering.')
     parser.add_argument('--gaussian_filter_size', type=int, nargs=3, default=[5, 5, 25],
                         help='Size of the 3D Gaussian filter kernel in voxel unit')
-    parser.add_argument('--destripe_sigma', type=float, default=0.25,
-                        help='Sigma of destriping filter along the z-axis. Use 0 to disable filtering.')
     parser.add_argument('--denoise_strength', type=int, default=1,
                         help='Denoising strength (e.g., 1 to 255 for 8-bit images)')
+    parser.add_argument('--destripe_sigma', type=float, default=0.25,
+                        help='Sigma of destriping filter along the z-axis. Use 0 to disable filtering.')
+    parser.add_argument('--regularize_interval', type=int, default=4,
+                        help='Apply a 3D Gaussian smoothing filter (σ=0.5) to the deconvolved volume every N iterations '
+                             'to stabilize convergence and enhance regularization. Set to 0 to disable.')
     parser.add_argument('--no-resume', dest='resume', action='store_false',
                         help='Disable resuming from previous cache (default: resume is enabled)')
     parser.set_defaults(resume=True)
@@ -289,8 +294,9 @@ def main():
         f"    {args.signal_amp}, ...\n"
         f"    [{gaussian_sigma_str}], ...\n"
         f"    [{gaussian_filter_size_str}], ...\n"
-        f"    {args.destripe_sigma}, ...\n"
         f"    {args.denoise_strength}, ...\n"
+        f"    {args.destripe_sigma}, ...\n"
+        f"    {args.regularize_interval}, ...\n"
         f"    {int(args.resume)}, ...\n"
         f"    {args.start_block}, ...\n"
         f"    {int(args.flip)}, ...\n"
