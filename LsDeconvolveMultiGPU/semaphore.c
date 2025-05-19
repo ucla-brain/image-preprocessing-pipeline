@@ -402,11 +402,22 @@ static int post_semaphore(int key) {
 static void destroy_semaphore(int key) {
     int fd = -1;
     shared_semaphore_t* sem = map_posix_semaphore(key, 0, &(int){0}, &fd);
+
+    // Try to lock, but don't block forever.
     int err = pthread_mutex_trylock(&sem->mutex);
 
-    if (err == EBUSY) {
-        mexWarnMsgIdAndTxt("semaphore:destroy", "Semaphore %d is currently locked and may be abandoned. Forcing reset.", key);
+    if (err == 0 || err == EOWNERDEAD) {
+        if (err == EOWNERDEAD) {
+            pthread_mutex_consistent(&sem->mutex);
+        }
+        sem->terminate = 1;
+        pthread_cond_broadcast(&sem->cond);
+        pthread_mutex_unlock(&sem->mutex);
+    } else {
+        // Assume the mutex is corrupted or stuck
+        mexWarnMsgIdAndTxt("semaphore:destroy", "Could not lock semaphore %d (err %d). Forcing full reset.", key, err);
 
+        // Attempt to destroy what we can
         pthread_mutex_destroy(&sem->mutex);
         pthread_cond_destroy(&sem->cond);
 
@@ -425,29 +436,19 @@ static void destroy_semaphore(int key) {
         pthread_mutex_init(&sem->mutex, &mattr);
         pthread_cond_init(&sem->cond, &cattr);
 
+        sem->terminate = 1;
         sem->initialized = 1;
-        sem->terminate = 1;
         pthread_cond_broadcast(&sem->cond);
-    } else if (err == EOWNERDEAD) {
-        pthread_mutex_consistent(&sem->mutex);
-        sem->terminate = 1;
-        pthread_cond_broadcast(&sem->cond);
-        pthread_mutex_unlock(&sem->mutex);
-    } else if (err == 0) {
-        sem->terminate = 1;
-        pthread_cond_broadcast(&sem->cond);
-        pthread_mutex_unlock(&sem->mutex);
-    } else if (err == EINVAL) {
-        mexWarnMsgIdAndTxt("semaphore:destroy", "Mutex structure is invalid.");
-    } else {
-        mexErrMsgIdAndTxt("semaphore:destroy", "Unexpected error locking mutex: %d", err);
     }
 
     close(fd);
 
     char name[64];
     snprintf(name, sizeof(name), SHM_NAME_PREFIX_POSIX SEMAPHORE_KEY_NAME_FMT, key);
-    shm_unlink(name);
+
+    if (shm_unlink(name) != 0) {
+        mexWarnMsgIdAndTxt("semaphore:shm_unlink", "shm_unlink failed for %s: %s", name, strerror(errno));
+    }
 }
 
 #endif  // End of POSIX section
