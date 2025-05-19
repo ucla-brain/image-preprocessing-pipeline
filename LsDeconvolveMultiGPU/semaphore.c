@@ -267,7 +267,9 @@ shared_semaphore_t* create_semaphore(int key, int initval, int* out_count) {
         pthread_condattr_t cattr;
         pthread_mutexattr_init(&mattr);
         pthread_mutexattr_setpshared(&mattr, PTHREAD_PROCESS_SHARED);
-        pthread_mutexattr_setrobust(&mattr, PTHREAD_MUTEX_ROBUST);
+        if (pthread_mutexattr_setrobust(&mattr, PTHREAD_MUTEX_ROBUST) != 0) {
+            mexWarnMsgIdAndTxt("semaphore:robust", "PTHREAD_MUTEX_ROBUST not supported on this platform. Crash recovery disabled.");
+        }
         pthread_condattr_init(&cattr);
         pthread_condattr_setpshared(&cattr, PTHREAD_PROCESS_SHARED);
         pthread_mutex_init(&sem->mutex, &mattr);
@@ -303,7 +305,11 @@ static int wait_semaphore(int key) {
     int err = pthread_mutex_lock(&sem->mutex);
     if (err == EOWNERDEAD) {
         pthread_mutex_consistent(&sem->mutex);
+    } else if (err == EINVAL) {
+        close(fd);
+        mexErrMsgIdAndTxt("semaphore:mutex_invalid", "Mutex corrupted or uninitialized. Try recreating the semaphore.");
     } else if (err != 0) {
+        close(fd);
         mexErrMsgIdAndTxt("semaphore:mutex_lock", "Failed to lock mutex: %d", err);
     }
 
@@ -335,7 +341,11 @@ static int post_semaphore(int key) {
     int err = pthread_mutex_lock(&sem->mutex);
     if (err == EOWNERDEAD) {
         pthread_mutex_consistent(&sem->mutex);
+    } else if (err == EINVAL) {
+        close(fd);
+        mexErrMsgIdAndTxt("semaphore:mutex_invalid", "Mutex corrupted or uninitialized. Try recreating the semaphore.");
     } else if (err != 0) {
+        close(fd);
         mexErrMsgIdAndTxt("semaphore:mutex_lock", "Failed to lock mutex: %d", err);
     }
 
@@ -365,7 +375,11 @@ static void destroy_semaphore(int key) {
     int err = pthread_mutex_lock(&sem->mutex);
     if (err == EOWNERDEAD) {
         pthread_mutex_consistent(&sem->mutex);
+    } else if (err == EINVAL) {
+        close(fd);
+        mexErrMsgIdAndTxt("semaphore:mutex_invalid", "Mutex corrupted or uninitialized. Try recreating the semaphore.");
     } else if (err != 0) {
+        close(fd);
         mexErrMsgIdAndTxt("semaphore:mutex_lock", "Failed to lock mutex: %d", err);
     }
     sem->terminate = 1;
