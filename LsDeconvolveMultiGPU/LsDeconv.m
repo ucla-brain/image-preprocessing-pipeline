@@ -762,32 +762,63 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
     assert(all(size(bl) == bl_size), '[process_block]: block size mismatch!');
 end
 
-%Lucy-Richardson deconvolution
 function bl = deconCPU(bl, psf, niter, lambda, stop_criterion, regularize_interval)
-    OTF = single(psf2otf(psf, size(bl)));
-    R = 1/26 * ones(3, 3, 3, 'single');
-    R(2,2,2) = single(0);
+    % Inputs:
+    % - bl: initial image estimate or observed image (3D)
+    % - psf: initial PSF guess
+    % - niter: number of iterations
+    % - lambda: Tikhonov regularization weight (0 to disable)
+    % - stop_criterion: relative delta threshold (0 to disable)
+    % - regularize_interval: Gaussian smoothing every N iterations (0 to disable)
 
-    delta_prev = []; % Initialize scalar-based change tracking
-    for i = 1 : niter
+    if ~isa(bl, 'single'), bl = single(bl); end
+    if ~isa(psf, 'single'), psf = single(psf); end
+
+    psf_size = size(bl);
+    otf = psf2otf(psf, psf_size);
+    otf_conj = conj(otf);
+
+    R = single(1/26 * ones(3,3,3)); R(2,2,2) = 0;
+
+    delta_prev = [];
+
+    for i = 1:niter
         start_time = tic;
 
-        denom = convFFT(bl, OTF);
-        denom = max(denom, eps('single')); % protect against division by zero
-        denom = bl ./ denom;
-        denom = convFFT(denom, conj(OTF));
+        % === RL Update using FFTs ===
+        tmp = convFFT(bl, otf);
+        tmp = max(tmp, eps('single'));
+        tmp = bl ./ tmp;
+        update = convFFT(tmp, otf_conj);
 
         if lambda > 0
-            reg_term = convn(bl, R, 'same');
-            bl = bl .* denom .* (1 - lambda) + reg_term .* lambda;
-            clear reg_term;
+            tmp = convn(bl, R, 'same');  % reuse tmp as reg_term
+            bl = bl .* update .* (1 - lambda) + tmp .* lambda;
         else
-            bl = bl .* denom;
+            bl = bl .* update;
         end
-        bl = abs(bl); % remove imaginary artifacts
 
+        bl = abs(bl);
+
+        % === Optional image regularization and blind PSF update ===
+        if regularize_interval > 0 && mod(i, regularize_interval) == 0 && i > 2
+            bl = imgaussfilt3(bl, 0.5);
+
+            % Blind PSF update
+            tmp = convFFT(bl, otf);
+            tmp = max(tmp, eps('single'));
+            tmp = bl ./ tmp;
+            psf = psf .* convn(flipall(bl), tmp, 'same');
+            psf = max(psf, 0);
+            psf = psf / sum(psf(:));
+            psf = imgaussfilt3(psf, 0.5);
+            psf = psf / sum(psf(:));
+            otf = psf2otf(psf, psf_size);        % update OTF
+            otf_conj = conj(otf);
+        end
+
+        % === Early stopping ===
         if stop_criterion > 0
-            % estimate quality criterion
             delta_current = norm(bl(:));
             if isempty(delta_prev)
                 delta_rel = 0;
@@ -796,54 +827,80 @@ function bl = deconCPU(bl, psf, niter, lambda, stop_criterion, regularize_interv
             end
             delta_prev = delta_current;
 
-            disp(['CPU: iteration: ' num2str(i) ' duration: ' num2str(round(toc(start_time), 1)) ' delta: ' num2str(delta_rel, 3)]);
-
+            disp(['CPU : Iter ' num2str(i) ...
+                ', Δ: ' num2str(delta_rel,3) ...
+                ', Time: ' num2str(round(toc(start_time),1)) 's']);
             if i > 1 && delta_rel <= stop_criterion
-                disp('stop criterion reached. finishing iterations.');
+                disp('Stop criterion reached. Finishing iterations.');
                 break
             end
         else
-            disp(['CPU: iteration: ' num2str(i) ' duration: ' num2str(round(toc(start_time), 1))]);
-        end
-
-        if mod(i, regularize_interval) == 0
-            clear denom; % temporary memory usage reduction
-            bl = imgaussfilt3(bl, 0.5);
+            disp(['CPU : Iter ' num2str(i) ...
+                ', Time: ' num2str(round(toc(start_time),1)) 's']);
         end
     end
 end
 
-function bl = deconGPU(bl, psf, niter, lambda, stop_criterion, regularize_interval, gpu)
-    % Explicit GPU array copies upfront
-    if ~isa(bl, 'gpuArray')
-        bl = gpuArray(bl);
-    end
-    psf = gpuArray(psf);
-    psf_inv = gpuArray(psf(end:-1:1, end:-1:1, end:-1:1));
-    R = gpuArray(single(1/26 * ones(3, 3, 3)));
-    R(2,2,2) = single(0);
+function out = convFFT(data, otf)
+    out = real(ifftn(fftn(data) .* otf));
+end
 
-    delta_prev = []; % <--- Initialize here
-    for i = 1 : niter
+function bl = deconGPU(bl, psf, niter, lambda, stop_criterion, regularize_interval, gpu)
+    % Inputs:
+    % - bl: initial image estimate or observed image (3D)
+    % - psf: initial PSF guess
+    % - niter: number of iterations
+    % - lambda: Tikhonov regularization weight (0 to disable)
+    % - stop_criterion: relative delta threshold (0 to disable)
+    % - regularize_interval: apply Gaussian smoothing every N iterations (0 to disable)
+    % - gpu: GPU index for logging
+
+    % === Ensure GPU and correct type ===
+    if ~isa(bl, 'single'), bl = single(bl); end
+    if ~isgpuarray(bl), bl = gpuArray(bl); end
+    if ~isa(psf, 'single'), psf = single(psf); end
+    if ~isgpuarray(psf), psf = gpuArray(psf); end
+
+    R = gpuArray(single(1/26 * ones(3,3,3))); R(2,2,2) = 0;
+
+    delta_prev = [];
+
+    for i = 1:niter
         start_time = tic;
 
-        denom = convn(bl, psf, 'same');
-        denom = max(denom, eps('single')); % protect against division by zero
-        denom = bl ./ denom;
-        denom = convn(denom, psf_inv, 'same');
+        % === Richardson–Lucy update ===
+        tmp = convn(bl, psf, 'same');
+        tmp = max(tmp, eps('single'));
+        tmp = bl ./ tmp;
+        update = convn(tmp, flipall(psf), 'same');
 
         if lambda > 0
-            reg_term = convn(bl, R, 'same');
-            bl = bl .* denom .* (1 - lambda) + reg_term .* lambda;
-            clear reg_term;
+            tmp = convn(bl, R, 'same');
+            bl = bl .* update .* (1 - lambda) + tmp .* lambda;
         else
-            bl = bl .* denom;
+            bl = bl .* update;
         end
-        bl = abs(bl); % eliminate imaginary artifacts
 
+        bl = abs(bl);
+
+        % === Optional image regularization and blind PSF update ===
+        if regularize_interval > 0 && mod(i, regularize_interval) == 0 && i > 2
+            bl = imgaussfilt3(bl, 0.5);
+
+            % Blind PSF update
+            tmp = convn(bl, psf, 'same');
+            tmp = max(tmp, eps('single'));
+            tmp = bl ./ tmp;
+            psf = psf .* convn(flipall(bl), tmp, 'same');
+            psf = max(psf, 0);
+            psf = psf / sum(psf(:));
+            psf = imgaussfilt3(psf, 0.5);
+            psf = psf / sum(psf(:));
+        end
+
+        % === Early stopping ===
         if stop_criterion > 0
-            % estimate quality criterion
-            delta_current = norm(bl(:)); % single scalar
+            delta_current = norm(bl(:));
             if isempty(delta_prev)
                 delta_rel = 0;
             else
@@ -851,25 +908,26 @@ function bl = deconGPU(bl, psf, niter, lambda, stop_criterion, regularize_interv
             end
             delta_prev = delta_current;
 
-            disp(['GPU' num2str(gpu) ': iteration: ' num2str(i) ...
-                  ' duration: ' num2str(round(toc(start_time), 1)) ...
-                  ' delta: ' num2str(delta_rel, 3)]);
-
+            disp(['GPU' num2str(gpu) ': Iter ' num2str(i) ...
+                  ', Δ: ' num2str(delta_rel,3) ...
+                  ', Time: ' num2str(round(toc(start_time),1)) 's']);
             if i > 1 && delta_rel <= stop_criterion
-                disp('stop criterion reached. Finishing iterations.');
+                disp('Stop criterion reached. Finishing iterations.');
                 break
             end
         else
-            disp(['GPU' num2str(gpu) ': iteration: ' num2str(i) ...
-                  ' duration: ' num2str(round(toc(start_time), 1))]);
-        end
-
-        if mod(i, regularize_interval) == 0
-            clear denom; % temporarily reduce GPU memory usage
-            bl = imgaussfilt3(bl, 0.5);
+            disp(['GPU' num2str(gpu) ': Iter ' num2str(i) ...
+                  ', Time: ' num2str(round(toc(start_time),1)) 's']);
         end
     end
 end
+
+function x = flipall(x)
+    for d = 1:ndims(x)
+        x = flip(x, d);
+    end
+end
+
 
 function postprocess_save(...
     outpath, cache_drive, min_max_path, log_file, clipval, ...
@@ -1426,11 +1484,6 @@ function bl = load_block(filelist, start_x, end_x, start_y, end_y, start_z, end_
         im = im';
         bl(:, :, k) = im;
     end
-end
-
-%deconvolve with OTF
-function R = convFFT(data , otf)
-    R = ifftn(otf .* fftn(data));
 end
 
 function img3d = filter_subband_3d_z(img3d, sigma, levels, wavelet)
