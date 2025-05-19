@@ -212,8 +212,9 @@ def main():
     parser.add_argument('--destripe_sigma', type=float, default=0.25,
                         help='Sigma of destriping filter along the z-axis. Use 0 to disable filtering.')
     parser.add_argument('--regularize_interval', type=int, default=4,
-                        help='Apply a 3D Gaussian smoothing filter (σ=0.5) to the deconvolved volume every N iterations '
-                             'to stabilize convergence and enhance regularization. Set to 0 to disable.')
+                        help='Apply a 3D Gaussian smoothing filter (σ=0.5) to the deconvolved volume every N iterations. '
+                             'Enables blind deconvolution by updating the PSF after each smoothing step. '
+                             'Set to 0 to disable both smoothing and blind deconvolution.')
     parser.add_argument('--no-resume', dest='resume', action='store_false',
                         help='Disable resuming from previous cache (default: resume is enabled)')
     parser.set_defaults(resume=True)
