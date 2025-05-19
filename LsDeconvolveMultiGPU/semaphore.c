@@ -406,6 +406,10 @@ static void destroy_semaphore(int key) {
 
     if (err == EBUSY) {
         mexWarnMsgIdAndTxt("semaphore:destroy", "Semaphore %d is currently locked and may be abandoned. Forcing reset.", key);
+
+        pthread_mutex_destroy(&sem->mutex);
+        pthread_cond_destroy(&sem->cond);
+
         memset(sem, 0, sizeof(shared_semaphore_t));
 
         pthread_mutexattr_t mattr;
