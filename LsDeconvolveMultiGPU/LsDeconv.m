@@ -679,7 +679,7 @@ end
 
 function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criterion, gpu, gpu_queue_key, filter)
     bl_size = size(bl);
-    gpu_id = 0
+    gpu_id = 0;
     if gpu && (min(filter.gaussian_sigma(:)) > 0 || niter > 0)
         % get the next available gpu
         gpu_id = queue('wait', gpu_queue_key);
@@ -959,7 +959,7 @@ function bl = load_bl(path, semkey)
 end
 
 %calculates a theoretical point spread function
-function [psf, FWHMxy, FWHMz] = LsMakePSF(dxy, dz, NA, nf, lambda_ex, lambda_em, fcyl,slitwidth)
+function [psf, FWHMxy, FWHMz] = LsMakePSF(dxy, dz, NA, nf, lambda_ex, lambda_em, fcyl, slitwidth)
     [nxy, nz, FWHMxy, FWHMz] = DeterminePSFsize(dxy, dz, NA, nf, lambda_ex, lambda_em, fcyl, slitwidth);
 
     %construct psf
