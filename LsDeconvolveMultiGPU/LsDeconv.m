@@ -785,7 +785,6 @@ function bl = deconCPU(bl, psf, niter, lambda, stop_criterion)
         else
             bl = bl .* denom;
         end
-        clear denom; % temporary memory usage reduction
         bl = abs(bl); % remove imaginary artifacts
 
         if stop_criterion > 0
@@ -809,6 +808,7 @@ function bl = deconCPU(bl, psf, niter, lambda, stop_criterion)
         end
 
         if i == mid_iter
+            clear denom; % temporary memory usage reduction
             bl = imgaussfilt3(bl, 0.5);
         end
     end
@@ -842,7 +842,6 @@ function bl = deconGPU(bl, psf, niter, lambda, stop_criterion, gpu)
         else
             bl = bl .* denom;
         end
-        clear denom; % temporarily reduce GPU memory usage
         bl = abs(bl); % eliminate imaginary artifacts
 
         if stop_criterion > 0
@@ -869,6 +868,7 @@ function bl = deconGPU(bl, psf, niter, lambda, stop_criterion, gpu)
         end
 
         if i == mid_iter
+            clear denom; % temporarily reduce GPU memory usage
             bl = imgaussfilt3(bl, 0.5);
         end
     end
