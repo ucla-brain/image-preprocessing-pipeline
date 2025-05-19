@@ -254,6 +254,41 @@ static shared_semaphore_t* map_posix_semaphore(int key, int create, int* is_new,
     return (shared_semaphore_t*)addr;
 }
 
+static void ensure_mutex_locked(shared_semaphore_t* sem, int fd) {
+    int err = pthread_mutex_lock(&sem->mutex);
+
+    if (err == EOWNERDEAD) {
+        pthread_mutex_consistent(&sem->mutex);
+    } else if (err == EINVAL) {
+        // Auto-reset corrupted semaphore
+        memset(sem, 0, sizeof(shared_semaphore_t));
+        pthread_mutexattr_t mattr;
+        pthread_condattr_t cattr;
+
+        pthread_mutexattr_init(&mattr);
+        pthread_mutexattr_setpshared(&mattr, PTHREAD_PROCESS_SHARED);
+        if (pthread_mutexattr_setrobust(&mattr, PTHREAD_MUTEX_ROBUST) != 0) {
+            mexWarnMsgIdAndTxt("semaphore:robust", "PTHREAD_MUTEX_ROBUST not supported. Crash recovery disabled.");
+        }
+
+        pthread_condattr_init(&cattr);
+        pthread_condattr_setpshared(&cattr, PTHREAD_PROCESS_SHARED);
+
+        pthread_mutex_init(&sem->mutex, &mattr);
+        pthread_cond_init(&sem->cond, &cattr);
+
+        sem->count = 0;
+        sem->max = 1;
+        sem->initialized = 1;
+        sem->terminate = 0;
+
+        pthread_mutex_lock(&sem->mutex); // Lock again after reinit
+    } else if (err != 0) {
+        close(fd);
+        mexErrMsgIdAndTxt("semaphore:mutex_lock", "Failed to lock mutex: %d", err);
+    }
+}
+
 shared_semaphore_t* create_semaphore(int key, int initval, int* out_count) {
     int is_new = 0, fd = -1;
     shared_semaphore_t* sem = map_posix_semaphore(key, 1, &is_new, &fd);
@@ -263,6 +298,7 @@ shared_semaphore_t* create_semaphore(int key, int initval, int* out_count) {
         memset(sem, 0, sizeof(shared_semaphore_t));
         sem->count = initval;
         sem->max = initval;
+
         pthread_mutexattr_t mattr;
         pthread_condattr_t cattr;
         pthread_mutexattr_init(&mattr);
@@ -270,10 +306,13 @@ shared_semaphore_t* create_semaphore(int key, int initval, int* out_count) {
         if (pthread_mutexattr_setrobust(&mattr, PTHREAD_MUTEX_ROBUST) != 0) {
             mexWarnMsgIdAndTxt("semaphore:robust", "PTHREAD_MUTEX_ROBUST not supported on this platform. Crash recovery disabled.");
         }
+
         pthread_condattr_init(&cattr);
         pthread_condattr_setpshared(&cattr, PTHREAD_PROCESS_SHARED);
+
         pthread_mutex_init(&sem->mutex, &mattr);
         pthread_cond_init(&sem->cond, &cattr);
+
         sem->initialized = 1;
     } else {
         sem->count = initval;
@@ -302,16 +341,7 @@ shared_semaphore_t* get_semaphore(int key) {
 static int wait_semaphore(int key) {
     int fd = -1;
     shared_semaphore_t* sem = map_posix_semaphore(key, 0, &(int){0}, &fd);
-    int err = pthread_mutex_lock(&sem->mutex);
-    if (err == EOWNERDEAD) {
-        pthread_mutex_consistent(&sem->mutex);
-    } else if (err == EINVAL) {
-        close(fd);
-        mexErrMsgIdAndTxt("semaphore:mutex_invalid", "Mutex corrupted or uninitialized. Try recreating the semaphore.");
-    } else if (err != 0) {
-        close(fd);
-        mexErrMsgIdAndTxt("semaphore:mutex_lock", "Failed to lock mutex: %d", err);
-    }
+    ensure_mutex_locked(sem, fd);
 
     if (sem->terminate) {
         pthread_mutex_unlock(&sem->mutex);
@@ -338,16 +368,7 @@ static int wait_semaphore(int key) {
 static int post_semaphore(int key) {
     int fd = -1;
     shared_semaphore_t* sem = map_posix_semaphore(key, 0, &(int){0}, &fd);
-    int err = pthread_mutex_lock(&sem->mutex);
-    if (err == EOWNERDEAD) {
-        pthread_mutex_consistent(&sem->mutex);
-    } else if (err == EINVAL) {
-        close(fd);
-        mexErrMsgIdAndTxt("semaphore:mutex_invalid", "Mutex corrupted or uninitialized. Try recreating the semaphore.");
-    } else if (err != 0) {
-        close(fd);
-        mexErrMsgIdAndTxt("semaphore:mutex_lock", "Failed to lock mutex: %d", err);
-    }
+    ensure_mutex_locked(sem, fd);
 
     if (sem->terminate) {
         pthread_mutex_unlock(&sem->mutex);
@@ -372,16 +393,7 @@ static int post_semaphore(int key) {
 static void destroy_semaphore(int key) {
     int fd = -1;
     shared_semaphore_t* sem = map_posix_semaphore(key, 0, &(int){0}, &fd);
-    int err = pthread_mutex_lock(&sem->mutex);
-    if (err == EOWNERDEAD) {
-        pthread_mutex_consistent(&sem->mutex);
-    } else if (err == EINVAL) {
-        close(fd);
-        mexErrMsgIdAndTxt("semaphore:mutex_invalid", "Mutex corrupted or uninitialized. Try recreating the semaphore.");
-    } else if (err != 0) {
-        close(fd);
-        mexErrMsgIdAndTxt("semaphore:mutex_lock", "Failed to lock mutex: %d", err);
-    }
+    ensure_mutex_locked(sem, fd);
     sem->terminate = 1;
     pthread_cond_broadcast(&sem->cond);
     pthread_mutex_unlock(&sem->mutex);
@@ -392,7 +404,7 @@ static void destroy_semaphore(int key) {
     shm_unlink(name);
 }
 
-#endif
+#endif  // End of POSIX section
 
 void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
     if (nrhs < 2)
