@@ -148,20 +148,24 @@ end
 function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
     cache_dir = getCachePath();
     key = ['key_' strrep(mat2str(imsize), ' ', '_')];
-    mat_file = fullfile(cache_dir, [key '.mat']);
+    cache_file = fullfile(cache_dir, key);
+    lock_file = [cache_file, '.lock'];
 
-    if isfile(mat_file)
+    % Wait if another process is writing
+    while isfile(lock_file)
+        pause(0.05);
+    end
+
+    if isfile([cache_file, '.bin']) && isfile([cache_file, '.meta'])
         try
-            m = matfile(mat_file, 'Writable', false);
-            otf = m.otf;
-            otf_conj = m.otf_conj;
+            [otf, otf_conj] = loadOTFCacheBinary(cache_file);
             return;
         catch
-            warning('Failed to load OTF from cache. Recomputing.');
+            warning('Failed to read binary cache. Recomputing.');
         end
     end
 
-    % Cache miss — compute
+    % Compute
     otf = psf;
     if use_gpu
         otf = gpuArray(otf);
@@ -171,29 +175,62 @@ function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
     otf = fftn(otf);
     otf_conj = conj(otf);
 
-    % Save cache as CPU arrays
     if use_gpu
         otf = gather(otf);
         otf_conj = gather(otf_conj);
     end
 
+    % Save to binary with lock
+    fid = fopen(lock_file, 'w'); fclose(fid);
     try
-        m = matfile(mat_file, 'Writable', true);
-        m.otf = otf;
-        m.otf_conj = otf_conj;
-    catch
-        warning('Could not write to OTF cache file: %s', mat_file);
+        saveOTFCacheBinary(cache_file, otf);
+    catch e
+        warning("Failed to write cache: %s", e.message);
     end
+    delete(lock_file);
 end
 
 function cache_path = getCachePath()
-    % cache_dir = fullfile(tempdir, 'otf_cache');
-    cache_dir = fullfile('/data', 'otf_cache');
-    if ~exist(cache_dir, 'dir')
-        mkdir(cache_dir);
+    % cache_path  = fullfile(tempdir, 'otf_cache');
+    cache_path  = fullfile('/data', 'otf_cache');
+    if ~exist(cache_path , 'dir')
+        mkdir(cache_path);
     end
-    cache_path = cache_dir;
 end
+
+function saveOTFCacheBinary(filename, otf)
+    % Split into real and imaginary parts
+    otf_real = single(real(otf));
+    otf_imag = single(imag(otf));
+    shape = size(otf_real);
+
+    % Write binary data
+    fid = fopen([filename, '.bin'], 'w');
+    fwrite(fid, otf_real(:), 'single');
+    fwrite(fid, otf_imag(:), 'single');
+    fclose(fid);
+
+    % Save metadata as .mat file
+    meta.shape = shape;
+    meta.class = 'single';
+    save([filename, '.meta'], '-struct', 'meta');
+end
+
+function [otf, otf_conj] = loadOTFCacheBinary(filename)
+    meta = load([filename, '.meta']);
+    shape = meta.shape;
+
+    fid = fopen([filename, '.bin'], 'r');
+    count = prod(shape);
+    real_part = fread(fid, count, 'single');
+    imag_part = fread(fid, count, 'single');
+    fclose(fid);
+
+    otf = complex(real_part, imag_part);
+    otf = reshape(otf, shape);
+    otf_conj = conj(otf);
+end
+
 
 function y = convFFT(x, otf)
     % Optimized frequency-domain convolution for low VRAM usage.
