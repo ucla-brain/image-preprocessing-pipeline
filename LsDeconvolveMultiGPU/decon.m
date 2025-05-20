@@ -87,11 +87,11 @@ function bl = deconFFT(bl, psf, niter, lambda, stop_criterion, regularize_interv
     imsize = size(bl);
     use_gpu = isgpuarray(bl);
 
-    % === Retrieve or compute and cache OTFs ===
-    if use_gpu, bl = gather(bl); end
-    [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu);
-
-    if ~isa(bl, 'single'), bl = single(bl); end
+    [otf, otf_conj] = getCachedOTF(psf, imsize, false);  % Always CPU
+    if use_gpu
+        otf = gpuArray(otf);
+        otf_conj = gpuArray(otf_conj);
+    end
 
     if regularize_interval < niter && lambda > 0
         R = single(1/26 * ones(3,3,3)); R(2,2,2) = 0;
@@ -104,15 +104,12 @@ function bl = deconFFT(bl, psf, niter, lambda, stop_criterion, regularize_interv
 
     for i = 1:niter
         start_time = tic;
-        if use_gpu, bl = gpuArray(bl); end
+
         buf = convFFT(bl, otf);
         buf = max(buf, eps('single'));
         buf = bl ./ buf;
-        if use_gpu, bl = gather(bl); end
         buf = convFFT(buf, otf_conj);
-        if use_gpu, bl = gpuArray(bl); end
 
-        % Apply smoothing and optional Tikhonov every N iterations (except final iteration)
         if regularize_interval < niter && mod(i, regularize_interval) == 0
             bl = imgaussfilt3(bl, 0.5);
             if lambda > 0
@@ -186,9 +183,7 @@ function y = convFFT(x, otf)
     x = fftn(x);              % x now holds fft(x)
 
     % Multiply with OTF (in-place)
-    if isgpuarray(x), otf = gpuArray(otf); end
     x = x .* otf;             % x now holds fft(x) .* otf
-    if isgpuarray(x), otf = gather(otf); end
 
     % Compute inverse FFT, overwrite x with result
     x = ifftn(x);
