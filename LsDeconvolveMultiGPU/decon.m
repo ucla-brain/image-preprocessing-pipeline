@@ -165,6 +165,7 @@ function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
         end
         psf = padPSF(psf, imsize);
         otf = fftn(psf);
+        clear psf;
         otf_conj = conj(otf);
 
         if ~isa(otf, 'single'), otf = single(otf); end
