@@ -185,7 +185,7 @@ function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
             otf = gpuArray(otf);
         end
 
-        otf = padPSF(otf, imsize);
+        otf = padPSF(otf, imsize);  % May fail if size mismatch or memory error
         otf = fftn(otf);
         otf_conj = conj(otf);
 
@@ -194,11 +194,17 @@ function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
             otf_conj = gather(otf_conj);
         end
 
+    catch e
+        error("getCachedOTF:ComputationFailed", ...
+              "Failed to compute OTF: %s", e.message);
+    end
+
+    try
         % === Save cache (bin + meta) ===
         saveOTFCacheBinary(cache_file, otf);
-
     catch e
-        warning("Failed to write cache: %s", e.message);
+        warning("getCachedOTF:SaveFailed", ...
+                "OTF was computed but failed to save to cache: %s", e.message);
     end
 end
 
