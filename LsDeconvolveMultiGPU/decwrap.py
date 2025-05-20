@@ -308,7 +308,7 @@ def main():
         f"    {args.start_block}, ...\n"
         f"    {int(args.flip)}, ...\n"
         f"    {int(args.convert_to_8bit)}, ...\n"
-        f"    {int(args.use_fft)}, ...\n"
+        f"    {'true' if args.use_fft else 'false'}, ...\n"
         f"    convertCharsToStrings('{cache_drive_folder}') ...\n"
         f");\n"
     )
