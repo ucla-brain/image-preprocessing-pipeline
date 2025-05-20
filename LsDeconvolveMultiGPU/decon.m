@@ -87,7 +87,7 @@ function bl = deconFFT(bl, psf, niter, lambda, stop_criterion, regularize_interv
     imsize = size(bl);
     use_gpu = isgpuarray(bl);
 
-    [otf, otf_conj] = getCachedOTF(psf, imsize, false);  % Always CPU
+    [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu);  % Always CPU
     if use_gpu
         otf = gpuArray(otf);
         otf_conj = gpuArray(otf_conj);
@@ -159,15 +159,15 @@ function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
         if use_gpu
             otf = gpuArray(otf);
         end
+
         otf = padPSF(otf, imsize);
         otf = fftn(otf);
         otf_conj = conj(otf);
 
-        if ~isa(otf, 'single'), otf = single(otf); end
-        if ~isa(otf_conj, 'single'), otf_conj = single(otf_conj); end
-
-        otf = gather(otf);
-        otf_conj = gather(otf_conj);
+        if use_gpu
+            otf = gather(otf);
+            otf_conj = gather(otf_conj);
+        end
 
         otf_cache(key) = {otf, otf_conj};
     end
