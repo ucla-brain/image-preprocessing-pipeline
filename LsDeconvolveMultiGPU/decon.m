@@ -205,15 +205,7 @@ function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
         saveOTFCacheBinary(cache_file, otf);
     catch e
         warning("getCachedOTF:SaveFailed", ...
-                "OTF was computed but failed to save to cache: %s", e.message);
-    end
-end
-
-function cache_path = getCachePath()
-    % cache_path  = fullfile(tempdir, 'otf_cache');
-    cache_path  = fullfile('/data', 'otf_cache');
-    if ~exist(cache_path , 'dir')
-        mkdir(cache_path);
+                "OTF was computed but failed to save to cache: %s\nFile: %s", e.message, filename);
     end
 end
 
@@ -249,7 +241,6 @@ function saveOTFCacheBinary(filename, otf)
     movefile(tmp_meta, final_meta, 'f');
 end
 
-
 function [otf, otf_conj] = loadOTFCacheBinary(filename)
     % Wait for any ongoing write to complete
     lock_file = [filename, '.lock'];
@@ -284,6 +275,14 @@ function [otf, otf_conj] = loadOTFCacheBinary(filename)
     % Reconstruct complex array
     otf = reshape(complex(real_part, imag_part), shape);
     otf_conj = conj(otf);
+end
+
+function cache_path = getCachePath()
+    % cache_path  = fullfile(tempdir, 'otf_cache');
+    cache_path  = fullfile('/data', 'otf_cache');
+    if ~exist(cache_path , 'dir')
+        mkdir(cache_path);
+    end
 end
 
 function y = convFFT(x, otf)
