@@ -151,9 +151,9 @@ function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
     cache_file = fullfile(cache_dir, key);
     lock_file = [cache_file, '.lock'];
 
-    % Wait if locked
+    % === Check for existing cache ===
     while isfile(lock_file)
-        pause(0.05);
+        pause(0.05);  % Wait if another process is writing
     end
 
     if isfile([cache_file, '.bin']) && isfile([cache_file, '.meta'])
@@ -165,30 +165,45 @@ function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
         end
     end
 
-    % Create lock BEFORE writing
-    fid = fopen(lock_file, 'w'); fclose(fid);
+    % === Atomically acquire lock ===
+    lock_acquired = false;
+    while ~lock_acquired
+        [fid, msg] = fopen(lock_file, 'x');  % 'x' fails if file exists
+        if fid > 0
+            fclose(fid);
+            lock_acquired = true;
+        else
+            pause(0.05);  % Retry until lock becomes available
+        end
+    end
 
     try
-        % Recompute OTF
+        % === Recompute OTF ===
         otf = psf;
-        if use_gpu, otf = gpuArray(otf); end
+        if use_gpu
+            otf = gpuArray(otf);
+        end
+
         otf = padPSF(otf, imsize);
         otf = fftn(otf);
         otf_conj = conj(otf);
+
         if use_gpu
             otf = gather(otf);
             otf_conj = gather(otf_conj);
         end
 
-        % Save BOTH .bin and .meta while locked
+        % === Save cache (bin + meta) ===
         saveOTFCacheBinary(cache_file, otf);
 
     catch e
         warning("Failed to write cache: %s", e.message);
     end
 
-    delete(lock_file);  % Release lock
+    % === Release lock ===
+    delete(lock_file);
 end
+
 
 function cache_path = getCachePath()
     % cache_path  = fullfile(tempdir, 'otf_cache');
@@ -217,31 +232,36 @@ function saveOTFCacheBinary(filename, otf)
 end
 
 function [otf, otf_conj] = loadOTFCacheBinary(filename)
+    % Wait for any ongoing write to complete
     lock_file = [filename, '.lock'];
-
-    % Wait if a writer is active
     while isfile(lock_file)
         pause(0.05);
     end
 
+    % Load metadata
     meta = load([filename, '.meta']);
     shape = meta.shape;
 
+    % Read binary data
     fid = fopen([filename, '.bin'], 'r');
+    if fid == -1
+        error('Cannot open binary cache file: %s.bin', filename);
+    end
+
     count = prod(shape);
     real_part = fread(fid, count, 'single');
     imag_part = fread(fid, count, 'single');
     fclose(fid);
 
+    % Integrity check
     if numel(real_part) < count || numel(imag_part) < count
-        error('Cache file is incomplete or corrupted: %s.bin', filename);
+        error('Incomplete or corrupted binary cache file: %s.bin', filename);
     end
 
-    otf = complex(real_part, imag_part);
-    otf = reshape(otf, shape);
+    % Reconstruct complex array
+    otf = reshape(complex(real_part, imag_part), shape);
     otf_conj = conj(otf);
 end
-
 
 function y = convFFT(x, otf)
     % Optimized frequency-domain convolution for low VRAM usage.
