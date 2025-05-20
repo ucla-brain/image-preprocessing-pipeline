@@ -43,7 +43,7 @@ function bl = decon(bl, psf, niter, lambda, stop_criterion, regularize_interval,
             if regularize_interval > 0 && mod(i, regularize_interval) == 0
                 disp('blind_decon 1')
                 % === Regularize image ===
-                bl = imgaussfilt3(bl, 0.5);
+                % bl = imgaussfilt3(bl, 0.5);
                 % === buf: ratio = bl / conv(bl, psf) ===
                 % disp("bl size:"); disp(size(bl))
                 % disp("psf size:"); disp(size(psf))
