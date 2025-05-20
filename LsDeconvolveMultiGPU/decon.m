@@ -59,6 +59,7 @@ function bl = decon(bl, psf, niter, lambda, stop_criterion, regularize_interval,
                 num2str(size(bl)), num2str(size(psf)));
                 fprintf('sum(psf): %.6f, min(psf): %.6f\n', gather(sum(psf(:))), gather(min(psf(:))));
                 fprintf('NaN check: bl = %d, psf = %d\n', any(isnan(bl(:))), any(isnan(psf(:))));
+                clear buf;
                 if use_fft
                     disp('blind_decon 2a')
                     buf = convFFT(bl, otf);                        % forward convolution (FFT)
