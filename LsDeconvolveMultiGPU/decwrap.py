@@ -214,7 +214,7 @@ def main():
                         help='Size of the 3D Gaussian filter kernel in voxel unit')
     parser.add_argument('--denoise_strength', type=int, default=1,
                         help='Denoising strength (e.g., 1 to 255 for 8-bit images)')
-    parser.add_argument('--destripe_sigma', type=float, default=0.125,
+    parser.add_argument('--destripe_sigma', type=float, default=0.0, # 0.125
                         help='Sigma of destriping filter along the z-axis. Use 0 to disable filtering.')
     parser.add_argument('--regularize_interval', type=int, default=4,
                         help='Apply a 3D Gaussian smoothing filter (σ=0.5) to the deconvolved volume every N iterations. '
@@ -239,6 +239,10 @@ def main():
                         help='use FFT-based convolution, which is faster but uses more memory.')
 
     args = parser.parse_args()
+
+    user_specified_workers = args.gpu_workers_per_gpu != default_workers_per_gpu
+    if not user_specified_workers and not args.destripe_sigma > 0.0:
+        args.gpu_workers_per_gpu = 5
 
     # Re-estimate block size if user selected subset of GPUs and did not override block size
     user_specified_subset = (
