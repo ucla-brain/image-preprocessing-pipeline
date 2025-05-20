@@ -1,154 +1,96 @@
 function bl = decon(bl, psf, niter, lambda, stop_criterion, regularize_interval, device_id, use_fft)
-    try
-        % Performs Richardson-Lucy or blind deconvolution (with optional Tikhonov regularization).
-        %
-        % Inputs:
-        % - bl: 3D observed volume or initial estimate (single or gpuArray)
-        % - psf: 3D point spread function (must match type and device of bl)
-        % - niter: number of iterations
-        % - lambda: Tikhonov regularization weight (applies only in blind mode)
-        % - stop_criterion: early stopping threshold in % change (0 disables)
-        % - regularize_interval: enables blind mode when > 0 (with PSF updates + smoothing)
-        % - device_id: string label for logging (e.g. 'GPU0', 'CPU')
-        % - use_fft: true = use FFT-based convolution (faster, more memory), false = use convn (slower, low-memory)
+    % Performs Richardson-Lucy or blind deconvolution (with optional Tikhonov regularization).
+    %
+    % Inputs:
+    % - bl: 3D observed volume or initial estimate (single or gpuArray)
+    % - psf: 3D point spread function (must match type and device of bl)
+    % - niter: number of iterations
+    % - lambda: Tikhonov regularization weight (applies during Gaussian regularization steps)
+    % - stop_criterion: early stopping threshold in % change (0 disables)
+    % - regularize_interval: enables blind mode when > 0 (with PSF updates + smoothing)
+    % - device_id: string label for logging (e.g. 'GPU0', 'CPU')
+    % - use_fft: true = use FFT-based convolution (faster, more memory), false = use convn (slower, low-memory)
 
-        % === Device detection and type consistency ===
-        use_gpu = isgpuarray(bl);
+    % === Device detection and type consistency ===
+    use_gpu = isgpuarray(bl);
 
-        if ~isa(bl, 'single'), bl = single(bl); end
-        if ~isa(psf, 'single'), psf = single(psf); end
+    if ~isa(bl, 'single'), bl = single(bl); end
+    if ~isa(psf, 'single'), psf = single(psf); end
 
-        % Ensure psf matches bl's device
-        if use_gpu && ~isgpuarray(psf), psf = gpuArray(psf); end
-        if ~use_gpu && isgpuarray(psf), psf = gather(psf); end
+    % Ensure psf matches bl's device
+    if use_gpu, psf = gpuArray(psf); else, psf = gather(psf); end
 
-        imsize = size(bl);
+    imsize = size(bl);
 
-        % === Precompute FFT of padded PSF if needed ===
+    % === Precompute FFT of padded PSF if needed ===
+    if use_fft
+        otf = fftn(padPSF(psf, imsize));
+        otf_conj = conj(otf);  % flipped PSF in Fourier domain
+    end
+
+    % === Tikhonov kernel: 3D Laplacian-like stencil ===
+    R = single(1/26 * ones(3,3,3)); R(2,2,2) = 0;
+    if use_gpu, R = gpuArray(R); end
+
+    delta_prev = [];
+
+    for i = 1:niter
+        start_time = tic;
+
+        % === Standard RL update ===
         if use_fft
-            otf = fftn(padPSF(psf, imsize));
-            otf_conj = conj(otf);  % flipped PSF in Fourier domain
+            buf = convFFT(bl, otf);                      % forward blur
+            buf = max(buf, eps('single'));
+            buf = bl ./ buf;                             % RL ratio
+            buf = convFFT(buf, otf_conj);                % deblur
+        else
+            buf = convn(bl, psf, 'same');                % forward blur
+            buf = max(buf, eps('single'));
+            buf = bl ./ buf;                             % RL ratio
+            buf = convn(buf, flipall(psf), 'same');      % deblur
         end
 
-        % === Tikhonov kernel: 3D Laplacian-like stencil ===
-        R = single(1/26 * ones(3,3,3)); R(2,2,2) = 0;
-        if use_gpu, R = gpuArray(R); end
+        % === Blind update path (PSF + smoothing + optional Tikhonov) ===
+        if regularize_interval > 0 && mod(i, regularize_interval) == 0
+            % === Regularize image ===
+            bl = imgaussfilt3(bl, 0.5);
 
-        delta_prev = [];
-
-        for i = 1:niter
-            start_time = tic;
-
-            % === Blind update path (PSF + smoothing + optional Tikhonov) ===
-            if regularize_interval > 0 && mod(i, regularize_interval) == 0
-                disp('blind_decon 1')
-                % === Regularize image ===
-                % bl = imgaussfilt3(bl, 0.5);
-                % === buf: ratio = bl / conv(bl, psf) ===
-                % disp("bl size:"); disp(size(bl))
-                % disp("psf size:"); disp(size(psf))
-                % disp(['any NaN in bl: ', num2str(any(isnan(bl(:))))]);
-                % disp(['any Inf in bl: ', num2str(any(isinf(bl(:))))]);
-                % disp(['any NaN in psf: ', num2str(any(isnan(psf(:))))]);
-                % disp(['any Inf in psf: ', num2str(any(isinf(psf(:))))]);
-                % whos bl psf
-                % gpuDevice()
-                % disp(['bl class: ', class(bl), ', isgpuArray: ', num2str(isa(bl, 'gpuArray'))])
-                % disp(['psf class: ', class(psf), ', isgpuArray: ', num2str(isa(psf, 'gpuArray'))])
-                % fprintf('Entering convn: size(bl) = [%s], size(psf) = [%s]\n', ...
-                % num2str(size(bl)), num2str(size(psf)));
-                % fprintf('sum(psf): %.6f, min(psf): %.6f\n', gather(sum(psf(:))), gather(min(psf(:))));
-                % fprintf('NaN check: bl = %d, psf = %d\n', any(isnan(bl(:))), any(isnan(psf(:))));
-                clear buf;
-                if use_fft
-                    disp('blind_decon 2a')
-                    buf = convFFT(bl, otf);                        % forward convolution (FFT)
-                else
-
-                    disp('blind_decon 2b')
-                    buf = convn(bl, psf, 'same');                 % forward convolution (spatial)
-                end
-                disp('blind_decon 3')
-                buf = max(buf, eps('single'));
-                disp('blind_decon 4')
-                buf = bl ./ buf;                                 % RL ratio
-                disp('blind_decon 5')
-
-                % === Blind PSF update ===
-                psf = psf .* convn(flipall(bl), buf, 'same');    % spatial update (always convn)
-                disp('blind_decon 6')
-                psf = max(psf, 0);
-                disp('blind_decon 7')
-                psf = psf / sum(psf(:));
-                disp('blind_decon 8')
-                psf = imgaussfilt3(psf, 0.5);                    % smooth PSF
-                disp('blind_decon 9')
-                psf = psf / sum(psf(:));                         % normalize again
-                disp('blind_decon 10')
-
-                % === Recompute OTF after PSF change ===
-                if use_fft
-                    otf = fftn(padPSF(psf, imsize));
-                    otf_conj = conj(otf);
-                    buf = convFFT(buf, otf_conj);                % backward convolution (FFT)
-                else
-                    buf = convn(buf, flipall(psf), 'same');      % backward convolution (spatial)
-                end
-                disp('blind_decon 11')
-
-                % === Apply RL update with optional Tikhonov ===
-                if lambda > 0
-                    reg = convn(bl, R, 'same');                  % regularization term
-                    bl = bl .* buf .* (1 - lambda) + reg .* lambda;
-                else
-                    bl = bl .* buf;
-                end
-                disp('blind_decon 12')
-
+            % === Apply RL update with optional Tikhonov ===
+            if lambda > 0
+                reg = convn(bl, R, 'same');               % regularization term
+                bl = bl .* buf .* (1 - lambda) + reg .* lambda;
             else
-                % === Standard RL update ===
-                if use_fft
-                    buf = convFFT(bl, otf);                      % forward blur
-                    buf = max(buf, eps('single'));
-                    buf = bl ./ buf;                             % RL ratio
-                    buf = convFFT(buf, otf_conj);                % deblur
-                else
-                    buf = convn(bl, psf, 'same');                % forward blur
-                    buf = max(buf, eps('single'));
-                    buf = bl ./ buf;                             % RL ratio
-                    buf = convn(buf, flipall(psf), 'same');      % deblur
-                end
                 bl = bl .* buf;
             end
-
-            % === Cleanup numerical noise ===
-            bl = abs(bl);
-
-            % === Early stopping (Δ norm) ===
-            if stop_criterion > 0
-                delta_current = norm(bl(:));
-                if isempty(delta_prev)
-                    delta_rel = 0;
-                else
-                    delta_rel = abs(delta_prev - delta_current) / delta_prev * 100;
-                end
-                delta_prev = delta_current;
-
-                disp([device_name(device_id) ': Iter ' num2str(i) ...
-                      ', ΔD: ' num2str(delta_rel,3) ...
-                      ', ΔT: ' num2str(round(toc(start_time),1)) 's']);
-
-                if i > 1 && delta_rel <= stop_criterion
-                    disp('Stop criterion reached. Finishing iterations.');
-                    break
-                end
-            else
-                disp([device_name(device_id) ': Iter ' num2str(i) ...
-                      ', ΔT: ' num2str(round(toc(start_time),1)) 's']);
-            end
+        else
+            bl = bl .* buf;
         end
-    catch ME
-        fprintf('CRASH on iteration %d: %s\n', i, ME.message);
+
+        % === Cleanup numerical noise ===
+        bl = abs(bl);
+
+        % === Early stopping (Δ norm) ===
+        if stop_criterion > 0
+            delta_current = norm(bl(:));
+            if isempty(delta_prev)
+                delta_rel = 0;
+            else
+                delta_rel = abs(delta_prev - delta_current) / delta_prev * 100;
+            end
+            delta_prev = delta_current;
+
+            disp([device_name(device_id) ': Iter ' num2str(i) ...
+                  ', ΔD: ' num2str(delta_rel,3) ...
+                  ', ΔT: ' num2str(round(toc(start_time),1)) 's']);
+
+            if i > 1 && delta_rel <= stop_criterion
+                disp('Stop criterion reached. Finishing iterations.');
+                break
+            end
+        else
+            disp([device_name(device_id) ': Iter ' num2str(i) ...
+                  ', ΔT: ' num2str(round(toc(start_time),1)) 's']);
+        end
     end
 end
 

@@ -177,7 +177,7 @@ def main():
     # Optional
     parser.add_argument('--cache_drive', type=str, default=None,
                         help='Optional brain name for cache path construction')
-    parser.add_argument('--numit', '-it', type=int, default=14,
+    parser.add_argument('--numit', '-it', type=int, default=8,
                         help='Number of deconvolution iterations [1-50]')
     parser.add_argument('--na', type=float, default=0.40,
                         help='Numerical aperture of the objective lens')
@@ -214,7 +214,7 @@ def main():
                         help='Size of the 3D Gaussian filter kernel in voxel unit')
     parser.add_argument('--denoise_strength', type=int, default=1,
                         help='Denoising strength (e.g., 1 to 255 for 8-bit images)')
-    parser.add_argument('--destripe_sigma', type=float, default=0.25,
+    parser.add_argument('--destripe_sigma', type=float, default=0.125,
                         help='Sigma of destriping filter along the z-axis. Use 0 to disable filtering.')
     parser.add_argument('--regularize_interval', type=int, default=4,
                         help='Apply a 3D Gaussian smoothing filter (σ=0.5) to the deconvolved volume every N iterations. '
