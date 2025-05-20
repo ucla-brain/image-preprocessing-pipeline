@@ -90,7 +90,6 @@ function bl = deconFFT(bl, psf, niter, lambda, stop_criterion, regularize_interv
     % === Retrieve or compute and cache OTFs ===
     if use_gpu, bl = gather(bl); end
     [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu);
-    if use_gpu, bl = gpuArray(bl); end
 
 
     if use_gpu
@@ -111,13 +110,14 @@ function bl = deconFFT(bl, psf, niter, lambda, stop_criterion, regularize_interv
 
     for i = 1:niter
         start_time = tic;
-
+        if use_gpu, bl = gpuArray(bl); otf=gpuArray(otf); end
         buf = convFFT(bl, otf);
+        if use_gpu, otf=gather(otf); end
         buf = max(buf, eps('single'));
         buf = bl ./ buf;
-        if use_gpu, bl = gather(bl); end
+        if use_gpu, bl = gather(bl); otf_conj = gpuArray(otf_conj); end
         buf = convFFT(buf, otf_conj);
-        if use_gpu, bl = gpuArray(bl); end
+        if use_gpu, bl = gpuArray(bl); otf_conj = gather(otf_conj); end
 
         % Apply smoothing and optional Tikhonov every N iterations (except final iteration)
         if regularize_interval < niter && mod(i, regularize_interval) == 0
