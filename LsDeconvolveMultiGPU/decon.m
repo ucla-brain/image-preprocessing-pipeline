@@ -45,11 +45,12 @@ function bl = decon(bl, psf, niter, lambda, stop_criterion, regularize_interval,
                 disp('blind_decon 1')
                 % === Regularize image ===
                 bl = imgaussfilt3(bl, 0.5);
-                disp('blind_decon 2')
                 % === buf: ratio = bl / conv(bl, psf) ===
                 if use_fft
+                    disp('blind_decon 2a')
                     buf = convFFT(bl, otf);                        % forward convolution (FFT)
                 else
+                    disp('blind_decon 2b')
                     buf = convn(bl, psf, 'same');                 % forward convolution (spatial)
                 end
                 disp('blind_decon 3')
