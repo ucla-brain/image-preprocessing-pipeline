@@ -965,14 +965,6 @@ function [psf, FWHMxy, FWHMz] = LsMakePSF(dxy, dz, NA, nf, lambda_ex, lambda_em,
 end
 
 function semaphore_destroy(semkey)
-    if ispc
-        try
-            while true
-                sephamore('post', semkey);
-            end
-        catch
-        end
-    end
     try
         semaphore('destroy', semkey);
     catch
@@ -981,7 +973,7 @@ end
 
 function semaphore_create(semkey, value)
     semaphore_destroy(semkey);
-    semaphore('create', semkey, value);
+    semaphore('c', semkey, value);
     disp(['semaphore ' num2str(semkey) ' is created with the initial value of ' num2str(value)]);
 end
 

@@ -147,138 +147,139 @@ end
 
 function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
     cache_dir = getCachePath();
-    key = ['key_' strrep(mat2str(imsize), ' ', '_')];
-    cache_file = fullfile(cache_dir, key);
-    lock_file = [cache_file, '.lock'];
+    key_str = ['key_' strrep(mat2str(imsize), ' ', '_')];
+    base = fullfile(cache_dir, key_str);
+    sem_key = double(string2hash(key_str));
+    registerSemaphoreKey(sem_key);  % record for cleanup
 
-    % === Check for existing cache ===
-    while isfile(lock_file)
-        pause(0.05);  % Wait if another process is writing
-    end
-
-    if isfile([cache_file, '.bin']) && isfile([cache_file, '.meta'])
+    % === Try to load cache ===
+    if isfile([base, '.bin']) && isfile([base, '.meta'])
         try
-            [otf, otf_conj] = loadOTFCacheBinary(cache_file);
+            [otf, otf_conj] = loadOTFCacheMapped(base);
             return;
         catch
-            warning('Failed to read binary cache. Recomputing.');
+            warning("Failed to read binary cache. Recomputing.");
         end
     end
 
-    % === Atomically acquire lock ===
-    lock_acquired = false;
-    while ~lock_acquired
-        [fid, msg] = fopen(lock_file, 'x');  % 'x' fails if file exists
-        if fid > 0
-            fclose(fid);
-            fileattrib(lock_file, '+w', 'a');  % add write permission for all
-            lock_acquired = true;
-        else
-            pause(0.05);  % Retry until lock becomes available
+    % === Wait for semaphore ===
+    semaphore('w', sem_key);
+    cleanup_sem = onCleanup(@() semaphore('p', sem_key));  % auto-release
+
+    % === Check again (might have been written by another worker) ===
+    if isfile([base, '.bin']) && isfile([base, '.meta'])
+        try
+            [otf, otf_conj] = loadOTFCacheMapped(base);
+            return;
+        catch
+            warning("Cache load failed after wait. Recomputing.");
         end
     end
-    cleanup = onCleanup(@() delete(lock_file));  % Ensure lock file is deleted
 
+    % === Compute OTF ===
     try
-        % === Recompute OTF ===
-        otf = psf;
-        if use_gpu
-            otf = gpuArray(otf);
-        end
-
-        otf = padPSF(otf, imsize);  % May fail if size mismatch or memory error
+        otf = padPSF(psf, imsize);
+        if use_gpu, otf = gpuArray(otf); end
         otf = fftn(otf);
         otf_conj = conj(otf);
-
         if use_gpu
             otf = gather(otf);
             otf_conj = gather(otf_conj);
         end
-
     catch e
         error("getCachedOTF:ComputationFailed", ...
               "Failed to compute OTF: %s", e.message);
     end
 
+    % === Save to cache ===
     try
-        % === Save cache (bin + meta) ===
-        saveOTFCacheBinary(cache_file, otf);
+        saveOTFCacheMapped(base, otf);
     catch e
-        warning("getCachedOTF:SaveFailed", ...
-                "OTF was computed but failed to save to cache: %s\nFile: %s", e.message, filename);
+        warning("OTF computed but failed to save: %s", e.message);
     end
 end
 
-function saveOTFCacheBinary(filename, otf)
+
+function saveOTFCacheMapped(filename, otf)
     otf_real = single(real(otf));
     otf_imag = single(imag(otf));
     shape = size(otf_real);
 
-    % Generate a per-worker temp file path in system temp
     tmp_id = char(java.util.UUID.randomUUID());
     tmp_bin = fullfile(tempdir, [tmp_id '_otf.bin.tmp']);
     tmp_meta = fullfile(tempdir, [tmp_id '_otf.meta.tmp']);
     final_bin = [filename, '.bin'];
     final_meta = [filename, '.meta'];
 
-    % Write binary data to tmp file
+    % Write .bin
     fid = fopen(tmp_bin, 'w');
     if fid == -1
         error('Cannot open file for writing: %s', tmp_bin);
     end
-    fwrite(fid, otf_real(:), 'single');
-    fwrite(fid, otf_imag(:), 'single');
+    fwrite(fid, [otf_real(:)'; otf_imag(:)'], 'single');
     fclose(fid);
+    fileattrib(tmp_bin, '+w', 'a');
 
-    % Save metadata to tmp file
+    % Save .meta
     meta.shape = shape;
     meta.class = 'single';
     meta.version = 1;
     save(tmp_meta, '-struct', 'meta');
-
-    % Apply open permissions just before final move
-    fileattrib(tmp_bin, '+w', 'a');
     fileattrib(tmp_meta, '+w', 'a');
 
-    % Atomically move to final names
+    % Atomic rename
     movefile(tmp_bin, final_bin, 'f');
     movefile(tmp_meta, final_meta, 'f');
 end
 
-function [otf, otf_conj] = loadOTFCacheBinary(filename)
-    % Wait for any ongoing write to complete
-    lock_file = [filename, '.lock'];
-    while isfile(lock_file)
-        pause(0.05);
-    end
 
-    % Load metadata
+function [otf, otf_conj] = loadOTFCacheMapped(filename)
     meta = load([filename, '.meta']);
     shape = meta.shape;
-
-    if ~isfield(meta, 'version') || meta.version ~= 1
-        error('Unsupported or missing cache version.');
-    end
-
-    % Read binary data
-    fid = fopen([filename, '.bin'], 'r');
-    if fid == -1
-        error('Cannot open binary cache file: %s.bin', filename);
-    end
-
     count = prod(shape);
-    real_part = fread(fid, count, 'single');
-    imag_part = fread(fid, count, 'single');
-    fclose(fid);
 
-    % Integrity check
-    if numel(real_part) < count || numel(imag_part) < count
-        error('Incomplete or corrupted binary cache file: %s.bin', filename);
-    end
+    mmap = memmapfile([filename, '.bin'], ...
+        'Format', {'single', [2, count], 're_im'}, ...
+        'Repeat', 1, ...
+        'Writable', false);
 
-    % Reconstruct complex array
-    otf = reshape(complex(real_part, imag_part), shape);
+    re = mmap.Data.re_im(1, :);
+    im = mmap.Data.re_im(2, :);
+    otf = reshape(complex(re, im), shape);
     otf_conj = conj(otf);
+end
+
+function registerSemaphoreKey(key)
+    persistent used_keys
+    if isempty(used_keys)
+        used_keys = containers.Map('KeyType', 'double', 'ValueType', 'logical');
+        onCleanup(@destroyAllSemaphores);
+    end
+    if ~isKey(used_keys, key)
+        semaphore('c', key, 1);  % create with count = 1
+        used_keys(key) = true;
+    end
+end
+
+function destroyAllSemaphores()
+    persistent used_keys
+    if isempty(used_keys), return; end
+    keys = used_keys.keys;
+    for i = 1:numel(keys)
+        try
+            semaphore('d', keys{i});
+        catch
+            warning('Failed to destroy semaphore %d', keys{i});
+        end
+    end
+end
+
+function h = string2hash(str)
+    str = double(str);
+    h = 5381;
+    for i = 1:length(str)
+        h = mod(h * 33 + str(i), 2^31 - 1);  % DJB2
+    end
 end
 
 function cache_path = getCachePath()
@@ -309,7 +310,7 @@ end
 function psf_padded = padPSF(psf, imsize)
     psf_padded = zeros(imsize, 'like', psf);
     center = floor((imsize - size(psf)) / 2);
-    idx = arrayfun(@(c, s) c+(1:s), center, size(psf), 'UniformOutput', false);
+    idx = arrayfun(@(c, s) c + (1:s), center, size(psf), 'UniformOutput', false);
     psf_padded(idx{:}) = psf;
 end
 

@@ -122,15 +122,29 @@ static semaphore_map_result_t map_shared_semaphore(int key, BOOL create) {
 shared_semaphore_t* create_semaphore(int key, int initval, int* out_count) {
     semaphore_map_result_t mapped = map_shared_semaphore(key, TRUE);
 
-    if (!mapped.sem->initialized || mapped.is_new) {
+    //if (!mapped.sem->initialized || mapped.is_new) {
+    //    ZeroMemory(mapped.sem, sizeof(shared_semaphore_t));
+    //    mapped.sem->count = initval;
+    //    mapped.sem->max = initval;
+    //    mapped.sem->initialized = 1;
+    //} else {
+    //    mapped.sem->count = initval;
+    //    mapped.sem->terminate = 0;
+    //    SetEvent(mapped.hEvent);
+    //}
+
+    if (mapped.is_new) {
         ZeroMemory(mapped.sem, sizeof(shared_semaphore_t));
         mapped.sem->count = initval;
         mapped.sem->max = initval;
         mapped.sem->initialized = 1;
     } else {
-        mapped.sem->count = initval;
-        mapped.sem->terminate = 0;
-        SetEvent(mapped.hEvent);
+        if (!mapped.sem->initialized) {
+            ReleaseMutex(mapped.hMutex);
+            close_handles(&mapped);
+            mexErrMsgIdAndTxt("semaphore:uninitialized", "Semaphore %d is in inconsistent state (not initialized).", key);
+        }
+        // No reset — strictly idempotent
     }
 
     if (out_count) *out_count = mapped.sem->count;
@@ -199,9 +213,35 @@ static int post_semaphore(int key) {
 }
 
 static void destroy_semaphore(int key) {
-    semaphore_map_result_t mapped = get_semaphore(key);
+    // semaphore_map_result_t mapped = get_semaphore(key);
+    // mapped.sem->terminate = 1;
+    // SetEvent(mapped.hEvent);
+    // ReleaseMutex(mapped.hMutex);
+    // close_handles(&mapped);
+
+    semaphore_map_result_t mapped;
+
+    // Try to open the semaphore without throwing if it doesn't exist
+    __try {
+        mapped = map_shared_semaphore(key, FALSE);  // open existing
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        // If opening fails (e.g. semaphore doesn't exist), return silently
+        return;
+    }
+
+    if (!mapped.sem) {
+        // Mapping succeeded but sem pointer is null — something went wrong
+        close_handles(&mapped);
+        return;
+    }
+
+    // Mark it as terminated
     mapped.sem->terminate = 1;
+
+    // Wake up any waiting threads
     SetEvent(mapped.hEvent);
+
+    // Cleanup
     ReleaseMutex(mapped.hMutex);
     close_handles(&mapped);
 }
