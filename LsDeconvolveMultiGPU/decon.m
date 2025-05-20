@@ -146,34 +146,53 @@ function bl = deconFFT(bl, psf, niter, lambda, stop_criterion, regularize_interv
 end
 
 function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
-    % Shared cache for OTFs indexed by image size
-    persistent otf_cache
-    if isempty(otf_cache)
-        otf_cache = containers.Map('KeyType', 'char', 'ValueType', 'any');
+    cache_dir = getCachePath();
+    key = ['key_' strrep(mat2str(imsize), ' ', '_')];
+    mat_file = fullfile(cache_dir, [key '.mat']);
+
+    if isfile(mat_file)
+        try
+            m = matfile(mat_file, 'Writable', false);
+            otf = m.otf;
+            otf_conj = m.otf_conj;
+            return;
+        catch
+            warning('Failed to load OTF from cache. Recomputing.');
+        end
     end
 
-    key = mat2str(imsize);
-    if isKey(otf_cache, key)
-        pair = otf_cache(key);
-        otf = pair{1};
-        otf_conj = pair{2};
-    else
-        otf = psf;
-        if use_gpu
-            otf = gpuArray(otf);
-        end
-
-        otf = padPSF(otf, imsize);
-        otf = fftn(otf);
-        otf_conj = conj(otf);
-
-        if use_gpu
-            otf = gather(otf);
-            otf_conj = gather(otf_conj);
-        end
-
-        otf_cache(key) = {otf, otf_conj};
+    % Cache miss — compute
+    otf = psf;
+    if use_gpu
+        otf = gpuArray(otf);
     end
+
+    otf = padPSF(otf, imsize);
+    otf = fftn(otf);
+    otf_conj = conj(otf);
+
+    % Save cache as CPU arrays
+    if use_gpu
+        otf = gather(otf);
+        otf_conj = gather(otf_conj);
+    end
+
+    try
+        m = matfile(mat_file, 'Writable', true);
+        m.otf = otf;
+        m.otf_conj = otf_conj;
+    catch
+        warning('Could not write to OTF cache file: %s', mat_file);
+    end
+end
+
+function cache_path = getCachePath()
+    % cache_dir = fullfile(tempdir, 'otf_cache');
+    cache_dir = fullfile('/data', 'otf_cache');
+    if ~exist(cache_dir, 'dir')
+        mkdir(cache_dir);
+    end
+    cache_path = cache_dir;
 end
 
 function y = convFFT(x, otf)
