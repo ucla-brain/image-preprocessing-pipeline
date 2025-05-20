@@ -246,7 +246,7 @@ def main():
             and set(args.gpu_indices).issubset(set(default_gpu_indices))
     )
     user_overrode_block_size = args.block_size_max != block_size_default
-    if user_specified_subset and not user_overrode_block_size:
+    if user_specified_subset or not user_overrode_block_size:
         args.block_size_max = estimate_block_size_max(
             args.gpu_indices,
             args.gpu_workers_per_gpu * len(args.gpu_indices),
