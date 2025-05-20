@@ -8,7 +8,7 @@ function bl = decon(bl, psf, niter, lambda, stop_criterion, regularize_interval,
     % - lambda: Tikhonov regularization weight (applies during Gaussian regularization steps)
     % - stop_criterion: early stopping threshold in % change (0 disables)
     % - regularize_interval: enables blind mode when > 0 (with PSF updates + smoothing)
-    % - device_id: string label for logging (e.g. 'GPU0', 'CPU')
+    % - device_id: int, 0 = cpu, >0 = GPU
     % - use_fft: true = use FFT-based convolution (faster, more memory), false = use convn (slower, low-memory)
 
     if use_fft
@@ -151,7 +151,7 @@ function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
     cache_file = fullfile(cache_dir, key);
     lock_file = [cache_file, '.lock'];
 
-    % Wait if another process is writing
+    % Wait if locked
     while isfile(lock_file)
         pause(0.05);
     end
@@ -165,29 +165,29 @@ function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
         end
     end
 
-    % Compute
-    otf = psf;
-    if use_gpu
-        otf = gpuArray(otf);
-    end
-
-    otf = padPSF(otf, imsize);
-    otf = fftn(otf);
-    otf_conj = conj(otf);
-
-    if use_gpu
-        otf = gather(otf);
-        otf_conj = gather(otf_conj);
-    end
-
-    % Save to binary with lock
+    % Create lock BEFORE writing
     fid = fopen(lock_file, 'w'); fclose(fid);
+
     try
+        % Recompute OTF
+        otf = psf;
+        if use_gpu, otf = gpuArray(otf); end
+        otf = padPSF(otf, imsize);
+        otf = fftn(otf);
+        otf_conj = conj(otf);
+        if use_gpu
+            otf = gather(otf);
+            otf_conj = gather(otf_conj);
+        end
+
+        % Save BOTH .bin and .meta while locked
         saveOTFCacheBinary(cache_file, otf);
+
     catch e
         warning("Failed to write cache: %s", e.message);
     end
-    delete(lock_file);
+
+    delete(lock_file);  % Release lock
 end
 
 function cache_path = getCachePath()
@@ -217,6 +217,13 @@ function saveOTFCacheBinary(filename, otf)
 end
 
 function [otf, otf_conj] = loadOTFCacheBinary(filename)
+    lock_file = [filename, '.lock'];
+
+    % Wait if a writer is active
+    while isfile(lock_file)
+        pause(0.05);
+    end
+
     meta = load([filename, '.meta']);
     shape = meta.shape;
 
@@ -225,6 +232,10 @@ function [otf, otf_conj] = loadOTFCacheBinary(filename)
     real_part = fread(fid, count, 'single');
     imag_part = fread(fid, count, 'single');
     fclose(fid);
+
+    if numel(real_part) < count || numel(imag_part) < count
+        error('Cache file is incomplete or corrupted: %s.bin', filename);
+    end
 
     otf = complex(real_part, imag_part);
     otf = reshape(otf, shape);
