@@ -88,7 +88,10 @@ function bl = deconFFT(bl, psf, niter, lambda, stop_criterion, regularize_interv
     use_gpu = isgpuarray(bl);
 
     % === Retrieve or compute and cache OTFs ===
+    if use_gpu, bl = gather(bl); end
     [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu);
+    if use_gpu, bl = gpuArray(bl); end
+
 
     if use_gpu
         otf = gpuArray(otf);
