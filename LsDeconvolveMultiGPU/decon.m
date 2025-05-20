@@ -105,7 +105,7 @@ function bl = deconFFT(bl, psf, niter, lambda, stop_criterion, regularize_interv
     for i = 1:niter
         start_time = tic;
 
-        if regularize_interval < niter && mod(i, regularize_interval) == 0
+        if i < niter && mod(i, regularize_interval) == 0
             bl = imgaussfilt3(bl, 0.5);
         end
 
@@ -114,7 +114,7 @@ function bl = deconFFT(bl, psf, niter, lambda, stop_criterion, regularize_interv
         buf = bl ./ buf;
         buf = convFFT(buf, otf_conj);
 
-        if regularize_interval < niter && mod(i, regularize_interval) == 0
+        if i < niter && mod(i, regularize_interval) == 0
             if lambda > 0
                 reg = convn(bl, R, 'same');
                 bl = bl .* buf .* (1 - lambda) + reg .* lambda;
