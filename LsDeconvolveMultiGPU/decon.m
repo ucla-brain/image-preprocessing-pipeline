@@ -160,12 +160,12 @@ function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
         otf = pair{1};
         otf_conj = pair{2};
     else
+        otf = psf;
         if use_gpu
-            psf = gpuArray(psf);
+            otf = gpuArray(otf);
         end
-        psf = padPSF(psf, imsize);
-        otf = fftn(psf);
-        clear psf;
+        otf = padPSF(otf, imsize);
+        otf = fftn(otf);
         otf_conj = conj(otf);
 
         if ~isa(otf, 'single'), otf = single(otf); end
