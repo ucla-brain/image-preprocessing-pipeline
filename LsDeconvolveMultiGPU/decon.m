@@ -176,6 +176,7 @@ function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
             pause(0.05);  % Retry until lock becomes available
         end
     end
+    cleanup = onCleanup(@() delete(lock_file));  % Ensure lock file is deleted
 
     try
         % === Recompute OTF ===
@@ -199,10 +200,8 @@ function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
     catch e
         warning("Failed to write cache: %s", e.message);
     end
-
-    % === Release lock ===
-    delete(lock_file);
 end
+
 
 
 function cache_path = getCachePath()
@@ -221,13 +220,17 @@ function saveOTFCacheBinary(filename, otf)
 
     % Write binary data
     fid = fopen([filename, '.bin'], 'w');
+    if fid == -1
+        error('Cannot open file for writing: %s.bin', filename);
+    end
     fwrite(fid, otf_real(:), 'single');
     fwrite(fid, otf_imag(:), 'single');
     fclose(fid);
 
-    % Save metadata as .mat file
+    % Save metadata
     meta.shape = shape;
     meta.class = 'single';
+    meta.version = 1;
     save([filename, '.meta'], '-struct', 'meta');
 end
 
@@ -241,6 +244,10 @@ function [otf, otf_conj] = loadOTFCacheBinary(filename)
     % Load metadata
     meta = load([filename, '.meta']);
     shape = meta.shape;
+
+    if ~isfield(meta, 'version') || meta.version ~= 1
+        error('Unsupported or missing cache version.');
+    end
 
     % Read binary data
     fid = fopen([filename, '.bin'], 'r');
