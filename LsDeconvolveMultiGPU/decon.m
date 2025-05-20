@@ -41,24 +41,33 @@ function bl = decon(bl, psf, niter, lambda, stop_criterion, regularize_interval,
 
         % === Blind update path (PSF + smoothing + optional Tikhonov) ===
         if regularize_interval > 0 && mod(i, regularize_interval) == 0
+            disp('blind_decon 1')
             % === Regularize image ===
             bl = imgaussfilt3(bl, 0.5);
-
+            disp('blind_decon 2')
             % === buf: ratio = bl / conv(bl, psf) ===
             if use_fft
                 buf = convFFT(bl, otf);                        % forward convolution (FFT)
             else
                 buf = convn(bl, psf, 'same');                 % forward convolution (spatial)
             end
+            disp('blind_decon 3')
             buf = max(buf, eps('single'));
+            disp('blind_decon 4')
             buf = bl ./ buf;                                 % RL ratio
+            disp('blind_decon 5')
 
             % === Blind PSF update ===
             psf = psf .* convn(flipall(bl), buf, 'same');    % spatial update (always convn)
+            disp('blind_decon 6')
             psf = max(psf, 0);
+            disp('blind_decon 7')
             psf = psf / sum(psf(:));
+            disp('blind_decon 8')
             psf = imgaussfilt3(psf, 0.5);                    % smooth PSF
+            disp('blind_decon 9')
             psf = psf / sum(psf(:));                         % normalize again
+            disp('blind_decon 10')
 
             % === Recompute OTF after PSF change ===
             if use_fft
@@ -68,6 +77,7 @@ function bl = decon(bl, psf, niter, lambda, stop_criterion, regularize_interval,
             else
                 buf = convn(buf, flipall(psf), 'same');      % backward convolution (spatial)
             end
+            disp('blind_decon 11')
 
             % === Apply RL update with optional Tikhonov ===
             if lambda > 0
@@ -76,6 +86,7 @@ function bl = decon(bl, psf, niter, lambda, stop_criterion, regularize_interval,
             else
                 bl = bl .* buf;
             end
+            disp('blind_decon 12')
 
         else
             % === Standard RL update ===
