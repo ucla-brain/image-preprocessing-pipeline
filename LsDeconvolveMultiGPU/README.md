@@ -61,6 +61,13 @@ Key scripts check file paths, validate image data, and provide meaningful error 
    ```matlab
    run('build_mex.m')
    ```
+   
+3. Install numactl:
+
+    From command line:
+   ```bash
+   sudo apt install numactl
+   ```
 
    This will compile the MEX files needed for interprocess communication.
 
