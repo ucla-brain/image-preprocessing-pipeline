@@ -166,7 +166,7 @@ function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
             [otf, otf_conj] = loadOTFCacheMapped(base);
             return;
         catch
-            warning("Failed to read binary cache. Recomputing.");
+            warnNoBacktrace('getCachedOTF:CacheReadFailed', 'Failed to read binary cache. Recomputing.');
         end
     end
 
@@ -180,7 +180,7 @@ function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
             [otf, otf_conj] = loadOTFCacheMapped(base);
             return;
         catch
-            warning("Cache load failed after wait. Recomputing.");
+            warnNoBacktrace("getCachedOTF:CacheReadTimeout", "Cache load failed after wait. Recomputing.");
         end
     end
 
@@ -203,10 +203,16 @@ function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
     try
         saveOTFCacheMapped(base, otf);
     catch e
-        warning("OTF computed but failed to save: %s", e.message);
+        warnNoBacktrace("getCachedOTF:SaveCacheFailed", "OTF computed but failed to save: %s", e.message);
     end
 end
 
+function warnNoBacktrace(id, msg, varargin)
+    st = warning('query', 'backtrace');
+    warning('off', 'backtrace');
+    warning(id, msg, varargin{:});
+    warning(st.state, 'backtrace');
+end
 
 function saveOTFCacheMapped(filename, otf)
     otf_real = single(real(otf));
