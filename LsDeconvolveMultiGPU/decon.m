@@ -214,8 +214,10 @@ function saveOTFCacheBinary(filename, otf)
     otf_imag = single(imag(otf));
     shape = size(otf_real);
 
-    tmp_bin = [filename, '.bin.tmp'];
-    tmp_meta = [filename, '.meta.tmp'];
+    % Generate a per-worker temp file path in system temp
+    tmp_id = char(java.util.UUID.randomUUID());
+    tmp_bin = fullfile(tempdir, [tmp_id '_otf.bin.tmp']);
+    tmp_meta = fullfile(tempdir, [tmp_id '_otf.meta.tmp']);
     final_bin = [filename, '.bin'];
     final_meta = [filename, '.meta'];
 
@@ -227,17 +229,19 @@ function saveOTFCacheBinary(filename, otf)
     fwrite(fid, otf_real(:), 'single');
     fwrite(fid, otf_imag(:), 'single');
     fclose(fid);
-    fileattrib(tmp_bin, '+w', 'a');
 
     % Save metadata to tmp file
     meta.shape = shape;
     meta.class = 'single';
     meta.version = 1;
     save(tmp_meta, '-struct', 'meta');
+
+    % Apply open permissions just before final move
+    fileattrib(tmp_bin, '+w', 'a');
     fileattrib(tmp_meta, '+w', 'a');
 
     % Atomically move to final names
-    movefile(tmp_bin, final_bin, 'f');   % 'f' forces overwrite if needed
+    movefile(tmp_bin, final_bin, 'f');
     movefile(tmp_meta, final_meta, 'f');
 end
 
