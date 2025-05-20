@@ -32,8 +32,9 @@ function bl = deconSpatial(bl, psf, psf_inv, niter, lambda, stop_criterion, regu
         psf_inv = gpuArray(psf_inv);
     end
 
-    is_reqularization_time = 1 < i && i < niter && mod(i, regularize_interval) == 0;
-    if is_reqularization_time
+    % Apply smoothing and optional Tikhonov every N iterations (except final iteration)
+
+    if regularize_interval < niter && lambda > 0
         R = single(1/26 * ones(3,3,3)); R(2,2,2) = 0;
         if use_gpu, R = gpuArray(R); end
     end
@@ -45,14 +46,19 @@ function bl = deconSpatial(bl, psf, psf_inv, niter, lambda, stop_criterion, regu
     for i = 1:niter
         start_time = tic;
 
+        is_regularization_time = 1 < i && i < niter && mod(i, regularize_interval) == 0;
+        if is_regularization_time
+            bl = imgaussfilt3(bl, 0.5);
+        end
+
         buf = convn(bl, psf, 'same');
         buf = max(buf, eps('single'));
         buf = bl ./ buf;
         buf = convn(buf, psf_inv, 'same');
 
         % Apply smoothing and optional Tikhonov every N iterations (except final iteration)
-        if is_reqularization_time
-            bl = imgaussfilt3(bl, 0.5);
+        if is_regularization_time
+
             if lambda > 0
                 reg = convn(bl, R, 'same');
                 bl = bl .* buf .* (1 - lambda) + reg .* lambda;
@@ -106,8 +112,8 @@ function bl = deconFFT(bl, psf, niter, lambda, stop_criterion, regularize_interv
     for i = 1:niter
         start_time = tic;
 
-        is_reqularization_time = 1 < i && i < niter && mod(i, regularize_interval) == 0;
-        if is_reqularization_time
+        is_regularization_time = 1 < i && i < niter && mod(i, regularize_interval) == 0;
+        if is_regularization_time
             bl = imgaussfilt3(bl, 0.5);
         end
 
@@ -116,7 +122,7 @@ function bl = deconFFT(bl, psf, niter, lambda, stop_criterion, regularize_interv
         buf = bl ./ buf;
         buf = convFFT(buf, otf_conj);
 
-        if is_reqularization_time
+        if is_regularization_time
             if lambda > 0
                 reg = convn(bl, R, 'same');
                 bl = bl .* buf .* (1 - lambda) + reg .* lambda;
