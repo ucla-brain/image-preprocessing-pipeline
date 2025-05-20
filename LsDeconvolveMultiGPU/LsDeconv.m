@@ -217,11 +217,14 @@ function [] = LsDeconv(varargin)
 
         p_log(log_file, 'deconvolution params ...')
         p_log(log_file, ['   max. iterations: ' num2str(numit)]);
+        p_log(log_file, ['   regularization interval: ' num2str(filter.regularize_interval)]);
+        p_log(log_file, ['   Tikhonov regularization lambda (0 to 1): ' num2str(damping)]);
+        p_log(log_file, ['   early stopping criterion (%): ' num2str(stop_criterion)]);
+        p_log(log_file, ['   deconvolve in frequency domain: ' num2str(filter.use_fft)]);
+        p_log(log_file, ['   destripe sigma: ' num2str(filter.destripe_sigma)]);
         p_log(log_file, ' ');
         
         p_log(log_file, 'postprocessing params ...')
-        p_log(log_file, ['   damping factor (%): ' num2str(damping)]);
-        p_log(log_file, ['   stop criterion (%): ' num2str(stop_criterion)]);
         p_log(log_file, ['   histogram clipping value (%): ' num2str(clipval)]);
         p_log(log_file, ['   signal amplification: ' num2str(amplification)]);
         p_log(log_file, ['   post deconvolution dark subtraction: ' num2str(amplification)]);

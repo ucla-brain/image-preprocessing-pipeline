@@ -90,6 +90,11 @@ function bl = deconFFT(bl, psf, niter, lambda, stop_criterion, regularize_interv
     % === Retrieve or compute and cache OTFs ===
     [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu);
 
+    if use_gpu
+        otf = gpuArray(otf);
+        otf_conj = gpuArray(otf_conj);
+    end
+
     if ~isa(bl, 'single'), bl = single(bl); end
 
     if regularize_interval < niter && lambda > 0
@@ -155,20 +160,20 @@ function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
         otf = pair{1};
         otf_conj = pair{2};
     else
-        psf_padded = padPSF(psf, imsize);
-        otf = fftn(psf_padded);
+        if use_gpu
+            psf = gpuArray(psf);
+        end
+        psf = padPSF(psf, imsize);
+        otf = fftn(psf);
         otf_conj = conj(otf);
-        otf_cache(key) = {otf, otf_conj};
-    end
 
-    if ~isa(otf, 'single'), otf = single(otf); end
-    if ~isa(otf_conj, 'single'), otf_conj = single(otf_conj); end
-    if use_gpu
-        otf = gpuArray(otf);
-        otf_conj = gpuArray(otf_conj);
-    else
+        if ~isa(otf, 'single'), otf = single(otf); end
+        if ~isa(otf_conj, 'single'), otf_conj = single(otf_conj); end
+
         otf = gather(otf);
         otf_conj = gather(otf_conj);
+
+        otf_cache(key) = {otf, otf_conj};
     end
 end
 
