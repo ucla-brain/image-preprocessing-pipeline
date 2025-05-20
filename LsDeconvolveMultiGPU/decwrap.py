@@ -240,9 +240,9 @@ def main():
 
     args = parser.parse_args()
 
-    user_specified_workers = args.gpu_workers_per_gpu != default_workers_per_gpu
-    if not user_specified_workers and not args.destripe_sigma > 0.0:
-        args.gpu_workers_per_gpu = 5
+    # user_specified_workers = args.gpu_workers_per_gpu != default_workers_per_gpu
+    # if not user_specified_workers and not args.destripe_sigma > 0.0:
+    #     args.gpu_workers_per_gpu = 5
 
     # Re-estimate block size if user selected subset of GPUs and did not override block size
     user_specified_subset = (
