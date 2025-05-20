@@ -11,53 +11,49 @@ function bl = decon(bl, psf, niter, lambda, stop_criterion, regularize_interval,
     % - device_id: string label for logging (e.g. 'GPU0', 'CPU')
     % - use_fft: true = use FFT-based convolution (faster, more memory), false = use convn (slower, low-memory)
 
-    % === Device detection and type consistency ===
-    use_gpu = isgpuarray(bl);
+    if use_fft
+        bl = deconFFT(bl, psf.psf, niter, lambda, stop_criterion, regularize_interval, device_id);
+    else
+        bl = deconSpatial(bl, psf.psf, psf.inv, niter, lambda, stop_criterion, regularize_interval, device_id);
+    end
+end
+
+% === Spatial-domain version ===
+function bl = deconSpatial(bl, psf, psf_inv, niter, lambda, stop_criterion, regularize_interval, device_id)
 
     if ~isa(bl, 'single'), bl = single(bl); end
     if ~isa(psf, 'single'), psf = single(psf); end
+    if ~isa(psf_inv, 'single'), psf_inv = single(psf_inv); end
 
-    % Ensure psf matches bl's device
-    if use_gpu, psf = gpuArray(psf); else, psf = gather(psf); end
+    use_gpu = isgpuarray(bl);
 
-    imsize = size(bl);
-
-    % === Precompute FFT of padded PSF if needed ===
-    if use_fft
-        otf = fftn(padPSF(psf, imsize));
-        otf_conj = conj(otf);  % flipped PSF in Fourier domain
+    if use_gpu
+        psf = gpuArray(psf);
+        psf_inv = gpuArray(psf_inv);
     end
 
-    % === Tikhonov kernel: 3D Laplacian-like stencil ===
-    R = single(1/26 * ones(3,3,3)); R(2,2,2) = 0;
-    if use_gpu, R = gpuArray(R); end
+    if regularize_interval < niter && lambda > 0
+        R = single(1/26 * ones(3,3,3)); R(2,2,2) = 0;
+        if use_gpu, R = gpuArray(R); end
+    end
 
-    delta_prev = [];
+    if stop_criterion > 0
+        delta_prev = norm(bl(:));
+    end
 
     for i = 1:niter
         start_time = tic;
 
-        % === Standard RL update ===
-        if use_fft
-            buf = convFFT(bl, otf);                      % forward blur
-            buf = max(buf, eps('single'));
-            buf = bl ./ buf;                             % RL ratio
-            buf = convFFT(buf, otf_conj);                % deblur
-        else
-            buf = convn(bl, psf, 'same');                % forward blur
-            buf = max(buf, eps('single'));
-            buf = bl ./ buf;                             % RL ratio
-            buf = convn(buf, flipall(psf), 'same');      % deblur
-        end
+        buf = convn(bl, psf, 'same');
+        buf = max(buf, eps('single'));
+        buf = bl ./ buf;
+        buf = convn(buf, psf_inv, 'same');
 
-        % === Blind update path (PSF + smoothing + optional Tikhonov) ===
-        if regularize_interval > 0 && mod(i, regularize_interval) == 0
-            % === Regularize image ===
+        % Apply smoothing and optional Tikhonov every N iterations (except final iteration)
+        if regularize_interval < niter && mod(i, regularize_interval) == 0
             bl = imgaussfilt3(bl, 0.5);
-
-            % === Apply RL update with optional Tikhonov ===
             if lambda > 0
-                reg = convn(bl, R, 'same');               % regularization term
+                reg = convn(bl, R, 'same');
                 bl = bl .* buf .* (1 - lambda) + reg .* lambda;
             else
                 bl = bl .* buf;
@@ -66,23 +62,15 @@ function bl = decon(bl, psf, niter, lambda, stop_criterion, regularize_interval,
             bl = bl .* buf;
         end
 
-        % === Cleanup numerical noise ===
         bl = abs(bl);
 
-        % === Early stopping (Δ norm) ===
         if stop_criterion > 0
             delta_current = norm(bl(:));
-            if isempty(delta_prev)
-                delta_rel = 0;
-            else
-                delta_rel = abs(delta_prev - delta_current) / delta_prev * 100;
-            end
+            delta_rel = abs(delta_prev - delta_current) / delta_prev * 100;
             delta_prev = delta_current;
-
             disp([device_name(device_id) ': Iter ' num2str(i) ...
                   ', ΔD: ' num2str(delta_rel,3) ...
                   ', ΔT: ' num2str(round(toc(start_time),1)) 's']);
-
             if i > 1 && delta_rel <= stop_criterion
                 disp('Stop criterion reached. Finishing iterations.');
                 break
@@ -91,6 +79,96 @@ function bl = decon(bl, psf, niter, lambda, stop_criterion, regularize_interval,
             disp([device_name(device_id) ': Iter ' num2str(i) ...
                   ', ΔT: ' num2str(round(toc(start_time),1)) 's']);
         end
+    end
+end
+
+% === Frequency-domain version with cached OTFs ===
+function bl = deconFFT(bl, psf, niter, lambda, stop_criterion, regularize_interval, device_id)
+    imsize = size(bl);
+    use_gpu = isgpuarray(bl);
+
+    % === Retrieve or compute and cache OTFs ===
+    [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu);
+
+    if ~isa(bl, 'single'), bl = single(bl); end
+
+    if regularize_interval < niter && lambda > 0
+        R = single(1/26 * ones(3,3,3)); R(2,2,2) = 0;
+        if use_gpu, R = gpuArray(R); end
+    end
+
+    if stop_criterion > 0
+        delta_prev = norm(bl(:));
+    end
+
+    for i = 1:niter
+        start_time = tic;
+
+        buf = convFFT(bl, otf);
+        buf = max(buf, eps('single'));
+        buf = bl ./ buf;
+        buf = convFFT(buf, otf_conj);
+
+        % Apply smoothing and optional Tikhonov every N iterations (except final iteration)
+        if regularize_interval < niter && mod(i, regularize_interval) == 0
+            bl = imgaussfilt3(bl, 0.5);
+            if lambda > 0
+                reg = convn(bl, R, 'same');
+                bl = bl .* buf .* (1 - lambda) + reg .* lambda;
+            else
+                bl = bl .* buf;
+            end
+        else
+            bl = bl .* buf;
+        end
+
+        bl = abs(bl);
+
+        if stop_criterion > 0
+            delta_current = norm(bl(:));
+            delta_rel = abs(delta_prev - delta_current) / delta_prev * 100;
+            delta_prev = delta_current;
+            disp([device_name(device_id) ': Iter ' num2str(i) ...
+                  ', ΔD: ' num2str(delta_rel,3) ...
+                  ', ΔT: ' num2str(round(toc(start_time),1)) 's']);
+            if i > 1 && delta_rel <= stop_criterion
+                disp('Stop criterion reached. Finishing iterations.');
+                break
+            end
+        else
+            disp([device_name(device_id) ': Iter ' num2str(i) ...
+                  ', ΔT: ' num2str(round(toc(start_time),1)) 's']);
+        end
+    end
+end
+
+function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
+    % Shared cache for OTFs indexed by image size
+    persistent otf_cache
+    if isempty(otf_cache)
+        otf_cache = containers.Map('KeyType', 'char', 'ValueType', 'any');
+    end
+
+    key = mat2str(imsize);
+    if isKey(otf_cache, key)
+        pair = otf_cache(key);
+        otf = pair{1};
+        otf_conj = pair{2};
+    else
+        psf_padded = padPSF(psf, imsize);
+        otf = fftn(psf_padded);
+        otf_conj = conj(otf);
+        otf_cache(key) = {otf, otf_conj};
+    end
+
+    if ~isa(otf, 'single'), otf = single(otf); end
+    if ~isa(otf_conj, 'single'), otf_conj = single(otf_conj); end
+    if use_gpu
+        otf = gpuArray(otf);
+        otf_conj = gpuArray(otf_conj);
+    else
+        otf = gather(otf);
+        otf_conj = gather(otf_conj);
     end
 end
 
@@ -111,20 +189,11 @@ function y = convFFT(x, otf)
     y = real(x);       % final output
 end
 
-function x = flipall(x)
-    % Flips array along all dimensions (for PSF symmetry)
-    for d = 1:ndims(x)
-        x = flip(x, d);
-    end
-end
-
-function otf = padPSF(psf, imsize)
-    % Pads and centers a PSF to the full image size before FFT
+function psf_padded = padPSF(psf, imsize)
     psf_padded = zeros(imsize, 'like', psf);
     center = floor((imsize - size(psf)) / 2);
     idx = arrayfun(@(c, s) c+(1:s), center, size(psf), 'UniformOutput', false);
     psf_padded(idx{:}) = psf;
-    otf = fftn(psf_padded);
 end
 
 function device = device_name(id)

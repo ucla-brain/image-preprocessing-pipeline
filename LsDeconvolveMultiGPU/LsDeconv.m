@@ -174,25 +174,17 @@ function [] = LsDeconv(varargin)
         p_log(log_file, 'calculating PSF ...');
         Rxy = 0.61 * lambda_em / NA;
         dxy_corr = min(dxy, Rxy / 3);
-        [psf, FWHMxy, FWHMz] = LsMakePSF(dxy_corr, dz, NA, rf, lambda_ex, lambda_em, fcyl, slitwidth);
-        p_log(log_file, ['   size of PSF (pixel): ' num2str(size(psf, 1))  ' x ' num2str(size(psf, 2)) ' x ' num2str(size(psf, 3))]);
+        [psf.psf, FWHMxy, FWHMz] = LsMakePSF(dxy_corr, dz, NA, rf, lambda_ex, lambda_em, fcyl, slitwidth);
+        psf.inv = psf.psf(end:-1:1, end:-1:1, end:-1:1);
+        p_log(log_file, ['   size of PSF (pixel): ' num2str(size(psf.psf, 1))  ' x ' num2str(size(psf.psf, 2)) ' x ' num2str(size(psf.psf, 3))]);
         p_log(log_file, ['   FWHHM of PSF lateral (nm): ' num2str(FWHMxy)]);
         p_log(log_file, ['   FWHHM of PSF axial (nm): ' num2str(FWHMz)]);
         p_log(log_file, ['   Rayleigh range of objective lateral (nm): ' num2str(Rxy)]);
         p_log(log_file, ['   Rayleigh range of objective axial (nm): ' num2str((2 * lambda_em * rf) / NA^2)]);
         clear Rxy dxy_corr FWHMxy FWHMz;
-
-        % plot_matrix(psf);
-        % options.overwrite = true;
-        % saveastiff(psf, 'psf.tif', options);
         p_log(log_file, ' ');
 
-        % disp(psf)
-        % psf_file = Tiff(fullfile(inpath, 'deconvolved', 'psf.tif'), 'w');
-        % write(psf_file, psf);
-        % close(psf_file);
-
-        % split the image into smaller blocks
+        % === split the image into smaller blocks ===
         % x and y pads are interpolated since they are smaller than z
         % z pad is from actual image to avoid artifacts
         p_log(log_file, 'partitioning the image into blocks ...')
@@ -201,7 +193,7 @@ function [] = LsDeconv(varargin)
         if resume && exist(block_path, 'file')
             block = load(block_path).block;
         else
-            [block.nx, block.ny, block.nz, block.x, block.y, block.z, block.x_pad, block.y_pad, block.z_pad] = autosplit(stack_info, size(psf), filter, block_size_max, ram_total);  % ram_total ram_available
+            [block.nx, block.ny, block.nz, block.x, block.y, block.z, block.x_pad, block.y_pad, block.z_pad] = autosplit(stack_info, size(psf.psf), filter, block_size_max, ram_total);  % ram_total ram_available
             save(block_path, "block");
         end
 
@@ -704,13 +696,13 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
         % In case z_pad was small for FFT efficiency it will be
         % interpolated slightly
         if blx ~= block.x || block.x_pad <= 0
-            pad_x = pad_size(blx, size(psf, 1));
+            pad_x = pad_size(blx, size(psf.psf, 1));
             if blx + 2 * pad_x > block.x
                 pad_x = (block.x - blx)/2;
             end
         end
         if bly ~= block.y || block.y_pad <= 0
-            pad_y = pad_size(bly, size(psf, 2));
+            pad_y = pad_size(bly, size(psf.psf, 2));
             if bly + 2 * pad_y > block.y
                 pad_y = (block.y - bly)/2;
             end
