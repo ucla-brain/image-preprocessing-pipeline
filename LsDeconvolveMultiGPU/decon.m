@@ -119,8 +119,8 @@ function bl = decon(bl, psf, niter, lambda, stop_criterion, regularize_interval,
                 delta_prev = delta_current;
 
                 disp([device_name(device_id) ': Iter ' num2str(i) ...
-                      ', Δ: ' num2str(delta_rel,3) ...
-                      ', Time: ' num2str(round(toc(start_time),1)) 's']);
+                      ', ΔD: ' num2str(delta_rel,3) ...
+                      ', ΔT: ' num2str(round(toc(start_time),1)) 's']);
 
                 if i > 1 && delta_rel <= stop_criterion
                     disp('Stop criterion reached. Finishing iterations.');
@@ -128,7 +128,7 @@ function bl = decon(bl, psf, niter, lambda, stop_criterion, regularize_interval,
                 end
             else
                 disp([device_name(device_id) ': Iter ' num2str(i) ...
-                      ', Time: ' num2str(round(toc(start_time),1)) 's']);
+                      ', ΔT: ' num2str(round(toc(start_time),1)) 's']);
             end
         end
     catch ME
