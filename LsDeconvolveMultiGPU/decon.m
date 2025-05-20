@@ -218,28 +218,37 @@ function cache_path = getCachePath()
 end
 
 function saveOTFCacheBinary(filename, otf)
-    % Split into real and imaginary parts
     otf_real = single(real(otf));
     otf_imag = single(imag(otf));
     shape = size(otf_real);
 
-    % Write binary data
-    fid = fopen([filename, '.bin'], 'w');
+    tmp_bin = [filename, '.bin.tmp'];
+    tmp_meta = [filename, '.meta.tmp'];
+    final_bin = [filename, '.bin'];
+    final_meta = [filename, '.meta'];
+
+    % Write binary data to tmp file
+    fid = fopen(tmp_bin, 'w');
     if fid == -1
-        error('Cannot open file for writing: %s.bin', filename);
+        error('Cannot open file for writing: %s', tmp_bin);
     end
     fwrite(fid, otf_real(:), 'single');
     fwrite(fid, otf_imag(:), 'single');
     fclose(fid);
-    fileattrib([filename, '.bin'], '+w', 'a');
+    fileattrib(tmp_bin, '+w', 'a');
 
-    % Save metadata
+    % Save metadata to tmp file
     meta.shape = shape;
     meta.class = 'single';
     meta.version = 1;
-    save([filename, '.meta'], '-struct', 'meta');
-    fileattrib([filename, '.meta'], '+w', 'a');
+    save(tmp_meta, '-struct', 'meta');
+    fileattrib(tmp_meta, '+w', 'a');
+
+    % Atomically move to final names
+    movefile(tmp_bin, final_bin, 'f');   % 'f' forces overwrite if needed
+    movefile(tmp_meta, final_meta, 'f');
 end
+
 
 function [otf, otf_conj] = loadOTFCacheBinary(filename)
     % Wait for any ongoing write to complete
