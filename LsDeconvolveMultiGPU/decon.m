@@ -13,15 +13,14 @@ function bl = decon(bl, psf, niter, lambda, stop_criterion, regularize_interval,
         % - use_fft: true = use FFT-based convolution (faster, more memory), false = use convn (slower, low-memory)
 
         % === Device detection and type consistency ===
-        use_gpu = isa(bl, 'gpuArray');
+        use_gpu = isgpuarray(bl);
 
         if ~isa(bl, 'single'), bl = single(bl); end
         if ~isa(psf, 'single'), psf = single(psf); end
 
         % Ensure psf matches bl's device
-        if use_gpu && ~isa(psf, 'gpuArray'), psf = gpuArray(psf); end
-        if ~use_gpu && isa(psf, 'gpuArray'), psf = gather(psf); end
-        if use_gpu && ~isa(bl, 'gpuArray'), bl = gpuArray(bl); end
+        if use_gpu && ~isgpuarray(psf), psf = gpuArray(psf); end
+        if ~use_gpu && isgpuarray(psf), psf = gather(psf); end
 
         imsize = size(bl);
 
@@ -46,10 +45,25 @@ function bl = decon(bl, psf, niter, lambda, stop_criterion, regularize_interval,
                 % === Regularize image ===
                 bl = imgaussfilt3(bl, 0.5);
                 % === buf: ratio = bl / conv(bl, psf) ===
+                disp("bl size:"); disp(size(bl))
+                disp("psf size:"); disp(size(psf))
+                disp(['any NaN in bl: ', num2str(any(isnan(bl(:))))]);
+                disp(['any Inf in bl: ', num2str(any(isinf(bl(:))))]);
+                disp(['any NaN in psf: ', num2str(any(isnan(psf(:))))]);
+                disp(['any Inf in psf: ', num2str(any(isinf(psf(:))))]);
+                whos bl psf
+                gpuDevice()
+                disp(['bl class: ', class(bl), ', isgpuArray: ', num2str(isa(bl, 'gpuArray'))])
+                disp(['psf class: ', class(psf), ', isgpuArray: ', num2str(isa(psf, 'gpuArray'))])
+                fprintf('Entering convn: size(bl) = [%s], size(psf) = [%s]\n', ...
+                num2str(size(bl)), num2str(size(psf)));
+                fprintf('sum(psf): %.6f, min(psf): %.6f\n', gather(sum(psf(:))), gather(min(psf(:))));
+                fprintf('NaN check: bl = %d, psf = %d\n', any(isnan(bl(:))), any(isnan(psf(:))));
                 if use_fft
                     disp('blind_decon 2a')
                     buf = convFFT(bl, otf);                        % forward convolution (FFT)
                 else
+
                     disp('blind_decon 2b')
                     buf = convn(bl, psf, 'same');                 % forward convolution (spatial)
                 end

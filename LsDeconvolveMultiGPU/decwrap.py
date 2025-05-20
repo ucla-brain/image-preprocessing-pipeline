@@ -9,6 +9,7 @@ import subprocess
 from json import dump
 from pathlib import Path
 from subprocess import CalledProcessError
+from typing import Optional
 
 import psutil
 
@@ -34,7 +35,7 @@ def find_matlab_executable():
     raise RuntimeError("MATLAB executable not found. Add it to your PATH or update the script.")
 
 
-def find_allocator(libname):
+def find_allocator(libname: str) -> Optional[str]:
     candidates = [
         f"/usr/lib/x86_64-linux-gnu/lib{libname}.so",
         f"/usr/lib/lib{libname}.so",
@@ -76,6 +77,7 @@ def get_all_gpu_indices():
             text=True,
             check=True
         )
+        # MATLAB uses 1-based indexing for GPU IDs, so we offset the zero-based output
         indices = [int(line.strip()) + 1 for line in result.stdout.strip().splitlines()]
         return indices
     except FileNotFoundError:
@@ -106,7 +108,7 @@ def estimate_block_size_max(gpu_indices, num_workers, bytes_per_element=4, base_
         min_vram_mib = min(selected_memories)
         usable_mib = min_vram_mib - base_reserve_gb * 1024 - num_workers * per_worker_mib
         if usable_mib <= 0:
-            log.warning("Usable GPU memory is too low.")
+            log.warning(f"Estimated usable VRAM ({usable_mib:.1f} MiB) is too low. Falling back to max_allowed.")
             return max_allowed
 
         usable_bytes = usable_mib * 1024 ** 2
