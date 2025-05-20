@@ -171,6 +171,7 @@ function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
         [fid, msg] = fopen(lock_file, 'x');  % 'x' fails if file exists
         if fid > 0
             fclose(fid);
+            fileattrib(lock_file, '+w', 'a');  % add write permission for all
             lock_acquired = true;
         else
             pause(0.05);  % Retry until lock becomes available
@@ -208,8 +209,6 @@ function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
     end
 end
 
-
-
 function cache_path = getCachePath()
     % cache_path  = fullfile(tempdir, 'otf_cache');
     cache_path  = fullfile('/data', 'otf_cache');
@@ -232,12 +231,14 @@ function saveOTFCacheBinary(filename, otf)
     fwrite(fid, otf_real(:), 'single');
     fwrite(fid, otf_imag(:), 'single');
     fclose(fid);
+    fileattrib([filename, '.bin'], '+w', 'a');
 
     % Save metadata
     meta.shape = shape;
     meta.class = 'single';
     meta.version = 1;
     save([filename, '.meta'], '-struct', 'meta');
+    fileattrib([filename, '.meta'], '+w', 'a');
 end
 
 function [otf, otf_conj] = loadOTFCacheBinary(filename)
