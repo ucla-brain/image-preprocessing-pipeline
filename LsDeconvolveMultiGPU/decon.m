@@ -253,7 +253,11 @@ function saveOTFCacheMapped(base, otf, otf_conj, sem_key)
         meta.shape = shape;
         meta.class = 'single';
         meta.version = 2;
-        save(tmp_meta, '-struct', 'meta', '-v7');
+        try
+            save(tmp_meta, '-struct', 'meta', '-v7');
+        catch e
+            error('Meta save failed: %s', e.message);
+        end
         fileattrib(tmp_meta, '+w', 'a');
 
         movefile(tmp_bin, final_bin, 'f');
