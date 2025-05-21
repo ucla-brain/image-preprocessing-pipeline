@@ -212,6 +212,7 @@ function checkFutureError(fut)
 end
 
 function warnNoBacktrace(id, msg, varargin)
+    marker = '[CustomWarning]';  % ← debug marker
     if ~ischar(id) && ~isStringScalar(id)
         id = 'warnNoBacktrace:InvalidID';
     else
@@ -224,7 +225,8 @@ function warnNoBacktrace(id, msg, varargin)
         msg = char(msg);
     end
 
-    % Suppress backtrace
+    msg = sprintf('%s %s', marker, msg);
+
     st = warning('query', 'backtrace');
     warning('off', 'backtrace');
 
