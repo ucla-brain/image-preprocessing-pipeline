@@ -639,12 +639,6 @@ function deconvolve(filelist, psf, numit, damping, ...
                 % consolidate and save block stats
                 deconvmax = max(ub, deconvmax);
                 deconvmin = min(lb, deconvmin);
-                % tmp_min_max_path = [min_max_path '.tmp']
-                % save(tmp_min_max_path, "deconvmin", "deconvmax", "rawmax", "-v7.3", "-nocompression");
-                % if exist(min_max_path, 'file')
-                %     delete(min_max_path);
-                % end
-                % movefile(tmp_min_max_path, min_max_path, 'f');
                 save(min_max_path, "deconvmin", "deconvmax", "rawmax", "-v7.3", "-nocompression");
                 could_not_save = false;
             catch
@@ -1109,16 +1103,6 @@ function [x, y, z, bit_depth] = getstackinfo(datadir)
     end
 end
 
-% function plot_matrix(psf)
-%     % Keivan disp(size(psf));
-%     diff = double(squeeze(psf));
-%     diff(diff==0)=nan;                              % added line
-%     h = slice(diff, [], [], 1:size(diff,3));
-%     set(h, 'EdgeColor','none', 'FaceColor','interp')
-%     alpha(.1);
-%     drawnow;
-% end
-
 function [ram_available, ram_total]  = get_memory()
     if ispc
         [~, m] = memory;  % check if os supports memory function
@@ -1130,20 +1114,6 @@ function [ram_available, ram_total]  = get_memory()
         ram_total = stats(1);
         ram_available = stats(end);
     end
-    %     if gpu
-    %         try
-    %             check = gpuDevice;  % check if CUDA is available
-    %             if (check.DeviceSupported == 1)
-    %                 mem = check.TotalMemory;
-    %             else
-    %                 disp('Matlab does not support your GPU');
-    %                 mem = 0;
-    %             end
-    %         catch
-    %             disp('CUDA is not available');
-    %             mem = 0;
-    %         end
-    %     end
 end
 
 function num_cpu_sockets = get_num_cpu_sockets()

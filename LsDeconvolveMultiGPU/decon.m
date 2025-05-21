@@ -46,7 +46,9 @@ function bl = deconSpatial(bl, psf, psf_inv, niter, lambda, stop_criterion, regu
     for i = 1:niter
         start_time = tic;
 
-        is_regularization_time = 1 < i && i < niter && mod(i, regularize_interval) == 0;
+        apply_regularization = (regularize_interval > 0) && (regularize_interval < niter);
+        is_regularization_time = apply_regularization && (i > 1) && (i < niter) && (mod(i, regularize_interval) == 0);
+
         if is_regularization_time
             bl = imgaussfilt3(bl, 0.5);
         end
@@ -96,8 +98,8 @@ function bl = deconFFT(bl, psf, niter, lambda, stop_criterion, regularize_interv
 
     [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu);
     if use_gpu
-        otf = gpuArray(otf);
-        otf_conj = gpuArray(otf_conj);
+        if ~isgpuarray(otf), otf = gpuArray(otf); end
+        if ~isgpuarray(otf_conj), otf_conj = gpuArray(otf_conj); end
     end
 
     if regularize_interval < niter && lambda > 0
@@ -112,7 +114,9 @@ function bl = deconFFT(bl, psf, niter, lambda, stop_criterion, regularize_interv
     for i = 1:niter
         start_time = tic;
 
-        is_regularization_time = 1 < i && i < niter && mod(i, regularize_interval) == 0;
+        apply_regularization = (regularize_interval > 0) && (regularize_interval < niter);
+        is_regularization_time = apply_regularization && (i > 1) && (i < niter) && (mod(i, regularize_interval) == 0);
+
         if is_regularization_time
             bl = imgaussfilt3(bl, 0.5);
         end
@@ -191,24 +195,22 @@ function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
         if use_gpu, otf = gpuArray(otf); end
         otf = fftn(otf);
         otf_conj = conj(otf);
-        if use_gpu
-            otf = gather(otf);
-            otf_conj = gather(otf_conj);
-        end
     catch e
         error('getCachedOTF:ComputationFailed', ...
               'Failed to compute OTF: %s', e.message);
     end
 
     % === Save to cache ===
-    % Double-check: another worker may have saved while we were computing
     if ~isfile([base, '.bin']) && ~isfile([base, '.meta'])
         semaphore('w', sem_key);
-        cleanup_sem = onCleanup(@() semaphore('p', sem_key));  % auto-release
         try
-            saveOTFCacheMapped(base, otf, otf_conj);
+            f = parfeval(@saveOTFCacheMapped, 0, base, gather(otf), gather(otf_conj));
+            % No blocking, fire-and-forget
+            f.AfterEach = @(~) semaphore('p', sem_key);  % Manually release if needed
         catch e
-            warnNoBacktrace('getCachedOTF:SaveCacheFailed', 'OTF computed but failed to save: %s', e.message);
+            semaphore('p', sem_key);
+            warnNoBacktrace('getCachedOTF:SaveCacheFailed', ...
+                            'OTF computed but failed to save: %s', e.message);
         end
     end
 end
@@ -307,7 +309,9 @@ function destroyAllSemaphores()
         try
             semaphore('d', keys{i});
         catch
-            warning('Failed to destroy semaphore %d', keys{i});
+            if isDebugMode()
+                warning('Failed to destroy semaphore %d', keys{i});
+            end
         end
     end
 end
