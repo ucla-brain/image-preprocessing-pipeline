@@ -157,7 +157,8 @@ function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
     cache_dir = getCachePath();
     key_str = ['key_' strrep(mat2str(imsize), ' ', '_')];
     base = fullfile(cache_dir, key_str);
-    sem_key = double(string2hash(key_str));
+    OFFSET = 1e5;
+    sem_key = double(string2hash(key_str)) + OFFSET;
     registerSemaphoreKey(sem_key);  % record for cleanup
 
     % === Try to load cache ===
