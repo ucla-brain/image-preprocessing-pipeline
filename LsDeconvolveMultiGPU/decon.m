@@ -212,6 +212,7 @@ function checkFutureError(fut)
 end
 
 function warnNoBacktrace(id, msg, varargin)
+    return
     % Validate and sanitize warning ID
     if ~ischar(id) && ~isstring(id)
         id = "warnNoBacktrace:InvalidID";
