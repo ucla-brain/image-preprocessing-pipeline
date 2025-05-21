@@ -200,17 +200,14 @@ function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
               'Failed to compute OTF: %s', e.message);
     end
 
-    % === Save to cache ===
-    if ~isfile([base, '.bin']) && ~isfile([base, '.meta'])
-        semaphore('w', sem_key);
-        try
-            f = parfeval(@saveOTFCacheMapped, 0, base, gather(otf), gather(otf_conj));
-            afterAll(f, @(~) semaphore('p', sem_key), 0);  % release semaphore after save
-        catch e
-            semaphore('p', sem_key);  % ensure release on failure
-            warnNoBacktrace('getCachedOTF:SaveCacheFailed', ...
-                            'OTF computed but failed to save: %s', e.message);
-        end
+    % === Save to cache (async, thread-safe)
+    try
+        otf_cpu = gather(otf);
+        otf_conj_cpu = gather(otf_conj);
+        parfeval(@saveOTFCacheMapped, 0, base, otf_cpu, otf_conj_cpu, sem_key);
+    catch e
+        warnNoBacktrace('getCachedOTF:SaveCacheFailed', ...
+                        'OTF computed but failed to save: %s', e.message);
     end
 end
 
@@ -221,37 +218,55 @@ function warnNoBacktrace(id, msg, varargin)
     warning(st.state, 'backtrace');
 end
 
-function saveOTFCacheMapped(filename, otf, otf_conj)
-    otf_real = single(real(otf));
-    otf_imag = single(imag(otf));
-    conj_real = single(real(otf_conj));
-    conj_imag = single(imag(otf_conj));
-    shape = size(otf_real);
-
-    tmp_bin = [filename, '.bin.tmp'];
-    tmp_meta = [filename, '.meta.tmp'];
-    final_bin = [filename, '.bin'];
-    final_meta = [filename, '.meta'];
-
-    % === Write binary file
-    fid = fopen(tmp_bin, 'wb');
-    if fid == -1
-        error('Cannot open file for writing: %s', tmp_bin);
+function saveOTFCacheMapped(base, otf, otf_conj, sem_key)
+    % === Skip if file already exists
+    if isfile([base, '.bin']) && isfile([base, '.meta'])
+        return;
     end
-    fwrite(fid, [otf_real(:); otf_imag(:); conj_real(:); conj_imag(:)], 'single');
-    fclose(fid);
-    fileattrib(tmp_bin, '+w', 'a');
 
-    % === Save metadata
-    meta.shape = shape;
-    meta.class = 'single';
-    meta.version = 2;
-    save(tmp_meta, '-struct', 'meta', '-v7');
-    fileattrib(tmp_meta, '+w', 'a');
+    % === Lock
+    semaphore('w', sem_key);
+    cleanup_sem = onCleanup(@() semaphore('p', sem_key));
 
-    % === Atomic move
-    movefile(tmp_bin, final_bin, 'f');
-    movefile(tmp_meta, final_meta, 'f');
+    try
+        % Double-check after acquiring lock
+        if isfile([base, '.bin']) && isfile([base, '.meta'])
+            return;
+        end
+
+        otf_real   = single(real(otf));
+        otf_imag   = single(imag(otf));
+        conj_real  = single(real(otf_conj));
+        conj_imag  = single(imag(otf_conj));
+        shape      = size(otf_real);
+
+        tmp_bin = [base, '.bin.tmp'];
+        tmp_meta = [base, '.meta.tmp'];
+        final_bin = [base, '.bin'];
+        final_meta = [base, '.meta'];
+
+        % Write .bin
+        fid = fopen(tmp_bin, 'wb');
+        if fid == -1
+            error('Cannot open file for writing: %s', tmp_bin);
+        end
+        fwrite(fid, [otf_real(:); otf_imag(:); conj_real(:); conj_imag(:)], 'single');
+        fclose(fid);
+        fileattrib(tmp_bin, '+w', 'a');
+
+        % Write .meta
+        meta.shape = shape;
+        meta.class = 'single';
+        meta.version = 2;
+        save(tmp_meta, '-struct', 'meta', '-v7');
+        fileattrib(tmp_meta, '+w', 'a');
+
+        movefile(tmp_bin, final_bin, 'f');
+        movefile(tmp_meta, final_meta, 'f');
+    catch e
+        warnNoBacktrace('getCachedOTF:SaveCacheFailed', ...
+                        'OTF computed but failed to save: %s', e.message);
+    end
 end
 
 function [otf, otf_conj] = loadOTFCacheMapped(filename)
