@@ -169,12 +169,6 @@ function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
     if isfile([base, '.bin']) && isfile([base, '.meta'])
         try
             [otf, otf_conj] = loadOTFCacheMapped(base);
-            if use_gpu
-                otf = gpuArray(otf);
-                otf = arrayfun(@(r, i) complex(r, i), real(otf), imag(otf));  % 💥 Safe for fftn/ifftn on gpu
-                otf_conj = gpuArray(otf_conj);
-                otf_conj = arrayfun(@(r, i) complex(r, i), real(otf_conj), imag(otf_conj));
-            end
             disp(['Loaded cached OTF for size ' mat2str(imsize)]);
             return;
         catch e
@@ -196,7 +190,9 @@ function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
     % === Save to cache (async, thread-safe)
     try
         if use_gpu
+            otf = arrayfun(@(r, i) complex(r, i), real(otf), imag(otf));
             otf_cpu = gather(otf);
+            otf_conj = arrayfun(@(r, i) complex(r, i), real(otf_conj), imag(otf_conj));
             otf_conj_cpu = gather(otf_conj);
         else
             otf_cpu = otf;
