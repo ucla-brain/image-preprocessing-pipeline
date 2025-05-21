@@ -191,7 +191,12 @@ def main():
                         help='Tikhonov (L2) regularization weight in the range [0, 1]. '
                              'Applies only during blind deconvolution (enabled when --regularize_interval > 0). '
                              'Blends each RL update with a smoothed version of the image to suppress noise. '
-                             'Set to 0 to disable.')
+                             'Set to 0 to disable. Suggested values:\n'
+                             '- 1e-5 to 1e-3: Low noise, high SNR data\n'
+                             '- 1e-3 to 1e-2: Typical data with moderate noise\n'
+                             '- 1e-2 to 0.1: High noise or very ill-posed cases\n'
+                             '- Use slightly higher values for fewer iterations, lower for many iterations\n'
+                             '- 5e-3 to 5e-2 recommended for blind deconvolution')
     parser.add_argument('--clipval', type=int, default=0,
                         help='Clipping value (0 = disabled)')
     parser.add_argument('--stop_criterion', type=float, default=0,

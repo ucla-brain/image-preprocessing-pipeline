@@ -172,32 +172,19 @@ function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
             disp(['Loaded cached OTF for size ' mat2str(imsize)]);
             return;
         catch
-            warnNoBacktrace('getCachedOTF:CacheReadFailed', 'Failed to read binary cache. Will try again ...');
+            warnNoBacktrace('getCachedOTF:CacheReadFailed', 'Failed to read binary cache.');
         end
     end
 
-    % === Check again (might have been written by another worker) ===
-    if isfile([base, '.bin']) && isfile([base, '.meta'])
-        semaphore('w', sem_key);
-        try
-            [otf, otf_conj] = loadOTFCacheMapped(base);
-            return;
-        catch
-            warnNoBacktrace('getCachedOTF:CacheReadTimeout', 'Cache load failed after wait. Recomputing.');
-        finally
-            semaphore('p', sem_key);
-        end
-    end
     % === Compute OTF ===
     try
-        disp(['Recomputing and caching OTF for size ' mat2str(imsize)]);
+        disp(['Recomputing OTF for size ' mat2str(imsize)]);
         otf = padPSF(psf, imsize);
         if use_gpu, otf = gpuArray(otf); end
         otf = fftn(otf);
         otf_conj = conj(otf);
     catch e
-        error('getCachedOTF:ComputationFailed', ...
-              'Failed to compute OTF: %s', e.message);
+        error('getCachedOTF:ComputationFailed', 'Failed to compute OTF: %s', e.message);
     end
 
     % === Save to cache (async, thread-safe)
@@ -206,10 +193,10 @@ function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
         otf_conj_cpu = gather(otf_conj);
         % f = parfeval(backgroundPool, @saveOTFCacheMapped, 0, base, otf_cpu, otf_conj_cpu, sem_key);
         % afterAll(f, @(fut) checkFutureError(fut), 0);
+        disp(['Caching OTF for size ' mat2str(imsize)]);
         saveOTFCacheMapped(base, otf_cpu, otf_conj_cpu, sem_key);
     catch e
-        warnNoBacktrace('getCachedOTF:SaveCacheFailed', ...
-                        'OTF computed but failed to save: %s', e.message);
+        warnNoBacktrace('getCachedOTF:SaveCacheFailed', 'OTF computed but failed to save: %s', e.message);
     end
 end
 
@@ -227,21 +214,21 @@ function warnNoBacktrace(id, msg, varargin)
 end
 
 function saveOTFCacheMapped(base, otf, otf_conj, sem_key)
+     % === Skip if file already exists
+    if isfile([base, '.bin']) && isfile([base, '.meta'])
+        return;
+    end
+
     % === Lock
     semaphore('w', sem_key);
     cleanup_sem = onCleanup(@() semaphore('p', sem_key));
 
-    % === Skip if file already exists
+    % === Skip if file already exists after wait time was over
     if isfile([base, '.bin']) && isfile([base, '.meta'])
         return;
     end
 
     try
-        % Double-check after acquiring lock
-        if isfile([base, '.bin']) && isfile([base, '.meta'])
-            return;
-        end
-
         otf_real   = single(real(otf));
         otf_imag   = single(imag(otf));
         conj_real  = single(real(otf_conj));
@@ -279,12 +266,13 @@ end
 
 function [otf, otf_conj] = loadOTFCacheMapped(filename)
     meta = load([filename, '.meta']);
-    shape = meta.shape;
 
     % === Version check
     if ~isfield(meta, 'version') || meta.version ~= 2
         error('Incompatible or missing cache version in %s.meta', filename);
     end
+
+    shape = meta.shape;
 
     % === Read flattened binary data
     fid = fopen([filename, '.bin'], 'rb');
