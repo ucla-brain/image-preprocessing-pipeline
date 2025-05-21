@@ -254,7 +254,14 @@ function saveOTFCacheMapped(base, otf, otf_conj, sem_key)
         meta.class = 'single';
         meta.version = 2;
         try
-            save(tmp_meta, '-struct', 'meta', '-v7');
+            % save(tmp_meta, '-struct', 'meta', '-v7');
+            fid = fopen(tmp_meta, 'w');
+            if fid == -1, error('Failed to open meta file for writing'); end
+
+            fprintf(fid, 'shape %s\n', mat2str(size(otf)));
+            fprintf(fid, 'class single\n');
+            fprintf(fid, 'version 2\n');
+            fclose(fid);
         catch e
             error('Meta save failed: %s', e.message);
         end
@@ -269,7 +276,35 @@ function saveOTFCacheMapped(base, otf, otf_conj, sem_key)
 end
 
 function [otf, otf_conj] = loadOTFCacheMapped(filename)
-    meta = load([filename, '.meta']);
+    % meta = load([filename, '.meta']);
+    fid = fopen([filename '.meta'], 'r');
+    if fid == -1
+        error('Cannot open meta file: %s.meta', filename);
+    end
+
+    meta = struct();
+    while ~feof(fid)
+        line = strtrim(fgetl(fid));
+        if isempty(line), continue; end
+
+        tokens = strsplit(line, ' ', 2);
+        if numel(tokens) < 2, continue; end
+
+        key = tokens{1};
+        value = strtrim(tokens{2});
+
+        switch lower(key)
+            case 'shape'
+                meta.shape = str2num(strrep(value, '[', ''));  %#ok<ST2NM>
+            case 'class'
+                meta.class = value;
+            case 'version'
+                meta.version = str2double(value);
+            otherwise
+                warning('Unknown key in meta file: %s', key);
+        end
+    end
+    fclose(fid);
 
     % === Version check
     if ~isfield(meta, 'version') || meta.version ~= 2
