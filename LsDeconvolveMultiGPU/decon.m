@@ -212,7 +212,6 @@ function checkFutureError(fut)
 end
 
 function warnNoBacktrace(id, msg, varargin)
-    return
     % Validate and sanitize warning ID
     if ~ischar(id) && ~isstring(id)
         id = "warnNoBacktrace:InvalidID";
@@ -300,23 +299,21 @@ function saveOTFCacheMapped(base, otf, otf_conj, sem_key)
 end
 
 function [otf, otf_conj] = loadOTFCacheMapped(filename)
-    meta_file = [filename, '.meta'];
-    bin_file  = [filename, '.bin'];
-
-    % === Read metadata
-    disp(['Opening meta file: ', meta_file]);
-    fid = fopen(meta_file, 'r');
+    % === Parse metadata
+    meta = struct();
+    fid = fopen([filename '.meta'], 'r');
     if fid == -1
-        error('Cannot open meta file: %s', meta_file);
+        error('Cannot open meta file: %s.meta', filename);
     end
 
-    meta = struct();
-    while ~feof(fid)
-        line = strtrim(fgetl(fid));
+    while true
+        line = fgetl(fid);
+        if ~ischar(line), break; end  % EOF or invalid
+        line = strtrim(line);
         if isempty(line), continue; end
 
-        tokens = strsplit(line, ' ', 2);
-        if numel(tokens) < 2, continue; end
+        tokens = regexp(line, '^(\S+)\s+(.*)$', 'tokens', 'once');
+        if isempty(tokens), continue; end
 
         key = lower(tokens{1});
         value = strtrim(tokens{2});
@@ -328,48 +325,36 @@ function [otf, otf_conj] = loadOTFCacheMapped(filename)
                 meta.class = value;
             case 'version'
                 meta.version = str2double(value);
-            otherwise
-                warning('Unknown key in meta file: %s', key);
         end
     end
     fclose(fid);
 
     % === Validate metadata
-    if ~isfield(meta, 'shape') || isempty(meta.shape)
-        error('Meta file is missing shape info: %s', meta_file);
-    end
-    if ~isfield(meta, 'version') || meta.version ~= 2
-        error('Incompatible or missing cache version in %s', meta_file);
+    if ~isfield(meta, 'shape') || ~isfield(meta, 'version') || meta.version ~= 2
+        error('Invalid or missing metadata in %s.meta', filename);
     end
     shape = meta.shape;
-    count = prod(shape);
 
-    % === Read binary data
-    disp(['Opening binary file: ', bin_file]);
-    fid = fopen(bin_file, 'rb');
+    % === Load binary data
+    fid = fopen([filename, '.bin'], 'rb');
     if fid == -1
-        error('Cannot open binary cache file: %s', bin_file);
+        error('Cannot open binary cache file: %s.bin', filename);
     end
 
-    disp(['Reading ', num2str(4*count), ' floats...']);
-    data = fread(fid, 4 * count, 'single');
+    count = prod(shape);
+    total = 4 * count;
+    data = fread(fid, total, 'single');
     fclose(fid);
 
-    if numel(data) < 4 * count
-        error('Incomplete or corrupted binary cache file: %s', bin_file);
+    if numel(data) < total
+        error('Incomplete or corrupted binary cache file: %s.bin', filename);
     end
 
-    % === Reconstruct complex arrays
-    otf_real   = data(1:count);
-    otf_imag   = data(count+1 : 2*count);
-    conj_real  = data(2*count+1 : 3*count);
-    conj_imag  = data(3*count+1 : end);
-
-    otf      = reshape(complex(otf_real,  otf_imag),  shape);
-    otf_conj = reshape(complex(conj_real, conj_imag), shape);
-
-    disp(['Loaded OTF and OTF_conj from cache: ', filename]);
+    % === Reconstruct OTF and its conjugate
+    otf      = reshape(complex(data(1:count), data(count+1:2*count)), shape);
+    otf_conj = reshape(complex(data(2*count+1:3*count), data(3*count+1:end)), shape);
 end
+
 
 function registerSemaphoreKey(key)
     persistent used_keys cleanupObj
