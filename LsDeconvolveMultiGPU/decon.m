@@ -172,7 +172,7 @@ function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
             disp(['Loaded cached OTF for size ' mat2str(imsize)]);
             return;
         catch e
-            warnNoBacktrace('getCachedOTF:CacheReadFailed', 'Failed to read binary cache.%s', e.message);
+            warnNoBacktrace('getCachedOTF:CacheReadFailed', 'Failed to read binary cache. %s', e.message);
         end
     end
 
@@ -212,33 +212,16 @@ function checkFutureError(fut)
 end
 
 function warnNoBacktrace(id, msg, varargin)
-    % Ensure ID is a valid char
-    if ~ischar(id)
-        try
-            id = char(id);  % works for string scalar
-        catch
-            id = 'warnNoBacktrace:InvalidID';  % fallback ID
-        end
+    if ~ischar(id) && ~isStringScalar(id)
+        id = 'warnNoBacktrace:InvalidID';
+    else
+        id = char(id);
     end
 
-    % Ensure message is a valid char
-    if ~ischar(msg)
-        try
-            msg = char(msg);
-        catch
-            msg = 'Unknown warning message';
-        end
-    end
-
-    % Clean varargin
-    for i = 1:numel(varargin)
-        if ~ischar(varargin{i}) && ~isStringScalar(varargin{i})
-            try
-                varargin{i} = char(varargin{i});
-            catch
-                varargin{i} = '<unprintable>';
-            end
-        end
+    if ~ischar(msg) && ~isStringScalar(msg)
+        msg = 'Unknown warning message';
+    else
+        msg = char(msg);
     end
 
     % Suppress backtrace
