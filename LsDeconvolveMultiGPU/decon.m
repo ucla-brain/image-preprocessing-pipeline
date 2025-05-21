@@ -212,31 +212,30 @@ function checkFutureError(fut)
 end
 
 function warnNoBacktrace(id, msg, varargin)
-    marker = '[CustomWarning]';  % ← debug marker
-    if ~ischar(id) && ~isStringScalar(id)
-        id = 'warnNoBacktrace:InvalidID';
-    else
-        id = char(id);
+    % Validate and sanitize warning ID
+    if ~ischar(id) && ~isstring(id)
+        id = "warnNoBacktrace:InvalidID";
+    end
+    id = char(id);
+
+    % Validate and format message
+    if nargin > 2
+        try
+            msg = sprintf(msg, varargin{:});
+        catch
+            msg = 'Warning formatting failed.';
+        end
     end
 
-    if ~ischar(msg) && ~isStringScalar(msg)
+    if ~ischar(msg) && ~isstring(msg)
         msg = 'Unknown warning message';
-    else
-        msg = char(msg);
     end
+    msg = char(msg);
 
-    msg = sprintf('%s %s', marker, msg);
-
+    % Suppress backtrace
     st = warning('query', 'backtrace');
     warning('off', 'backtrace');
-
-    try
-        full_msg = sprintf(msg, varargin{:});
-    catch
-        full_msg = msg;  % fallback to raw message
-    end
-    warning(id, full_msg);
-
+    warning(id, msg);
     warning(st.state, 'backtrace');
 end
 
