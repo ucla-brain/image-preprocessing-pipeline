@@ -171,9 +171,9 @@ function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
             [otf, otf_conj] = loadOTFCacheMapped(base);
             if use_gpu
                 otf = gpuArray(otf);
-                otf = complex(real(otf), imag(otf));  % 💥 Safe for fftn/ifftn on gpu
+                otf = arrayfun(@(r, i) complex(r, i), real(otf), imag(otf));  % 💥 Safe for fftn/ifftn on gpu
                 otf_conj = gpuArray(otf_conj);
-                otf_conj = complex(real(otf_conj), imag(otf_conj));
+                otf_conj = arrayfun(@(r, i) complex(r, i), real(otf_conj), imag(otf_conj));
             end
             disp(['Loaded cached OTF for size ' mat2str(imsize)]);
             return;
