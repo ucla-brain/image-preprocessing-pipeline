@@ -198,10 +198,9 @@ function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
             otf_cpu = otf;
             otf_conj_cpu = otf_conj;
         end
-        % f = parfeval(backgroundPool, @saveOTFCacheMapped, 0, base, otf_cpu, otf_conj_cpu, sem_key);
-        % afterAll(f, @(fut) checkFutureError(fut), 0);
-        disp(['Caching OTF for size ' mat2str(imsize)]);
-        saveOTFCacheMapped(base, otf_cpu, otf_conj_cpu, sem_key);
+        f = parfeval(backgroundPool, @saveOTFCacheMapped, 0, base, otf_cpu, otf_conj_cpu, sem_key);
+        afterAll(f, @(fut) checkFutureError(fut), 0);
+        % saveOTFCacheMapped(base, otf_cpu, otf_conj_cpu, sem_key);
     catch e
         warnNoBacktrace('getCachedOTF:SaveCacheFailed', 'OTF computed but failed to save: %s', e.message);
     end
@@ -254,6 +253,7 @@ function saveOTFCacheMapped(base, otf, otf_conj, sem_key)
     end
 
     try
+        disp(['Caching OTF for size ' mat2str(size(otf))]);
         otf_real   = single(real(otf));
         otf_imag   = single(imag(otf));
         conj_real  = single(real(otf_conj));
