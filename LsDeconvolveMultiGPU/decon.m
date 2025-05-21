@@ -207,12 +207,17 @@ function checkFutureError(fut)
 end
 
 function warnNoBacktrace(id, msg, varargin)
-    % Ensure msg is a string or char
+    % Force ID to string
+    if ~ischar(id) && ~isStringScalar(id)
+        id = 'warnNoBacktrace:InvalidID';
+    end
+
+    % Force MSG to string
     if ~ischar(msg) && ~isStringScalar(msg)
         msg = char(msg);
     end
 
-    % Sanitize varargin: convert any non-string to char
+    % Sanitize all varargin elements
     for i = 1:numel(varargin)
         arg = varargin{i};
         if ~ischar(arg) && ~isStringScalar(arg)
@@ -224,10 +229,17 @@ function warnNoBacktrace(id, msg, varargin)
         end
     end
 
-    % Suppress backtrace, issue warning, restore
+    % Safely issue warning with backtrace suppressed
     st = warning('query', 'backtrace');
     warning('off', 'backtrace');
-    warning(id, msg, varargin{:});
+
+    try
+        warning(id, msg, varargin{:});
+    catch inner
+        % Fallback: safe default message if formatting fails
+        warning(id, '%s [formatting failed: %s]', msg, inner.message);
+    end
+
     warning(st.state, 'backtrace');
 end
 
