@@ -97,10 +97,6 @@ function bl = deconFFT(bl, psf, niter, lambda, stop_criterion, regularize_interv
     use_gpu = isgpuarray(bl);
 
     [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu);
-    if use_gpu
-        if ~isgpuarray(otf), otf = gpuArray(otf); end
-        if ~isgpuarray(otf_conj), otf_conj = gpuArray(otf_conj); end
-    end
 
     if regularize_interval < niter && lambda > 0
         R = single(1/26 * ones(3,3,3)); R(2,2,2) = 0;
@@ -173,6 +169,12 @@ function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
     if isfile([base, '.bin']) && isfile([base, '.meta'])
         try
             [otf, otf_conj] = loadOTFCacheMapped(base);
+            if use_gpu
+                otf = gpuArray(otf);
+                otf = complex(real(otf), imag(otf));  % 💥 Safe for fftn/ifftn on gpu
+                otf_conj = gpuArray(otf_conj);
+                otf_conj = complex(real(otf_conj), imag(otf_conj));
+            end
             disp(['Loaded cached OTF for size ' mat2str(imsize)]);
             return;
         catch e
