@@ -171,8 +171,8 @@ function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
             [otf, otf_conj] = loadOTFCacheMapped(base);
             disp(['Loaded cached OTF for size ' mat2str(imsize)]);
             return;
-        catch
-            warnNoBacktrace('getCachedOTF:CacheReadFailed', 'Failed to read binary cache.');
+        catch e
+            warnNoBacktrace('getCachedOTF:CacheReadFailed', 'Failed to read binary cache.%s', e.message);
         end
     end
 
