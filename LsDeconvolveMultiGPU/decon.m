@@ -159,7 +159,11 @@ end
 
 function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
     cache_dir = getCachePath();
-    key_str = ['key_' strrep(mat2str(imsize), ' ', '_')];
+    if use_gpu
+        key_str = ['key_' strrep(mat2str(imsize), ' ', '_') '_gpu'];
+    else
+        key_str = ['key_' strrep(mat2str(imsize), ' ', '_') '_cpu'];
+    end
     base = fullfile(cache_dir, key_str);
     OFFSET = 1e5;
     sem_key = double(string2hash(key_str)) + OFFSET;
@@ -199,7 +203,7 @@ function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
         % f = parfeval(backgroundPool, @saveOTFCacheMapped, 0, base, otf_cpu, otf_conj_cpu, sem_key);
         % afterAll(f, @(fut) checkFutureError(fut), 0);
         disp(['Caching OTF for size ' mat2str(imsize)]);
-        saveOTFCacheMapped(base, otf_cpu, otf_conj_cpu, sem_key);
+        saveOTFCacheMapped(base, otf_cpu, otf_conj_cpu, use_gpu, sem_key);
     catch e
         warnNoBacktrace('getCachedOTF:SaveCacheFailed', 'OTF computed but failed to save: %s', e.message);
     end
