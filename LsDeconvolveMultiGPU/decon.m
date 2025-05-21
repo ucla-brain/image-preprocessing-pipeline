@@ -206,7 +206,7 @@ function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
         semaphore('w', sem_key);
         cleanup_sem = onCleanup(@() semaphore('p', sem_key));  % auto-release
         try
-            saveOTFCacheMapped(base, otf);
+            saveOTFCacheMapped(base, otf, otf_conj);
         catch e
             warnNoBacktrace('getCachedOTF:SaveCacheFailed', 'OTF computed but failed to save: %s', e.message);
         end
@@ -220,53 +220,71 @@ function warnNoBacktrace(id, msg, varargin)
     warning(st.state, 'backtrace');
 end
 
-function saveOTFCacheMapped(filename, otf)
+function saveOTFCacheMapped(filename, otf, otf_conj)
     otf_real = single(real(otf));
     otf_imag = single(imag(otf));
+    conj_real = single(real(otf_conj));
+    conj_imag = single(imag(otf_conj));
     shape = size(otf_real);
 
-    tmp_id = char(java.util.UUID.randomUUID());
-    tmp_bin = fullfile(tempdir, [tmp_id '_otf.bin.tmp']);
-    tmp_meta = fullfile(tempdir, [tmp_id '_otf.meta.tmp']);
+    tmp_bin = [filename, '.bin.tmp'];
+    tmp_meta = [filename, '.meta.tmp'];
     final_bin = [filename, '.bin'];
     final_meta = [filename, '.meta'];
 
-    % Write .bin
-    fid = fopen(tmp_bin, 'w');
+    % === Write binary file
+    fid = fopen(tmp_bin, 'wb');
     if fid == -1
         error('Cannot open file for writing: %s', tmp_bin);
     end
-    fwrite(fid, [otf_real(:)'; otf_imag(:)'], 'single');
+    fwrite(fid, [otf_real(:); otf_imag(:); conj_real(:); conj_imag(:)], 'single');
     fclose(fid);
     fileattrib(tmp_bin, '+w', 'a');
 
-    % Save .meta
+    % === Save metadata
     meta.shape = shape;
     meta.class = 'single';
-    meta.version = 1;
-    save(tmp_meta, '-struct', 'meta');
+    meta.version = 2;
+    save(tmp_meta, '-struct', 'meta', '-v7');
     fileattrib(tmp_meta, '+w', 'a');
 
-    % Atomic rename
+    % === Atomic move
     movefile(tmp_bin, final_bin, 'f');
     movefile(tmp_meta, final_meta, 'f');
 end
 
-
 function [otf, otf_conj] = loadOTFCacheMapped(filename)
     meta = load([filename, '.meta']);
     shape = meta.shape;
+
+    % === Version check
+    if ~isfield(meta, 'version') || meta.version ~= 2
+        error('Incompatible or missing cache version in %s.meta', filename);
+    end
+
+    % === Read flattened binary data
+    fid = fopen([filename, '.bin'], 'rb');
+    if fid == -1
+        error('Cannot open binary cache file: %s.bin', filename);
+    end
+
     count = prod(shape);
+    total = 4 * count;
+    data = fread(fid, total, 'single');
+    fclose(fid);
 
-    mmap = memmapfile([filename, '.bin'], ...
-        'Format', {'single', [2, count], 're_im'}, ...
-        'Repeat', 1, ...
-        'Writable', false);
+    if numel(data) < total
+        error('Incomplete or corrupted binary cache file: %s.bin', filename);
+    end
 
-    re = mmap.Data.re_im(1, :);
-    im = mmap.Data.re_im(2, :);
-    otf = reshape(complex(re, im), shape);
-    otf_conj = conj(otf);
+    % === Unpack real/imag parts of otf and otf_conj
+    otf_real   = data(1:count);
+    otf_imag   = data(count+1 : 2*count);
+    conj_real  = data(2*count+1 : 3*count);
+    conj_imag  = data(3*count+1 : end);
+
+    otf      = reshape(complex(otf_real,  otf_imag),  shape);
+    otf_conj = reshape(complex(conj_real, conj_imag), shape);
 end
 
 function registerSemaphoreKey(key)
