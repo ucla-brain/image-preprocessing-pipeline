@@ -207,6 +207,24 @@ function checkFutureError(fut)
 end
 
 function warnNoBacktrace(id, msg, varargin)
+    % Ensure msg is a string or char
+    if ~ischar(msg) && ~isStringScalar(msg)
+        msg = char(msg);
+    end
+
+    % Sanitize varargin: convert any non-string to char
+    for i = 1:numel(varargin)
+        arg = varargin{i};
+        if ~ischar(arg) && ~isStringScalar(arg)
+            try
+                varargin{i} = char(arg);
+            catch
+                varargin{i} = '<unprintable>';
+            end
+        end
+    end
+
+    % Suppress backtrace, issue warning, restore
     st = warning('query', 'backtrace');
     warning('off', 'backtrace');
     warning(id, msg, varargin{:});
