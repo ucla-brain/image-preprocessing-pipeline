@@ -231,7 +231,7 @@ function warnNoBacktrace(id, msg, varargin)
     warning('off', 'backtrace');
 
     try
-        warning(id, msg, varargin{:});
+        warning(id, sprintf(msg, varargin{:}));
     catch inner
         warning('warnNoBacktrace:InternalFailure', ...
             'Warning formatting failed: %s', inner.message);
