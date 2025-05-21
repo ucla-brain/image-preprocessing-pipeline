@@ -320,7 +320,7 @@ function [otf, otf_conj] = loadOTFCacheMapped(filename)
 
         switch key
             case 'shape'
-                meta.shape = str2num(strrep(value, '[', ''));  %#ok<ST2NM>
+                meta.shape = str2num(value);  %#ok<ST2NM>
             case 'class'
                 meta.class = value;
             case 'version'
