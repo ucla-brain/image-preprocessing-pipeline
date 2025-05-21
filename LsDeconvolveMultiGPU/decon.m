@@ -240,16 +240,13 @@ function warnNoBacktrace(id, msg, varargin)
 end
 
 function saveOTFCacheMapped(base, otf, otf_conj, sem_key)
-     % === Skip if file already exists
     if isfile([base, '.bin']) && isfile([base, '.meta'])
         return;
     end
 
-    % === Lock
     semaphore('w', sem_key);
     cleanup_sem = onCleanup(@() semaphore('p', sem_key));
 
-    % === Skip if file already exists after wait time was over
     if isfile([base, '.bin']) && isfile([base, '.meta'])
         return;
     end
@@ -268,26 +265,17 @@ function saveOTFCacheMapped(base, otf, otf_conj, sem_key)
 
         % Write .bin
         fid = fopen(tmp_bin, 'wb');
-        if fid == -1
-            error('Cannot open file for writing: %s', tmp_bin);
-        end
+        if fid == -1, error('Cannot open file for writing: %s', tmp_bin); end
         fwrite(fid, [otf_real(:); otf_imag(:); conj_real(:); conj_imag(:)], 'single');
         fclose(fid);
         fileattrib(tmp_bin, '+w', 'a');
 
         % Write .meta
-        try
-            % save(tmp_meta, '-struct', 'meta', '-v7');
-            fid = fopen(tmp_meta, 'w');
-            if fid == -1, error('Failed to open meta file for writing'); end
-
-            fprintf(fid, 'shape %s\n', mat2str(shape));
-            fprintf(fid, 'class single\n');
-            fprintf(fid, 'version 2\n');
-            fclose(fid);
-        catch e
-            error('Meta save failed: %s', e.message);
-        end
+        fid = fopen(tmp_meta, 'w');
+        if fid == -1, error('Failed to open meta file for writing'); end
+        fprintf(fid, 'shape [%s]\n', num2str(shape));
+        fprintf(fid, 'class single\n');
+        fclose(fid);
         fileattrib(tmp_meta, '+w', 'a');
 
         movefile(tmp_bin, final_bin, 'f');
@@ -299,7 +287,6 @@ function saveOTFCacheMapped(base, otf, otf_conj, sem_key)
 end
 
 function [otf, otf_conj] = loadOTFCacheMapped(filename)
-    % === Parse metadata
     meta = struct();
     fid = fopen([filename '.meta'], 'r');
     if fid == -1
@@ -308,7 +295,7 @@ function [otf, otf_conj] = loadOTFCacheMapped(filename)
 
     while true
         line = fgetl(fid);
-        if ~ischar(line), break; end  % EOF or invalid
+        if ~ischar(line), break; end
         line = strtrim(line);
         if isempty(line), continue; end
 
@@ -323,19 +310,15 @@ function [otf, otf_conj] = loadOTFCacheMapped(filename)
                 meta.shape = sscanf(regexprep(value, '[\[\]]', ''), '%f')';
             case 'class'
                 meta.class = value;
-            case 'version'
-                meta.version = str2double(value);
         end
     end
     fclose(fid);
 
-    % === Validate metadata
-    if ~isfield(meta, 'shape') || ~isfield(meta, 'version') || meta.version ~= 2
-        error('Invalid or missing metadata in %s.meta', filename);
+    if ~isfield(meta, 'shape')
+        error('loadOTFCacheMapped:InvalidMeta', 'Missing shape in metadata for: %s', filename);
     end
     shape = meta.shape;
 
-    % === Load binary data
     fid = fopen([filename, '.bin'], 'rb');
     if fid == -1
         error('Cannot open binary cache file: %s.bin', filename);
@@ -350,11 +333,9 @@ function [otf, otf_conj] = loadOTFCacheMapped(filename)
         error('Incomplete or corrupted binary cache file: %s.bin', filename);
     end
 
-    % === Reconstruct OTF and its conjugate
     otf      = reshape(complex(data(1:count), data(count+1:2*count)), shape);
     otf_conj = reshape(complex(data(2*count+1:3*count), data(3*count+1:end)), shape);
 end
-
 
 function registerSemaphoreKey(key)
     persistent used_keys cleanupObj
