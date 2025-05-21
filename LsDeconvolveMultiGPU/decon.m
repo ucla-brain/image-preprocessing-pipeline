@@ -207,37 +207,44 @@ function checkFutureError(fut)
 end
 
 function warnNoBacktrace(id, msg, varargin)
-    % Force ID to string
-    if ~ischar(id) && ~isStringScalar(id)
-        id = 'warnNoBacktrace:InvalidID';
+    % Ensure ID is a valid char
+    if ~ischar(id)
+        try
+            id = char(id);  % works for string scalar
+        catch
+            id = 'warnNoBacktrace:InvalidID';  % fallback ID
+        end
     end
 
-    % Force MSG to string
-    if ~ischar(msg) && ~isStringScalar(msg)
-        msg = char(msg);
+    % Ensure message is a valid char
+    if ~ischar(msg)
+        try
+            msg = char(msg);
+        catch
+            msg = 'Unknown warning message';
+        end
     end
 
-    % Sanitize all varargin elements
+    % Clean varargin
     for i = 1:numel(varargin)
-        arg = varargin{i};
-        if ~ischar(arg) && ~isStringScalar(arg)
+        if ~ischar(varargin{i}) && ~isStringScalar(varargin{i})
             try
-                varargin{i} = char(arg);
+                varargin{i} = char(varargin{i});
             catch
                 varargin{i} = '<unprintable>';
             end
         end
     end
 
-    % Safely issue warning with backtrace suppressed
+    % Suppress backtrace
     st = warning('query', 'backtrace');
     warning('off', 'backtrace');
 
     try
         warning(id, msg, varargin{:});
     catch inner
-        % Fallback: safe default message if formatting fails
-        warning(id, '%s [formatting failed: %s]', msg, inner.message);
+        warning('warnNoBacktrace:InternalFailure', ...
+            'Warning formatting failed: %s', inner.message);
     end
 
     warning(st.state, 'backtrace');
