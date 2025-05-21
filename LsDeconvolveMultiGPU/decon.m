@@ -300,10 +300,14 @@ function saveOTFCacheMapped(base, otf, otf_conj, sem_key)
 end
 
 function [otf, otf_conj] = loadOTFCacheMapped(filename)
-    % meta = load([filename, '.meta']);
-    fid = fopen([filename '.meta'], 'r');
+    meta_file = [filename, '.meta'];
+    bin_file  = [filename, '.bin'];
+
+    % === Read metadata
+    disp(['Opening meta file: ', meta_file]);
+    fid = fopen(meta_file, 'r');
     if fid == -1
-        error('Cannot open meta file: %s.meta', filename);
+        error('Cannot open meta file: %s', meta_file);
     end
 
     meta = struct();
@@ -314,10 +318,10 @@ function [otf, otf_conj] = loadOTFCacheMapped(filename)
         tokens = strsplit(line, ' ', 2);
         if numel(tokens) < 2, continue; end
 
-        key = tokens{1};
+        key = lower(tokens{1});
         value = strtrim(tokens{2});
 
-        switch lower(key)
+        switch key
             case 'shape'
                 meta.shape = str2num(strrep(value, '[', ''));  %#ok<ST2NM>
             case 'class'
@@ -330,33 +334,32 @@ function [otf, otf_conj] = loadOTFCacheMapped(filename)
     end
     fclose(fid);
 
-    % === Version check
+    % === Validate metadata
     if ~isfield(meta, 'shape') || isempty(meta.shape)
-        error('Meta file is missing shape info.');
+        error('Meta file is missing shape info: %s', meta_file);
     end
-
     if ~isfield(meta, 'version') || meta.version ~= 2
-        error('Incompatible or missing cache version in %s.meta', filename);
+        error('Incompatible or missing cache version in %s', meta_file);
     end
-
     shape = meta.shape;
+    count = prod(shape);
 
-    % === Read flattened binary data
-    fid = fopen([filename, '.bin'], 'rb');
+    % === Read binary data
+    disp(['Opening binary file: ', bin_file]);
+    fid = fopen(bin_file, 'rb');
     if fid == -1
-        error('Cannot open binary cache file: %s.bin', filename);
+        error('Cannot open binary cache file: %s', bin_file);
     end
 
-    count = prod(shape);
-    total = 4 * count;
-    data = fread(fid, total, 'single');
+    disp(['Reading ', num2str(4*count), ' floats...']);
+    data = fread(fid, 4 * count, 'single');
     fclose(fid);
 
-    if numel(data) < total
-        error('Incomplete or corrupted binary cache file: %s.bin', filename);
+    if numel(data) < 4 * count
+        error('Incomplete or corrupted binary cache file: %s', bin_file);
     end
 
-    % === Unpack real/imag parts of otf and otf_conj
+    % === Reconstruct complex arrays
     otf_real   = data(1:count);
     otf_imag   = data(count+1 : 2*count);
     conj_real  = data(2*count+1 : 3*count);
@@ -364,6 +367,8 @@ function [otf, otf_conj] = loadOTFCacheMapped(filename)
 
     otf      = reshape(complex(otf_real,  otf_imag),  shape);
     otf_conj = reshape(complex(conj_real, conj_imag), shape);
+
+    disp(['Loaded OTF and OTF_conj from cache: ', filename]);
 end
 
 function registerSemaphoreKey(key)
