@@ -164,28 +164,28 @@ function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
     if isfile([base, '.bin']) && isfile([base, '.meta'])
         try
             [otf, otf_conj] = loadOTFCacheMapped(base);
+            disp(['Loaded cached OTF for size ' mat2str(imsize)]);
             return;
         catch
-            warnNoBacktrace('getCachedOTF:CacheReadFailed', 'Failed to read binary cache. Recomputing.');
+            warnNoBacktrace('getCachedOTF:CacheReadFailed', 'Failed to read binary cache. Will try again ...');
         end
     end
 
-    % === Wait for semaphore ===
-    semaphore('w', sem_key);
-    cleanup_sem = onCleanup(@() semaphore('p', sem_key));  % auto-release
-
     % === Check again (might have been written by another worker) ===
     if isfile([base, '.bin']) && isfile([base, '.meta'])
+        semaphore('w', sem_key);
         try
             [otf, otf_conj] = loadOTFCacheMapped(base);
             return;
         catch
-            warnNoBacktrace("getCachedOTF:CacheReadTimeout", "Cache load failed after wait. Recomputing.");
+            warnNoBacktrace('getCachedOTF:CacheReadTimeout', 'Cache load failed after wait. Recomputing.');
+        finally
+            semaphore('p', sem_key);
         end
     end
-
     % === Compute OTF ===
     try
+        disp(['Recomputing and caching OTF for size ' mat2str(imsize)]);
         otf = padPSF(psf, imsize);
         if use_gpu, otf = gpuArray(otf); end
         otf = fftn(otf);
@@ -195,15 +195,20 @@ function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
             otf_conj = gather(otf_conj);
         end
     catch e
-        error("getCachedOTF:ComputationFailed", ...
-              "Failed to compute OTF: %s", e.message);
+        error('getCachedOTF:ComputationFailed', ...
+              'Failed to compute OTF: %s', e.message);
     end
 
     % === Save to cache ===
-    try
-        saveOTFCacheMapped(base, otf);
-    catch e
-        warnNoBacktrace("getCachedOTF:SaveCacheFailed", "OTF computed but failed to save: %s", e.message);
+    % Double-check: another worker may have saved while we were computing
+    if ~isfile([base, '.bin']) && ~isfile([base, '.meta'])
+        semaphore('w', sem_key);
+        cleanup_sem = onCleanup(@() semaphore('p', sem_key));  % auto-release
+        try
+            saveOTFCacheMapped(base, otf);
+        catch e
+            warnNoBacktrace('getCachedOTF:SaveCacheFailed', 'OTF computed but failed to save: %s', e.message);
+        end
     end
 end
 
@@ -264,10 +269,10 @@ function [otf, otf_conj] = loadOTFCacheMapped(filename)
 end
 
 function registerSemaphoreKey(key)
-    persistent used_keys
+    persistent used_keys cleanupObj
     if isempty(used_keys)
         used_keys = containers.Map('KeyType', 'double', 'ValueType', 'logical');
-        onCleanup(@destroyAllSemaphores);
+        cleanupObj = onCleanup(@destroyAllSemaphores);
     end
     if ~isKey(used_keys, key)
         semaphore('c', key, 1);  % create with count = 1
