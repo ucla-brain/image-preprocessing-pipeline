@@ -205,10 +205,9 @@ function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
         semaphore('w', sem_key);
         try
             f = parfeval(@saveOTFCacheMapped, 0, base, gather(otf), gather(otf_conj));
-            % No blocking, fire-and-forget
-            f.AfterEach = @(~) semaphore('p', sem_key);  % Manually release if needed
+            afterAll(f, @(~) semaphore('p', sem_key), 0);  % release semaphore after save
         catch e
-            semaphore('p', sem_key);
+            semaphore('p', sem_key);  % ensure release on failure
             warnNoBacktrace('getCachedOTF:SaveCacheFailed', ...
                             'OTF computed but failed to save: %s', e.message);
         end
