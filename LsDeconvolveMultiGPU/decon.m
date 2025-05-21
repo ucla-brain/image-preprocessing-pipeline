@@ -94,7 +94,7 @@ function bl = deconFFT(bl, psf, niter, lambda, stop_criterion, regularize_interv
     imsize = size(bl);
     use_gpu = isgpuarray(bl);
 
-    [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu);  % Always CPU
+    [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu);
     if use_gpu
         otf = gpuArray(otf);
         otf_conj = gpuArray(otf_conj);
