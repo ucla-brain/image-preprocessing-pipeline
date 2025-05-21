@@ -204,10 +204,17 @@ function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
     try
         otf_cpu = gather(otf);
         otf_conj_cpu = gather(otf_conj);
-        parfeval(@saveOTFCacheMapped, 0, base, otf_cpu, otf_conj_cpu, sem_key);
+        f = parfeval(backgroundPool, @saveOTFCacheMapped, 0, base, otf_cpu, otf_conj_cpu, sem_key);
+        afterAll(f, @(fut) checkFutureError(fut), 0);
     catch e
         warnNoBacktrace('getCachedOTF:SaveCacheFailed', ...
                         'OTF computed but failed to save: %s', e.message);
+    end
+end
+
+function checkFutureError(fut)
+    if ~isempty(fut.Error)
+        warning('Async OTF save failed: %s', fut.Error.message);
     end
 end
 
