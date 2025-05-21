@@ -189,8 +189,13 @@ function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
 
     % === Save to cache (async, thread-safe)
     try
-        otf_cpu = gather(otf);
-        otf_conj_cpu = gather(otf_conj);
+        if use_gpu
+            otf_cpu = gather(otf);
+            otf_conj_cpu = gather(otf_conj);
+        else
+            otf_cpu = otf;
+            otf_conj_cpu = otf_conj;
+        end
         % f = parfeval(backgroundPool, @saveOTFCacheMapped, 0, base, otf_cpu, otf_conj_cpu, sem_key);
         % afterAll(f, @(fut) checkFutureError(fut), 0);
         disp(['Caching OTF for size ' mat2str(imsize)]);
@@ -287,15 +292,12 @@ function saveOTFCacheMapped(base, otf, otf_conj, sem_key)
         fileattrib(tmp_bin, '+w', 'a');
 
         % Write .meta
-        meta.shape = shape;
-        meta.class = 'single';
-        meta.version = 2;
         try
             % save(tmp_meta, '-struct', 'meta', '-v7');
             fid = fopen(tmp_meta, 'w');
             if fid == -1, error('Failed to open meta file for writing'); end
 
-            fprintf(fid, 'shape %s\n', mat2str(size(otf)));
+            fprintf(fid, 'shape %s\n', mat2str(shape));
             fprintf(fid, 'class single\n');
             fprintf(fid, 'version 2\n');
             fclose(fid);
@@ -344,6 +346,10 @@ function [otf, otf_conj] = loadOTFCacheMapped(filename)
     fclose(fid);
 
     % === Version check
+    if ~isfield(meta, 'shape') || isempty(meta.shape)
+        error('Meta file is missing shape info.');
+    end
+
     if ~isfield(meta, 'version') || meta.version ~= 2
         error('Incompatible or missing cache version in %s.meta', filename);
     end
@@ -395,9 +401,7 @@ function destroyAllSemaphores()
         try
             semaphore('d', keys{i});
         catch
-            if isDebugMode()
-                warning('Failed to destroy semaphore %d', keys{i});
-            end
+            warning('Failed to destroy semaphore %d: %s', keys{i}, lasterr);  %#ok<LERR>
         end
     end
 end
