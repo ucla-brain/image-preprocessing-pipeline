@@ -204,8 +204,9 @@ function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
     try
         otf_cpu = gather(otf);
         otf_conj_cpu = gather(otf_conj);
-        f = parfeval(backgroundPool, @saveOTFCacheMapped, 0, base, otf_cpu, otf_conj_cpu, sem_key);
-        afterAll(f, @(fut) checkFutureError(fut), 0);
+        % f = parfeval(backgroundPool, @saveOTFCacheMapped, 0, base, otf_cpu, otf_conj_cpu, sem_key);
+        % afterAll(f, @(fut) checkFutureError(fut), 0);
+        saveOTFCacheMapped(base, otf_cpu, otf_conj_cpu, sem_key);
     catch e
         warnNoBacktrace('getCachedOTF:SaveCacheFailed', ...
                         'OTF computed but failed to save: %s', e.message);
@@ -226,14 +227,14 @@ function warnNoBacktrace(id, msg, varargin)
 end
 
 function saveOTFCacheMapped(base, otf, otf_conj, sem_key)
+    % === Lock
+    semaphore('w', sem_key);
+    cleanup_sem = onCleanup(@() semaphore('p', sem_key));
+
     % === Skip if file already exists
     if isfile([base, '.bin']) && isfile([base, '.meta'])
         return;
     end
-
-    % === Lock
-    semaphore('w', sem_key);
-    cleanup_sem = onCleanup(@() semaphore('p', sem_key));
 
     try
         % Double-check after acquiring lock
