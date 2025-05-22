@@ -413,14 +413,14 @@ if __name__ == '__main__':
     parser.add_argument("--voxel_size_z_target", "-dzt", type=float, required=False, default=1.0,
                         help="The voxel size on the z-axis of the target image. "
                              "Default value is 1.")
-    parser.add_argument("--x_axis_length", "-x", type=int, required=False, default=0,
-                        help="The length of x-axis in pixels of the source image. "
+    parser.add_argument("--x_axis_length", "-x", type=float, required=False, default=0,
+                        help="The length of x-axis in pixels or um of the source image. "
                              "If x>0 is provided x-axis will be flipped. Default is 0 --> no x-axis flipping")
-    parser.add_argument("--y_axis_length", "-y", type=int, required=False, default=0,
-                        help="The length of y-axis in pixels of the source image. "
+    parser.add_argument("--y_axis_length", "-y", type=float, required=False, default=0,
+                        help="The length of y-axis in pixels or um of the source image. "
                              "If y>0 is provided y-axis will be flipped. Default is 0 --> no y-axis flipping")
-    parser.add_argument("--z_axis_length", "-z", type=int, required=False, default=0,
-                        help="The length of z-axis in pixels of the source image. "
+    parser.add_argument("--z_axis_length", "-z", type=float, required=False, default=0,
+                        help="The length of z-axis in pixels or um of the source image. "
                              "If z>0 is provided z-axis will be flipped. Default is 0 --> no z-axis flipping")
     parser.add_argument("--radii", "-r", type=float, required=False, default=None,
                         help="If soma radius is smaller than the specified value the radius will be changed. "
