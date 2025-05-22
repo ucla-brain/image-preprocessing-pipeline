@@ -1405,7 +1405,7 @@ end
 
 function cleanupSemaphoresFromCache()
     OFFSET = 1e5;
-    cacheDir = fullfile(tempdir, 'otf_cache');
+    cacheDir = getCachePath()
     if ~isfolder(cacheDir)
         fprintf('Cache directory not found: %s\n', cacheDir);
         return;
@@ -1429,10 +1429,3 @@ function cleanupSemaphoresFromCache()
     end
 end
 
-function h = string2hash(str)
-    str = double(str);
-    h = 5381;
-    for i = 1:length(str)
-        h = mod(h * 33 + str(i), 2^31 - 1);  % DJB2 hash
-    end
-end

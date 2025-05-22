@@ -356,22 +356,6 @@ function destroyAllSemaphores()
     end
 end
 
-function h = string2hash(str)
-    str = double(str);
-    h = 5381;
-    for i = 1:length(str)
-        h = mod(h * 33 + str(i), 2^31 - 1);  % DJB2
-    end
-end
-
-function cache_path = getCachePath()
-    cache_path  = fullfile(tempdir, 'otf_cache');
-    % cache_path  = fullfile('/data', 'otf_cache');
-    if ~exist(cache_path , 'dir')
-        mkdir(cache_path);
-    end
-end
-
 function y = convFFT(x, otf)
     % Optimized frequency-domain convolution for low VRAM usage.
     % Performs: y = real(ifftn(fftn(x) .* otf))
