@@ -6,6 +6,7 @@ import platform
 import signal
 import shutil
 import subprocess
+import tempfile
 from json import dump
 from pathlib import Path
 from subprocess import CalledProcessError
@@ -242,6 +243,9 @@ def main():
                         help='Use tcmalloc allocator (Linux only)')
     parser.add_argument('--use-fft', action='store_true', default=False,
                         help='use FFT-based convolution, which is faster but uses more memory.')
+    parser.add_argument('--no-clean-otf-cache', dest='clean_otf_cache', action='store_false',
+                        help='Disable deletion of OTF cache after deconvolution (enabled by default).')
+    parser.set_defaults(clean_otf_cache=True)
 
     args = parser.parse_args()
 
@@ -397,6 +401,8 @@ def main():
         )
         proc.wait()
         log.info("Deconvolution completed successfully.")
+        if args.clean_otf_cache:
+            cleanup_otf_cache()
 
     except KeyboardInterrupt:
         log.warning("Interrupted by user (Ctrl+C). Terminating MATLAB...")
@@ -428,6 +434,17 @@ def main():
         if not args.dry_run and tmp_script_path.exists():
             log.info("Cleaning up temporary MATLAB script...")
             tmp_script_path.unlink(missing_ok=True)
+
+def cleanup_otf_cache():
+    otf_cache_path = Path(tempfile.gettempdir()) / "otf_cache"
+    if otf_cache_path.exists() and otf_cache_path.is_dir():
+        try:
+            shutil.rmtree(otf_cache_path)
+            log.info(f"Cleaned up OTF cache at: {otf_cache_path}")
+        except Exception as e:
+            log.warning(f"Failed to clean OTF cache at {otf_cache_path}: {e}")
+    else:
+        log.info(f"No OTF cache found at: {otf_cache_path}")
 
 
 if __name__ == "__main__":
