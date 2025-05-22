@@ -233,6 +233,9 @@ def main():
                         help='Flip output image vertically after deconvolution')
     parser.add_argument('--convert-to-8bit', action='store_true',
                         help='Convert output to 8-bit (default keeps original bit depth, usually 16-bit)')
+    parser.add_argument('--no-convert-to-16bit', action='store_false', dest='convert_to_16bit',
+                        help='Disable 16-bit conversion and keep the original file type.')
+    parser.set_defaults(convert_to_16bit=True)
     parser.add_argument('--start_block', type=int, default=1,
                         help='Starting block index for multi-GPU chunking')
     parser.add_argument('--dry-run', action='store_true',
@@ -322,7 +325,8 @@ def main():
         f"    {int(args.resume)}, ...\n"
         f"    {args.start_block}, ...\n"
         f"    {int(args.flip)}, ...\n"
-        f"    {int(args.convert_to_8bit)}, ...\n"
+        f"    {'true' if args.convert_to_8bit else 'false'}, ...\n"
+        f"    {'true' if args.convert_to_16bit else 'false'}, ...\n"
         f"    {'true' if args.use_fft else 'false'}, ...\n"
         f"    convertCharsToStrings('{cache_drive_folder}') ...\n"
         f");\n"
@@ -332,6 +336,9 @@ def main():
 
     if args.use_jemalloc and args.use_tcmalloc:
         raise RuntimeError("Cannot use both jemalloc and tcmalloc simultaneously. Choose one.")
+
+    if args.convert_to_8bit and args.convert_to_16bit:
+        raise RuntimeError("Cannot use both convert-to-8bit and convert-to-16bit simultaneously. Choose one.")
 
     jemalloc_path = find_allocator("jemalloc") if is_linux and args.use_jemalloc else None
     tcmalloc_path = find_allocator("tcmalloc") if is_linux and args.use_tcmalloc else None

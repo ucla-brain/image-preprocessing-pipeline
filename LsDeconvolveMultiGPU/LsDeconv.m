@@ -37,11 +37,8 @@ function [] = LsDeconv(varargin)
         disp(' ');
 
         % make sure correct number of parameters specified
-        if nargin < 26
+        if nargin < 28
             showinfo();
-            if isdeployed
-                exit(1);
-            end
             return
         end
 
@@ -72,16 +69,14 @@ function [] = LsDeconv(varargin)
         starting_block = varargin{23};
         flip_upside_down = varargin{24};
         convert_to_8bit = varargin{25};
-        filter.use_fft = varargin{26};
-        cache_drive = fullfile(tempdir, 'decon_cache');
-        if nargin > 26
-            cache_drive = varargin{27};
-            if ~exist(cache_drive, "dir")
-                disp("making cache drive dir " + cache_drive)
-                mkdir(cache_drive);
-            end
-            disp("cache drive dir created and/or exists " + cache_drive)
+        convert_to_16bit = varargin{26};
+        filter.use_fft = varargin{27};
+        cache_drive = varargin{28};
+        if ~exist(cache_drive, "dir")
+            disp("making cache drive dir " + cache_drive)
+            mkdir(cache_drive);
         end
+        disp("cache drive dir created and/or exists " + cache_drive)
         
         assert(isa(inpath, "string"), "wrong type " + class(inpath));
         assert(isa(dxy, "double"), "wrong type " + class(dxy));
@@ -120,6 +115,7 @@ function [] = LsDeconv(varargin)
             stack_info.dz = dz;
             stack_info.flip_upside_down = flip_upside_down;
             stack_info.convert_to_8bit = convert_to_8bit;
+            stack_info.convert_to_16bit = convert_to_16bit;
 
             if resume && numel(dir(fullfile(outpath, '*.tif'))) == stack_info.z
                 disp("it seems all the files are already deconvolved!");
@@ -158,6 +154,8 @@ function [] = LsDeconv(varargin)
         p_log(log_file, ['   image size (voxels): ' num2str(stack_info.x)  'x * ' num2str(stack_info.y) 'y * ' num2str(stack_info.z) 'z = ' num2str(stack_info.x * stack_info.y * stack_info.z)]);
         p_log(log_file, ['   voxel size (nm^3): ' num2str(dxy)  'x * ' num2str(dxy) 'y * ' num2str(dz) 'z = ' num2str(dxy^2*dz)]);
         p_log(log_file, ['   image bit depth: ' num2str(stack_info.bit_depth)]);
+        p_log(log_file, ['   convert to 8bit: ' num2str(stack_info.convert_to_8bit)]);
+        p_log(log_file, ['   convert to 16bit: ' num2str(stack_info.convert_to_16bit)]);
         p_log(log_file, ' ');
 
         disp("Logging imaging system parameters");
@@ -253,18 +251,11 @@ function [] = LsDeconv(varargin)
 
         fclose(log_file);
         % open(log_file_path);
-
-        if isdeployed
-            exit(0);
-        end
     catch ME
         % error handling
         disp(ME);
         if exist('log_file', 'var')
             p_log(log_file, getReport(ME, 'extended', 'hyperlinks', 'off'));
-        end
-        if isdeployed
-            exit(1);
         end
     end
 end
@@ -779,18 +770,23 @@ function postprocess_save(...
         warning("min_max.mat not found!")
         deconvmin = 0;
         deconvmax = 5.3374;
-        rawmax = 255;
+        rawmax = 65535;
+        if stack_info.convert_to_8bit
+            rawmax = 255;
+        elseif stack_info.convert_to_16bit
+            rawmax = 65535;
+        end
     end
 
     % rescale deconvolved data
-    if rawmax <= 255
+    if stack_info.convert_to_8bit
+        scal = 255;
+    elseif stack_info.convert_to_16bit
+        scal = 65535;
+    elseif rawmax <= 255
         scal = 255;
     elseif rawmax <= 65535
         scal = 65535;
-        if stack_info.convert_to_8bit
-            rawmax = 255;
-            scal = 255;
-        end
     else
         scal = rawmax; % scale to maximum of input data
     end
@@ -902,9 +898,9 @@ function postprocess_save(...
         end
 
         if rawmax <= 255       % 8bit data
-            R = uint8(R); % , 'Compression', 'none'
+            R = uint8(R);
         elseif rawmax <= 65535 % 16bit data
-            R = uint16(R); % , 'Compression', 'none'
+            R = uint16(R);
         end
 
         %write images to output path
