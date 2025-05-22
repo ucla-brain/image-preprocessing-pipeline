@@ -1215,14 +1215,21 @@ function index = findClosest(data, x)
     [~,index] = min(abs(data-x));
 end
 
-function x = findGoodFFTLength(x)
-    while max(factor(x)) > 7
-        x = x + 1;
-    end
+function pad = pad_size(x, min_pad_size)
+    target = findGoodFFTLength(x + min_pad_size);
+    pad_total = target - x;
+    pad = pad_total/2;
 end
 
-function pad = pad_size(x, min_pad_size)
-    pad = 0.5 * (findGoodFFTLength(x + min_pad_size) - x);
+function tf = isfftgood(x)
+    f = factor(x);
+    tf = all(f <= 7);
+end
+
+function x = findGoodFFTLength(x)
+    while ~isfftgood(x)
+        x = x + 1;
+    end
 end
 
 function pad_size = gaussian_pad_size(image_size, filter_size)
