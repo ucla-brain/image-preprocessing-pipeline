@@ -705,12 +705,13 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
                 pad_y = (block.y - bly)/2;
             end
         end
-        if blz < block.z
-            pad_z = pad_size(blz, pad_z);
-            if blz + 2 * pad_z > block.z
-                pad_z = (block.z - blz)/2;
-            end
-        end
+        pad_z = 0
+        % if blz < block.z
+        %     pad_z = pad_size(blz, pad_z);
+        %     if blz + 2 * pad_z > block.z
+        %         pad_z = (block.z - blz)/2;
+        %     end
+        % end
 
         bl = padarray(bl, [floor(pad_x) floor(pad_y) floor(pad_z)], 'pre', 'symmetric');
         bl = padarray(bl, [ceil(pad_x) ceil(pad_y) ceil(pad_z)], 'post', 'symmetric');
@@ -1213,23 +1214,6 @@ end
 
 function index = findClosest(data, x)
     [~,index] = min(abs(data-x));
-end
-
-function pad = pad_size(x, min_pad_size)
-    target = findGoodFFTLength(x + min_pad_size);
-    pad_total = target - x;
-    pad = pad_total/2;
-end
-
-function tf = isfftgood(x)
-    f = factor(x);
-    tf = all(f <= 7);
-end
-
-function x = findGoodFFTLength(x)
-    while ~isfftgood(x)
-        x = x + 1;
-    end
 end
 
 function pad_size = gaussian_pad_size(image_size, filter_size)
