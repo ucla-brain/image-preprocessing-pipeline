@@ -695,21 +695,21 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
 
         % interpolated slightly
         if blx ~= block.x || block.x_pad <= 0
-            pad_x = pad_size(blx, size(psf.psf, 1))
+            pad_x = pad_size(blx, size(psf.psf, 1));
             if blx + 2 * pad_x > block.x
-                pad_x = (block.x - blx)/2
+                pad_x = (block.x - blx)/2;
             end
         end
         if bly ~= block.y || block.y_pad <= 0
-            pad_y = pad_size(bly, size(psf.psf, 2))
+            pad_y = pad_size(bly, size(psf.psf, 2));
             if bly + 2 * pad_y > block.y
-                pad_y = (block.y - bly)/2
+                pad_y = (block.y - bly)/2;
             end
         end
         if blz < block.z
-            pad_z = pad_size(blz, pad_z)
+            pad_z = pad_size(blz, pad_z);
             if blz + 2 * pad_z > block.z
-                pad_z = (block.z - blz)/2
+                pad_z = (block.z - blz)/2;
             end
         end
 
