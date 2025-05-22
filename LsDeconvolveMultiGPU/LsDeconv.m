@@ -692,26 +692,26 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
         % factor becomes <= 5. z_padding comes from image, which is
         % different from x and y pad that are interpolated based on image.
         % In case z_pad was small for FFT efficiency it will be
+
         % interpolated slightly
         if blx ~= block.x || block.x_pad <= 0
-            pad_x = pad_size(blx, size(psf.psf, 1));
+            pad_x = pad_size(blx, size(psf.psf, 1))
             if blx + 2 * pad_x > block.x
-                pad_x = (block.x - blx)/2;
+                pad_x = (block.x - blx)/2
             end
         end
         if bly ~= block.y || block.y_pad <= 0
-            pad_y = pad_size(bly, size(psf.psf, 2));
+            pad_y = pad_size(bly, size(psf.psf, 2))
             if bly + 2 * pad_y > block.y
-                pad_y = (block.y - bly)/2;
+                pad_y = (block.y - bly)/2
             end
         end
-        pad_z = 0
-        % if blz < block.z
-        %     pad_z = pad_size(blz, pad_z);
-        %     if blz + 2 * pad_z > block.z
-        %         pad_z = (block.z - blz)/2;
-        %     end
-        % end
+        if blz < block.z
+            pad_z = pad_size(blz, pad_z)
+            if blz + 2 * pad_z > block.z
+                pad_z = (block.z - blz)/2
+            end
+        end
 
         bl = padarray(bl, [floor(pad_x) floor(pad_y) floor(pad_z)], 'pre', 'symmetric');
         bl = padarray(bl, [ceil(pad_x) ceil(pad_y) ceil(pad_z)], 'post', 'symmetric');
