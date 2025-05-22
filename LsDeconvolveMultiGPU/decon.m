@@ -198,19 +198,11 @@ function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
             otf_cpu = otf;
             otf_conj_cpu = otf_conj;
         end
-        f = parfeval(backgroundPool, @saveOTFCacheMapped, 0, base, otf_cpu, otf_conj_cpu, sem_key);
-        afterEach(f, @(~) [], 0);
-        % saveOTFCacheMapped(base, otf_cpu, otf_conj_cpu, sem_key);
+        saveOTFCacheMapped(base, otf_cpu, otf_conj_cpu, sem_key);
     catch e
         warnNoBacktrace('getCachedOTF:SaveCacheFailed', 'OTF computed but failed to save: %s', e.message);
     end
 end
-
-% function checkFutureError(fut)
-%     if ~isempty(fut.Error)
-%         warning('Async OTF save failed: %s', fut.Error.message);
-%     end
-% end
 
 function warnNoBacktrace(id, msg, varargin)
     % Validate and sanitize warning ID
