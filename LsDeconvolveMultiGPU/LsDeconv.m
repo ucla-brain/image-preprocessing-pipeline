@@ -236,6 +236,11 @@ function [] = LsDeconv(varargin)
         else
         p_log(log_file, '   convert to 8-bit: no');
         end
+        if convert_to_16bit
+        p_log(log_file, '   convert to 16-bit: yes');
+        else
+        p_log(log_file, '   convert to 16-bit: no');
+        end
         p_log(log_file, ' ');
 
         p_log(log_file, 'paths ...')
