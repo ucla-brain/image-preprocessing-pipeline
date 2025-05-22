@@ -237,12 +237,12 @@ LsDeconvMultiGPU supports both **FFT-based** and **spatial domain** deconvolutio
 
 Deconvolution of a 3D volume with **8266 × 12778 × 7912 = 835,688,764,576 voxels**
 
-| GPU             | Method       | Num. Blocks | Block Size (X×Y×Z)     | Voxels/Block     | Time/Iteration | Throughput (vox/s)   | Notes                                      |
-|-----------------|--------------|-------------|-------------------------|------------------|----------------|------------------------|--------------------------------------------|
-| **RTX 2080 TI** | FFT-based     | 5984        | —                       | 148,891,512      | 1.1 s          | ~1.35 × 10⁹            | Memory-limited, fast per block             |
-|                 | Spatial       | 1728        | —                       | 602,505,336      | 1.3 s          | ~4.63 × 10⁸            | 28% faster in practice than FFT            |
-| **A100 80 GB**  | FFT-based     | 600         | 855×855×2516            | 1,839,258,900    | 6.0 s          | ~3.07 × 10⁸            | Higher VRAM allows large FFT blocks        |
-|                 | Spatial       | 560         | 891×951×2422            | 2,052,259,902    | 12.7 s         | ~1.62 × 10⁸            | Significantly slower than FFT              |
+| GPU                | Method    | Num. Blocks | Effective Block Size (X×Y×Z) | Voxels/Block     | Time/Iteration | Throughput (vox/s) | Notes                              |
+|--------------------|-----------|-------------|------------------------------|------------------|----------------|--------------------|------------------------------------|
+| **RTX 2080 TI**    | FFT-based | 5984        | 759×791×248                  | 148,891,512      | 1.1 s          | ~1.35 × 10⁹        | Memory-limited, fast per block     |
+|                    | Spatial   | 1728        | 1527×1591×248                | 602,505,336      | 1.3 s          | ~4.63 × 10⁸        | 28% faster in practice than FFT    |
+| **A100 80 GB** | FFT-based | 600         | 855×855×2516                 | 1,839,258,900    | 6.0 s          | ~3.07 × 10⁸        | Higher VRAM allows large FFT blocks|
+|                    | Spatial   | 560         | 891×951×2422                 | 2,052,259,902    | 12.7 s         | ~1.62 × 10⁸        | Significantly slower than FFT      |
 
 🧠 **Key Insights**:
 - On low-VRAM GPUs (e.g., RTX 2080), spatial deconvolution can outperform FFT due to memory pressure and block fragmentation.
