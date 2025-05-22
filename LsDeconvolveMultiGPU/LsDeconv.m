@@ -1216,7 +1216,7 @@ function index = findClosest(data, x)
 end
 
 function x = findGoodFFTLength(x)
-    while max(factor(x)) > 5
+    while max(factor(x)) > 7
         x = x + 1;
     end
 end
@@ -1405,7 +1405,7 @@ end
 
 function cleanupSemaphoresFromCache()
     OFFSET = 1e5;
-    cacheDir = getCachePath()
+    cacheDir = getCachePath();
     if ~isfolder(cacheDir)
         fprintf('Cache directory not found: %s\n', cacheDir);
         return;
