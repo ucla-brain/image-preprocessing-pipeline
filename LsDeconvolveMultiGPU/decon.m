@@ -178,7 +178,7 @@ function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
 
     % === Compute OTF ===
     try
-        disp(['Recomputing OTF for size ' mat2str(imsize)]);
+        disp(['Computing OTF for size ' mat2str(imsize)]);
         otf = padPSF(psf, imsize);
         if use_gpu, otf = gpuArray(otf); end
         otf = fftn(otf);
