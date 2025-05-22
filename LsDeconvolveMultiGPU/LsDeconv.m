@@ -472,7 +472,8 @@ function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
     clear gpus_vertical;
     
     % initiate locks and semaphors
-    % semkeys are arbitrary non-zero values 
+    % semkeys are arbitrary non-zero values
+    cleanupSemaphoresFromCache();
     semkey_single = 1e3;
     semkey_loading_base = 1e4;
     semaphore_create(semkey_single, 1);
@@ -1400,4 +1401,38 @@ end
 function g = gaussian_notch_filter_1d(n, sigma)
     x = 0:(n - 1);
     g = 1 - exp(-(x .^ 2) / (2 * sigma ^ 2));
+end
+
+function cleanupSemaphoresFromCache()
+    OFFSET = 1e5;
+    cacheDir = fullfile(tempdir, 'otf_cache');
+    if ~isfolder(cacheDir)
+        fprintf('Cache directory not found: %s\n', cacheDir);
+        return;
+    end
+
+    % Get both CPU and GPU cache files
+    files = [ ...
+        dir(fullfile(cacheDir, 'key_*_gpu.bin')); ...
+        dir(fullfile(cacheDir, 'key_*_cpu.bin')) ...
+    ];
+
+    for i = 1:numel(files)
+        [~, stem, ~] = fileparts(files(i).name);  % Extract 'key_[...]_gpu' or 'key_[...]_cpu'
+        key = string2hash(stem) + OFFSET;
+        try
+            semaphore('d', key);
+            fprintf('Destroyed semaphore with key %d (from file %s)\n', key, files(i).name);
+        catch
+            warning('Failed to destroy semaphore with key %d from file %s', key, files(i).name);
+        end
+    end
+end
+
+function h = string2hash(str)
+    str = double(str);
+    h = 5381;
+    for i = 1:length(str)
+        h = mod(h * 33 + str(i), 2^31 - 1);  % DJB2 hash
+    end
 end
