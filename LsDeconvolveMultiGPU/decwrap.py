@@ -233,9 +233,8 @@ def main():
                         help='Flip output image vertically after deconvolution')
     parser.add_argument('--convert-to-8bit', action='store_true',
                         help='Convert output to 8-bit (default keeps original bit depth, usually 16-bit)')
-    parser.add_argument('--no-convert-to-16bit', action='store_false', dest='convert_to_16bit',
-                        help='Disable 16-bit conversion and keep the original file type.')
-    parser.set_defaults(convert_to_16bit=True)
+    parser.add_argument('--convert-to-16bit', action='store_true',
+                        help='Convert output to 16-bit (default keeps original bit depth, usually 16-bit)')
     parser.add_argument('--start_block', type=int, default=1,
                         help='Starting block index for multi-GPU chunking')
     parser.add_argument('--dry-run', action='store_true',
@@ -297,6 +296,31 @@ def main():
     except NameError:
         deconvolve_dir = Path.cwd().as_posix()
 
+
+
+    if args.convert_to_8bit and args.convert_to_16bit:
+        raise RuntimeError("Cannot use both convert-to-8bit and convert-to-16bit simultaneously. Choose one.")
+
+    matlab_exec = find_matlab_executable()
+
+    if args.use_jemalloc and args.use_tcmalloc:
+        raise RuntimeError("Cannot use both jemalloc and tcmalloc simultaneously. Choose one.")
+
+    jemalloc_path = find_allocator("jemalloc") if is_linux and args.use_jemalloc else None
+    tcmalloc_path = find_allocator("tcmalloc") if is_linux and args.use_tcmalloc else None
+
+    if args.use_jemalloc and is_linux:
+        if jemalloc_path:
+            log.info(f"Using jemalloc allocator at: {jemalloc_path}")
+        else:
+            log.warning("jemalloc requested but not found. To install on Ubuntu: sudo apt install libjemalloc2.")
+
+    if args.use_tcmalloc and is_linux:
+        if tcmalloc_path:
+            log.info(f"Using tcmalloc allocator at: {tcmalloc_path}")
+        else:
+            log.warning("tcmalloc requested but not found. To install on Ubuntu: sudo apt install google-perftools.")
+
     tmp_script_path = Path("deconv_batch_script.m")
     tmp_script_path.write_text(
         f"addpath('{deconvolve_dir}');\n"
@@ -331,30 +355,6 @@ def main():
         f"    convertCharsToStrings('{cache_drive_folder}') ...\n"
         f");\n"
     )
-
-    matlab_exec = find_matlab_executable()
-
-    if args.use_jemalloc and args.use_tcmalloc:
-        raise RuntimeError("Cannot use both jemalloc and tcmalloc simultaneously. Choose one.")
-
-    if args.convert_to_8bit and args.convert_to_16bit:
-        raise RuntimeError("Cannot use both convert-to-8bit and convert-to-16bit simultaneously. Choose one.")
-
-    jemalloc_path = find_allocator("jemalloc") if is_linux and args.use_jemalloc else None
-    tcmalloc_path = find_allocator("tcmalloc") if is_linux and args.use_tcmalloc else None
-
-    if args.use_jemalloc and is_linux:
-        if jemalloc_path:
-            log.info(f"Using jemalloc allocator at: {jemalloc_path}")
-        else:
-            log.warning("jemalloc requested but not found. To install on Ubuntu: sudo apt install libjemalloc2.")
-
-    if args.use_tcmalloc and is_linux:
-        if tcmalloc_path:
-            log.info(f"Using tcmalloc allocator at: {tcmalloc_path}")
-        else:
-            log.warning("tcmalloc requested but not found. To install on Ubuntu: sudo apt install google-perftools.")
-
     # === Insert Linux-specific optimizations ===
     env = os.environ.copy()
     if not is_windows:
