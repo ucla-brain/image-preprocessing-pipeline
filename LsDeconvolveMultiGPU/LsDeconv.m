@@ -722,6 +722,8 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
             floor(pad_z) + 1 : end - ceil(pad_z));
     end
 
+    % since prctile function needs high vram usage gather it to avoid low
+    % memory error
     if gpu && isgpuarray(bl) && free_GPU_vRAM(gpu_id, gpu_device) < 60
         % Reseting the GPU
         bl = gather(bl);
@@ -734,8 +736,7 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
     end
 
     [lb, ub] = deconvolved_stats(bl);
-    % since prctile function needs high vram usage gather it to avoid low
-    % memory error
+
     if gpu && isgpuarray(bl)
         bl = gather(bl);
         reset(gpu_device);  % to free gpu memory
