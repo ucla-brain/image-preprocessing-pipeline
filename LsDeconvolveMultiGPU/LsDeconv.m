@@ -722,16 +722,17 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
             floor(pad_z) + 1 : end - ceil(pad_z));
     end
 
-    if gpu && isgpuarray(bl) && gpu_device.TotalMemory < 60e9
+    if gpu && isgpuarray(bl) && free_GPU_vRAM(gpu_id, gpu_device) < 60
         % Reseting the GPU
         bl = gather(bl);
         reset(gpu_device);  % to free 2 extra copies of bl in gpu
-        if gpu_device.TotalMemory > 43e9
+        if free_GPU_vRAM(gpu_id, gpu_device) > 43
             bl = gpuArray(bl);
         else
             queue('post', gpu_queue_key, gpu_id);
         end
     end
+
     [lb, ub] = deconvolved_stats(bl);
     % since prctile function needs high vram usage gather it to avoid low
     % memory error
