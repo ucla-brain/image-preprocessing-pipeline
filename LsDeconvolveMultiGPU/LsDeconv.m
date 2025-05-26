@@ -778,11 +778,12 @@ function postprocess_save(...
         deconvmin = 0;
         deconvmax = 5.3374;
         rawmax = 65535;
-        if stack_info.convert_to_8bit
-            rawmax = 255;
-        elseif stack_info.convert_to_16bit
-            rawmax = 65535;
-        end
+    end
+
+    if stack_info.convert_to_8bit
+        rawmax = 255;
+    elseif stack_info.convert_to_16bit
+        rawmax = 65535;
     end
 
     % rescale deconvolved data
