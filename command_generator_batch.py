@@ -53,7 +53,7 @@ def main():
     print(Fore.BLUE + '\nRunning command_generator_batch.py to generate/run commands for performing batch processing of Tiff Channel Merging, Imaris, and/or FNT Conversions on Windows.\n' + Style.RESET_ALL)
     print('Enter [0] if target command is merging + imaris conversion + FNT conversion')
     print('Enter [1] if target command is merging only')
-    print('Enter [2] if target command is imaris conversion only - DEPRECATED...')
+    print('Enter [2] if target command is imaris conversion only - NOT SUPPORTED...')
     print('Enter [3] if target command is FNT conversion only')
     # print('Enter [4] if target command is merging + imaris conversion\n')
     # print('Enter [5] if target command is merging + imaris conversion\n')
@@ -218,3 +218,4 @@ def main():
 
  
 if __name__ == "__main__":
+    main()
