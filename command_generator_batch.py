@@ -46,6 +46,8 @@ def main():
     BATCH_IMS_CMDS = ''
 
     ### Temporary variables; values updated per channel, per case ###
+    valid_merge = False
+    single_channel = False
     mergeChannelsCMD = ''
     fntConversionCMD = ''
     imsConversionCMD = ''
@@ -65,7 +67,7 @@ def main():
         sys.exit()
 
 
-    print(Fore.MAGENTA + "Enter all stitched paths for batch processing, use Control + Z once complete\n" + Style.RESET_ALL)
+    print(Fore.MAGENTA + "Enter all stitched acquisition paths for batch processing, use Control + Z once complete\n" + Style.RESET_ALL)
     rawInput = sys.stdin.read()
     STITCHED_PATHS = sanitize_paths(rawInput.splitlines())
     totalPaths = len(STITCHED_PATHS)
@@ -81,22 +83,24 @@ def main():
         for path in STITCHED_PATHS:
             mergeChannelsCMD = f"python .\\merge_channels.py "
             channel_count = 0
-            valid_merge = False
             print('Stitched path: ' + Fore.MAGENTA + path + Style.RESET_ALL)
             stitched_path = Path(path)
             output_path = COMPOSITE_PATH + '\\' + stitched_path.name + '\\'
-            os.makedirs(output_path, exist_ok=True)
 
             for subpath in stitched_path.iterdir():
-                if (str(subpath.name).startswith('Ex_') and 'mip' not in str(subpath.name).lower()):
+                if ((str(subpath.name).startswith('Ex_')) and ('mip' not in str(subpath.name).lower()) and ('middle' not in str(subpath.name).lower())):
                     print('Channel: ' + Fore.YELLOW + subpath.name + Style.RESET_ALL)
                     channel_cmd = merge_channel_color(subpath, channel_count)
                     mergeChannelsCMD += channel_cmd + ' '
-                    channel_count +=1
+                    channel_count += 1
                     if channel_count > 1:
                         valid_merge = True
+                    elif channel_count == 1:
+                        valid_merge = False
+                        single_channel = True
 
             if valid_merge:
+                os.makedirs(output_path, exist_ok=True)
                 print(Fore.BLUE + 'Merged output will be saved to: ' + Fore.GREEN + output_path + Style.RESET_ALL)
                 mergeChannelsCMD += '--output_path ' + output_path
                 # print(Fore.RED + mergeChannelsCMD + Style.RESET_ALL)
@@ -104,6 +108,9 @@ def main():
                     BATCH_MERGE_CMDS += ' && ' + mergeChannelsCMD
                 else:
                     BATCH_MERGE_CMDS += mergeChannelsCMD
+            elif single_channel: 
+                print(Fore.MAGENTA + "Single-channel case found (above), skipping merging"+ Style.RESET_ALL)
+            
         
         print('\n '+ BATCH_MERGE_CMDS + '\n')
 
@@ -117,19 +124,24 @@ def main():
             z_voxel = ''
             x_y_voxels = ''
             for file in stitched_path.iterdir():
-                if 'metadata' in file.name.lower():
-                    with open(file, "r") as mf:
-                        content = mf.readlines()
-                    
+                if 'metadata.txt' in file.name.lower():
+                    try:
+                        with open(file, "r") as mf:
+                            content = mf.readlines()
+                    except:
+                        with open(file, "r", encoding='ISO-8859-1') as mf:
+                            content = mf.readlines()
+
                     if len(content) >= 2:
-                        second_line = content[1]
-                        words = second_line.split()
-                        
-                        if len(words) >= 4:
-                            x_y_voxels = words[3]  # 4th word
-                            z_voxel = words[3]  # 4th word, updated for Isotripic use
-                            x_y_voxels = round(float(x_y_voxels), 1)
-                            z_voxel = round(float(z_voxel), 1)
+                            second_line = content[1]
+                            words = second_line.split()
+                            
+                            if len(words) >= 4:
+                                x_y_voxels = words[3]  # 4th word
+                                z_voxel = words[3]  # 4th word, updated for Isotripic use
+                                x_y_voxels = round(float(x_y_voxels), 1)
+                                z_voxel = round(float(z_voxel), 1)
+                    
 
             for subpath in stitched_path.iterdir():
                 if (str(subpath.name).startswith('Ex_') and 'mip' not in str(subpath.name).lower() and z_voxel != ''):
@@ -151,7 +163,7 @@ def main():
     if goal in (0, 2):
         if (goal == 2):
             # Copy / pasting merged paths is not user friendly, skipping implementation atm
-            print('Direct Batch Imaris not yet implemented...')
+            print(Fore.RED + 'Direct Batch Imaris not yet implemented...' + Style.RESET_ALL)
             sys.exit
         print(Fore.LIGHTGREEN_EX + '\n################ IMARIS CONVERSIONS ################' + Style.RESET_ALL)
         print(Fore.BLUE + '\nProcessing Merged channels (Yellow) to respective (Green) Imaris output paths. Confirm Imaris conversions' + Style.RESET_ALL)
@@ -160,24 +172,42 @@ def main():
             x_y_voxels = ''
             z_voxel = ''
             stitched_path = Path(path)
-            for file in stitched_path.iterdir():
+            for file in stitched_path.iterdir(): # Searches within acqusition folder level
                 if 'metadata' in file.name.lower():
-                    with open(file, "r") as mf:
-                        content = mf.readlines()
-                    
+                    try:
+                        with open(file, "r") as mf:
+                            content = mf.readlines()
+                    except:
+                        with open(file, "r", encoding='ISO-8859-1') as mf:
+                            content = mf.readlines()
                     if len(content) >= 2:
-                        second_line = content[1]
-                        words = second_line.split()
-                        
-                        if len(words) >= 4:
-                            x_y_voxels = words[3]  # 3rd word
-                            z_voxel = words[3]  # 4th word
-                            x_y_voxels = round(float(x_y_voxels), 1)
-                            z_voxel = round(float(z_voxel), 1)
+                            second_line = content[1]
+                            words = second_line.split()
+                            
+                            if len(words) >= 4:
+                                x_y_voxels = words[3]  # 3rd word
+                                z_voxel = words[3]  # 4th word
+                                x_y_voxels = round(float(x_y_voxels), 1)
+                                z_voxel = round(float(z_voxel), 1)
             if z_voxel != '':
-                merged_path = COMPOSITE_PATH + '\\' + stitched_path.name + '\\'
-                print('\nStitched path: ' + Fore.MAGENTA + path + Style.RESET_ALL)
-                print('(Planned) Merged data path: ' + Fore.YELLOW + merged_path + Style.RESET_ALL)
+                channel_count = 0
+                channels = []
+                for subpath in stitched_path.iterdir():
+                    if ((str(subpath.name).startswith('Ex_')) and ('mip' not in str(subpath.name).lower()) and ('middle' not in str(subpath.name).lower())):
+                        channels.append(subpath)
+                        channel_count += 1
+                    if channel_count > 1:
+                        single_channel = False
+                    elif channel_count == 1:
+                        single_channel = True
+                if single_channel:
+                    # Using single_channel despite not being merged (coding through the interface, not very complete-code-esque)
+                    merged_path = channels[0]
+                    print(f'\nSingle channel folder to convert to imaris: {merged_path}')
+                else: 
+                    merged_path = COMPOSITE_PATH + '\\' + stitched_path.name + '\\'
+                    print('\nStitched path: ' + Fore.MAGENTA + path + Style.RESET_ALL)
+                    print('(Planned) Merged data path: ' + Fore.YELLOW + merged_path + Style.RESET_ALL)
                 tmp_string = stitched_path.name.replace('_stitched', '')
                 parts = tmp_string.split('_')
                 ims_filename = '_'.join(parts[:1] + parts[4:])
