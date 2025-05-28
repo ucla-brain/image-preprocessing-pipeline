@@ -194,7 +194,7 @@ function [] = LsDeconv(varargin)
             ] = autosplit(stack_info, size(psf.psf), filter, block_size_max, ram_total);  % ram_total ram_available
             save(block_path, "block");
         end
-        check_block_coverage_slices(stack_info, block);
+        check_block_coverage_planes(stack_info, block);
 
         p_log(log_file, ['   block numbers: ' num2str(block.nx) 'x * ' num2str(block.ny) 'y * ' num2str(block.nz) 'z = ' num2str(block.nx * block.ny * block.nz) ' blocks.']);
         p_log(log_file, ['   block size loaded image: ' num2str(block.x) 'x * ' num2str(block.y) 'y * ' num2str(block.z) 'z = ' num2str(block.x * block.y * block.z) ' voxels.']);
