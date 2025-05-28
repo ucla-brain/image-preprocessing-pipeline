@@ -579,7 +579,7 @@ function deconvolve(filelist, psf, numit, damping, ...
         semaphore('wait', semkey_loading);
         send(dQueue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' is loading ...']);
         loading_start = tic;
-        [bl] = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info);
+        bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info);
         send(dQueue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' is loaded in ' num2str(round(toc(loading_start), 1))]);
         semaphore('post', semkey_loading);
 
@@ -604,6 +604,19 @@ function deconvolve(filelist, psf, numit, damping, ...
         bl = bl(1 + block.x_pad : end - block.x_pad, ...
                 1 + block.y_pad : end - block.y_pad, ...
                 1 + block.z_pad : end - block.z_pad);
+
+        expected_size = [p2(blnr,1) - p1(blnr,1) + 1, ...
+                 p2(blnr,2) - p1(blnr,2) + 1, ...
+                 p2(blnr,3) - p1(blnr,3) + 1];
+        actual_size = size(bl);
+
+        if ~isequal(actual_size, expected_size)
+            msg = sprintf(['[FATAL ERROR] Block %d: Output block size mismatch! ', ...
+                'Expected [%d %d %d], got [%d %d %d].'], ...
+                blnr, expected_size, actual_size);
+            disp(msg);
+            error(msg);
+        end
 
         % find maximum value in other blocks
         semaphore('wait', semkey_single);
