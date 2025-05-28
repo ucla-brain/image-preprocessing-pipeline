@@ -363,19 +363,32 @@ end
 %provides coordinates of sub-blocks after splitting
 function [p1, p2] = split(stack_info, block)
     % Calculate starting indices for each block (x, y, z)
-    x_starts = 1 : (block.x - 2*block.x_pad) : (stack_info.x - block.x + 1);
-    y_starts = 1 : (block.y - 2*block.y_pad) : (stack_info.y - block.y + 1);
-    z_starts = 1 : (block.z - 2*block.z_pad) : (stack_info.z - block.z + 1);
+    x_step = block.x - 2*block.x_pad;
+    y_step = block.y - 2*block.y_pad;
+    z_step = block.z - 2*block.z_pad;
 
-    % Make sure last block covers the edge exactly
-    if isempty(x_starts) || x_starts(end) + block.x - 1 < stack_info.x
-        x_starts = [x_starts, stack_info.x - block.x + 1];
+    x_starts = 1 : x_step : (stack_info.x - block.x + 1);
+    if isempty(x_starts) || (x_starts(end) + block.x - 1 < stack_info.x)
+        last_start = stack_info.x - block.x + 1;
+        if isempty(x_starts) || x_starts(end) ~= last_start
+            x_starts = [x_starts, last_start];
+        end
     end
-    if isempty(y_starts) || y_starts(end) + block.y - 1 < stack_info.y
-        y_starts = [y_starts, stack_info.y - block.y + 1];
+
+    y_starts = 1 : y_step : (stack_info.y - block.y + 1);
+    if isempty(y_starts) || (y_starts(end) + block.y - 1 < stack_info.y)
+        last_start = stack_info.y - block.y + 1;
+        if isempty(y_starts) || y_starts(end) ~= last_start
+            y_starts = [y_starts, last_start];
+        end
     end
-    if isempty(z_starts) || z_starts(end) + block.z - 1 < stack_info.z
-        z_starts = [z_starts, stack_info.z - block.z + 1];
+
+    z_starts = 1 : z_step : (stack_info.z - block.z + 1);
+    if isempty(z_starts) || (z_starts(end) + block.z - 1 < stack_info.z)
+        last_start = stack_info.z - block.z + 1;
+        if isempty(z_starts) || z_starts(end) ~= last_start
+            z_starts = [z_starts, last_start];
+        end
     end
 
     nx = numel(x_starts);
@@ -403,7 +416,7 @@ function [p1, p2] = split(stack_info, block)
                 p1(blnr, 3) = zs;
                 p2(blnr, 3) = min(zs + block.z - 1, stack_info.z);
 
-                p1(blnr, 4) = 0; % you can use this for debug or ignore
+                p1(blnr, 4) = 0; % optional debug value
             end
         end
     end
@@ -1185,77 +1198,66 @@ end
 
 function check_block_coverage_planes(stack_info, block)
     disp('checking for potential issues ...');
+
     [p1, p2] = split(stack_info, block);
-    planes = {
-        [1, NaN, NaN], [stack_info.x, NaN, NaN], ...  % yz planes (x=1, x=end)
-        [NaN, 1, NaN], [NaN, stack_info.y, NaN], ...  % xz planes (y=1, y=end)
-        [NaN, NaN, 1], [NaN, NaN, stack_info.z]       % xy planes (z=1, z=end)
-    };
-    err_msgs = {};
-    t0 = tic;
-    total_planes = numel(planes);
 
-    for pi = 1:total_planes
-        % Choose which plane to check
-        plane = planes{pi};
-        if ~isnan(plane(1))  % yz plane at x=plane(1)
-            x = plane(1);
-            coverage = zeros(stack_info.y, stack_info.z, 'uint8');
-            for bl = 1:size(p1,1)
-                if p1(bl,1) <= x && p2(bl,1) >= x
-                    y1 = p1(bl,2); y2 = p2(bl,2);
-                    z1 = p1(bl,3); z2 = p2(bl,3);
-                    coverage(y1:y2, z1:z2) = coverage(y1:y2, z1:z2) + 1;
-                end
-            end
-            nGaps = nnz(coverage == 0);
-            nOverlaps = nnz(coverage > 1);
-            if nGaps > 0 || nOverlaps > 0
-                err_msgs{end+1} = sprintf('YZ plane at x=%d: %d gaps, %d overlaps', x, nGaps, nOverlaps);
-            end
+    % Planes to check (boundaries only)
+    planes = {'XY', 'XZ', 'YZ'};
+    errors = {};
 
-        elseif ~isnan(plane(2))  % xz plane at y=plane(2)
-            y = plane(2);
-            coverage = zeros(stack_info.x, stack_info.z, 'uint8');
-            for bl = 1:size(p1,1)
-                if p1(bl,2) <= y && p2(bl,2) >= y
-                    x1 = p1(bl,1); x2 = p2(bl,1);
-                    z1 = p1(bl,3); z2 = p2(bl,3);
-                    coverage(x1:x2, z1:z2) = coverage(x1:x2, z1:z2) + 1;
-                end
-            end
-            nGaps = nnz(coverage == 0);
-            nOverlaps = nnz(coverage > 1);
-            if nGaps > 0 || nOverlaps > 0
-                err_msgs{end+1} = sprintf('XZ plane at y=%d: %d gaps, %d overlaps', y, nGaps, nOverlaps);
-            end
-
-        elseif ~isnan(plane(3))  % xy plane at z=plane(3)
-            z = plane(3);
-            coverage = zeros(stack_info.x, stack_info.y, 'uint8');
-            for bl = 1:size(p1,1)
-                if p1(bl,3) <= z && p2(bl,3) >= z
-                    x1 = p1(bl,1); x2 = p2(bl,1);
-                    y1 = p1(bl,2); y2 = p2(bl,2);
-                    coverage(x1:x2, y1:y2) = coverage(x1:x2, y1:y2) + 1;
-                end
-            end
-            nGaps = nnz(coverage == 0);
-            nOverlaps = nnz(coverage > 1);
-            if nGaps > 0 || nOverlaps > 0
-                err_msgs{end+1} = sprintf('XY plane at z=%d: %d gaps, %d overlaps', z, nGaps, nOverlaps);
+    % XY at z=1 and z=end
+    for z = [1, stack_info.z]
+        covered = false(stack_info.x, stack_info.y);
+        for k = 1:size(p1,1)
+            if p1(k,3) <= z && p2(k,3) >= z
+                xs = p1(k,1):p2(k,1);
+                ys = p1(k,2):p2(k,2);
+                covered(xs, ys) = covered(xs, ys) + 1;
             end
         end
-
-        % Progress
-        elapsed = toc(t0);
-        eta = (elapsed / pi) * (total_planes - pi);
-        fprintf('\rChecking plane %d/%d, ETA: %.1fs', pi, total_planes, eta);
+        overlaps = sum(covered(:) > 1);
+        gaps = sum(covered(:) == 0);
+        if overlaps > 0 || gaps > 0
+            errors{end+1} = sprintf('XY plane at z=%d: %d gaps, %d overlaps', z, gaps, overlaps);
+        end
     end
-    fprintf('\n');
 
-    if ~isempty(err_msgs)
-        summary = strjoin(err_msgs, '\n');
-        error(['Block coverage error(s) detected:\n' summary]);
+    % XZ at y=1 and y=end
+    for y = [1, stack_info.y]
+        covered = false(stack_info.x, stack_info.z);
+        for k = 1:size(p1,1)
+            if p1(k,2) <= y && p2(k,2) >= y
+                xs = p1(k,1):p2(k,1);
+                zs = p1(k,3):p2(k,3);
+                covered(xs, zs) = covered(xs, zs) + 1;
+            end
+        end
+        overlaps = sum(covered(:) > 1);
+        gaps = sum(covered(:) == 0);
+        if overlaps > 0 || gaps > 0
+            errors{end+1} = sprintf('XZ plane at y=%d: %d gaps, %d overlaps', y, gaps, overlaps);
+        end
+    end
+
+    % YZ at x=1 and x=end
+    for x = [1, stack_info.x]
+        covered = false(stack_info.y, stack_info.z);
+        for k = 1:size(p1,1)
+            if p1(k,1) <= x && p2(k,1) >= x
+                ys = p1(k,2):p2(k,2);
+                zs = p1(k,3):p2(k,3);
+                covered(ys, zs) = covered(ys, zs) + 1;
+            end
+        end
+        overlaps = sum(covered(:) > 1);
+        gaps = sum(covered(:) == 0);
+        if overlaps > 0 || gaps > 0
+            errors{end+1} = sprintf('YZ plane at x=%d: %d gaps, %d overlaps', x, gaps, overlaps);
+        end
+    end
+
+    if ~isempty(errors)
+        err_msg = sprintf('Block coverage error(s) detected:\n%s', strjoin(errors, '\n'));
+        error(err_msg);
     end
 end
