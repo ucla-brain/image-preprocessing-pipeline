@@ -1184,25 +1184,23 @@ function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
 end
 
 function check_block_coverage_slices(stack_info, block)
-    % Reuse your existing split function:
+    disp('checking for potential issues ...')
     [p1, p2] = split(stack_info, block);
     nBlocks = size(p1, 1);
     err_msgs = {};
 
-    % Loop over each Z slice
     for z = 1:stack_info.z
         coverage = zeros(stack_info.x, stack_info.y, 'uint8');
-        % For each block, check if it covers the current z slice
-        for bl = 1:nBlocks
-            if p1(bl,3) <= z && z <= p2(bl,3)
-                x1 = p1(bl,1); x2 = p2(bl,1);
-                y1 = p1(bl,2); y2 = p2(bl,2);
-                % Mark this block's region for this slice
-                coverage(x1:x2, y1:y2) = coverage(x1:x2, y1:y2) + 1;
-            end
+
+        % Find blocks covering this slice (vectorized)
+        covered_blocks = find((p1(:,3) <= z) & (p2(:,3) >= z));
+        for k = 1:numel(covered_blocks)
+            bl = covered_blocks(k);
+            x1 = p1(bl,1); x2 = p2(bl,1);
+            y1 = p1(bl,2); y2 = p2(bl,2);
+            coverage(x1:x2, y1:y2) = coverage(x1:x2, y1:y2) + 1;
         end
 
-        % Check for any gaps (zeros) or overlaps (>1)
         nGaps = nnz(coverage == 0);
         nOverlaps = nnz(coverage > 1);
         if nGaps > 0 || nOverlaps > 0
@@ -1212,7 +1210,6 @@ function check_block_coverage_slices(stack_info, block)
     end
 
     if ~isempty(err_msgs)
-        % Only the first 10 errors will be shown, but all errors are counted.
         shown = min(numel(err_msgs), 10);
         summary = sprintf('%s\n', err_msgs{1:shown});
         if numel(err_msgs) > shown
