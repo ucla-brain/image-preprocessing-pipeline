@@ -362,40 +362,60 @@ end
 
 %provides coordinates of sub-blocks after splitting
 function [p1, p2] = split(stack_info, block)
-    % bounding box coordinate points
-    p1 = zeros(block.nx * block.ny * block.nz, 4);
-    p2 = zeros(block.nx * block.ny * block.nz, 3);
+    % Precompute block starting positions for each axis:
+    x_starts = 1 : (block.x - 2*block.x_pad) : stack_info.x;
+    y_starts = 1 : (block.y - 2*block.y_pad) : stack_info.y;
+    z_starts = 1 : (block.z - 2*block.z_pad) : stack_info.z;
+
+    % Ensure last block covers the edge exactly
+    if x_starts(end) + block.x - 1 < stack_info.x
+        x_starts = [x_starts, stack_info.x - block.x + 1];
+    end
+    if y_starts(end) + block.y - 1 < stack_info.y
+        y_starts = [y_starts, stack_info.y - block.y + 1];
+    end
+    if z_starts(end) + block.z - 1 < stack_info.z
+        z_starts = [z_starts, stack_info.z - block.z + 1];
+    end
+
+    nx = numel(x_starts);
+    ny = numel(y_starts);
+    nz = numel(z_starts);
+
+    p1 = zeros(nx * ny * nz, 4);
+    p2 = zeros(nx * ny * nz, 3);
 
     blnr = 0;
-    for nz = 0 : block.nz-1
-        zs = nz * (block.z - floor(block.z_pad) - ceil(block.z_pad)) + 1;
-        for ny = 0 : block.ny-1
-            ys = ny * block.y + 1;
-            for nx = 0 : block.nx-1
-                xs = nx * block.x + 1;
-
+    for iz = 1:nz
+        for iy = 1:ny
+            for ix = 1:nx
                 blnr = blnr + 1;
+                xs = x_starts(ix);
+                ys = y_starts(iy);
+                zs = z_starts(iz);
+
                 p1(blnr, 1) = xs;
-                p2(blnr, 1) = min([xs + block.x - 1, stack_info.x]);
+                p2(blnr, 1) = min(xs + block.x - 1, stack_info.x);
 
                 p1(blnr, 2) = ys;
-                p2(blnr, 2) = min([ys + block.y - 1, stack_info.y]);
+                p2(blnr, 2) = min(ys + block.y - 1, stack_info.y);
 
                 p1(blnr, 3) = zs;
-                p2(blnr, 3) = min([zs + block.z - 1, stack_info.z]);
+                p2(blnr, 3) = min(zs + block.z - 1, stack_info.z);
 
-                % imaged processed so far
-                % p1(blnr, 4) = nz * block.z - max(2*nz - 1, 0) * block.z_pad;
-                if nz == 0
-                    p1(blnr, 4) = 0;
+                % Track processed core region starting slice
+                % The 'core' for this block is always:
+                %   xs+block.x_pad : min(xs+block.x-1-block.x_pad, stack_info.x), etc.
+                if iz == 1
+                    p1(blnr, 4) = 0; % Not sure you use this anywhere
                 else
-                    % p1(blnr, 4) = nz * (block.z - floor(block.z_pad)) - 1;
-                    p1(blnr, 4) = zs + floor(block.z_pad) - 1;
+                    p1(blnr, 4) = zs + block.z_pad - 1;
                 end
             end
         end
     end
 end
+
 
 function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
     damping, clipval, stop_criterion, gpus, cache_drive, amplification, ...
@@ -1238,30 +1258,4 @@ function check_block_coverage_slices(stack_info, block)
     end
 
     disp('All voxels in every z-plane are covered by at least one block.');
-end
-
-function cleanupSemaphoresFromCache()
-    OFFSET = 1e5;
-    cacheDir = getCachePath();
-    if ~isfolder(cacheDir)
-        fprintf('Cache directory not found: %s\n', cacheDir);
-        return;
-    end
-
-    % Get both CPU and GPU cache files
-    files = [ ...
-        dir(fullfile(cacheDir, 'key_*_gpu.bin')); ...
-        dir(fullfile(cacheDir, 'key_*_cpu.bin')) ...
-    ];
-
-    for i = 1:numel(files)
-        [~, stem, ~] = fileparts(files(i).name);  % Extract 'key_[...]_gpu' or 'key_[...]_cpu'
-        key = string2hash(stem) + OFFSET;
-        try
-            semaphore('d', key);
-            fprintf('Destroyed semaphore with key %d (from file %s)\n', key, files(i).name);
-        catch
-            warning('Failed to destroy semaphore with key %d from file %s', key, files(i).name);
-        end
-    end
 end
