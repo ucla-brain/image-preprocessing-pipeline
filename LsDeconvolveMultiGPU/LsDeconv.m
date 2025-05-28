@@ -1151,70 +1151,63 @@ function message = save_image_2d(im, path, s, rawmax, save_time)
 end
 
 function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
-    % LOAD_BLOCK loads a padded 3D block from a stack of image files.
-    %   filelist: cell array of file names for each z-slice
-    %   x1, x2, y1, y2, z1, z2: requested (inclusive) bounds within the volume
-    %   block: struct with fields x_pad, y_pad, z_pad (pad sizes for each dimension)
-    %   stack_info: struct with fields x, y, z (full size of volume)
-    %   Returns: bl - padded block as single precision 3D array
-
-    % Compute requested core block size (without padding)
-    nx = x2 - x1 + 1;
-    ny = y2 - y1 + 1;
-    nz = z2 - z1 + 1;
-
-    % Determine full requested region (including padding)
-    req_x = [x1 - block.x_pad, x2 + block.x_pad];
-    req_y = [y1 - block.y_pad, y2 + block.y_pad];
-    req_z = [z1 - block.z_pad, z2 + block.z_pad];
-
-    % Clip the region to stay within the stack bounds
-    img_x = [max(1, req_x(1)), min(stack_info.x, req_x(2))];
-    img_y = [max(1, req_y(1)), min(stack_info.y, req_y(2))];
-    img_z = [max(1, req_z(1)), min(stack_info.z, req_z(2))];
-
-    % Allocate the full padded block
-    full_nx = nx + 2 * block.x_pad;
-    full_ny = ny + 2 * block.y_pad;
-    full_nz = nz + 2 * block.z_pad;
+    % Compute target full-padded size
+    full_nx = block.x + 2 * block.x_pad;
+    full_ny = block.y + 2 * block.y_pad;
+    full_nz = block.z + 2 * block.z_pad;
     bl = zeros(full_nx, full_ny, full_nz, 'single');
 
-    % Compute where the loaded region should be placed within the block
-    bx1 = 1 + (img_x(1) - req_x(1));
-    bx2 = bx1 + (img_x(2) - img_x(1));
-    by1 = 1 + (img_y(1) - req_y(1));
-    by2 = by1 + (img_y(2) - img_y(1));
-    bz1 = 1 + (img_z(1) - req_z(1));
-    % Note: We do not need bz2
+    % Calculate the desired range including pads
+    x_rng = (x1 - block.x_pad):(x2 + block.x_pad);
+    y_rng = (y1 - block.y_pad):(y2 + block.y_pad);
+    z_rng = (z1 - block.z_pad):(z2 + block.z_pad);
 
-    % Loop through the Z-slices to load the image data into the block
-    for k = img_z(1):img_z(2)
-        % Read a 2D slice from file (only the requested region)
-        slice = imread(filelist{k}, 'PixelRegion', {img_y, img_x});
-        slice = im2single(slice); % Convert to single precision
-        slice = slice';           % Transpose to match MATLAB convention
-        % Place the loaded slice in the correct Z position within bl
-        bl(bx1:bx2, by1:by2, bz1 + (k - img_z(1))) = slice;
+    % Find valid in-bounds regions for source image
+    x_valid = max(1, x_rng(1)):min(stack_info.x, x_rng(end));
+    y_valid = max(1, y_rng(1)):min(stack_info.y, y_rng(end));
+    z_valid = max(1, z_rng(1)):min(stack_info.z, z_rng(end));
+
+    % Destination indices in bl
+    x_dst = (x_valid(1) - x_rng(1) + 1):(x_valid(end) - x_rng(1) + 1);
+    y_dst = (y_valid(1) - y_rng(1) + 1):(y_valid(end) - y_rng(1) + 1);
+    z_dst = (z_valid(1) - z_rng(1) + 1):(z_valid(end) - z_rng(1) + 1);
+
+    % Fill from image files (real data)
+    for k = 1:length(z_valid)
+        img_k = z_valid(k);
+        slice = imread(filelist{img_k}, 'PixelRegion', {y_valid, x_valid});
+        slice = im2single(slice)';
+        bl(x_dst, y_dst, z_dst(k)) = slice;
     end
 
-    % For regions that extend past the stack edge, apply symmetric padding
-    if x1 == 1
-        bl = padarray(bl, [block.x_pad 0 0], 'symmetric', 'pre');
+    % If any region is outside the image, pad it using padarray (symmetric)
+    % This works in each dimension (x, y, z)
+    sz = size(bl);
+    for dim = 1:3
+        needed = [full_nx, full_ny, full_nz](dim);
+        got = size(bl, dim);
+        pre = 0; post = 0;
+        if got < needed
+            pre = max(0, 1 - [x_rng(1), y_rng(1), z_rng(1)](dim));
+            post = max(0, [x_rng(end), y_rng(end), z_rng(end)](dim) - [stack_info.x, stack_info.y, stack_info.z](dim));
+            bl = padarray(bl, pre * (1 == dim), 'symmetric', 'pre');
+            bl = padarray(bl, post * (1 == dim), 'symmetric', 'post');
+        end
     end
-    if x2 == stack_info.x
-        bl = padarray(bl, [block.x_pad 0 0], 'symmetric', 'post');
-    end
-    if y1 == 1
-        bl = padarray(bl, [0 block.y_pad 0], 'symmetric', 'pre');
-    end
-    if y2 == stack_info.y
-        bl = padarray(bl, [0 block.y_pad 0], 'symmetric', 'post');
-    end
-    if z1 == 1
-        bl = padarray(bl, [0 0 block.z_pad], 'symmetric', 'pre');
-    end
-    if z2 == stack_info.z
-        bl = padarray(bl, [0 0 block.z_pad], 'symmetric', 'post');
+
+    % After all, ensure bl is exactly [block.x+2*block.x_pad, block.y+2*block.y_pad, block.z+2*block.z_pad]
+    sz = size(bl);
+    target_sz = [full_nx, full_ny, full_nz];
+    for dim = 1:3
+        if sz(dim) > target_sz(dim)
+            % Crop if too large
+            idx = cell(1,3); [idx{:}] = deal(':');
+            idx{dim} = 1:target_sz(dim);
+            bl = bl(idx{:});
+        elseif sz(dim) < target_sz(dim)
+            % Extra pad if too small (should not happen, but for safety)
+            bl = padarray(bl, (target_sz(dim) - sz(dim)) * (1 == dim), 'symmetric', 'post');
+        end
     end
 end
 
