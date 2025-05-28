@@ -1196,16 +1196,41 @@ function check_block_coverage_slices(stack_info, block)
             end
         end
 
-        % Check for gaps on this plane
-        if any(cov2d(:) == 0)
-            error('Gap detected: Some voxels in z = %d are not covered by any block!', z);
+        % Debug print for z=1 (or any z with a gap)
+        if z == 1 || any(cov2d(:)==0)
+            fprintf('\n----- Debug coverage for z=%d -----\n', z);
+            fprintf('Coverage stats: min=%d, max=%d, sum(zeros)=%d\n', ...
+                min(cov2d(:)), max(cov2d(:)), sum(cov2d(:)==0));
+            [miss_x, miss_y] = find(cov2d==0);
+            if ~isempty(miss_x)
+                fprintf('Missing voxels at z=%d: total=%d\n', z, numel(miss_x));
+                fprintf('First 10 missing (x,y):\n');
+                for idx = 1:min(10, numel(miss_x))
+                    fprintf('  (%d,%d)\n', miss_x(idx), miss_y(idx));
+                end
+            else
+                fprintf('No missing voxels at z=%d.\n', z);
+            end
+
+            % Print which blocks claim to cover this Z
+            fprintf('Blocks covering core at z=%d:\n', z);
+            for blnr = 1:nBlocks
+                core_z1 = p1(blnr,3) + block.z_pad;
+                core_z2 = p2(blnr,3) - block.z_pad;
+                if z >= core_z1 && z <= core_z2
+                    core_x1 = min(max(p1(blnr,1) + block.x_pad, 1), stack_info.x);
+                    core_x2 = min(max(p2(blnr,1) - block.x_pad, 1), stack_info.x);
+                    core_y1 = min(max(p1(blnr,2) + block.y_pad, 1), stack_info.y);
+                    core_y2 = min(max(p2(blnr,2) - block.y_pad, 1), stack_info.y);
+                    fprintf('  Block %d: X[%d-%d], Y[%d-%d], core_z1=%d, core_z2=%d\n', ...
+                        blnr, core_x1, core_x2, core_y1, core_y2, core_z1, core_z2);
+                end
+            end
         end
 
-        % Optional: Visualize first/last/middle slices for sanity check
-        if z == 1 || z == stack_info.z || z == round(stack_info.z/2)
-            figure; imagesc(cov2d); colorbar;
-            title(['Block core coverage at Z = ' num2str(z)]);
-            drawnow;
+        % Error and exit if any gap
+        if any(cov2d(:) == 0)
+            error('Gap detected: Some voxels in z = %d are not covered by any block!', z);
         end
     end
 
