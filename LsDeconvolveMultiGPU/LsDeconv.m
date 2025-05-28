@@ -1183,49 +1183,80 @@ function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
     end
 end
 
-function check_block_coverage_slices(stack_info, block)
-    disp('checking for potential issues ...')
+function check_block_coverage_planes(stack_info, block)
+    disp('checking for potential issues ...');
     [p1, p2] = split(stack_info, block);
-    nBlocks = size(p1, 1);
-    zmax = stack_info.z;
+    dims = {'x', 'y', 'z'};
+    planes = {
+        [1, NaN, NaN], [stack_info.x, NaN, NaN], ...  % yz planes (x=1, x=end)
+        [NaN, 1, NaN], [NaN, stack_info.y, NaN], ...  % xz planes (y=1, y=end)
+        [NaN, NaN, 1], [NaN, NaN, stack_info.z]       % xy planes (z=1, z=end)
+    };
     err_msgs = {};
     t0 = tic;
-    last_update = 0;
+    total_planes = numel(planes);
 
-    for z = 1:zmax
-        coverage = zeros(stack_info.x, stack_info.y, 'uint8');
-        covered_blocks = find((p1(:,3) <= z) & (p2(:,3) >= z));
-        for k = 1:numel(covered_blocks)
-            bl = covered_blocks(k);
-            x1 = p1(bl,1); x2 = p2(bl,1);
-            y1 = p1(bl,2); y2 = p2(bl,2);
-            coverage(x1:x2, y1:y2) = coverage(x1:x2, y1:y2) + 1;
+    for pi = 1:total_planes
+        % Choose which plane to check
+        plane = planes{pi};
+        if ~isnan(plane(1))  % yz plane at x=plane(1)
+            x = plane(1);
+            coverage = zeros(stack_info.y, stack_info.z, 'uint8');
+            for bl = 1:size(p1,1)
+                if p1(bl,1) <= x && p2(bl,1) >= x
+                    y1 = p1(bl,2); y2 = p2(bl,2);
+                    z1 = p1(bl,3); z2 = p2(bl,3);
+                    coverage(y1:y2, z1:z2) = coverage(y1:y2, z1:z2) + 1;
+                end
+            end
+            nGaps = nnz(coverage == 0);
+            nOverlaps = nnz(coverage > 1);
+            if nGaps > 0 || nOverlaps > 0
+                err_msgs{end+1} = sprintf('YZ plane at x=%d: %d gaps, %d overlaps', x, nGaps, nOverlaps);
+            end
+
+        elseif ~isnan(plane(2))  % xz plane at y=plane(2)
+            y = plane(2);
+            coverage = zeros(stack_info.x, stack_info.z, 'uint8');
+            for bl = 1:size(p1,1)
+                if p1(bl,2) <= y && p2(bl,2) >= y
+                    x1 = p1(bl,1); x2 = p2(bl,1);
+                    z1 = p1(bl,3); z2 = p2(bl,3);
+                    coverage(x1:x2, z1:z2) = coverage(x1:x2, z1:z2) + 1;
+                end
+            end
+            nGaps = nnz(coverage == 0);
+            nOverlaps = nnz(coverage > 1);
+            if nGaps > 0 || nOverlaps > 0
+                err_msgs{end+1} = sprintf('XZ plane at y=%d: %d gaps, %d overlaps', y, nGaps, nOverlaps);
+            end
+
+        elseif ~isnan(plane(3))  % xy plane at z=plane(3)
+            z = plane(3);
+            coverage = zeros(stack_info.x, stack_info.y, 'uint8');
+            for bl = 1:size(p1,1)
+                if p1(bl,3) <= z && p2(bl,3) >= z
+                    x1 = p1(bl,1); x2 = p2(bl,1);
+                    y1 = p1(bl,2); y2 = p2(bl,2);
+                    coverage(x1:x2, y1:y2) = coverage(x1:x2, y1:y2) + 1;
+                end
+            end
+            nGaps = nnz(coverage == 0);
+            nOverlaps = nnz(coverage > 1);
+            if nGaps > 0 || nOverlaps > 0
+                err_msgs{end+1} = sprintf('XY plane at z=%d: %d gaps, %d overlaps', z, nGaps, nOverlaps);
+            end
         end
 
-        nGaps = nnz(coverage == 0);
-        nOverlaps = nnz(coverage > 1);
-        if nGaps > 0 || nOverlaps > 0
-            msg = sprintf('z=%d: %d gaps, %d overlaps', z, nGaps, nOverlaps);
-            err_msgs{end+1} = msg; %#ok<AGROW>
-        end
-
-        % Update progress every 1% or last slice
-        frac = z/zmax;
-        if (frac - last_update >= 0.01) || z == zmax
-            elapsed = toc(t0);
-            eta = (elapsed / frac) * (1 - frac);
-            fprintf('\rChecking slices: %3.0f%% [%d/%d] ETA: %4.1fs', 100*frac, z, zmax, eta);
-            last_update = frac;
-        end
+        % Progress
+        elapsed = toc(t0);
+        eta = (elapsed / pi) * (total_planes - pi);
+        fprintf('\rChecking plane %d/%d, ETA: %.1fs', pi, total_planes, eta);
     end
-    fprintf('\n'); % Newline after progress bar
+    fprintf('\n');
 
     if ~isempty(err_msgs)
-        shown = min(numel(err_msgs), 10);
-        summary = sprintf('%s\n', err_msgs{1:shown});
-        if numel(err_msgs) > shown
-            summary = [summary sprintf('...and %d more slices with errors\n', numel(err_msgs)-shown)];
-        end
+        summary = strjoin(err_msgs, '\n');
         error(['Block coverage error(s) detected:\n' summary]);
     end
 end
