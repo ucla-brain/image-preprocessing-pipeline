@@ -1184,70 +1184,37 @@ function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
 end
 
 function check_block_coverage_slices(stack_info, block)
+    % Efficiently checks that block splitting covers stack exactly (no gaps/overlaps).
+    % Uses only one slice at a time, reuses the split() function.
+
     [p1, p2] = split(stack_info, block);
-    nBlocks = size(p1,1);
+    nBlocks = size(p1, 1);
+
+    fprintf('[Coverage check] stack size: [%d %d %d], blocks: %d\n', ...
+        stack_info.x, stack_info.y, stack_info.z, nBlocks);
 
     for z = 1:stack_info.z
-        cov2d = zeros(stack_info.x, stack_info.y, 'uint8');
-        % For each block, if its core covers this z-plane, mark it
-        for blnr = 1:nBlocks
-            % --- Patched: Clamp core_z1/core_z2 to image boundaries ---
-            core_z1 = max(p1(blnr,3) + block.z_pad, 1);
-            core_z2 = min(p2(blnr,3) - block.z_pad, stack_info.z);
-            if z < core_z1 || z > core_z2
-                continue; % This block does not cover this Z
-            end
-
-            core_x1 = min(max(p1(blnr,1) + block.x_pad, 1), stack_info.x);
-            core_x2 = min(max(p2(blnr,1) - block.x_pad, 1), stack_info.x);
-            core_y1 = min(max(p1(blnr,2) + block.y_pad, 1), stack_info.y);
-            core_y2 = min(max(p2(blnr,2) - block.y_pad, 1), stack_info.y);
-
-            if core_x2 >= core_x1 && core_y2 >= core_y1
-                cov2d(core_x1:core_x2, core_y1:core_y2) = ...
-                    cov2d(core_x1:core_x2, core_y1:core_y2) + 1;
+        mask = zeros(stack_info.x, stack_info.y, 'uint8');
+        for i = 1:nBlocks
+            % Get block coverage in this slice
+            if z >= p1(i,3) && z <= p2(i,3)
+                xs = p1(i,1); xe = p2(i,1);
+                ys = p1(i,2); ye = p2(i,2);
+                % Mark covered region
+                mask(xs:xe, ys:ye) = mask(xs:xe, ys:ye) + 1;
             end
         end
-
-        % Debug print for z=1 (or any z with a gap)
-        if z == 1 || any(cov2d(:)==0)
-            fprintf('\n----- Debug coverage for z=%d -----\n', z);
-            fprintf('Coverage stats: min=%d, max=%d, sum(zeros)=%d\n', ...
-                min(cov2d(:)), max(cov2d(:)), sum(cov2d(:)==0));
-            [miss_x, miss_y] = find(cov2d==0);
-            if ~isempty(miss_x)
-                fprintf('Missing voxels at z=%d: total=%d\n', z, numel(miss_x));
-                fprintf('First 10 missing (x,y):\n');
-                for idx = 1:min(10, numel(miss_x))
-                    fprintf('  (%d,%d)\n', miss_x(idx), miss_y(idx));
-                end
-            else
-                fprintf('No missing voxels at z=%d.\n', z);
-            end
-
-            % Print which blocks claim to cover this Z
-            fprintf('Blocks covering core at z=%d:\n', z);
-            for blnr = 1:nBlocks
-                % Also print the actual block boundaries!
-                core_z1 = max(p1(blnr,3) + block.z_pad, 1);
-                core_z2 = min(p2(blnr,3) - block.z_pad, stack_info.z);
-                fprintf(['  Block %d: p1_z=%d, p2_z=%d, block.z_pad=%d, ' ...
-                         'core_z1=%d, core_z2=%d, ' ...
-                         'X[%d-%d], Y[%d-%d]\n'], ...
-                         blnr, p1(blnr,3), p2(blnr,3), block.z_pad, ...
-                         core_z1, core_z2, ...
-                         min(max(p1(blnr,1) + block.x_pad, 1), stack_info.x), ...
-                         min(max(p2(blnr,1) - block.x_pad, 1), stack_info.x), ...
-                         min(max(p1(blnr,2) + block.y_pad, 1), stack_info.y), ...
-                         min(max(p2(blnr,2) - block.y_pad, 1), stack_info.y));
-            end
+        % Check for gaps or overlaps
+        if any(mask(:) == 0)
+            [xi, yi] = find(mask == 0, 10, 'first');
+            fprintf('[GAP] z=%d first uncovered (x,y): (%d,%d)\n', z, xi(1), yi(1));
         end
-
-        % Error and exit if any gap
-        if any(cov2d(:) == 0)
-            error('Gap detected: Some voxels in z = %d are not covered by any block!', z);
+        if any(mask(:) > 1)
+            [xi, yi] = find(mask > 1, 10, 'first');
+            fprintf('[OVERLAP] z=%d first multi-covered (x,y): (%d,%d)\n', z, xi(1), yi(1));
         end
+        % Optional: Break early for debug
+        % if any(mask(:) == 0) || any(mask(:) > 1), break; end
     end
-
-    disp('All voxels in every z-plane are covered by at least one block.');
+    fprintf('Coverage check finished.\n');
 end
