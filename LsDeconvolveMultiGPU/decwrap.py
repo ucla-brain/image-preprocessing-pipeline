@@ -94,7 +94,7 @@ def estimate_block_size_max(gpu_indices, num_workers, bytes_per_element=4, base_
     max_allowed = 2 ** 31
     try:
         result = subprocess.run(
-            ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+            ["nvidia-smi", "--query-gpu=memory.free", "--format=csv,noheader,nounits"],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
