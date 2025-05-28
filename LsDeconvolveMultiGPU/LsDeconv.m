@@ -1181,31 +1181,32 @@ function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
     end
 
     % If any region is outside the image, pad it using padarray (symmetric)
-    % This works in each dimension (x, y, z)
     sz = size(bl);
+    dims = [full_nx, full_ny, full_nz];
+    x0 = [x_rng(1), y_rng(1), z_rng(1)];
+    x1 = [x_rng(end), y_rng(end), z_rng(end)];
+    sx = [stack_info.x, stack_info.y, stack_info.z];
+
     for dim = 1:3
-        needed = [full_nx, full_ny, full_nz](dim);
-        got = size(bl, dim);
-        pre = 0; post = 0;
+        needed = dims(dim);
+        got = sz(dim);
+        pre = max(0, 1 - x0(dim));
+        post = max(0, x1(dim) - sx(dim));
         if got < needed
-            pre = max(0, 1 - [x_rng(1), y_rng(1), z_rng(1)](dim));
-            post = max(0, [x_rng(end), y_rng(end), z_rng(end)](dim) - [stack_info.x, stack_info.y, stack_info.z](dim));
             bl = padarray(bl, pre * (1 == dim), 'symmetric', 'pre');
             bl = padarray(bl, post * (1 == dim), 'symmetric', 'post');
         end
     end
 
-    % After all, ensure bl is exactly [block.x+2*block.x_pad, block.y+2*block.y_pad, block.z+2*block.z_pad]
+    % After all, ensure bl is exactly the expected size
     sz = size(bl);
-    target_sz = [full_nx, full_ny, full_nz];
+    target_sz = dims;
     for dim = 1:3
         if sz(dim) > target_sz(dim)
-            % Crop if too large
-            idx = cell(1,3); [idx{:}] = deal(':');
+            idx = {':', ':', ':'};
             idx{dim} = 1:target_sz(dim);
             bl = bl(idx{:});
         elseif sz(dim) < target_sz(dim)
-            % Extra pad if too small (should not happen, but for safety)
             bl = padarray(bl, (target_sz(dim) - sz(dim)) * (1 == dim), 'symmetric', 'post');
         end
     end
