@@ -1184,37 +1184,40 @@ function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
 end
 
 function check_block_coverage_slices(stack_info, block)
-    % Efficiently checks that block splitting covers stack exactly (no gaps/overlaps).
-    % Uses only one slice at a time, reuses the split() function.
-
+    % Reuse your existing split function:
     [p1, p2] = split(stack_info, block);
     nBlocks = size(p1, 1);
+    err_msgs = {};
 
-    fprintf('[Coverage check] stack size: [%d %d %d], blocks: %d\n', ...
-        stack_info.x, stack_info.y, stack_info.z, nBlocks);
-
+    % Loop over each Z slice
     for z = 1:stack_info.z
-        mask = zeros(stack_info.x, stack_info.y, 'uint8');
-        for i = 1:nBlocks
-            % Get block coverage in this slice
-            if z >= p1(i,3) && z <= p2(i,3)
-                xs = p1(i,1); xe = p2(i,1);
-                ys = p1(i,2); ye = p2(i,2);
-                % Mark covered region
-                mask(xs:xe, ys:ye) = mask(xs:xe, ys:ye) + 1;
+        coverage = zeros(stack_info.x, stack_info.y, 'uint8');
+        % For each block, check if it covers the current z slice
+        for bl = 1:nBlocks
+            if p1(bl,3) <= z && z <= p2(bl,3)
+                x1 = p1(bl,1); x2 = p2(bl,1);
+                y1 = p1(bl,2); y2 = p2(bl,2);
+                % Mark this block's region for this slice
+                coverage(x1:x2, y1:y2) = coverage(x1:x2, y1:y2) + 1;
             end
         end
-        % Check for gaps or overlaps
-        if any(mask(:) == 0)
-            [xi, yi] = find(mask == 0, 10, 'first');
-            fprintf('[GAP] z=%d first uncovered (x,y): (%d,%d)\n', z, xi(1), yi(1));
+
+        % Check for any gaps (zeros) or overlaps (>1)
+        nGaps = nnz(coverage == 0);
+        nOverlaps = nnz(coverage > 1);
+        if nGaps > 0 || nOverlaps > 0
+            msg = sprintf('z=%d: %d gaps, %d overlaps', z, nGaps, nOverlaps);
+            err_msgs{end+1} = msg; %#ok<AGROW>
         end
-        if any(mask(:) > 1)
-            [xi, yi] = find(mask > 1, 10, 'first');
-            fprintf('[OVERLAP] z=%d first multi-covered (x,y): (%d,%d)\n', z, xi(1), yi(1));
-        end
-        % Optional: Break early for debug
-        % if any(mask(:) == 0) || any(mask(:) > 1), break; end
     end
-    fprintf('Coverage check finished.\n');
+
+    if ~isempty(err_msgs)
+        % Only the first 10 errors will be shown, but all errors are counted.
+        shown = min(numel(err_msgs), 10);
+        summary = sprintf('%s\n', err_msgs{1:shown});
+        if numel(err_msgs) > shown
+            summary = [summary sprintf('...and %d more slices with errors\n', numel(err_msgs)-shown)];
+        end
+        error(['Block coverage error(s) detected:\n' summary]);
+    end
 end
