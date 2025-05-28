@@ -190,7 +190,8 @@ function [] = LsDeconv(varargin)
         if resume && exist(block_path, 'file')
             block = load(block_path).block;
         else
-            [block.nx, block.ny, block.nz, block.x, block.y, block.z, block.x_pad, block.y_pad, block.z_pad, block.fft_shape] = autosplit(stack_info, size(psf.psf), filter, block_size_max, ram_total);  % ram_total ram_available
+            [block.nx, block.ny, block.nz, block.x, block.y, block.z, block.x_pad, block.y_pad, block.z_pad, block.fft_shape ...
+            ] = autosplit(stack_info, size(psf.psf), filter, block_size_max, ram_total);  % ram_total ram_available
             save(block_path, "block");
         end
 
@@ -284,9 +285,9 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(stack
                 g_pad_x = gaussian_pad_size(x, filter.gaussian_size(1));
                 g_pad_y = gaussian_pad_size(y, filter.gaussian_size(2));
                 g_pad_z = gaussian_pad_size(z, filter.gaussian_size(3));
-                p_pad_x = decon_pad_size(x, psf_size(1));
-                p_pad_y = decon_pad_size(y, psf_size(2));
-                p_pad_z = decon_pad_size(z, psf_size(3));
+                p_pad_x = decon_pad_size(psf_size(1));
+                p_pad_y = decon_pad_size(psf_size(2));
+                p_pad_z = decon_pad_size(psf_size(3));
 
                 % Take the largest needed on each axis
                 pad_x = max(g_pad_x, p_pad_x);
