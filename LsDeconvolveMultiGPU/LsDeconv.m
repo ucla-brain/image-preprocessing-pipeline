@@ -1175,8 +1175,16 @@ function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
     % Fill from image files (real data)
     for k = 1:length(z_valid)
         img_k = z_valid(k);
-        slice = imread(filelist{img_k}, 'PixelRegion', {y_valid, x_valid});
-        slice = im2single(slice)';
+        % If indices are contiguous, use PixelRegion, else use direct indexing
+        contiguous_y = isequal(y_valid, y_valid(1):y_valid(end));
+        contiguous_x = isequal(x_valid, x_valid(1):x_valid(end));
+        if contiguous_y && contiguous_x
+            slice = imread(filelist{img_k}, 'PixelRegion', {[y_valid(1) y_valid(end)], [x_valid(1) x_valid(end)]});
+            slice = im2single(slice)';
+        else
+            full_slice = imread(filelist{img_k});
+            slice = im2single(full_slice(y_valid, x_valid))';
+        end
         bl(x_dst, y_dst, z_dst(k)) = slice;
     end
 
