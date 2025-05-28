@@ -1187,12 +1187,13 @@ function check_block_coverage_slices(stack_info, block)
     disp('checking for potential issues ...')
     [p1, p2] = split(stack_info, block);
     nBlocks = size(p1, 1);
+    zmax = stack_info.z;
     err_msgs = {};
+    t0 = tic;
+    last_update = 0;
 
-    for z = 1:stack_info.z
+    for z = 1:zmax
         coverage = zeros(stack_info.x, stack_info.y, 'uint8');
-
-        % Find blocks covering this slice (vectorized)
         covered_blocks = find((p1(:,3) <= z) & (p2(:,3) >= z));
         for k = 1:numel(covered_blocks)
             bl = covered_blocks(k);
@@ -1207,7 +1208,17 @@ function check_block_coverage_slices(stack_info, block)
             msg = sprintf('z=%d: %d gaps, %d overlaps', z, nGaps, nOverlaps);
             err_msgs{end+1} = msg; %#ok<AGROW>
         end
+
+        % Update progress every 1% or last slice
+        frac = z/zmax;
+        if (frac - last_update >= 0.01) || z == zmax
+            elapsed = toc(t0);
+            eta = (elapsed / frac) * (1 - frac);
+            fprintf('\rChecking slices: %3.0f%% [%d/%d] ETA: %4.1fs', 100*frac, z, zmax, eta);
+            last_update = frac;
+        end
     end
+    fprintf('\n'); % Newline after progress bar
 
     if ~isempty(err_msgs)
         shown = min(numel(err_msgs), 10);
