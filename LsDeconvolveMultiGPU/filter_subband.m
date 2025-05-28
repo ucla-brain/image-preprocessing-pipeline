@@ -36,9 +36,11 @@ function img = filter_subband(img, sigma, levels, wavelet, axes)
 
         % Apply filtering
         if ismember(2, axes)
+            % Horizontal filtering on H
             H = filter_coefficient(H, sigma / size(H, 2), 2);
         end
         if ismember(1, axes)
+            % Vertical filtering on V
             V = filter_coefficient(V, sigma / size(V, 1), 1);
         end
 
