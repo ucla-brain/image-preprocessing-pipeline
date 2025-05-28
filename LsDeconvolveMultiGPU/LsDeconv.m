@@ -1186,7 +1186,6 @@ end
 function check_block_coverage_planes(stack_info, block)
     disp('checking for potential issues ...');
     [p1, p2] = split(stack_info, block);
-    dims = {'x', 'y', 'z'};
     planes = {
         [1, NaN, NaN], [stack_info.x, NaN, NaN], ...  % yz planes (x=1, x=end)
         [NaN, 1, NaN], [NaN, stack_info.y, NaN], ...  % xz planes (y=1, y=end)
