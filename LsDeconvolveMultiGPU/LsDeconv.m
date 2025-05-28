@@ -362,19 +362,19 @@ end
 
 %provides coordinates of sub-blocks after splitting
 function [p1, p2] = split(stack_info, block)
-    % Precompute block starting positions for each axis:
-    x_starts = 1 : (block.x - 2*block.x_pad) : stack_info.x;
-    y_starts = 1 : (block.y - 2*block.y_pad) : stack_info.y;
-    z_starts = 1 : (block.z - 2*block.z_pad) : stack_info.z;
+    % Calculate starting indices for each block (x, y, z)
+    x_starts = 1 : (block.x - 2*block.x_pad) : (stack_info.x - block.x + 1);
+    y_starts = 1 : (block.y - 2*block.y_pad) : (stack_info.y - block.y + 1);
+    z_starts = 1 : (block.z - 2*block.z_pad) : (stack_info.z - block.z + 1);
 
-    % Ensure last block covers the edge exactly
-    if x_starts(end) + block.x - 1 < stack_info.x
+    % Make sure last block covers the edge exactly
+    if isempty(x_starts) || x_starts(end) + block.x - 1 < stack_info.x
         x_starts = [x_starts, stack_info.x - block.x + 1];
     end
-    if y_starts(end) + block.y - 1 < stack_info.y
+    if isempty(y_starts) || y_starts(end) + block.y - 1 < stack_info.y
         y_starts = [y_starts, stack_info.y - block.y + 1];
     end
-    if z_starts(end) + block.z - 1 < stack_info.z
+    if isempty(z_starts) || z_starts(end) + block.z - 1 < stack_info.z
         z_starts = [z_starts, stack_info.z - block.z + 1];
     end
 
@@ -403,19 +403,11 @@ function [p1, p2] = split(stack_info, block)
                 p1(blnr, 3) = zs;
                 p2(blnr, 3) = min(zs + block.z - 1, stack_info.z);
 
-                % Track processed core region starting slice
-                % The 'core' for this block is always:
-                %   xs+block.x_pad : min(xs+block.x-1-block.x_pad, stack_info.x), etc.
-                if iz == 1
-                    p1(blnr, 4) = 0; % Not sure you use this anywhere
-                else
-                    p1(blnr, 4) = zs + block.z_pad - 1;
-                end
+                p1(blnr, 4) = 0; % you can use this for debug or ignore
             end
         end
     end
 end
-
 
 function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
     damping, clipval, stop_criterion, gpus, cache_drive, amplification, ...
