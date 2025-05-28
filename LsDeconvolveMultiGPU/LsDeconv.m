@@ -194,6 +194,7 @@ function [] = LsDeconv(varargin)
             ] = autosplit(stack_info, size(psf.psf), filter, block_size_max, ram_total);  % ram_total ram_available
             save(block_path, "block");
         end
+        check_block_coverage_slices(stack_info, block);
 
         p_log(log_file, ['   block numbers: ' num2str(block.nx) 'x * ' num2str(block.ny) 'y * ' num2str(block.nz) 'z = ' num2str(block.nx * block.ny * block.nz) ' blocks.']);
         p_log(log_file, ['   block size loaded image: ' num2str(block.x) 'x * ' num2str(block.y) 'y * ' num2str(block.z) 'z = ' num2str(block.x * block.y * block.z) ' voxels.']);
@@ -553,7 +554,7 @@ function deconvolve(filelist, psf, numit, damping, ...
         semaphore('wait', semkey_loading);
         send(dQueue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' is loading ...']);
         loading_start = tic;
-        [bl, pad_info] = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info);
+        [bl] = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info);
         send(dQueue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' is loaded in ' num2str(round(toc(loading_start), 1))]);
         semaphore('post', semkey_loading);
 
@@ -575,9 +576,9 @@ function deconvolve(filelist, psf, numit, damping, ...
         save_start = tic;
 
         % Remove pads before saving bl
-        bl = bl(1 + pad_info.x_pre : end - pad_info.x_post, ...
-                1 + pad_info.y_pre : end - pad_info.y_post, ...
-                1 + pad_info.z_pre : end - pad_info.z_post);
+        bl = bl(1 + block.x_pad : end - block.x_pad, ...
+                1 + block.y_pad : end - block.y_pad, ...
+                1 + block.z_pad : end - block.z_pad);
 
         % find maximum value in other blocks
         semaphore('wait', semkey_single);
@@ -733,7 +734,7 @@ function postprocess_save(...
         error('Aborting postprocess_save due to missing block files.');
     end
 
-    x = 1; y = 2; z = 3; z_saved = 4;
+    x = 1; y = 2; z = 3;
     if exist(min_max_path, "file")
         min_max = load(min_max_path);
         deconvmin = min_max.deconvmin;
@@ -797,13 +798,15 @@ function postprocess_save(...
     end
 
     % mount data and save data layer by layer
-    blnr = 1;  % block number
-    imagenr = 0;  % image number
-    starting_z_block = 1;
+    % --- Minimal and safe resume logic (updated, z_saved removed) ---
     num_tif_files = numel(dir(fullfile(outpath, '*.tif')));
+    starting_z_block = 1;
+    starting_block_number = 1;
+    blnr = 1;
+
     if resume && num_tif_files
         starting_z_block = 0;
-        while blnr <= length(p1) && p1(blnr, z_saved) <= num_tif_files
+        while blnr <= length(p1) && p1(blnr, z) <= num_tif_files
             if p1(blnr, x) == 1 && p1(blnr, y) == 1
                 starting_block_number = blnr;
                 starting_z_block = starting_z_block + 1;
@@ -811,9 +814,11 @@ function postprocess_save(...
             blnr = blnr + 1;
         end
         blnr = starting_block_number;
-        imagenr = p1(starting_block_number, z_saved); % since imagenr starts from zero but z levels start from 1
+        imagenr = p1(starting_block_number, z); % Use p1 Z directly
         disp(['number of existing tif files ' num2str(num_tif_files)]);
         disp(['resuming from block ' num2str(blnr) ' and image number ' num2str(imagenr)]);
+    else
+        imagenr = 0;
     end
     clear num_tif_files;
     
@@ -823,26 +828,25 @@ function postprocess_save(...
     for nz = starting_z_block : block.nz
         disp(['layer ' num2str(nz) ' from ' num2str(block.nz) ': mounting blocks ...']);
 
-        %load and mount next layer of images
-        if block.z_pad > 0 && block.nz > 1
-            bl_z = p2(blnr, z) - p1(blnr, z) + 1;
-            if  nz == 1
-                R = zeros(stack_info.x, stack_info.y,                      bl_z - floor(block.z_pad), 'single');
-            elseif nz == block.nz
-                R = zeros(stack_info.x, stack_info.y, -ceil(block.z_pad) + bl_z                     , 'single');
-            else
-                R = zeros(stack_info.x, stack_info.y, -ceil(block.z_pad) + bl_z - floor(block.z_pad), 'single');
-            end
+        % Indices for blocks in this Z slab
+        block_inds = ((nz-1)*block.nx*block.ny + 1):(nz*block.nx*block.ny);
+        slab_z1 = p1(block_inds(1), z);
+        slab_z2 = p2(block_inds(1), z);
+        slab_depth = slab_z2 - slab_z1 + 1;
+
+        R = zeros(stack_info.x, stack_info.y, slab_depth, 'single');
+
+        % Async load all blocks in this Z slab
+        for j = 1:length(block_inds)
+            async_load(j) = pool.parfeval(@load_bl, 1, blocklist(block_inds(j)), semkey_multi);
         end
-        for j = 1 : block.nx * block.ny
-             async_load(j) = pool.parfeval(@load_bl, 1, blocklist(blnr+j-1), semkey_multi);
-        end
-        for j = 1 : block.nx * block.ny
-            %%% Use filesep for platform-independent path splitting
-            file_path_parts = strsplit(blocklist(blnr), filesep);
-            file_name = char(file_path_parts(end));
-            asigment_time_start = tic;
-            R(p1(blnr, x) : p2(blnr, x), p1(blnr, y) : p2(blnr, y), :) = async_load(j).fetchOutputs;
+
+        % Assign each block directly using p1/p2 indices
+        for j = 1:length(block_inds)
+            blnr = block_inds(j);
+            R(p1(blnr, x):p2(blnr, x), ...
+              p1(blnr, y):p2(blnr, y), ...
+              p1(blnr, z)-slab_z1+1 : p2(blnr, z)-slab_z1+1) = async_load(j).fetchOutputs;
             disp(['   block ' num2str(j) ':' num2str(block.nx * block.ny) ' file: ' file_name ' loaded and asinged in ' num2str(round(toc(asigment_time_start), 1))]);
             blnr = blnr + 1;
         end
@@ -1099,52 +1103,113 @@ function message = save_image_2d(im, path, s, rawmax, save_time)
     message = ['   saved img_' s ' in ' num2str(round(toc(save_time), 1)) ' seconds and after ' num2str(num_retries) ' attempts.'];
 end
 
-function [bl, pad_info] = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
-    % Determine the core block size (without padding)
+function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
+    % LOAD_BLOCK loads a padded 3D block from a stack of image files.
+    %   filelist: cell array of file names for each z-slice
+    %   x1, x2, y1, y2, z1, z2: requested (inclusive) bounds within the volume
+    %   block: struct with fields x_pad, y_pad, z_pad (pad sizes for each dimension)
+    %   stack_info: struct with fields x, y, z (full size of volume)
+    %   Returns: bl - padded block as single precision 3D array
+
+    % Compute requested core block size (without padding)
     nx = x2 - x1 + 1;
     ny = y2 - y1 + 1;
     nz = z2 - z1 + 1;
 
-    % Pad sizes from block definition
-    px = block.x_pad;  py = block.y_pad;  pz = block.z_pad;
+    % Determine full requested region (including padding)
+    req_x = [x1 - block.x_pad, x2 + block.x_pad];
+    req_y = [y1 - block.y_pad, y2 + block.y_pad];
+    req_z = [z1 - block.z_pad, z2 + block.z_pad];
 
-    % Are we on the edges of the stack?
-    edge_x1 = (x1 == 1);    edge_x2 = (x2 == stack_info.x);
-    edge_y1 = (y1 == 1);    edge_y2 = (y2 == stack_info.y);
-    edge_z1 = (z1 == 1);    edge_z2 = (z2 == stack_info.z);
-
-    % Actual pad to keep (zero at the edges)
-    pad_info.x_pre  = px * ~edge_x1;   pad_info.x_post = px * ~edge_x2;
-    pad_info.y_pre  = py * ~edge_y1;   pad_info.y_post = py * ~edge_y2;
-    pad_info.z_pre  = pz * ~edge_z1;   pad_info.z_post = pz * ~edge_z2;
-
-    % Full region to load (may extend beyond stack)
-    req_x = [x1-px, x2+px];   req_y = [y1-py, y2+py];   req_z = [z1-pz, z2+pz];
+    % Clip the region to stay within the stack bounds
     img_x = [max(1, req_x(1)), min(stack_info.x, req_x(2))];
     img_y = [max(1, req_y(1)), min(stack_info.y, req_y(2))];
     img_z = [max(1, req_z(1)), min(stack_info.z, req_z(2))];
 
-    % Allocate padded block
-    bl = zeros(nx+2*px, ny+2*py, nz+2*pz, 'single');
+    % Allocate the full padded block
+    full_nx = nx + 2 * block.x_pad;
+    full_ny = ny + 2 * block.y_pad;
+    full_nz = nz + 2 * block.z_pad;
+    bl = zeros(full_nx, full_ny, full_nz, 'single');
 
-    % Placement indices in bl for the real loaded data
-    bx1 = 1 + (img_x(1) - req_x(1));   bx2 = bx1 + (img_x(2) - img_x(1));
-    by1 = 1 + (img_y(1) - req_y(1));   by2 = by1 + (img_y(2) - img_y(1));
-    bz1 = 1 + (img_z(1) - req_z(1));   bz2 = bz1 + (img_z(2) - img_z(1));
+    % Compute where the loaded region should be placed within the block
+    bx1 = 1 + (img_x(1) - req_x(1));
+    bx2 = bx1 + (img_x(2) - img_x(1));
+    by1 = 1 + (img_y(1) - req_y(1));
+    by2 = by1 + (img_y(2) - img_y(1));
+    bz1 = 1 + (img_z(1) - req_z(1));
+    % Note: We do not need bz2
 
-    % Read and insert image data
+    % Loop through the Z-slices to load the image data into the block
     for k = img_z(1):img_z(2)
-        slice = im2single(imread(filelist{k}, 'PixelRegion', {img_y, img_x}));
-        bl(bx1:bx2, by1:by2, bz1+(k-img_z(1))) = slice';
+        % Read a 2D slice from file (only the requested region)
+        slice = imread(filelist{k}, 'PixelRegion', {img_y, img_x});
+        slice = im2single(slice); % Convert to single precision
+        slice = slice';           % Transpose to match MATLAB convention
+        % Place the loaded slice in the correct Z position within bl
+        bl(bx1:bx2, by1:by2, bz1 + (k - img_z(1))) = slice;
     end
 
-    % Replicate edges for padding if needed
-    if bx1 > 1,          bl(1:bx1-1,:,:)      = repmat(bl(bx1,:,:), [bx1-1, 1, 1]); end
-    if bx2 < size(bl,1), bl(bx2+1:end,:,:)    = repmat(bl(bx2,:,:), [size(bl,1)-bx2, 1, 1]); end
-    if by1 > 1,          bl(:,1:by1-1,:)      = repmat(bl(:,by1,:), [1, by1-1, 1]); end
-    if by2 < size(bl,2), bl(:,by2+1:end,:)    = repmat(bl(:,by2,:), [1, size(bl,2)-by2, 1]); end
-    if bz1 > 1,          bl(:,:,1:bz1-1)      = repmat(bl(:,:,bz1), [1, 1, bz1-1]); end
-    if bz2 < size(bl,3), bl(:,:,bz2+1:end)    = repmat(bl(:,:,bz2), [1, 1, size(bl,3)-bz2]); end
+    % For regions that extend past the stack edge, apply symmetric padding
+    if x1 == 1
+        bl = padarray(bl, [block.x_pad 0 0], 'symmetric', 'pre');
+    end
+    if x2 == stack_info.x
+        bl = padarray(bl, [block.x_pad 0 0], 'symmetric', 'post');
+    end
+    if y1 == 1
+        bl = padarray(bl, [0 block.y_pad 0], 'symmetric', 'pre');
+    end
+    if y2 == stack_info.y
+        bl = padarray(bl, [0 block.y_pad 0], 'symmetric', 'post');
+    end
+    if z1 == 1
+        bl = padarray(bl, [0 0 block.z_pad], 'symmetric', 'pre');
+    end
+    if z2 == stack_info.z
+        bl = padarray(bl, [0 0 block.z_pad], 'symmetric', 'post');
+    end
+end
+
+function check_block_coverage_slices(stack_info, block)
+    [p1, p2] = split(stack_info, block);
+    nBlocks = size(p1,1);
+
+    for z = 1:stack_info.z
+        cov2d = zeros(stack_info.x, stack_info.y, 'uint8');
+        % For each block, if its core covers this z-plane, mark it
+        for blnr = 1:nBlocks
+            core_z1 = p1(blnr,3) + block.z_pad;
+            core_z2 = p2(blnr,3) - block.z_pad;
+            if z < core_z1 || z > core_z2
+                continue; % This block does not cover this Z
+            end
+
+            core_x1 = min(max(p1(blnr,1) + block.x_pad, 1), stack_info.x);
+            core_x2 = min(max(p2(blnr,1) - block.x_pad, 1), stack_info.x);
+            core_y1 = min(max(p1(blnr,2) + block.y_pad, 1), stack_info.y);
+            core_y2 = min(max(p2(blnr,2) - block.y_pad, 1), stack_info.y);
+
+            if core_x2 >= core_x1 && core_y2 >= core_y1
+                cov2d(core_x1:core_x2, core_y1:core_y2) = ...
+                    cov2d(core_x1:core_x2, core_y1:core_y2) + 1;
+            end
+        end
+
+        % Check for gaps on this plane
+        if any(cov2d(:) == 0)
+            error('Gap detected: Some voxels in z = %d are not covered by any block!', z);
+        end
+
+        % Optional: Visualize first/last/middle slices for sanity check
+        if z == 1 || z == stack_info.z || z == round(stack_info.z/2)
+            figure; imagesc(cov2d); colorbar;
+            title(['Block core coverage at Z = ' num2str(z)]);
+            drawnow;
+        end
+    end
+
+    disp('All voxels in every z-plane are covered by at least one block.');
 end
 
 function cleanupSemaphoresFromCache()
