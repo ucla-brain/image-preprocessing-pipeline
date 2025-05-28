@@ -1179,8 +1179,9 @@ function check_block_coverage_slices(stack_info, block)
         cov2d = zeros(stack_info.x, stack_info.y, 'uint8');
         % For each block, if its core covers this z-plane, mark it
         for blnr = 1:nBlocks
-            core_z1 = p1(blnr,3) + block.z_pad;
-            core_z2 = p2(blnr,3) - block.z_pad;
+            % --- Patched: Clamp core_z1/core_z2 to image boundaries ---
+            core_z1 = max(p1(blnr,3) + block.z_pad, 1);
+            core_z2 = min(p2(blnr,3) - block.z_pad, stack_info.z);
             if z < core_z1 || z > core_z2
                 continue; % This block does not cover this Z
             end
@@ -1215,16 +1216,18 @@ function check_block_coverage_slices(stack_info, block)
             % Print which blocks claim to cover this Z
             fprintf('Blocks covering core at z=%d:\n', z);
             for blnr = 1:nBlocks
-                core_z1 = p1(blnr,3) + block.z_pad;
-                core_z2 = p2(blnr,3) - block.z_pad;
-                if z >= core_z1 && z <= core_z2
-                    core_x1 = min(max(p1(blnr,1) + block.x_pad, 1), stack_info.x);
-                    core_x2 = min(max(p2(blnr,1) - block.x_pad, 1), stack_info.x);
-                    core_y1 = min(max(p1(blnr,2) + block.y_pad, 1), stack_info.y);
-                    core_y2 = min(max(p2(blnr,2) - block.y_pad, 1), stack_info.y);
-                    fprintf('  Block %d: X[%d-%d], Y[%d-%d], core_z1=%d, core_z2=%d\n', ...
-                        blnr, core_x1, core_x2, core_y1, core_y2, core_z1, core_z2);
-                end
+                % Also print the actual block boundaries!
+                core_z1 = max(p1(blnr,3) + block.z_pad, 1);
+                core_z2 = min(p2(blnr,3) - block.z_pad, stack_info.z);
+                fprintf(['  Block %d: p1_z=%d, p2_z=%d, block.z_pad=%d, ' ...
+                         'core_z1=%d, core_z2=%d, ' ...
+                         'X[%d-%d], Y[%d-%d]\n'], ...
+                         blnr, p1(blnr,3), p2(blnr,3), block.z_pad, ...
+                         core_z1, core_z2, ...
+                         min(max(p1(blnr,1) + block.x_pad, 1), stack_info.x), ...
+                         min(max(p2(blnr,1) - block.x_pad, 1), stack_info.x), ...
+                         min(max(p1(blnr,2) + block.y_pad, 1), stack_info.y), ...
+                         min(max(p2(blnr,2) - block.y_pad, 1), stack_info.y));
             end
         end
 
