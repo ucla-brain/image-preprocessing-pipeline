@@ -266,7 +266,6 @@ function [] = LsDeconv(varargin)
 end
 
 function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(stack_info, psf_size, filter, block_size_max, ram_available)
-    % Limit z block size by available RAM for post-processing
     ram_usage_portion = 0.5;
     bytes_per_voxel = 4; % single-precision
     z_max_ram = floor(ram_available * ram_usage_portion / (bytes_per_voxel * stack_info.x * stack_info.y));
@@ -278,47 +277,46 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(stack
     best_score = -Inf;
     best = struct();
 
-    for z = max_block(3):-8:min_block(3)
-        for x = max_block(1):-8:min_block(1)
-            for y = max_block(2):-8:min_block(2)
-                % --- Calculate Gaussian and FFT (PSF) pads ---
-                g_pad_x = gaussian_pad_size(x, filter.gaussian_size(1));
-                g_pad_y = gaussian_pad_size(y, filter.gaussian_size(2));
-                g_pad_z = gaussian_pad_size(z, filter.gaussian_size(3));
-                p_pad_x = decon_pad_size(psf_size(1));
-                p_pad_y = decon_pad_size(psf_size(2));
-                p_pad_z = decon_pad_size(psf_size(3));
+    % Use coarse step for initial sweep
+    for z = max_block(3):-32:min_block(3)
+        for xy = max_block(1):-32:min_block(1)
+            % Only try square blocks for speed
+            x = xy; y = xy;
+            % Pads
+            g_pad_x = gaussian_pad_size(x, filter.gaussian_size(1));
+            g_pad_y = gaussian_pad_size(y, filter.gaussian_size(2));
+            g_pad_z = gaussian_pad_size(z, filter.gaussian_size(3));
+            p_pad_x = decon_pad_size(psf_size(1));
+            p_pad_y = decon_pad_size(psf_size(2));
+            p_pad_z = decon_pad_size(psf_size(3));
 
-                % Take the largest needed on each axis
-                pad_x = max(g_pad_x, p_pad_x);
-                pad_y = max(g_pad_y, p_pad_y);
-                pad_z = max(g_pad_z, p_pad_z);
+            pad_x = max(g_pad_x, p_pad_x);
+            pad_y = max(g_pad_y, p_pad_y);
+            pad_z = max(g_pad_z, p_pad_z);
 
-                block_x = x + 2*pad_x;
-                block_y = y + 2*pad_y;
-                block_z = z + 2*pad_z;
+            block_x = x + 2*pad_x;
+            block_y = y + 2*pad_y;
+            block_z = z + 2*pad_z;
 
-                if filter.use_fft
-                    block_x = next_fast_len(block_x);
-                    block_y = next_fast_len(block_y);
-                    block_z = next_fast_len(block_z);
-                end
+            if filter.use_fft
+                block_x = next_fast_len(block_x);
+                block_y = next_fast_len(block_y);
+                block_z = next_fast_len(block_z);
+            end
 
-                block_elements = block_x * block_y * block_z;
-                if block_elements > block_size_max
-                    continue;
-                end
+            block_elements = block_x * block_y * block_z;
+            if block_elements > block_size_max
+                continue;
+            end
 
-                % Prefer larger z, prefer square x/y
-                score = z*1e6 + x*y - abs(x-y)*1e2;
-                if score > best_score
-                    best_score = score;
-                    best = struct( ...
-                        'x', x, 'y', y, 'z', z, ...
-                        'x_pad', pad_x, 'y_pad', pad_y, 'z_pad', pad_z, ...
-                        'block_x', block_x, 'block_y', block_y, 'block_z', block_z ...
-                    );
-                end
+            score = z*1e6 + x*y; % (x==y so abs(x-y)==0)
+            if score > best_score
+                best_score = score;
+                best = struct( ...
+                    'x', x, 'y', y, 'z', z, ...
+                    'x_pad', pad_x, 'y_pad', pad_y, 'z_pad', pad_z, ...
+                    'block_x', block_x, 'block_y', block_y, 'block_z', block_z ...
+                );
             end
         end
     end
