@@ -407,6 +407,11 @@ def main():
             preexec_fn=os.setsid if not is_windows else None
         )
         proc.wait()
+
+        if proc.returncode != 0:
+            log.error(f"MATLAB exited with error code {proc.returncode}.")
+            raise SystemExit(f"MATLAB execution failed with exit code {proc.returncode}. Check logs for details.")
+
         log.info("Deconvolution completed successfully.")
         if args.clean_otf_cache:
             cleanup_otf_cache()
