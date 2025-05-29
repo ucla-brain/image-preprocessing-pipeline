@@ -182,7 +182,9 @@ function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
         otf = padPSF(psf, imsize);
         if use_gpu, otf = gpuArray(otf); end
         otf = fftn(otf);
+        if use_gpu, otf = arrayfun(@(r, i) complex(r, i), real(otf), imag(otf)); end
         otf_conj = conj(otf);
+        if use_gpu, otf_conj = arrayfun(@(r, i) complex(r, i), real(otf_conj), imag(otf_conj)); end
     catch e
         error('getCachedOTF:ComputationFailed', 'Failed to compute OTF: %s', e.message);
     end
@@ -190,9 +192,7 @@ function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
     % === Save to cache (async, thread-safe)
     try
         if use_gpu
-            otf = arrayfun(@(r, i) complex(r, i), real(otf), imag(otf));
             otf_cpu = gather(otf);
-            otf_conj = arrayfun(@(r, i) complex(r, i), real(otf_conj), imag(otf_conj));
             otf_conj_cpu = gather(otf_conj);
         else
             otf_cpu = otf;
