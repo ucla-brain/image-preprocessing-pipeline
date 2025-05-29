@@ -1162,6 +1162,11 @@ function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
     y_rng = (y1 - block.y_pad):(y2 + block.y_pad);
     z_rng = (z1 - block.z_pad):(z2 + block.z_pad);
 
+    % For easier dimension indexing:
+    rng_starts = [x_rng(1), y_rng(1), z_rng(1)];
+    rng_ends   = [x_rng(end), y_rng(end), z_rng(end)];
+    stack_dims = [stack_info.x, stack_info.y, stack_info.z];
+
     % Find in-bounds (real data) region in each dimension
     x_valid = max(1, x_rng(1)):min(stack_info.x, x_rng(end));
     y_valid = max(1, y_rng(1)):min(stack_info.y, y_rng(end));
@@ -1189,12 +1194,12 @@ function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
             pad_pre = zeros(1,3);
             pad_post = zeros(1,3);
             % Pre-pad if our start was before 1
-            if [x_rng(1), y_rng(1), z_rng(1)](dim) < 1
-                pad_pre(dim) = 1 - [x_rng(1), y_rng(1), z_rng(1)](dim);
+            if rng_starts(dim) < 1
+                pad_pre(dim) = 1 - rng_starts(dim);
             end
             % Post-pad if our end was beyond the image
-            if [x_rng(end), y_rng(end), z_rng(end)](dim) > [stack_info.x, stack_info.y, stack_info.z](dim)
-                pad_post(dim) = [x_rng(end), y_rng(end), z_rng(end)](dim) - [stack_info.x, stack_info.y, stack_info.z](dim);
+            if rng_ends(dim) > stack_dims(dim)
+                pad_post(dim) = rng_ends(dim) - stack_dims(dim);
             end
             if any(pad_pre)
                 bl = padarray(bl, pad_pre, 'symmetric', 'pre');
@@ -1202,7 +1207,6 @@ function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
             if any(pad_post)
                 bl = padarray(bl, pad_post, 'symmetric', 'post');
             end
-            % Re-calc sz after each pad
             sz = size(bl);
         end
     end
@@ -1211,19 +1215,16 @@ function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
     sz = size(bl);
     for dim = 1:3
         if sz(dim) > target_sz(dim)
-            % Crop if too large
             idx = {':', ':', ':'};
             idx{dim} = 1:target_sz(dim);
             bl = bl(idx{:});
         elseif sz(dim) < target_sz(dim)
-            % Final pad if too small
             pad_extra = zeros(1,3);
             pad_extra(dim) = target_sz(dim) - sz(dim);
             bl = padarray(bl, pad_extra, 'symmetric', 'post');
         end
     end
 end
-
 
 function check_block_coverage_planes(stack_info, block)
     disp('checking for potential issues ...');
