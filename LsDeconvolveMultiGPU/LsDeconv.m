@@ -595,7 +595,11 @@ function deconvolve(filelist, psf, numit, damping, ...
             continue
         end
         block_processing_start = tic;
+        sz_in = size(bl);  % Store size before processing
         [bl, lb, ub] = process_block(bl, block, psf, numit, damping, stop_criterion, gpu, gpu_queue_key, filter);
+        assert(isequal(size(bl), sz_in), ...
+            sprintf('[process_block] Output size mismatch! Got [%s], expected [%s]', ...
+            num2str(size(bl)), num2str(sz_in)));
         send(dQueue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' filters applied in ' num2str(round(toc(block_processing_start), 1))]);
         
         save_start = tic;
@@ -1217,11 +1221,14 @@ function check_block_coverage_planes(stack_info, block)
 end
 
 function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
-    % Determine the actual size of the block to load (core + pads)
+    % Load a padded 3D block from a stack of 2D image slices.
+    % Assumes filelist is a cell array of file paths, one per z-plane.
+
+    % Target block size (core + padding)
     core_sz = [x2 - x1 + 1, y2 - y1 + 1, z2 - z1 + 1];
     target_sz = core_sz + 2 * [block.x_pad, block.y_pad, block.z_pad];
 
-    % Requested indices (can be out-of-bounds)
+    % Full requested indices (may be out-of-bounds)
     xq = (x1 - block.x_pad):(x2 + block.x_pad);
     yq = (y1 - block.y_pad):(y2 + block.y_pad);
     zq = (z1 - block.z_pad):(z2 + block.z_pad);
@@ -1231,46 +1238,42 @@ function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
     y_src = max(1, yq(1)) : min(stack_info.y, yq(end));
     z_src = max(1, zq(1)) : min(stack_info.z, zq(end));
 
-    % Allocate array for real data region
-    bl_real = zeros(length(x_src), length(y_src), length(z_src), 'single');
+    % Preallocate buffer for real data
+    nx = length(x_src);
+    ny = length(y_src);
+    nz = length(z_src);
+    bl_real = zeros(nx, ny, nz, 'single');
 
-    % Read image slices into bl_real
-    for k = 1:length(z_src)
+    % Load slices from disk
+    for k = 1:nz
         img_k = z_src(k);
         try
-            slice = imread(filelist{img_k}, 'PixelRegion', {[y_src(1), y_src(end)], [x_src(1), x_src(end)]});
+            slice = imread(filelist{img_k}, 'PixelRegion', ...
+                {[y_src(1), y_src(end)], [x_src(1), x_src(end)]});
         catch ME
             error('[load_block] Error reading slice %d: %s', img_k, ME.message);
         end
-        slice = im2single(slice)';  % transpose to match (x, y) indexing
-        bl_real(:, :, k) = slice;
+        bl_real(:, :, k) = im2single(slice)';
     end
 
-    % Determine out-of-bounds padding needed
-    xq_start = x1 - block.x_pad;
-    xq_end   = x2 + block.x_pad;
-    yq_start = y1 - block.y_pad;
-    yq_end   = y2 + block.y_pad;
-    zq_start = z1 - block.z_pad;
-    zq_end   = z2 + block.z_pad;
+    % Compute padding needed at edges (if any)
+    starts = [x1, y1, z1];
+    ends   = [x2, y2, z2];
+    pads   = [block.x_pad, block.y_pad, block.z_pad];
+    vol_sz = [stack_info.x, stack_info.y, stack_info.z];
 
-    x_pre  = max(0, 1      - xq_start);
-    x_post = max(0, xq_end - stack_info.x);
-    y_pre  = max(0, 1      - yq_start);
-    y_post = max(0, yq_end - stack_info.y);
-    z_pre  = max(0, 1      - zq_start);
-    z_post = max(0, zq_end - stack_info.z);
+    q_start = starts - pads;
+    q_end   = ends   + pads;
+
+    pad_pre  = max(0, 1      - q_start);
+    pad_post = max(0, q_end  - vol_sz);
 
     % Apply symmetric padding only where needed
     bl = bl_real;
-    if x_pre  > 0, bl = padarray(bl, [x_pre  0      0     ], 'symmetric', 'pre' ); end
-    if x_post > 0, bl = padarray(bl, [x_post 0      0     ], 'symmetric', 'post'); end
-    if y_pre  > 0, bl = padarray(bl, [0      y_pre  0     ], 'symmetric', 'pre' ); end
-    if y_post > 0, bl = padarray(bl, [0      y_post 0     ], 'symmetric', 'post'); end
-    if z_pre  > 0, bl = padarray(bl, [0      0      z_pre ], 'symmetric', 'pre' ); end
-    if z_post > 0, bl = padarray(bl, [0      0      z_post], 'symmetric', 'post'); end
+    if any(pad_pre  > 0), bl = padarray(bl, pad_pre,  'symmetric', 'pre');  end
+    if any(pad_post > 0), bl = padarray(bl, pad_post, 'symmetric', 'post'); end
 
-    % Final size check
+    % Final safety check
     assert(isequal(size(bl), target_sz), ...
         sprintf('[load_block] Output size mismatch! Got [%s], expected [%s]', ...
         num2str(size(bl)), num2str(target_sz)));
