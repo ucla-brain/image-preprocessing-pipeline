@@ -1151,53 +1151,56 @@ function message = save_image_2d(im, path, s, rawmax, save_time)
 end
 
 function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
-    % Target block size (including pads)
+    % Define output block size
     nx = block.x + 2*block.x_pad;
     ny = block.y + 2*block.y_pad;
     nz = block.z + 2*block.z_pad;
     bl = zeros(nx, ny, nz, 'single');
 
-    % The region we WANT in global image coordinates (may extend beyond edges)
-    x_rng = (x1-block.x_pad):(x2+block.x_pad);
-    y_rng = (y1-block.y_pad):(y2+block.y_pad);
-    z_rng = (z1-block.z_pad):(z2+block.z_pad);
+    % Region in the image we want to extract (may be out-of-bounds)
+    x_start = x1 - block.x_pad;
+    x_end   = x2 + block.x_pad;
+    y_start = y1 - block.y_pad;
+    y_end   = y2 + block.y_pad;
+    z_start = z1 - block.z_pad;
+    z_end   = z2 + block.z_pad;
 
-    % The VALID (in-bounds) region in source image coordinates
-    x_valid = max(1, x_rng(1)):min(stack_info.x, x_rng(end));
-    y_valid = max(1, y_rng(1)):min(stack_info.y, y_rng(end));
-    z_valid = max(1, z_rng(1)):min(stack_info.z, z_rng(end));
+    % Valid (in-bounds) region in the image
+    x_valid_start = max(1, x_start);
+    x_valid_end   = min(stack_info.x, x_end);
+    y_valid_start = max(1, y_start);
+    y_valid_end   = min(stack_info.y, y_end);
+    z_valid_start = max(1, z_start);
+    z_valid_end   = min(stack_info.z, z_end);
 
-    % The region in 'bl' where valid image data will go
-    x_dst1 = find(x_rng == x_valid(1));
-    x_dst2 = find(x_rng == x_valid(end));
-    y_dst1 = find(y_rng == y_valid(1));
-    y_dst2 = find(y_rng == y_valid(end));
-    z_dst1 = find(z_rng == z_valid(1));
-    z_dst2 = find(z_rng == z_valid(end));
+    % Corresponding indices in the output block
+    x_out_start = x_valid_start - x_start + 1;
+    x_out_end   = x_valid_end - x_start + 1;
+    y_out_start = y_valid_start - y_start + 1;
+    y_out_end   = y_valid_end - y_start + 1;
+    z_out_start = z_valid_start - z_start + 1;
+    z_out_end   = z_valid_end - z_start + 1;
 
-    % Copy valid data
-    for k = 1:length(z_valid)
-        img_k = z_valid(k);
-        % Use PixelRegion only for contiguous regions
-        if isequal(y_valid, y_valid(1):y_valid(end)) && isequal(x_valid, x_valid(1):x_valid(end))
-            slice = imread(filelist{img_k}, 'PixelRegion', {[y_valid(1) y_valid(end)], [x_valid(1) x_valid(end)]});
-            slice = im2single(slice)';
-        else
-            % Fallback: read full image and slice
-            full_slice = imread(filelist{img_k});
-            slice = im2single(full_slice(y_valid, x_valid))';
-        end
-        bl(x_dst1:x_dst2, y_dst1:y_dst2, z_dst1 + k - 1) = slice;
+    % Fill from image files (real data)
+    for k = 1:(z_valid_end - z_valid_start + 1)
+        img_k = z_valid_start + k - 1;
+        % Read the valid region from the image
+        slice = imread(filelist{img_k}, 'PixelRegion', ...
+            {[y_valid_start y_valid_end], [x_valid_start x_valid_end]});
+        slice = im2single(slice)';
+        bl(x_out_start:x_out_end, y_out_start:y_out_end, z_out_start + k - 1) = slice;
     end
 
-    % Pad outside regions using 'symmetric' (or your preferred padding)
-    pad_pre = [max(0, 1-x_rng(1)), max(0, 1-y_rng(1)), max(0, 1-z_rng(1))];
-    pad_post = [max(0, x_rng(end)-stack_info.x), max(0, y_rng(end)-stack_info.y), max(0, z_rng(end)-stack_info.z)];
-    if any(pad_pre > 0 | pad_post > 0)
-        bl = padarray(bl, pad_pre, 'symmetric', 'pre');
-        bl = padarray(bl, pad_post, 'symmetric', 'post');
-        % Crop in case padarray overshoots
-        bl = bl(1:nx, 1:ny, 1:nz);
+    % Optional: Pad out-of-bounds regions (here they remain zeros)
+    % If you want other pad modes (symmetric, replicate), add here:
+    % bl = padarray(bl, ...);
+
+    % Make sure size is correct (robustness)
+    target_size = [nx, ny, nz];
+    if ~isequal(size(bl), target_size)
+        % This should never happen, but catch it for debugging
+        error('[load_block] Block size mismatch! Expected [%d %d %d], got [%d %d %d]', ...
+            target_size, size(bl));
     end
 end
 
