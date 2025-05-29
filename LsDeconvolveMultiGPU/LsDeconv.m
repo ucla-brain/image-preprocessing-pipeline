@@ -344,12 +344,10 @@ function pad_size = gaussian_pad_size(image_size, filter_size)
     pad_size = pad_size(:).'; % Row vector (consistent with image_size)
 end
 
-
 function pad = decon_pad_size(psf_sz)
-    pad = zeros(size(psf_sz));
-    for i = 1:numel(psf_sz)
-        pad(i) = ceil(psf_sz / 2);
-    end
+    % Returns padding size for deconvolution given PSF size in each dimension.
+    % For a PSF of size N, the pad is ceil(N/2) for each dimension.
+    pad = ceil(psf_sz / 2);
 end
 
 function n_vec = next_fast_len(n_vec)
