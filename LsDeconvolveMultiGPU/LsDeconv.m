@@ -355,11 +355,11 @@ function pad_size = gaussian_pad_size(image_size, filter_size)
     end
 
     filter_size = [filter_size ones(1, rankA-rankH)];
-    pad_size = floor(filter_size / 2);
+    pad_size = ceil(filter_size / 2);
 end
 
 function pad = decon_pad_size(psf_sz)
-    pad = floor(psf_sz / 2);
+    pad = ceil(psf_sz / 2);
 end
 
 function n = next_fast_len(n)
