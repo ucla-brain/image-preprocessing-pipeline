@@ -96,7 +96,7 @@ function bl = deconFFT(bl, psf, niter, lambda, stop_criterion, regularize_interv
     imsize = size(bl);
     use_gpu = isgpuarray(bl);
 
-    [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu);
+    [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu, device_id);
 
     if regularize_interval < niter && lambda > 0
         R = single(1/26 * ones(3,3,3)); R(2,2,2) = 0;
@@ -153,7 +153,7 @@ function bl = deconFFT(bl, psf, niter, lambda, stop_criterion, regularize_interv
     end
 end
 
-function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
+function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu, device_id)
     cache_dir = getCachePath();
     if use_gpu
         key_str = ['key_' strrep(mat2str(imsize), ' ', '_') '_gpu'];
@@ -165,13 +165,13 @@ function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
     sem_key = double(string2hash(key_str)) + OFFSET;
     registerSemaphoreKey(sem_key);
 
-    % Try to load cache
-    t_load = tic;
     if isfile([base, '.bin']) && isfile([base, '.meta'])
         try
+            % Try to load cache
+            t_load = tic;
             [otf, otf_conj] = loadOTFCacheMapped(base);
-            fprintf('[TIMER] loadOTFCacheMapped: %.2f s\n', toc(t_load));
-            disp(['Loaded cached OTF for size ' mat2str(imsize)]);
+            disp(sprintf('%s: Loaded cached OTF for size %s in %.2f s', ...
+                device_name(device_id), mat2str(imsize), toc(t_load)));
             return;
         catch e
             warnNoBacktrace('getCachedOTF:CacheReadFailed', 'Failed to read binary cache. %s', e.message);
@@ -187,11 +187,12 @@ function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
     if use_gpu, otf = arrayfun(@(r, i) complex(r, i), real(otf), imag(otf)); end
     otf_conj = conj(otf);
     if use_gpu, otf_conj = arrayfun(@(r, i) complex(r, i), real(otf_conj), imag(otf_conj)); end
-    fprintf('[TIMER] OTF compute: %.2f s\n', toc(t_compute));
+    disp(sprintf('%s: OTF computed for size %s in %.2f s', ...
+        device_name(device_id), mat2str(imsize), toc(t_compute)));
 
     % Save to cache
-    t_save = tic;
     try
+        t_save = tic;
         if use_gpu
             otf_cpu = gather(otf);
             otf_conj_cpu = gather(otf_conj);
@@ -200,7 +201,8 @@ function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
             otf_conj_cpu = otf_conj;
         end
         saveOTFCacheMapped(base, otf_cpu, otf_conj_cpu, sem_key);
-        fprintf('[TIMER] OTF save to cache: %.2f s\n', toc(t_save));
+        disp(sprintf('%s: OTF saved to cache for size %s in %.2f s', ...
+            device_name(device_id), mat2str(imsize), toc(t_save)));
     catch e
         warnNoBacktrace('getCachedOTF:SaveCacheFailed', 'OTF computed but failed to save: %s', e.message);
     end
