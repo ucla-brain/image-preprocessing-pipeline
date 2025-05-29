@@ -1151,72 +1151,78 @@ function message = save_image_2d(im, path, s, rawmax, save_time)
 end
 
 function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
-    % Compute output size
+    % Compute final output size (target size)
     target_sz = [block.x + 2*block.x_pad, block.y + 2*block.y_pad, block.z + 2*block.z_pad];
 
-    % Compute requested range in stack coordinates (can go out of bounds)
+    % Requested (possibly out-of-bounds) indices in each dimension
     xq = (x1 - block.x_pad):(x2 + block.x_pad);
     yq = (y1 - block.y_pad):(y2 + block.y_pad);
     zq = (z1 - block.z_pad):(z2 + block.z_pad);
 
-    % In-bounds region within the stack
+    % Actual available in-bounds indices in stack
     x_src = max(1, xq(1)):min(stack_info.x, xq(end));
     y_src = max(1, yq(1)):min(stack_info.y, yq(end));
     z_src = max(1, zq(1)):min(stack_info.z, zq(end));
 
-    % Indices for placing the in-bounds data in the output array
-    x_dst = (x_src(1) - xq(1) + 1):(x_src(end) - xq(1) + 1);
-    y_dst = (y_src(1) - yq(1) + 1):(y_src(end) - yq(1) + 1);
-    z_dst = (z_src(1) - zq(1) + 1):(z_src(end) - zq(1) + 1);
+    % Offset in output block (where real data should go)
+    x_pre  = find(xq == x_src(1), 1, 'first') - 1; % pad needed before real data
+    y_pre  = find(yq == y_src(1), 1, 'first') - 1;
+    z_pre  = find(zq == z_src(1), 1, 'first') - 1;
+    x_post = length(xq) - (find(xq == x_src(end), 1, 'last')); % pad after
+    y_post = length(yq) - (find(yq == y_src(end), 1, 'last'));
+    z_post = length(zq) - (find(zq == z_src(end), 1, 'last'));
 
-    % Allocate the *in-bounds* data region
-    data_sz = [length(x_src), length(y_src), length(z_src)];
-    bl_data = zeros(data_sz, 'single');
+    % Allocate array for the region you can actually fill from disk
+    bl_real = zeros(length(x_src), length(y_src), length(z_src), 'single');
 
-    % Read image data
+    % Load real data into buffer
     for k = 1:length(z_src)
         img_k = z_src(k);
-        y_pixel_region = [y_src(1), y_src(end)];
-        x_pixel_region = [x_src(1), x_src(end)];
+        % imread expects [START STOP] for PixelRegion, 1-based indices
         try
-            slice = imread(filelist{img_k}, 'PixelRegion', {y_pixel_region, x_pixel_region});
-            slice = im2single(slice)';
-            bl_data(:,:,k) = slice;
+            slice = imread(filename, 'PixelRegion', {[y_src(1), y_src(end)], [x_src(1), x_src(end)]});
         catch ME
             error('[load_block] Error reading slice %d: %s', img_k, ME.message);
         end
+        slice = im2single(slice)';
+        bl_real(:,:,k) = slice;
     end
 
-    % Now, pad to the *target* size
-    pad_pre  = [x_dst(1)-1, y_dst(1)-1, z_dst(1)-1];
-    pad_post = target_sz - pad_pre - data_sz;
+    % Pad real-data region to full target size
+    bl = bl_real;
+    % Pad each dimension in pre and post as needed
+    if x_pre > 0
+        bl = padarray(bl, [x_pre 0 0], 'symmetric', 'pre');
+    end
+    if x_post > 0
+        bl = padarray(bl, [x_post 0 0], 'symmetric', 'post');
+    end
+    if y_pre > 0
+        bl = padarray(bl, [0 y_pre 0], 'symmetric', 'pre');
+    end
+    if y_post > 0
+        bl = padarray(bl, [0 y_post 0], 'symmetric', 'post');
+    end
+    if z_pre > 0
+        bl = padarray(bl, [0 0 z_pre], 'symmetric', 'pre');
+    end
+    if z_post > 0
+        bl = padarray(bl, [0 0 z_post], 'symmetric', 'post');
+    end
 
-    % If any pad is negative, crop the data accordingly
-    crop_pre  = max(-pad_pre, 0);
-    crop_post = max(-pad_post, 0);
+    % In rare cases, padarray can slightly overshoot—crop to target size.
+    for dim = 1:3
+        if size(bl,dim) > target_sz(dim)
+            idx = {':',':',':'};
+            idx{dim} = 1:target_sz(dim);
+            bl = bl(idx{:});
+        end
+    end
 
-    % Crop first if necessary
-    idx_x = 1+crop_pre(1):data_sz(1)-crop_post(1);
-    idx_y = 1+crop_pre(2):data_sz(2)-crop_post(2);
-    idx_z = 1+crop_pre(3):data_sz(3)-crop_post(3);
-    bl_data = bl_data(idx_x, idx_y, idx_z);
-
-    % Adjust pads if cropping happened
-    pad_pre  = pad_pre + crop_pre;
-    pad_post = pad_post + crop_post;
-
-    % Only positive pads are used
-    pad_pre  = max(pad_pre, 0);
-    pad_post = max(pad_post, 0);
-
-    % Pad as needed
-    bl = padarray(bl_data, pad_pre, 'symmetric', 'pre');
-    bl = padarray(bl,     pad_post, 'symmetric', 'post');
-
-    % Final assertion (safety)
+    % Final assertion for robustness
     assert(isequal(size(bl), target_sz), ...
-        '[load_block] Output size mismatch!');
-
+        sprintf('[load_block] Output size mismatch! Got [%s], expected [%s]', ...
+        num2str(size(bl)), num2str(target_sz)));
 end
 
 function check_block_coverage_planes(stack_info, block)
