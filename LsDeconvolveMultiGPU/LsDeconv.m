@@ -116,7 +116,7 @@ function [] = LsDeconv(varargin)
             stack_info.convert_to_8bit = convert_to_8bit;
             stack_info.convert_to_16bit = convert_to_16bit;
 
-            if resume && numel(dir(fullfile(outpath, '*.tif'))) == stack_info.z
+            if resume && numel(dir(fullfile(outpath, 'img_*.tif'))) == stack_info.z
                 disp("it seems all the files are already deconvolved!");
                 return
             elseif ~resume
@@ -188,10 +188,21 @@ function [] = LsDeconv(varargin)
 
         block_path = fullfile(cache_drive, 'block.mat');
         if resume && exist(block_path, 'file')
-            block = load(block_path).block;
+            loaded = load(block_path);
+            block = loaded.block;
+            p1 = block.p1;
+            p2 = block.p2;
         else
-            [block.nx, block.ny, block.nz, block.x, block.y, block.z, block.x_pad, block.y_pad, block.z_pad, block.fft_shape ...
-            ] = autosplit(stack_info, size(psf.psf), filter, block_size_max, ram_total);  % ram_total ram_available
+            [block.nx, block.ny, block.nz, block.x, block.y, block.z, ...
+             block.x_pad, block.y_pad, block.z_pad, block.fft_shape] = ...
+                autosplit(stack_info, size(psf.psf), filter, block_size_max, ram_total);
+
+            [p1, p2] = split(stack_info, block);
+
+            % Embed p1 and p2 directly into block
+            block.p1 = p1;
+            block.p2 = p2;
+
             save(block_path, 'block');
         end
         check_block_coverage_planes(stack_info, block);
@@ -837,7 +848,7 @@ function postprocess_save(...
         chist = zeros(1, nbins);
 
         disp('calculating histogram...');
-        for i = 1:numel(blocklist)
+        parfor i = 1:numel(blocklist)
             S = load_bl(blocklist{i}, semkey_multi);
             chist = chist + histcounts(S.bl, bins);
         end
@@ -850,28 +861,41 @@ function postprocess_save(...
         high_clip = findClosest(chist, 100 - clipval) * binwidth;
     end
 
-    % mount data and save data layer by layer
-    % --- Minimal and safe resume logic (updated, z_saved removed) ---
-    num_tif_files = numel(dir(fullfile(outpath, '*.tif')));
-    starting_z_block = 1;
-    starting_block_number = 1;
-    blnr = 1;
+    %%%%%%%%%%%%%% mount data and save data layer by layer %%%%%%%%%%%%%%
 
+    % Robust resume logic
+    starting_z_block = 1;
+    imagenr = 0;
+    num_tif_files = numel(dir(fullfile(outpath, '*.tif')));
+    blnr = 1;
     if resume && num_tif_files
+        last_completed_z = num_tif_files;
         starting_z_block = 0;
-        while blnr <= length(p1) && p1(blnr, z) <= num_tif_files
+
+        % Find the z-chunk where last completed z-plane resides
+        for blnr = 1:length(p1)
             if p1(blnr, x) == 1 && p1(blnr, y) == 1
-                starting_block_number = blnr;
-                starting_z_block = starting_z_block + 1;
+                % potential start of slab
+                slab_start_z = p1(blnr, z);
+                slab_end_z = p2(blnr, z);
+
+                if slab_end_z <= last_completed_z
+                    starting_z_block = starting_z_block + 1;
+                    imagenr = slab_end_z;
+                else
+                    break;
+                end
             end
-            blnr = blnr + 1;
         end
-        blnr = starting_block_number;
-        imagenr = p1(starting_block_number, z); % Use p1 Z directly
-        disp(['number of existing tif files ' num2str(num_tif_files)]);
-        disp(['resuming from block ' num2str(blnr) ' and image number ' num2str(imagenr)]);
-    else
-        imagenr = 0;
+
+        if imagenr ~= last_completed_z
+            % mismatch, possible partial save, rollback one slab to be safe
+            starting_z_block = max(1, starting_z_block); % avoid zero-index
+            imagenr = p1((starting_z_block - 1) * block.nx * block.ny + 1, z) - 1;
+        end
+
+        disp(['number of existing tif files: ' num2str(num_tif_files)]);
+        disp(['resuming from slab ' num2str(starting_z_block) ', image number ' num2str(imagenr + 1)]);
     end
     clear num_tif_files;
 
@@ -888,6 +912,20 @@ function postprocess_save(...
 
         % Indices for blocks in this Z slab
         block_inds = ((nz-1)*block.nx*block.ny + 1):(nz*block.nx*block.ny);
+
+        % Verify existence of all required block files
+        missing_files = false;
+        for idx = block_inds
+            if ~exist(blocklist{idx}, 'file')
+                disp(['Missing block file: ' blocklist{idx}]);
+                missing_files = true;
+            end
+        end
+
+        if missing_files
+            error('Missing files detected in slab %d. Resume aborted.', nz);
+        end
+
         slab_z1 = p1(block_inds(1), z);
         slab_z2 = p2(block_inds(1), z);
         slab_depth = slab_z2 - slab_z1 + 1;
@@ -1238,27 +1276,36 @@ function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
     % Load a padded 3D block from a stack of 2D image slices.
     % Assumes filelist is a cell array of file paths, one per z-plane.
 
-    % Target block size (core + padding)
-    core_sz = [x2 - x1 + 1, y2 - y1 + 1, z2 - z1 + 1];
-    target_sz = core_sz + 2 * [block.x_pad, block.y_pad, block.z_pad];
+    % ---- Vectorized setup ----
+    starts = [x1, y1, z1];
+    ends   = [x2, y2, z2];
+    pads   = [block.x_pad, block.y_pad, block.z_pad];
+    vol_sz = [stack_info.x, stack_info.y, stack_info.z];
 
-    % Full requested indices (may be out-of-bounds)
-    xq = (x1 - block.x_pad):(x2 + block.x_pad);
-    yq = (y1 - block.y_pad):(y2 + block.y_pad);
-    zq = (z1 - block.z_pad):(z2 + block.z_pad);
+    % Full requested block (possibly out-of-bounds)
+    q1 = starts - pads;         % block window start for x/y/z
+    q2 = ends   + pads;         % block window end   for x/y/z
 
-    % Actual in-bounds indices
-    x_src = max(1, xq(1)) : min(stack_info.x, xq(end));
-    y_src = max(1, yq(1)) : min(stack_info.y, yq(end));
-    z_src = max(1, zq(1)) : min(stack_info.z, zq(end));
+    % Actual in-bounds region to load from disk
+    src1 = max(1, q1);
+    src2 = min(vol_sz, q2);
+
+    % Padding needed (pre and post for each axis)
+    pad_pre  = src1 - q1;
+    pad_post = q2 - src2;
+
+    % Indices for each axis (in-bounds)
+    x_src = src1(1):src2(1);
+    y_src = src1(2):src2(2);
+    z_src = src1(3):src2(3);
 
     % Preallocate buffer for real data
-    nx = length(x_src);
-    ny = length(y_src);
-    nz = length(z_src);
+    nx = numel(x_src);
+    ny = numel(y_src);
+    nz = numel(z_src);
     bl_real = zeros(nx, ny, nz, 'single');
 
-    % Load slices from disk
+    % Load 2D slices from disk
     for k = 1:nz
         img_k = z_src(k);
         try
@@ -1270,22 +1317,14 @@ function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
         bl_real(:, :, k) = im2single(slice)';
     end
 
-    % Compute padding needed at edges (if any)
-    starts = [x1, y1, z1];
-    ends   = [x2, y2, z2];
-    pads   = [block.x_pad, block.y_pad, block.z_pad];
-    vol_sz = [stack_info.x, stack_info.y, stack_info.z];
-
-    q_start = starts - pads;
-    q_end   = ends   + pads;
-
-    pad_pre  = max(0, 1      - q_start);
-    pad_post = max(0, q_end  - vol_sz);
+    % Target (padded) block size
+    core_sz   = ends - starts + 1;
+    target_sz = core_sz + 2 * pads;
 
     % Apply symmetric padding only where needed
     bl = bl_real;
-    if any(pad_pre  > 0), bl = padarray(bl, pad_pre,  'symmetric', 'pre');  end
-    if any(pad_post > 0), bl = padarray(bl, pad_post, 'symmetric', 'post'); end
+    if any(pad_pre  > 0),  bl = padarray(bl, pad_pre,  'symmetric', 'pre');  end
+    if any(pad_post > 0),  bl = padarray(bl, pad_post, 'symmetric', 'post'); end
 
     % Final safety check
     assert(isequal(size(bl), target_sz), ...
