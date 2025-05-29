@@ -1173,8 +1173,10 @@ function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
     % Fill with data
     for k = 1:length(z_src)
         img_k = z_src(k);
+        y_pixel_region = [y_src(1), y_src(end)];
+        x_pixel_region = [x_src(1), x_src(end)];
         try
-            slice = imread(filelist{img_k}, 'PixelRegion', {y_src, x_src}); % [start, stop]
+            slice = imread(filelist{img_k}, 'PixelRegion', {y_pixel_region, x_pixel_region});
             slice = im2single(slice)';
             bl(x_dst, y_dst, z_dst(k)) = slice;
         catch ME
