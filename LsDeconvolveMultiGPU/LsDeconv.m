@@ -1151,35 +1151,36 @@ function message = save_image_2d(im, path, s, rawmax, save_time)
 end
 
 function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
-    % Compute final output size (target size)
-    target_sz = [block.x + 2*block.x_pad, block.y + 2*block.y_pad, block.z + 2*block.z_pad];
+    % Determine the actual size of the block to load (core + pads)
+    core_sz = [x2-x1+1, y2-y1+1, z2-z1+1];
+    target_sz = core_sz + 2*[block.x_pad, block.y_pad, block.z_pad];
 
-    % Requested (possibly out-of-bounds) indices in each dimension
+    % Requested indices (can be out-of-bounds)
     xq = (x1 - block.x_pad):(x2 + block.x_pad);
     yq = (y1 - block.y_pad):(y2 + block.y_pad);
     zq = (z1 - block.z_pad):(z2 + block.z_pad);
 
-    % Actual available in-bounds indices in stack
+    % Actual in-bounds indices
     x_src = max(1, xq(1)):min(stack_info.x, xq(end));
     y_src = max(1, yq(1)):min(stack_info.y, yq(end));
     z_src = max(1, zq(1)):min(stack_info.z, zq(end));
 
-    % Offset in output block (where real data should go)
-    x_pre  = find(xq == x_src(1), 1, 'first') - 1; % pad needed before real data
+    % Pre/post pad amounts for each dimension
+    x_pre  = find(xq == x_src(1), 1, 'first') - 1;
     y_pre  = find(yq == y_src(1), 1, 'first') - 1;
     z_pre  = find(zq == z_src(1), 1, 'first') - 1;
-    x_post = length(xq) - (find(xq == x_src(end), 1, 'last')); % pad after
-    y_post = length(yq) - (find(yq == y_src(end), 1, 'last'));
-    z_post = length(zq) - (find(zq == z_src(end), 1, 'last'));
+    x_post = length(xq) - find(xq == x_src(end), 1, 'last');
+    y_post = length(yq) - find(yq == y_src(end), 1, 'last');
+    z_post = length(zq) - find(zq == z_src(end), 1, 'last');
 
-    % Allocate array for the region you can actually fill from disk
+    % Allocate array for real data region
     bl_real = zeros(length(x_src), length(y_src), length(z_src), 'single');
 
-    % Load real data into buffer
+    % Read data into bl_real
     for k = 1:length(z_src)
         img_k = z_src(k);
-        % imread expects [START STOP] for PixelRegion, 1-based indices
         try
+            % Note: PixelRegion expects [START STOP] for y, x
             slice = imread(filelist{img_k}, 'PixelRegion', {[y_src(1), y_src(end)], [x_src(1), x_src(end)]});
         catch ME
             error('[load_block] Error reading slice %d: %s', img_k, ME.message);
@@ -1188,29 +1189,16 @@ function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
         bl_real(:,:,k) = slice;
     end
 
-    % Pad real-data region to full target size
+    % Pad real data region to target size
     bl = bl_real;
-    % Pad each dimension in pre and post as needed
-    if x_pre > 0
-        bl = padarray(bl, [x_pre 0 0], 'symmetric', 'pre');
-    end
-    if x_post > 0
-        bl = padarray(bl, [x_post 0 0], 'symmetric', 'post');
-    end
-    if y_pre > 0
-        bl = padarray(bl, [0 y_pre 0], 'symmetric', 'pre');
-    end
-    if y_post > 0
-        bl = padarray(bl, [0 y_post 0], 'symmetric', 'post');
-    end
-    if z_pre > 0
-        bl = padarray(bl, [0 0 z_pre], 'symmetric', 'pre');
-    end
-    if z_post > 0
-        bl = padarray(bl, [0 0 z_post], 'symmetric', 'post');
-    end
+    if x_pre > 0,  bl = padarray(bl, [x_pre 0 0], 'symmetric', 'pre'); end
+    if x_post > 0, bl = padarray(bl, [x_post 0 0], 'symmetric', 'post'); end
+    if y_pre > 0,  bl = padarray(bl, [0 y_pre 0], 'symmetric', 'pre'); end
+    if y_post > 0, bl = padarray(bl, [0 y_post 0], 'symmetric', 'post'); end
+    if z_pre > 0,  bl = padarray(bl, [0 0 z_pre], 'symmetric', 'pre'); end
+    if z_post > 0, bl = padarray(bl, [0 0 z_post], 'symmetric', 'post'); end
 
-    % Final assertion for robustness
+    % Final assertion for robust error checking
     assert(isequal(size(bl), target_sz), ...
         sprintf('[load_block] Output size mismatch! Got [%s], expected [%s]', ...
         num2str(size(bl)), num2str(target_sz)));
