@@ -1150,70 +1150,6 @@ function message = save_image_2d(im, path, s, rawmax, save_time)
     message = ['   saved img_' s ' in ' num2str(round(toc(save_time), 1)) ' seconds and after ' num2str(num_retries) ' attempts.'];
 end
 
-function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
-    % Core block size
-    core_sz = [x2-x1+1, y2-y1+1, z2-z1+1];
-    target_sz = core_sz + 2*[block.x_pad, block.y_pad, block.z_pad];
-
-    % Allocate block full of zeros first
-    bl = zeros(target_sz, 'single');
-
-    % Compute actual indices within the stack
-    x_start = max(1, x1 - block.x_pad);
-    x_end   = min(stack_info.x, x2 + block.x_pad);
-    y_start = max(1, y1 - block.y_pad);
-    y_end   = min(stack_info.y, y2 + block.y_pad);
-    z_start = max(1, z1 - block.z_pad);
-    z_end   = min(stack_info.z, z2 + block.z_pad);
-
-    % Offsets to place valid region in the padded block
-    bx1 = x_start - (x1 - block.x_pad) + 1;
-    bx2 = bx1 + (x_end - x_start);
-    by1 = y_start - (y1 - block.y_pad) + 1;
-    by2 = by1 + (y_end - y_start);
-    bz1 = z_start - (z1 - block.z_pad) + 1;
-    bz2 = bz1 + (z_end - z_start);
-
-    % Read actual data and place in correct region of bl
-    for k = 1:(z_end - z_start + 1)
-        img_k = z_start + k - 1;
-        slice = imread(filelist{img_k}, 'PixelRegion', {[y_start y_end], [x_start x_end]});
-        slice = im2single(slice)';
-        bl(bx1:bx2, by1:by2, bz1+k-1) = slice;
-    end
-
-    % Pad any missing data using symmetric edge replicate
-    % X direction (left)
-    if bx1 > 1
-        bl(1:bx1-1, :, :) = repmat(bl(bx1,:,:), [bx1-1, 1, 1]);
-    end
-    % X direction (right)
-    if bx2 < target_sz(1)
-        bl(bx2+1:end, :, :) = repmat(bl(bx2,:,:), [target_sz(1)-bx2, 1, 1]);
-    end
-    % Y direction (top)
-    if by1 > 1
-        bl(:,1:by1-1,:) = repmat(bl(:,by1,:), [1, by1-1, 1]);
-    end
-    % Y direction (bottom)
-    if by2 < target_sz(2)
-        bl(:,by2+1:end,:) = repmat(bl(:,by2,:), [1, target_sz(2)-by2, 1]);
-    end
-    % Z direction (front)
-    if bz1 > 1
-        bl(:,:,1:bz1-1) = repmat(bl(:,:,bz1), [1, 1, bz1-1]);
-    end
-    % Z direction (back)
-    if bz2 < target_sz(3)
-        bl(:,:,bz2+1:end) = repmat(bl(:,:,bz2), [1, 1, target_sz(3)-bz2]);
-    end
-
-    % Final assert
-    assert(isequal(size(bl), target_sz), ...
-        sprintf('[load_block] Output size mismatch! Got [%s], expected [%s]', ...
-        num2str(size(bl)), num2str(target_sz)));
-end
-
 function check_block_coverage_planes(stack_info, block)
     disp('checking for potential issues ...');
 
@@ -1278,4 +1214,61 @@ function check_block_coverage_planes(stack_info, block)
         err_msg = sprintf('Block coverage error(s) detected:\n%s', strjoin(errors, '\n'));
         error(err_msg);
     end
+end
+
+function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
+    % Core region size
+    core_sz = [x2-x1+1, y2-y1+1, z2-z1+1];
+    target_sz = core_sz + 2*[block.x_pad, block.y_pad, block.z_pad];
+    bl = zeros(target_sz, 'single');
+
+    % Find the actual region to read (clamped to image bounds)
+    x_req = (x1-block.x_pad):(x2+block.x_pad);
+    y_req = (y1-block.y_pad):(y2+block.y_pad);
+    z_req = (z1-block.z_pad):(z2+block.z_pad);
+
+    x_img = max(1, min(stack_info.x, x_req));
+    y_img = max(1, min(stack_info.y, y_req));
+    z_img = max(1, min(stack_info.z, z_req));
+
+    % Indices in padded block where real data will be placed
+    x_in_bl = (find(x_req >= 1 & x_req <= stack_info.x));
+    y_in_bl = (find(y_req >= 1 & y_req <= stack_info.y));
+    z_in_bl = (find(z_req >= 1 & z_req <= stack_info.z));
+
+    % Read valid region and place in correct part of bl
+    for k = 1:numel(z_in_bl)
+        img_k = z_img(z_in_bl(k));
+        slice = imread(filelist{img_k}, 'PixelRegion', {[min(y_img) max(y_img)], [min(x_img) max(x_img)]});
+        slice = im2single(slice)';
+        bl(x_in_bl, y_in_bl, z_in_bl(k)) = slice;
+    end
+
+    % Pad missing borders by replicating edge values
+    % X
+    if x_in_bl(1) > 1
+        bl(1:x_in_bl(1)-1,:,:) = repmat(bl(x_in_bl(1),:,:), x_in_bl(1)-1, 1, 1);
+    end
+    if x_in_bl(end) < target_sz(1)
+        bl(x_in_bl(end)+1:end,:,:) = repmat(bl(x_in_bl(end),:,:), target_sz(1)-x_in_bl(end), 1, 1);
+    end
+    % Y
+    if y_in_bl(1) > 1
+        bl(:,1:y_in_bl(1)-1,:) = repmat(bl(:,y_in_bl(1),:), 1, y_in_bl(1)-1, 1);
+    end
+    if y_in_bl(end) < target_sz(2)
+        bl(:,y_in_bl(end)+1:end,:) = repmat(bl(:,y_in_bl(end),:), 1, target_sz(2)-y_in_bl(end), 1);
+    end
+    % Z
+    if z_in_bl(1) > 1
+        bl(:,:,1:z_in_bl(1)-1) = repmat(bl(:,:,z_in_bl(1)), 1, 1, z_in_bl(1)-1);
+    end
+    if z_in_bl(end) < target_sz(3)
+        bl(:,:,z_in_bl(end)+1:end) = repmat(bl(:,:,z_in_bl(end)), 1, 1, target_sz(3)-z_in_bl(end));
+    end
+
+    % Final check
+    assert(isequal(size(bl), target_sz), ...
+        sprintf('[load_block] Output size mismatch! Got [%s], expected [%s]', ...
+        num2str(size(bl)), num2str(target_sz)));
 end
