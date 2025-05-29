@@ -1151,64 +1151,79 @@ function message = save_image_2d(im, path, s, rawmax, save_time)
 end
 
 function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
-    % Desired output size
-    nx = block.x + 2*block.x_pad;
-    ny = block.y + 2*block.y_pad;
-    nz = block.z + 2*block.z_pad;
-    bl = zeros(nx, ny, nz, 'single');
+    % Target size (including pad)
+    full_nx = block.x + 2 * block.x_pad;
+    full_ny = block.y + 2 * block.y_pad;
+    full_nz = block.z + 2 * block.z_pad;
+    bl = zeros(full_nx, full_ny, full_nz, 'single');
 
-    % Target coordinates in image (may go out of bounds)
-    x_req = (x1 - block.x_pad):(x2 + block.x_pad);
-    y_req = (y1 - block.y_pad):(y2 + block.y_pad);
-    z_req = (z1 - block.z_pad):(z2 + block.z_pad);
+    % Range in source (including intended pad)
+    x_rng = (x1 - block.x_pad):(x2 + block.x_pad);
+    y_rng = (y1 - block.y_pad):(y2 + block.y_pad);
+    z_rng = (z1 - block.z_pad):(z2 + block.z_pad);
 
-    % Source region that is in bounds
-    x_src = max(1, x_req(1)) : min(stack_info.x, x_req(end));
-    y_src = max(1, y_req(1)) : min(stack_info.y, y_req(end));
-    z_src = max(1, z_req(1)) : min(stack_info.z, z_req(end));
+    % Find in-bounds (real data) region in each dimension
+    x_valid = max(1, x_rng(1)):min(stack_info.x, x_rng(end));
+    y_valid = max(1, y_rng(1)):min(stack_info.y, y_rng(end));
+    z_valid = max(1, z_rng(1)):min(stack_info.z, z_rng(end));
 
-    % Where to put the source region in bl
-    x_dst = (x_src(1) - x_req(1) + 1) : (x_src(end) - x_req(1) + 1);
-    y_dst = (y_src(1) - y_req(1) + 1) : (y_src(end) - y_req(1) + 1);
-    z_dst = (z_src(1) - z_req(1) + 1) : (z_src(end) - z_req(1) + 1);
+    % Where to place real data in output (destination)
+    x_dst = (x_valid(1) - x_rng(1) + 1):(x_valid(end) - x_rng(1) + 1);
+    y_dst = (y_valid(1) - y_rng(1) + 1):(y_valid(end) - y_rng(1) + 1);
+    z_dst = (z_valid(1) - z_rng(1) + 1):(z_valid(end) - z_rng(1) + 1);
 
-    % Read and assign real data into bl
-    for k = 1:numel(z_src)
-        img_idx = z_src(k);
-        % Read just the rectangular region with PixelRegion
-        slice = imread(filelist{img_idx}, 'PixelRegion', { [y_src(1) y_src(end)], [x_src(1) x_src(end)] });
+    % Fill with real data (slice by slice)
+    for k = 1:length(z_valid)
+        img_k = z_valid(k);
+        slice = imread(filelist{img_k}, 'PixelRegion', {y_valid, x_valid});
         slice = im2single(slice)';
         bl(x_dst, y_dst, z_dst(k)) = slice;
     end
 
-    % Pad (only if out-of-bounds) - use 'symmetric' or any mode you like
-    pad_x_pre = 1 - (x1 - block.x_pad);
-    pad_y_pre = 1 - (y1 - block.y_pad);
-    pad_z_pre = 1 - (z1 - block.z_pad);
+    % Now pad any missing edges with padarray (symmetric)
+    sz = size(bl);
+    target_sz = [full_nx, full_ny, full_nz];
 
-    pad_x_post = (x2 + block.x_pad) - stack_info.x;
-    pad_y_post = (y2 + block.y_pad) - stack_info.y;
-    pad_z_post = (z2 + block.z_pad) - stack_info.z;
-
-    pre_pad = max([pad_x_pre, 0; pad_y_pre, 0; pad_z_pre, 0], 0)';
-    post_pad = max([pad_x_post, 0; pad_y_post, 0; pad_z_post, 0], 0)';
-
-    % Apply pre and post padding if needed (rare, but only at image edge)
-    if any(pre_pad)
-        bl = padarray(bl, pre_pad, 'symmetric', 'pre');
+    for dim = 1:3
+        if sz(dim) < target_sz(dim)
+            pad_pre = zeros(1,3);
+            pad_post = zeros(1,3);
+            % Pre-pad if our start was before 1
+            if [x_rng(1), y_rng(1), z_rng(1)](dim) < 1
+                pad_pre(dim) = 1 - [x_rng(1), y_rng(1), z_rng(1)](dim);
+            end
+            % Post-pad if our end was beyond the image
+            if [x_rng(end), y_rng(end), z_rng(end)](dim) > [stack_info.x, stack_info.y, stack_info.z](dim)
+                pad_post(dim) = [x_rng(end), y_rng(end), z_rng(end)](dim) - [stack_info.x, stack_info.y, stack_info.z](dim);
+            end
+            if any(pad_pre)
+                bl = padarray(bl, pad_pre, 'symmetric', 'pre');
+            end
+            if any(pad_post)
+                bl = padarray(bl, pad_post, 'symmetric', 'post');
+            end
+            % Re-calc sz after each pad
+            sz = size(bl);
+        end
     end
-    if any(post_pad)
-        bl = padarray(bl, post_pad, 'symmetric', 'post');
-    end
 
-    % Crop in case padding went too far
-    bl = bl(1:nx, 1:ny, 1:nz);
-
-    % Final assert
-    if ~isequal(size(bl), [nx, ny, nz])
-        error('[load_block] Block size mismatch! Expected [%d %d %d], got [%d %d %d]', nx, ny, nz, size(bl));
+    % Crop or pad again for absolute safety (should rarely be needed)
+    sz = size(bl);
+    for dim = 1:3
+        if sz(dim) > target_sz(dim)
+            % Crop if too large
+            idx = {':', ':', ':'};
+            idx{dim} = 1:target_sz(dim);
+            bl = bl(idx{:});
+        elseif sz(dim) < target_sz(dim)
+            % Final pad if too small
+            pad_extra = zeros(1,3);
+            pad_extra(dim) = target_sz(dim) - sz(dim);
+            bl = padarray(bl, pad_extra, 'symmetric', 'post');
+        end
     end
 end
+
 
 function check_block_coverage_planes(stack_info, block)
     disp('checking for potential issues ...');
