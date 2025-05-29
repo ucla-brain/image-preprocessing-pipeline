@@ -6,6 +6,7 @@
 % Set source files
 src_semaphore = 'semaphore.c';
 src_queue = 'queue.c';
+src_loadOTFCacheMapped = 'loadOTFCacheMapped_mex.c'
 
 %src_wavedec2 = 'wavedec2_mex.cu';
 %src_waverec2 = 'waverec2_mex.cu';
@@ -24,6 +25,7 @@ src_queue = 'queue.c';
 % Compile
 mex('-O', '-v', src_semaphore);
 mex('-O', '-v', src_queue);
+mex('-O', '-v', src_loadOTFCacheMapped);
 %mexcuda('-v', '-g', '-G', '-f', build_xml, '-R2018a', src_wavedec2,       ['-I' root_dir], ['-I' include_dir]);
 %mexcuda('-v', '-g', '-G', '-f', build_xml, '-R2018a', src_waverec2,       ['-I' root_dir], ['-I' include_dir]);
 %mexcuda('-v', '-g', '-G', '-f', build_xml, '-R2018a', src_filter_subband, ['-I' root_dir], ['-I' include_dir]);
