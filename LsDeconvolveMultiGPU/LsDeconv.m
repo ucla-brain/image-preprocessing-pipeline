@@ -1246,24 +1246,29 @@ function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
         bl_real(:, :, k) = slice;
     end
 
-    % Compute actual padding needed at each edge
-    x_pre_pad  = max(0, block.x_pad - (x1 - 1));
-    x_post_pad = max(0, block.x_pad - (stack_info.x - x2));
+    % Determine out-of-bounds padding needed
+    xq_start = x1 - block.x_pad;
+    xq_end   = x2 + block.x_pad;
+    yq_start = y1 - block.y_pad;
+    yq_end   = y2 + block.y_pad;
+    zq_start = z1 - block.z_pad;
+    zq_end   = z2 + block.z_pad;
 
-    y_pre_pad  = max(0, block.y_pad - (y1 - 1));
-    y_post_pad = max(0, block.y_pad - (stack_info.y - y2));
-
-    z_pre_pad  = max(0, block.z_pad - (z1 - 1));
-    z_post_pad = max(0, block.z_pad - (stack_info.z - z2));
+    x_pre  = max(0, 1      - xq_start);
+    x_post = max(0, xq_end - stack_info.x);
+    y_pre  = max(0, 1      - yq_start);
+    y_post = max(0, yq_end - stack_info.y);
+    z_pre  = max(0, 1      - zq_start);
+    z_post = max(0, zq_end - stack_info.z);
 
     % Apply symmetric padding only where needed
     bl = bl_real;
-    if x_pre_pad  > 0, bl = padarray(bl, [x_pre_pad  0           0], 'symmetric', 'pre');  end
-    if x_post_pad > 0, bl = padarray(bl, [x_post_pad 0           0], 'symmetric', 'post'); end
-    if y_pre_pad  > 0, bl = padarray(bl, [0          y_pre_pad   0], 'symmetric', 'pre');  end
-    if y_post_pad > 0, bl = padarray(bl, [0          y_post_pad  0], 'symmetric', 'post'); end
-    if z_pre_pad  > 0, bl = padarray(bl, [0          0           z_pre_pad], 'symmetric', 'pre');  end
-    if z_post_pad > 0, bl = padarray(bl, [0          0           z_post_pad], 'symmetric', 'post'); end
+    if x_pre  > 0, bl = padarray(bl, [x_pre  0      0     ], 'symmetric', 'pre' ); end
+    if x_post > 0, bl = padarray(bl, [x_post 0      0     ], 'symmetric', 'post'); end
+    if y_pre  > 0, bl = padarray(bl, [0      y_pre  0     ], 'symmetric', 'pre' ); end
+    if y_post > 0, bl = padarray(bl, [0      y_post 0     ], 'symmetric', 'post'); end
+    if z_pre  > 0, bl = padarray(bl, [0      0      z_pre ], 'symmetric', 'pre' ); end
+    if z_post > 0, bl = padarray(bl, [0      0      z_post], 'symmetric', 'post'); end
 
     % Final size check
     assert(isequal(size(bl), target_sz), ...
