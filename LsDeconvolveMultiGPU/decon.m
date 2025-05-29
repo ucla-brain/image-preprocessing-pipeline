@@ -163,12 +163,14 @@ function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
     base = fullfile(cache_dir, key_str);
     OFFSET = 1e5;
     sem_key = double(string2hash(key_str)) + OFFSET;
-    registerSemaphoreKey(sem_key);  % record for cleanup
+    registerSemaphoreKey(sem_key);
 
-    % === Try to load cache ===
+    % Try to load cache
+    t_load = tic;
     if isfile([base, '.bin']) && isfile([base, '.meta'])
         try
             [otf, otf_conj] = loadOTFCacheMapped(base);
+            fprintf('[TIMER] loadOTFCacheMapped: %.2f s\n', toc(t_load));
             disp(['Loaded cached OTF for size ' mat2str(imsize)]);
             return;
         catch e
@@ -176,20 +178,19 @@ function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
         end
     end
 
-    % === Compute OTF ===
-    try
-        disp(['Computing OTF for size ' mat2str(imsize)]);
-        otf = padPSF(psf, imsize);
-        if use_gpu, otf = gpuArray(otf); end
-        otf = fftn(otf);
-        if use_gpu, otf = arrayfun(@(r, i) complex(r, i), real(otf), imag(otf)); end
-        otf_conj = conj(otf);
-        if use_gpu, otf_conj = arrayfun(@(r, i) complex(r, i), real(otf_conj), imag(otf_conj)); end
-    catch e
-        error('getCachedOTF:ComputationFailed', 'Failed to compute OTF: %s', e.message);
-    end
+    % Compute OTF
+    t_compute = tic;
+    disp(['Computing OTF for size ' mat2str(imsize)]);
+    otf = padPSF(psf, imsize);
+    if use_gpu, otf = gpuArray(otf); end
+    otf = fftn(otf);
+    if use_gpu, otf = arrayfun(@(r, i) complex(r, i), real(otf), imag(otf)); end
+    otf_conj = conj(otf);
+    if use_gpu, otf_conj = arrayfun(@(r, i) complex(r, i), real(otf_conj), imag(otf_conj)); end
+    fprintf('[TIMER] OTF compute: %.2f s\n', toc(t_compute));
 
-    % === Save to cache (async, thread-safe)
+    % Save to cache
+    t_save = tic;
     try
         if use_gpu
             otf_cpu = gather(otf);
@@ -199,6 +200,7 @@ function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu)
             otf_conj_cpu = otf_conj;
         end
         saveOTFCacheMapped(base, otf_cpu, otf_conj_cpu, sem_key);
+        fprintf('[TIMER] OTF save to cache: %.2f s\n', toc(t_save));
     catch e
         warnNoBacktrace('getCachedOTF:SaveCacheFailed', 'OTF computed but failed to save: %s', e.message);
     end
