@@ -1151,56 +1151,61 @@ function message = save_image_2d(im, path, s, rawmax, save_time)
 end
 
 function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
-    % Define output block size
+    % Desired output size
     nx = block.x + 2*block.x_pad;
     ny = block.y + 2*block.y_pad;
     nz = block.z + 2*block.z_pad;
     bl = zeros(nx, ny, nz, 'single');
 
-    % Region in the image we want to extract (may be out-of-bounds)
-    x_start = x1 - block.x_pad;
-    x_end   = x2 + block.x_pad;
-    y_start = y1 - block.y_pad;
-    y_end   = y2 + block.y_pad;
-    z_start = z1 - block.z_pad;
-    z_end   = z2 + block.z_pad;
+    % Target coordinates in image (may go out of bounds)
+    x_req = (x1 - block.x_pad):(x2 + block.x_pad);
+    y_req = (y1 - block.y_pad):(y2 + block.y_pad);
+    z_req = (z1 - block.z_pad):(z2 + block.z_pad);
 
-    % Valid (in-bounds) region in the image
-    x_valid_start = max(1, x_start);
-    x_valid_end   = min(stack_info.x, x_end);
-    y_valid_start = max(1, y_start);
-    y_valid_end   = min(stack_info.y, y_end);
-    z_valid_start = max(1, z_start);
-    z_valid_end   = min(stack_info.z, z_end);
+    % Source region that is in bounds
+    x_src = max(1, x_req(1)) : min(stack_info.x, x_req(end));
+    y_src = max(1, y_req(1)) : min(stack_info.y, y_req(end));
+    z_src = max(1, z_req(1)) : min(stack_info.z, z_req(end));
 
-    % Corresponding indices in the output block
-    x_out_start = x_valid_start - x_start + 1;
-    x_out_end   = x_valid_end - x_start + 1;
-    y_out_start = y_valid_start - y_start + 1;
-    y_out_end   = y_valid_end - y_start + 1;
-    z_out_start = z_valid_start - z_start + 1;
-    z_out_end   = z_valid_end - z_start + 1;
+    % Where to put the source region in bl
+    x_dst = (x_src(1) - x_req(1) + 1) : (x_src(end) - x_req(1) + 1);
+    y_dst = (y_src(1) - y_req(1) + 1) : (y_src(end) - y_req(1) + 1);
+    z_dst = (z_src(1) - z_req(1) + 1) : (z_src(end) - z_req(1) + 1);
 
-    % Fill from image files (real data)
-    for k = 1:(z_valid_end - z_valid_start + 1)
-        img_k = z_valid_start + k - 1;
-        % Read the valid region from the image
-        slice = imread(filelist{img_k}, 'PixelRegion', ...
-            {[y_valid_start y_valid_end], [x_valid_start x_valid_end]});
+    % Read and assign real data into bl
+    for k = 1:numel(z_src)
+        img_idx = z_src(k);
+        slice = imread(filelist{img_idx}, 'PixelRegion', {y_src, x_src});
         slice = im2single(slice)';
-        bl(x_out_start:x_out_end, y_out_start:y_out_end, z_out_start + k - 1) = slice;
+        bl(x_dst, y_dst, z_dst(k)) = slice;
     end
 
-    % Optional: Pad out-of-bounds regions (here they remain zeros)
-    % If you want other pad modes (symmetric, replicate), add here:
-    % bl = padarray(bl, ...);
+    % Pad (only if out-of-bounds) - use 'symmetric' or any mode you like
+    pad_x_pre = 1 - (x1 - block.x_pad);
+    pad_y_pre = 1 - (y1 - block.y_pad);
+    pad_z_pre = 1 - (z1 - block.z_pad);
 
-    % Make sure size is correct (robustness)
-    target_size = [nx, ny, nz];
-    if ~isequal(size(bl), target_size)
-        % This should never happen, but catch it for debugging
-        error('[load_block] Block size mismatch! Expected [%d %d %d], got [%d %d %d]', ...
-            target_size, size(bl));
+    pad_x_post = (x2 + block.x_pad) - stack_info.x;
+    pad_y_post = (y2 + block.y_pad) - stack_info.y;
+    pad_z_post = (z2 + block.z_pad) - stack_info.z;
+
+    pre_pad = max([pad_x_pre, 0; pad_y_pre, 0; pad_z_pre, 0], 0)';
+    post_pad = max([pad_x_post, 0; pad_y_post, 0; pad_z_post, 0], 0)';
+
+    % Apply pre and post padding if needed (rare, but only at image edge)
+    if any(pre_pad)
+        bl = padarray(bl, pre_pad, 'symmetric', 'pre');
+    end
+    if any(post_pad)
+        bl = padarray(bl, post_pad, 'symmetric', 'post');
+    end
+
+    % Crop in case padding went too far
+    bl = bl(1:nx, 1:ny, 1:nz);
+
+    % Final assert
+    if ~isequal(size(bl), [nx, ny, nz])
+        error('[load_block] Block size mismatch! Expected [%d %d %d], got [%d %d %d]', nx, ny, nz, size(bl));
     end
 end
 
