@@ -1210,14 +1210,14 @@ function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
         bl = padarray(bl, [0 0 z_post], 'symmetric', 'post');
     end
 
-    % In rare cases, padarray can slightly overshoot—crop to target size.
-    for dim = 1:3
-        if size(bl,dim) > target_sz(dim)
-            idx = {':',':',':'};
-            idx{dim} = 1:target_sz(dim);
-            bl = bl(idx{:});
-        end
-    end
+    % % In rare cases, padarray can slightly overshoot—crop to target size.
+    % for dim = 1:3
+    %     if size(bl,dim) > target_sz(dim)
+    %         idx = {':',':',':'};
+    %         idx{dim} = 1:target_sz(dim);
+    %         bl = bl(idx{:});
+    %     end
+    % end
 
     % Final assertion for robustness
     assert(isequal(size(bl), target_sz), ...
