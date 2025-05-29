@@ -1151,54 +1151,64 @@ function message = save_image_2d(im, path, s, rawmax, save_time)
 end
 
 function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
-    % Determine the actual size of the block to load (core + pads)
+    % Core block size
     core_sz = [x2-x1+1, y2-y1+1, z2-z1+1];
     target_sz = core_sz + 2*[block.x_pad, block.y_pad, block.z_pad];
 
-    % Requested indices (can be out-of-bounds)
-    xq = (x1 - block.x_pad):(x2 + block.x_pad);
-    yq = (y1 - block.y_pad):(y2 + block.y_pad);
-    zq = (z1 - block.z_pad):(z2 + block.z_pad);
+    % Allocate block full of zeros first
+    bl = zeros(target_sz, 'single');
 
-    % Actual in-bounds indices
-    x_src = max(1, xq(1)):min(stack_info.x, xq(end));
-    y_src = max(1, yq(1)):min(stack_info.y, yq(end));
-    z_src = max(1, zq(1)):min(stack_info.z, zq(end));
+    % Compute actual indices within the stack
+    x_start = max(1, x1 - block.x_pad);
+    x_end   = min(stack_info.x, x2 + block.x_pad);
+    y_start = max(1, y1 - block.y_pad);
+    y_end   = min(stack_info.y, y2 + block.y_pad);
+    z_start = max(1, z1 - block.z_pad);
+    z_end   = min(stack_info.z, z2 + block.z_pad);
 
-    % Pre/post pad amounts for each dimension
-    x_pre  = find(xq == x_src(1), 1, 'first') - 1;
-    y_pre  = find(yq == y_src(1), 1, 'first') - 1;
-    z_pre  = find(zq == z_src(1), 1, 'first') - 1;
-    x_post = length(xq) - find(xq == x_src(end), 1, 'last');
-    y_post = length(yq) - find(yq == y_src(end), 1, 'last');
-    z_post = length(zq) - find(zq == z_src(end), 1, 'last');
+    % Offsets to place valid region in the padded block
+    bx1 = x_start - (x1 - block.x_pad) + 1;
+    bx2 = bx1 + (x_end - x_start);
+    by1 = y_start - (y1 - block.y_pad) + 1;
+    by2 = by1 + (y_end - y_start);
+    bz1 = z_start - (z1 - block.z_pad) + 1;
+    bz2 = bz1 + (z_end - z_start);
 
-    % Allocate array for real data region
-    bl_real = zeros(length(x_src), length(y_src), length(z_src), 'single');
-
-    % Read data into bl_real
-    for k = 1:length(z_src)
-        img_k = z_src(k);
-        try
-            % Note: PixelRegion expects [START STOP] for y, x
-            slice = imread(filelist{img_k}, 'PixelRegion', {[y_src(1), y_src(end)], [x_src(1), x_src(end)]});
-        catch ME
-            error('[load_block] Error reading slice %d: %s', img_k, ME.message);
-        end
+    % Read actual data and place in correct region of bl
+    for k = 1:(z_end - z_start + 1)
+        img_k = z_start + k - 1;
+        slice = imread(filelist{img_k}, 'PixelRegion', {[y_start y_end], [x_start x_end]});
         slice = im2single(slice)';
-        bl_real(:,:,k) = slice;
+        bl(bx1:bx2, by1:by2, bz1+k-1) = slice;
     end
 
-    % Pad real data region to target size
-    bl = bl_real;
-    if x_pre > 0,  bl = padarray(bl, [x_pre 0 0], 'symmetric', 'pre'); end
-    if x_post > 0, bl = padarray(bl, [x_post 0 0], 'symmetric', 'post'); end
-    if y_pre > 0,  bl = padarray(bl, [0 y_pre 0], 'symmetric', 'pre'); end
-    if y_post > 0, bl = padarray(bl, [0 y_post 0], 'symmetric', 'post'); end
-    if z_pre > 0,  bl = padarray(bl, [0 0 z_pre], 'symmetric', 'pre'); end
-    if z_post > 0, bl = padarray(bl, [0 0 z_post], 'symmetric', 'post'); end
+    % Pad any missing data using symmetric edge replicate
+    % X direction (left)
+    if bx1 > 1
+        bl(1:bx1-1, :, :) = repmat(bl(bx1,:,:), [bx1-1, 1, 1]);
+    end
+    % X direction (right)
+    if bx2 < target_sz(1)
+        bl(bx2+1:end, :, :) = repmat(bl(bx2,:,:), [target_sz(1)-bx2, 1, 1]);
+    end
+    % Y direction (top)
+    if by1 > 1
+        bl(:,1:by1-1,:) = repmat(bl(:,by1,:), [1, by1-1, 1]);
+    end
+    % Y direction (bottom)
+    if by2 < target_sz(2)
+        bl(:,by2+1:end,:) = repmat(bl(:,by2,:), [1, target_sz(2)-by2, 1]);
+    end
+    % Z direction (front)
+    if bz1 > 1
+        bl(:,:,1:bz1-1) = repmat(bl(:,:,bz1), [1, 1, bz1-1]);
+    end
+    % Z direction (back)
+    if bz2 < target_sz(3)
+        bl(:,:,bz2+1:end) = repmat(bl(:,:,bz2), [1, 1, target_sz(3)-bz2]);
+    end
 
-    % Final assertion for robust error checking
+    % Final assert
     assert(isequal(size(bl), target_sz), ...
         sprintf('[load_block] Output size mismatch! Got [%s], expected [%s]', ...
         num2str(size(bl)), num2str(target_sz)));
