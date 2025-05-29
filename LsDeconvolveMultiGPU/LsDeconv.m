@@ -263,6 +263,7 @@ function [] = LsDeconv(varargin)
         if exist('log_file', 'var')
             p_log(log_file, getReport(ME, 'extended', 'hyperlinks', 'off'));
         end
+        exit(1)
     end
 end
 
