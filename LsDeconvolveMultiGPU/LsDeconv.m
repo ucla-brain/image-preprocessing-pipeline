@@ -310,7 +310,7 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(stack
                 continue;
             end
 
-            score = z*1e6 + x*y; % (x==y so abs(x-y)==0)
+            score = z * x * y;
             if score > best_score
                 best_score = score;
                 best = struct( ...
