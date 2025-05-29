@@ -1231,20 +1231,10 @@ function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
     y_src = max(1, yq(1)) : min(stack_info.y, yq(end));
     z_src = max(1, zq(1)) : min(stack_info.z, zq(end));
 
-    % Compute how much padding is needed due to out-of-bound queries
-    x_pre  = max(0, 1 - (x1 - block.x_pad));
-    x_post = max(0, (x2 + block.x_pad) - stack_info.x);
-
-    y_pre  = max(0, 1 - (y1 - block.y_pad));
-    y_post = max(0, (y2 + block.y_pad) - stack_info.y);
-
-    z_pre  = max(0, 1 - (z1 - block.z_pad));
-    z_post = max(0, (z2 + block.z_pad) - stack_info.z);
-
     % Allocate array for real data region
     bl_real = zeros(length(x_src), length(y_src), length(z_src), 'single');
 
-    % Read data into bl_real
+    % Read image slices into bl_real
     for k = 1:length(z_src)
         img_k = z_src(k);
         try
@@ -1252,20 +1242,30 @@ function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
         catch ME
             error('[load_block] Error reading slice %d: %s', img_k, ME.message);
         end
-        slice = im2single(slice)';  % Transpose to match (x,y)
+        slice = im2single(slice)';  % transpose to match (x, y) indexing
         bl_real(:, :, k) = slice;
     end
 
-    % Pad real data region to match full padded size
-    bl = bl_real;
-    if x_pre  > 0, bl = padarray(bl, [x_pre  0     0], 'symmetric', 'pre');  end
-    if x_post > 0, bl = padarray(bl, [x_post 0     0], 'symmetric', 'post'); end
-    if y_pre  > 0, bl = padarray(bl, [0      y_pre 0], 'symmetric', 'pre');  end
-    if y_post > 0, bl = padarray(bl, [0      y_post 0], 'symmetric', 'post'); end
-    if z_pre  > 0, bl = padarray(bl, [0      0     z_pre], 'symmetric', 'pre');  end
-    if z_post > 0, bl = padarray(bl, [0      0     z_post], 'symmetric', 'post'); end
+    % Compute actual padding needed at each edge
+    x_pre_pad  = max(0, block.x_pad - (x1 - 1));
+    x_post_pad = max(0, block.x_pad - (stack_info.x - x2));
 
-    % Final assertion for robust error checking
+    y_pre_pad  = max(0, block.y_pad - (y1 - 1));
+    y_post_pad = max(0, block.y_pad - (stack_info.y - y2));
+
+    z_pre_pad  = max(0, block.z_pad - (z1 - 1));
+    z_post_pad = max(0, block.z_pad - (stack_info.z - z2));
+
+    % Apply symmetric padding only where needed
+    bl = bl_real;
+    if x_pre_pad  > 0, bl = padarray(bl, [x_pre_pad  0           0], 'symmetric', 'pre');  end
+    if x_post_pad > 0, bl = padarray(bl, [x_post_pad 0           0], 'symmetric', 'post'); end
+    if y_pre_pad  > 0, bl = padarray(bl, [0          y_pre_pad   0], 'symmetric', 'pre');  end
+    if y_post_pad > 0, bl = padarray(bl, [0          y_post_pad  0], 'symmetric', 'post'); end
+    if z_pre_pad  > 0, bl = padarray(bl, [0          0           z_pre_pad], 'symmetric', 'pre');  end
+    if z_post_pad > 0, bl = padarray(bl, [0          0           z_post_pad], 'symmetric', 'post'); end
+
+    % Final size check
     assert(isequal(size(bl), target_sz), ...
         sprintf('[load_block] Output size mismatch! Got [%s], expected [%s]', ...
         num2str(size(bl)), num2str(target_sz)));
