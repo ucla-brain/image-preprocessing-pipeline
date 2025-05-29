@@ -290,46 +290,30 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(stack
     best_score = -Inf;
     best = struct();
 
-    % Use coarse step for initial sweep
+    % Use coarse step for initial sweep (square xy blocks)
     for z = max_block(3):-32:min_block(3)
         for xy = max_block(1):-32:min_block(1)
-            % Only try square blocks for speed
             x = xy; y = xy;
-            % Pads
-            g_pad_x = gaussian_pad_size(x, filter.gaussian_size(1));
-            g_pad_y = gaussian_pad_size(y, filter.gaussian_size(2));
-            g_pad_z = gaussian_pad_size(z, filter.gaussian_size(3));
-            p_pad_x = decon_pad_size(psf_size(1));
-            p_pad_y = decon_pad_size(psf_size(2));
-            p_pad_z = decon_pad_size(psf_size(3));
+            bl_core = [x y z];
 
-            pad_x = max(g_pad_x, p_pad_x);
-            pad_y = max(g_pad_y, p_pad_y);
-            pad_z = max(g_pad_z, p_pad_z);
-
-            block_x = x + 2*pad_x;
-            block_y = y + 2*pad_y;
-            block_z = z + 2*pad_z;
+            d_pad = decon_pad_size(psf_size);
+            bl_shape = bl_core + 2*d_pad;
 
             if filter.use_fft
-                block_x = next_fast_len(block_x);
-                block_y = next_fast_len(block_y);
-                block_z = next_fast_len(block_z);
+                bl_shape = next_fast_len(bl_shape);
             end
 
-            block_elements = block_x * block_y * block_z;
+            g_pad = gaussian_pad_size(bl_shape, filter.gaussian_size);
+            block_elements = prod(bl_shape + g_pad);
+
             if block_elements > block_size_max
                 continue;
             end
 
-            score = z * x * y;
+            score = prod(bl_core);
             if score > best_score
                 best_score = score;
-                best = struct( ...
-                    'x', x, 'y', y, 'z', z, ...
-                    'x_pad', pad_x, 'y_pad', pad_y, 'z_pad', pad_z, ...
-                    'block_x', block_x, 'block_y', block_y, 'block_z', block_z ...
-                );
+                best = struct('bl_core', bl_core, 'd_pad', d_pad, 'fft_shape', bl_shape);
             end
         end
     end
@@ -338,39 +322,52 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(stack
         error('autosplit: No block shape fits in memory. Try increasing block_size_max or reducing min_block.');
     end
 
-    x = best.x; y = best.y; z = best.z;
-    x_pad = best.x_pad; y_pad = best.y_pad; z_pad = best.z_pad;
-    fft_shape = [best.block_x, best.block_y, best.block_z];
+    x = best.bl_core(1); y = best.bl_core(2); z = best.bl_core(3);
+    x_pad = best.d_pad(1); y_pad = best.d_pad(2); z_pad = best.d_pad(3);
+    fft_shape = best.fft_shape;
     nx = ceil(stack_info.x / x);
     ny = ceil(stack_info.y / y);
     nz = ceil((stack_info.z - 2*z_pad) / (z - 2*z_pad));
 end
 
 function pad_size = gaussian_pad_size(image_size, filter_size)
-    rankA = numel(image_size);
-    rankH = numel(filter_size);
-
-    if rankA < rankH
-        error('filter_size cannot be higher-dimensional than image_size');
+    % Returns the required padding for a Gaussian filter of size filter_size
+    % for each image dimension in image_size.
+    % filter_size can be scalar or vector; if scalar, applies to all dims.
+    if isscalar(filter_size)
+        filter_size = repmat(filter_size, size(image_size));
     end
-
-    filter_size = [filter_size ones(1, rankA-rankH)];
-    pad_size = ceil(filter_size / 2);
+    pad_size = floor(filter_size(:) ./ 2);    % Column vector output
+    if numel(pad_size) ~= numel(image_size)
+        pad_size = [pad_size; zeros(numel(image_size) - numel(pad_size), 1)];
+    end
+    pad_size = pad_size(:).'; % Row vector (consistent with image_size)
 end
+
 
 function pad = decon_pad_size(psf_sz)
-    pad = ceil(psf_sz / 2);
-end
-
-function n = next_fast_len(n)
-    while true
-        f = factor(n);
-        if all(f <= 7)
-            return;
-        end
-        n = n + 1;
+    pad = zeros(size(psf_sz));
+    for i = 1:numel(psf_sz)
+        pad(i) = ceil(psf_sz / 2);
     end
 end
+
+function n_vec = next_fast_len(n_vec)
+    % Accepts a scalar or a vector of positive integers and returns, for each,
+    % the next integer >= n_in(i) whose factors are all <= 7.
+    for i = 1:numel(n_vec)
+        n = n_vec(i);
+        while true
+            f = factor(n);
+            if all(f <= 7)
+                n_vec(i) = n;
+                break;
+            end
+            n = n + 1;
+        end
+    end
+end
+
 
 %provides coordinates of sub-blocks after splitting
 function [p1, p2] = split(stack_info, block)
