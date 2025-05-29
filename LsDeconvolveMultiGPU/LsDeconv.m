@@ -1217,57 +1217,55 @@ function check_block_coverage_planes(stack_info, block)
 end
 
 function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
-    % Core region size
-    core_sz = [x2-x1+1, y2-y1+1, z2-z1+1];
-    target_sz = core_sz + 2*[block.x_pad, block.y_pad, block.z_pad];
-    bl = zeros(target_sz, 'single');
+    % Determine the actual size of the block to load (core + pads)
+    core_sz = [x2 - x1 + 1, y2 - y1 + 1, z2 - z1 + 1];
+    target_sz = core_sz + 2 * [block.x_pad, block.y_pad, block.z_pad];
 
-    % Find the actual region to read (clamped to image bounds)
-    x_req = (x1-block.x_pad):(x2+block.x_pad);
-    y_req = (y1-block.y_pad):(y2+block.y_pad);
-    z_req = (z1-block.z_pad):(z2+block.z_pad);
+    % Requested indices (can be out-of-bounds)
+    xq = (x1 - block.x_pad):(x2 + block.x_pad);
+    yq = (y1 - block.y_pad):(y2 + block.y_pad);
+    zq = (z1 - block.z_pad):(z2 + block.z_pad);
 
-    x_img = max(1, min(stack_info.x, x_req));
-    y_img = max(1, min(stack_info.y, y_req));
-    z_img = max(1, min(stack_info.z, z_req));
+    % Actual in-bounds indices
+    x_src = max(1, xq(1)) : min(stack_info.x, xq(end));
+    y_src = max(1, yq(1)) : min(stack_info.y, yq(end));
+    z_src = max(1, zq(1)) : min(stack_info.z, zq(end));
 
-    % Indices in padded block where real data will be placed
-    x_in_bl = (find(x_req >= 1 & x_req <= stack_info.x));
-    y_in_bl = (find(y_req >= 1 & y_req <= stack_info.y));
-    z_in_bl = (find(z_req >= 1 & z_req <= stack_info.z));
+    % Compute how much padding is needed due to out-of-bound queries
+    x_pre  = max(0, 1 - (x1 - block.x_pad));
+    x_post = max(0, (x2 + block.x_pad) - stack_info.x);
 
-    % Read valid region and place in correct part of bl
-    for k = 1:numel(z_in_bl)
-        img_k = z_img(z_in_bl(k));
-        slice = imread(filelist{img_k}, 'PixelRegion', {[min(y_img) max(y_img)], [min(x_img) max(x_img)]});
-        slice = im2single(slice)';
-        bl(x_in_bl, y_in_bl, z_in_bl(k)) = slice;
-    end
+    y_pre  = max(0, 1 - (y1 - block.y_pad));
+    y_post = max(0, (y2 + block.y_pad) - stack_info.y);
 
-    % Pad missing borders by replicating edge values
-    % X
-    if x_in_bl(1) > 1
-        bl(1:x_in_bl(1)-1,:,:) = repmat(bl(x_in_bl(1),:,:), x_in_bl(1)-1, 1, 1);
-    end
-    if x_in_bl(end) < target_sz(1)
-        bl(x_in_bl(end)+1:end,:,:) = repmat(bl(x_in_bl(end),:,:), target_sz(1)-x_in_bl(end), 1, 1);
-    end
-    % Y
-    if y_in_bl(1) > 1
-        bl(:,1:y_in_bl(1)-1,:) = repmat(bl(:,y_in_bl(1),:), 1, y_in_bl(1)-1, 1);
-    end
-    if y_in_bl(end) < target_sz(2)
-        bl(:,y_in_bl(end)+1:end,:) = repmat(bl(:,y_in_bl(end),:), 1, target_sz(2)-y_in_bl(end), 1);
-    end
-    % Z
-    if z_in_bl(1) > 1
-        bl(:,:,1:z_in_bl(1)-1) = repmat(bl(:,:,z_in_bl(1)), 1, 1, z_in_bl(1)-1);
-    end
-    if z_in_bl(end) < target_sz(3)
-        bl(:,:,z_in_bl(end)+1:end) = repmat(bl(:,:,z_in_bl(end)), 1, 1, target_sz(3)-z_in_bl(end));
+    z_pre  = max(0, 1 - (z1 - block.z_pad));
+    z_post = max(0, (z2 + block.z_pad) - stack_info.z);
+
+    % Allocate array for real data region
+    bl_real = zeros(length(x_src), length(y_src), length(z_src), 'single');
+
+    % Read data into bl_real
+    for k = 1:length(z_src)
+        img_k = z_src(k);
+        try
+            slice = imread(filelist{img_k}, 'PixelRegion', {[y_src(1), y_src(end)], [x_src(1), x_src(end)]});
+        catch ME
+            error('[load_block] Error reading slice %d: %s', img_k, ME.message);
+        end
+        slice = im2single(slice)';  % Transpose to match (x,y)
+        bl_real(:, :, k) = slice;
     end
 
-    % Final check
+    % Pad real data region to match full padded size
+    bl = bl_real;
+    if x_pre  > 0, bl = padarray(bl, [x_pre  0     0], 'symmetric', 'pre');  end
+    if x_post > 0, bl = padarray(bl, [x_post 0     0], 'symmetric', 'post'); end
+    if y_pre  > 0, bl = padarray(bl, [0      y_pre 0], 'symmetric', 'pre');  end
+    if y_post > 0, bl = padarray(bl, [0      y_post 0], 'symmetric', 'post'); end
+    if z_pre  > 0, bl = padarray(bl, [0      0     z_pre], 'symmetric', 'pre');  end
+    if z_post > 0, bl = padarray(bl, [0      0     z_post], 'symmetric', 'post'); end
+
+    % Final assertion for robust error checking
     assert(isequal(size(bl), target_sz), ...
         sprintf('[load_block] Output size mismatch! Got [%s], expected [%s]', ...
         num2str(size(bl)), num2str(target_sz)));
