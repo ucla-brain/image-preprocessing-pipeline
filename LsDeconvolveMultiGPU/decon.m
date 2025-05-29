@@ -330,9 +330,10 @@ function [otf, otf_conj] = loadOTFCacheMapped(filename)
     if numel(data) < total
         error('Incomplete or corrupted binary cache file: %s.bin', filename);
     end
-
-    otf      = reshape(complex(data(1:count), data(count+1:2*count)), shape);
-    otf_conj = reshape(complex(data(2*count+1:3*count), data(3*count+1:end)), shape);
+    otf      = complex(data(1:count), data(count+1:2*count));
+    otf      = reshape(otf, shape);
+    otf_conj = complex(data(2*count+1:3*count), data(3*count+1:end));
+    otf_conj = reshape(otf_conj, shape);
 end
 
 function registerSemaphoreKey(key)
