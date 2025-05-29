@@ -773,11 +773,12 @@ function postprocess_save(...
     semaphore_create(semkey_single, 1);
     semaphore_create(semkey_multi, 32);
 
-    blocklist = strings(size(p1, 1), 1);
+    % Use cell array for blocklist for compatibility with file functions
+    blocklist = cell(size(p1, 1), 1);
     missing_blocks = [];
     for i = 1 : size(p1, 1)
-        blocklist(i) = fullfile(cache_drive, ['bl_' num2str(i) '.mat']);
-        if ~exist(blocklist(i), 'file')
+        blocklist{i} = fullfile(cache_drive, ['bl_' num2str(i) '.mat']);
+        if ~exist(blocklist{i}, 'file')
             missing_blocks(end+1) = i; %#ok<AGROW>
         end
     end
@@ -827,29 +828,26 @@ function postprocess_save(...
     p_log(log_file, ['   min value in image after deconvolution: ' num2str(deconvmin)]);
     p_log(log_file,  ' ');
 
-    %estimate the global histogram and upper and lower clipping values
+    % Estimate the global histogram and upper and lower clipping values
     if clipval > 0
         nbins = 1e6;
         binwidth = deconvmax / nbins;
         bins = 0 : binwidth : deconvmax;
 
-        %%% [KM PATCH] Initialize chist to zeros before histogram addition
         chist = zeros(1, nbins);
 
-        %calculate cumulative histogram by scanning all blocks
         disp('calculating histogram...');
-
-        for i = size(blocklist, 1) : -1 : 1
-            S = load(blocklist(i), 'bl');
-            chist = chist + cumsum(histcounts(S.bl, bins));
+        for i = 1:numel(blocklist)
+            S = load_bl(blocklist{i}, semkey_multi);
+            chist = chist + histcounts(S.bl, bins);
         end
-        clear S;
+        chist = cumsum(chist);
 
         % normalize cumulative histogram to 0..100%
         chist = chist / max(chist) * 100;
         % determine upper and lower histogram clipping values
         low_clip = findClosest(chist, clipval) * binwidth;
-        high_clip = findClosest(chist, 100-clipval) * binwidth;
+        high_clip = findClosest(chist, 100 - clipval) * binwidth;
     end
 
     % mount data and save data layer by layer
@@ -876,10 +874,15 @@ function postprocess_save(...
         imagenr = 0;
     end
     clear num_tif_files;
-    
+
     num_workers = feature('numcores');
-    pool = parpool('local', num_workers, 'IdleTimeout', Inf);
-    async_load(1 : block.nx * block.ny) = parallel.FevalFuture;
+    if isempty(gcp('nocreate'))
+        pool = parpool('local', num_workers, 'IdleTimeout', Inf);
+    else
+        pool = gcp();
+    end
+
+    async_load(block.nx * block.ny) = parallel.FevalFuture;
     for nz = starting_z_block : block.nz
         disp(['layer ' num2str(nz) ' from ' num2str(block.nz) ': mounting blocks ...']);
 
@@ -893,17 +896,24 @@ function postprocess_save(...
 
         % Async load all blocks in this Z slab
         for j = 1:length(block_inds)
-            async_load(j) = pool.parfeval(@load_bl, 1, blocklist(block_inds(j)), semkey_multi);
+            async_load(j) = pool.parfeval(@load_bl, 1, blocklist{block_inds(j)}, semkey_multi);
         end
 
         % Assign each block directly using p1/p2 indices
         for j = 1:length(block_inds)
+            asigment_time_start = tic;
             blnr = block_inds(j);
             R(p1(blnr, x):p2(blnr, x), ...
               p1(blnr, y):p2(blnr, y), ...
               p1(blnr, z)-slab_z1+1 : p2(blnr, z)-slab_z1+1) = async_load(j).fetchOutputs;
-            disp(['   block ' num2str(j) ':' num2str(block.nx * block.ny) ' file: ' file_name ' loaded and asinged in ' num2str(round(toc(asigment_time_start), 1))]);
-            blnr = blnr + 1;
+
+            filepath = blocklist{blnr};
+            [~, name, ext] = fileparts(filepath);
+            filename = [name ext];
+
+            disp(['   block ' num2str(j) '/' num2str(block.nx * block.ny) ...
+                  ' file: ' filename ' loaded and assigned in ' ...
+                  num2str(round(toc(asigment_time_start), 1)) ' s']);
         end
         
         % since R matrix can be very large memory mangement is important.
