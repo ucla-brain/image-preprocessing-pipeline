@@ -1162,24 +1162,24 @@ function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
     y_rng = (y1 - block.y_pad):(y2 + block.y_pad);
     z_rng = (z1 - block.z_pad):(z2 + block.z_pad);
 
-    % For easier dimension indexing:
     rng_starts = [x_rng(1), y_rng(1), z_rng(1)];
     rng_ends   = [x_rng(end), y_rng(end), z_rng(end)];
     stack_dims = [stack_info.x, stack_info.y, stack_info.z];
 
     % Find in-bounds (real data) region in each dimension
-    x_valid = max(1, x_rng(1)):min(stack_info.x, x_rng(end));
-    y_valid = max(1, y_rng(1)):min(stack_info.y, y_rng(end));
-    z_valid = max(1, z_rng(1)):min(stack_info.z, z_rng(end));
+    x_valid = [max(1, x_rng(1)), min(stack_info.x, x_rng(end))];
+    y_valid = [max(1, y_rng(1)), min(stack_info.y, y_rng(end))];
+    z_valid = [max(1, z_rng(1)), min(stack_info.z, z_rng(end))];
 
     % Where to place real data in output (destination)
-    x_dst = (x_valid(1) - x_rng(1) + 1):(x_valid(end) - x_rng(1) + 1);
-    y_dst = (y_valid(1) - y_rng(1) + 1):(y_valid(end) - y_rng(1) + 1);
-    z_dst = (z_valid(1) - z_rng(1) + 1):(z_valid(end) - z_rng(1) + 1);
+    x_dst = (x_valid(1) - x_rng(1) + 1):(x_valid(2) - x_rng(1) + 1);
+    y_dst = (y_valid(1) - y_rng(1) + 1):(y_valid(2) - y_rng(1) + 1);
+    z_dst = (z_valid(1) - z_rng(1) + 1):(z_valid(2) - z_rng(1) + 1);
 
     % Fill with real data (slice by slice)
-    for k = 1:length(z_valid)
-        img_k = z_valid(k);
+    for k = 1:(z_valid(2) - z_valid(1) + 1)
+        img_k = z_valid(1) + k - 1;
+        % PixelRegion: { [Y_START Y_STOP], [X_START X_STOP] }
         slice = imread(filelist{img_k}, 'PixelRegion', {y_valid, x_valid});
         slice = im2single(slice)';
         bl(x_dst, y_dst, z_dst(k)) = slice;
@@ -1224,7 +1224,13 @@ function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
             bl = padarray(bl, pad_extra, 'symmetric', 'post');
         end
     end
+
+    % === Final robust assertion ===
+    assert(isequal(size(bl), target_sz), ...
+        sprintf('[load_block]: Output size mismatch! Got [%s], expected [%s]', ...
+            num2str(size(bl)), num2str(target_sz)));
 end
+
 
 function check_block_coverage_planes(stack_info, block)
     disp('checking for potential issues ...');
