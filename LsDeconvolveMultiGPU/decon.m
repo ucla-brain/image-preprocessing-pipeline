@@ -169,7 +169,7 @@ function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu, device_id)
         try
             % Try to load cache
             t_load = tic;
-            [otf, otf_conj] = loadOTFCacheMapped(base);
+            [otf, otf_conj] = loadOTFCacheMapped_mex(base);
             disp(sprintf('%s: Loaded cached OTF for size %s in %.2f s', ...
                 device_name(device_id), mat2str(imsize), toc(t_load)));
             return;
