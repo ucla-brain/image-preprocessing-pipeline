@@ -1180,7 +1180,7 @@ function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
         img_k = z_src(k);
         % imread expects [START STOP] for PixelRegion, 1-based indices
         try
-            slice = imread(filename, 'PixelRegion', {[y_src(1), y_src(end)], [x_src(1), x_src(end)]});
+            slice = imread(filelist{img_k}, 'PixelRegion', {[y_src(1), y_src(end)], [x_src(1), x_src(end)]});
         catch ME
             error('[load_block] Error reading slice %d: %s', img_k, ME.message);
         end
@@ -1209,15 +1209,6 @@ function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
     if z_post > 0
         bl = padarray(bl, [0 0 z_post], 'symmetric', 'post');
     end
-
-    % % In rare cases, padarray can slightly overshoot—crop to target size.
-    % for dim = 1:3
-    %     if size(bl,dim) > target_sz(dim)
-    %         idx = {':',':',':'};
-    %         idx{dim} = 1:target_sz(dim);
-    %         bl = bl(idx{:});
-    %     end
-    % end
 
     % Final assertion for robustness
     assert(isequal(size(bl), target_sz), ...
