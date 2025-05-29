@@ -1173,32 +1173,40 @@ function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
     % Fill with data
     for k = 1:length(z_src)
         img_k = z_src(k);
-        % NOTE: PixelRegion wants [start, end] vectors
-        slice = imread(filelist{img_k}, 'PixelRegion', {y_src, x_src});
-        slice = im2single(slice)';
-        bl(x_dst, y_dst, z_dst(k)) = slice;
-    end
-
-    % If any region is outside image bounds, pad it (symmetric)
-    sz = size(bl);
-    for dim = 1:3
-        if sz(dim) < target_sz(dim)
-            pre = max(0, 1 - [xq(1), yq(1), zq(1)](dim));
-            post = max(0, [xq(end), yq(end), zq(end)](dim) - [stack_info.x, stack_info.y, stack_info.z](dim));
-            padsize = zeros(1,3);
-            padsize(dim) = pre;
-            if pre > 0
-                bl = padarray(bl, padsize, 'symmetric', 'pre');
-            end
-            padsize(dim) = post;
-            if post > 0
-                bl = padarray(bl, padsize, 'symmetric', 'post');
-            end
-            sz = size(bl); % update
+        try
+            slice = imread(filelist{img_k}, 'PixelRegion', {y_src, x_src}); % [start, stop]
+            slice = im2single(slice)';
+            bl(x_dst, y_dst, z_dst(k)) = slice;
+        catch ME
+            error('[load_block] Error reading slice %d: %s', img_k, ME.message);
         end
     end
 
-    % Safety crop/pad (just in case, should rarely trigger)
+    % Pad if necessary in each dimension (edge blocks)
+    sz = size(bl);
+    for dim = 1:3
+        if sz(dim) < target_sz(dim)
+            switch dim
+                case 1
+                    pre  = max(0, 1 - xq(1));
+                    post = max(0, xq(end) - stack_info.x);
+                case 2
+                    pre  = max(0, 1 - yq(1));
+                    post = max(0, yq(end) - stack_info.y);
+                case 3
+                    pre  = max(0, 1 - zq(1));
+                    post = max(0, zq(end) - stack_info.z);
+            end
+            padsize = [0 0 0];
+            padsize(dim) = pre;
+            if pre > 0, bl = padarray(bl, padsize, 'symmetric', 'pre'); end
+            padsize(dim) = post;
+            if post > 0, bl = padarray(bl, padsize, 'symmetric', 'post'); end
+            sz = size(bl);
+        end
+    end
+
+    % Final guarantee: ensure output is *exactly* the target size
     for dim = 1:3
         if size(bl, dim) > target_sz(dim)
             idx = {':', ':', ':'};
@@ -1211,7 +1219,7 @@ function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
         end
     end
 
-    % FINAL CHECK
+    % Final assertion
     assert(isequal(size(bl), target_sz), ...
         sprintf('[load_block]: Output size mismatch! Got [%s], expected [%s]', ...
             num2str(size(bl)), num2str(target_sz)));
