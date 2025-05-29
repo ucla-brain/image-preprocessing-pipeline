@@ -269,7 +269,7 @@ end
 
 function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(stack_info, psf_size, filter, block_size_max, ram_available)
     ram_usage_portion = 0.5;
-    bytes_per_voxel = 4; % single-precision
+    bytes_per_voxel = 8; % single-precision
     z_max_ram = floor(ram_available * ram_usage_portion / (bytes_per_voxel * stack_info.x * stack_info.y));
     z_max = min(z_max_ram, stack_info.z);
 
