@@ -1175,7 +1175,8 @@ function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
     % Read and assign real data into bl
     for k = 1:numel(z_src)
         img_idx = z_src(k);
-        slice = imread(filelist{img_idx}, 'PixelRegion', {y_src, x_src});
+        % Read just the rectangular region with PixelRegion
+        slice = imread(filelist{img_idx}, 'PixelRegion', { [y_src(1) y_src(end)], [x_src(1) x_src(end)] });
         slice = im2single(slice)';
         bl(x_dst, y_dst, z_dst(k)) = slice;
     end
