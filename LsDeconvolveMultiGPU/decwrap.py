@@ -265,7 +265,7 @@ def main():
         args.block_size_max = estimate_block_size_max(
             args.gpu_indices,
             args.gpu_workers_per_gpu * len(args.gpu_indices),
-            base_reserve_gb=4.5 if args.use_fft else 3.5,
+            base_reserve_gb=5 if args.use_fft else 3.5,
             num_blocks_on_gpu=(8 if args.use_fft else 2) + (1 if args.lambda_damping else 0),
         )
         log.info(f"Re-estimated block_size_max: {args.block_size_max}")
