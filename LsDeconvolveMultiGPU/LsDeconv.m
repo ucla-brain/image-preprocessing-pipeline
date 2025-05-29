@@ -1151,72 +1151,53 @@ function message = save_image_2d(im, path, s, rawmax, save_time)
 end
 
 function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
-    % Compute target full-padded size
-    full_nx = block.x + 2 * block.x_pad;
-    full_ny = block.y + 2 * block.y_pad;
-    full_nz = block.z + 2 * block.z_pad;
-    bl = zeros(full_nx, full_ny, full_nz, 'single');
+    % Target block size (including pads)
+    nx = block.x + 2*block.x_pad;
+    ny = block.y + 2*block.y_pad;
+    nz = block.z + 2*block.z_pad;
+    bl = zeros(nx, ny, nz, 'single');
 
-    % Calculate the desired range including pads
-    x_rng = (x1 - block.x_pad):(x2 + block.x_pad);
-    y_rng = (y1 - block.y_pad):(y2 + block.y_pad);
-    z_rng = (z1 - block.z_pad):(z2 + block.z_pad);
+    % The region we WANT in global image coordinates (may extend beyond edges)
+    x_rng = (x1-block.x_pad):(x2+block.x_pad);
+    y_rng = (y1-block.y_pad):(y2+block.y_pad);
+    z_rng = (z1-block.z_pad):(z2+block.z_pad);
 
-    % Find valid in-bounds regions for source image
+    % The VALID (in-bounds) region in source image coordinates
     x_valid = max(1, x_rng(1)):min(stack_info.x, x_rng(end));
     y_valid = max(1, y_rng(1)):min(stack_info.y, y_rng(end));
     z_valid = max(1, z_rng(1)):min(stack_info.z, z_rng(end));
 
-    % Destination indices in bl
-    x_dst = (x_valid(1) - x_rng(1) + 1):(x_valid(end) - x_rng(1) + 1);
-    y_dst = (y_valid(1) - y_rng(1) + 1):(y_valid(end) - y_rng(1) + 1);
-    z_dst = (z_valid(1) - z_rng(1) + 1):(z_valid(end) - z_rng(1) + 1);
+    % The region in 'bl' where valid image data will go
+    x_dst1 = find(x_rng == x_valid(1));
+    x_dst2 = find(x_rng == x_valid(end));
+    y_dst1 = find(y_rng == y_valid(1));
+    y_dst2 = find(y_rng == y_valid(end));
+    z_dst1 = find(z_rng == z_valid(1));
+    z_dst2 = find(z_rng == z_valid(end));
 
-    % Fill from image files (real data)
+    % Copy valid data
     for k = 1:length(z_valid)
         img_k = z_valid(k);
-        % If indices are contiguous, use PixelRegion, else use direct indexing
-        contiguous_y = isequal(y_valid, y_valid(1):y_valid(end));
-        contiguous_x = isequal(x_valid, x_valid(1):x_valid(end));
-        if contiguous_y && contiguous_x
+        % Use PixelRegion only for contiguous regions
+        if isequal(y_valid, y_valid(1):y_valid(end)) && isequal(x_valid, x_valid(1):x_valid(end))
             slice = imread(filelist{img_k}, 'PixelRegion', {[y_valid(1) y_valid(end)], [x_valid(1) x_valid(end)]});
             slice = im2single(slice)';
         else
+            % Fallback: read full image and slice
             full_slice = imread(filelist{img_k});
             slice = im2single(full_slice(y_valid, x_valid))';
         end
-        bl(x_dst, y_dst, z_dst(k)) = slice;
+        bl(x_dst1:x_dst2, y_dst1:y_dst2, z_dst1 + k - 1) = slice;
     end
 
-    % If any region is outside the image, pad it using padarray (symmetric)
-    sz = size(bl);
-    dims = [full_nx, full_ny, full_nz];
-    x0 = [x_rng(1), y_rng(1), z_rng(1)];
-    x1 = [x_rng(end), y_rng(end), z_rng(end)];
-    sx = [stack_info.x, stack_info.y, stack_info.z];
-
-    for dim = 1:3
-        needed = dims(dim);
-        got = sz(dim);
-        pre = max(0, 1 - x0(dim));
-        post = max(0, x1(dim) - sx(dim));
-        if got < needed
-            bl = padarray(bl, pre * (1 == dim), 'symmetric', 'pre');
-            bl = padarray(bl, post * (1 == dim), 'symmetric', 'post');
-        end
-    end
-
-    % After all, ensure bl is exactly the expected size
-    sz = size(bl);
-    target_sz = dims;
-    for dim = 1:3
-        if sz(dim) > target_sz(dim)
-            idx = {':', ':', ':'};
-            idx{dim} = 1:target_sz(dim);
-            bl = bl(idx{:});
-        elseif sz(dim) < target_sz(dim)
-            bl = padarray(bl, (target_sz(dim) - sz(dim)) * (1 == dim), 'symmetric', 'post');
-        end
+    % Pad outside regions using 'symmetric' (or your preferred padding)
+    pad_pre = [max(0, 1-x_rng(1)), max(0, 1-y_rng(1)), max(0, 1-z_rng(1))];
+    pad_post = [max(0, x_rng(end)-stack_info.x), max(0, y_rng(end)-stack_info.y), max(0, z_rng(end)-stack_info.z)];
+    if any(pad_pre > 0 | pad_post > 0)
+        bl = padarray(bl, pad_pre, 'symmetric', 'pre');
+        bl = padarray(bl, pad_post, 'symmetric', 'post');
+        % Crop in case padarray overshoots
+        bl = bl(1:nx, 1:ny, 1:nz);
     end
 end
 
