@@ -261,7 +261,20 @@ function [] = LsDeconv(varargin)
             if any(gpus > 0)
                 device_id = gpus(find(gpus > 0, 1, 'first'));
             end
-            [psf.otf, psf.otf_conj] = calculate_otf(psf.psf, block.fft_shape, device_id);
+
+            % Start a local pool with only 1 worker to release GPU vRAM after computation ened.
+            if isempty(gcp('nocreate'))
+                parpool('local', 1);
+            end
+
+            % Run calculate_otf on the single worker
+            f = parfeval(@calculate_otf, 2, psf.psf, block.fft_shape, device_id);
+
+            % Wait for result
+            [psf.otf, psf.otf_conj] = fetchOutputs(f);
+
+            % Release the worker and free GPU memory
+            delete(gcp('nocreate'));
         end
         
         process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
