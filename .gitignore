@@ -1,20 +1,13 @@
-/Ex_488_Em_525_flat.tif
-/Ex_561_Em_600_flat.tif
-/Ex_642_Em_680_flat.tif
-/Ex_488_Em_525/
-/Ex_561_Em_600/
-/Ex_642_Em_680/
-/tempData/
-/cudaDecon/
-/log.txt
-/supplements/3D Manual Tracing Tracking Sheet copy.csv
-*/__pycache__/
-/test.ipynb
-/LsDeconvolveMultiGPU/psf.tif
-/LsDeconvolveMultiGPU/LsDeconv.asv
-*/semaphore.mex*
 .idea/
+*/__pycache__/
 __pycache__/
-/LsDeconvolveMultiGPU/queue.mexw64
+/.ipynb_checkpoints/notebook-checkpoint.ipynb
+/supplements/3D Manual Tracing Tracking Sheet copy.csv
+/LsDeconvolveMultiGPU/LsDeconv.asv
+/LsDeconvolveMultiGPU/semaphore.mex*
+/LsDeconvolveMultiGPU/queue.mex*
+/LsDeconvolveMultiGPU/load_lz4_mex.mex*
+/LsDeconvolveMultiGPU/save_lz4_mex.mex*
 /LsDeconvolveMultiGPU/lz4.c
 /LsDeconvolveMultiGPU/lz4.h
+/LsDeconvolveMultiGPU/test*
