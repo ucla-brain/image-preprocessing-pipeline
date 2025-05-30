@@ -334,8 +334,8 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(stack
         error('autosplit: No block shape fits in memory. Try increasing block_size_max or reducing min_block.');
     end
 
-    x   = best.bl_core(1); y   = best.bl_core(2); z   = best.bl_core(3);
-    x_pad = best.d_pad(1); y_pad = best.d_pad(2); z_pad = best.d_pad(3);
+    x     = best.bl_core(1); y     = best.bl_core(2); z     = best.bl_core(3);
+    x_pad =   best.d_pad(1); y_pad =   best.d_pad(2); z_pad =   best.d_pad(3);
     fft_shape = best.fft_shape;
     nx = ceil(stack_info.x / x);
     ny = ceil(stack_info.y / y);
@@ -378,65 +378,21 @@ function n_vec = next_fast_len(n_vec)
     end
 end
 
-
 %provides coordinates of sub-blocks after splitting
 function [p1, p2] = split(stack_info, block)
-    % Calculate starting indices for each block (x, y, z)
-    x_step = block.x - 2*block.x_pad;
-    y_step = block.y - 2*block.y_pad;
-    z_step = block.z - 2*block.z_pad;
+    x_starts = min(1 + (0:block.nx-1) * block.x, stack_info.x - block.x + 1);
+    y_starts = min(1 + (0:block.ny-1) * block.y, stack_info.y - block.y + 1);
+    z_starts = min(1 + (0:block.nz-1) * block.z, stack_info.z - block.z + 1);
 
-    x_starts = 1 : x_step : (stack_info.x - block.x + 1);
-    if isempty(x_starts) || (x_starts(end) + block.x - 1 < stack_info.x)
-        last_start = stack_info.x - block.x + 1;
-        if isempty(x_starts) || x_starts(end) ~= last_start
-            x_starts = [x_starts, last_start];
-        end
-    end
+    [X, Y, Z] = ndgrid(x_starts, y_starts, z_starts);
+    X = X(:); Y = Y(:); Z = Z(:);
 
-    y_starts = 1 : y_step : (stack_info.y - block.y + 1);
-    if isempty(y_starts) || (y_starts(end) + block.y - 1 < stack_info.y)
-        last_start = stack_info.y - block.y + 1;
-        if isempty(y_starts) || y_starts(end) ~= last_start
-            y_starts = [y_starts, last_start];
-        end
-    end
-
-    z_starts = 1 : z_step : (stack_info.z - block.z + 1);
-    if isempty(z_starts) || (z_starts(end) + block.z - 1 < stack_info.z)
-        last_start = stack_info.z - block.z + 1;
-        if isempty(z_starts) || z_starts(end) ~= last_start
-            z_starts = [z_starts, last_start];
-        end
-    end
-
-    nx = numel(x_starts);
-    ny = numel(y_starts);
-    nz = numel(z_starts);
-
-    p1 = zeros(nx * ny * nz, 3);
-    p2 = zeros(nx * ny * nz, 3);
-
-    blnr = 0;
-    for iz = 1:nz
-        for iy = 1:ny
-            for ix = 1:nx
-                blnr = blnr + 1;
-                xs = x_starts(ix);
-                ys = y_starts(iy);
-                zs = z_starts(iz);
-
-                p1(blnr, 1) = xs;
-                p2(blnr, 1) = min(xs + block.x - 1, stack_info.x);
-
-                p1(blnr, 2) = ys;
-                p2(blnr, 2) = min(ys + block.y - 1, stack_info.y);
-
-                p1(blnr, 3) = zs;
-                p2(blnr, 3) = min(zs + block.z - 1, stack_info.z);
-            end
-        end
-    end
+    p1 = [X, Y, Z];
+    p2 = [ ...
+        min(X + block.x - 1, stack_info.x), ...
+        min(Y + block.y - 1, stack_info.y), ...
+        min(Z + block.z - 1, stack_info.z) ...
+    ];
 end
 
 function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
