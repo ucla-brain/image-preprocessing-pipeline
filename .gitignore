@@ -16,3 +16,5 @@
 .idea/
 __pycache__/
 /LsDeconvolveMultiGPU/queue.mexw64
+/LsDeconvolveMultiGPU/lz4.c
+/LsDeconvolveMultiGPU/lz4.h
