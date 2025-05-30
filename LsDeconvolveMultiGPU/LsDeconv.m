@@ -423,7 +423,7 @@ function [p1, p2] = split(stack_info, block)
     ny = numel(y_starts);
     nz = numel(z_starts);
 
-    p1 = zeros(nx * ny * nz, 4);
+    p1 = zeros(nx * ny * nz, 3);
     p2 = zeros(nx * ny * nz, 3);
 
     blnr = 0;
