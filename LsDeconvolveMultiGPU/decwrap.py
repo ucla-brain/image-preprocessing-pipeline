@@ -141,11 +141,10 @@ def validate_args(args):
         raise RuntimeError(f"Ex {args.lambda_ex} and Em {args.lambda_em} do not match.")
 
     if len(args.gaussian_sigma) != 3:
-        raise ValueError("Gaussian sigma must be a triplet, e.g., --gaussian_sigma 0.5 0.5 1.5")
+        raise ValueError("Gaussian sigma must be a triplet, e.g., --gaussian-sigma 0.5 0.5 1.5")
 
     if len(args.gaussian_filter_size) != 3:
-        raise ValueError("Gaussian filter size must be a triplet, e.g., --gaussian_filter_size 5 5 15")
-
+        raise ValueError("Gaussian filter size must be a triplet, e.g., --gaussian-filter-size 5 5 15")
 
 def main():
     default_gpu_indices = get_all_gpu_indices()
@@ -162,7 +161,7 @@ def main():
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
 
-    parser.add_argument('--version', action='version', version='DeconvWrapper v1.4')
+    parser.add_argument('--version', action='version', version='DeconvWrapper v1.5')
 
     # Required
     parser.add_argument('-i', '--input', type=Path, required=True,
@@ -171,14 +170,15 @@ def main():
                         help='Lateral resolution in micrometers (μm)')
     parser.add_argument('-dz', '--dz', type=float,
                         help='Axial resolution in micrometers (μm)')
-    parser.add_argument('-ex', '--lambda_ex', type=int, required=True,
+    parser.add_argument('-ex', '--lambda-ex', type=int, required=True,
                         help='Excitation wavelength (488, 561, 642)')
-    parser.add_argument('-em', '--lambda_em', type=int, required=True,
+    parser.add_argument('-em', '--lambda-em', type=int, required=True,
                         help='Emission wavelength (525, 600, 690)')
+
     # Optional
-    parser.add_argument('--cache_drive', type=str, default=None,
+    parser.add_argument('--cache-drive', type=str, default=None,
                         help='Optional brain name for cache path construction')
-    parser.add_argument('--numit', '-it', type=int, default=6,
+    parser.add_argument('-it', '--numit', type=int, default=6,
                         help='Number of deconvolution iterations [1-50]')
     parser.add_argument('--na', type=float, default=0.40,
                         help='Numerical aperture of the objective lens')
@@ -188,9 +188,9 @@ def main():
                         help='Focal length of the cylindrical lens (in mm)')
     parser.add_argument('--slitwidth', type=float, default=12.0,
                         help='Slit width in millimeters')
-    parser.add_argument('--lambda_damping', type=float, default=0.0,
+    parser.add_argument('--lambda-damping', type=float, default=0.0,
                         help='Tikhonov (L2) regularization weight in the range [0, 1]. '
-                             'Applies only during blind deconvolution (enabled when --regularize_interval > 0). '
+                             'Applies only during blind deconvolution (enabled when --regularize-interval > 0). '
                              'Blends each RL update with a smoothed version of the image to suppress noise. '
                              'Set to 0 to disable. Suggested values:\n'
                              '- 1e-5 to 1e-3: Low noise, high SNR data\n'
@@ -200,11 +200,11 @@ def main():
                              '- 5e-3 to 5e-2 recommended for blind deconvolution')
     parser.add_argument('--clipval', type=int, default=0,
                         help='Clipping value (0 = disabled)')
-    parser.add_argument('--stop_criterion', type=float, default=0,
+    parser.add_argument('--stop-criterion', type=float, default=0,
                         help='Early stopping threshold as a percentage change in loss between iterations. '
                              'Training stops if the relative change falls below this value. '
                              'Set to 0 to disable early stopping.')
-    parser.add_argument('--block_size_max', type=int, default=block_size_default,
+    parser.add_argument('--block-size-max', type=int, default=block_size_default,
                         help='Max number of elements per GPU block (estimated from GPU memory)')
     parser.add_argument('--gpu-indices', type=int, nargs='+', default=default_gpu_indices,
                         help='List of GPU device indices to use (e.g., 1 2). Default: all detected GPUs.')
@@ -212,17 +212,17 @@ def main():
                         help='Number of parallel workers per selected GPU')
     parser.add_argument('--cpu-workers', type=int, default=0,
                         help='Number of CPU workers to use (0 disables CPU deconvolution)')
-    parser.add_argument('--signal_amp', type=float, default=1.0,
+    parser.add_argument('--signal-amp', type=float, default=1.0,
                         help='Signal amplification factor')
-    parser.add_argument('--gaussian_sigma', type=float, nargs=3, default=[0.5, 0.5, 2.5],
+    parser.add_argument('--gaussian-sigma', type=float, nargs=3, default=[0.5, 0.5, 2.5],
                         help='3D Gaussian filter sigma in voxel unit (e.g., 0.5 0.5 1.5). Use 0 0 0 to disable filtering.')
-    parser.add_argument('--gaussian_filter_size', type=int, nargs=3, default=[5, 5, 25],
+    parser.add_argument('--gaussian-filter-size', type=int, nargs=3, default=[5, 5, 25],
                         help='Size of the 3D Gaussian filter kernel in voxel unit')
-    parser.add_argument('--denoise_strength', type=int, default=1,
+    parser.add_argument('--denoise-strength', type=int, default=1,
                         help='Denoising strength (e.g., 1 to 255 for 8-bit images)')
-    parser.add_argument('--destripe_sigma', type=float, default=0.0, # 0.125
+    parser.add_argument('--destripe-sigma', type=float, default=0.0,
                         help='Sigma of destriping filter along the z-axis. Use 0 to disable filtering.')
-    parser.add_argument('--regularize_interval', type=int, default=3,
+    parser.add_argument('--regularize-interval', type=int, default=3,
                         help='Apply a 3D Gaussian smoothing filter (σ=0.5) to the deconvolved volume every N iterations. '
                              'Enables blind deconvolution by updating the PSF after each smoothing step. '
                              'Set to 0 to disable both smoothing and blind deconvolution.')
@@ -235,7 +235,7 @@ def main():
                         help='Convert output to 8-bit (default keeps original bit depth, usually 16-bit)')
     parser.add_argument('--convert-to-16bit', action='store_true',
                         help='Convert output to 16-bit (default keeps original bit depth, usually 16-bit)')
-    parser.add_argument('--start_block', type=int, default=1,
+    parser.add_argument('--start-block', type=int, default=1,
                         help='Starting block index for multi-GPU chunking')
     parser.add_argument('--dry-run', action='store_true',
                         help='Print the MATLAB command and exit without executing it')
@@ -250,10 +250,6 @@ def main():
     parser.set_defaults(clean_otf_cache=True)
 
     args = parser.parse_args()
-
-    # user_specified_workers = args.gpu_workers_per_gpu != default_workers_per_gpu
-    # if not user_specified_workers and not args.destripe_sigma > 0.0:
-    #     args.gpu_workers_per_gpu = 5
 
     # Re-estimate block size if user selected subset of GPUs and did not override block size
     user_specified_subset = (
@@ -353,7 +349,7 @@ def main():
         f"    {'true' if args.convert_to_8bit else 'false'}, ...\n"
         f"    {'true' if args.convert_to_16bit else 'false'}, ...\n"
         f"    {'true' if args.use_fft else 'false'}, ...\n"
-        f"    convertCharsToStrings('{cache_drive_folder}') ...\n"
+        f"    convertCharsToStrings('{cache_drive_folder.as_posix()}') ...\n"
         f");\n"
     )
     # === Insert Linux-specific optimizations ===
@@ -385,7 +381,7 @@ def main():
         ]
 
     log.info("MATLAB command:")
-    log.info(' '.join(matlab_cmd) if is_windows else matlab_cmd)
+    log.info(' '.join(matlab_cmd))
 
     decon_path = args.input / "deconvolved"
     decon_path.mkdir(exist_ok=True)
