@@ -882,6 +882,7 @@ function postprocess_save(...
     imagenr = 0;
     num_tif_files = numel(dir(fullfile(outpath, '*.tif')));
     blnr = 1;
+    num_blocks_per_z_slab = block.nx * block.ny;
     if resume && num_tif_files
         last_completed_z = num_tif_files;
         starting_z_block = 0;
@@ -905,7 +906,7 @@ function postprocess_save(...
         if imagenr ~= last_completed_z
             % mismatch, possible partial save, rollback one slab to be safe
             starting_z_block = max(1, starting_z_block); % avoid zero-index
-            imagenr = p1((starting_z_block - 1) * block.nx * block.ny + 1, z) - 1;
+            imagenr = p1((starting_z_block - 1) * num_blocks_per_z_slab + 1, z) - 1;
         end
 
         disp(['number of existing tif files: ' num2str(num_tif_files)]);
@@ -920,7 +921,7 @@ function postprocess_save(...
         pool = gcp();
     end
 
-    async_load(block.nx * block.ny) = parallel.FevalFuture;
+    async_load(num_blocks_per_z_slab) = parallel.FevalFuture;
     for nz = starting_z_block : block.nz
         disp(['layer ' num2str(nz) ' from ' num2str(block.nz) ': mounting blocks ...']);
 
@@ -961,9 +962,9 @@ function postprocess_save(...
 
             filepath = blocklist{blnr};
             [~, name, ext] = fileparts(filepath);
-            filename = char([name ext]);
+            filename = strcat(name, ext);
 
-            disp(['   block ' num2str(j) '/' num2str(block.nx * block.ny) ...
+            disp(['   block ' num2str(j) '/' num2str(num_blocks_per_z_slab) ...
                   ' file: ' filename ' loaded and assigned in ' ...
                   num2str(round(toc(asigment_time_start), 1)) ' s']);
         end
@@ -1019,7 +1020,7 @@ function postprocess_save(...
         imagenr = imagenr + size(R, 3);
         % delete(gcp('nocreate'));
         % pool = parpool('local', 16, 'IdleTimeout', Inf);
-        % async_load(1 : block.nx * block.ny) = parallel.FevalFuture;
+        % async_load(1 : num_blocks_per_z_slab) = parallel.FevalFuture;
     end
     semaphore_destroy(semkey_single);
     semaphore_destroy(semkey_multi);
