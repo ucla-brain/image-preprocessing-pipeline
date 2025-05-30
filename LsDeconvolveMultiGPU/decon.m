@@ -1,4 +1,4 @@
-function bl = decon(bl, psf, niter, lambda, stop_criterion, regularize_interval, device_id, use_fft)
+function bl = decon(bl, psf, niter, lambda, stop_criterion, regularize_interval, device_id, use_fft, fft_shape)
     % Performs Richardson-Lucy or blind deconvolution (with optional Tikhonov regularization).
     %
     % Inputs:
@@ -12,7 +12,7 @@ function bl = decon(bl, psf, niter, lambda, stop_criterion, regularize_interval,
     % - use_fft: true = use FFT-based convolution (faster, more memory), false = use convn (slower, low-memory)
 
     if use_fft
-        bl = deconFFT(bl, psf.otf, psf.otf_conj, niter, lambda, stop_criterion, regularize_interval, device_id);
+        bl = deconFFT  (bl, psf.psf, fft_shape, niter, lambda, stop_criterion, regularize_interval, device_id);
     else
         bl = deconSpatial(bl, psf.psf, psf.inv, niter, lambda, stop_criterion, regularize_interval, device_id);
     end
@@ -92,20 +92,15 @@ function bl = deconSpatial(bl, psf, psf_inv, niter, lambda, stop_criterion, regu
 end
 
 % === Frequency-domain version with cached OTFs ===
-function bl = deconFFT(bl, otf, otf_conj, niter, lambda, stop_criterion, regularize_interval, device_id)
-    use_gpu = isgpuarray(bl);
-
-    % imsize = size(bl);
-    % [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu, device_id);
-    if use_gpu
-        otf = gpuArray(otf);
-        otf_conj = gpuArray(otf_conj);
-    end
+function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regularize_interval, device_id)
+    [otf, otf_conj] = calculate_otf(psf, fft_shape, device_id);
 
     if regularize_interval < niter && lambda > 0
         R = single(1/26 * ones(3,3,3)); R(2,2,2) = 0;
-        if use_gpu, R = gpuArray(R); end
+        if device_id > 0, R = gpuArray(R); end
     end
+
+    [bl, pad_pre, pad_post] = pad_block_to_fft_shape(bl, fft_shape);
 
     if stop_criterion > 0
         delta_prev = norm(bl(:));
@@ -155,238 +150,15 @@ function bl = deconFFT(bl, otf, otf_conj, niter, lambda, stop_criterion, regular
                   ', ΔT: ' num2str(round(toc(start_time),1)) 's']);
         end
     end
+
+    bl = unpad_block(bl, pad_pre, pad_post);
 end
 
-function [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu, device_id)
-    cache_dir = getCachePath();
-    if use_gpu
-        key_str = ['key_' strrep(mat2str(imsize), ' ', '_') '_gpu'];
-    else
-        key_str = ['key_' strrep(mat2str(imsize), ' ', '_') '_cpu'];
-    end
-    base = fullfile(cache_dir, key_str);
-    OFFSET = 1e5;
-    sem_key = double(string2hash(key_str)) + OFFSET;
-    registerSemaphoreKey(sem_key);
-
-    if isfile([base, '.bin']) && isfile([base, '.meta'])
-        try
-            % Try to load cache
-            t_load = tic;
-            [otf, otf_conj] = loadOTFCacheMapped_mex(base);
-            disp(sprintf('%s: Loaded cached OTF for size %s in %.2f s', ...
-                device_name(device_id), mat2str(imsize), toc(t_load)));
-            return;
-        catch e
-            warnNoBacktrace('getCachedOTF:CacheReadFailed', 'Failed to read binary cache. %s', e.message);
-        end
-    end
-
-    % Compute OTF
-    t_compute = tic;
-    disp(['Computing OTF for size ' mat2str(imsize)]);
-    otf = padPSF(psf, imsize);
-    if use_gpu, otf = gpuArray(otf); end
-    otf = fftn(otf);
-    if use_gpu, otf = arrayfun(@(r, i) complex(r, i), real(otf), imag(otf)); end
-    otf_conj = conj(otf);
-    if use_gpu, otf_conj = arrayfun(@(r, i) complex(r, i), real(otf_conj), imag(otf_conj)); end
-    disp(sprintf('%s: OTF computed for size %s in %.2f s', ...
-        device_name(device_id), mat2str(imsize), toc(t_compute)));
-
-    % Save to cache
-    try
-        t_save = tic;
-        if use_gpu
-            otf_cpu = gather(otf);
-            otf_conj_cpu = gather(otf_conj);
-        else
-            otf_cpu = otf;
-            otf_conj_cpu = otf_conj;
-        end
-        saveOTFCacheMapped(base, otf_cpu, otf_conj_cpu, sem_key);
-        disp(sprintf('%s: OTF saved to cache for size %s in %.2f s', ...
-            device_name(device_id), mat2str(imsize), toc(t_save)));
-    catch e
-        warnNoBacktrace('getCachedOTF:SaveCacheFailed', 'OTF computed but failed to save: %s', e.message);
-    end
-end
-
-function warnNoBacktrace(id, msg, varargin)
-    % Validate and sanitize warning ID
-    if ~ischar(id) && ~isstring(id)
-        id = "warnNoBacktrace:InvalidID";
-    end
-    id = char(id);
-
-    % Validate and format message
-    if nargin > 2
-        try
-            msg = sprintf(msg, varargin{:});
-        catch
-            msg = 'Warning formatting failed.';
-        end
-    end
-
-    if ~ischar(msg) && ~isstring(msg)
-        msg = 'Unknown warning message';
-    end
-    msg = char(msg);
-
-    % Suppress backtrace
-    st = warning('query', 'backtrace');
-    warning('off', 'backtrace');
-    warning(id, msg);
-    warning(st.state, 'backtrace');
-end
-
-function saveOTFCacheMapped(base, otf, otf_conj, sem_key)
-    if isfile([base, '.bin']) && isfile([base, '.meta'])
-        return;
-    end
-
-    semaphore('w', sem_key);
-    cleanup_sem = onCleanup(@() semaphore('p', sem_key));
-
-    if isfile([base, '.bin']) && isfile([base, '.meta'])
-        return;
-    end
-
-    try
-        disp(['Caching OTF for size ' mat2str(size(otf))]);
-        otf_real   = single(real(otf));
-        otf_imag   = single(imag(otf));
-        conj_real  = single(real(otf_conj));
-        conj_imag  = single(imag(otf_conj));
-        shape      = size(otf_real);
-
-        tmp_bin = [base, '.bin.tmp'];
-        tmp_meta = [base, '.meta.tmp'];
-        final_bin = [base, '.bin'];
-        final_meta = [base, '.meta'];
-
-        % Write .bin
-        fid = fopen(tmp_bin, 'wb');
-        if fid == -1, error('Cannot open file for writing: %s', tmp_bin); end
-        fwrite(fid, [otf_real(:); otf_imag(:); conj_real(:); conj_imag(:)], 'single');
-        fclose(fid);
-        fileattrib(tmp_bin, '+w', 'a');
-
-        % Write .meta
-        fid = fopen(tmp_meta, 'w');
-        if fid == -1, error('Failed to open meta file for writing'); end
-        fprintf(fid, 'shape [%s]\n', num2str(shape));
-        fprintf(fid, 'class single\n');
-        fclose(fid);
-        fileattrib(tmp_meta, '+w', 'a');
-
-        movefile(tmp_bin, final_bin, 'f');
-        movefile(tmp_meta, final_meta, 'f');
-    catch e
-        warnNoBacktrace('getCachedOTF:SaveCacheFailed', ...
-                        'OTF computed but failed to save: %s', e.message);
-    end
-end
-
-function [otf, otf_conj] = loadOTFCacheMapped(filename)
-    meta = struct();
-    fid = fopen([filename '.meta'], 'r');
-    if fid == -1
-        error('Cannot open meta file: %s.meta', filename);
-    end
-
-    while true
-        line = fgetl(fid);
-        if ~ischar(line), break; end
-        line = strtrim(line);
-        if isempty(line), continue; end
-
-        tokens = regexp(line, '^(\S+)\s+(.*)$', 'tokens', 'once');
-        if isempty(tokens), continue; end
-
-        key = lower(tokens{1});
-        value = strtrim(tokens{2});
-
-        switch key
-            case 'shape'
-                meta.shape = sscanf(regexprep(value, '[\[\]]', ''), '%f')';
-            case 'class'
-                meta.class = value;
-        end
-    end
-    fclose(fid);
-
-    if ~isfield(meta, 'shape')
-        error('loadOTFCacheMapped:InvalidMeta', 'Missing shape in metadata for: %s', filename);
-    end
-    shape = meta.shape;
-
-    fid = fopen([filename, '.bin'], 'rb');
-    if fid == -1
-        error('Cannot open binary cache file: %s.bin', filename);
-    end
-
-    count = prod(shape);
-    total = 4 * count;
-    data = fread(fid, total, 'single');
-    fclose(fid);
-
-    if numel(data) < total
-        error('Incomplete or corrupted binary cache file: %s.bin', filename);
-    end
-    otf      = complex(data(1:count), data(count+1:2*count));
-    otf      = reshape(otf, shape);
-    otf_conj = complex(data(2*count+1:3*count), data(3*count+1:end));
-    otf_conj = reshape(otf_conj, shape);
-end
-
-function registerSemaphoreKey(key)
-    persistent used_keys cleanupObj
-    if isempty(used_keys)
-        used_keys = containers.Map('KeyType', 'double', 'ValueType', 'logical');
-        cleanupObj = onCleanup(@destroyAllSemaphores);
-    end
-    if ~isKey(used_keys, key)
-        semaphore('c', key, 1);  % create with count = 1
-        used_keys(key) = true;
-    end
-end
-
-function destroyAllSemaphores()
-    persistent used_keys
-    if isempty(used_keys), return; end
-    keys = used_keys.keys;
-    for i = 1:numel(keys)
-        try
-            semaphore('d', keys{i});
-        catch
-            warning('Failed to destroy semaphore %d: %s', keys{i}, lasterr);  %#ok<LERR>
-        end
-    end
-end
-
-function y = convFFT(x, otf)
-    % Optimized frequency-domain convolution for low VRAM usage.
-    % Performs: y = real(ifftn(fftn(x) .* otf))
-    %
-    % Key: avoids holding both fft(x) and ifftn result simultaneously.
-
-    % Compute FFT of input
+function x = convFFT(x, otf)
     x = fftn(x);              % x now holds fft(x)
-
-    % Multiply with OTF (in-place)
     x = x .* otf;             % x now holds fft(x) .* otf
-
-    % Compute inverse FFT, overwrite x with result
     x = ifftn(x);
-    y = real(x);       % final output
-end
-
-function psf_padded = padPSF(psf, imsize)
-    psf_padded = zeros(imsize, 'like', psf);
-    center = floor((imsize - size(psf)) / 2);
-    idx = arrayfun(@(c, s) c + (1:s), center, size(psf), 'UniformOutput', false);
-    psf_padded(idx{:}) = psf;
+    x = real(x);              % final output
 end
 
 function device = device_name(id)
@@ -394,4 +166,50 @@ function device = device_name(id)
     if id > 0
         device = ['GPU' num2str(id)];
     end
+end
+
+function [otf, otf_conj] = calculate_otf(psf, fft_shape, device_id)
+    t_compute = tic;
+    if ~isa(psf, 'single'), psf = single(psf); end
+    if device_id > 0, psf = gpuArray(psf); end
+    [otf, ~, ~] = pad_block_to_fft_shape(psf, fft_shape);
+    otf = fftn(otf);
+    if device_id > 0, otf = arrayfun(@(r, i) complex(r, i), real(otf), imag(otf)); end
+    otf_conj = conj(otf);
+    if device_id > 0, otf_conj = arrayfun(@(r, i) complex(r, i), real(otf_conj), imag(otf_conj)); end
+    fprintf('%s: OTF computed for size %s in %.1fs\n', ...
+        device_name(device_id), mat2str(fft_shape), toc(t_compute));
+end
+
+function [bl, pad_pre, pad_post] = pad_block_to_fft_shape(bl, fft_shape)
+    % Ensure 3 dimensions for both bl and fft_shape
+    sz = size(bl);
+    sz = [sz, ones(1, 3-numel(sz))];      % pad size to 3 elements if needed
+    fft_shape = [fft_shape(:)', ones(1, 3-numel(fft_shape))]; % ensure row vector, 3 elements
+
+    % Compute missing for each dimension
+    missing = max(fft_shape - sz, 0);
+
+    % Vectorized pad pre and post calculation
+    pad_pre = floor(missing/2);
+    pad_post = ceil(missing/2);
+
+    % Only pad if needed
+    if any(pad_pre > 0 | pad_post > 0)
+        bl = padarray(bl, pad_pre, 'replicate', 'pre');
+        bl = padarray(bl, pad_post, 'replicate', 'post');
+    end
+end
+
+function bl = unpad_block(bl, pad_pre, pad_post)
+    % Ensure pad vectors are 3 elements
+    pad_pre  = [pad_pre(:)'  zeros(1,3-numel(pad_pre))];
+    pad_post = [pad_post(:)' zeros(1,3-numel(pad_post))];
+    sz = size(bl);
+
+    idx = arrayfun(@(dim) ...
+        (pad_pre(dim)+1):(sz(dim)-pad_post(dim)), ...
+        1:ndims(bl), 'UniformOutput', false);
+
+    bl = bl(idx{:});
 end

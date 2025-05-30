@@ -255,28 +255,6 @@ function [] = LsDeconv(varargin)
         p_log(log_file, ['   logs: ' char(log_file_path)]);
         p_log(log_file, ' ');
 
-        if filter.use_fft
-            p_log(log_file, 'calculating otf ...')
-            device_id = 0;
-            if any(gpus > 0)
-                device_id = gpus(find(gpus > 0, 1, 'first'));
-            end
-
-            % Start a local pool with only 1 worker to release GPU vRAM after computation ened.
-            if isempty(gcp('nocreate'))
-                parpool('local', 1);
-            end
-
-            % Run calculate_otf on the single worker
-            f = parfeval(@calculate_otf, 2, psf.psf, block.fft_shape, device_id);
-
-            % Wait for result
-            [psf.otf, psf.otf_conj] = fetchOutputs(f);
-
-            % Release the worker and free GPU memory
-            delete(gcp('nocreate'));
-        end
-        
         process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
             damping, clipval, stop_criterion, gpus, cache_drive, ...
             amplification, filter, resume, starting_block);
@@ -735,14 +713,8 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
     end
 
     if niter > 0 && max(bl(:)) > eps('single')
-        pad_pre = [0 0 0]; pad_post = [0 0 0];
-        if filter.use_fft, [bl, pad_pre, pad_post] = pad_block_to_fft_shape(bl, block.fft_shape); end
-
         % deconvolve block using Lucy-Richardson or blind algorithm
-        bl = decon(bl, psf, niter, lambda, stop_criterion, filter.regularize_interval, gpu_id, filter.use_fft);
-
-        % remove padding
-        if filter.use_fft, bl = unpad_block(bl, pad_pre, pad_post); end
+        bl = decon(bl, psf, niter, lambda, stop_criterion, filter.regularize_interval, gpu_id, filter.use_fft, block.fft_shape);
     end
 
     % since prctile function needs high vram usage gather it to avoid low
@@ -771,39 +743,6 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
     end
 
     assert(all(size(bl) == bl_size), '[process_block]: block size mismatch!');
-end
-
-function [bl, pad_pre, pad_post] = pad_block_to_fft_shape(bl, fft_shape)
-    % Ensure 3 dimensions for both bl and fft_shape
-    sz = size(bl);
-    sz = [sz, ones(1, 3-numel(sz))];      % pad size to 3 elements if needed
-    fft_shape = [fft_shape(:)', ones(1, 3-numel(fft_shape))]; % ensure row vector, 3 elements
-
-    % Compute missing for each dimension
-    missing = max(fft_shape - sz, 0);
-
-    % Vectorized pad pre and post calculation
-    pad_pre = floor(missing/2);
-    pad_post = ceil(missing/2);
-
-    % Only pad if needed
-    if any(pad_pre > 0 | pad_post > 0)
-        bl = padarray(bl, pad_pre, 'replicate', 'pre');
-        bl = padarray(bl, pad_post, 'replicate', 'post');
-    end
-end
-
-function bl = unpad_block(bl, pad_pre, pad_post)
-    % Ensure pad vectors are 3 elements
-    pad_pre  = [pad_pre(:)'  zeros(1,3-numel(pad_pre))];
-    pad_post = [pad_post(:)' zeros(1,3-numel(pad_post))];
-    sz = size(bl);
-
-    idx = arrayfun(@(dim) ...
-        (pad_pre(dim)+1):(sz(dim)-pad_post(dim)), ...
-        1:ndims(bl), 'UniformOutput', false);
-
-    bl = bl(idx{:});
 end
 
 function postprocess_save(...
@@ -1385,32 +1324,4 @@ function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
     assert(isequal(size(bl), target_sz), ...
         sprintf('[load_block] Output size mismatch! Got [%s], expected [%s]', ...
         num2str(size(bl)), num2str(target_sz)));
-end
-
-
-function [otf, otf_conj] = calculate_otf(psf, fft_shape, device_id)
-    t_compute = tic;
-    if device_id > 0
-        gpu_device = gpuDevice(device_id);
-        psf = gpuArray(psf);
-    end
-    [otf, ~, ~] = pad_block_to_fft_shape(psf, fft_shape);
-    otf = fftn(otf);
-    if device_id > 0, otf = arrayfun(@(r, i) complex(r, i), real(otf), imag(otf)); end
-    otf_conj = conj(otf);
-    if device_id > 0
-        otf_conj = arrayfun(@(r, i) complex(r, i), real(otf_conj), imag(otf_conj));
-        otf = gather(otf);
-        otf_conj = gather(otf_conj);
-        reset(gpu_device);
-    end
-    fprintf('%s: OTF computed for size %s in %.2fs\n', ...
-        device_name(device_id), mat2str(fft_shape), toc(t_compute));
-end
-
-function device = device_name(id)
-    device = 'CPU ';
-    if id > 0
-        device = ['GPU' num2str(id)];
-    end
 end
