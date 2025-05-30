@@ -725,22 +725,14 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
     end
 
     if niter > 0 && max(bl(:)) > eps('single')
-        pad_pre = [0 0 0];
-        pad_post = [0 0 0];
-        if filter.use_fft
-            [bl, pad_pre, pad_post] = pad_block_to_fft_shape(bl, block.fft_shape);
-        end
-    
+        pad_pre = [0 0 0]; pad_post = [0 0 0];
+        if filter.use_fft, [bl, pad_pre, pad_post] = pad_block_to_fft_shape(bl, block.fft_shape); end
+
         % deconvolve block using Lucy-Richardson or blind algorithm
         bl = decon(bl, psf, niter, lambda, stop_criterion, filter.regularize_interval, gpu_id, filter.use_fft);
 
         % remove padding
-        if filter.use_fft
-            bl = bl(...
-                pad_pre(1)+1 : end-pad_post(1), ...
-                pad_pre(2)+1 : end-pad_post(2), ...
-                pad_pre(3)+1 : end-pad_post(3));
-        end
+        if filter.use_fft, bl = unpad_block(bl, pad_pre, pad_post); end
     end
 
     % since prctile function needs high vram usage gather it to avoid low
@@ -772,21 +764,36 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
 end
 
 function [bl, pad_pre, pad_post] = pad_block_to_fft_shape(bl, fft_shape)
+    % Ensure 3 dimensions for both bl and fft_shape
     sz = size(bl);
-    if numel(sz) < 3, sz(3) = 1; end
-    pad_pre = zeros(1,3);
-    pad_post = zeros(1,3);
-    for k = 1:3
-        missing = fft_shape(k) - sz(k);
-        if missing > 0
-            pad_pre(k) = floor(missing/2);
-            pad_post(k) = ceil(missing/2);
-        end
-    end
+    sz = [sz, ones(1, 3-numel(sz))];      % pad size to 3 elements if needed
+    fft_shape = [fft_shape(:)', ones(1, 3-numel(fft_shape))]; % ensure row vector, 3 elements
+
+    % Compute missing for each dimension
+    missing = max(fft_shape - sz, 0);
+
+    % Vectorized pad pre and post calculation
+    pad_pre = floor(missing/2);
+    pad_post = ceil(missing/2);
+
+    % Only pad if needed
     if any(pad_pre > 0 | pad_post > 0)
         bl = padarray(bl, pad_pre, 'replicate', 'pre');
         bl = padarray(bl, pad_post, 'replicate', 'post');
     end
+end
+
+function bl = unpad_block(bl, pad_pre, pad_post)
+    % Ensure pad vectors are 3 elements
+    pad_pre  = [pad_pre(:)'  zeros(1,3-numel(pad_pre))];
+    pad_post = [pad_post(:)' zeros(1,3-numel(pad_post))];
+    sz = size(bl);
+
+    idx = arrayfun(@(dim) ...
+        (pad_pre(dim)+1):(sz(dim)-pad_post(dim)), ...
+        1:ndims(bl), 'UniformOutput', false);
+
+    bl = bl(idx{:});
 end
 
 function postprocess_save(...
