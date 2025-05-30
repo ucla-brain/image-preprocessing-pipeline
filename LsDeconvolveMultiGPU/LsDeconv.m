@@ -966,8 +966,7 @@ function postprocess_save(...
             if iscell(filename), filename = filename{1}; end
 
             fprintf('   block %d/%d file: %s loaded and assigned in %.1f s\n', ...
-                j, num_blocks_per_z_slab, filename, round(toc(asigment_time_start), 1));
-
+                j, num_blocks_per_z_slab, filename, toc(asigment_time_start));
         end
         
         % since R matrix can be very large memory mangement is important.
