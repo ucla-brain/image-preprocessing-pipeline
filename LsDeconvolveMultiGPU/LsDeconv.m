@@ -279,15 +279,29 @@ function [] = LsDeconv(varargin)
 end
 
 function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(stack_info, psf_size, filter, block_size_max, ram_available)
-    ram_usage_portion = 0.5;
-    bytes_per_voxel = 8; % single-precision
+    % Parameters for RAM and block sizing
+    ram_usage_portion = 0.5;               % Use at most 50% of available RAM
+    bytes_per_voxel = 8;                   % Use 4 for single, 8 for double (adjust as needed)
+    max_elements_per_dim = 1290;           % 3D cube limit from 2^31-1 elements
+    max_elements_total  = 2^31 - 1;        % MATLAB's total element limit
+
+    % Compute the max z size that fits in RAM (capped at 1290 and stack_info.z)
     z_max_ram = floor(ram_available * ram_usage_portion / (bytes_per_voxel * stack_info.x * stack_info.y));
     z_max = min(z_max_ram, stack_info.z);
 
-    min_block = [32 32 64];
-    max_block = [stack_info.x, stack_info.y, z_max];
-    block_size_max = min(block_size_max, 2^31 - 1);
-    max_dim = 1290;
+    % Set min and max block sizes, capping to allowed per-dimension limit
+    min_block = min([floor(max_elements_per_dim/2) floor(max_elements_per_dim/2) floor(max_elements_per_dim/2);
+                     stack_info.x                  stack_info.y                  stack_info.z]);
+
+    max_block = [min(max_elements_per_dim, stack_info.x), ...
+                 min(max_elements_per_dim, stack_info.y), ...
+                 min(max_elements_per_dim, z_max       )];
+
+    % Cap total block size to max allowed elements
+    block_size_max = min(block_size_max, max_elements_total);
+
+    % For later use in dimension checks
+    max_dim = max_elements_per_dim;
 
     best_score = -Inf;
     best = struct();
