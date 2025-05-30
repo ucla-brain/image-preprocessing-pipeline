@@ -293,8 +293,8 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(stack
     best = struct();
 
     % Use coarse step for initial sweep (square xy blocks)
-    for z = max_block(3):-32:min_block(3)
-        for xy = max_block(1):-32:min_block(1)
+    for z = max_block(3):-1:min_block(3)
+        for xy = max_block(1):-1:min_block(1)
             x = xy; y = xy;
             bl_core = [x y z];
 
