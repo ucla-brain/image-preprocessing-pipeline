@@ -477,7 +477,6 @@ function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
     
     % initiate locks and semaphors
     % semkeys are arbitrary non-zero values
-    cleanupSemaphoresFromCache();
     semkey_single = 1e3;
     semkey_loading_base = 1e4;
     semaphore_create(semkey_single, 1);
