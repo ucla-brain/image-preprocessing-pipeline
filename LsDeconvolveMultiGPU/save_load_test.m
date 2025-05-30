@@ -1,7 +1,15 @@
 % ===============================
-% save_load_test.m (with benchmarks)
+% save_load_test.m (with cache location prompt)
 % ===============================
-disp('Running save/load LZ4 and MATLAB benchmark test ...');
+disp('Running save/load LZ4 test and benchmark ...');
+
+% --- Ask for cache/test directory ---
+cache_dir = uigetdir(pwd, 'Select a folder for temp/cache test files (choose a fast drive if possible)');
+if isnumeric(cache_dir) && cache_dir == 0
+    disp('User canceled; aborting test.');
+    return
+end
+fprintf('Using folder for cache/test files: %s\n', cache_dir);
 
 rng(42); % For reproducibility
 filetypes = {'double', 'single', 'uint16'};
@@ -15,11 +23,10 @@ do_raw_bin = false; % Set true to include raw binary (optional)
 % --- Test moderate-sized arrays ---
 for k = 1:numel(filetypes)
     t = filetypes{k};
-    fname = filenames{k};
+    fname = fullfile(cache_dir, filenames{k});
     sz = shapes{k};
     fprintf('Testing %s ...\n', t);
 
-    % Create a random array of the given type and shape
     switch t
         case 'double'
             arr = rand(sz);
@@ -46,7 +53,7 @@ for k = 1:numel(filetypes)
     end
 
     % ========== MATLAB save/load ==========
-    fname_mat = [fname(1:end-4) '_matlab.mat'];
+    fname_mat = fullfile(cache_dir, [filenames{k}(1:end-4) '_matlab.mat']);
     tic;
     save(fname_mat, 'arr', '-v7.3');
     t_save_mat = toc;
@@ -70,10 +77,10 @@ for k = 1:numel(filetypes)
     eq_content_mf = isequal(arr, arr4);
     res_mf = eq_type_mf && eq_shape_mf && eq_content_mf;
 
-    % ========== RAW BINARY (optional, only if do_raw_bin true) ==========
+    % ========== RAW BINARY (optional) ==========
     t_save_raw = NaN; t_load_raw = NaN; res_raw = false;
     if do_raw_bin
-        fname_raw = [fname(1:end-4) '.rawbin'];
+        fname_raw = fullfile(cache_dir, [filenames{k}(1:end-4) '.rawbin']);
         tic;
         fid = fopen(fname_raw, 'wb');
         fwrite(fid, arr, class(arr));
@@ -105,12 +112,12 @@ end
 % --- Test >2GB array for each type ---
 big_types = {'double', 'single', 'uint16'};
 big_fnames = {'test_big_dbl.lz4', 'test_big_sgl.lz4', 'test_big_u16.lz4'};
-big_sz = { [340*1024*1024,1], [700*1024*1024,1], [1500*1024*1024,1] }; % doubles: 2.5GB, singles: ~2.7GB, uint16: ~3GB
+big_sz = { [340*1024*1024,1], [700*1024*1024,1], [1500*1024*1024,1] };
 
 fprintf('\nTesting >2GB arrays:\n');
 for k = 1:numel(big_types)
     t = big_types{k};
-    fname = big_fnames{k};
+    fname = fullfile(cache_dir, big_fnames{k});
     sz = big_sz{k};
     fprintf('Testing %s, >2GB ...\n', t);
 
@@ -140,7 +147,7 @@ for k = 1:numel(big_types)
     end
 
     % ========== MATLAB save/load ==========
-    fname_mat = [fname(1:end-4) '_matlab.mat'];
+    fname_mat = fullfile(cache_dir, [big_fnames{k}(1:end-4) '_matlab.mat']);
     tic;
     save(fname_mat, 'arr', '-v7.3');
     t_save_mat = toc;
@@ -181,10 +188,10 @@ end
 % --- Display Table ---
 headers = { ...
     'Type', ...
-    'LZ4 Save', 'LZ4 Load', 'LZ4 Ok', ...
-    'MAT Save', 'MAT Load', 'MAT Ok', ...
-    'Matfile Load', 'Matfile Ok', ...
-    'Raw Save', 'Raw Load', 'Raw Ok' ...
+    'LZ4_Save', 'LZ4_Load', 'LZ4_Ok', ...
+    'MAT_Save', 'MAT_Load', 'MAT_Ok', ...
+    'Matfile_Load', 'Matfile_Ok', ...
+    'Raw_Save', 'Raw_Load', 'Raw_Ok' ...
 };
 tbl = cell2table(bench_results, 'VariableNames', headers);
 disp(tbl);
