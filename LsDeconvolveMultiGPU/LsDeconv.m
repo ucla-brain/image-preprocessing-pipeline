@@ -1228,8 +1228,8 @@ end
 function check_block_coverage_planes(stack_info, block)
     disp('checking for potential issues ...');
 
-    p1 = block.p1
-    p2 = block.p2
+    p1 = block.p1;
+    p2 = block.p2;
     errors = {};
 
     % 1. XY at z=1 and z=end
