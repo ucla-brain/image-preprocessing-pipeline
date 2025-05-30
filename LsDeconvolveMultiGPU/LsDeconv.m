@@ -176,22 +176,30 @@ function [] = LsDeconv(varargin)
         if resume && exist(block_path, 'file')
             loaded = load(block_path);
             block = loaded.block;
-            p1 = block.p1;
-            p2 = block.p2;
+            clear loaded;
+            % After loading block struct, assert its split is valid for the current stack
+            assert(all(size(block.p1) == [block.nx * block.ny * block.nz, 3]), ...
+                'block.p1 shape mismatch with block.nx, block.ny, block.nz');
+            assert(all(size(block.p2) == [block.nx * block.ny * block.nz, 3]), ...
+                'block.p2 shape mismatch with block.nx, block.ny, block.nz');
+            fields = fieldnames(stack_info);
+            for f = 1:numel(fields)
+                if ~isequal(block.stack_info.(fields{f}), stack_info.(fields{f}))
+                    error('Loaded block.mat stack_info.%s (%s) does not match current stack_info (%s)', ...
+                        fields{f}, mat2str(block.stack_info.(fields{f})), mat2str(stack_info.(fields{f})));
+                end
+            end
         else
+            block.stack_info = stack_info;
             [block.nx, block.ny, block.nz, block.x, block.y, block.z, ...
              block.x_pad, block.y_pad, block.z_pad, block.fft_shape] = ...
                 autosplit(stack_info, size(psf.psf), filter, block_size_max, ram_total);
 
-            [p1, p2] = split(stack_info, block);
-
-            % Embed p1 and p2 directly into block
-            block.p1 = p1;
-            block.p2 = p2;
-
+            [block.p1, block.p2] = split(stack_info, block);
             save(block_path, 'block');
         end
         check_block_coverage_planes(stack_info, block);
+
         p_log(log_file, ['   block numbers: ' num2str(block.nx) 'x * ' num2str(block.ny) 'y * ' num2str(block.nz) 'z = ' num2str(block.nx * block.ny * block.nz) ' blocks.']);
         p_log(log_file, ['   block size loaded image: ' num2str(block.x) 'x * ' num2str(block.y) 'y * ' num2str(block.z) 'z = ' num2str(block.x * block.y * block.z) ' voxels.']);
         p_log(log_file, ['   block size deconvolved image: ' num2str(block.x) 'x * ' num2str(block.y) 'y * ' num2str(block.z - 2*block.z_pad) 'z = ' num2str(block.x * block.y * (block.z - 2*block.z_pad)) ' voxels.']);
@@ -335,12 +343,12 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(stack
         error('autosplit: No block shape fits in memory. Try increasing block_size_max or reducing min_block.');
     end
 
-    x = best.bl_core(1); y = best.bl_core(2); z = best.bl_core(3);
+    x   = best.bl_core(1); y   = best.bl_core(2); z   = best.bl_core(3);
     x_pad = best.d_pad(1); y_pad = best.d_pad(2); z_pad = best.d_pad(3);
     fft_shape = best.fft_shape;
     nx = ceil(stack_info.x / x);
     ny = ceil(stack_info.y / y);
-    nz = ceil((stack_info.z - 2*z_pad) / (z - 2*z_pad));
+    nz = ceil(stack_info.z / z);
 end
 
 function pad_size = gaussian_pad_size(image_size, filter_size)
@@ -435,8 +443,6 @@ function [p1, p2] = split(stack_info, block)
 
                 p1(blnr, 3) = zs;
                 p2(blnr, 3) = min(zs + block.z - 1, stack_info.z);
-
-                p1(blnr, 4) = 0; % optional debug value
             end
         end
     end
@@ -452,9 +458,6 @@ function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
     if starting_block == 1
         need_post_processing = true;
     end
-    
-    % split it to chunks
-    [p1, p2] = split(stack_info, block);
 
     % load filelist
     filelist = dir(fullfile(inpath, '*.tif'));
@@ -525,7 +528,7 @@ function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
             parfor idx = 1 : numel(gpus)
                 deconvolve( ...
                     filelist, psf, numit, damping, ...
-                    block, stack_info, p1, p2, min_max_path, ...
+                    block, stack_info, min_max_path, ...
                     stop_criterion, gpus(idx), gpu_queue_key, ...
                     cache_drive, filter, starting_block + idx - 1, dQueue);
             end
@@ -547,7 +550,7 @@ function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
     if need_post_processing
         postprocess_save(...
             outpath, cache_drive, min_max_path, log_file, clipval, ...
-            p1, p2, stack_info, resume, block, amplification);
+            stack_info, resume, block, amplification);
     end
     
     p_log(log_file, ['deconvolution finished at ' char(datetime)]);
@@ -557,7 +560,7 @@ function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
 end
 
 function deconvolve(filelist, psf, numit, damping, ...
-    block, stack_info, p1, p2, min_max_path, ...
+    block, stack_info, min_max_path, ...
     stop_criterion, gpu, gpu_queue_key, cache_drive, ...
     filter, starting_block, dQueue)
     
@@ -592,10 +595,10 @@ function deconvolve(filelist, psf, numit, damping, ...
         semaphore('post', semkey_single);
 
         % begin processing next block and load next block of data into memory
-        startp = p1(blnr, :); endp = p2(blnr, :);
-        x1     = startp(x);     x2 = endp(x);
-        y1     = startp(y);     y2 = endp(y);
-        z1     = startp(z);     z2 = endp(z);
+        startp = block.p1(blnr, :); endp = block.p2(blnr, :);
+        x1     = startp(x);           x2 = endp(x);
+        y1     = startp(y);           y2 = endp(y);
+        z1     = startp(z);           z2 = endp(z);
         semaphore('wait', semkey_loading);
         send(dQueue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' is loading ...']);
         loading_start = tic;
@@ -624,9 +627,9 @@ function deconvolve(filelist, psf, numit, damping, ...
                      'Expected [%d %d %d], got [%d %d %d].\n', ...
                      'Block X[%d-%d], Y[%d-%d], Z[%d-%d]'], ...
                     blnr, expected_size, actual_size, ...
-                    p1(blnr,1), p2(blnr,1), ...
-                    p1(blnr,2), p2(blnr,2), ...
-                    p1(blnr,3), p2(blnr,3)));
+                    block.p1(blnr,1), block.p2(blnr,1), ...
+                    block.p1(blnr,2), block.p2(blnr,2), ...
+                    block.p1(blnr,3), block.p2(blnr,3)));
 
         % Report status
         send(dQueue, [current_device(gpu) ': block ' num2str(blnr) ...
@@ -640,9 +643,9 @@ function deconvolve(filelist, psf, numit, damping, ...
                 1 + block.z_pad : end - block.z_pad);
 
         % === Check trimmed block matches expected core size ===
-        expected_size = [p2(blnr,1) - p1(blnr,1) + 1, ...
-                         p2(blnr,2) - p1(blnr,2) + 1, ...
-                         p2(blnr,3) - p1(blnr,3) + 1];
+        expected_size = [block.p2(blnr,1) - block.p1(blnr,1) + 1, ...
+                         block.p2(blnr,2) - block.p1(blnr,2) + 1, ...
+                         block.p2(blnr,3) - block.p1(blnr,3) + 1];
         actual_size = size(bl);
 
         assert(isequal(actual_size, expected_size), ...
@@ -650,9 +653,9 @@ function deconvolve(filelist, psf, numit, damping, ...
                      'Expected [%d %d %d], got [%d %d %d].\n', ...
                      'Block X[%d-%d], Y[%d-%d], Z[%d-%d]'], ...
                     blnr, expected_size, actual_size, ...
-                    p1(blnr,1), p2(blnr,1), ...
-                    p1(blnr,2), p2(blnr,2), ...
-                    p1(blnr,3), p2(blnr,3)));
+                    block.p1(blnr,1), block.p2(blnr,1), ...
+                    block.p1(blnr,2), block.p2(blnr,2), ...
+                    block.p1(blnr,3), block.p2(blnr,3)));
 
         % find maximum value in other blocks
         semaphore('wait', semkey_single);
@@ -792,7 +795,7 @@ end
 
 function postprocess_save(...
     outpath, cache_drive, min_max_path, log_file, clipval, ...
-    p1, p2, stack_info, resume, block, amplification)
+    stack_info, resume, block, amplification)
 
     semkey_single = 1e3;
     semkey_multi = 1e4;
@@ -800,9 +803,9 @@ function postprocess_save(...
     semaphore_create(semkey_multi, 32);
 
     % Use cell array for blocklist for compatibility with file functions
-    blocklist = cell(size(p1, 1), 1);
+    blocklist = cell(size(block.p1, 1), 1);
     missing_blocks = [];
-    for i = 1 : size(p1, 1)
+    for i = 1 : size(block.p1, 1)
         blocklist{i} = fullfile(cache_drive, ['bl_' num2str(i) '.mat']);
         if ~exist(blocklist{i}, 'file')
             missing_blocks(end+1) = i; %#ok<AGROW>
@@ -889,11 +892,11 @@ function postprocess_save(...
         starting_z_block = 0;
 
         % Find the z-chunk where last completed z-plane resides
-        for blnr = 1:length(p1)
-            if p1(blnr, x) == 1 && p1(blnr, y) == 1
+        for blnr = 1:length(block.p1)
+            if block.p1(blnr, x) == 1 && block.p1(blnr, y) == 1
                 % potential start of slab
-                slab_start_z = p1(blnr, z);
-                slab_end_z = p2(blnr, z);
+                slab_start_z = block.p1(blnr, z);
+                slab_end_z   = block.p2(blnr, z);
 
                 if slab_end_z <= last_completed_z
                     starting_z_block = starting_z_block + 1;
@@ -907,7 +910,7 @@ function postprocess_save(...
         if imagenr ~= last_completed_z
             % mismatch, possible partial save, rollback one slab to be safe
             starting_z_block = max(1, starting_z_block); % avoid zero-index
-            imagenr = p1((starting_z_block - 1) * num_blocks_per_z_slab + 1, z) - 1;
+            imagenr = block.p1((starting_z_block - 1) * num_blocks_per_z_slab + 1, z) - 1;
         end
 
         disp(['number of existing tif files: ' num2str(num_tif_files)]);
@@ -942,8 +945,8 @@ function postprocess_save(...
             error('Missing files detected in slab %d. Resume aborted.', nz);
         end
 
-        slab_z1 = p1(block_inds(1), z);
-        slab_z2 = p2(block_inds(1), z);
+        slab_z1 = block.p1(block_inds(1), z);
+        slab_z2 = block.p2(block_inds(1), z);
         slab_depth = slab_z2 - slab_z1 + 1;
 
         R = zeros(stack_info.x, stack_info.y, slab_depth, 'single');
@@ -957,9 +960,9 @@ function postprocess_save(...
         for j = 1:length(block_inds)
             asigment_time_start = tic;
             blnr = block_inds(j);
-            R(p1(blnr, x):p2(blnr, x), ...
-              p1(blnr, y):p2(blnr, y), ...
-              p1(blnr, z)-slab_z1+1 : p2(blnr, z)-slab_z1+1) = async_load(j).fetchOutputs;
+            R(block.p1(blnr, x)           : block.p2(blnr, x), ...
+              block.p1(blnr, y)           : block.p2(blnr, y), ...
+              block.p1(blnr, z)-slab_z1+1 : block.p2(blnr, z)-slab_z1+1) = async_load(j).fetchOutputs;
 
             filepath = blocklist{blnr};
             [~, name, ext] = fileparts(filepath);
@@ -1225,13 +1228,11 @@ end
 function check_block_coverage_planes(stack_info, block)
     disp('checking for potential issues ...');
 
-    [p1, p2] = split(stack_info, block);
-
-    % Planes to check (boundaries only)
-    planes = {'XY', 'XZ', 'YZ'};
+    p1 = block.p1
+    p2 = block.p2
     errors = {};
 
-    % XY at z=1 and z=end
+    % 1. XY at z=1 and z=end
     for z = [1, stack_info.z]
         covered = false(stack_info.x, stack_info.y);
         for k = 1:size(p1,1)
@@ -1248,7 +1249,7 @@ function check_block_coverage_planes(stack_info, block)
         end
     end
 
-    % XZ at y=1 and y=end
+    % 2. XZ at y=1 and y=end
     for y = [1, stack_info.y]
         covered = false(stack_info.x, stack_info.z);
         for k = 1:size(p1,1)
@@ -1265,7 +1266,7 @@ function check_block_coverage_planes(stack_info, block)
         end
     end
 
-    % YZ at x=1 and x=end
+    % 3. YZ at x=1 and x=end
     for x = [1, stack_info.x]
         covered = false(stack_info.y, stack_info.z);
         for k = 1:size(p1,1)
@@ -1282,6 +1283,31 @@ function check_block_coverage_planes(stack_info, block)
         end
     end
 
+    % 4. Z stack coverage check
+    covered_z = false(1, stack_info.z);
+    for k = 1:size(p1,1)
+        zs = p1(k,3):p2(k,3);
+        covered_z(zs) = true;
+    end
+    missing_z = find(~covered_z);
+    if ~isempty(missing_z)
+        errors{end+1} = sprintf('Missing Z planes in output: %s', mat2str(missing_z));
+    end
+
+    if numel(find(covered_z)) > stack_info.z
+        errors{end+1} = sprintf('Too many Z planes in output: %d (should be %d)', numel(find(covered_z)), stack_info.z);
+    end
+
+    actual_z_max = max(p2(:,3));
+    actual_z_min = min(p1(:,3));
+    if actual_z_min ~= 1
+        errors{end+1} = sprintf('Output Z planes start at %d, expected 1', actual_z_min);
+    end
+    if actual_z_max ~= stack_info.z
+        errors{end+1} = sprintf('Total output Z planes = %d, expected %d', actual_z_max, stack_info.z);
+    end
+
+    % Final error report
     if ~isempty(errors)
         err_msg = sprintf('Block coverage error(s) detected:\n%s', strjoin(errors, '\n'));
         error(err_msg);
