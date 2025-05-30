@@ -134,19 +134,6 @@ function [] = LsDeconv(varargin)
             mkdir(cache_drive);
         elseif ~resume
             delete(fullfile(cache_drive, "*.mat"));
-        % else
-        %     files = dir(fullfile(cache_drive, "bl_*"));
-        %     files = files(~[files.isdir]); % files only
-        %     for idx = 1:length(files)
-        %         file = files(idx);
-        %         if file.bytes < 10
-        %             try
-        %                 delete(fullfile(cache_drive, file.name));
-        %             catch
-        %                 warning('Cannot delete %s', file.name);
-        %             end
-        %         end
-        %     end
         end
 
         disp("Logging image attributes");
@@ -185,7 +172,6 @@ function [] = LsDeconv(varargin)
         % x and y pads are interpolated since they are smaller than z
         % z pad is from actual image to avoid artifacts
         p_log(log_file, 'partitioning the image into blocks ...')
-
         block_path = fullfile(cache_drive, 'block.mat');
         if resume && exist(block_path, 'file')
             loaded = load(block_path);
@@ -206,7 +192,6 @@ function [] = LsDeconv(varargin)
             save(block_path, 'block');
         end
         check_block_coverage_planes(stack_info, block);
-
         p_log(log_file, ['   block numbers: ' num2str(block.nx) 'x * ' num2str(block.ny) 'y * ' num2str(block.nz) 'z = ' num2str(block.nx * block.ny * block.nz) ' blocks.']);
         p_log(log_file, ['   block size loaded image: ' num2str(block.x) 'x * ' num2str(block.y) 'y * ' num2str(block.z) 'z = ' num2str(block.x * block.y * block.z) ' voxels.']);
         p_log(log_file, ['   block size deconvolved image: ' num2str(block.x) 'x * ' num2str(block.y) 'y * ' num2str(block.z - 2*block.z_pad) 'z = ' num2str(block.x * block.y * (block.z - 2*block.z_pad)) ' voxels.']);
@@ -261,6 +246,15 @@ function [] = LsDeconv(varargin)
         p_log(log_file, ['   blocks: ' char(cache_drive)]);
         p_log(log_file, ['   logs: ' char(log_file_path)]);
         p_log(log_file, ' ');
+
+        if filter.use_fft
+            p_log(log_file, 'calculating otf ...')
+            device_id = 0;
+            if any(gpus > 0)
+                device_id = gpus(find(gpus > 0, 1, 'first'));
+            end
+            [psf.otf, psf.otf_conj] = calculate_otf(psf.psf, block.fft_shape, device_id);
+        end
         
         process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
             damping, clipval, stop_criterion, gpus, cache_drive, ...
@@ -1352,4 +1346,32 @@ function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
     assert(isequal(size(bl), target_sz), ...
         sprintf('[load_block] Output size mismatch! Got [%s], expected [%s]', ...
         num2str(size(bl)), num2str(target_sz)));
+end
+
+
+function [otf, otf_conj] = calculate_otf(psf, fft_shape, device_id)
+    t_compute = tic;
+    if device_id > 0
+        gpu_device = gpuDevice(device_id);
+        psf = gpuArray(psf);
+    end
+    [otf, ~, ~] = pad_block_to_fft_shape(psf, fft_shape);
+    otf = fftn(otf);
+    if device_id > 0, otf = arrayfun(@(r, i) complex(r, i), real(otf), imag(otf)); end
+    otf_conj = conj(otf);
+    if device_id > 0
+        otf_conj = arrayfun(@(r, i) complex(r, i), real(otf_conj), imag(otf_conj));
+        otf = gather(otf);
+        otf_conj = gather(otf_conj);
+        reset(gpu_device);
+    end
+    fprintf('%s: OTF computed for size %s in %.2fs\n', ...
+        device_name(device_id), mat2str(fft_shape), toc(t_compute));
+end
+
+function device = device_name(id)
+    device = 'CPU ';
+    if id > 0
+        device = ['GPU' num2str(id)];
+    end
 end

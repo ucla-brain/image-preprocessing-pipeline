@@ -12,7 +12,7 @@ function bl = decon(bl, psf, niter, lambda, stop_criterion, regularize_interval,
     % - use_fft: true = use FFT-based convolution (faster, more memory), false = use convn (slower, low-memory)
 
     if use_fft
-        bl = deconFFT(bl, psf.psf, niter, lambda, stop_criterion, regularize_interval, device_id);
+        bl = deconFFT(bl, psf.otf, psf.otf_conj, niter, lambda, stop_criterion, regularize_interval, device_id);
     else
         bl = deconSpatial(bl, psf.psf, psf.inv, niter, lambda, stop_criterion, regularize_interval, device_id);
     end
@@ -92,11 +92,15 @@ function bl = deconSpatial(bl, psf, psf_inv, niter, lambda, stop_criterion, regu
 end
 
 % === Frequency-domain version with cached OTFs ===
-function bl = deconFFT(bl, psf, niter, lambda, stop_criterion, regularize_interval, device_id)
-    imsize = size(bl);
+function bl = deconFFT(bl, otf, otf_conj, niter, lambda, stop_criterion, regularize_interval, device_id)
     use_gpu = isgpuarray(bl);
 
-    [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu, device_id);
+    % imsize = size(bl);
+    % [otf, otf_conj] = getCachedOTF(psf, imsize, use_gpu, device_id);
+    if use_gpu
+        otf = gpuArray(otf);
+        otf_conj = gpuArray(otf_conj);
+    end
 
     if regularize_interval < niter && lambda > 0
         R = single(1/26 * ones(3,3,3)); R(2,2,2) = 0;
