@@ -147,7 +147,7 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regula
             end
         else
             disp([device_name(device_id) ': Iter ' num2str(i) ...
-                  ', ΔT: ' num2str(round(toc(start_time),1)) 's']);
+                  ', ΔT: ' num2str(round(toc(start_time),2)) 's']);
         end
     end
 
