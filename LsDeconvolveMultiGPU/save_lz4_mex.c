@@ -5,6 +5,8 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <errno.h>
+#include <unistd.h> // for unlink
 
 // --- CONSTANTS ---
 #define MAX_DIMS 16
