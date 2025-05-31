@@ -134,6 +134,8 @@ function [] = LsDeconv(varargin)
             mkdir(cache_drive);
         elseif ~resume
             delete(fullfile(cache_drive, "*.mat"));
+            delete(fullfile(cache_drive, "*.lz4"));
+            delete(fullfile(cache_drive, "*.tmp"));
         end
 
         disp("Logging image attributes");
