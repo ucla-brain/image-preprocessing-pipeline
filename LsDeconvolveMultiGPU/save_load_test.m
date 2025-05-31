@@ -4,10 +4,19 @@
 disp('Running save/load LZ4 test and benchmark ...');
 
 % --- Ask for cache/test directory ---
-cache_dir = uigetdir(pwd, 'Select a folder for temp/cache test files (choose a fast drive if possible)');
-if isnumeric(cache_dir) && cache_dir == 0
-    disp('User canceled; aborting test.');
-    return
+if usejava('desktop')
+    cache_dir = uigetdir(pwd, 'Select a folder for temp/cache test files (choose a fast drive if possible)');
+    if isnumeric(cache_dir) && cache_dir == 0
+        disp('User canceled; aborting test.');
+        return
+    end
+else
+    prompt = 'Enter a folder for temp/cache test files (choose a fast drive if possible):\n> ';
+    cache_dir = input(prompt, 's');
+    if isempty(cache_dir) || ~isfolder(cache_dir)
+        disp('No valid folder specified; aborting test.');
+        return
+    end
 end
 fprintf('Using folder for cache/test files: %s\n', cache_dir);
 
