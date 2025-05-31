@@ -548,8 +548,8 @@ function deconvolve(filelist, psf, numit, damping, ...
 
     for blnr = starting_block : num_blocks
         % skip blocks already worked on
-        block_path = fullfile(cache_drive, ['bl_' num2str(blnr) '.lz4']);
-        block_path_tmp = fullfile(cache_drive, ['bl_' num2str(blnr) '.lz4.tmp']);
+        block_path = fullfile(cache_drive, ['bl_' num2str(blnr) '.lz']);
+        block_path_tmp = fullfile(cache_drive, ['bl_' num2str(blnr) '.lz.tmp']);
         semaphore('wait', semkey_single);
         if num_blocks > 1 && (exist(block_path, "file") || exist(block_path_tmp, "file"))
             semaphore('post', semkey_single);
@@ -732,7 +732,7 @@ function postprocess_save(...
     blocklist = cell(size(block.p1, 1), 1);
     missing_blocks = [];
     for i = 1 : size(block.p1, 1)
-        blocklist{i} = fullfile(cache_drive, ['bl_' num2str(i) '.lz4']);
+        blocklist{i} = fullfile(cache_drive, ['bl_' num2str(i) '.lz']);
         if ~exist(blocklist{i}, 'file')
             missing_blocks(end+1) = i; %#ok<AGROW>
         end
