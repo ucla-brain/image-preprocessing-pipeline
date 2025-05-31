@@ -1248,20 +1248,43 @@ function check_block_coverage_planes(stack_info, block)
         end
     end
 
-    % === Add warning about small blocks at the end ===
+    % 6. True 3D interior-overlap check (ignores face/edge/corner contacts)
+    disp('Checking for true 3D interior overlaps (ignoring faces/edges/corners)...');
+    N = size(p1, 1);
+    true_overlaps = [];
+    for i = 1:N-1
+        p1_i = p1(i, :); p2_i = p2(i, :);
+        for j = i+1:N
+            p1_j = p1(j, :); p2_j = p2(j, :);
+            overlap_x = min(p2_i(1), p2_j(1)) - max(p1_i(1), p1_j(1)) + 1;
+            overlap_y = min(p2_i(2), p2_j(2)) - max(p1_i(2), p1_j(2)) + 1;
+            overlap_z = min(p2_i(3), p2_j(3)) - max(p1_i(3), p1_j(3)) + 1;
+            % All axes must have overlap > 1
+            if overlap_x > 1 && overlap_y > 1 && overlap_z > 1
+                true_overlaps = [true_overlaps; i, j];
+            end
+        end
+    end
+    if isempty(true_overlaps)
+        disp('No true 3D interior overlaps found between blocks.');
+    else
+        disp('True 3D interior overlaps found between blocks:');
+        disp(true_overlaps);
+        errors{end+1} = sprintf('Found %d pairs of blocks with true interior overlap.', size(true_overlaps, 1));
+    end
+
+    % === Warn if any block is much smaller than nominal ===
     nominal_block_size = [block.x, block.y, block.z];
     actual_sizes = block.p2 - block.p1 + 1;
-    axes_labels = 'XYZ'; % Define variable
     for i = 1:size(actual_sizes, 1)
         too_small = actual_sizes(i,:) < 0.5 * nominal_block_size;
         if any(too_small)
-            small_axes = axes_labels(too_small);
             fprintf('Warning: Block %d is small in axis %s. Size: [%s], Expected: [%s]\n', ...
-                i, small_axes, num2str(actual_sizes(i,:)), num2str(nominal_block_size));
+                i, char('XYZ'(too_small)), num2str(actual_sizes(i,:)), num2str(nominal_block_size));
         end
     end
 
-    % Final report
+    % === Final report ===
     if ~isempty(errors)
         err_msg = sprintf('Block coverage error(s) detected:\n%s', strjoin(errors, '\n'));
         error(err_msg);
