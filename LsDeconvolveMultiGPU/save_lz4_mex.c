@@ -44,8 +44,15 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
     // --- Parse Inputs ---
     char fname[1024];
     mxGetString(prhs[0], fname, sizeof(fname));
+
+    unlink(fname);
     FILE* f = fopen(fname, "wb");
-    if (!f) mexErrMsgTxt("Failed to open file for writing.");
+    if (!f) {
+        mexPrintf("Failed to open file: %s\n", fname);
+        mexPrintf("errno: %d\n", errno);
+        perror("fopen");
+        mexErrMsgTxt("Failed to open file for writing (even after trying to remove it).");
+    }
 
     const mxArray* arr = prhs[1];
     mwSize ndims = mxGetNumberOfDimensions(arr);
