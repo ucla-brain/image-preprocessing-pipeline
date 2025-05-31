@@ -353,9 +353,6 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(stack
 end
 
 function pad_size = gaussian_pad_size(image_size, filter_size)
-    % Returns the required padding for a Gaussian filter of size filter_size
-    % for each image dimension in image_size.
-    % filter_size can be scalar or vector; if scalar, applies to all dims.
     if isscalar(filter_size)
         filter_size = repmat(filter_size, size(image_size));
     end
@@ -367,9 +364,7 @@ function pad_size = gaussian_pad_size(image_size, filter_size)
 end
 
 function pad = decon_pad_size(psf_sz)
-    % Returns padding size for deconvolution given PSF size in each dimension.
-    % For a PSF of size N, the pad is ceil(N/2) for each dimension.
-    pad = ceil(psf_sz / 2);
+    pad = ceil(psf_sz * 3 / 4);
 end
 
 function n_vec = next_fast_len(n_vec)
