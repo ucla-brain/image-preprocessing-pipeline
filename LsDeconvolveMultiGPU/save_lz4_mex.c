@@ -6,18 +6,12 @@
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
-#include <unistd.h> // for unlink
 
 // --- CONSTANTS ---
 #define MAX_DIMS 16
 #define MAX_CHUNKS 2048
 #define HEADER_SIZE 33280  // >= 4+1+1+8*16+8+8+4+8*2048*2 = 32922, rounded up
 #define DEFAULT_CHUNK_SIZE ((uint64_t)1<<30) // 1GB
-
-#ifdef _WIN32
-#include <io.h>
-#define unlink _unlink
-#endif
 
 // --- FILE FORMAT ---
 #define MAGIC_NUMBER 0x4C5A4331  // 'LZ4C' (chunked)
@@ -48,23 +42,13 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
     if (nrhs != 2) mexErrMsgIdAndTxt("save_lz4_mex:NumArgs", "Usage: save_lz4_mex(filename, array)");
 
     // === Robustly extract filename from char or string ===
-    char fname[4096] = {0};
-    char* tempstr = mxArrayToString(prhs[0]);
-    if (tempstr && strlen(tempstr) < sizeof(fname)) {
-        strncpy(fname, tempstr, sizeof(fname)-1);
-        fname[sizeof(fname)-1] = '\0';
-        mxFree(tempstr);
-    } else {
-        if (tempstr) mxFree(tempstr);
-        mexErrMsgIdAndTxt("save_lz4_mex:BadString", "Could not extract filename. Make sure to pass a char array (e.g., 'file.lz4') or a scalar string (e.g., \"file.lz4\")");
-    }
+    char* fname = mxArrayToString(prhs[0]);
+    if (!fname || strlen(fname)==0)
+        mexErrMsgIdAndTxt("save_lz4_mex:BadFilename", "Could not extract filename. Pass a char array or string scalar.");
 
     if (strlen(fname) == 0) {
         mexErrMsgIdAndTxt("save_lz4_mex:EmptyFilename", "Filename is empty!");
     }
-
-    //mexPrintf("Trying to open: %s\n", fname);
-    unlink(fname); // Try to remove any existing file, ignore errors
 
     FILE* f = fopen(fname, "wb");
     if (!f) {
@@ -148,4 +132,5 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
     write_header(f, &hdr);
     fflush(f);
     if (fclose(f) != 0) mexErrMsgIdAndTxt("save_lz4_mex:FileCloseFailed", "Could not close file (write error?)");
+    mxFree(fname);
 }

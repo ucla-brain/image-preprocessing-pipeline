@@ -1,7 +1,13 @@
 % ===============================
 % build_mex.m
 % ===============================
-% Compile CUDA MEX files for wavedec2 and waverec2
+% Compile semaphore, queue, and chunked LZ4 MEX files.
+% Downloads lz4.c/.h from GitHub if missing.
+% Requires MATLAB R2018a+ (-R2018a mxArray API).
+
+if verLessThan('matlab', '9.4')
+    error('This script requires MATLAB R2018a or newer (for -R2018a MEX API)');
+end
 
 src_semaphore = 'semaphore.c';
 src_queue = 'queue.c';
@@ -12,7 +18,6 @@ src_lz4_c = 'lz4.c';
 lz4_c_url  = 'https://raw.githubusercontent.com/lz4/lz4/dev/lib/lz4.c';
 lz4_h_url  = 'https://raw.githubusercontent.com/lz4/lz4/dev/lib/lz4.h';
 
-% Download lz4.c and lz4.h if missing, with error handling
 if ~isfile('lz4.c')
     fprintf('Downloading lz4.c ...\n');
     try, websave('lz4.c', lz4_c_url);
@@ -24,18 +29,19 @@ if ~isfile('lz4.h')
     catch, error('Failed to download lz4.h'); end
 end
 
-opt_flags = '-O2 -march=native -fomit-frame-pointer';
-
+% Compile
+mex_flags = {'-R2018a'};
 if ispc && ~ismac
-    mex_cmd_base = 'mex CFLAGS="$CFLAGS /O2 /arch:AVX2" CXXFLAGS="$CXXFLAGS /O2 /arch:AVX2" ';
+    mex_flags = [mex_flags, 'CFLAGS="$CFLAGS /O2 /arch:AVX2"', 'CXXFLAGS="$CXXFLAGS /O2 /arch:AVX2"'];
 else
-    mex_cmd_base = ['mex CFLAGS="$CFLAGS ', opt_flags, '" CXXFLAGS="$CXXFLAGS ', opt_flags, '" '];
+    mex_flags = [mex_flags, 'CFLAGS="$CFLAGS -O2 -march=native -fomit-frame-pointer"', ...
+                           'CXXFLAGS="$CXXFLAGS -O2 -march=native -fomit-frame-pointer"'];
 end
 
-eval([mex_cmd_base, ' ', src_semaphore]);
-eval([mex_cmd_base, ' ', src_queue]);
-eval([mex_cmd_base, ' ', src_lz4_save, ' ', src_lz4_c]);
-eval([mex_cmd_base, ' ', src_lz4_load, ' ', src_lz4_c]);
+mex(mex_flags{:}, src_semaphore);
+mex(mex_flags{:}, src_queue);
+mex(mex_flags{:}, src_lz4_save, src_lz4_c);
+mex(mex_flags{:}, src_lz4_load, src_lz4_c);
 
 % CUDA/mexcuda examples (uncomment as needed)
 % nvcc_flags = '-O2 -Xcompiler -march=native -Xcompiler -fomit-frame-pointer';
