@@ -8,7 +8,7 @@ src_semaphore = 'semaphore.c';
 src_queue = 'queue.c';
 src_lz4_save = 'save_lz4_mex.c';
 src_lz4_load = 'load_lz4_mex.c';
-src_lz4_c = 'lz4.c'
+src_lz4_c = 'lz4.c';
 
 % URLs for LZ4
 lz4_c_url  = 'https://raw.githubusercontent.com/lz4/lz4/dev/lib/lz4.c';
@@ -24,25 +24,34 @@ if ~isfile('lz4.h')
     websave('lz4.h', lz4_h_url);
 end
 
-%src_wavedec2 = 'wavedec2_mex.cu';
-%src_waverec2 = 'waverec2_mex.cu';
-%src_filter_subband = 'filter_subband_mex.cu';
-%build_xml = "C:/Program Files/MATLAB/R2023a/toolbox/parallel/gpu/extern/src/mex/win64/nvcc_msvcpp2022.xml";
+% Optimization flags for gcc/clang (Linux/macOS) and fallback for MSVC/Windows
+opt_flags = '-O2 -march=native -fomit-frame-pointer';
 
-% Include directory for headers
-%root_dir = '.';
-%include_dir = './cuda_kernels';
-%setenv('CUDA_PATH', 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8');
-%setenv('CUDA_ROOT', getenv('CUDA_PATH'));
-%setenv('CUDA_TOOLKIT_ROOT_DIR', getenv('CUDA_PATH'));
-%setenv('MW_ALLOW_ANY_CUDA', '1');
+% Use different flags for Windows/MSVC (ignores -march/-fomit-frame-pointer)
+if ispc && ~ismac
+    mex_cmd_base = 'mex -v CFLAGS="$CFLAGS /O2 /arch:AVX2" CXXFLAGS="$CXXFLAGS /O2 /arch:AVX2" ';
+else
+    mex_cmd_base = ['mex -v CFLAGS="$CFLAGS ', opt_flags, '" CXXFLAGS="$CXXFLAGS ', opt_flags, '" '];
+end
 
+% Compile semaphore.c
+eval([mex_cmd_base, ' ', src_semaphore]);
 
-% Compile
-mex('-O', '-v', src_semaphore);
-mex('-O', '-v', src_queue);
-mex('-O', '-v', src_lz4_save, src_lz4_c);
-mex('-O', '-v', src_lz4_load, src_lz4_c);
-%mexcuda('-v', '-g', '-G', '-f', build_xml, '-R2018a', src_wavedec2,       ['-I' root_dir], ['-I' include_dir]);
-%mexcuda('-v', '-g', '-G', '-f', build_xml, '-R2018a', src_waverec2,       ['-I' root_dir], ['-I' include_dir]);
-%mexcuda('-v', '-g', '-G', '-f', build_xml, '-R2018a', src_filter_subband, ['-I' root_dir], ['-I' include_dir]);
+% Compile queue.c
+eval([mex_cmd_base, ' ', src_queue]);
+
+% Compile save_lz4_mex.c + lz4.c
+eval([mex_cmd_base, ' ', src_lz4_save, ' ', src_lz4_c]);
+
+% Compile load_lz4_mex.c + lz4.c
+eval([mex_cmd_base, ' ', src_lz4_load, ' ', src_lz4_c]);
+
+% CUDA/mexcuda examples (uncomment & edit paths as needed)
+% nvcc_flags = '-O2 -Xcompiler -march=native -Xcompiler -fomit-frame-pointer';
+% build_xml = "C:/Program Files/MATLAB/R2023a/toolbox/parallel/gpu/extern/src/mex/win64/nvcc_msvcpp2022.xml";
+% root_dir = '.'; include_dir = './cuda_kernels';
+% mexcuda('-v', '-R2018a', '-f', build_xml, src_wavedec2, ['-I', root_dir], ['-I', include_dir], ...
+%     'CFLAGS="$CFLAGS -O2 -march=native -fomit-frame-pointer"', ...
+%     'CXXFLAGS="$CXXFLAGS -O2 -march=native -fomit-frame-pointer"', ...
+%     'NVCCFLAGS="$NVCCFLAGS -O2 -Xcompiler -march=native -Xcompiler -fomit-frame-pointer"');
+% ... (repeat for other .cu files as needed)
