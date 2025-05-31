@@ -276,7 +276,7 @@ end
 function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(stack_info, psf_size, filter, block_size_max, ram_available)
     % Parameters for RAM and block sizing
     ram_usage_portion = 0.5;               % Use at most 50% of available RAM
-    bytes_per_voxel = 8;                   % Use 4 for single, 8 for double (adjust as needed)
+    bytes_per_voxel = 4;                   % Use 4 for single, 8 for double (adjust as needed)
     max_elements_per_dim = 1290;           % 3D cube limit from 2^31-1 elements
     max_elements_total  = 2^31 - 1;        % MATLAB's total element limit
 
