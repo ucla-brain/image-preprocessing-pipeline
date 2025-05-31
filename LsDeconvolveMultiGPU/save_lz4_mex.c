@@ -14,6 +14,11 @@
 #define HEADER_SIZE 33280  // >= 4+1+1+8*16+8+8+4+8*2048*2 = 32922, rounded up
 #define DEFAULT_CHUNK_SIZE ((uint64_t)1<<30) // 1GB
 
+#ifdef _WIN32
+#include <io.h>
+#define unlink _unlink
+#endif
+
 // --- FILE FORMAT ---
 #define MAGIC_NUMBER 0x4C5A4331  // 'LZ4C' (chunked)
 
@@ -35,25 +40,46 @@ typedef struct {
 
 void write_header(FILE* f, file_header_t* hdr) {
     size_t n = fwrite(hdr, 1, HEADER_SIZE, f);
-    if (n != (size_t)HEADER_SIZE) mexErrMsgIdAndTxt("save_lz4_mex:WriteFailed", "Failed to write data to file");
+    if (n != (size_t)HEADER_SIZE) mexErrMsgIdAndTxt("save_lz4_mex:write_header", "Failed to write data to file");
 }
 
 void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
 {
-    if (nrhs != 2)
-        mexErrMsgTxt("Usage: save_lz4_mex(filename, array)");
+    if (nrhs != 2) mexErrMsgIdAndTxt("save_lz4_mex:NumArgs", "Usage: save_lz4_mex(filename, array)");
 
-    // --- Parse Inputs ---
-    char fname[1024];
-    mxGetString(prhs[0], fname, sizeof(fname));
+    // === Robustly extract filename from char or string ===
+    char fname[4096] = {0};
+    const mxArray* file_arg = prhs[0];
+
+    if (mxIsChar(file_arg)) {
+        if (mxGetString(file_arg, fname, sizeof(fname)) != 0) {
+            mexErrMsgIdAndTxt("save_lz4_mex:FilenameTooLong", "Filename is too long or could not be read.");
+        }
+    } else if (mxIsString(file_arg)) {
+        char* tempstr = mxArrayToString(file_arg);
+        if (tempstr && strlen(tempstr) < sizeof(fname)) {
+            strncpy(fname, tempstr, sizeof(fname)-1);
+            fname[sizeof(fname)-1] = '\0';
+            mxFree(tempstr);
+        } else {
+            if (tempstr) mxFree(tempstr);
+            mexErrMsgIdAndTxt("save_lz4_mex:BadString", "Could not extract filename from string.");
+        }
+    } else {
+        mexErrMsgIdAndTxt("save_lz4_mex:BadType", "Filename must be a char array or string scalar.");
+    }
+
+    if (strlen(fname) == 0) {
+        mexErrMsgIdAndTxt("save_lz4_mex:EmptyFilename", "Filename is empty!");
+    }
 
     mexPrintf("Trying to open: %s\n", fname);
-    unlink(fname);
+    unlink(fname); // Try to remove any existing file, ignore errors
+
     FILE* f = fopen(fname, "wb");
     if (!f) {
-        mexErrMsgIdAndTxt("save_lz4_mex:OpenFailed",
-        "Failed to open file for writing: %s (errno %d: %s)",
-        fname, errno, strerror(errno));
+        mexPrintf("fopen failed: errno = %d (%s)\n", errno, strerror(errno));
+        mexErrMsgIdAndTxt("save_lz4_mex:OpenFailed", "Failed to open file for writing: %s (errno %d: %s)", fname, errno, strerror(errno));
     }
 
     const mxArray* arr = prhs[1];
