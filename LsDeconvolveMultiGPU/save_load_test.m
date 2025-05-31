@@ -1,7 +1,88 @@
 % ===============================
-% save_load_test.m (with cache location prompt and integrity backmasking)
+% save_load_test.m (with cache location prompt, integrity backmasking, and MEX worker compatibility checks)
 % ===============================
-disp('Running save/load LZ4 test and benchmark with integrity checks ...');
+disp('Running save/load LZ4 test and benchmark with integrity and worker MEX checks ...');
+
+% --- Check for save_lz4_mex and load_lz4_mex visibility ---
+disp('Checking MEX visibility on client and all workers ...');
+mexfiles = {'save_lz4_mex', 'load_lz4_mex'};
+for m = 1:numel(mexfiles)
+    mf = mexfiles{m};
+    loc = which(mf);
+    if isempty(loc)
+        error('MEX file "%s" not found on client MATLAB path. Please add its folder with addpath().', mf);
+    else
+        fprintf('Found "%s" at: %s\n', mf, loc);
+    end
+end
+
+pool = gcp('nocreate');
+if isempty(pool)
+    pool = parpool('local');
+end
+
+% --- Check MEX file visibility and current folder on each worker ---
+fprintf('\nChecking workers for save_lz4_mex and load_lz4_mex...\n');
+mex_on_workers = cell(pool.NumWorkers, numel(mexfiles));
+cwd_on_workers = cell(pool.NumWorkers, 1);
+path_on_workers = cell(pool.NumWorkers, 1);
+
+spmd
+    for m = 1:numel(mexfiles)
+        mex_on_workers{labindex, m} = which(mexfiles{m});
+    end
+    cwd_on_workers{labindex} = pwd;
+    path_on_workers{labindex} = path;
+end
+
+for w = 1:pool.NumWorkers
+    for m = 1:numel(mexfiles)
+        if isempty(mex_on_workers{w, m})
+            warning('Worker %d does NOT see "%s" on its path.', w, mexfiles{m});
+        else
+            fprintf('Worker %d sees "%s" at: %s\n', w, mexfiles{m}, mex_on_workers{w, m});
+        end
+    end
+    fprintf('Worker %d PWD: %s\n', w, cwd_on_workers{w});
+    % You may want to print or analyze path_on_workers{w} for debugging.
+end
+
+% --- Test trivial call to MEX on each worker ---
+disp('Testing save_lz4_mex and load_lz4_mex on all workers...');
+mex_test_ok = true(pool.NumWorkers, 1);
+mex_test_msg = cell(pool.NumWorkers, 1);
+
+spmd
+    try
+        testfile = ['test_mex_worker_' num2str(labindex) '.lz4'];
+        A = magic(8) * labindex;
+        save_lz4_mex(testfile, A);
+        B = load_lz4_mex(testfile);
+        assert(isequal(A,B), 'Data mismatch');
+        if exist(testfile, 'file'), delete(testfile); end
+        mex_test_ok = true;
+        mex_test_msg = 'OK';
+    catch ME
+        mex_test_ok = false;
+        mex_test_msg = getReport(ME);
+    end
+end
+
+for w = 1:pool.NumWorkers
+    if ~mex_test_ok{w}
+        warning('MEX test failed on worker %d:\n%s', w, mex_test_msg{w});
+        disp('--- SUGGESTIONS ---');
+        disp('• Make sure all workers have the correct MEX file on their path.');
+        disp('• If using parallel clusters or remote nodes, use addAttachedFiles, or ensure the MEX is visible at startup.');
+        disp('• Consider restarting the parallel pool after adding path.');
+        disp('• If missing DLL/SO dependencies, put them next to the .mex* file.');
+        error('Aborting test because save_lz4_mex or load_lz4_mex failed on one or more workers.');
+    else
+        fprintf('Worker %d passed MEX functionality test.\n', w);
+    end
+end
+
+% =========== MAIN TEST LOGIC FOLLOWS ===========
 
 % --- Ask for cache/test directory ---
 if usejava('desktop')
