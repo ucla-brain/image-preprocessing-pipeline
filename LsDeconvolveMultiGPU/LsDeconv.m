@@ -846,6 +846,13 @@ function postprocess_save(...
     end
     clear num_tif_files;
 
+    num_workers = feature('numcores');
+    if isempty(gcp('nocreate'))
+        pool = parpool('local', num_workers, 'IdleTimeout', Inf);
+    else
+        pool = gcp();
+    end
+
     async_load(num_blocks_per_z_slab) = parallel.FevalFuture;
     for nz = starting_z_block : block.nz
         disp(['layer ' num2str(nz) ' from ' num2str(block.nz) ': mounting blocks ...']);
