@@ -1156,8 +1156,30 @@ function check_block_coverage_planes(stack_info, block)
 
     p1 = block.p1;
     p2 = block.p2;
+
+
     disp([p1, p2])
-    return
+    blocks_for_z1 = find(p1(:,3) <= 1 & p2(:,3) >= 1);
+    disp('Blocks covering z=1:');
+    disp(blocks_for_z1.');
+
+    % How many are there?
+    disp(['Num blocks covering z=1: ' num2str(numel(blocks_for_z1))]);
+
+    % Now check overlap in XY
+    covered = zeros(9600, 6656);  % stack_info.x, stack_info.y
+    for k = blocks_for_z1.'
+        xs = p1(k,1):p2(k,1);
+        ys = p1(k,2):p2(k,2);
+        covered(xs, ys) = covered(xs, ys) + 1;
+    end
+    num_overlaps = sum(covered(:) > 1);
+    num_gaps = sum(covered(:) == 0);
+
+    disp(['XY at z=1: gaps=' num2str(num_gaps) ', overlaps=' num2str(num_overlaps)]);
+    exit(1)
+
+
     errors = {};
 
     % 1. Block boundary checks
