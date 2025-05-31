@@ -413,8 +413,6 @@ function [block_start_indices, block_end_indices] = split(stack_info, block)
         'block_end_indices shape mismatch with block.nx, block.ny, block.nz');
 end
 
-
-
 function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
     damping, clipval, stop_criterion, gpus, cache_drive, amplification, ...
     filter, resume, starting_block)
@@ -1254,6 +1252,17 @@ function check_block_coverage_planes(stack_info, block)
         gaps = sum(covered(:) == 0);
         if overlaps > 0 || gaps > 0
             errors{end+1} = sprintf('YZ at x=%d: %d gaps, %d overlaps', x, gaps, overlaps);
+        end
+    end
+
+    % === Add warning about small blocks at the end ===
+    nominal_block_size = [block.x, block.y, block.z];
+    actual_sizes = block.p2 - block.p1 + 1;
+    for i = 1:size(actual_sizes, 1)
+        too_small = actual_sizes(i,:) < 0.5 * nominal_block_size;
+        if any(too_small)
+            fprintf('Warning: Block %d is small in axis %s. Size: [%s], Expected: [%s]\n', ...
+                i, char('XYZ'(too_small)), num2str(actual_sizes(i,:)), num2str(nominal_block_size));
         end
     end
 
