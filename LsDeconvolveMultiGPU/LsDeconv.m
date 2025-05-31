@@ -379,21 +379,41 @@ function n_vec = next_fast_len(n_vec)
 end
 
 %provides coordinates of sub-blocks after splitting
-function [p1, p2] = split(stack_info, block)
-    x_starts = min(1 + (0:block.nx-1) * block.x, stack_info.x - block.x + 1);
-    y_starts = min(1 + (0:block.ny-1) * block.y, stack_info.y - block.y + 1);
-    z_starts = min(1 + (0:block.nz-1) * block.z, stack_info.z - block.z + 1);
+function [block_start_indices, block_end_indices] = split(stack_info, block)
+    % Determine sizes and number of blocks in each dimension
+    block_size_per_axis = [block.x, block.y, block.z];
+    stack_size_per_axis = [stack_info.x, stack_info.y, stack_info.z];
+    num_blocks_per_axis = [block.nx, block.ny, block.nz];
 
-    [X, Y, Z] = ndgrid(x_starts, y_starts, z_starts);
-    X = X(:); Y = Y(:); Z = Z(:);
+    % Compute block starting indices for each axis
+    % Ensure that the last block covers the end of the stack, clamp at minimum
+    block_starts = arrayfun(@(num_blocks, block_size, stack_size) ...
+        min([1 + (0:num_blocks-1)*block_size; repmat(stack_size-block_size+1, 1, num_blocks)], [], 1), ...
+        num_blocks_per_axis, block_size_per_axis, stack_size_per_axis, 'UniformOutput', false);
 
-    p1 = [X, Y, Z];
-    p2 = [ ...
-        min(X + block.x - 1, stack_info.x), ...
-        min(Y + block.y - 1, stack_info.y), ...
-        min(Z + block.z - 1, stack_info.z) ...
-    ];
+    % Compute block ending indices for each axis
+    block_ends = cellfun(@(starts, block_size, stack_size) ...
+        min(starts + block_size - 1, stack_size), ...
+        block_starts, num2cell(block_size_per_axis), num2cell(stack_size_per_axis), ...
+        'UniformOutput', false);
+
+    % Create 3D grid of start/end coordinates for all blocks
+    [X_start, Y_start, Z_start] = ndgrid(block_starts{1}, block_starts{2}, block_starts{3});
+    [X_end,   Y_end,   Z_end  ] = ndgrid(block_ends{1},   block_ends{2},   block_ends{3});
+
+    % Convert to lists of block start and end coordinates (N_blocks x 3)
+    block_start_indices = [X_start(:), Y_start(:), Z_start(:)];
+    block_end_indices   = [X_end(:),   Y_end(:),   Z_end(:)];
+
+    % === Assert that shapes are as expected ===
+    num_total_blocks = prod(num_blocks_per_axis);
+    assert(all(size(block_start_indices) == [num_total_blocks, 3]), ...
+        'block_start_indices shape mismatch with block.nx, block.ny, block.nz');
+    assert(all(size(block_end_indices) == [num_total_blocks, 3]), ...
+        'block_end_indices shape mismatch with block.nx, block.ny, block.nz');
 end
+
+
 
 function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
     damping, clipval, stop_criterion, gpus, cache_drive, amplification, ...
@@ -1141,15 +1161,54 @@ function message = save_image_2d(im, path, s, rawmax, save_time)
 end
 
 function check_block_coverage_planes(stack_info, block)
-    disp('checking for potential issues ...');
+    disp('Checking block coverage for errors ...');
 
     p1 = block.p1;
     p2 = block.p2;
     errors = {};
 
-    % 1. XY at z=1 and z=end
+    % 1. Block boundary checks
+    for k = 1:size(p1,1)
+        if any(p1(k,:) < 1) || any(p2(k,:) > [stack_info.x, stack_info.y, stack_info.z])
+            errors{end+1} = sprintf('Block %d out of bounds: p1=%s, p2=%s', ...
+                k, mat2str(p1(k,:)), mat2str(p2(k,:)));
+        end
+        if any(p1(k,:) > p2(k,:))
+            errors{end+1} = sprintf('Block %d has p1 > p2: p1=%s, p2=%s', ...
+                k, mat2str(p1(k,:)), mat2str(p2(k,:)));
+        end
+    end
+
+    % 2. Z-plane coverage
+    z_cover = zeros(1, stack_info.z);
+    for k = 1:size(p1,1)
+        z_range = p1(k,3):p2(k,3);
+        z_cover(z_range) = z_cover(z_range) + 1;
+    end
+
+    missing_z = find(z_cover == 0);
+    excess_z = find(z_cover > 1);
+    if ~isempty(missing_z)
+        errors{end+1} = sprintf('Missing Z planes: %s', mat2str(missing_z));
+    end
+    if ~isempty(excess_z)
+        errors{end+1} = sprintf('Overlapping Z planes: %s', mat2str(excess_z));
+    end
+    if numel(find(z_cover > 0)) ~= stack_info.z
+        errors{end+1} = sprintf('Unique covered Z planes = %d, expected %d', ...
+            numel(find(z_cover > 0)), stack_info.z);
+    end
+    if max(p2(:,3)) > stack_info.z
+        errors{end+1} = sprintf('Blocks extend past last Z-plane! Max p2(:,3)=%d, stack_info.z=%d', ...
+            max(p2(:,3)), stack_info.z);
+    end
+    if min(p1(:,3)) < 1
+        errors{end+1} = sprintf('Blocks start before Z=1! Min p1(:,3)=%d', min(p1(:,3)));
+    end
+
+    % 3. Optional: XY at z=1 and z=end
     for z = [1, stack_info.z]
-        covered = false(stack_info.x, stack_info.y);
+        covered = zeros(stack_info.x, stack_info.y);
         for k = 1:size(p1,1)
             if p1(k,3) <= z && p2(k,3) >= z
                 xs = p1(k,1):p2(k,1);
@@ -1160,13 +1219,13 @@ function check_block_coverage_planes(stack_info, block)
         overlaps = sum(covered(:) > 1);
         gaps = sum(covered(:) == 0);
         if overlaps > 0 || gaps > 0
-            errors{end+1} = sprintf('XY plane at z=%d: %d gaps, %d overlaps', z, gaps, overlaps);
+            errors{end+1} = sprintf('XY at z=%d: %d gaps, %d overlaps', z, gaps, overlaps);
         end
     end
 
-    % 2. XZ at y=1 and y=end
+    % 4. Optional: XZ at y=1 and y=end
     for y = [1, stack_info.y]
-        covered = false(stack_info.x, stack_info.z);
+        covered = zeros(stack_info.x, stack_info.z);
         for k = 1:size(p1,1)
             if p1(k,2) <= y && p2(k,2) >= y
                 xs = p1(k,1):p2(k,1);
@@ -1177,13 +1236,13 @@ function check_block_coverage_planes(stack_info, block)
         overlaps = sum(covered(:) > 1);
         gaps = sum(covered(:) == 0);
         if overlaps > 0 || gaps > 0
-            errors{end+1} = sprintf('XZ plane at y=%d: %d gaps, %d overlaps', y, gaps, overlaps);
+            errors{end+1} = sprintf('XZ at y=%d: %d gaps, %d overlaps', y, gaps, overlaps);
         end
     end
 
-    % 3. YZ at x=1 and x=end
+    % 5. Optional: YZ at x=1 and x=end
     for x = [1, stack_info.x]
-        covered = false(stack_info.y, stack_info.z);
+        covered = zeros(stack_info.y, stack_info.z);
         for k = 1:size(p1,1)
             if p1(k,1) <= x && p2(k,1) >= x
                 ys = p1(k,2):p2(k,2);
@@ -1194,38 +1253,16 @@ function check_block_coverage_planes(stack_info, block)
         overlaps = sum(covered(:) > 1);
         gaps = sum(covered(:) == 0);
         if overlaps > 0 || gaps > 0
-            errors{end+1} = sprintf('YZ plane at x=%d: %d gaps, %d overlaps', x, gaps, overlaps);
+            errors{end+1} = sprintf('YZ at x=%d: %d gaps, %d overlaps', x, gaps, overlaps);
         end
     end
 
-    % 4. Z stack coverage check
-    covered_z = false(1, stack_info.z);
-    for k = 1:size(p1,1)
-        zs = p1(k,3):p2(k,3);
-        covered_z(zs) = true;
-    end
-    missing_z = find(~covered_z);
-    if ~isempty(missing_z)
-        errors{end+1} = sprintf('Missing Z planes in output: %s', mat2str(missing_z));
-    end
-
-    if numel(find(covered_z)) > stack_info.z
-        errors{end+1} = sprintf('Too many Z planes in output: %d (should be %d)', numel(find(covered_z)), stack_info.z);
-    end
-
-    actual_z_max = max(p2(:,3));
-    actual_z_min = min(p1(:,3));
-    if actual_z_min ~= 1
-        errors{end+1} = sprintf('Output Z planes start at %d, expected 1', actual_z_min);
-    end
-    if actual_z_max ~= stack_info.z
-        errors{end+1} = sprintf('Total output Z planes = %d, expected %d', actual_z_max, stack_info.z);
-    end
-
-    % Final error report
+    % Final report
     if ~isempty(errors)
         err_msg = sprintf('Block coverage error(s) detected:\n%s', strjoin(errors, '\n'));
         error(err_msg);
+    else
+        disp('Block coverage: PASSED');
     end
 end
 
