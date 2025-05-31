@@ -530,8 +530,8 @@ function deconvolve(filelist, psf, numit, damping, ...
 
     for blnr = starting_block : num_blocks
         % skip blocks already worked on
-        block_path = fullfile(cache_drive, ['bl_' num2str(blnr) '.mat']);
-        block_path_tmp = fullfile(cache_drive, ['bl_' num2str(blnr) '.mat.tmp']);
+        block_path = fullfile(cache_drive, ['bl_' num2str(blnr) '.lz4']);
+        block_path_tmp = fullfile(cache_drive, ['bl_' num2str(blnr) '.lz4.tmp']);
         semaphore('wait', semkey_single);
         if num_blocks > 1 && (exist(block_path, "file") || exist(block_path_tmp, "file"))
             semaphore('post', semkey_single);
@@ -639,7 +639,8 @@ function deconvolve(filelist, psf, numit, damping, ...
         could_not_save = true;
         while could_not_save
             try
-                save(block_path_tmp, 'bl', '-v7.3');  % , '-nocompression'
+                %save(block_path_tmp, 'bl', '-v7.3');  % , '-nocompression'
+                save_lz4_mex(block_path_tmp, bl);
                 movefile(block_path_tmp, block_path, 'f');
                 send(dQueue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' saved in ' num2str(round(toc(save_start), 1))]);
                 could_not_save = false;
@@ -713,7 +714,7 @@ function postprocess_save(...
     blocklist = cell(size(block.p1, 1), 1);
     missing_blocks = [];
     for i = 1 : size(block.p1, 1)
-        blocklist{i} = fullfile(cache_drive, ['bl_' num2str(i) '.mat']);
+        blocklist{i} = fullfile(cache_drive, ['bl_' num2str(i) '.lz4']);
         if ~exist(blocklist{i}, 'file')
             missing_blocks(end+1) = i; %#ok<AGROW>
         end
@@ -915,7 +916,7 @@ function postprocess_save(...
         parfor k = 1 : size(R, 3)
             save_time = tic;
             % file path
-            s = num2str(imagenr + k - 1);
+            s = num2str(slab_z1 + k - 1);
             while length(s) < 6
                 s = strcat('0', s);
             end
@@ -944,12 +945,19 @@ end
 function bl = load_bl(path, semkey)
     semaphore('wait', semkey);
     cleanup = onCleanup(@() semaphore('post', semkey));
-    try
-        bl = importdata(path);
-    catch
-        % Use warning or simple log
+    max_tries = 3; tries = 0; loaded = false;
+    while ~loaded && tries < max_tries
+        tries = tries + 1;
+        try
+            bl = load_lz4_mex(path);
+            loaded = true;
+        catch
+            pause(1);
+        end
+    end
+    if ~loaded
         delete(path);
-        error('Deleting corrupted file: %s\n', path);
+        error('Deleting corrupted file: %s after %d tries\n', path, max_tries);
     end
 end
 
@@ -1222,61 +1230,56 @@ function check_block_coverage_planes(stack_info, block)
 end
 
 function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
-    % Load a padded 3D block from a stack of 2D image slices.
-    % Assumes filelist is a cell array of file paths, one per z-plane.
+    % Load a padded 3D block from the stack, using only available planes,
+    % and pad symmetrically to the target block size
 
-    % ---- Vectorized setup ----
-    starts = [x1, y1, z1];
-    ends   = [x2, y2, z2];
-    pads   = [block.x_pad, block.y_pad, block.z_pad];
-    vol_sz = [stack_info.x, stack_info.y, stack_info.z];
+    block_start = [x1, y1, z1];
+    block_end   = [x2, y2, z2];
+    block_pad   = [block.x_pad, block.y_pad, block.z_pad];
+    volume_size = [stack_info.x, stack_info.y, stack_info.z];
 
-    % Full requested block (possibly out-of-bounds)
-    q1 = starts - pads;         % block window start for x/y/z
-    q2 = ends   + pads;         % block window end   for x/y/z
+    % Request region (may go out of bounds at the edges)
+    requested_start = block_start - block_pad;
+    requested_end   = block_end   + block_pad;
 
-    % Actual in-bounds region to load from disk
-    src1 = max(1, q1);
-    src2 = min(vol_sz, q2);
+    % In-bounds region (what we can actually read)
+    read_start = max(1, requested_start);
+    read_end   = min(volume_size, requested_end);
 
-    % Padding needed (pre and post for each axis)
-    pad_pre  = src1 - q1;
-    pad_post = q2 - src2;
+    % Indices to load for each axis
+    x_indices = read_start(1):read_end(1);
+    y_indices = read_start(2):read_end(2);
+    z_indices = read_start(3):read_end(3);
 
-    % Indices for each axis (in-bounds)
-    x_src = src1(1):src2(1);
-    y_src = src1(2):src2(2);
-    z_src = src1(3):src2(3);
+    % Only allocate space for what we read from disk
+    bl = zeros(numel(x_indices), numel(y_indices), numel(z_indices), 'single');
 
-    % Preallocate buffer for real data
-    nx = numel(x_src);
-    ny = numel(y_src);
-    nz = numel(z_src);
-    bl_real = zeros(nx, ny, nz, 'single');
-
-    % Load 2D slices from disk
-    for k = 1:nz
-        img_k = z_src(k);
-        try
-            slice = imread(filelist{img_k}, 'PixelRegion', ...
-                {[y_src(1), y_src(end)], [x_src(1), x_src(end)]});
-        catch ME
-            error('[load_block] Error reading slice %d: %s', img_k, ME.message);
-        end
-        bl_real(:, :, k) = im2single(slice)';
+    % Read the valid slices
+    for k = 1:numel(z_indices)
+        slice_idx = z_indices(k);
+        slice = imread(filelist{slice_idx}, ...
+            'PixelRegion', {[y_indices(1), y_indices(end)], [x_indices(1), x_indices(end)]});
+        bl(:, :, k) = im2single(slice)';
     end
 
-    % Target (padded) block size
-    core_sz   = ends - starts + 1;
-    target_sz = core_sz + 2 * pads;
+    % How much to pad before and after in each axis
+    pad_before = read_start - requested_start;
+    pad_after  = requested_end - read_end;
 
-    % Apply symmetric padding only where needed
-    bl = bl_real;
-    if any(pad_pre  > 0),  bl = padarray(bl, pad_pre,  'symmetric', 'pre');  end
-    if any(pad_post > 0),  bl = padarray(bl, pad_post, 'symmetric', 'post'); end
+    % Final block size after all padding
+    block_core_size = block_end - block_start + 1;
+    block_target_size = block_core_size + 2 * block_pad;
 
-    % Final safety check
-    assert(isequal(size(bl), target_sz), ...
+    % Pad as needed to reach the requested size
+    if any(pad_before > 0)
+        bl = padarray(bl, pad_before, 'symmetric', 'pre');
+    end
+    if any(pad_after > 0)
+        bl = padarray(bl, pad_after, 'symmetric', 'post');
+    end
+
+    % Final check
+    assert(isequal(size(bl), block_target_size), ...
         sprintf('[load_block] Output size mismatch! Got [%s], expected [%s]', ...
-        num2str(size(bl)), num2str(target_sz)));
+        num2str(size(bl)), num2str(block_target_size)));
 end
