@@ -298,6 +298,7 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(stack
 
     best_score = -Inf;
     best = struct();
+    num_failed = 0;
 
     % Use coarse step for initial sweep (square xy blocks)
     for z = max_block(3):-1:min_block(3)
@@ -326,6 +327,13 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(stack
             if score > best_score
                 best_score = score;
                 best = struct('bl_core', bl_core, 'd_pad', d_pad, 'fft_shape', bl_shape);
+            else
+                if ~isempty(fieldnames(best))
+                    num_failed = num_failed + 1;
+                    if num_failed > 100, break; end
+                else
+                    num_failed = 0;
+                end
             end
         end
     end
