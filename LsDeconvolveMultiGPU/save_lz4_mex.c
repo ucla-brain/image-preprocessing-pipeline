@@ -47,13 +47,17 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
     char fname[1024];
     mxGetString(prhs[0], fname, sizeof(fname));
 
+    mexPrintf("Trying to open: %s\n", fname);
     unlink(fname);
     FILE* f = fopen(fname, "wb");
     if (!f) {
-        mexPrintf("Failed to open file: %s\n", fname);
-        mexPrintf("errno: %d\n", errno);
-        perror("fopen");
-        mexErrMsgTxt("Failed to open file for writing (even after trying to remove it).");
+        mexPrintf("fopen failed: errno = %d (%s)\n", errno, strerror(errno));
+        // Optionally check with access()
+        if (access(fname, F_OK) == 0) {
+            mexPrintf("File exists\n");
+        } else {
+            mexPrintf("File does not exist\n");
+        }
     }
 
     const mxArray* arr = prhs[1];
