@@ -461,7 +461,7 @@ function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
     queue('create', gpu_queue_key, unique_gpus);
     for gpu = unique_gpus
         % semaphore_create(gpu, 1);
-        semaphore_create(gpu + semkey_loading_base, 3);
+        semaphore_create(gpu + semkey_loading_base, 6);
     end
 
     % start deconvolution
