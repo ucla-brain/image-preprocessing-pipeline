@@ -327,12 +327,11 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(stack
             if score > best_score
                 best_score = score;
                 best = struct('bl_core', bl_core, 'd_pad', d_pad, 'fft_shape', bl_shape);
+                num_failed = 0;
             else
                 if ~isempty(fieldnames(best))
                     num_failed = num_failed + 1;
                     if num_failed > 100, break; end
-                else
-                    num_failed = 0;
                 end
             end
         end
