@@ -657,8 +657,8 @@ function deconvolve(filelist, psf, numit, damping, ...
         could_not_save = true;
         while could_not_save
             try
-                %save(block_path_tmp, 'bl', '-v7.3');  % , '-nocompression'
-                save_lz4_mex(block_path_tmp, bl);
+                save(block_path_tmp, 'bl', '-v7.3');  % , '-nocompression'
+                %save_lz4_mex(block_path_tmp, bl);
                 movefile(block_path_tmp, block_path, 'f');
                 send(dQueue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' saved in ' num2str(round(toc(save_start), 1))]);
                 could_not_save = false;
