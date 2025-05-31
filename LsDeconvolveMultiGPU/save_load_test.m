@@ -1,6 +1,7 @@
 % ===============================
-% save_load_test.m (with cache location prompt, integrity backmasking, and MEX worker compatibility checks)
+% save_load_test.m (with diagnostics for save_lz4_mex write/flush issues)
 % ===============================
+
 disp('Running save/load LZ4 test and benchmark with integrity and worker MEX checks ...');
 
 % --- Check for save_lz4_mex and load_lz4_mex visibility ---
@@ -52,50 +53,6 @@ for w = 1:pool.NumWorkers
     if ~mex_test_ok{w}
         warning('MEX test failed on worker %d:\n%s', w, mex_test_msg{w});
         fprintf('Worker %d current folder: %s\n', w, cwd_on_workers{w});
-        % Optionally, print part of path_on_workers{w} here if debugging further.
-        any_fail = true;
-        fail_idx(end+1) = w;
-    else
-        fprintf('Worker %d passed MEX functionality test.\n', w);
-    end
-end
-
-if any_fail
-    error('Error detected on workers %s. See above for diagnostics.', num2str(fail_idx));
-end
-
-% --- Test trivial call to MEX on each worker ---
-disp('Testing save_lz4_mex and load_lz4_mex on all workers...');
-mex_test_ok = true(pool.NumWorkers, 1);
-mex_test_msg = cell(pool.NumWorkers, 1);
-cwd_on_workers = cell(pool.NumWorkers, 1);
-path_on_workers = cell(pool.NumWorkers, 1);
-
-spmd
-    try
-        testfile = ['test_mex_worker_' num2str(labindex) '.lz4'];
-        A = magic(8) * labindex;
-        save_lz4_mex(testfile, A);
-        B = load_lz4_mex(testfile);
-        assert(isequal(A,B), 'Data mismatch');
-        if exist(testfile, 'file'), delete(testfile); end
-        mex_test_ok = true;
-        mex_test_msg = 'OK';
-    catch ME
-        mex_test_ok = false;
-        mex_test_msg = getReport(ME);
-    end
-    cwd_on_workers{labindex} = pwd;
-    path_on_workers{labindex} = path;
-end
-
-any_fail = false;
-fail_idx = [];
-for w = 1:pool.NumWorkers
-    if ~mex_test_ok{w}
-        warning('MEX test failed on worker %d:\n%s', w, mex_test_msg{w});
-        fprintf('Worker %d current folder: %s\n', w, cwd_on_workers{w});
-        % You can print path_on_workers{w} for more debugging if desired
         any_fail = true;
         fail_idx(end+1) = w;
     else
@@ -155,8 +112,30 @@ for k = 1:numel(filetypes)
     tic;
     save_lz4_mex(fname, arr);
     t_save_lz4 = toc;
-    tic;
-    arr2 = load_lz4_mex(fname);
+
+    % --- DIAGNOSTIC FILE CHECK ---
+    % 1. Check file exists
+    if ~isfile(fname)
+        error('File not found after save_lz4_mex: %s', fname);
+    end
+    % 2. Check file is nonzero size
+    finfo = dir(fname);
+    if finfo.bytes == 0
+        error('File is zero bytes after save_lz4_mex: %s', fname);
+    end
+    % 3. Try to open for read
+    [fid, errmsg] = fopen(fname, 'rb');
+    if fid < 0
+        error('Cannot open saved file for reading: %s. Error: %s', fname, errmsg);
+    end
+    fclose(fid);
+    % 4. Try to load immediately
+    try
+        arr2 = load_lz4_mex(fname);
+    catch ME
+        error('load_lz4_mex failed immediately after save_lz4_mex for %s: %s', fname, ME.message);
+    end
+
     t_load_lz4 = toc;
 
     eq_type = isa(arr2, t);
@@ -175,7 +154,6 @@ for k = 1:numel(filetypes)
     if ~eq_content_backmask
         warning('%s LZ4 backmasking mismatch (original vs. save->load->save->load)', t);
     end
-    % Clean up extra file
     if isfile(fname2), delete(fname2); end
 
     % ========== MATLAB save/load ==========
@@ -260,8 +238,26 @@ for k = 1:numel(big_types)
     tic;
     save_lz4_mex(fname, arr);
     t_save_lz4 = toc;
-    tic;
-    arr2 = load_lz4_mex(fname);
+
+    % --- DIAGNOSTIC FILE CHECK ---
+    if ~isfile(fname)
+        error('File not found after save_lz4_mex: %s', fname);
+    end
+    finfo = dir(fname);
+    if finfo.bytes == 0
+        error('File is zero bytes after save_lz4_mex: %s', fname);
+    end
+    [fid, errmsg] = fopen(fname, 'rb');
+    if fid < 0
+        error('Cannot open saved file for reading: %s. Error: %s', fname, errmsg);
+    end
+    fclose(fid);
+    try
+        arr2 = load_lz4_mex(fname);
+    catch ME
+        error('load_lz4_mex failed immediately after save_lz4_mex for %s: %s', fname, ME.message);
+    end
+
     t_load_lz4 = toc;
 
     eq_type = isa(arr2, t);
