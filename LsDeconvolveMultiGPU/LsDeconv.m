@@ -663,7 +663,7 @@ function deconvolve(filelist, psf, numit, damping, ...
                 if isstruct(bl) && isfield(bl, 'bl')
                     bl = bl.bl;
                 end
-                save_lz4_mex(block_path_tmp, bl);
+                save_lz4_mex(str2char_robust(block_path_tmp), bl);
                 movefile(block_path_tmp, block_path, 'f');
                 send(dQueue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' saved in ' num2str(round(toc(save_start), 1))]);
                 could_not_save = false;
@@ -973,7 +973,7 @@ function bl = load_bl(path, semkey)
     while ~loaded && tries < max_tries
         tries = tries + 1;
         try
-            bl = load_lz4_mex(path);
+            bl = load_lz4_mex(str2char_robust(path));
             loaded = true;
         catch
             pause(1);
@@ -1371,4 +1371,19 @@ function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
     assert(isequal(size(bl), block_target_size), ...
         sprintf('[load_block] Output size mismatch! Got [%s], expected [%s]', ...
         num2str(size(bl)), num2str(block_target_size)));
+end
+
+function c = str2char_robust(s)
+    % Convert string or char to char row vector
+    if ischar(s)
+        c = s;  % Already char
+    elseif isstring(s)
+        if isscalar(s)
+            c = char(s);  % Convert string scalar to char row
+        else
+            error('Input is a string array, expected a string scalar.');
+        end
+    else
+        error('Input must be a char vector or string scalar.');
+    end
 end
