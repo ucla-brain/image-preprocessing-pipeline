@@ -1279,7 +1279,7 @@ function check_block_coverage_planes(stack_info, block)
     for i = 1:size(actual_sizes, 1)
         too_small = actual_sizes(i,:) < 0.5 * nominal_block_size;
         if any(too_small)
-            small_axes = join(cellstr('XYZ'(find(too_small))), '');
+            small_axes = 'XYZ'(too_small);
             if isempty(small_axes)
                 small_axes = '-';
             end
