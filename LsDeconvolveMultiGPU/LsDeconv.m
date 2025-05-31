@@ -1284,6 +1284,7 @@ function check_block_coverage_planes(stack_info, block)
     % Warn if any block is much smaller than nominal
     nominal_block_size = [block.x, block.y, block.z];
     actual_sizes = block.p2 - block.p1 + 1;
+    axis_labels = 'XYZ';
     for i = 1:size(actual_sizes, 1)
         too_small = actual_sizes(i,:) < 0.5 * nominal_block_size;
         if any(too_small)
@@ -1291,7 +1292,7 @@ function check_block_coverage_planes(stack_info, block)
             axstr = '';
             for dim = 1:3
                 if too_small(dim)
-                    axstr = [axstr, 'XYZ'(dim)];
+                    axstr = [axstr, axis_labels(dim)];
                 end
             end
             if isempty(axstr)
