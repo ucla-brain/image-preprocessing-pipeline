@@ -32,7 +32,8 @@ typedef struct {
 } file_header_t;
 
 void write_header(FILE* f, file_header_t* hdr) {
-    fwrite(hdr, 1, HEADER_SIZE, f);
+    size_t n = fwrite(hdr, 1, HEADER_SIZE, f);
+    if (n != (size_t)HEADER_SIZE) mexErrMsgIdAndTxt("save_lz4_mex:WriteFailed", "Failed to write data to file");
 }
 
 void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
@@ -117,7 +118,9 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
     }
 
     // --- Write real header with actual chunk sizes ---
+    fflush(f);
     fseek(f, 0, SEEK_SET);
     write_header(f, &hdr);
-    fclose(f);
+    fflush(f);
+    if (fclose(f) != 0) mexErrMsgIdAndTxt("save_lz4_mex:FileCloseFailed", "Could not close file (write error?)");
 }
