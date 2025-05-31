@@ -469,8 +469,8 @@ function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
     while remaining_blocks > 0
         for i = starting_block : num_blocks
             % skip blocks already worked on
-            block_path = fullfile(cache_drive, ['bl_' num2str(i) '.mat']);
-            block_path_tmp = fullfile(cache_drive, ['bl_' num2str(i) '.mat.tmp']);
+            block_path = fullfile(cache_drive, ['bl_' num2str(i) '.lz4']);
+            block_path_tmp = fullfile(cache_drive, ['bl_' num2str(i) '.lz4.tmp']);
             if exist(block_path, "file")
                 if dir(block_path).bytes > 0
                     remaining_blocks = remaining_blocks - 1;
