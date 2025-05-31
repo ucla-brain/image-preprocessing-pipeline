@@ -1281,27 +1281,27 @@ function check_block_coverage_planes(stack_info, block)
         errors{end+1} = sprintf('Found %d pairs of blocks with true interior overlap.', size(true_overlaps, 1));
     end
 
-    % Warn if any block is much smaller than nominal
-    nominal_block_size = [block.x, block.y, block.z];
-    actual_sizes = block.p2 - block.p1 + 1;
-    axis_labels = 'XYZ';
-    for i = 1:size(actual_sizes, 1)
-        too_small = actual_sizes(i,:) < 0.5 * nominal_block_size;
-        if any(too_small)
-            % MATLAB R2019b+: strjoin(string)
-            axstr = '';
-            for dim = 1:3
-                if too_small(dim)
-                    axstr = [axstr, axis_labels(dim)];
-                end
-            end
-            if isempty(axstr)
-                axstr = '-';
-            end
-            fprintf('Warning: Block %d is small in axis %s. Size: [%s], Expected: [%s]\n', ...
-                i, axstr, num2str(actual_sizes(i,:)), num2str(nominal_block_size));
-        end
-    end
+    % 7. Warn if any block is much smaller than nominal
+    % nominal_block_size = [block.x, block.y, block.z];
+    % actual_sizes = block.p2 - block.p1 + 1;
+    % axis_labels = 'XYZ';
+    % for i = 1:size(actual_sizes, 1)
+    %     too_small = actual_sizes(i,:) < 0.5 * nominal_block_size;
+    %     if any(too_small)
+    %         % MATLAB R2019b+: strjoin(string)
+    %         axstr = '';
+    %         for dim = 1:3
+    %             if too_small(dim)
+    %                 axstr = [axstr, axis_labels(dim)];
+    %             end
+    %         end
+    %         if isempty(axstr)
+    %             axstr = '-';
+    %         end
+    %         fprintf('Warning: Block %d is small in axis %s. Size: [%s], Expected: [%s]\n', ...
+    %             i, axstr, num2str(actual_sizes(i,:)), num2str(nominal_block_size));
+    %     end
+    % end
 
     % Final report
     if ~isempty(errors)
