@@ -55,14 +55,13 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
         if (mxGetString(file_arg, fname, sizeof(fname)) != 0) {
             mexErrMsgIdAndTxt("save_lz4_mex:FilenameTooLong", "Filename is too long or could not be read.");
         }
-    } else if (mxIsString(file_arg)) {
-        char* tempstr = mxArrayToString(file_arg);
-        if (tempstr && strlen(tempstr) < sizeof(fname)) {
-            strncpy(fname, tempstr, sizeof(fname)-1);
-            fname[sizeof(fname)-1] = '\0';
-            mxFree(tempstr);
+    } else if (mxIsClass(file_arg, "string")) {
+        mxArray* str_mx = mxGetProperty(file_arg, 0, "Data"); // Get underlying char data
+        if (str_mx && mxIsChar(str_mx)) {
+            if (mxGetString(str_mx, fname, sizeof(fname)) != 0) {
+                mexErrMsgIdAndTxt("save_lz4_mex:BadString", "Could not extract filename from string.");
+            }
         } else {
-            if (tempstr) mxFree(tempstr);
             mexErrMsgIdAndTxt("save_lz4_mex:BadString", "Could not extract filename from string.");
         }
     } else {
