@@ -51,13 +51,9 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
     unlink(fname);
     FILE* f = fopen(fname, "wb");
     if (!f) {
-        mexPrintf("fopen failed: errno = %d (%s)\n", errno, strerror(errno));
-        // Optionally check with access()
-        if (access(fname, F_OK) == 0) {
-            mexPrintf("File exists\n");
-        } else {
-            mexPrintf("File does not exist\n");
-        }
+        mexErrMsgIdAndTxt("save_lz4_mex:OpenFailed",
+        "Failed to open file for writing: %s (errno %d: %s)",
+        fname, errno, strerror(errno));
     }
 
     const mxArray* arr = prhs[1];
