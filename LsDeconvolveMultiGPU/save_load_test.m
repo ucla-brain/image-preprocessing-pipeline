@@ -21,30 +21,47 @@ if isempty(pool)
     pool = parpool('local');
 end
 
-% --- Check MEX file visibility and current folder on each worker ---
-fprintf('\nChecking workers for save_lz4_mex and load_lz4_mex...\n');
-mex_on_workers = cell(pool.NumWorkers, numel(mexfiles));
+% --- Check MEX file functionality and worker context ---
+fprintf('\nTesting save_lz4_mex and load_lz4_mex on all workers...\n');
+mex_test_ok = true(pool.NumWorkers, 1);
+mex_test_msg = cell(pool.NumWorkers, 1);
 cwd_on_workers = cell(pool.NumWorkers, 1);
 path_on_workers = cell(pool.NumWorkers, 1);
 
 spmd
-    for m = 1:numel(mexfiles)
-        mex_on_workers{labindex, m} = which(mexfiles{m});
+    try
+        testfile = ['test_mex_worker_' num2str(labindex) '.lz4'];
+        A = magic(8) * labindex;
+        save_lz4_mex(testfile, A);
+        B = load_lz4_mex(testfile);
+        assert(isequal(A,B), 'Data mismatch');
+        if exist(testfile, 'file'), delete(testfile); end
+        mex_test_ok = true;
+        mex_test_msg = 'OK';
+    catch ME
+        mex_test_ok = false;
+        mex_test_msg = getReport(ME);
     end
     cwd_on_workers{labindex} = pwd;
     path_on_workers{labindex} = path;
 end
 
+any_fail = false;
+fail_idx = [];
 for w = 1:pool.NumWorkers
-    for m = 1:numel(mexfiles)
-        if isempty(mex_on_workers{w, m})
-            warning('Worker %d does NOT see "%s" on its path.', w, mexfiles{m});
-        else
-            fprintf('Worker %d sees "%s" at: %s\n', w, mexfiles{m}, mex_on_workers{w, m});
-        end
+    if ~mex_test_ok{w}
+        warning('MEX test failed on worker %d:\n%s', w, mex_test_msg{w});
+        fprintf('Worker %d current folder: %s\n', w, cwd_on_workers{w});
+        % Optionally, print part of path_on_workers{w} here if debugging further.
+        any_fail = true;
+        fail_idx(end+1) = w;
+    else
+        fprintf('Worker %d passed MEX functionality test.\n', w);
     end
-    fprintf('Worker %d PWD: %s\n', w, cwd_on_workers{w});
-    % You may want to print or analyze path_on_workers{w} for debugging.
+end
+
+if any_fail
+    error('Error detected on workers %s. See above for diagnostics.', num2str(fail_idx));
 end
 
 % --- Test trivial call to MEX on each worker ---
