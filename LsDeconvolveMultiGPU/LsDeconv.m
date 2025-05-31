@@ -657,13 +657,17 @@ function deconvolve(filelist, psf, numit, damping, ...
         could_not_save = true;
         while could_not_save
             try
-                save(block_path_tmp, 'bl', '-v7.3');  % , '-nocompression'
-                %save_lz4_mex(block_path_tmp, bl);
+                % save(block_path_tmp, 'bl', '-v7.3');  % , '-nocompression'
+                if isstruct(bl) && isfield(bl, 'bl')
+                    bl = bl.bl;
+                end
+                save_lz4_mex(block_path_tmp, bl);
                 movefile(block_path_tmp, block_path, 'f');
                 send(dQueue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' saved in ' num2str(round(toc(save_start), 1))]);
                 could_not_save = false;
-            catch
-                send(dQueue, sprintf('could not save %s ! Retrying ...', block_path));
+            catch ME
+                send(dQueue, sprintf('could not save %s! Retrying ... %s: %s', ...
+                    block_path, ME.identifier, ME.message));
                 pause(1);
             end
         end
