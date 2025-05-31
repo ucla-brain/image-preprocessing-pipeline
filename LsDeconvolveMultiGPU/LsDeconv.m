@@ -1258,11 +1258,13 @@ function check_block_coverage_planes(stack_info, block)
     % === Add warning about small blocks at the end ===
     nominal_block_size = [block.x, block.y, block.z];
     actual_sizes = block.p2 - block.p1 + 1;
+    axes_labels = 'XYZ'; % Define variable
     for i = 1:size(actual_sizes, 1)
         too_small = actual_sizes(i,:) < 0.5 * nominal_block_size;
         if any(too_small)
+            small_axes = axes_labels(too_small);
             fprintf('Warning: Block %d is small in axis %s. Size: [%s], Expected: [%s]\n', ...
-                i, char('XYZ'(too_small)), num2str(actual_sizes(i,:)), num2str(nominal_block_size));
+                i, small_axes, num2str(actual_sizes(i,:)), num2str(nominal_block_size));
         end
     end
 
