@@ -49,23 +49,14 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
 
     // === Robustly extract filename from char or string ===
     char fname[4096] = {0};
-    const mxArray* file_arg = prhs[0];
-
-    if (mxIsChar(file_arg)) {
-        if (mxGetString(file_arg, fname, sizeof(fname)) != 0) {
-            mexErrMsgIdAndTxt("save_lz4_mex:FilenameTooLong", "Filename is too long or could not be read.");
-        }
-    } else if (mxIsClass(file_arg, "string")) {
-        mxArray* str_mx = mxGetProperty(file_arg, 0, "Data"); // Get underlying char data
-        if (str_mx && mxIsChar(str_mx)) {
-            if (mxGetString(str_mx, fname, sizeof(fname)) != 0) {
-                mexErrMsgIdAndTxt("save_lz4_mex:BadString", "Could not extract filename from string.");
-            }
-        } else {
-            mexErrMsgIdAndTxt("save_lz4_mex:BadString", "Could not extract filename from string.");
-        }
+    char* tempstr = mxArrayToString(prhs[0]);
+    if (tempstr && strlen(tempstr) < sizeof(fname)) {
+        strncpy(fname, tempstr, sizeof(fname)-1);
+        fname[sizeof(fname)-1] = '\0';
+        mxFree(tempstr);
     } else {
-        mexErrMsgIdAndTxt("save_lz4_mex:BadType", "Filename must be a char array or string scalar.");
+        if (tempstr) mxFree(tempstr);
+        mexErrMsgIdAndTxt("save_lz4_mex:BadString", "Could not extract filename. Make sure to pass a char array (e.g., 'file.lz4') or a scalar string (e.g., \"file.lz4\")");
     }
 
     if (strlen(fname) == 0) {
