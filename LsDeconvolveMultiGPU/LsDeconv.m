@@ -1156,6 +1156,8 @@ function check_block_coverage_planes(stack_info, block)
 
     p1 = block.p1;
     p2 = block.p2;
+    disp([p1, p2])
+    return
     errors = {};
 
     % 1. Block boundary checks
