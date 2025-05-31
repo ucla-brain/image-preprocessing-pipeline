@@ -277,11 +277,12 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(stack
     % Parameters for RAM and block sizing
     ram_usage_portion = 0.5;               % Use at most 50% of available RAM
     bytes_per_voxel = 4;                   % Use 4 for single, 8 for double (adjust as needed)
+    num_copies = 2;                        % loading blocks (load_bl workiers) + stitched block (z-slab)
     max_elements_per_dim = 1290;           % 3D cube limit from 2^31-1 elements
     max_elements_total  = 2^31 - 1;        % MATLAB's total element limit
 
     % Compute the max z size that fits in RAM (capped at 1290 and stack_info.z)
-    z_max_ram = floor(ram_available * ram_usage_portion / (bytes_per_voxel * stack_info.x * stack_info.y));
+    z_max_ram = floor(ram_available * ram_usage_portion / (bytes_per_voxel * num_copies * stack_info.x * stack_info.y));
     z_max = min(z_max_ram, stack_info.z);
 
     % Set min and max block sizes, capping to allowed per-dimension limit
