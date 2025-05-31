@@ -85,6 +85,7 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
         int comp_size = (int)this_comp;
 
         char* cbuf = (char*)mxMalloc(comp_size);
+        if (!cbuf) { fclose(f); mexErrMsgTxt("Out of memory."); }
         size_t nread = fread(cbuf, 1, comp_size, f);
         if (nread != (size_t)comp_size) {
             fclose(f); mxFree(cbuf);

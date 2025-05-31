@@ -107,6 +107,7 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
         int max_dst = LZ4_compressBound(uncomp_size);
 
         char* cbuf = (char*)mxMalloc(max_dst);
+        if (!cbuf) { fclose(f); mexErrMsgTxt("Out of memory."); }
 
         int comp_bytes = LZ4_compress_default(src + offset, cbuf, uncomp_size, max_dst);
         if (comp_bytes <= 0) {
