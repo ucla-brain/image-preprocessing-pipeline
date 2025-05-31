@@ -379,38 +379,31 @@ function n_vec = next_fast_len(n_vec)
 end
 
 %provides coordinates of sub-blocks after splitting
-function [block_start_indices, block_end_indices] = split(stack_info, block)
-    % Determine sizes and number of blocks in each dimension
-    block_size_per_axis = [block.x, block.y, block.z];
-    stack_size_per_axis = [stack_info.x, stack_info.y, stack_info.z];
-    num_blocks_per_axis = [block.nx, block.ny, block.nz];
+function [p1, p2] = split(stack_info, block)
+    % bounding box coordinate points
+    p1 = zeros(block.nx * block.ny * block.nz, 3);
+    p2 = zeros(block.nx * block.ny * block.nz, 3);
 
-    % Compute block starting indices for each axis
-    % Ensure that the last block covers the end of the stack, clamp at minimum
-    block_starts = arrayfun(@(num_blocks, block_size, stack_size) ...
-        min([1 + (0:num_blocks-1)*block_size; repmat(stack_size-block_size+1, 1, num_blocks)], [], 1), ...
-        num_blocks_per_axis, block_size_per_axis, stack_size_per_axis, 'UniformOutput', false);
+    blnr = 0;
+    for nz = 0 : block.nz-1
+        zs = nz * block.z + 1;
+        for ny = 0 : block.ny-1
+            ys = ny * block.y + 1;
+            for nx = 0 : block.nx-1
+                xs = nx * block.x + 1;
 
-    % Compute block ending indices for each axis
-    block_ends = cellfun(@(starts, block_size, stack_size) ...
-        min(starts + block_size - 1, stack_size), ...
-        block_starts, num2cell(block_size_per_axis), num2cell(stack_size_per_axis), ...
-        'UniformOutput', false);
+                blnr = blnr + 1;
+                p1(blnr, 1) = xs;
+                p2(blnr, 1) = min([xs + block.x - 1, stack_info.x]);
 
-    % Create 3D grid of start/end coordinates for all blocks
-    [X_start, Y_start, Z_start] = ndgrid(block_starts{1}, block_starts{2}, block_starts{3});
-    [X_end,   Y_end,   Z_end  ] = ndgrid(block_ends{1},   block_ends{2},   block_ends{3});
+                p1(blnr, 2) = ys;
+                p2(blnr, 2) = min([ys + block.y - 1, stack_info.y]);
 
-    % Convert to lists of block start and end coordinates (N_blocks x 3)
-    block_start_indices = [X_start(:), Y_start(:), Z_start(:)];
-    block_end_indices   = [X_end(:),   Y_end(:),   Z_end(:)];
-
-    % === Assert that shapes are as expected ===
-    num_total_blocks = prod(num_blocks_per_axis);
-    assert(all(size(block_start_indices) == [num_total_blocks, 3]), ...
-        'block_start_indices shape mismatch with block.nx, block.ny, block.nz');
-    assert(all(size(block_end_indices) == [num_total_blocks, 3]), ...
-        'block_end_indices shape mismatch with block.nx, block.ny, block.nz');
+                p1(blnr, 3) = zs;
+                p2(blnr, 3) = min([zs + block.z - 1, stack_info.z]);
+            end
+        end
+    end
 end
 
 function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
