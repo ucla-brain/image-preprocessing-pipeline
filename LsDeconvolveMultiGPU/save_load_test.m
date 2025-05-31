@@ -51,6 +51,8 @@ end
 disp('Testing save_lz4_mex and load_lz4_mex on all workers...');
 mex_test_ok = true(pool.NumWorkers, 1);
 mex_test_msg = cell(pool.NumWorkers, 1);
+cwd_on_workers = cell(pool.NumWorkers, 1);
+path_on_workers = cell(pool.NumWorkers, 1);
 
 spmd
     try
@@ -66,20 +68,26 @@ spmd
         mex_test_ok = false;
         mex_test_msg = getReport(ME);
     end
+    cwd_on_workers{labindex} = pwd;
+    path_on_workers{labindex} = path;
 end
 
+any_fail = false;
+fail_idx = [];
 for w = 1:pool.NumWorkers
     if ~mex_test_ok{w}
         warning('MEX test failed on worker %d:\n%s', w, mex_test_msg{w});
-        disp('--- SUGGESTIONS ---');
-        disp('• Make sure all workers have the correct MEX file on their path.');
-        disp('• If using parallel clusters or remote nodes, use addAttachedFiles, or ensure the MEX is visible at startup.');
-        disp('• Consider restarting the parallel pool after adding path.');
-        disp('• If missing DLL/SO dependencies, put them next to the .mex* file.');
-        error('Aborting test because save_lz4_mex or load_lz4_mex failed on one or more workers.');
+        fprintf('Worker %d current folder: %s\n', w, cwd_on_workers{w});
+        % You can print path_on_workers{w} for more debugging if desired
+        any_fail = true;
+        fail_idx(end+1) = w;
     else
         fprintf('Worker %d passed MEX functionality test.\n', w);
     end
+end
+
+if any_fail
+    error('Error detected on workers %s. See above for diagnostics.', num2str(fail_idx));
 end
 
 % =========== MAIN TEST LOGIC FOLLOWS ===========
