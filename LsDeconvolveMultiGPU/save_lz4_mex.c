@@ -63,7 +63,7 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
         mexErrMsgIdAndTxt("save_lz4_mex:EmptyFilename", "Filename is empty!");
     }
 
-    mexPrintf("Trying to open: %s\n", fname);
+    //mexPrintf("Trying to open: %s\n", fname);
     unlink(fname); // Try to remove any existing file, ignore errors
 
     FILE* f = fopen(fname, "wb");
