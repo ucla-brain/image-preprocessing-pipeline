@@ -2,8 +2,15 @@
 #include "mex.h"
 #include <cuda_runtime.h>
 #include <math.h>
+#include <algorithm>
 
-#define MAX_KERNEL_SIZE 51  // reasonable max
+#define MAX_KERNEL_SIZE 51
+
+#define CUDA_CHECK(call) do { \
+    cudaError_t err = call; \
+    if (err != cudaSuccess) \
+        mexErrMsgIdAndTxt("gauss3d:cuda", "CUDA error: %s", cudaGetErrorString(err)); \
+} while(0)
 
 template <typename T>
 __global__ void gauss1d_kernel(
@@ -24,9 +31,7 @@ __global__ void gauss1d_kernel(
     for (int k = 0; k < klen; ++k) {
         int offset = k - center;
         int ci = (dim == 0) ? ix + offset : (dim == 1) ? iy + offset : iz + offset;
-        // Clamp to edge
-        if (ci < 0) ci = 0;
-        if (ci >= size[dim]) ci = size[dim] - 1;
+        ci = min(max(ci, 0), size[dim] - 1);
         int cidx;
         if (dim == 0)
             cidx = iz * nx * ny + iy * nx + ci;
@@ -40,9 +45,10 @@ __global__ void gauss1d_kernel(
 }
 
 void make_gaussian_kernel(float sigma, float* kernel, int* klen) {
-    // support at least ±3*sigma, always odd kernel
     int r = (int)ceilf(3.0f * sigma);
     *klen = 2*r + 1;
+    if (*klen > MAX_KERNEL_SIZE)
+        mexErrMsgIdAndTxt("gauss3d:kernel", "Kernel size exceeds MAX_KERNEL_SIZE (%d)", MAX_KERNEL_SIZE);
     float sum = 0.0f;
     for (int i = -r; i <= r; ++i) {
         kernel[i+r] = expf(-0.5f * (i*i) / (sigma*sigma));
@@ -60,8 +66,8 @@ void run_gauss3d(const T* d_img, T* d_tmp, T* d_out, int nx, int ny, int nz, flo
     for (int d = 0; d < 3; ++d) {
         h_kernels[d] = new float[MAX_KERNEL_SIZE];
         make_gaussian_kernel(sigma[d], h_kernels[d], &klen[d]);
-        cudaMalloc(&d_kernels[d], klen[d] * sizeof(float));
-        cudaMemcpy(d_kernels[d], h_kernels[d], klen[d] * sizeof(float), cudaMemcpyHostToDevice);
+        CUDA_CHECK(cudaMalloc(&d_kernels[d], klen[d] * sizeof(float)));
+        CUDA_CHECK(cudaMemcpy(d_kernels[d], h_kernels[d], klen[d] * sizeof(float), cudaMemcpyHostToDevice));
     }
 
     dim3 block(8,8,8);
@@ -69,26 +75,24 @@ void run_gauss3d(const T* d_img, T* d_tmp, T* d_out, int nx, int ny, int nz, flo
 
     // x axis
     gauss1d_kernel<T><<<grid, block>>>(d_img, d_tmp, nx, ny, nz, d_kernels[0], klen[0], 0);
-    cudaDeviceSynchronize();
+    CUDA_CHECK(cudaDeviceSynchronize());
 
     // y axis
     gauss1d_kernel<T><<<grid, block>>>(d_tmp, d_out, nx, ny, nz, d_kernels[1], klen[1], 1);
-    cudaDeviceSynchronize();
+    CUDA_CHECK(cudaDeviceSynchronize());
 
-    // z axis
+    // z axis (write back to d_tmp!)
     gauss1d_kernel<T><<<grid, block>>>(d_out, d_tmp, nx, ny, nz, d_kernels[2], klen[2], 2);
-    cudaDeviceSynchronize();
+    CUDA_CHECK(cudaDeviceSynchronize());
 
-    // copy result back to d_out
-    cudaMemcpy(d_out, d_tmp, nx*ny*nz*sizeof(T), cudaMemcpyDeviceToDevice);
+    // d_tmp now holds the final result!
 
     for (int d = 0; d < 3; ++d) {
-        cudaFree(d_kernels[d]);
+        CUDA_CHECK(cudaFree(d_kernels[d]));
         delete[] h_kernels[d];
     }
 }
 
-// MEX entry
 void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     if (nrhs < 2) mexErrMsgIdAndTxt("gauss3d:nrhs", "Need input array and sigma");
     if (mxGetNumberOfDimensions(prhs[0]) != 3)
@@ -112,28 +116,29 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     if (cls == mxSINGLE_CLASS) {
         const float* img = (float*)mxGetData(prhs[0]);
         float* d_img; float* d_tmp; float* d_out;
-        cudaMalloc(&d_img, N*sizeof(float));
-        cudaMalloc(&d_tmp, N*sizeof(float));
-        cudaMalloc(&d_out, N*sizeof(float));
-        cudaMemcpy(d_img, img, N*sizeof(float), cudaMemcpyHostToDevice);
+        CUDA_CHECK(cudaMalloc(&d_img, N*sizeof(float)));
+        CUDA_CHECK(cudaMalloc(&d_tmp, N*sizeof(float)));
+        CUDA_CHECK(cudaMalloc(&d_out, N*sizeof(float)));
+        CUDA_CHECK(cudaMemcpy(d_img, img, N*sizeof(float), cudaMemcpyHostToDevice));
 
         run_gauss3d<float>(d_img, d_tmp, d_out, nx, ny, nz, sigma);
 
-        cudaMemcpy(mxGetData(out), d_out, N*sizeof(float), cudaMemcpyDeviceToHost);
-        cudaFree(d_img); cudaFree(d_tmp); cudaFree(d_out);
+        // d_tmp holds the final result after z axis
+        CUDA_CHECK(cudaMemcpy(mxGetData(out), d_tmp, N*sizeof(float), cudaMemcpyDeviceToHost));
+        CUDA_CHECK(cudaFree(d_img)); CUDA_CHECK(cudaFree(d_tmp)); CUDA_CHECK(cudaFree(d_out));
     }
     else if (cls == mxDOUBLE_CLASS) {
         const double* img = (double*)mxGetData(prhs[0]);
         double* d_img; double* d_tmp; double* d_out;
-        cudaMalloc(&d_img, N*sizeof(double));
-        cudaMalloc(&d_tmp, N*sizeof(double));
-        cudaMalloc(&d_out, N*sizeof(double));
-        cudaMemcpy(d_img, img, N*sizeof(double), cudaMemcpyHostToDevice);
+        CUDA_CHECK(cudaMalloc(&d_img, N*sizeof(double)));
+        CUDA_CHECK(cudaMalloc(&d_tmp, N*sizeof(double)));
+        CUDA_CHECK(cudaMalloc(&d_out, N*sizeof(double)));
+        CUDA_CHECK(cudaMemcpy(d_img, img, N*sizeof(double), cudaMemcpyHostToDevice));
 
         run_gauss3d<double>(d_img, d_tmp, d_out, nx, ny, nz, sigma);
 
-        cudaMemcpy(mxGetData(out), d_out, N*sizeof(double), cudaMemcpyDeviceToHost);
-        cudaFree(d_img); cudaFree(d_tmp); cudaFree(d_out);
+        CUDA_CHECK(cudaMemcpy(mxGetData(out), d_tmp, N*sizeof(double), cudaMemcpyDeviceToHost));
+        CUDA_CHECK(cudaFree(d_img)); CUDA_CHECK(cudaFree(d_tmp)); CUDA_CHECK(cudaFree(d_out));
     } else
         mexErrMsgIdAndTxt("gauss3d:class", "Input must be single or double");
 }
