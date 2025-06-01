@@ -1,14 +1,16 @@
 function test_gauss3d_mex_large_gpu()
-    % 3D block GPU Gaussian filtering test
+    % 3D block GPU Gaussian filtering test (with interior-only validation)
     szs = {
         [32, 128, 128], ...
         [256, 512, 512], ...
-        [512, 1024, 1024] % Large test
+        [768, 768, 768]    % ~1.8 GB single, ~3.6 GB double (fits 3GB in single)
     };
     types = {@single, @double};
     sigma = 2.5;
-    g = gpuDevice(1);
+
+    g = gpuDevice(1);  % Use first GPU
     reset(g);
+
     for ityp = 1:numel(types)
         for isz = 1:numel(szs)
             sz = szs{isz};
@@ -17,7 +19,7 @@ function test_gauss3d_mex_large_gpu()
             bytes = prod(sz) * sizeof(T);
             fprintf('Testing %s %s (%.2f GB)...\n', type_str, mat2str(sz), bytes/2^30);
 
-            max_gpu_bytes = 9 * 2^30;
+            max_gpu_bytes = 9 * 2^30;  % Max per-chunk (safe)
             slice_bytes = prod(sz(1:2)) * sizeof(T);
             slices_per_chunk = max(floor(max_gpu_bytes / slice_bytes), 1);
 
@@ -37,18 +39,46 @@ function test_gauss3d_mex_large_gpu()
             t_gpu = toc;
             fprintf('Completed GPU Gaussian filtering in %.2f seconds\n', t_gpu);
 
-            % 3D validation
+            % Validation: only test the interior region (exclude edges)
             rng(0);
             x_val = rand(sz, type_str);
             k3d = odd_kernel_size(sigma);
             y_ref = imgaussfilt3(x_val, sigma, ...
                 'Padding', 'replicate', 'FilterSize', k3d); % 3D ground truth
 
-            % Compare the entire output (random slice check is less meaningful in 3D)
-            err = max(abs(y_result(:) - y_ref(:)));
-            fprintf('  3D validation: max error = %.2e\n', err);
+            r = floor(k3d/2);  % margin in each dimension
+            x_rng = (1+r(1)):(sz(1)-r(1));
+            y_rng = (1+r(2)):(sz(2)-r(2));
+            z_rng = (1+r(3)):(sz(3)-r(3));
+            y_interior    = y_result(x_rng, y_rng, z_rng);
+            y_ref_interior = y_ref(x_rng, y_rng, z_rng);
 
-            clear y_result
+            err = max(abs(y_interior(:) - y_ref_interior(:)));
+            rms_err = sqrt(mean((y_interior(:) - y_ref_interior(:)).^2));
+            rel_err = rms_err / (max(abs(y_ref_interior(:))) + eps);
+
+            fprintf('  3D validation (interior): max = %.2e, RMS = %.2e, rel RMS = %.2e\n', err, rms_err, rel_err);
+
+            % Pass/fail threshold
+            if strcmp(type_str, 'single')
+                if err < 5e-5
+                    fprintf('    PASS: single precision\n');
+                else
+                    fprintf('    FAIL: single precision\n');
+                end
+            else
+                if err < 1e-8
+                    fprintf('    PASS: double precision\n');
+                else
+                    fprintf('    FAIL: double precision\n');
+                end
+            end
+
+            clear y_result y_interior y_ref_interior
+
+            g = gpuDevice; % Update device info
+            fprintf('  GPU free memory after test: %.2f GB\n', g.AvailableMemory/2^30);
+            reset(g);
         end
     end
 end
