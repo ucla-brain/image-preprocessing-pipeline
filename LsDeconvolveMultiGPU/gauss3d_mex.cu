@@ -35,35 +35,37 @@ __global__ void gauss1d_kernel(const T* src, T* dst, const double* kernel, int k
     int pos = threadIdx.x;
     if (line >= n_lines || pos >= line_len) return;
 
-    // For each axis, decode which indices this line maps to:
     int x=0, y=0, z=0;
-    if (axis == 0) { // X lines
+    if (axis == 0) { // X lines: for each y,z, process x
         y = line % ny;
         z = line / ny;
         x = pos;
-    } else if (axis == 1) { // Y lines
+        if (y >= ny || z >= nz || x >= nx) return;
+    } else if (axis == 1) { // Y lines: for each x,z, process y
         x = line % nx;
         z = line / nx;
         y = pos;
-    } else { // Z lines
+        if (x >= nx || z >= nz || y >= ny) return;
+    } else { // Z lines: for each x,y, process z
         x = line % nx;
         y = line / nx;
         z = pos;
+        if (x >= nx || y >= ny || z >= nz) return;
     }
     size_t idx = ((size_t)z)*nx*ny + ((size_t)y)*nx + x;
 
-    // Convolve the line with replicate boundary:
     int center = klen / 2;
     double val = 0.0;
     for (int k = 0; k < klen; ++k) {
         int offset = k - center;
         int pi = pos + offset;
+        // replicate border
         if (pi < 0) pi = 0;
         if (pi >= line_len) pi = line_len - 1;
-        int tx=x, ty=y, tz=z;
-        if (axis == 0) tx=pi;
-        else if (axis == 1) ty=pi;
-        else tz=pi;
+        int tx = x, ty = y, tz = z;
+        if (axis == 0) tx = pi;
+        else if (axis == 1) ty = pi;
+        else tz = pi;
         size_t sidx = ((size_t)tz)*nx*ny + ((size_t)ty)*nx + tx;
         val += (double)src[sidx] * kernel[k];
     }
