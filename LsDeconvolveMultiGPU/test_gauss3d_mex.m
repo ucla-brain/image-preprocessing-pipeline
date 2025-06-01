@@ -5,7 +5,7 @@ function test_gauss3d_mex_gpu_inplace()
     szs = {
         [32, 128, 128], ...
         [256, 512, 512], ...
-        [512, 512, 768]    % ~3.0 GB single
+        [512, 512, 512]    % ~3.0 GB single
     };
     types = {@single, @double};
     sigma = 2.5;
