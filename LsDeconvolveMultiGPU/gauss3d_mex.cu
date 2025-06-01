@@ -30,6 +30,19 @@ void make_gaussian_kernel(T sigma, int ksize, T* kernel) {
 }
 
 // --------- CUDA KERNEL: Each block processes a line ---------
+void warn_kernel_size(const double* sigma, const int* ksize, int do_warn) {
+    for (int i = 0; i < 3; ++i) {
+        int min_ksize = 2 * static_cast<int>(ceil(3.0 * sigma[i])) + 1;
+        if (ksize[i] < min_ksize && do_warn) {
+            mexWarnMsgIdAndTxt("gauss3d:kernelSizeTooSmall",
+                "Kernel size for axis %d (%d) is too small for sigma=%.3f (recommended at least %d). Results may be inaccurate.\n"
+                "To disable this warning, call gauss3d_mex(..., ..., ..., true) to disable warnings.",
+                i+1, ksize[i], sigma[i], min_ksize);
+        }
+    }
+}
+
+
 template<typename T>
 __global__ void gauss1d_lines_kernel(
     const T* __restrict__ data_in, // read-only input!
