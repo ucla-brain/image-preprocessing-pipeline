@@ -150,9 +150,6 @@ void gauss3d_separable(
         int block = 256;
         int grid = (total + block - 1) / block;
 
-        // Last axis: do in-place in 'input' to save memory copy
-        if (axis == 2) dst = input;
-
         if (std::is_same<T, float>::value) {
             CUDA_CHECK(cudaMemcpyToSymbol(const_kernel_f, h_kernel, ksize[axis] * sizeof(float), 0, cudaMemcpyHostToDevice));
             gauss1d_kernel_const_float<<<grid, block, 0>>>(
@@ -169,7 +166,11 @@ void gauss3d_separable(
 
         CUDA_CHECK(cudaGetLastError());
         CUDA_CHECK(cudaDeviceSynchronize());
-        if (axis < 2) std::swap(src, dst);
+        std::swap(src, dst);
+    }
+    // After 3 axes, src points to the result (due to odd number of swaps)
+    if (src != input) {
+        CUDA_CHECK(cudaMemcpy(input, src, (size_t)nx * ny * nz * sizeof(T), cudaMemcpyDeviceToDevice));
     }
     delete[] h_kernel;
 }
