@@ -1158,7 +1158,7 @@ function message = save_image_2d(im, path, s, rawmax, save_time)
 end
 
 function check_block_coverage_planes(stack_info, block)
-    disp('Checking block coverage for errors ...');
+    % disp('Checking block coverage for errors ...');
 
     p1 = block.p1;
     p2 = block.p2;
@@ -1209,8 +1209,8 @@ function check_block_coverage_planes(stack_info, block)
         end
         num_gaps = sum(covered(:) == 0);
         num_overlaps = sum(covered(:) > 1); % This counts pixels covered by more than 1 block (not face/edge)
-        disp(['Blocks covering z=' num2str(z) ': ' num2str(numel(blocks))]);
-        disp(['XY at z=' num2str(z) ': gaps=' num2str(num_gaps) ', overlaps=' num2str(num_overlaps)]);
+        %disp(['   Blocks covering z=' num2str(z) ': ' num2str(numel(blocks))]);
+        %disp(['   XY at z=' num2str(z) ': gaps=' num2str(num_gaps) ', overlaps=' num2str(num_overlaps)]);
         if num_gaps > 0
             errors{end+1} = sprintf('XY at z=%d: %d gaps', z, num_gaps);
         end
@@ -1230,8 +1230,8 @@ function check_block_coverage_planes(stack_info, block)
         end
         num_gaps = sum(covered(:) == 0);
         num_overlaps = sum(covered(:) > 1);
-        disp(['     Blocks covering y=' num2str(y) ': ' num2str(numel(blocks))]);
-        disp(['     XZ at y=' num2str(y) ': gaps=' num2str(num_gaps) ', overlaps=' num2str(num_overlaps)]);
+        %disp(['   Blocks covering y=' num2str(y) ': ' num2str(numel(blocks))]);
+        %disp(['   XZ at y=' num2str(y) ': gaps=' num2str(num_gaps) ', overlaps=' num2str(num_overlaps)]);
         if num_gaps > 0
             errors{end+1} = sprintf('XZ at y=%d: %d gaps', y, num_gaps);
         end
@@ -1248,15 +1248,15 @@ function check_block_coverage_planes(stack_info, block)
         end
         num_gaps = sum(covered(:) == 0);
         num_overlaps = sum(covered(:) > 1);
-        disp(['     Blocks covering x=' num2str(x) ': ' num2str(numel(blocks))]);
-        disp(['     YZ at x=' num2str(x) ': gaps=' num2str(num_gaps) ', overlaps=' num2str(num_overlaps)]);
+        %disp(['   Blocks covering x=' num2str(x) ': ' num2str(numel(blocks))]);
+        %disp(['   YZ at x=' num2str(x) ': gaps=' num2str(num_gaps) ', overlaps=' num2str(num_overlaps)]);
         if num_gaps > 0
             errors{end+1} = sprintf('YZ at x=%d: %d gaps', x, num_gaps);
         end
     end
 
     % 6. True 3D interior-overlap check (ignore face/edge/corner)
-    disp('      Checking for true 3D interior overlaps (ignoring faces/edges/corners)...');
+    disp('   Checking for true 3D interior overlaps (ignoring faces/edges/corners)...');
     N = size(p1, 1);
     true_overlaps = [];
     for i = 1:N-1
@@ -1273,9 +1273,9 @@ function check_block_coverage_planes(stack_info, block)
         end
     end
     if isempty(true_overlaps)
-        disp('      No true 3D interior overlaps found between blocks.');
+        %disp('   No true 3D interior overlaps found between blocks.');
     else
-        disp('      True 3D interior overlaps found between blocks:');
+        %disp('   True 3D interior overlaps found between blocks:');
         disp(true_overlaps);
         errors{end+1} = sprintf('Found %d pairs of blocks with true interior overlap.', size(true_overlaps, 1));
     end
@@ -1307,7 +1307,7 @@ function check_block_coverage_planes(stack_info, block)
         err_msg = sprintf('Block coverage error(s) detected:\n%s', strjoin(errors, '\n'));
         error(err_msg);
     else
-        disp('Block coverage: PASSED');
+        disp('   Block coverage test: PASSED');
     end
 end
 
