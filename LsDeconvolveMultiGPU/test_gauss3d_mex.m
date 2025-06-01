@@ -23,7 +23,11 @@ function test_gauss3d_mex_gpu_inplace()
                 for iksz = 1:numel(ksize_tests)
                     ksz = ksize_tests{iksz};
                     % Description string for printout
-                    kdesc = ischar(ksz) ? 'auto' : mat2str(ksz);
+                    if ischar(ksz)
+                        kdesc = 'auto';
+                    else
+                        kdesc = mat2str(ksz);
+                    end
                     fprintf('\nTesting %s %s, sigma=%s, ksize=%s ...\n', ...
                         type_str, mat2str(sz), mat2str(sigma), kdesc);
 
