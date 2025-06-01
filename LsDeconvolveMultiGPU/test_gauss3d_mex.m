@@ -1,21 +1,22 @@
 function test_gauss3d_mex_features()
 % Robust + colorful test harness for gauss3d_mex vs imgaussfilt3 (GPU/CPU fallback).
-% Features: accuracy, type/class checks, perf timing, OOM/fallback, color output.
+% Now also tests half precision ('half' mode). Features: accuracy, type/class checks,
+% perf timing, OOM/fallback, output/precision summary, color output.
 
     g = gpuDevice(1);
     reset(g);
 
-    % Check if cprintf exists for color; fallback to normal if not
     hasCprintf = exist('cprintf','file') == 2;
     col = @(c,str) colored_str(c,str,hasCprintf);
 
     szs = {
         [32, 64, 32], ...
-        [512, 512, 512]
+        [512, 512, 512], ...
+        [48, 17, 119]  % Oddball non-cube size
     };
     types = {@single, @double};
-    sigma_tests = {2.5, [2.5 2.5 2.5], [1.5 2.0 2.5]};
-    ksize_tests = {'auto', 9, [9 11 15]};
+    sigma_tests = {2.5, [2.5 2.5 2.5], [1.5 2.0 2.5], 0.25, 12}; % add extreme sigmas
+    ksize_tests = {'auto', 9, [9 11 15], 3, 41};  % 3=smallest, 41=large (still < MAX_KERNEL_SIZE)
     disable_warning = getenv('GAUSS3D_WARN_KSIZE');
     if isempty(disable_warning)
         disp(col('cyan','  (Kernel size warnings are ENABLED: set GAUSS3D_WARN_KSIZE=0 to disable.)'));
@@ -26,6 +27,7 @@ function test_gauss3d_mex_features()
     % Define error thresholds for test pass/fail
     SINGLE_THRESH = 5e-5;
     DOUBLE_THRESH = 1e-7;
+    HALF_THRESH   = 1e-2; % Acceptable for half
 
     for ityp = 1:numel(types)
         for isz = 1:numel(szs)
@@ -87,12 +89,12 @@ function test_gauss3d_mex_features()
                         end
                         t_ref = toc(t1);
 
-                        % --- gauss3d_mex ---
+                        % --- gauss3d_mex (single/double as baseline) ---
                         t2 = tic;
                         if ischar(ksz) || isstring(ksz)
                             y_mex_gpu = gauss3d_mex(x_pad_gpu, sigma);
                         else
-                            y_mex_gpu = gauss3d_mex(x_pad_gpu, sigma, kernel_sz, true);
+                            y_mex_gpu = gauss3d_mex(x_pad_gpu, sigma, kernel_sz);
                         end
                         t_mex = toc(t2);
 
@@ -128,7 +130,48 @@ function test_gauss3d_mex_features()
 
                         % --- Timing ---
                         speedup = t_ref / t_mex;
-                        fprintf('%s\n',col('blue',sprintf('  Reference time: %.3fs | gauss3d\\_mex time: %.3fs | Speedup: %.2fx', t_ref, t_mex, speedup)));
+                        fprintf('%s\n',col('blue',sprintf('  Reference time: %.3fs | gauss3d_mex time: %.3fs | Speedup: %.2fx', t_ref, t_mex, speedup)));
+
+                        % -- HISTOGRAM for quick outlier/precision insight --
+                        show_hist(y_mex_unpad, 'Output histogram (single/double)', hasCprintf);
+
+                        % --- Half precision test: only for single input ---
+                        if strcmp(type_str, 'single')
+                            t3 = tic;
+                            if ischar(ksz) || isstring(ksz)
+                                y_half_gpu = gauss3d_mex(x_pad_gpu, sigma, [], 'half');
+                            else
+                                y_half_gpu = gauss3d_mex(x_pad_gpu, sigma, kernel_sz, 'half');
+                            end
+                            t_half = toc(t3);
+
+                            assert(isequal(size(y_half_gpu), size(x_pad_gpu)), 'Half output size mismatch.');
+                            assert(strcmp(class(y_half_gpu), class(x_pad_gpu)), 'Half output class mismatch.');
+                            assert(strcmp(classUnderlying(y_half_gpu), classUnderlying(x_pad_gpu)), 'Half output underlying class mismatch.');
+                            fprintf('%s\n',col('yellow','  [Half precision] Output matches input type/class/shape.'));
+
+                            y_half_unpad = y_half_gpu(idx1,idx2,idx3);
+
+                            err_half = max(abs(y_half_unpad(:) - y_ref_unpad(:)));
+                            rms_half = sqrt(mean((y_half_unpad(:) - y_ref_unpad(:)).^2));
+                            rel_half = rms_half / (max(abs(y_ref_unpad(:))) + eps);
+
+                            fprintf('%s\n',col('yellow',sprintf('  [Half] max = %.2e, RMS = %.2e, rel RMS = %.2e', ...
+                                gather(err_half), gather(rms_half), gather(rel_half))));
+
+                            pass_half = gather(err_half) < HALF_THRESH;
+                            report_passfail(pass_half, 'half', hasCprintf);
+
+                            speedup_half = t_ref / t_half;
+                            fprintf('%s\n',col('blue',sprintf('  [Half] gauss3d_mex time: %.3fs | Speedup: %.2fx', t_half, speedup_half)));
+
+                            show_hist(y_half_unpad, '[Half] Output histogram', hasCprintf);
+
+                            % Print a comparison summary for a random voxel
+                            linear_idx = randi(numel(y_half_unpad));
+                            fprintf('%s\n', col('magenta', sprintf('    Voxel comparison [ref/single/half]: %g / %g / %g\n', ...
+                                gather(y_ref_unpad(linear_idx)), gather(y_mex_unpad(linear_idx)), gather(y_half_unpad(linear_idx)))));
+                        end
 
                     catch ME
                         if contains(ME.message, 'out of memory') || ...
@@ -143,7 +186,7 @@ function test_gauss3d_mex_features()
                         end
                     end
 
-                    clear x_pad_gpu y_mex_gpu y_ref_gpu y_mex_unpad y_ref_unpad
+                    clear x_pad_gpu y_mex_gpu y_ref_gpu y_mex_unpad y_ref_unpad y_half_gpu y_half_unpad
                 end
             end
         end
@@ -183,5 +226,15 @@ function print_color(str, color, hasCprintf)
         cprintf(color, str);
     else
         fprintf('%s', str);
+    end
+end
+
+function show_hist(arr, msg, hasCprintf)
+    arr = gather(arr(:));
+    if ~isempty(arr)
+        fprintf('%s\n', colored_str('cyan', [msg, sprintf(': min=%g max=%g mean=%g', min(arr), max(arr), mean(arr))], hasCprintf));
+        edges = linspace(min(arr), max(arr), 16);
+        counts = histcounts(arr, edges);
+        fprintf('%s\n', colored_str('cyan', ['      hist: ', num2str(counts)] , hasCprintf));
     end
 end
