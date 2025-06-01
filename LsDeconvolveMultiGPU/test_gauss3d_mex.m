@@ -19,28 +19,17 @@ function test_gauss3d_mex_large_gpu()
             bytes = prod(sz) * sizeof(T);
             fprintf('\nTesting %s %s (%.2f GB)...\n', type_str, mat2str(sz), bytes/2^30);
 
-            % Chunking setup
-            max_gpu_bytes = 9 * 2^30;
-            slice_bytes = prod(sz(1:2)) * sizeof(T);
-            slices_per_chunk = max(floor(max_gpu_bytes / slice_bytes), 1);
+            % Always use the same input for both tests!
+            rng(0);
+            x_val = rand(sz, type_str);
 
             % --- GPU Gaussian Filtering (timed) ---
-            y_result = zeros(sz, type_str);
             tic;
-            for z1 = 1:slices_per_chunk:sz(3)
-                z2 = min(z1 + slices_per_chunk - 1, sz(3));
-                this_chunk = double(z2 - z1 + 1);
-                x_chunk_gpu = gpuArray.rand(sz(1), sz(2), this_chunk, type_str);
-                y_chunk_gpu = gauss3d_mex(x_chunk_gpu, sigma);
-                y_result(:, :, z1:z2) = gather(y_chunk_gpu);
-                clear x_chunk_gpu y_chunk_gpu
-            end
+            y_result = gauss3d_mex(x_val, sigma);
             t_gpu = toc;
             fprintf('  gauss3d_mex execution time: %.2f s\n', t_gpu);
 
             % --- CPU Validation with imgaussfilt3 (timed) ---
-            rng(0);
-            x_val = rand(sz, type_str);
             k3d = odd_kernel_size(sigma);
             t_cpu_start = tic;
             y_ref = imgaussfilt3(x_val, sigma, ...
@@ -63,6 +52,12 @@ function test_gauss3d_mex_large_gpu()
             rel_err = rms_err / (max(abs(y_ref_interior(:))) + eps);
 
             fprintf('  3D validation (interior): max = %.2e, RMS = %.2e, rel RMS = %.2e\n', err, rms_err, rel_err);
+
+            % Extra: print statistics for debugging
+            fprintf('    mean(y_result) = %.6g, mean(y_ref) = %.6g, mean(diff) = %.6g\n', ...
+                mean(y_result(:)), mean(y_ref(:)), mean(y_result(:)-y_ref(:)));
+            fprintf('    min/max(y_result) = %.6g/%.6g, min/max(y_ref) = %.6g/%.6g\n', ...
+                min(y_result(:)), max(y_result(:)), min(y_ref(:)), max(y_ref(:)));
 
             % --- Pass/fail threshold ---
             if strcmp(type_str, 'single')
