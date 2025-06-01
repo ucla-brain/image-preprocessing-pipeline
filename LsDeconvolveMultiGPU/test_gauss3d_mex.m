@@ -37,7 +37,7 @@ function test_gauss3d_mex_large_gpu()
 
             rng(0);
             midz = round(sz(3)/2);
-            x_val = rand(sz(1), sz(2), T);
+            x_val = rand(sz(1), sz(2), type_str);
             y_ref = imgaussfilt(x_val, sigma, ...
                 'Padding', 'replicate', 'FilterSize', odd_kernel_size(sigma));
             err = max(abs(y_result(:,:,midz) - y_ref), [], 'all');
