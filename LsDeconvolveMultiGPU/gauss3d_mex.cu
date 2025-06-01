@@ -42,45 +42,47 @@ void warn_kernel_size(const double* sigma, const int* ksize, int do_warn) {
     }
 }
 
-
 template<typename T>
 __global__ void gauss1d_lines_kernel(
-    const T* __restrict__ data_in, // read-only input!
-    T* data_out,                   // output buffer!
+    const T* __restrict__ data_in,
+    T* data_out,
     const T* __restrict__ kernel, int klen,
     int nx, int ny, int nz,
     int dim, int line_len, int n_lines)
 {
     int line_idx = blockIdx.x;
-    int idx_in_line = threadIdx.x;
-    if (line_idx >= n_lines || idx_in_line >= line_len) return;
-
-    // Compute the starting position of this line in 3D
-    int ix = 0, iy = 0, iz = 0;
-    if (dim == 0) { iy = line_idx % ny; iz = line_idx / ny; ix = idx_in_line; }
-    else if (dim == 1) { ix = line_idx % nx; iz = line_idx / nx; iy = idx_in_line; }
-    else { ix = line_idx % nx; iy = line_idx / nx; iz = idx_in_line; }
-
     int center = klen / 2;
-    double val = 0.0;
 
-    for (int k = 0; k < klen; ++k) {
-        int offset = k - center;
-        int ci = idx_in_line + offset;
-        // Replicate boundary
-        ci = min(max(ci, 0), line_len - 1);
+    // Compute 3D coordinates of the start of this line
+    int ix0 = 0, iy0 = 0, iz0 = 0;
+    if (dim == 0) { iy0 = line_idx % ny; iz0 = line_idx / ny; }
+    else if (dim == 1) { ix0 = line_idx % nx; iz0 = line_idx / nx; }
+    else { ix0 = line_idx % nx; iy0 = line_idx / nx; }
 
-        int cx = ix, cy = iy, cz = iz;
-        if (dim == 0) cx = ci;
-        else if (dim == 1) cy = ci;
-        else cz = ci;
+    for (int idx_in_line = threadIdx.x; idx_in_line < line_len; idx_in_line += blockDim.x) {
+        int ix = ix0, iy = iy0, iz = iz0;
+        if (dim == 0) ix = idx_in_line;
+        else if (dim == 1) iy = idx_in_line;
+        else iz = idx_in_line;
 
-        int in_idx = cz * nx * ny + cy * nx + cx;
-        val += static_cast<double>(data_in[in_idx]) * static_cast<double>(kernel[k]);
+        double val = 0.0;
+        for (int k = 0; k < klen; ++k) {
+            int offset = k - center;
+            int ci = idx_in_line + offset;
+            ci = min(max(ci, 0), line_len - 1);
+
+            int cx = ix0, cy = iy0, cz = iz0;
+            if (dim == 0) cx = ci;
+            else if (dim == 1) cy = ci;
+            else cz = ci;
+            int in_idx = cz * nx * ny + cy * nx + cx;
+
+            val += static_cast<double>(data_in[in_idx]) * static_cast<double>(kernel[k]);
+        }
+
+        int out_idx = iz * nx * ny + iy * nx + ix;
+        data_out[out_idx] = static_cast<T>(val);
     }
-
-    int out_idx = iz * nx * ny + iy * nx + ix;
-    data_out[out_idx] = static_cast<T>(val);
 }
 
 // --------- SEPARABLE GAUSS 3D (in-place, parallelized) ---------
