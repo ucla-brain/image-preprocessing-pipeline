@@ -39,10 +39,10 @@ else
                            'CXXFLAGS="$CXXFLAGS -O2 -march=native -fomit-frame-pointer"'];
 end
 
-mex(mex_flags{:}, src_semaphore);
-mex(mex_flags{:}, src_queue);
-mex(mex_flags{:}, src_lz4_save, src_lz4_c);
-mex(mex_flags{:}, src_lz4_load, src_lz4_c);
+%mex(mex_flags{:}, src_semaphore);
+%mex(mex_flags{:}, src_queue);
+%mex(mex_flags{:}, src_lz4_save, src_lz4_c);
+%mex(mex_flags{:}, src_lz4_load, src_lz4_c);
 
 nvcc_flags = '-O2 -Xcompiler -march=native -Xcompiler -fomit-frame-pointer';
 % build_xml = "..."; '-f', build_xml,
