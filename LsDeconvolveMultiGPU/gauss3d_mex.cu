@@ -1,4 +1,4 @@
-// gauss3d_mex.cu - Optimized 3D Gaussian filtering (1 buffer, constant/shared memory kernel, in-place last axis)
+// gauss3d_mex.cu - Robust 3D Gaussian filtering (constant memory, explicit kernel specializations)
 #include "mex.h"
 #include "gpu/mxGPUArray.h"
 #include <cuda_runtime.h>
@@ -35,11 +35,10 @@ void make_gaussian_kernel(T sigma, int ksize, T* kernel) {
 }
 
 // =====================
-// CUDA 1D convolution (constant memory only)
+// CUDA 1D convolution kernels (constant memory only)
 // =====================
-template <typename T>
-__global__ void gauss1d_kernel_const(
-    const T* src, T* dst,
+__global__ void gauss1d_kernel_const_float(
+    const float* src, float* dst,
     int nx, int ny, int nz,
     int klen, int axis)
 {
@@ -70,7 +69,7 @@ __global__ void gauss1d_kernel_const(
 
     int idx = x + y * nx + z * nx * ny;
     int r = klen / 2;
-    T acc = T(0);
+    float acc = 0.0f;
     for (int s = 0; s < klen; ++s) {
         int offset = s - r;
         int xi = x, yi = y, zi = z;
@@ -78,13 +77,52 @@ __global__ void gauss1d_kernel_const(
         if (axis == 1) yi = min(max(y + offset, 0), ny - 1);
         if (axis == 2) zi = min(max(z + offset, 0), nz - 1);
         int src_idx = xi + yi * nx + zi * nx * ny;
-        // Constant memory access
-        T k;
-        if (std::is_same<T, float>::value)
-            k = const_kernel_f[s];
-        else
-            k = const_kernel_d[s];
-        acc += src[src_idx] * k;
+        acc += src[src_idx] * const_kernel_f[s];
+    }
+    dst[idx] = acc;
+}
+
+__global__ void gauss1d_kernel_const_double(
+    const double* src, double* dst,
+    int nx, int ny, int nz,
+    int klen, int axis)
+{
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    int nline, linelen;
+    if (axis == 0) { linelen = nx; nline = ny * nz; }
+    else if (axis == 1) { linelen = ny; nline = nx * nz; }
+    else { linelen = nz; nline = nx * ny; }
+    if (tid >= nline * linelen) return;
+
+    int line = tid / linelen;
+    int pos = tid % linelen;
+
+    int x, y, z;
+    if (axis == 0) {
+        y = line % ny;
+        z = line / ny;
+        x = pos;
+    } else if (axis == 1) {
+        x = line % nx;
+        z = line / nx;
+        y = pos;
+    } else {
+        x = line % nx;
+        y = line / nx;
+        z = pos;
+    }
+
+    int idx = x + y * nx + z * nx * ny;
+    int r = klen / 2;
+    double acc = 0.0;
+    for (int s = 0; s < klen; ++s) {
+        int offset = s - r;
+        int xi = x, yi = y, zi = z;
+        if (axis == 0) xi = min(max(x + offset, 0), nx - 1);
+        if (axis == 1) yi = min(max(y + offset, 0), ny - 1);
+        if (axis == 2) zi = min(max(z + offset, 0), nz - 1);
+        int src_idx = xi + yi * nx + zi * nx * ny;
+        acc += src[src_idx] * const_kernel_d[s];
     }
     dst[idx] = acc;
 }
@@ -122,11 +160,17 @@ void gauss3d_separable(
 
         if (std::is_same<T, float>::value) {
             CUDA_CHECK(cudaMemcpyToSymbol(const_kernel_f, h_kernel, ksize[axis] * sizeof(float), 0, cudaMemcpyHostToDevice));
+            gauss1d_kernel_const_float<<<grid, block, 0>>>(
+                reinterpret_cast<const float*>(src),
+                reinterpret_cast<float*>(dst),
+                nx, ny, nz, ksize[axis], axis);
         } else {
             CUDA_CHECK(cudaMemcpyToSymbol(const_kernel_d, h_kernel, ksize[axis] * sizeof(double), 0, cudaMemcpyHostToDevice));
+            gauss1d_kernel_const_double<<<grid, block, 0>>>(
+                reinterpret_cast<const double*>(src),
+                reinterpret_cast<double*>(dst),
+                nx, ny, nz, ksize[axis], axis);
         }
-
-        gauss1d_kernel_const<T><<<grid, block, 0>>>(src, dst, nx, ny, nz, ksize[axis], axis);
 
         CUDA_CHECK(cudaGetLastError());
         CUDA_CHECK(cudaDeviceSynchronize());
