@@ -1,3 +1,5 @@
+// gauss3d_mex.cu - Single-precision 3D Gaussian filtering for MATLAB gpuArray
+
 #include "mex.h"
 #include "gpu/mxGPUArray.h"
 #include <cuda_runtime.h>
@@ -7,14 +9,17 @@
 
 #define CUDA_CHECK(call) do { \
     cudaError_t err = call; \
-    if (err != cudaSuccess) \
-        mexErrMsgIdAndTxt("gauss3d:cuda", "CUDA error %s:%d: %s", __FILE__, __LINE__, cudaGetErrorString(err)); \
+    if (err != cudaSuccess) { \
+        mexPrintf("CUDA error at %s:%d: %s\n", __FILE__, __LINE__, cudaGetErrorString(err)); \
+        goto cleanup; \
+    } \
 } while(0)
 
+// Max kernel size for Gaussian (fits in constant memory)
 #define MAX_KERNEL_SIZE 51
 __constant__ float const_kernel_f[MAX_KERNEL_SIZE];
 
-// Gaussian kernel creation
+// Gaussian kernel creation (host)
 void make_gaussian_kernel(float sigma, int ksize, float* kernel) {
     int r = ksize / 2;
     double sum = 0.0;
@@ -32,17 +37,17 @@ __global__ void gauss1d_kernel_const_float(
     int nx, int ny, int nz,
     int klen, int axis)
 {
-    int tid = blockIdx.x * blockDim.x + threadIdx.x;
-    int nline, linelen;
-    if (axis == 0) { linelen = nx; nline = ny * nz; }
-    else if (axis == 1) { linelen = ny; nline = nx * nz; }
-    else { linelen = nz; nline = nx * ny; }
+    size_t tid = blockIdx.x * blockDim.x + threadIdx.x;  // Use size_t for all indices
+    size_t nline, linelen;
+    if (axis == 0) { linelen = nx; nline = (size_t)ny * nz; }
+    else if (axis == 1) { linelen = ny; nline = (size_t)nx * nz; }
+    else { linelen = nz; nline = (size_t)nx * ny; }
     if (tid >= nline * linelen) return;
 
-    int line = tid / linelen;
-    int pos = tid % linelen;
+    size_t line = tid / linelen;
+    size_t pos = tid % linelen;
 
-    int x, y, z;
+    size_t x, y, z;
     if (axis == 0) {
         y = line % ny;
         z = line / ny;
@@ -57,70 +62,63 @@ __global__ void gauss1d_kernel_const_float(
         z = pos;
     }
 
-    int idx = x + y * nx + z * nx * ny;
+    size_t idx = x + y * (size_t)nx + z * (size_t)nx * ny;
     int r = klen / 2;
     float acc = 0.0f;
     for (int s = 0; s < klen; ++s) {
         int offset = s - r;
-        int xi = x, yi = y, zi = z;
-        if (axis == 0) xi = min(max(x + offset, 0), nx - 1);
-        if (axis == 1) yi = min(max(y + offset, 0), ny - 1);
-        if (axis == 2) zi = min(max(z + offset, 0), nz - 1);
-        int src_idx = xi + yi * nx + zi * nx * ny;
+        size_t xi = x, yi = y, zi = z;
+        if (axis == 0) xi = (size_t)max(min((int)x + offset, nx - 1), 0);
+        if (axis == 1) yi = (size_t)max(min((int)y + offset, ny - 1), 0);
+        if (axis == 2) zi = (size_t)max(min((int)z + offset, nz - 1), 0);
+        size_t src_idx = xi + yi * (size_t)nx + zi * (size_t)nx * ny;
         acc += src[src_idx] * const_kernel_f[s];
     }
     dst[idx] = acc;
 }
 
-// Host orchestration for float, in-place optimization
-void gauss3d_separable_float_inplace(
-    float* data,   // data is both input and output!
+// Host orchestration for float
+void gauss3d_separable_float(
+    float* input,
+    float* buffer,
     int nx, int ny, int nz,
-    const float sigma[3], const int ksize[3])
+    const float sigma[3], const int ksize[3],
+    bool* error_flag)
 {
     int max_klen = std::max({ksize[0], ksize[1], ksize[2]});
     if (max_klen > MAX_KERNEL_SIZE) {
         mexErrMsgIdAndTxt("gauss3d:ksize", "Kernel size exceeds MAX_KERNEL_SIZE (%d)", MAX_KERNEL_SIZE);
     }
     float* h_kernel = new float[max_klen];
-
-    // Allocate a *single* buffer (same size as input)
-    float* buffer;
-    size_t N = (size_t)nx * ny * nz;
-    CUDA_CHECK(cudaMalloc(&buffer, N * sizeof(float)));
-
-    // Three passes: swap pointers every pass
-    float* src = data;
+    float* src = input;
     float* dst = buffer;
 
     for (int axis = 0; axis < 3; ++axis) {
         make_gaussian_kernel(sigma[axis], ksize[axis], h_kernel);
         CUDA_CHECK(cudaMemcpyToSymbol(const_kernel_f, h_kernel, ksize[axis] * sizeof(float), 0, cudaMemcpyHostToDevice));
 
-        int linelen = (axis == 0) ? nx : (axis == 1) ? ny : nz;
-        int nline   = (axis == 0) ? ny * nz : (axis == 1) ? nx * nz : nx * ny;
-        int total = linelen * nline;
+        size_t linelen = (axis == 0) ? nx : (axis == 1) ? ny : nz;
+        size_t nline   = (axis == 0) ? (size_t)ny * nz : (axis == 1) ? (size_t)nx * nz : (size_t)nx * ny;
+        size_t total = linelen * nline;
         int block = 256;
-        int grid = (total + block - 1) / block;
+        int grid = static_cast<int>((total + block - 1) / block);
 
         gauss1d_kernel_const_float<<<grid, block, 0>>>(
             src, dst, nx, ny, nz, ksize[axis], axis);
 
         CUDA_CHECK(cudaGetLastError());
         CUDA_CHECK(cudaDeviceSynchronize());
-
-        // Swap pointers for next pass
-        float* tmp = src; src = dst; dst = tmp;
+        std::swap(src, dst);
+    }
+    // After 3 axes, src points to the result (due to odd number of swaps)
+    if (src != input) {
+        CUDA_CHECK(cudaMemcpy(input, src, (size_t)nx * ny * nz * sizeof(float), cudaMemcpyDeviceToDevice));
     }
 
-    // After 3 passes, src points to the result (could be buffer or data)
-    // We want result in `data`, so copy if needed
-    if (src != data) {
-        CUDA_CHECK(cudaMemcpy(data, src, N * sizeof(float), cudaMemcpyDeviceToDevice));
-    }
-
+cleanup:
+    // Always free host kernel, even if error
     delete[] h_kernel;
-    CUDA_CHECK(cudaFree(buffer));
+    if (error_flag) *error_flag = (cudaGetLastError() != cudaSuccess);
 }
 
 // ================
@@ -128,62 +126,86 @@ void gauss3d_separable_float_inplace(
 // ================
 extern "C" void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     mxInitGPU();
+    float* buffer = nullptr;
+    bool error_flag = false;
+    mxGPUArray* out_gpu = nullptr;
+    mxGPUArray* img_gpu = nullptr;
 
-    if (nrhs < 2)
-        mexErrMsgIdAndTxt("gauss3d:nrhs", "Usage: gauss3d_mex(x, sigma [, kernel_size])");
+    try {
+        if (nrhs < 2)
+            mexErrMsgIdAndTxt("gauss3d:nrhs", "Usage: gauss3d_mex(x, sigma [, kernel_size])");
 
-    // Use const pointer here
-    const mxGPUArray* img_gpu = mxGPUCreateFromMxArray(prhs[0]);
-    const mwSize* sz = mxGPUGetDimensions(img_gpu);
-    int nd = mxGPUGetNumberOfDimensions(img_gpu);
-    if (nd != 3)
-        mexErrMsgIdAndTxt("gauss3d:ndims", "Input must be 3D.");
+        img_gpu = (mxGPUArray*)mxGPUCreateFromMxArray(prhs[0]);
+        const mwSize* sz = mxGPUGetDimensions(img_gpu);
+        int nd = mxGPUGetNumberOfDimensions(img_gpu);
+        if (nd != 3)
+            mexErrMsgIdAndTxt("gauss3d:ndims", "Input must be 3D.");
 
-    int nx = (int)sz[0], ny = (int)sz[1], nz = (int)sz[2];
-    mxClassID cls = mxGPUGetClassID(img_gpu);
+        int nx = (int)sz[0], ny = (int)sz[1], nz = (int)sz[2];
+        size_t N = (size_t)nx * ny * nz;
+        mxClassID cls = mxGPUGetClassID(img_gpu);
+        void* ptr = mxGPUGetData(img_gpu);
 
-    // Cast away constness only for data writing
-    void* ptr = mxGPUGetData(const_cast<mxGPUArray*>(img_gpu));
+        if (cls != mxSINGLE_CLASS)
+            mexErrMsgIdAndTxt("gauss3d:class", "Input must be single-precision gpuArray");
 
-    if (cls != mxSINGLE_CLASS)
-        mexErrMsgIdAndTxt("gauss3d:class", "Input must be single-precision gpuArray");
+        double sigma_double[3];
+        if (mxIsScalar(prhs[1])) {
+            double v = mxGetScalar(prhs[1]);
+            sigma_double[0] = sigma_double[1] = sigma_double[2] = v;
+        } else if (mxGetNumberOfElements(prhs[1]) == 3) {
+            double* s = mxGetPr(prhs[1]);
+            for (int i = 0; i < 3; ++i) sigma_double[i] = s[i];
+        } else {
+            mexErrMsgIdAndTxt("gauss3d:sigma", "sigma must be scalar or 3-vector");
+        }
 
-    double sigma_double[3];
-    if (mxIsScalar(prhs[1])) {
-        double v = mxGetScalar(prhs[1]);
-        sigma_double[0] = sigma_double[1] = sigma_double[2] = v;
-    } else if (mxGetNumberOfElements(prhs[1]) == 3) {
-        double* s = mxGetPr(prhs[1]);
-        for (int i = 0; i < 3; ++i) sigma_double[i] = s[i];
-    } else {
-        mexErrMsgIdAndTxt("gauss3d:sigma", "sigma must be scalar or 3-vector");
-    }
-
-    int ksize[3];
-    if (nrhs >= 3 && !mxIsLogicalScalar(prhs[2])) {
-        if (mxIsEmpty(prhs[2])) {
+        int ksize[3];
+        if (nrhs >= 3 && !mxIsLogicalScalar(prhs[2])) {
+            if (mxIsEmpty(prhs[2])) {
+                for (int i = 0; i < 3; ++i)
+                    ksize[i] = 2 * (int)ceil(3.0 * sigma_double[i]) + 1;
+            } else if (mxIsScalar(prhs[2])) {
+                int k = (int)mxGetScalar(prhs[2]);
+                ksize[0] = ksize[1] = ksize[2] = k;
+            } else if (mxGetNumberOfElements(prhs[2]) == 3) {
+                double* ks = mxGetPr(prhs[2]);
+                for (int i = 0; i < 3; ++i) ksize[i] = (int)ks[i];
+            } else {
+                mexErrMsgIdAndTxt("gauss3d:kernel", "kernel_size must be scalar or 3-vector");
+            }
+        } else {
             for (int i = 0; i < 3; ++i)
                 ksize[i] = 2 * (int)ceil(3.0 * sigma_double[i]) + 1;
-        } else if (mxIsScalar(prhs[2])) {
-            int k = (int)mxGetScalar(prhs[2]);
-            ksize[0] = ksize[1] = ksize[2] = k;
-        } else if (mxGetNumberOfElements(prhs[2]) == 3) {
-            double* ks = mxGetPr(prhs[2]);
-            for (int i = 0; i < 3; ++i) ksize[i] = (int)ks[i];
-        } else {
-            mexErrMsgIdAndTxt("gauss3d:kernel", "kernel_size must be scalar or 3-vector");
         }
-    } else {
-        for (int i = 0; i < 3; ++i)
-            ksize[i] = 2 * (int)ceil(3.0 * sigma_double[i]) + 1;
+
+        // --- OOM awareness ---
+        cudaError_t alloc_err = cudaMalloc(&buffer, N * sizeof(float));
+        if (alloc_err != cudaSuccess) {
+            mexWarnMsgIdAndTxt("gauss3d:cuda", "CUDA OOM: Could not allocate workspace buffer (%.2f MB). Try reducing input size or call reset(gpuDevice).", N * sizeof(float) / (1024.0 * 1024.0));
+            goto cleanup;
+        }
+
+        float sigma[3] = { (float)sigma_double[0], (float)sigma_double[1], (float)sigma_double[2] };
+        gauss3d_separable_float((float*)ptr, buffer, nx, ny, nz, sigma, ksize, &error_flag);
+
+        // Synchronize before returning to MATLAB to catch any lingering errors
+        CUDA_CHECK(cudaDeviceSynchronize());
+
+        // Output result
+        out_gpu = img_gpu;
+        plhs[0] = mxGPUCreateMxArrayOnGPU(out_gpu);
+
+    } catch (...) {
+        // Unified error handler
+        mexPrintf("Unknown error in gauss3d_mex.cu. Possible OOM or kernel failure.\n");
+        error_flag = true;
+        goto cleanup;
     }
 
-    float sigma[3] = { (float)sigma_double[0], (float)sigma_double[1], (float)sigma_double[2] };
-    gauss3d_separable_float_inplace((float*)ptr, nx, ny, nz, sigma, ksize);
-
-    // Ensure all GPU work is finished
-    CUDA_CHECK(cudaDeviceSynchronize());
-
-    plhs[0] = mxGPUCreateMxArrayOnGPU(img_gpu);
-    // img_gpu is not destroyed, as output holds reference
+cleanup:
+    if (buffer) cudaFree(buffer);
+    // Only destroy img_gpu if not returned
+    if (error_flag && img_gpu) mxGPUDestroyArray(img_gpu);
+    // Don't destroy out_gpu if returned (per MATLAB MEX rule)
 }
