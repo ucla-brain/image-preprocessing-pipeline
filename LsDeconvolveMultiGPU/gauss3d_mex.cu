@@ -1,19 +1,11 @@
-// gauss3d_mex.cu - Fast, accurate, minimal VRAM 3D Gaussian filter for MATLAB GPU
+// gauss3d_mex.cu - Correct, high-precision, fast 3D Gaussian (1 temp buffer)
 // Author: ChatGPT + Keivan Moradi
-// - In-place, only one temp buffer (same as input)
-// - Separable (x, y, z)
-// - Accurate: double-precision accumulation for single/double input
-// - Matches imgaussfilt3 (spatial) for replicate boundary
-// - Handles large images and all classes
-// - No unnecessary copies
 
 #include "mex.h"
 #include "gpu/mxGPUArray.h"
 #include <cuda_runtime.h>
 #include <math.h>
 #include <algorithm>
-#include <cstdio>
-#include <cstdlib>
 
 #define MAX_KERNEL_SIZE 151
 #define CUDA_BLOCK_SIZE 256
@@ -24,7 +16,6 @@
         mexErrMsgIdAndTxt("gauss3d:cuda", "CUDA error at %s:%d: %s", __FILE__, __LINE__, cudaGetErrorString(err)); \
 } while(0)
 
-// Generate normalized double-precision 1D Gaussian kernel (host)
 void make_gaussian_kernel(double sigma, int ksize, double* kernel) {
     int r = ksize / 2;
     double sum = 0.0;
@@ -36,43 +27,49 @@ void make_gaussian_kernel(double sigma, int ksize, double* kernel) {
         kernel[i] /= sum;
 }
 
-// CUDA kernel: apply 1D gaussian to a line in given axis (with double-precision accumulation)
+// CUDA kernel: Apply 1D Gaussian to every line along given axis
 template<typename T>
-__global__ void gauss1d_axis_kernel(const T* src, T* dst, const double* kernel, int klen,
-                                    int nx, int ny, int nz, int axis)
+__global__ void gauss1d_kernel(const T* src, T* dst, const double* kernel, int klen,
+                               int nx, int ny, int nz, int axis)
 {
-    int line_len = (axis == 0) ? nx : (axis == 1) ? ny : nz;
+    // Find which line (out of all possible lines along 'axis') this block processes:
+    int n_lines[3] = { ny*nz, nx*nz, nx*ny };
+    int line_idx = blockIdx.x;
+    int pos = threadIdx.x;
+    int line_len = (axis==0) ? nx : (axis==1) ? ny : nz;
+
+    if (line_idx >= n_lines[axis] || pos >= line_len) return;
+
+    // For each axis, decode which indices this line maps to:
+    int x=0, y=0, z=0;
+    if (axis == 0) { // X lines
+        y = line_idx % ny;
+        z = line_idx / ny;
+        x = pos;
+    } else if (axis == 1) { // Y lines
+        x = line_idx % nx;
+        z = line_idx / nx;
+        y = pos;
+    } else { // Z lines
+        x = line_idx % nx;
+        y = line_idx / nx;
+        z = pos;
+    }
+    size_t idx = z*nx*ny + y*nx + x;
+
+    // Convolve the line with replicate boundary:
     int center = klen / 2;
-
-    // Identify the line (blockIdx.x/blockIdx.y) and position (threadIdx.x)
-    int max_lines0 = (axis == 0) ? ny : nx;
-    int max_lines1 = (axis == 2) ? ny : nz;
-
-    int line0 = blockIdx.x;
-    int line1 = blockIdx.y;
-    int pos   = threadIdx.x;
-
-    if (pos >= line_len) return;
-    if (line0 >= max_lines0 || line1 >= max_lines1) return;
-
-    int x = 0, y = 0, z = 0;
-    if (axis == 0) { y = line0; z = line1; x = pos; }
-    else if (axis == 1) { x = line0; z = line1; y = pos; }
-    else { x = line0; y = line1; z = pos; }
-    size_t idx = z * nx * ny + y * nx + x;
-
     double val = 0.0;
     for (int k = 0; k < klen; ++k) {
         int offset = k - center;
         int pi = pos + offset;
         if (pi < 0) pi = 0;
         if (pi >= line_len) pi = line_len - 1;
-
-        int tx = x, ty = y, tz = z;
-        if (axis == 0) tx = pi;
-        else if (axis == 1) ty = pi;
-        else tz = pi;
-        size_t sidx = tz * nx * ny + ty * nx + tx;
+        int tx=x, ty=y, tz=z;
+        if (axis == 0) tx=pi;
+        else if (axis == 1) ty=pi;
+        else tz=pi;
+        size_t sidx = tz*nx*ny + ty*nx + tx;
         val += (double)src[sidx] * kernel[k];
     }
     dst[idx] = (T)val;
@@ -80,7 +77,7 @@ __global__ void gauss1d_axis_kernel(const T* src, T* dst, const double* kernel, 
 
 template<typename T>
 void run_gauss3d_separable(T* buf, int nx, int ny, int nz, const double sigma[3], const int ksize[3]) {
-    size_t nvox = (size_t)nx * ny * nz;
+    size_t nvox = (size_t)nx*ny*nz;
     double h_kernel[MAX_KERNEL_SIZE];
     double* d_kernel = nullptr;
     T* d_tmp = nullptr;
@@ -95,20 +92,16 @@ void run_gauss3d_separable(T* buf, int nx, int ny, int nz, const double sigma[3]
         CUDA_CHECK(cudaMalloc(&d_kernel, klen * sizeof(double)));
         CUDA_CHECK(cudaMemcpy(d_kernel, h_kernel, klen * sizeof(double), cudaMemcpyHostToDevice));
 
-        int nblock0 = (axis == 0) ? ny : nx;
-        int nblock1 = (axis == 2) ? ny : nz;
-        int nthread = (axis == 0) ? nx : (axis == 1) ? ny : nz;
-        int threads = std::min(nthread, CUDA_BLOCK_SIZE);
-        dim3 grid(nblock0, nblock1, 1);
-        dim3 block(threads, 1, 1);
-
-        gauss1d_axis_kernel<T><<<grid, block>>>(src, dst, d_kernel, klen, nx, ny, nz, axis);
+        int n_lines = (axis==0) ? ny*nz : (axis==1) ? nx*nz : nx*ny;
+        int line_len = (axis==0) ? nx : (axis==1) ? ny : nz;
+        int threads = std::min(line_len, CUDA_BLOCK_SIZE);
+        int blocks = n_lines;
+        gauss1d_kernel<T><<<blocks, threads>>>(src, dst, d_kernel, klen, nx, ny, nz, axis);
         CUDA_CHECK(cudaGetLastError());
         CUDA_CHECK(cudaDeviceSynchronize());
         CUDA_CHECK(cudaFree(d_kernel));
         std::swap(src, dst);
     }
-
     if (src != buf)
         CUDA_CHECK(cudaMemcpy(buf, src, nvox * sizeof(T), cudaMemcpyDeviceToDevice));
     CUDA_CHECK(cudaFree(d_tmp));
@@ -119,7 +112,6 @@ extern "C"
 void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     mxInitGPU();
     if (nrhs < 2) mexErrMsgIdAndTxt("gauss3d:nrhs", "Usage: gauss3d_mex(x, sigma [, kernel_size])");
-
     const mxGPUArray* img_gpu_const = mxGPUCreateFromMxArray(prhs[0]);
     mxGPUArray* img_gpu = const_cast<mxGPUArray*>(img_gpu_const);
     const mwSize* sz = mxGPUGetDimensions(img_gpu);
