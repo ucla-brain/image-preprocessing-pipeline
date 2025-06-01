@@ -309,27 +309,24 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(stack
             x = xy; y = xy;
             bl_core = [x y z];
 
-            d_pad = decon_pad_size(psf_size);
-            bl_shape = bl_core + 2*d_pad;
+            pad = max(decon_pad_size(psf_size), gaussian_pad_size(bl_core, filter.gaussian_sigma));
+            bl_shape = bl_core + 2*pad;
 
             if filter.use_fft
                 bl_shape = next_fast_len(bl_shape);
             end
 
-            g_pad = gaussian_pad_size(bl_shape, filter.gaussian_size);
-            bl_shape_max = bl_shape + 2*g_pad;
-
             if any(bl_shape > max_elements_per_dim)
                 continue;
             end
-            if prod(bl_shape_max) > block_size_max
+            if prod(bl_shape) > block_size_max
                 continue;
             end
 
             score = prod(bl_core);
             if score > best_score
                 best_score = score;
-                best = struct('bl_core', bl_core, 'd_pad', d_pad, 'fft_shape', bl_shape);
+                best = struct('bl_core', bl_core, 'pad', pad, 'fft_shape', bl_shape);
                 num_failed = 0;
             else
                 if ~isempty(fieldnames(best))
@@ -345,20 +342,23 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(stack
     end
 
     x     = best.bl_core(1); y     = best.bl_core(2); z     = best.bl_core(3);
-    x_pad =   best.d_pad(1); y_pad =   best.d_pad(2); z_pad =   best.d_pad(3);
+    x_pad =     best.pad(1); y_pad =     best.pad(2); z_pad =     best.pad(3);
     fft_shape = best.fft_shape;
     nx = ceil(stack_info.x / x);
     ny = ceil(stack_info.y / y);
     nz = ceil(stack_info.z / z);
 end
 
-function pad_size = gaussian_pad_size(image_size, filter_size)
-    if isscalar(filter_size)
-        filter_size = repmat(filter_size, size(image_size));
+function pad_size = gaussian_pad_size(image_size, sigma)
+    % Accepts sigma (scalar or vector), computes pad_size for each dimension.
+    if isscalar(sigma)
+        sigma = repmat(sigma, size(image_size));
     end
-    pad_size = floor(filter_size(:) ./ 2);    % Column vector output
+    % Kernel size: covers ~99.7% of Gaussian (3 sigma each side)
+    ksize = 2 * ceil(3 * sigma(:)) + 1;
+    pad_size = floor(ksize / 2);    % Column vector
     if numel(pad_size) ~= numel(image_size)
-        pad_size = [pad_size; zeros(numel(image_size) - numel(pad_size), 1)];
+        pad_size = ceil([pad_size; zeros(numel(image_size) - numel(pad_size), 1)] ./ 2);
     end
     pad_size = pad_size(:).'; % Row vector (consistent with image_size)
 end
@@ -680,7 +680,7 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
 
     if min(filter.gaussian_sigma(:)) > 0
         % bl = imgaussfilt3(bl, filter.gaussian_sigma, 'FilterSize', filter.gaussian_size, 'Padding', 'symmetric');
-        bl = gauss3d_mex(bl, filter.gaussian_sigma);
+        bl = gauss3d_mex(bl, filter.gaussian_sigma, filter.gaussian_size, true);
         bl = bl - filter.dark;
         bl = max(bl, 0);
     end
