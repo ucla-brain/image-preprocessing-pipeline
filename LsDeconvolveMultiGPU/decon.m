@@ -100,7 +100,7 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regula
         if device_id > 0, R = gpuArray(R); end
     end
 
-    [bl, pad_pre, pad_post] = pad_block_to_fft_shape(bl, fft_shape);
+    [bl, pad_pre, pad_post] = pad_block_to_fft_shape(bl, fft_shape, 'replicate');
 
     if stop_criterion > 0
         delta_prev = norm(bl(:));
@@ -172,7 +172,7 @@ function [otf, otf_conj] = calculate_otf(psf_shifted, fft_shape, device_id)
     t_compute = tic;
     if ~isa(psf_shifted, 'single'), psf_shifted = single(psf_shifted); end
     if device_id > 0, psf_shifted = gpuArray(psf_shifted); end
-    [otf, ~, ~] = pad_block_to_fft_shape(psf_shifted, fft_shape);
+    [otf, ~, ~] = pad_block_to_fft_shape(psf_shifted, fft_shape, 0);
     otf = fftn(otf);
     % if device_id > 0, otf = arrayfun(@(r, i) complex(r, i), real(otf), imag(otf)); end
     otf_conj = conj(otf);
@@ -181,7 +181,7 @@ function [otf, otf_conj] = calculate_otf(psf_shifted, fft_shape, device_id)
         device_name(device_id), mat2str(fft_shape), toc(t_compute));
 end
 
-function [bl, pad_pre, pad_post] = pad_block_to_fft_shape(bl, fft_shape)
+function [bl, pad_pre, pad_post] = pad_block_to_fft_shape(bl, fft_shape, mode)
     % Ensure 3 dimensions for both bl and fft_shape
     sz = size(bl);
     sz = [sz, ones(1, 3-numel(sz))];      % pad size to 3 elements if needed
@@ -196,8 +196,8 @@ function [bl, pad_pre, pad_post] = pad_block_to_fft_shape(bl, fft_shape)
 
     % Only pad if needed
     if any(pad_pre > 0 | pad_post > 0)
-        bl = padarray(bl, pad_pre, 'replicate', 'pre');
-        bl = padarray(bl, pad_post, 'replicate', 'post');
+        bl = padarray(bl, pad_pre, mode', 'pre');
+        bl = padarray(bl, pad_post, mode, 'post');
     end
 end
 
