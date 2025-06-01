@@ -12,7 +12,7 @@
         mexErrMsgIdAndTxt("gauss3d:cuda", "CUDA error %s:%d: %s", __FILE__, __LINE__, cudaGetErrorString(err)); \
 } while(0)
 
-#define MAX_KERNEL_SIZE 151
+#define MAX_KERNEL_SIZE 51  // practical upper bound, can adjust as needed
 
 // ========================
 // Gaussian kernel creation
@@ -67,7 +67,7 @@ __global__ void gauss1d_kernel(
 
     // Convolve this position along axis
     int r = klen / 2;
-    double acc = 0.0;
+    T acc = T(0); // accumulate in input type, not double
     for (int s = 0; s < klen; ++s) {
         int offset = s - r;
         int xi = x, yi = y, zi = z;
@@ -75,9 +75,9 @@ __global__ void gauss1d_kernel(
         if (axis == 1) yi = min(max(y + offset, 0), ny - 1);
         if (axis == 2) zi = min(max(z + offset, 0), nz - 1);
         int src_idx = xi + yi * nx + zi * nx * ny;
-        acc += (double)src[src_idx] * (double)kernel[s];
+        acc += src[src_idx] * kernel[s];
     }
-    dst[idx] = (T)acc;
+    dst[idx] = acc;
 }
 
 // ===============================
@@ -92,27 +92,28 @@ void gauss3d_separable(
 {
     size_t N = (size_t)nx * ny * nz;
 
-    // Prepare Gaussian kernels
-    T* h_kernel = new T[MAX_KERNEL_SIZE];
-    T* d_kernel[3];
-    for (int axis = 0; axis < 3; ++axis) {
-        make_gaussian_kernel(sigma[axis], ksize[axis], h_kernel);
-        CUDA_CHECK(cudaMalloc(&d_kernel[axis], ksize[axis] * sizeof(T)));
-        CUDA_CHECK(cudaMemcpy(d_kernel[axis], h_kernel, ksize[axis] * sizeof(T), cudaMemcpyHostToDevice));
+    // Allocate single Gaussian kernel buffer (max needed size)
+    int max_klen = std::max({ksize[0], ksize[1], ksize[2]});
+    if (max_klen > MAX_KERNEL_SIZE) {
+        mexErrMsgIdAndTxt("gauss3d:ksize", "Kernel size exceeds MAX_KERNEL_SIZE (%d)", MAX_KERNEL_SIZE);
     }
-    delete[] h_kernel;
+    T* h_kernel = new T[max_klen];
+    T* d_kernel;
+    CUDA_CHECK(cudaMalloc(&d_kernel, max_klen * sizeof(T)));
 
     // Swap logic: input <-> buffer
     T* src = input;
     T* dst = buffer;
     for (int axis = 0; axis < 3; ++axis) {
+        make_gaussian_kernel(sigma[axis], ksize[axis], h_kernel);
+        CUDA_CHECK(cudaMemcpy(d_kernel, h_kernel, ksize[axis] * sizeof(T), cudaMemcpyHostToDevice));
         int linelen = (axis == 0) ? nx : (axis == 1) ? ny : nz;
         int nline   = (axis == 0) ? ny * nz : (axis == 1) ? nx * nz : nx * ny;
         int total = linelen * nline;
         int block = 256;
         int grid = (total + block - 1) / block;
         gauss1d_kernel<T><<<grid, block>>>(
-            src, dst, nx, ny, nz, d_kernel[axis], ksize[axis], axis);
+            src, dst, nx, ny, nz, d_kernel, ksize[axis], axis);
         CUDA_CHECK(cudaGetLastError());
         CUDA_CHECK(cudaDeviceSynchronize());
         std::swap(src, dst); // Swap pointers for next axis
@@ -121,8 +122,8 @@ void gauss3d_separable(
     if (src != input) {
         CUDA_CHECK(cudaMemcpy(input, src, N * sizeof(T), cudaMemcpyDeviceToDevice));
     }
-    // Free device kernels
-    for (int axis = 0; axis < 3; ++axis) CUDA_CHECK(cudaFree(d_kernel[axis]));
+    delete[] h_kernel;
+    CUDA_CHECK(cudaFree(d_kernel));
 }
 
 // ================
