@@ -1,4 +1,5 @@
-// Revised gauss3d_mex.cu supporting gpuArray inputs
+// gauss3d_mex.cu - Robust 3D Gaussian convolution for MATLAB GPU (X->Y->Z, replicate padding)
+
 #include "mex.h"
 #include "gpu/mxGPUArray.h"
 #include <cuda_runtime.h>
@@ -13,6 +14,7 @@
         mexErrMsgIdAndTxt("gauss3d:cuda", "CUDA error: %s", cudaGetErrorString(err)); \
 } while(0)
 
+// CUDA kernel for 1D convolution along specified dimension (with replicate padding)
 template <typename T>
 __global__ void gauss1d_kernel(
     const T* src, T* dst, int nx, int ny, int nz,
@@ -32,6 +34,7 @@ __global__ void gauss1d_kernel(
     for (int k = 0; k < klen; ++k) {
         int offset = k - center;
         int ci = (dim == 0) ? ix + offset : (dim == 1) ? iy + offset : iz + offset;
+        // Replicate (clamp) padding
         ci = min(max(ci, 0), size[dim] - 1);
         int cidx;
         if (dim == 0)
@@ -45,6 +48,7 @@ __global__ void gauss1d_kernel(
     dst[idx] = val;
 }
 
+// Host-side Gaussian kernel builder
 void make_gaussian_kernel(float sigma, float* kernel, int* klen) {
     int r = (int)ceilf(3.0f * sigma);
     *klen = 2*r + 1;
@@ -59,6 +63,7 @@ void make_gaussian_kernel(float sigma, float* kernel, int* klen) {
         kernel[i] /= sum;
 }
 
+// Separable 3D convolution: always returns the result in d_tmp
 template<typename T>
 void run_gauss3d(T* d_img, T* d_tmp, T* d_out, int nx, int ny, int nz, float sigma[3]) {
     float *h_kernels[3];
@@ -74,12 +79,15 @@ void run_gauss3d(T* d_img, T* d_tmp, T* d_out, int nx, int ny, int nz, float sig
     dim3 block(8,8,8);
     dim3 grid((nx+block.x-1)/block.x, (ny+block.y-1)/block.y, (nz+block.z-1)/block.z);
 
+    // Pass 1: X (src: d_img → dst: d_tmp)
     gauss1d_kernel<T><<<grid, block>>>(d_img, d_tmp, nx, ny, nz, d_kernels[0], klen[0], 0);
     CUDA_CHECK(cudaDeviceSynchronize());
 
+    // Pass 2: Y (src: d_tmp → dst: d_out)
     gauss1d_kernel<T><<<grid, block>>>(d_tmp, d_out, nx, ny, nz, d_kernels[1], klen[1], 1);
     CUDA_CHECK(cudaDeviceSynchronize());
 
+    // Pass 3: Z (src: d_out → dst: d_tmp)
     gauss1d_kernel<T><<<grid, block>>>(d_out, d_tmp, nx, ny, nz, d_kernels[2], klen[2], 2);
     CUDA_CHECK(cudaDeviceSynchronize());
 
@@ -87,15 +95,21 @@ void run_gauss3d(T* d_img, T* d_tmp, T* d_out, int nx, int ny, int nz, float sig
         CUDA_CHECK(cudaFree(d_kernels[d]));
         delete[] h_kernels[d];
     }
+    // After Z pass, d_tmp contains the final result!
 }
 
+// Main entry point for MATLAB MEX
 void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     mxInitGPU();
 
     if (nrhs < 2) mexErrMsgIdAndTxt("gauss3d:nrhs", "Need input array and sigma");
 
+    // Accept both cpu and gpuArray input
     const mxGPUArray *img_gpu = mxGPUCreateFromMxArray(prhs[0]);
     const mwSize* sz = mxGPUGetDimensions(img_gpu);
+    int nd = mxGPUGetNumberOfDimensions(img_gpu);
+    if (nd != 3) mexErrMsgIdAndTxt("gauss3d:ndims", "Input must be 3D");
+
     int nx = (int)sz[0], ny = (int)sz[1], nz = (int)sz[2];
 
     float sigma[3];
@@ -111,19 +125,12 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     void *img_ptr = (void*)mxGPUGetDataReadOnly(img_gpu);
     void *out_ptr = (void*)mxGPUGetData(out_gpu);
 
-    size_t N = nx*ny*nz;
     mxGPUArray *tmp_gpu = mxGPUCreateGPUArray(3, sz, cls, mxREAL, MX_GPU_DO_NOT_INITIALIZE);
     void *tmp_ptr = (void*)mxGPUGetData(tmp_gpu);
 
+    // Run: X (img->tmp), Y (tmp->out), Z (out->tmp). Final result in tmp.
     if (cls == mxSINGLE_CLASS)
         run_gauss3d<float>((float*)img_ptr, (float*)tmp_ptr, (float*)out_ptr, nx, ny, nz, sigma);
     else if (cls == mxDOUBLE_CLASS)
         run_gauss3d<double>((double*)img_ptr, (double*)tmp_ptr, (double*)out_ptr, nx, ny, nz, sigma);
-    else mexErrMsgIdAndTxt("gauss3d:class", "Input must be single or double");
-
-    plhs[0] = mxGPUCreateMxArrayOnGPU(tmp_gpu);
-
-    mxGPUDestroyGPUArray(img_gpu);
-    mxGPUDestroyGPUArray(tmp_gpu);
-    mxGPUDestroyGPUArray(out_gpu);
-}
+    else mexErrMsgIdAndTxt("gauss3d:class", "Input
