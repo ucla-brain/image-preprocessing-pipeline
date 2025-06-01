@@ -50,7 +50,7 @@ void make_gaussian_kernel(float sigma, float* kernel, int* klen) {
     int r = (int)ceilf(3.0f * sigma);
     *klen = 2*r + 1;
     if (*klen > MAX_KERNEL_SIZE)
-        mexErrMsgIdAndTxt("gauss3d:kernel", "Kernel size exceeds MAX_KERNEL_SIZE (%d)", MAX_KERNEL_SIZE);
+        mexErrMsgIdAndTxt("gauss3d:kernel", "Kernel size (%d) exceeds MAX_KERNEL_SIZE (%d)", *klen, MAX_KERNEL_SIZE);
     float sum = 0.0f;
     for (int i = -r; i <= r; ++i) {
         kernel[i+r] = expf(-0.5f * (i*i) / (sigma*sigma));
@@ -62,7 +62,7 @@ void make_gaussian_kernel(float sigma, float* kernel, int* klen) {
 
 // Minimal vRAM version: only two buffers for in-place swapping.
 template<typename T>
-void run_gauss3d(T* bufA, T* bufB, int nx, int ny, int nz, float sigma[3]) {
+void run_gauss3d(T* bufA, T* bufB, int nx, int ny, int nz, const float sigma[3]) {
     float *h_kernel = new float[MAX_KERNEL_SIZE];
     float *d_kernel;
     int klen;
@@ -88,8 +88,7 @@ void run_gauss3d(T* bufA, T* bufB, int nx, int ny, int nz, float sigma[3]) {
         dst = tmp;
     }
     delete[] h_kernel;
-    // After three swaps, if passes is odd, src == bufB (final), else src == bufA.
-    // We always return 'src' after 3 passes.
+    // After three swaps, the output is always in bufB (src == bufB)
 }
 
 // MEX entry
@@ -104,6 +103,8 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     if (nd != 3) mexErrMsgIdAndTxt("gauss3d:ndims", "Input must be 3D");
 
     int nx = (int)sz[0], ny = (int)sz[1], nz = (int)sz[2];
+    if (nx == 0 || ny == 0 || nz == 0)
+        mexErrMsgIdAndTxt("gauss3d:empty", "Input must be nonempty 3D array");
 
     float sigma[3];
     if (mxIsScalar(prhs[1])) sigma[0]=sigma[1]=sigma[2]=(float)mxGetScalar(prhs[1]);
@@ -132,14 +133,13 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
 
     void* B_ptr = (void*)mxGPUGetData(B_gpu);
 
-    // Run filter (output may be in A or B)
+    // Run filter (output will always be in B_gpu after 3 passes)
     if (cls == mxSINGLE_CLASS)
         run_gauss3d<float>((float*)A_ptr, (float*)B_ptr, nx, ny, nz, sigma);
     else if (cls == mxDOUBLE_CLASS)
         run_gauss3d<double>((double*)A_ptr, (double*)B_ptr, nx, ny, nz, sigma);
     else mexErrMsgIdAndTxt("gauss3d:class", "Input must be single or double");
 
-    // After 3 passes (odd), the output is in B_gpu
     plhs[0] = mxGPUCreateMxArrayOnGPU(B_gpu);
 
     mxGPUDestroyGPUArray(img_gpu);
