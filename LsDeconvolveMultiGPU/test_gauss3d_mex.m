@@ -1,8 +1,9 @@
 function test_gauss3d_mex_large_gpu()
+    % 3D block GPU Gaussian filtering test
     szs = {
         [32, 128, 128], ...
         [256, 512, 512], ...
-        [2048, 1024, 1024]
+        [2048, 1024, 1024] % Large test
     };
     types = {@single, @double};
     sigma = 2.5;
@@ -35,15 +36,16 @@ function test_gauss3d_mex_large_gpu()
             t_gpu = toc;
             fprintf('Completed GPU Gaussian filtering in %.2f seconds\n', t_gpu);
 
+            % 3D validation
             rng(0);
-            midz = round(sz(3)/2);
-            x_val = rand(sz(1), sz(2), type_str);
-            k2d = odd_kernel_size(sigma);
-            y_ref = imgaussfilt(x_val, sigma, ...
-                'Padding', 'replicate', 'FilterSize', k2d(1:2));  % <<--- FIXED
+            x_val = rand(sz, type_str);
+            k3d = odd_kernel_size(sigma);
+            y_ref = imgaussfilt3(x_val, sigma, ...
+                'Padding', 'replicate', 'FilterSize', k3d); % 3D ground truth
 
-            err = max(abs(y_result(:,:,midz) - y_ref), [], 'all');
-            fprintf('  Validation slice: max error = %.2e\n', err);
+            % Compare the entire output (random slice check is less meaningful in 3D)
+            err = max(abs(y_result(:) - y_ref(:)));
+            fprintf('  3D validation: max error = %.2e\n', err);
 
             clear y_result
         end
@@ -51,6 +53,7 @@ function test_gauss3d_mex_large_gpu()
 end
 
 function sz = odd_kernel_size(sigma)
+    % Returns a 3-element vector for 3D filter size
     if isscalar(sigma)
         sigma = [sigma sigma sigma];
     end
