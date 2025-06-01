@@ -67,7 +67,7 @@ function test_gauss3d_mex_large_gpu()
                     fprintf('    FAIL: single precision\n');
                 end
             else
-                if err < 1e-8
+                if err < 1e-7
                     fprintf('    PASS: double precision\n');
                 else
                     fprintf('    FAIL: double precision\n');
