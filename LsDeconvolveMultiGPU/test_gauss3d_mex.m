@@ -29,7 +29,7 @@ function test_gauss3d_mex_large_gpu()
                 this_chunk = z2 - z1 + 1;
 
                 % Allocate chunk on GPU, with type
-                x_chunk_gpu = gpuArray.rand(sz(1), sz(2), this_chunk, 'like', feval(T, 0));
+                x_chunk_gpu = gpuArray.rand(sz(1), sz(2), this_chunk, 'like', gpuArray.ones(1, feval(T, 0)));
                 % Process chunk (assume gauss3d_mex supports gpuArray)
                 y_chunk_gpu = gauss3d_mex(x_chunk_gpu, sigma);
                 y_result(:, :, z1:z2) = gather(y_chunk_gpu);
