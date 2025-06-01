@@ -1,10 +1,5 @@
 // gauss3d_mex.cu: Minimal VRAM in-place 3D Gaussian filter for MATLAB GPU arrays
-//
-// - True in-place: Only a 1D temp line buffer is allocated on GPU
-// - Accuracy: Double-precision accumulation for single/double input
-// - Boundary: Replicate, matches MATLAB
-// - VRAM: ≪ full-volume, matches imgaussfilt3 (spatial)
-// - Author: ChatGPT + Keivan Moradi
+// Author: ChatGPT + Keivan Moradi
 
 #include "mex.h"
 #include "gpu/mxGPUArray.h"
@@ -15,7 +10,7 @@
 #include <cstdio>
 
 #define MAX_KERNEL_SIZE 151
-#define CUDA_BLOCK_SIZE 256
+#define CUDA_BLOCK_SIZE 256   // May increase up to 1024 for larger lines
 
 #define CUDA_CHECK(call) do { \
     cudaError_t err = call; \
@@ -23,7 +18,7 @@
         mexErrMsgIdAndTxt("gauss3d:cuda", "CUDA error at %s:%d: %s", __FILE__, __LINE__, cudaGetErrorString(err)); \
 } while(0)
 
-// Gaussian kernel (host)
+// --- 1D Gaussian kernel generation (normalized) ---
 template<typename T>
 void make_gaussian_kernel(T sigma, int ksize, T* kernel) {
     int r = ksize / 2;
@@ -36,33 +31,81 @@ void make_gaussian_kernel(T sigma, int ksize, T* kernel) {
         kernel[i] = (T)(kernel[i] / sum);
 }
 
-// Kernel for 1D convolution of a line (in-place in line buffer)
+// --- Gather a line from 3D into d_line (parallel for Y/Z axis) ---
+template<typename T>
+__global__ void gather_line_kernel(const T* buf, T* d_line, int nx, int ny, int nz,
+                                   int ix, int iy, int iz, int len, int dim)
+{
+    int i = threadIdx.x + blockDim.x * blockIdx.x;
+    if (i >= len) return;
+    size_t idx;
+    if (dim == 1) // along Y
+        idx = iz * nx * ny + i * nx + ix;
+    else          // along Z
+        idx = i * nx * ny + iy * nx + ix;
+    d_line[i] = buf[idx];
+}
+
+// --- Scatter d_line into 3D volume (parallel for Y/Z axis) ---
+template<typename T>
+__global__ void scatter_line_kernel(T* buf, const T* d_line, int nx, int ny, int nz,
+                                    int ix, int iy, int iz, int len, int dim)
+{
+    int i = threadIdx.x + blockDim.x * blockIdx.x;
+    if (i >= len) return;
+    size_t idx;
+    if (dim == 1) // along Y
+        idx = iz * nx * ny + i * nx + ix;
+    else          // along Z
+        idx = i * nx * ny + iy * nx + ix;
+    buf[idx] = d_line[i];
+}
+
+// --- 1D convolution kernel: shared memory safe for any line length ---
 template<typename T>
 __global__ void gauss1d_line_kernel(T* line, const T* kernel, int klen, int line_len) {
     int idx = threadIdx.x + blockDim.x * blockIdx.x;
     if (idx >= line_len) return;
-    extern __shared__ double buf[]; // shared mem for double accumulation
-    int tid = threadIdx.x;
-    // Copy to double buffer
-    if (idx < line_len) buf[tid] = (double)line[idx];
-    __syncthreads();
 
-    int center = klen / 2;
-    double val = 0.0;
-    for (int k = 0; k < klen; ++k) {
-        int offset = k - center;
-        int ci = idx + offset;
-        ci = min(max(ci, 0), line_len - 1); // replicate
-        val += buf[ci] * (double)kernel[k];
+    // Buffer only up to CUDA_BLOCK_SIZE
+    __shared__ double buf[CUDA_BLOCK_SIZE];
+    int tid = threadIdx.x;
+
+    // Use grid-stride for long lines
+    for (int base = 0; base < line_len; base += CUDA_BLOCK_SIZE) {
+        int global_idx = base + tid;
+        if (global_idx < line_len) {
+            buf[tid] = (double)line[global_idx];
+        }
+        __syncthreads();
+
+        // Convolve for this chunk, each thread for its element
+        if (global_idx < line_len) {
+            int center = klen / 2;
+            double val = 0.0;
+            for (int k = 0; k < klen; ++k) {
+                int offset = k - center;
+                int ci = global_idx + offset;
+                // replicate boundary
+                ci = min(max(ci, 0), line_len - 1);
+                int local_ci = ci - base; // Local offset in shared buf
+                if (local_ci >= 0 && local_ci < CUDA_BLOCK_SIZE)
+                    val += buf[local_ci] * (double)kernel[k];
+                else
+                    val += (double)line[ci] * (double)kernel[k]; // fallback if out of chunk
+            }
+            line[global_idx] = (T)val;
+        }
+        __syncthreads();
     }
-    __syncthreads();
-    if (idx < line_len) line[idx] = (T)val;
 }
 
-// Host-side: process one axis at a time, true in-place, line by line
+// --- Host-side: Axis-wise line filtering, true in-place, with safe gather/scatter ---
 template<typename T>
 void run_gauss3d_inplace(T* buf, int nx, int ny, int nz, const T sigma[3], const int ksize[3]) {
     int max_line = std::max({nx, ny, nz});
+    if (max_line > 65536)
+        mexErrMsgIdAndTxt("gauss3d:maxline", "Single line length exceeds supported range (65536).");
     T* h_kernel = new T[MAX_KERNEL_SIZE];
     T* d_kernel = nullptr;
     T* d_line = nullptr;
@@ -82,45 +125,33 @@ void run_gauss3d_inplace(T* buf, int nx, int ny, int nz, const T sigma[3], const
             else if (dim == 1) { ix = l % nx; iz = l / nx; }
             else { ix = l % nx; iy = l / nx; }
 
-            // Compute start pointer of the line
-            T* line_ptr;
+            // Gather line
             if (dim == 0)
-                line_ptr = buf + iz * nx * ny + iy * nx;
-            else if (dim == 1)
-                line_ptr = buf + iz * nx * ny + ix;
-            else
-                line_ptr = buf + iy * nx + ix;
-
-            // Gather the line into d_line buffer
-            if (dim == 0)
-                CUDA_CHECK(cudaMemcpy(d_line, line_ptr, nx * sizeof(T), cudaMemcpyDeviceToDevice));
-            else if (dim == 1) {
-                // Strided copy: along y
-                for (int j = 0; j < ny; ++j)
-                    CUDA_CHECK(cudaMemcpy(d_line + j, buf + iz * nx * ny + j * nx + ix, sizeof(T), cudaMemcpyDeviceToDevice));
-            } else {
-                // Strided copy: along z
-                for (int k = 0; k < nz; ++k)
-                    CUDA_CHECK(cudaMemcpy(d_line + k, buf + k * nx * ny + iy * nx + ix, sizeof(T), cudaMemcpyDeviceToDevice));
+                CUDA_CHECK(cudaMemcpy(d_line, buf + iz * nx * ny + iy * nx, nx * sizeof(T), cudaMemcpyDeviceToDevice));
+            else {
+                int threads = CUDA_BLOCK_SIZE;
+                int blocks = (line_len + threads - 1) / threads;
+                gather_line_kernel<T><<<blocks, threads>>>(buf, d_line, nx, ny, nz, ix, iy, iz, line_len, dim);
+                CUDA_CHECK(cudaGetLastError());
+                CUDA_CHECK(cudaDeviceSynchronize());
             }
 
-            // Launch kernel for line
-            int threads = std::min(line_len, CUDA_BLOCK_SIZE);
+            // Filter the line (always full line, safe for any length)
+            int threads = CUDA_BLOCK_SIZE;
             int blocks = (line_len + threads - 1) / threads;
-            size_t shared_mem = threads * sizeof(double);
-            gauss1d_line_kernel<T><<<blocks, threads, shared_mem>>>(d_line, d_kernel, klen, line_len);
+            gauss1d_line_kernel<T><<<blocks, threads>>>(d_line, d_kernel, klen, line_len);
             CUDA_CHECK(cudaGetLastError());
             CUDA_CHECK(cudaDeviceSynchronize());
 
-            // Scatter filtered line back
+            // Scatter back
             if (dim == 0)
-                CUDA_CHECK(cudaMemcpy(line_ptr, d_line, nx * sizeof(T), cudaMemcpyDeviceToDevice));
-            else if (dim == 1) {
-                for (int j = 0; j < ny; ++j)
-                    CUDA_CHECK(cudaMemcpy(buf + iz * nx * ny + j * nx + ix, d_line + j, sizeof(T), cudaMemcpyDeviceToDevice));
-            } else {
-                for (int k = 0; k < nz; ++k)
-                    CUDA_CHECK(cudaMemcpy(buf + k * nx * ny + iy * nx + ix, d_line + k, sizeof(T), cudaMemcpyDeviceToDevice));
+                CUDA_CHECK(cudaMemcpy(buf + iz * nx * ny + iy * nx, d_line, nx * sizeof(T), cudaMemcpyDeviceToDevice));
+            else {
+                int threads = CUDA_BLOCK_SIZE;
+                int blocks = (line_len + threads - 1) / threads;
+                scatter_line_kernel<T><<<blocks, threads>>>(buf, d_line, nx, ny, nz, ix, iy, iz, line_len, dim);
+                CUDA_CHECK(cudaGetLastError());
+                CUDA_CHECK(cudaDeviceSynchronize());
             }
         }
         CUDA_CHECK(cudaFree(d_kernel));
@@ -129,7 +160,7 @@ void run_gauss3d_inplace(T* buf, int nx, int ny, int nz, const T sigma[3], const
     delete[] h_kernel;
 }
 
-// MEX entry
+// --- MEX entry point ---
 extern "C"
 void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     mxInitGPU();
