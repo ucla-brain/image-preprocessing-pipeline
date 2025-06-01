@@ -103,7 +103,8 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     if (nrhs < 2) mexErrMsgIdAndTxt("gauss3d:nrhs", "Need input array and sigma");
 
     // Use input gpuArray for in-place output
-    mxGPUArray* img_gpu = mxGPUCreateFromMxArray(prhs[0]);
+    const mxGPUArray* img_gpu_const = mxGPUCreateFromMxArray(prhs[0]);
+    mxGPUArray* img_gpu = const_cast<mxGPUArray*>(img_gpu_const);
     const mwSize* sz = mxGPUGetDimensions(img_gpu);
     int nd = mxGPUGetNumberOfDimensions(img_gpu);
     if (nd != 3) mexErrMsgIdAndTxt("gauss3d:ndims", "Input must be 3D");
