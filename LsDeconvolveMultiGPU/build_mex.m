@@ -51,9 +51,9 @@ mex(mex_flags{:}, src_lz4_load, src_lz4_c);
 
 % CUDA optimization flags (for mexcuda)
 if ispc && ~ismac
-    nvccflags = 'NVCCFLAGS="$NVCCFLAGS -G -g -lineinfo -std=c++14 -Xcompiler ""/O2,/arch:AVX2,/openmp"" "';
+    nvccflags = 'NVCCFLAGS="$NVCCFLAGS -G -std=c++14 -Xcompiler ""/O2,/arch:AVX2,/openmp"" "';
 else
-    nvccflags = 'NVCCFLAGS="$NVCCFLAGS -G -g -lineinfo -std=c++14 -Xcompiler ''-O2,-march=native,-fomit-frame-pointer,-fopenmp'' "';
+    nvccflags = 'NVCCFLAGS="$NVCCFLAGS -G -std=c++14 -Xcompiler ''-O2,-march=native,-fopenmp'' "';
 end
 
 % CUDA include dirs (if any)
