@@ -38,8 +38,10 @@ function test_gauss3d_mex_large_gpu()
             rng(0);
             midz = round(sz(3)/2);
             x_val = rand(sz(1), sz(2), type_str);
+            k2d = odd_kernel_size(sigma);
             y_ref = imgaussfilt(x_val, sigma, ...
-                'Padding', 'replicate', 'FilterSize', odd_kernel_size(sigma));
+                'Padding', 'replicate', 'FilterSize', k2d(1:2));  % <<--- FIXED
+
             err = max(abs(y_result(:,:,midz) - y_ref), [], 'all');
             fprintf('  Validation slice: max error = %.2e\n', err);
 
