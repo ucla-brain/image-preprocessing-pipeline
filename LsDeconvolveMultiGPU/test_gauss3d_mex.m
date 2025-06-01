@@ -24,6 +24,7 @@ function test_gauss3d_mex_large_gpu()
             slices_per_chunk = max(floor(max_gpu_bytes / slice_bytes), 1);
 
             % Preallocate result on CPU
+            disp(sz);
             y_result = zeros(sz, T);   % now always numeric!
 
             tic;
