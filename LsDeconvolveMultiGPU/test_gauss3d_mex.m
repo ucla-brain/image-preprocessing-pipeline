@@ -27,8 +27,7 @@ function test_gauss3d_mex_gpu_inplace()
             mem0 = g.AvailableMemory;
             k3d = odd_kernel_size(sigma);
             tic;
-            y_ref_gpu = imgaussfilt3(x_val_gpu, sigma, ...
-                'Padding', 'replicate', 'FilterSize', k3d);
+            y_ref_gpu = imgaussfilt3(x_val_gpu, sigma, 'Padding', 'replicate', 'FilterSize', k3d, 'FilterDomain', 'spatial');
             wait(g);
             t_matlab = toc;
             mem1 = g.AvailableMemory;
