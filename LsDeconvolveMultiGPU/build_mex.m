@@ -51,12 +51,11 @@ mex(mex_flags{:}, src_lz4_load, src_lz4_c);
 
 % CUDA optimization flags (for mexcuda)
 if ispc && ~ismac
-    extra_opts = {'-compiler-options', '/O2 /arch:AVX2 /openmp', ...
-                  '-Xcompiler', '/O2,/arch:AVX2,/openmp'};
+    extra_opts = {'-Xcompiler', '/O2,/arch:AVX2,/openmp'};
 else
-    extra_opts = {'-compiler-options', '-O2 -march=native -fomit-frame-pointer -fopenmp', ...
-                  '-Xcompiler', '-O2,-march=native,-fomit-frame-pointer,-fopenmp'};
+    extra_opts = {'-Xcompiler', '-O2,-march=native,-fomit-frame-pointer,-fopenmp'};
 end
+
 
 % CUDA include dirs (if any)
 root_dir = '.'; include_dir = './cuda_kernels';
