@@ -28,8 +28,8 @@ function test_gauss3d_mex_large_gpu()
                 z_end = min(z + slices_per_chunk - 1, sz(3));
                 chunk_sz = [sz(1), sz(2), z_end - z + 1];
 
-                % Create GPU input of correct type
-                x_chunk_gpu = gpuArray.rand(chunk_sz, 'like', feval(T, 0));
+                % FIX: Unpack dimensions as separate arguments
+                x_chunk_gpu = gpuArray.rand(chunk_sz(1), chunk_sz(2), chunk_sz(3), 'like', feval(T, 0));
 
                 % Process chunk directly on GPU
                 y_chunk_gpu = gauss3d_mex(x_chunk_gpu, sigma);
