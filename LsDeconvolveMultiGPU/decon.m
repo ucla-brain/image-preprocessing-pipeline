@@ -196,7 +196,7 @@ function [bl, pad_pre, pad_post] = pad_block_to_fft_shape(bl, fft_shape, mode)
 
     % Only pad if needed
     if any(pad_pre > 0 | pad_post > 0)
-        bl = padarray(bl, pad_pre, mode', 'pre');
+        bl = padarray(bl, pad_pre, mode, 'pre');
         bl = padarray(bl, pad_post, mode, 'post');
     end
 end
