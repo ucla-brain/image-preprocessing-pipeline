@@ -24,6 +24,13 @@ __constant__ __half const_kernel_h[MAX_KERNEL_SIZE];
 __constant__ float const_kernel_f[MAX_KERNEL_SIZE];
 __constant__ double const_kernel_d[MAX_KERNEL_SIZE];
 
+// --- Device-side OOB check macro, with minimal print ---
+#define OOB_CHECK(idx, N, label, ...) \
+    if ((idx) < 0 || (idx) >= (N)) { \
+        printf("OOB-%s: idx=%d N=%d " __VA_ARGS__ "\n", label, (int)(idx), (int)(N)); \
+        return; \
+    }
+
 // Gaussian kernel creation - must be declared before use!
 template <typename T>
 void make_gaussian_kernel(T sigma, int ksize, T* kernel) {
@@ -35,13 +42,6 @@ void make_gaussian_kernel(T sigma, int ksize, T* kernel) {
     }
     for (int i = 0; i < ksize; ++i) kernel[i] = (T)(kernel[i] / sum);
 }
-
-// --- Debugging OOB check macro ---
-#define OOB_CHECK(idx, N, label) \
-    if ((idx) < 0 || (idx) >= (N)) { \
-        printf("OOB %s: idx=%d N=%d\n", label, (int)(idx), (int)(N)); \
-        return; \
-    }
 
 // CUDA 1D convolution kernel for half (accumulates in float)
 __global__ void gauss1d_kernel_const_half(
@@ -79,7 +79,7 @@ __global__ void gauss1d_kernel_const_half(
     float acc = 0.0f;
     int N = nx * ny * nz;
 
-    OOB_CHECK(idx, N, "half-dst")
+    OOB_CHECK(idx, N, "half-dst", "[half axis=%d]", axis)
     for (int s = 0; s < klen; ++s) {
         int offset = s - r;
         int xi = x, yi = y, zi = z;
@@ -87,9 +87,9 @@ __global__ void gauss1d_kernel_const_half(
         if (axis == 1) yi = min(max(y + offset, 0), ny - 1);
         if (axis == 2) zi = min(max(z + offset, 0), nz - 1);
         int src_idx = xi + yi * nx + zi * nx * ny;
-        OOB_CHECK(src_idx, N, "half-src")
+        OOB_CHECK(src_idx, N, "half-src", "[half axis=%d s=%d]", axis, s)
         if (s < 0 || s >= klen) {
-            printf("OOB half-kernel: s=%d klen=%d\n", s, klen);
+            printf("OOB-half-kernel: s=%d klen=%d [axis=%d]\n", s, klen, axis);
             return;
         }
         acc += __half2float(src[src_idx]) * __half2float(const_kernel_h[s]);
@@ -133,7 +133,7 @@ __global__ void gauss1d_kernel_const_float(
     float acc = 0.0f;
     int N = nx * ny * nz;
 
-    OOB_CHECK(idx, N, "float-dst")
+    OOB_CHECK(idx, N, "float-dst", "[float axis=%d]", axis)
     for (int s = 0; s < klen; ++s) {
         int offset = s - r;
         int xi = x, yi = y, zi = z;
@@ -141,9 +141,9 @@ __global__ void gauss1d_kernel_const_float(
         if (axis == 1) yi = min(max(y + offset, 0), ny - 1);
         if (axis == 2) zi = min(max(z + offset, 0), nz - 1);
         int src_idx = xi + yi * nx + zi * nx * ny;
-        OOB_CHECK(src_idx, N, "float-src")
+        OOB_CHECK(src_idx, N, "float-src", "[float axis=%d s=%d]", axis, s)
         if (s < 0 || s >= klen) {
-            printf("OOB float-kernel: s=%d klen=%d\n", s, klen);
+            printf("OOB-float-kernel: s=%d klen=%d [axis=%d]\n", s, klen, axis);
             return;
         }
         acc += src[src_idx] * const_kernel_f[s];
@@ -151,7 +151,6 @@ __global__ void gauss1d_kernel_const_float(
     dst[idx] = acc;
 }
 
-// CUDA 1D convolution kernel for double
 __global__ void gauss1d_kernel_const_double(
     const double* src, double* dst,
     int nx, int ny, int nz,
@@ -187,7 +186,7 @@ __global__ void gauss1d_kernel_const_double(
     double acc = 0.0;
     int N = nx * ny * nz;
 
-    OOB_CHECK(idx, N, "double-dst")
+    OOB_CHECK(idx, N, "double-dst", "[double axis=%d]", axis)
     for (int s = 0; s < klen; ++s) {
         int offset = s - r;
         int xi = x, yi = y, zi = z;
@@ -195,9 +194,9 @@ __global__ void gauss1d_kernel_const_double(
         if (axis == 1) yi = min(max(y + offset, 0), ny - 1);
         if (axis == 2) zi = min(max(z + offset, 0), nz - 1);
         int src_idx = xi + yi * nx + zi * nx * ny;
-        OOB_CHECK(src_idx, N, "double-src")
+        OOB_CHECK(src_idx, N, "double-src", "[double axis=%d s=%d]", axis, s)
         if (s < 0 || s >= klen) {
-            printf("OOB double-kernel: s=%d klen=%d\n", s, klen);
+            printf("OOB-double-kernel: s=%d klen=%d [axis=%d]\n", s, klen, axis);
             return;
         }
         acc += src[src_idx] * const_kernel_d[s];
@@ -232,14 +231,11 @@ void gauss3d_separable_half(
         mexErrMsgIdAndTxt("gauss3d:ksize", "Kernel size exceeds MAX_KERNEL_SIZE (%d)", MAX_KERNEL_SIZE);
     }
     size_t N = (size_t)nx * ny * nz;
-
-    // Allocate device __half buffers
     __half* d_a;
     __half* d_b;
     CUDA_CHECK(cudaMalloc(&d_a, N * sizeof(__half)));
     CUDA_CHECK(cudaMalloc(&d_b, N * sizeof(__half)));
 
-    // Convert input float -> half
     float_to_half_kernel<<<(N+255)/256,256>>>(input, d_a, N);
     CUDA_CHECK(cudaGetLastError());
     CUDA_CHECK(cudaDeviceSynchronize());
@@ -247,13 +243,10 @@ void gauss3d_separable_half(
     __half* src = d_a;
     __half* dst = d_b;
     __half* tmp;
-
     float* h_kernel = new float[max_klen];
     __half* h_kernel_h = new __half[max_klen];
 
     for (int axis = 0; axis < 3; ++axis) {
-        printf("[DEBUG] [half] Launch axis %d: nx=%d ny=%d nz=%d klen=%d N=%zu\n", axis, nx, ny, nz, ksize[axis], N);
-        fflush(stdout);
         make_gaussian_kernel(sigma[axis], ksize[axis], h_kernel);
         for (int i = 0; i < ksize[axis]; ++i)
             h_kernel_h[i] = __float2half(h_kernel[i]);
@@ -266,7 +259,6 @@ void gauss3d_separable_half(
         int grid = (total + block - 1) / block;
 
         gauss1d_kernel_const_half<<<grid, block, 0>>>(src, dst, nx, ny, nz, ksize[axis], axis);
-
         CUDA_CHECK(cudaGetLastError());
         CUDA_CHECK(cudaDeviceSynchronize());
 
@@ -301,8 +293,6 @@ void gauss3d_separable(
     T* dst = buffer;
 
     for (int axis = 0; axis < 3; ++axis) {
-        printf("[DEBUG] [T] Launch axis %d: nx=%d ny=%d nz=%d klen=%d\n", axis, nx, ny, nz, ksize[axis]);
-        fflush(stdout);
         make_gaussian_kernel(sigma[axis], ksize[axis], h_kernel);
 
         int linelen = (axis == 0) ? nx : (axis == 1) ? ny : nz;
@@ -386,7 +376,6 @@ extern "C" void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* 
             ksize[i] = 2 * (int)ceil(3.0 * sigma_double[i]) + 1;
     }
 
-    // --- Parse optional 'half' mode ---
     bool use_half = false;
     if (nrhs >= 4 && mxIsChar(prhs[3])) {
         char mode[16];
@@ -394,12 +383,6 @@ extern "C" void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* 
         if (strcmp(mode, "half") == 0) use_half = true;
     }
 
-    // --- Debugging log of params ---
-    printf("[DEBUG] nx=%d ny=%d nz=%d N=%zu ksize=[%d %d %d] sigma=[%.3f %.3f %.3f] type=%d use_half=%d\n",
-        nx, ny, nz, N, ksize[0], ksize[1], ksize[2], sigma_double[0], sigma_double[1], sigma_double[2], cls, use_half);
-    fflush(stdout);
-
-    // --- Dispatch by type ---
     if (use_half) {
         if (cls != mxSINGLE_CLASS) {
             mexErrMsgIdAndTxt("gauss3d:half", "'half' mode requires single-precision gpuArray input.");
