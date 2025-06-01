@@ -23,6 +23,19 @@ __constant__ __half const_kernel_h[MAX_KERNEL_SIZE];
 __constant__ float const_kernel_f[MAX_KERNEL_SIZE];
 __constant__ double const_kernel_d[MAX_KERNEL_SIZE];
 
+// Gaussian kernel creation - must be declared before use!
+template <typename T>
+void make_gaussian_kernel(T sigma, int ksize, T* kernel) {
+    int r = ksize / 2;
+    double sum = 0.0;
+    for (int i = -r; i <= r; ++i) {
+        kernel[i + r] = (T)std::exp(-0.5 * (i * i) / (sigma * sigma));
+        sum += kernel[i + r];
+    }
+    for (int i = 0; i < ksize; ++i) kernel[i] = (T)(kernel[i] / sum);
+}
+
+// CUDA 1D convolution kernel for half (accumulates in float)
 __global__ void gauss1d_kernel_const_half(
     const __half* src, __half* dst,
     int nx, int ny, int nz,
@@ -82,19 +95,7 @@ __global__ void half_to_float_kernel(const __half* src, float* dst, size_t N) {
         dst[idx] = __half2float(src[idx]);
 }
 
-// Gaussian kernel creation
-template <typename T>
-void make_gaussian_kernel(T sigma, int ksize, T* kernel) {
-    int r = ksize / 2;
-    double sum = 0.0;
-    for (int i = -r; i <= r; ++i) {
-        kernel[i + r] = (T)std::exp(-0.5 * (i * i) / (sigma * sigma));
-        sum += kernel[i + r];
-    }
-    for (int i = 0; i < ksize; ++i) kernel[i] = (T)(kernel[i] / sum);
-}
-
-// Host orchestration for half precision
+// Host orchestration for half precision (called only from MEX entry)
 void gauss3d_separable_half(
     float* input,
     float* buffer,
@@ -248,49 +249,8 @@ __global__ void gauss1d_kernel_const_double(
     }
     dst[idx] = acc;
 }
-template <>
-void gauss3d_separable<__half>(
-    __half* input,
-    __half* buffer,
-    int nx, int ny, int nz,
-    const __half sigma[3], const int ksize[3])
-{
-    int max_klen = std::max({ksize[0], ksize[1], ksize[2]});
-    if (max_klen > MAX_KERNEL_SIZE) {
-        mexErrMsgIdAndTxt("gauss3d:ksize", "Kernel size exceeds MAX_KERNEL_SIZE (%d)", MAX_KERNEL_SIZE);
-    }
-    float* h_kernel_f = new float[max_klen];
-    __half* h_kernel_h = new __half[max_klen];
 
-    __half* src = input;
-    __half* dst = buffer;
-    float sigma_f[3] = { __half2float(sigma[0]), __half2float(sigma[1]), __half2float(sigma[2]) };
-
-    for (int axis = 0; axis < 3; ++axis) {
-        make_gaussian_kernel(sigma_f[axis], ksize[axis], h_kernel_f);
-        for (int i = 0; i < ksize[axis]; ++i)
-            h_kernel_h[i] = __float2half(h_kernel_f[i]);
-        CUDA_CHECK(cudaMemcpyToSymbol(const_kernel_h, h_kernel_h, ksize[axis] * sizeof(__half), 0, cudaMemcpyHostToDevice));
-
-        int linelen = (axis == 0) ? nx : (axis == 1) ? ny : nz;
-        int nline   = (axis == 0) ? ny * nz : (axis == 1) ? nx * nz : nx * ny;
-        int total = linelen * nline;
-        int block = 256;
-        int grid = (total + block - 1) / block;
-
-        gauss1d_kernel_const_half<<<grid, block, 0>>>(src, dst, nx, ny, nz, ksize[axis], axis);
-        CUDA_CHECK(cudaGetLastError());
-        CUDA_CHECK(cudaDeviceSynchronize());
-        std::swap(src, dst);
-    }
-    if (src != input) {
-        CUDA_CHECK(cudaMemcpy(input, src, (size_t)nx * ny * nz * sizeof(__half), cudaMemcpyDeviceToDevice));
-    }
-    delete[] h_kernel_f;
-    delete[] h_kernel_h;
-}
-
-// Host orchestration with 1 buffer, in-place for last axis
+// Host orchestration for float/double
 template <typename T>
 void gauss3d_separable(
     T* input,
@@ -350,8 +310,7 @@ extern "C" void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* 
     if (nrhs < 2)
         mexErrMsgIdAndTxt("gauss3d:nrhs", "Usage: gauss3d_mex(x, sigma [, kernel_size, 'half'])");
 
-    const mxGPUArray* img_gpu_const = mxGPUCreateFromMxArray(prhs[0]);
-    void* ptr = mxGPUGetData(const_cast<mxGPUArray*>(img_gpu_const));
+    const mxGPUArray* img_gpu = mxGPUCreateFromMxArray(prhs[0]);
     const mwSize* sz = mxGPUGetDimensions(img_gpu);
     int nd = mxGPUGetNumberOfDimensions(img_gpu);
     if (nd != 3)
@@ -360,7 +319,7 @@ extern "C" void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* 
     int nx = (int)sz[0], ny = (int)sz[1], nz = (int)sz[2];
     size_t N = (size_t)nx * ny * nz;
     mxClassID cls = mxGPUGetClassID(img_gpu);
-    void* ptr = mxGPUGetData(img_gpu);
+    void* ptr = mxGPUGetData(const_cast<mxGPUArray*>(img_gpu));
     void* buffer = nullptr;
 
     double sigma_double[3];
@@ -410,12 +369,12 @@ extern "C" void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* 
     } else if (cls == mxSINGLE_CLASS) {
         CUDA_CHECK(cudaMalloc(&buffer, N * sizeof(float)));
         float sigma[3] = { (float)sigma_double[0], (float)sigma_double[1], (float)sigma_double[2] };
-        gauss3d_separable<float>((float*)ptr, (float*)buffer, nx, ny, nz, sigma, ksize);
+        gauss3d_separable((float*)ptr, (float*)buffer, nx, ny, nz, sigma, ksize);
         CUDA_CHECK(cudaFree(buffer));
     } else if (cls == mxDOUBLE_CLASS) {
         CUDA_CHECK(cudaMalloc(&buffer, N * sizeof(double)));
         double sigma[3] = { sigma_double[0], sigma_double[1], sigma_double[2] };
-        gauss3d_separable<double>((double*)ptr, (double*)buffer, nx, ny, nz, sigma, ksize);
+        gauss3d_separable((double*)ptr, (double*)buffer, nx, ny, nz, sigma, ksize);
         CUDA_CHECK(cudaFree(buffer));
     } else {
         mexErrMsgIdAndTxt("gauss3d:class", "Input must be single or double gpuArray");
