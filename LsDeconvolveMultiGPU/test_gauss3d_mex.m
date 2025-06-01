@@ -7,7 +7,8 @@ function test_gauss3d_mex_large_gpu()
     };
     types = {@single, @double};
     sigma = 2.5;
-
+    g = gpuDevice(1);
+    reset(g);
     for ityp = 1:numel(types)
         for isz = 1:numel(szs)
             sz = szs{isz};
