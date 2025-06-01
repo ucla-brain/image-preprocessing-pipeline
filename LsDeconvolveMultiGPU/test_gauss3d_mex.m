@@ -1,9 +1,13 @@
 function test_gauss3d_mex_features()
-% Test gauss3d_mex vs imgaussfilt3 for accuracy, shape, class, precision, warnings, and edge cases.
-% Also tests large arrays, both auto/manual kernel size, and disables warnings if requested.
+% Robust + colorful test harness for gauss3d_mex vs imgaussfilt3 (GPU/CPU fallback).
+% Features: accuracy, type/class checks, perf timing, OOM/fallback, color output.
 
     g = gpuDevice(1);
     reset(g);
+
+    % Check if cprintf exists for color; fallback to normal if not
+    hasCprintf = exist('cprintf','file') == 2;
+    col = @(c,str) colored_str(c,str,hasCprintf);
 
     szs = {
         [32, 64, 32], ...
@@ -14,9 +18,9 @@ function test_gauss3d_mex_features()
     ksize_tests = {'auto', 9, [9 11 15]};
     disable_warning = getenv('GAUSS3D_WARN_KSIZE');
     if isempty(disable_warning)
-        disp('  (Kernel size warnings are ENABLED: set GAUSS3D_WARN_KSIZE=0 to disable.)');
+        disp(col('cyan','  (Kernel size warnings are ENABLED: set GAUSS3D_WARN_KSIZE=0 to disable.)'));
     elseif strcmp(disable_warning, '0')
-        disp('  (Kernel size warnings are DISABLED.)');
+        disp(col('cyan','  (Kernel size warnings are DISABLED.)'));
     end
 
     % Define error thresholds for test pass/fail
@@ -39,8 +43,9 @@ function test_gauss3d_mex_features()
                         kdesc = mat2str(ksz);
                     end
 
-                    fprintf('\nTesting %s %s, sigma=%s, ksize=%s ...\n', ...
-                        type_str, mat2str(sz), mat2str(sigma), kdesc);
+                    fprintf('\n%s\n',col('yellow',repmat('=',1,80)));
+                    fprintf('%s\n',col('magenta',sprintf('Testing %s %s, sigma=%s, ksize=%s ...', ...
+                        type_str, mat2str(sz), mat2str(sigma), kdesc)));
 
                     % Determine kernel size for padding
                     if ischar(ksz) || isstring(ksz)
@@ -64,7 +69,8 @@ function test_gauss3d_mex_features()
                     opts = {'Padding', 'replicate', 'FilterSize', kernel_sz, 'FilterDomain', 'spatial'};
 
                     try
-                        % Try imgaussfilt3 (on GPU, padding 'replicate')
+                        % --- Reference (imgaussfilt3, GPU or CPU fallback) ---
+                        t1 = tic;
                         try
                             y_ref_gpu = imgaussfilt3(x_pad_gpu, sigma, opts{:});
                         catch ME1
@@ -73,59 +79,66 @@ function test_gauss3d_mex_features()
                                contains(ME1.message, 'FFT') || ...
                                contains(ME1.message, 'out of memory') || ...
                                contains(ME1.identifier, 'parallel:gpu:array:OOM')
-                                warning('imgaussfilt3 GPU failed (FFT or OOM), using CPU reference for this size.');
+                                warning(col('blue','imgaussfilt3 GPU failed (FFT or OOM), using CPU reference for this size.'));
                                 y_ref_gpu = gpuArray(imgaussfilt3(gather(x_pad_gpu), sigma, opts{:}));
                             else
                                 rethrow(ME1);
                             end
                         end
+                        t_ref = toc(t1);
 
-                        % gauss3d_mex (no padding, in-place)
+                        % --- gauss3d_mex ---
+                        t2 = tic;
                         if ischar(ksz) || isstring(ksz)
                             y_mex_gpu = gauss3d_mex(x_pad_gpu, sigma);
                         else
                             y_mex_gpu = gauss3d_mex(x_pad_gpu, sigma, kernel_sz, true);
                         end
+                        t_mex = toc(t2);
 
-                        % --- Check: type, class, and shape match input ---
+                        % --- Type, class, shape checks ---
                         assert(isequal(size(y_mex_gpu), size(x_pad_gpu)), 'Output size mismatch.');
                         assert(strcmp(class(y_mex_gpu), class(x_pad_gpu)), 'Output class mismatch.');
                         assert(strcmp(classUnderlying(y_mex_gpu), classUnderlying(x_pad_gpu)), 'Output underlying class mismatch.');
-                        fprintf('  Output matches input type/class/shape.\n');
+                        fprintf('%s\n',col('green','  Output matches input type/class/shape.'));
 
-                        % Unpad both results for comparison
+                        % --- Unpad both for comparison ---
                         idx1 = (1+pad_amt(1)):(size(x_pad,1)-pad_amt(1));
                         idx2 = (1+pad_amt(2)):(size(x_pad,2)-pad_amt(2));
                         idx3 = (1+pad_amt(3)):(size(x_pad,3)-pad_amt(3));
                         y_ref_unpad = y_ref_gpu(idx1,idx2,idx3);
                         y_mex_unpad = y_mex_gpu(idx1,idx2,idx3);
 
-                        % Compute error
+                        % --- Compute error ---
                         err = max(abs(y_mex_unpad(:) - y_ref_unpad(:)));
                         rms_err = sqrt(mean((y_mex_unpad(:) - y_ref_unpad(:)).^2));
                         rel_err = rms_err / (max(abs(y_ref_unpad(:))) + eps);
 
-                        fprintf('  3D validation (unpadded): max = %.2e, RMS = %.2e, rel RMS = %.2e\n', ...
-                            gather(err), gather(rms_err), gather(rel_err));
+                        fprintf('%s\n',col('cyan',sprintf('  3D validation (unpadded): max = %.2e, RMS = %.2e, rel RMS = %.2e', ...
+                            gather(err), gather(rms_err), gather(rel_err))));
 
+                        % --- Pass/Fail ---
                         if strcmp(type_str, 'single')
                             pass = gather(err) < SINGLE_THRESH;
-                            report_passfail(pass, 'single');
+                            report_passfail(pass, 'single', hasCprintf);
                         else
                             pass = gather(err) < DOUBLE_THRESH;
-                            report_passfail(pass, 'double');
+                            report_passfail(pass, 'double', hasCprintf);
                         end
 
+                        % --- Timing ---
+                        speedup = t_ref / t_mex;
+                        fprintf('%s\n',col('blue',sprintf('  Reference time: %.3fs | gauss3d\\_mex time: %.3fs | Speedup: %.2fx', t_ref, t_mex, speedup)));
+
                     catch ME
-                        % Handle OOM and unexpected errors gracefully
                         if contains(ME.message, 'out of memory') || ...
                            contains(ME.identifier, 'parallel:gpu:array:OOM')
-                            warning('OOM: Skipping test for %s %s, sigma=%s, ksize=%s due to GPU memory.', ...
-                                type_str, mat2str(sz), mat2str(sigma), kdesc);
-                            reset(gpuDevice); % Attempt to recover memory for next test
+                            warning(col('red',sprintf('OOM: Skipping test for %s %s, sigma=%s, ksize=%s due to GPU memory.', ...
+                                type_str, mat2str(sz), mat2str(sigma), kdesc)));
+                            reset(gpuDevice); % Try to recover memory for next test
                             continue;
                         else
-                            fprintf('  ERROR during test: %s\n', ME.message);
+                            fprintf('%s\n',col('red',sprintf('  ERROR during test: %s', ME.message)));
                             rethrow(ME);
                         end
                     end
@@ -145,10 +158,30 @@ function sz = odd_kernel_size(sigma)
     sz = max(sz, 3);
 end
 
-function report_passfail(pass, precision_str)
+function report_passfail(pass, precision_str, hasCprintf)
     if pass
-        fprintf('    PASS: %s precision\n', precision_str);
+        s = sprintf('    PASS: %s precision\n', precision_str);
+        print_color(s, 'blue', hasCprintf);
     else
-        fprintf('    FAIL: %s precision\n', precision_str);
+        s = sprintf('    FAIL: %s precision\n', precision_str);
+        print_color(s, 'red', hasCprintf);
+    end
+end
+
+function out = colored_str(color, str, hasCprintf)
+    % Return color-coded string if cprintf available, else normal string
+    if hasCprintf
+        out = evalc(['cprintf(''', color, ''','' ', 'str', ')']);
+        out = out(1:end-1); % remove trailing newline from evalc
+    else
+        out = str;
+    end
+end
+
+function print_color(str, color, hasCprintf)
+    if hasCprintf
+        cprintf(color, str);
+    else
+        fprintf('%s', str);
     end
 end
