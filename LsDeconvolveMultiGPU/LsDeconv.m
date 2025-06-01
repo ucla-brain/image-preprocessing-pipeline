@@ -1104,7 +1104,7 @@ function dark_ = dark(filter, bit_depth)
     % dark is a value greater than 10 surrounded by zeros
     a(ceil(filter.gaussian_size(1)/2), ceil(filter.gaussian_size(2)/2), ceil(filter.gaussian_size(3)/2)) = filter.dark;
     a=im2single(a);
-    a=imgaussfilt3(a, filter.gaussian_sigma, 'FilterSize', filter.gaussian_size, 'Padding', 'circular');
+    a=imgaussfilt3(a, filter.gaussian_sigma, 'FilterSize', filter.gaussian_size, 'Padding', 'symmetric');
     dark_ = max(a(:));
 end
 
