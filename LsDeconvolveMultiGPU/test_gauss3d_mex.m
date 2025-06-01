@@ -10,12 +10,9 @@ function test_gauss3d_mex_features()
     col = @(c,str) colored_str(c,str,hasCprintf);
 
     szs = {[32, 64, 32], [512, 512, 512]};
-    % types = {@single, @double};
-    types = {@single};
-    % sigma_tests = {2.5, [2.5 2.5 2.5], [0.5 0.5 2.5], 0.25, 12};
-    sigma_tests = {[0.5 0.5 2.5]};
-    % ksize_tests = {'auto', 9, [9 11 15], 3, 41};
-    ksize_tests = {'auto'};
+    types = {@single, @double};
+    sigma_tests = {2.5, [2.5 2.5 2.5], [0.5 0.5 2.5], 0.25, 7};
+    ksize_tests = {'auto', 9, [9 11 15], 3, 41};
     SINGLE_THRESH = 5e-5;
     DOUBLE_THRESH = 1e-7;
 
