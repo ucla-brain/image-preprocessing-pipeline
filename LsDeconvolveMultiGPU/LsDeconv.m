@@ -364,7 +364,8 @@ function pad_size = gaussian_pad_size(image_size, filter_size)
 end
 
 function pad = decon_pad_size(psf_sz)
-    pad = ceil(psf_sz);
+    pad = ceil(psf_sz/2);
+    pad(3) = pad(3) * 4
 end
 
 function n_vec = next_fast_len(n_vec)
