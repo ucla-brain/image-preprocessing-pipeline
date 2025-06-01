@@ -10,7 +10,7 @@ function test_gauss3d_mex_gpu_only()
     types = {@single, @double};
     sigma = 2.5;
 
-    g = gpuDevice(1);  % Only one reset(g) at the end of the isz loop
+    g = gpuDevice(1);
 
     for ityp = 1:numel(types)
         for isz = 1:numel(szs)
@@ -43,10 +43,9 @@ function test_gauss3d_mex_gpu_only()
             mem1 = g.AvailableMemory;
             vram_matlab = mem0 - mem1;
 
-            % Free input for Matlab
-            clear x_val_gpu;
+            clear x_val_gpu; % free up input right after both uses
 
-            % --- Exclude edges for validation (still all on GPU) ---
+            % --- Exclude edges for validation (all on GPU) ---
             margin = max(ceil(4*sigma), 1);
             x_rng = (1+margin):(sz(1)-margin);
             y_rng = (1+margin):(sz(2)-margin);
@@ -87,7 +86,10 @@ function test_gauss3d_mex_gpu_only()
             fprintf('  Speedup (gauss3d_mex/imgaussfilt3): %.2fx\n', t_matlab/t_mex);
             fprintf('  vRAM ratio (mex/Matlab): %.2f\n', vram_mex/max(1,vram_matlab));
 
-            reset(g); % only reset once per type for maximal efficiency
+            % clear outputs ASAP before reset
+            clear y_result_gpu y_interior_gpu y_ref_interior_gpu y_ref_gpu
+
+            reset(g); % after each test, ensures vRAM is maximally available for next
         end
     end
 end
