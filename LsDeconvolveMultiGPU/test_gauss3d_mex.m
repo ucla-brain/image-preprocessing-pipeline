@@ -10,7 +10,10 @@ function test_gauss3d_mex_large_gpu()
 
     for ityp = 1:numel(types)
         for isz = 1:numel(szs)
-            sz = szs{isz};         % E.g. [256 512 512]
+            sz = szs{isz};
+            if iscell(sz)
+                sz = cell2mat(sz); % <-- fix
+            end
             T = types{ityp};       % @single or @double
             bytes = prod(sz) * sizeof(T);
             fprintf('Testing %s %s (%.2f GB)...\n', func2str(T), mat2str(sz), bytes/2^30);
@@ -21,7 +24,7 @@ function test_gauss3d_mex_large_gpu()
             slices_per_chunk = max(floor(max_gpu_bytes / slice_bytes), 1);
 
             % Preallocate result on CPU
-            y_result = zeros([sz], T);   % <-- FIXED HERE
+            y_result = zeros(sz, T);   % now always numeric!
 
             tic;
             for z1 = 1:slices_per_chunk:sz(3)
