@@ -1,6 +1,8 @@
 function test_gauss3d_mex_features()
-    % Test gauss3d_mex vs imgaussfilt3, including kernel size warning, in-place, precision/class, and input/output matching
-    g=gpuDevice(1);
+% Test gauss3d_mex vs imgaussfilt3 for accuracy, shape, class, precision, warnings, and edge cases.
+% Also tests large arrays, both auto/manual kernel size, and disables warnings if requested.
+
+    g = gpuDevice(1);
     reset(g);
 
     szs = {
@@ -17,6 +19,10 @@ function test_gauss3d_mex_features()
         disp('  (Kernel size warnings are DISABLED.)');
     end
 
+    % Define error thresholds for test pass/fail
+    SINGLE_THRESH = 5e-5;
+    DOUBLE_THRESH = 1e-7;
+
     for ityp = 1:numel(types)
         for isz = 1:numel(szs)
             sz = szs{isz};
@@ -27,16 +33,17 @@ function test_gauss3d_mex_features()
                 sigma = sigma_tests{isig};
                 for iksz = 1:numel(ksize_tests)
                     ksz = ksize_tests{iksz};
-                    if ischar(ksz)
-                        kdesc = 'auto';
+                    if ischar(ksz) || isstring(ksz)
+                        kdesc = char(ksz);
                     else
                         kdesc = mat2str(ksz);
                     end
+
                     fprintf('\nTesting %s %s, sigma=%s, ksize=%s ...\n', ...
                         type_str, mat2str(sz), mat2str(sigma), kdesc);
 
                     % Determine kernel size for padding
-                    if ischar(ksz)
+                    if ischar(ksz) || isstring(ksz)
                         kernel_sz = odd_kernel_size(sigma);
                     else
                         kernel_sz = ksz;
@@ -54,49 +61,72 @@ function test_gauss3d_mex_features()
                     x_pad = padarray(x, pad_amt, 'replicate', 'both');
                     x_pad_gpu = gpuArray(x_pad);
 
-                    % imgaussfilt3 (on GPU, padding 'replicate')
-                    opts = {'Padding', 'replicate', 'FilterSize', kernel_sz};
-                    y_ref_gpu = imgaussfilt3(x_pad_gpu, sigma, opts{:});
+                    opts = {'Padding', 'replicate', 'FilterSize', kernel_sz, 'FilterDomain', 'spatial'};
 
-                    % gauss3d_mex (no padding, in-place)
-                    if ischar(ksz)
-                        y_mex_gpu = gauss3d_mex(x_pad_gpu, sigma);
-                    else
-                        y_mex_gpu = gauss3d_mex(x_pad_gpu, sigma, kernel_sz, true);
-                    end
-
-                    % --- Check: type, class, and shape match input ---
-                    assert(isequal(size(y_mex_gpu), size(x_pad_gpu)), 'Output size mismatch.');
-                    assert(strcmp(class(y_mex_gpu), class(x_pad_gpu)), 'Output class mismatch.');
-                    assert(strcmp(classUnderlying(y_mex_gpu), classUnderlying(x_pad_gpu)), 'Output underlying class mismatch.');
-                    fprintf('  Output matches input type/class/shape.\n');
-
-                    % Unpad both results for comparison
-                    idx1 = (1+pad_amt(1)):(size(x_pad,1)-pad_amt(1));
-                    idx2 = (1+pad_amt(2)):(size(x_pad,2)-pad_amt(2));
-                    idx3 = (1+pad_amt(3)):(size(x_pad,3)-pad_amt(3));
-                    y_ref_unpad = y_ref_gpu(idx1,idx2,idx3);
-                    y_mex_unpad = y_mex_gpu(idx1,idx2,idx3);
-
-                    % Compute error
-                    err = max(abs(y_mex_unpad(:) - y_ref_unpad(:)));
-                    rms_err = sqrt(mean((y_mex_unpad(:) - y_ref_unpad(:)).^2));
-                    rel_err = rms_err / (max(abs(y_ref_unpad(:))) + eps);
-
-                    fprintf('  3D validation (unpadded): max = %.2e, RMS = %.2e, rel RMS = %.2e\n', ...
-                        gather(err), gather(rms_err), gather(rel_err));
-
-                    if strcmp(type_str, 'single')
-                        if gather(err) < 5e-5
-                            fprintf('    PASS: single precision\n');
-                        else
-                            fprintf('    FAIL: single precision\n');
+                    try
+                        % Try imgaussfilt3 (on GPU, padding 'replicate')
+                        try
+                            y_ref_gpu = imgaussfilt3(x_pad_gpu, sigma, opts{:});
+                        catch ME1
+                            % If FFT plan error or OOM, fallback to CPU reference
+                            if contains(ME1.message, 'fftn') || ...
+                               contains(ME1.message, 'FFT') || ...
+                               contains(ME1.message, 'out of memory') || ...
+                               contains(ME1.identifier, 'parallel:gpu:array:OOM')
+                                warning('imgaussfilt3 GPU failed (FFT or OOM), using CPU reference for this size.');
+                                y_ref_gpu = gpuArray(imgaussfilt3(gather(x_pad_gpu), sigma, opts{:}));
+                            else
+                                rethrow(ME1);
+                            end
                         end
-                    else
-                        if gather(err) < 1e-7
-                            fprintf('    PASS: double precision\n');
+
+                        % gauss3d_mex (no padding, in-place)
+                        if ischar(ksz) || isstring(ksz)
+                            y_mex_gpu = gauss3d_mex(x_pad_gpu, sigma);
                         else
-                            fprintf('    FAIL: double precision\n');
+                            y_mex_gpu = gauss3d_mex(x_pad_gpu, sigma, kernel_sz, true);
+                        end
+
+                        % --- Check: type, class, and shape match input ---
+                        assert(isequal(size(y_mex_gpu), size(x_pad_gpu)), 'Output size mismatch.');
+                        assert(strcmp(class(y_mex_gpu), class(x_pad_gpu)), 'Output class mismatch.');
+                        assert(strcmp(classUnderlying(y_mex_gpu), classUnderlying(x_pad_gpu)), 'Output underlying class mismatch.');
+                        fprintf('  Output matches input type/class/shape.\n');
+
+                        % Unpad both results for comparison
+                        idx1 = (1+pad_amt(1)):(size(x_pad,1)-pad_amt(1));
+                        idx2 = (1+pad_amt(2)):(size(x_pad,2)-pad_amt(2));
+                        idx3 = (1+pad_amt(3)):(size(x_pad,3)-pad_amt(3));
+                        y_ref_unpad = y_ref_gpu(idx1,idx2,idx3);
+                        y_mex_unpad = y_mex_gpu(idx1,idx2,idx3);
+
+                        % Compute error
+                        err = max(abs(y_mex_unpad(:) - y_ref_unpad(:)));
+                        rms_err = sqrt(mean((y_mex_unpad(:) - y_ref_unpad(:)).^2));
+                        rel_err = rms_err / (max(abs(y_ref_unpad(:))) + eps);
+
+                        fprintf('  3D validation (unpadded): max = %.2e, RMS = %.2e, rel RMS = %.2e\n', ...
+                            gather(err), gather(rms_err), gather(rel_err));
+
+                        if strcmp(type_str, 'single')
+                            pass = gather(err) < SINGLE_THRESH;
+                            report_passfail(pass, 'single');
+                        else
+                            pass = gather(err) < DOUBLE_THRESH;
+                            report_passfail(pass, 'double');
+                        end
+
+                    catch ME
+                        % Handle OOM and unexpected errors gracefully
+                        if contains(ME.message, 'out of memory') || ...
+                           contains(ME.identifier, 'parallel:gpu:array:OOM')
+                            warning('OOM: Skipping test for %s %s, sigma=%s, ksize=%s due to GPU memory.', ...
+                                type_str, mat2str(sz), mat2str(sigma), kdesc);
+                            reset(gpuDevice); % Attempt to recover memory for next test
+                            continue;
+                        else
+                            fprintf('  ERROR during test: %s\n', ME.message);
+                            rethrow(ME);
                         end
                     end
 
@@ -113,4 +143,12 @@ function sz = odd_kernel_size(sigma)
     end
     sz = 2*ceil(3*sigma) + 1;
     sz = max(sz, 3);
+end
+
+function report_passfail(pass, precision_str)
+    if pass
+        fprintf('    PASS: %s precision\n', precision_str);
+    else
+        fprintf('    FAIL: %s precision\n', precision_str);
+    end
 end
