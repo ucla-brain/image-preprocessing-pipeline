@@ -1,5 +1,7 @@
 function test_gauss3d_mex_features()
     % Test gauss3d_mex vs imgaussfilt3, including kernel size warning, in-place, precision/class, and input/output matching
+    g=gpuDevice(1);
+    reset(g);
 
     szs = {
         [32, 64, 32], ...
