@@ -10,11 +10,8 @@ function test_gauss3d_mex_large_gpu()
 
     for ityp = 1:numel(types)
         for isz = 1:numel(szs)
-            sz = szs{isz};
-            if iscell(sz)
-                sz = cell2mat(sz); % <-- fix
-            end
-            T = types{ityp};       % @single or @double
+            sz = szs{isz};            % Ensure sz is numeric vector
+            T = types{ityp};          % @single or @double
             bytes = prod(sz) * sizeof(T);
             fprintf('Testing %s %s (%.2f GB)...\n', func2str(T), mat2str(sz), bytes/2^30);
 
@@ -23,18 +20,17 @@ function test_gauss3d_mex_large_gpu()
             slice_bytes = prod(sz(1:2)) * sizeof(T);
             slices_per_chunk = max(floor(max_gpu_bytes / slice_bytes), 1);
 
-            % Preallocate result on CPU
-            disp(sz);
-            y_result = zeros(sz, T);   % now always numeric!
+            % Preallocate result on CPU with proper type
+            y_result = zeros(sz, 'like', feval(T, 0));
 
             tic;
             for z1 = 1:slices_per_chunk:sz(3)
                 z2 = min(z1 + slices_per_chunk - 1, sz(3));
                 this_chunk = z2 - z1 + 1;
 
-                % --- GPU allocation: pass dimensions as scalars, then 'like'
+                % Allocate chunk on GPU, with type
                 x_chunk_gpu = gpuArray.rand(sz(1), sz(2), this_chunk, 'like', feval(T, 0));
-                % --- Your MEX call (assume supports gpuArray):
+                % Process chunk (assume gauss3d_mex supports gpuArray)
                 y_chunk_gpu = gauss3d_mex(x_chunk_gpu, sigma);
                 y_result(:, :, z1:z2) = gather(y_chunk_gpu);
 
@@ -43,7 +39,7 @@ function test_gauss3d_mex_large_gpu()
             t_gpu = toc;
             fprintf('Completed GPU Gaussian filtering in %.2f seconds\n', t_gpu);
 
-            % Simple validation: compare one slice to imgaussfilt
+            % Validation: compare middle slice to imgaussfilt
             rng(0); % Reproducibility
             midz = round(sz(3)/2);
             x_val = rand(sz(1), sz(2), T);
