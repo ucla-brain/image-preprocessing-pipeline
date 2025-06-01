@@ -87,9 +87,8 @@ function test_gauss3d_mex_gpu_only()
             fprintf('  Speedup (gauss3d_mex/imgaussfilt3): %.2fx\n', t_matlab/t_mex);
             fprintf('  vRAM ratio (mex/Matlab): %.2f\n', vram_mex/max(1,vram_matlab));
 
-            clear y_result_gpu y_interior_gpu y_ref_interior_gpu y_ref_gpu
+            reset(g); % only reset once per type for maximal efficiency
         end
-        reset(g); % only reset once per type for maximal efficiency
     end
 end
 
