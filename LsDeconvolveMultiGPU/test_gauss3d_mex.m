@@ -29,7 +29,7 @@ function test_gauss3d_mex_vs_imgaussfilt3_gpu()
             t_mex = toc;
             mem1 = g.AvailableMemory;
             vram_mex = mem0 - mem1;
-            fprintf('  gauss3d_mex: %.2f s, vRAM used: %.2f MB\n', t_mex, vram_mex/2^20);
+            y_result = gather(y_result);   % <-- gather before indexing/reset
 
             % ---- imgaussfilt3(gpuArray) test ----
             reset(g);
@@ -41,9 +41,8 @@ function test_gauss3d_mex_vs_imgaussfilt3_gpu()
             t_matlab_gpu = toc;
             mem1 = g.AvailableMemory;
             vram_matlab = mem0 - mem1;
-            y_ref = gather(y_ref_gpu);
+            y_ref = gather(y_ref_gpu);    % <-- gather before indexing/reset
             clear y_ref_gpu;
-            fprintf('  imgaussfilt3(gpuArray): %.2f s, vRAM used: %.2f MB\n', t_matlab_gpu, vram_matlab/2^20);
 
             % ---- Exclude edges, validate ----
             margin = max(ceil(4*sigma), 1);
@@ -66,6 +65,8 @@ function test_gauss3d_mex_vs_imgaussfilt3_gpu()
             fprintf('    min/max(y_result) = %.6g/%.6g, min/max(y_ref) = %.6g/%.6g\n', ...
                 min(y_result(:)), max(y_result(:)), min(y_ref(:)), max(y_ref(:)));
 
+            fprintf('  gauss3d_mex:           %.2f s, vRAM used: %.2f MB\n', t_mex, vram_mex/2^20);
+            fprintf('  imgaussfilt3(gpuArray):%.2f s, vRAM used: %.2f MB\n', t_matlab_gpu, vram_matlab/2^20);
             fprintf('  Speedup (gauss3d_mex / imgaussfilt3(gpuArray)): %.2fx\n', t_matlab_gpu/t_mex);
             fprintf('  vRAM ratio (mex/Matlab): %.2f\n', vram_mex/max(1,vram_matlab)); % avoid division by zero
 
