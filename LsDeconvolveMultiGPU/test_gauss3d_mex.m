@@ -1,6 +1,6 @@
 function test_gauss3d_mex_gpu_only()
     % Compare gauss3d_mex and imgaussfilt3 on the same gpuArray input,
-    % with all calculations on the GPU (no gather).
+    % all calculations on the GPU, never gather, one reset per test.
 
     szs = {
         [32, 128, 128], ...
@@ -10,7 +10,7 @@ function test_gauss3d_mex_gpu_only()
     types = {@single, @double};
     sigma = 2.5;
 
-    g = gpuDevice(1);
+    g = gpuDevice(1);  % Only one reset(g) at the end of the isz loop
 
     for ityp = 1:numel(types)
         for isz = 1:numel(szs)
@@ -24,7 +24,6 @@ function test_gauss3d_mex_gpu_only()
             x_val_gpu = gpuArray.rand(sz, type_str);
 
             % --- gauss3d_mex ---
-            reset(g);
             mem0 = g.AvailableMemory;
             tic;
             y_result_gpu = gauss3d_mex(x_val_gpu, sigma);
@@ -34,7 +33,6 @@ function test_gauss3d_mex_gpu_only()
             vram_mex = mem0 - mem1;
 
             % --- imgaussfilt3(gpuArray) ---
-            reset(g);
             mem0 = g.AvailableMemory;
             k3d = odd_kernel_size(sigma);
             tic;
@@ -44,6 +42,9 @@ function test_gauss3d_mex_gpu_only()
             t_matlab = toc;
             mem1 = g.AvailableMemory;
             vram_matlab = mem0 - mem1;
+
+            % Free input for Matlab
+            clear x_val_gpu;
 
             % --- Exclude edges for validation (still all on GPU) ---
             margin = max(ceil(4*sigma), 1);
@@ -60,7 +61,6 @@ function test_gauss3d_mex_gpu_only()
 
             fprintf('  3D validation (interior): max = %.2e, RMS = %.2e, rel RMS = %.2e\n', ...
                 gather(err), gather(rms_err), gather(rel_err));
-
             fprintf('    mean(y_result) = %.6g, mean(y_ref) = %.6g, mean(diff) = %.6g\n', ...
                 gather(mean(y_result_gpu(:))), gather(mean(y_ref_gpu(:))), ...
                 gather(mean(y_result_gpu(:) - y_ref_gpu(:))));
@@ -88,8 +88,8 @@ function test_gauss3d_mex_gpu_only()
             fprintf('  vRAM ratio (mex/Matlab): %.2f\n', vram_mex/max(1,vram_matlab));
 
             clear y_result_gpu y_interior_gpu y_ref_interior_gpu y_ref_gpu
-            reset(g);
         end
+        reset(g); % only reset once per type for maximal efficiency
     end
 end
 
