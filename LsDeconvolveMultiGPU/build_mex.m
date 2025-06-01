@@ -14,6 +14,7 @@ src_queue = 'queue.c';
 src_lz4_save = 'save_lz4_mex.c';
 src_lz4_load = 'load_lz4_mex.c';
 src_lz4_c = 'lz4.c';
+src_gauss3d = 'gauss3d_mex.cu';
 
 lz4_c_url  = 'https://raw.githubusercontent.com/lz4/lz4/dev/lib/lz4.c';
 lz4_h_url  = 'https://raw.githubusercontent.com/lz4/lz4/dev/lib/lz4.h';
@@ -43,11 +44,10 @@ mex(mex_flags{:}, src_queue);
 mex(mex_flags{:}, src_lz4_save, src_lz4_c);
 mex(mex_flags{:}, src_lz4_load, src_lz4_c);
 
-% CUDA/mexcuda examples (uncomment as needed)
-% nvcc_flags = '-O2 -Xcompiler -march=native -Xcompiler -fomit-frame-pointer';
-% build_xml = "...";
-% root_dir = '.'; include_dir = './cuda_kernels';
-% mexcuda('-R2018a', '-f', build_xml, src_wavedec2, ['-I', root_dir], ['-I', include_dir], ...
-%     'CFLAGS="$CFLAGS -O2 -march=native -fomit-frame-pointer"', ...
-%     'CXXFLAGS="$CXXFLAGS -O2 -march=native -fomit-frame-pointer"', ...
-%     'NVCCFLAGS="$NVCCFLAGS -O2 -Xcompiler -march=native -Xcompiler -fomit-frame-pointer"');
+nvcc_flags = '-O2 -Xcompiler -march=native -Xcompiler -fomit-frame-pointer';
+% build_xml = "..."; '-f', build_xml,
+root_dir = '.'; include_dir = './cuda_kernels';
+mexcuda('-R2018a', src_gauss3d, ['-I', root_dir], ['-I', include_dir], ...
+    'CFLAGS="$CFLAGS -O2 -march=native -fomit-frame-pointer"', ...
+    'CXXFLAGS="$CXXFLAGS -O2 -march=native -fomit-frame-pointer"', ...
+    'NVCCFLAGS="$NVCCFLAGS -O2 -Xcompiler -march=native -Xcompiler -fomit-frame-pointer"');
