@@ -11,7 +11,6 @@
     cudaError_t err = call; \
     if (err != cudaSuccess) { \
         mexWarnMsgIdAndTxt("gauss3d:cuda", "CUDA error %s:%d: %s", __FILE__, __LINE__, cudaGetErrorString(err)); \
-        goto cleanup; \
     } \
 } while(0)
 
