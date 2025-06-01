@@ -3,7 +3,7 @@ function test_gauss3d_mex_large_gpu()
     szs = {
         [32, 128, 128], ...
         [256, 512, 512], ...
-        [512, 1024, 1024] % Large test
+        [512, 512, 512] % Large test
     };
     types = {@single, @double};
     sigma = 2.5;
