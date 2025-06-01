@@ -35,15 +35,14 @@ void make_gaussian_kernel(T sigma, int ksize, T* kernel) {
 }
 
 // =====================
-// CUDA 1D convolution
+// CUDA 1D convolution (constant memory only)
 // =====================
-template <typename T, bool use_const_kernel>
-__global__ void gauss1d_kernel(
+template <typename T>
+__global__ void gauss1d_kernel_const(
     const T* src, T* dst,
     int nx, int ny, int nz,
     int klen, int axis)
 {
-    extern __shared__ T shared_kernel[];  // Kernel in shared memory
     int tid = blockIdx.x * blockDim.x + threadIdx.x;
     int nline, linelen;
     if (axis == 0) { linelen = nx; nline = ny * nz; }
@@ -51,16 +50,9 @@ __global__ void gauss1d_kernel(
     else { linelen = nz; nline = nx * ny; }
     if (tid >= nline * linelen) return;
 
-    // Shared memory: only one block copies kernel per launch
-    if (!use_const_kernel && threadIdx.x < klen) {
-        shared_kernel[threadIdx.x] = 0; // Just to suppress warnings for non-specializations
-    }
-    __syncthreads();
-
     int line = tid / linelen;
     int pos = tid % linelen;
 
-    // Compute x/y/z for this line/position
     int x, y, z;
     if (axis == 0) {
         y = line % ny;
@@ -86,15 +78,12 @@ __global__ void gauss1d_kernel(
         if (axis == 1) yi = min(max(y + offset, 0), ny - 1);
         if (axis == 2) zi = min(max(z + offset, 0), nz - 1);
         int src_idx = xi + yi * nx + zi * nx * ny;
+        // Constant memory access
         T k;
-        if constexpr (use_const_kernel) {
-            if constexpr (std::is_same<T, float>::value)
-                k = const_kernel_f[s];
-            else
-                k = const_kernel_d[s];
-        } else {
-            k = shared_kernel[s];
-        }
+        if (std::is_same<T, float>::value)
+            k = const_kernel_f[s];
+        else
+            k = const_kernel_d[s];
         acc += src[src_idx] * k;
     }
     dst[idx] = acc;
@@ -105,19 +94,17 @@ __global__ void gauss1d_kernel(
 // ===============================
 template <typename T>
 void gauss3d_separable(
-    T* input,           // in-place array (device ptr)
-    T* buffer,          // extra buffer (device ptr, same size)
+    T* input,
+    T* buffer,
     int nx, int ny, int nz,
     const T sigma[3], const int ksize[3])
 {
-    size_t N = (size_t)nx * ny * nz;
     int max_klen = std::max({ksize[0], ksize[1], ksize[2]});
     if (max_klen > MAX_KERNEL_SIZE) {
         mexErrMsgIdAndTxt("gauss3d:ksize", "Kernel size exceeds MAX_KERNEL_SIZE (%d)", MAX_KERNEL_SIZE);
     }
     T* h_kernel = new T[max_klen];
 
-    // Swap logic: input <-> buffer, last axis done in-place in input
     T* src = input;
     T* dst = buffer;
 
@@ -131,21 +118,18 @@ void gauss3d_separable(
         int grid = (total + block - 1) / block;
 
         // Last axis: do in-place in 'input' to save memory copy
-        if (axis == 2) {
-            dst = input;
-        }
+        if (axis == 2) dst = input;
 
-        // Use constant memory for kernel if possible
-        if constexpr (std::is_same<T, float>::value) {
+        if (std::is_same<T, float>::value) {
             CUDA_CHECK(cudaMemcpyToSymbol(const_kernel_f, h_kernel, ksize[axis] * sizeof(float), 0, cudaMemcpyHostToDevice));
-            gauss1d_kernel<T, true><<<grid, block, 0>>>(src, dst, nx, ny, nz, ksize[axis], axis);
         } else {
             CUDA_CHECK(cudaMemcpyToSymbol(const_kernel_d, h_kernel, ksize[axis] * sizeof(double), 0, cudaMemcpyHostToDevice));
-            gauss1d_kernel<T, true><<<grid, block, 0>>>(src, dst, nx, ny, nz, ksize[axis], axis);
         }
+
+        gauss1d_kernel_const<T><<<grid, block, 0>>>(src, dst, nx, ny, nz, ksize[axis], axis);
+
         CUDA_CHECK(cudaGetLastError());
         CUDA_CHECK(cudaDeviceSynchronize());
-        // Swap for next axis if not the last axis
         if (axis < 2) std::swap(src, dst);
     }
     delete[] h_kernel;
