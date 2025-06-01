@@ -4,7 +4,7 @@
 % Compile semaphore, queue, chunked LZ4, and GPU Gaussian MEX files.
 % Downloads lz4.c/.h from GitHub if missing.
 % Requires MATLAB R2018a+ (-R2018a mxArray API).
-debug = true;
+debug = false;
 if verLessThan('matlab', '9.4')
     error('This script requires MATLAB R2018a or newer (for -R2018a MEX API)');
 end
