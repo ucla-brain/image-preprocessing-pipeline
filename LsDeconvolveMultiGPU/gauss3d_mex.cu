@@ -132,16 +132,18 @@ extern "C" void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* 
     if (nrhs < 2)
         mexErrMsgIdAndTxt("gauss3d:nrhs", "Usage: gauss3d_mex(x, sigma [, kernel_size])");
 
-    mxGPUArray* img_gpu = mxGPUCreateFromMxArray(prhs[0]);
+    // Use const pointer here
+    const mxGPUArray* img_gpu = mxGPUCreateFromMxArray(prhs[0]);
     const mwSize* sz = mxGPUGetDimensions(img_gpu);
     int nd = mxGPUGetNumberOfDimensions(img_gpu);
     if (nd != 3)
         mexErrMsgIdAndTxt("gauss3d:ndims", "Input must be 3D.");
 
     int nx = (int)sz[0], ny = (int)sz[1], nz = (int)sz[2];
-    size_t N = (size_t)nx * ny * nz;
     mxClassID cls = mxGPUGetClassID(img_gpu);
-    void* ptr = mxGPUGetData(img_gpu);
+
+    // Cast away constness only for data writing
+    void* ptr = mxGPUGetData(const_cast<mxGPUArray*>(img_gpu));
 
     if (cls != mxSINGLE_CLASS)
         mexErrMsgIdAndTxt("gauss3d:class", "Input must be single-precision gpuArray");
