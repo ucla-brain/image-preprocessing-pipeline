@@ -11,7 +11,7 @@ function test_gauss3d_mex_features()
 
     szs = {[32, 64, 32], [512, 512, 512]};
     types = {@single, @double};
-    sigma_tests = {7, 8}; % 2.5, [2.5 2.5 2.5], [0.5 0.5 2.5], 0.25,
+    sigma_tests = {2.5, [2.5 2.5 2.5], [0.5 0.5 2.5], 0.25, 8};
     ksize_tests = {'auto', 9, [9 11 15], 3, 41};
     SINGLE_THRESH = 5e-5;
     DOUBLE_THRESH = 1e-7;
