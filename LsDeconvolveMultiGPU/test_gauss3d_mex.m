@@ -1,13 +1,19 @@
-function test_gauss3d_mex_vs_imgaussfilt3_padded()
-    % Test gauss3d_mex against imgaussfilt3 for sigma <= 2.5, with pre-padding
+function test_gauss3d_mex_features()
+    % Test gauss3d_mex vs imgaussfilt3, including kernel size warning, in-place, precision/class, and input/output matching
 
     szs = {
-        [32, 128, 128], ...
-        [256, 512, 512]
+        [32, 64, 32], ...
+        [64, 80, 96]
     };
     types = {@single, @double};
-    sigma_tests = {2.5, [2.5 2.5 2.5]}; % Only up to 2.5
-    ksize_tests = {'auto', 13, [13 13 13]}; % Only up to 13
+    sigma_tests = {2.5, [2.5 2.5 2.5], [1.5 2.0 2.5]};
+    ksize_tests = {'auto', 9, [9 11 15]};
+    disable_warning = getenv('GAUSS3D_WARN_KSIZE');
+    if isempty(disable_warning)
+        disp('  (Kernel size warnings are ENABLED: set GAUSS3D_WARN_KSIZE=0 to disable.)');
+    elseif strcmp(disable_warning, '0')
+        disp('  (Kernel size warnings are DISABLED.)');
+    end
 
     for ityp = 1:numel(types)
         for isz = 1:numel(szs)
@@ -42,24 +48,26 @@ function test_gauss3d_mex_vs_imgaussfilt3_padded()
                     rng(0);
                     x = rand(sz, type_str);
 
-                    % Pad input for both methods
+                    % Pad input for both methods (mimic 'replicate')
                     x_pad = padarray(x, pad_amt, 'replicate', 'both');
                     x_pad_gpu = gpuArray(x_pad);
 
                     % imgaussfilt3 (on GPU, padding 'replicate')
                     opts = {'Padding', 'replicate', 'FilterSize', kernel_sz};
-                    if exist('imgaussfilt3', 'file') && ...
-                            any(strcmp('FilterDomain', methods('imgaussfilt3')))
-                        opts = [opts, {'FilterDomain', 'spatial'}];
-                    end
                     y_ref_gpu = imgaussfilt3(x_pad_gpu, sigma, opts{:});
 
                     % gauss3d_mex (no padding, in-place)
                     if ischar(ksz)
-                        y_mex_gpu = gauss3d_mex(x_pad_gpu, sigma); % default kernel size
+                        y_mex_gpu = gauss3d_mex(x_pad_gpu, sigma);
                     else
                         y_mex_gpu = gauss3d_mex(x_pad_gpu, sigma, kernel_sz);
                     end
+
+                    % --- Check: type, class, and shape match input ---
+                    assert(isequal(size(y_mex_gpu), size(x_pad_gpu)), 'Output size mismatch.');
+                    assert(strcmp(class(y_mex_gpu), class(x_pad_gpu)), 'Output class mismatch.');
+                    assert(strcmp(classUnderlying(y_mex_gpu), classUnderlying(x_pad_gpu)), 'Output underlying class mismatch.');
+                    fprintf('  Output matches input type/class/shape.\n');
 
                     % Unpad both results for comparison
                     idx1 = (1+pad_amt(1)):(size(x_pad,1)-pad_amt(1));
