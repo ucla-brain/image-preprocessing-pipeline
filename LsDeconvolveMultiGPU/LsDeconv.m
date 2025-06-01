@@ -195,7 +195,7 @@ function [] = LsDeconv(varargin)
         else
             final_image_bytes_per_voxel = stack_info.bit_depth / 4;
             if stack_info.convert_to_8bit, final_image_bytes_per_voxel = 2; end
-            if stack_info.convert_to_8bit, final_image_bytes_per_voxel = 4; end
+            if stack_info.convert_to_16bit, final_image_bytes_per_voxel = 4; end
             block.stack_info = stack_info;
             [block.nx, block.ny, block.nz, block.x, block.y, block.z, ...
              block.x_pad, block.y_pad, block.z_pad, block.fft_shape] = ...
