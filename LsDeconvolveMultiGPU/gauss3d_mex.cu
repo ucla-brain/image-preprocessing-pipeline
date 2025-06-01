@@ -131,13 +131,16 @@ void run_gauss3d(T* buf, int nx, int ny, int nz, const T sigma[3], const int ksi
         CUDA_CHECK(cudaMalloc(&d_kernel, klen * sizeof(T)));
         CUDA_CHECK(cudaMemcpy(d_kernel, h_kernel, klen * sizeof(T), cudaMemcpyHostToDevice));
 
-        int n_lines, line_len;
-        if (dim == 0) { n_lines = ny * nz; line_len = nx; }
-        else if (dim == 1) { n_lines = nx * nz; line_len = ny; }
-        else { n_lines = nx * ny; line_len = nz; }
+        size_t n_lines, line_len;
+        if (dim == 0) { n_lines = (size_t)ny * nz; line_len = nx; }
+        else if (dim == 1) { n_lines = (size_t)nx * nz; line_len = ny; }
+        else { n_lines = (size_t)nx * ny; line_len = nz; }
 
-        if (n_lines > 65535 * 65535) // CUDA grid dimension limit
-            mexErrMsgIdAndTxt("gauss3d:gridSize", "Too many lines for CUDA kernel launch.");
+        // CUDA grid-dim limit: 65535 x 65535
+        const size_t CUDA_GRID_MAX = 65535ULL * 65535ULL;
+        if (n_lines > CUDA_GRID_MAX)
+            mexErrMsgIdAndTxt("gauss3d:gridSize", "Too many lines for CUDA kernel launch (max: %zu).", CUDA_GRID_MAX);
+
 
         int block_size = (line_len < CUDA_BLOCK_SIZE) ? line_len : CUDA_BLOCK_SIZE;
         dim3 block(block_size);
