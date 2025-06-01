@@ -29,37 +29,40 @@ void make_gaussian_kernel(T sigma, int ksize, T* kernel) {
         kernel[i] /= sum;
 }
 
-// --------- CUDA KERNEL (accumulate in T) ---------
-template <typename T>
-__global__ void gauss1d_kernel(
-    T* src, T* dst, int nx, int ny, int nz,
-    const T* kernel, int klen, int dim
-) {
-    int ix = blockIdx.x * blockDim.x + threadIdx.x;
-    int iy = blockIdx.y * blockDim.y + threadIdx.y;
-    int iz = blockIdx.z * blockDim.z + threadIdx.z;
-    if (ix >= nx || iy >= ny || iz >= nz) return;
+// --------- CUDA KERNEL: Each block processes a line ---------
+template<typename T>
+__global__ void gauss1d_lines_kernel(
+    T* data, const T* kernel, int klen,
+    int nx, int ny, int nz,
+    int dim, int line_len, int n_lines)
+{
+    int line_idx = blockIdx.x;
+    int idx_in_line = threadIdx.x;
+    if (line_idx >= n_lines || idx_in_line >= line_len) return;
 
-    int size[3] = {nx, ny, nz};
+    int ix = 0, iy = 0, iz = 0;
+    if (dim == 0) { iy = line_idx % ny; iz = line_idx / ny; ix = idx_in_line; }
+    else if (dim == 1) { ix = line_idx % nx; iz = line_idx / nx; iy = idx_in_line; }
+    else { ix = line_idx % nx; iy = line_idx / nx; iz = idx_in_line; }
+
+    int out_idx = iz * nx * ny + iy * nx + ix;
+
     int center = klen / 2;
-
-    int idx = iz * nx * ny + iy * nx + ix;
     T val = 0;
-
     for (int k = 0; k < klen; ++k) {
         int offset = k - center;
-        int ci = (dim == 0) ? ix + offset : (dim == 1) ? iy + offset : iz + offset;
-        ci = min(max(ci, 0), size[dim] - 1); // replicate boundary
-        int cidx;
-        if (dim == 0)
-            cidx = iz * nx * ny + iy * nx + ci;
-        else if (dim == 1)
-            cidx = iz * nx * ny + ci * nx + ix;
-        else
-            cidx = ci * nx * ny + iy * nx + ix;
-        val += src[cidx] * kernel[k];
+        int ci = idx_in_line + offset;
+        ci = min(max(ci, 0), line_len - 1); // boundary replicate
+
+        int cx = ix, cy = iy, cz = iz;
+        if (dim == 0) cx = ci;
+        else if (dim == 1) cy = ci;
+        else cz = ci;
+        int in_idx = cz * nx * ny + cy * nx + cx;
+
+        val += data[in_idx] * kernel[k];
     }
-    dst[idx] = val;
+    data[out_idx] = val; // In-place write
 }
 
 // --------- WARN IF KERNEL SIZE TOO SMALL ---------
@@ -75,22 +78,13 @@ void warn_kernel_size(const double* sigma, const int* ksize, int do_warn) {
     }
 }
 
-// --------- SEPARABLE GAUSS 3D (in-place) ---------
+// --------- SEPARABLE GAUSS 3D (in-place, parallelized) ---------
 template<typename T>
-void run_gauss3d_inplace(T* bufA, int nx, int ny, int nz, const T sigma[3], const int ksize[3]) {
+void run_gauss3d_inplace(T* buf, int nx, int ny, int nz, const T sigma[3], const int ksize[3]) {
     T* h_kernel = new T[MAX_KERNEL_SIZE];
     T* d_kernel;
     int klen;
 
-    dim3 block(8,8,8);
-    dim3 grid((nx+block.x-1)/block.x, (ny+block.y-1)/block.y, (nz+block.z-1)/block.z);
-
-    // Allocate temp buffer for swap
-    T* bufB;
-    CUDA_CHECK(cudaMalloc(&bufB, nx*ny*nz*sizeof(T)));
-
-    T *src = bufA;
-    T *dst = bufB;
     for (int dim = 0; dim < 3; ++dim) {
         klen = ksize[dim];
         if (klen > MAX_KERNEL_SIZE)
@@ -99,19 +93,21 @@ void run_gauss3d_inplace(T* bufA, int nx, int ny, int nz, const T sigma[3], cons
         CUDA_CHECK(cudaMalloc(&d_kernel, klen * sizeof(T)));
         CUDA_CHECK(cudaMemcpy(d_kernel, h_kernel, klen * sizeof(T), cudaMemcpyHostToDevice));
 
-        gauss1d_kernel<T><<<grid, block>>>(src, dst, nx, ny, nz, d_kernel, klen, dim);
+        int n_lines, line_len;
+        if (dim == 0) { n_lines = ny * nz; line_len = nx; }
+        else if (dim == 1) { n_lines = nx * nz; line_len = ny; }
+        else { n_lines = nx * ny; line_len = nz; }
+
+        int block_size = (line_len < 256) ? line_len : 256;
+        dim3 block(block_size);
+        dim3 grid(n_lines);
+
+        gauss1d_lines_kernel<T><<<grid, block>>>(
+            buf, d_kernel, klen, nx, ny, nz, dim, line_len, n_lines
+        );
         CUDA_CHECK(cudaDeviceSynchronize());
         CUDA_CHECK(cudaFree(d_kernel));
-
-        // Swap
-        T* tmp = src; src = dst; dst = tmp;
     }
-
-    // After 3 passes (odd), result is in bufB, copy back to bufA
-    if (src != bufA) {
-        CUDA_CHECK(cudaMemcpy(bufA, bufB, nx*ny*nz*sizeof(T), cudaMemcpyDeviceToDevice));
-    }
-    CUDA_CHECK(cudaFree(bufB));
     delete[] h_kernel;
 }
 
