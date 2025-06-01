@@ -1,6 +1,6 @@
 function test_gauss3d_mex_features()
 % Robust & colorful test harness for gauss3d_mex vs imgaussfilt3 (GPU/CPU fallback).
-% Only tests double precision. Prints left-aligned, includes timings, OOM/fallback, and summary.
+% Single-precision only. Includes performance, color, and summary.
 
     g = gpuDevice(1);
     reset(g);
@@ -10,127 +10,136 @@ function test_gauss3d_mex_features()
     col = @(c,str) colored_str(c,str,hasCprintf);
 
     szs = {[32, 64, 32], [512, 512, 512]};
+    types = {@single};   % Single only!
     sigma_tests = {2.5, [2.5 2.5 2.5], [0.5 0.5 2.5], 0.25, 8};
     ksize_tests = {'auto', 9, [9 11 15], 3, 41};
-    DOUBLE_THRESH = 1e-7;
+    SINGLE_THRESH = 5e-5;
 
     % Summary counters
-    total = 0; pass = 0; fail = 0; oom = 0; ksizeerr = 0;
+    total = 0; pass = 0; fail = 0; skip = 0; oom = 0; ksizeerr = 0;
 
-    for isz = 1:numel(szs)
-        sz = szs{isz};
-        type_str = 'single';
+    % Print summary header
+    fprintf('%-5s %-11s %-20s %-14s %-16s %-8s %-8s %-8s %-8s\n', ...
+        'Test', 'Type', 'Size', 'Sigma', 'Kernel', 'maxErr', 'RMS', 'relErr', 'mex(s)');
 
-        for isig = 1:numel(sigma_tests)
-            sigma = sigma_tests{isig};
-            for iksz = 1:numel(ksize_tests)
-                total = total + 1;
-                ksz = ksize_tests{iksz};
-                if ischar(ksz) || isstring(ksz)
-                    kdesc = char(ksz);
-                else
-                    kdesc = mat2str(ksz);
-                end
+    for ityp = 1:numel(types)
+        for isz = 1:numel(szs)
+            sz = szs{isz};
+            T = types{ityp};
+            type_str = func2str(T);
 
-                % Kernel size for padding
-                if ischar(ksz) || isstring(ksz)
-                    kernel_sz = odd_kernel_size(sigma);
-                else
-                    kernel_sz = ksz;
-                    if isscalar(kernel_sz)
-                        kernel_sz = repmat(kernel_sz,1,3);
+            for isig = 1:numel(sigma_tests)
+                sigma = sigma_tests{isig};
+                for iksz = 1:numel(ksize_tests)
+                    total = total + 1;
+                    ksz = ksize_tests{iksz};
+                    if ischar(ksz) || isstring(ksz)
+                        kdesc = char(ksz);
+                    else
+                        kdesc = mat2str(ksz);
                     end
-                end
-                pad_amt = floor(kernel_sz / 2);
 
-                rng(0);
-                x = rand(sz, type_str);
-                x = x ./ max(x(:));
-                x_pad = padarray(x, pad_amt, 'replicate', 'both');
-                x_pad_gpu = gpuArray(x_pad);
-                opts = {'Padding', 'replicate', 'FilterSize', kernel_sz, 'FilterDomain', 'spatial'};
-
-                % Section header
-                print_section_header(total, type_str, sz, sigma, kdesc, col);
-
-                try
-                    % Reference (imgaussfilt3, fallback to CPU)
-                    t1 = tic;
-                    try
-                        y_ref_gpu = imgaussfilt3(x_pad_gpu, sigma, opts{:});
-                    catch ME1
-                        if contains(ME1.message, 'fftn') || ...
-                           contains(ME1.message, 'FFT') || ...
-                           contains(ME1.message, 'out of memory') || ...
-                           contains(ME1.identifier, 'parallel:gpu:array:OOM')
-                            warning(col('blue','    imgaussfilt3 GPU failed (FFT or OOM), using CPU reference.'));
-                            y_ref_gpu = gpuArray(imgaussfilt3(gather(x_pad_gpu), sigma, opts{:}));
-                        else
-                            rethrow(ME1);
+                    % Kernel size for padding
+                    if ischar(ksz) || isstring(ksz)
+                        kernel_sz = odd_kernel_size(sigma);
+                    else
+                        kernel_sz = ksz;
+                        if isscalar(kernel_sz)
+                            kernel_sz = repmat(kernel_sz,1,3);
                         end
                     end
-                    t_ref = toc(t1);
+                    pad_amt = floor(kernel_sz / 2);
 
-                    % gauss3d_mex (double only)
-                    t2 = tic;
-                    y_mex_gpu = gauss3d_mex(x_pad_gpu, sigma, kernel_sz);
-                    t_mex = toc(t2);
+                    rng(0);
+                    x = rand(sz, type_str);
+                    x = x ./ max(x(:));
+                    x_pad = padarray(x, pad_amt, 'replicate', 'both');
+                    x_pad_gpu = gpuArray(x_pad);
+                    opts = {'Padding', 'replicate', 'FilterSize', kernel_sz, 'FilterDomain', 'spatial'};
 
-                    % Output checks and stats
-                    assert(isequal(size(y_mex_gpu), size(x_pad_gpu)), 'Output size mismatch.');
-                    assert(strcmp(class(y_mex_gpu), class(x_pad_gpu)), 'Output class mismatch.');
-                    assert(strcmp(classUnderlying(y_mex_gpu), classUnderlying(x_pad_gpu)), 'Output underlying class mismatch.');
-                    print_ok('Output matches input type/class/shape.', col);
+                    try
+                        % Reference (imgaussfilt3, fallback to CPU)
+                        t1 = tic;
+                        try
+                            y_ref_gpu = imgaussfilt3(x_pad_gpu, sigma, opts{:});
+                        catch ME1
+                            if contains(ME1.message, 'fftn') || ...
+                               contains(ME1.message, 'FFT') || ...
+                               contains(ME1.message, 'out of memory') || ...
+                               contains(ME1.identifier, 'parallel:gpu:array:OOM')
+                                warning(col('blue','    imgaussfilt3 GPU failed (FFT or OOM), using CPU reference.'));
+                                y_ref_gpu = gpuArray(imgaussfilt3(gather(x_pad_gpu), sigma, opts{:}));
+                            else
+                                rethrow(ME1);
+                            end
+                        end
+                        t_ref = toc(t1);
 
-                    % Unpad for fair comparison
-                    [idx1, idx2, idx3] = unpad_indices(size(x_pad), pad_amt);
-                    y_ref_unpad = y_ref_gpu(idx1,idx2,idx3);
-                    y_mex_unpad = y_mex_gpu(idx1,idx2,idx3);
+                        % gauss3d_mex single (standard)
+                        t2 = tic;
+                        y_mex_gpu = gauss3d_mex(x_pad_gpu, sigma, kernel_sz);
+                        t_mex = toc(t2);
 
-                    % Error metrics
-                    err = max(abs(y_mex_unpad(:) - y_ref_unpad(:)));
-                    rms_err = sqrt(mean((y_mex_unpad(:) - y_ref_unpad(:)).^2));
-                    rel_err = rms_err / (max(abs(y_ref_unpad(:))) + eps);
+                        % Output checks and stats
+                        assert(isequal(size(y_mex_gpu), size(x_pad_gpu)), 'Output size mismatch.');
+                        assert(strcmp(class(y_mex_gpu), class(x_pad_gpu)), 'Output class mismatch.');
+                        assert(strcmp(classUnderlying(y_mex_gpu), classUnderlying(x_pad_gpu)), 'Output underlying class mismatch.');
 
-                    % Histogram/stats
-                    print_histogram(y_mex_unpad, y_ref_unpad, col);
+                        % Unpad for fair comparison
+                        [idx1, idx2, idx3] = unpad_indices(size(x_pad), pad_amt);
+                        y_ref_unpad = y_ref_gpu(idx1,idx2,idx3);
+                        y_mex_unpad = y_mex_gpu(idx1,idx2,idx3);
 
-                    % Pass/Fail
-                    p = gather(err) < DOUBLE_THRESH;
-                    print_result(p, type_str, err, rms_err, rel_err, t_ref, t_mex, col);
-                    if p, pass = pass+1; else, fail = fail+1; end
+                        % Error metrics
+                        err = max(abs(y_mex_unpad(:) - y_ref_unpad(:)));
+                        rms_err = sqrt(mean((y_mex_unpad(:) - y_ref_unpad(:)).^2));
+                        rel_err = rms_err / (max(abs(y_ref_unpad(:))) + eps);
 
-                catch ME
-                    % OOM or kernel size errors
-                    if contains(ME.message, 'out of memory') || ...
-                       contains(ME.identifier, 'parallel:gpu:array:OOM')
-                        print_fail('OOM: Skipping due to GPU memory.', col);
-                        oom = oom+1; reset(gpuDevice); continue;
-                    elseif contains(ME.message, 'Kernel size exceeds')
-                        print_fail('Kernel size exceeds device limit.', col);
-                        ksizeerr = ksizeerr + 1;
-                        continue;
-                    else
-                        print_fail(['ERROR: ' ME.message], col);
-                        fail = fail+1;
-                        continue;
+                        % Print single-line result (left-aligned)
+                        fprintf('%-5d %-11s %-20s %-14s %-16s %-8.2e %-8.2e %-8.2e %-8.3f\n', ...
+                            total, type_str, mat2str(sz), mat2str(sigma), kdesc, err, rms_err, rel_err, t_mex);
+
+                        % Optional: print histogram/stats
+                        % print_histogram(y_mex_unpad, y_ref_unpad, col);
+
+                        % Pass/Fail
+                        p = (strcmp(type_str,'single') && gather(err) < SINGLE_THRESH);
+                        if p, pass = pass+1;
+                        else, fail = fail+1;
+                        end
+
+                    catch ME
+                        % OOM or kernel size errors
+                        if contains(ME.message, 'out of memory') || ...
+                           contains(ME.identifier, 'parallel:gpu:array:OOM')
+                            print_fail('OOM: Skipping due to GPU memory.', col);
+                            oom = oom+1; reset(gpuDevice); continue;
+                        elseif contains(ME.message, 'Kernel size exceeds')
+                            print_fail('Kernel size exceeds device limit.', col);
+                            ksizeerr = ksizeerr + 1;
+                            continue;
+                        else
+                            print_fail(['ERROR: ' ME.message], col);
+                            fail = fail+1;
+                            continue;
+                        end
                     end
-                end
 
-                clear x_pad_gpu y_mex_gpu y_ref_gpu y_mex_unpad y_ref_unpad
+                    clear x_pad_gpu y_mex_gpu y_ref_gpu y_mex_unpad y_ref_unpad
+                end
             end
         end
     end
 
     % --- Suite summary ---
-    fprintf('\n%s\n',col('yellow', repmat('=',1,60)));
+    fprintf('\n%s\n',col('yellow', repmat('=',1,80)));
     fprintf('%s\n', col('magenta', 'TEST SUITE SUMMARY'));
-    fprintf('%-25s %d\n', col('green',  'Total tests:'      ), total);
-    fprintf('%-25s %d\n', col('green',  'Passed:'           ), pass);
-    fprintf('%-25s %d\n', col('red',    'Failed:'           ), fail);
-    fprintf('%-25s %d\n', col('blue',   'OOM/Skipped:'      ), oom);
-    fprintf('%-25s %d\n', col('red',    'Kernel size skip:' ), ksizeerr);
-    fprintf('%s\n', col('yellow', repmat('=',1,60)));
+    fprintf('%-24s %-8d\n', col('green', 'Total tests:'), total);
+    fprintf('%-24s %-8d\n', col('green', 'Passed:'), pass);
+    fprintf('%-24s %-8d\n', col('red',   'Failed:'), fail);
+    fprintf('%-24s %-8d\n', col('blue',  'OOM/Skipped:'), oom);
+    fprintf('%-24s %-8d\n', col('red',   'Kernel size skip:'), ksizeerr);
+    fprintf('%s\n', col('yellow', repmat('=',1,80)));
 end
 
 function [idx1, idx2, idx3] = unpad_indices(sz, pad_amt)
@@ -147,39 +156,8 @@ function sz = odd_kernel_size(sigma)
     sz = max(sz, 3);
 end
 
-function print_section_header(test_idx, type_str, sz, sigma, kdesc, col)
-    fprintf('\n%s\n', col('yellow', repmat('=',1,60)));
-    fprintf('%-40s %s\n', col('magenta', sprintf('Test %d:', test_idx)), sprintf('%s [%s]', type_str, mat2str(sz)));
-    fprintf('    %-12s %s\n', col('cyan','Sigma:'),   mat2str(sigma));
-    fprintf('    %-12s %s\n', col('cyan','Kernel:'),  kdesc);
-end
-
-function print_ok(str, col)
-    fprintf('%-40s %s\n', col('green', '  ✔️'), str);
-end
-
 function print_fail(str, col)
-    fprintf('%-40s %s\n', col('red', '  ❌'), str);
-end
-
-function print_result(pass, type_str, err, rms_err, rel_err, t_ref, t_mex, col)
-    if pass
-        mark = col('green', '✔️');
-    else
-        mark = col('red', '❌');
-    end
-    label = upper(type_str);
-    fprintf('    %-8s %-3s   max=%-12.2e RMS=%-12.2e rel=%-12.2e\n', label, mark, err, rms_err, rel_err);
-    fprintf('    %-8s ref=%.3fs | mex=%.3fs\n', 'Time:', t_ref, t_mex);
-end
-
-function print_histogram(y, yref, col)
-    y = gather(y); yref = gather(yref);
-    minv = min(y(:)); maxv = max(y(:)); meanv = mean(y(:));
-    fprintf('    %-12s min=%.4f max=%.4f mean=%.4f\n', 'Output:', minv, maxv, meanv);
-    % Optionally, show a small histogram or a voxel sample
-    idx = numel(y)/2 + 1;
-    fprintf('    %-12s ref/this: %.6f / %.6f\n', 'Voxel:', yref(idx), y(idx));
+    fprintf('%s %s\n', col('red', '  ❌'), str);
 end
 
 function out = colored_str(color, str, hasCprintf)
