@@ -177,7 +177,7 @@ function [otf, otf_conj] = calculate_otf(psf_shifted, fft_shape, device_id)
     % if device_id > 0, otf = arrayfun(@(r, i) complex(r, i), real(otf), imag(otf)); end
     otf_conj = conj(otf);
     % if device_id > 0, otf_conj = arrayfun(@(r, i) complex(r, i), real(otf_conj), imag(otf_conj)); end
-    fprintf('%s: OTF computed for size %s in %.1fs\n', ...
+    fprintf('%s: OTF computed for size %s in %.2fs\n', ...
         device_name(device_id), mat2str(fft_shape), toc(t_compute));
 end
 
