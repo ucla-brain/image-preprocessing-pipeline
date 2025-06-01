@@ -29,25 +29,25 @@ function img = filter_subband(img, sigma, levels, wavelet, axes)
         idxV = idxH(end) + (1:sz);
         idxD = idxV(end) + (1:sz);
 
-        % Reshape from C
-        H = reshape(C(idxH), S(n + 1, :));
-        V = reshape(C(idxV), S(n + 1, :));
-        D = reshape(C(idxD), S(n + 1, :));
-
         % Apply filtering
+        % if ismember(3, axes)
+        %     % Diagonal filtering on D
+        %     D = reshape(C(idxD), S(n + 1, :));
+        %     D = filter_coefficient(D, sigma / mean(size(D)), 3);
+        %     C(idxD) = D(:);
+        % end
         if ismember(2, axes)
             % Horizontal filtering on H
+            H = reshape(C(idxH), S(n + 1, :));
             H = filter_coefficient(H, sigma / size(H, 2), 2);
+            C(idxH) = H(:);
         end
         if ismember(1, axes)
             % Vertical filtering on V
+            V = reshape(C(idxV), S(n + 1, :));
             V = filter_coefficient(V, sigma / size(V, 1), 1);
+            C(idxV) = V(:);
         end
-
-        % Overwrite filtered values in C
-        C(idxH) = H(:);
-        C(idxV) = V(:);
-
         start_idx = idxD(end);  % Move to next level
     end
 
