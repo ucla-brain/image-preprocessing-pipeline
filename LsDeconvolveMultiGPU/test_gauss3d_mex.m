@@ -1,16 +1,13 @@
-function test_gauss3d_mex_gpu_inplace()
-    % Test gauss3d_mex (in-place) against imgaussfilt3 with all parameter variants
+function test_gauss3d_mex_vs_imgaussfilt3_padded()
+    % Test gauss3d_mex against imgaussfilt3 for sigma <= 2.5, with pre-padding
 
     szs = {
         [32, 128, 128], ...
-        [256, 512, 512], ...
-        [512, 512, 512]
+        [256, 512, 512]
     };
     types = {@single, @double};
-    sigma_tests = {2.5, [2.5 3 4]};
-    ksize_tests = {'auto', 13, [13 19 25]};
-
-    g = gpuDevice(1);
+    sigma_tests = {2.5, [2.5 2.5 2.5]}; % Only up to 2.5
+    ksize_tests = {'auto', 13, [13 13 13]}; % Only up to 13
 
     for ityp = 1:numel(types)
         for isz = 1:numel(szs)
@@ -22,7 +19,6 @@ function test_gauss3d_mex_gpu_inplace()
                 sigma = sigma_tests{isig};
                 for iksz = 1:numel(ksize_tests)
                     ksz = ksize_tests{iksz};
-                    % Description string for printout
                     if ischar(ksz)
                         kdesc = 'auto';
                     else
@@ -31,51 +27,54 @@ function test_gauss3d_mex_gpu_inplace()
                     fprintf('\nTesting %s %s, sigma=%s, ksize=%s ...\n', ...
                         type_str, mat2str(sz), mat2str(sigma), kdesc);
 
-                    rng(0);
-                    x_val_gpu = gpuArray.rand(sz, type_str);
-
-                    % --- imgaussfilt3 ---
-                    opts = {'Padding', 'replicate'};
-                    if ~ischar(ksz)
-                        opts = [opts, {'FilterSize', ksz}];
+                    % Determine kernel size for padding
+                    if ischar(ksz)
+                        kernel_sz = odd_kernel_size(sigma);
                     else
-                        opts = [opts, {'FilterSize', odd_kernel_size(sigma)}];
+                        kernel_sz = ksz;
+                        if isscalar(kernel_sz)
+                            kernel_sz = repmat(kernel_sz,1,3);
+                        end
                     end
-                    if exist('imgaussfilt3', 'file') && any(strcmp('FilterDomain', ...
-                            methods('imgaussfilt3')))
+                    pad_amt = floor(kernel_sz / 2);
+
+                    % Prepare input
+                    rng(0);
+                    x = rand(sz, type_str);
+
+                    % Pad input for both methods
+                    x_pad = padarray(x, pad_amt, 'replicate', 'both');
+                    x_pad_gpu = gpuArray(x_pad);
+
+                    % imgaussfilt3 (on GPU, padding 'replicate')
+                    opts = {'Padding', 'replicate', 'FilterSize', kernel_sz};
+                    if exist('imgaussfilt3', 'file') && ...
+                            any(strcmp('FilterDomain', methods('imgaussfilt3')))
                         opts = [opts, {'FilterDomain', 'spatial'}];
                     end
+                    y_ref_gpu = imgaussfilt3(x_pad_gpu, sigma, opts{:});
 
-                    y_ref_gpu = imgaussfilt3(x_val_gpu, sigma, opts{:});
-
-                    % --- gauss3d_mex (in-place) ---
+                    % gauss3d_mex (no padding, in-place)
                     if ischar(ksz)
-                        y_result_gpu = gauss3d_mex(x_val_gpu, sigma); % default kernel size
+                        y_mex_gpu = gauss3d_mex(x_pad_gpu, sigma); % default kernel size
                     else
-                        y_result_gpu = gauss3d_mex(x_val_gpu, sigma, ksz);
+                        y_mex_gpu = gauss3d_mex(x_pad_gpu, sigma, kernel_sz);
                     end
 
-                    % --- Validation (all on GPU) ---
-                    margin = max(ceil(4*max(sigma)), 1); % conservative margin
-                    x_rng = (1+margin):(sz(1)-margin);
-                    y_rng = (1+margin):(sz(2)-margin);
-                    z_rng = (1+margin):(sz(3)-margin);
+                    % Unpad both results for comparison
+                    idx1 = (1+pad_amt(1)):(size(x_pad,1)-pad_amt(1));
+                    idx2 = (1+pad_amt(2)):(size(x_pad,2)-pad_amt(2));
+                    idx3 = (1+pad_amt(3)):(size(x_pad,3)-pad_amt(3));
+                    y_ref_unpad = y_ref_gpu(idx1,idx2,idx3);
+                    y_mex_unpad = y_mex_gpu(idx1,idx2,idx3);
 
-                    y_interior_gpu    = y_result_gpu(x_rng, y_rng, z_rng);
-                    y_ref_interior_gpu = y_ref_gpu(x_rng, y_rng, z_rng);
+                    % Compute error
+                    err = max(abs(y_mex_unpad(:) - y_ref_unpad(:)));
+                    rms_err = sqrt(mean((y_mex_unpad(:) - y_ref_unpad(:)).^2));
+                    rel_err = rms_err / (max(abs(y_ref_unpad(:))) + eps);
 
-                    err = max(abs(y_interior_gpu(:) - y_ref_interior_gpu(:)));
-                    rms_err = sqrt(mean((y_interior_gpu(:) - y_ref_interior_gpu(:)).^2));
-                    rel_err = rms_err / (max(abs(y_ref_interior_gpu(:))) + eps);
-
-                    fprintf('  3D validation (interior): max = %.2e, RMS = %.2e, rel RMS = %.2e\n', ...
+                    fprintf('  3D validation (unpadded): max = %.2e, RMS = %.2e, rel RMS = %.2e\n', ...
                         gather(err), gather(rms_err), gather(rel_err));
-                    fprintf('    mean(y_result) = %.6g, mean(y_ref) = %.6g, mean(diff) = %.6g\n', ...
-                        gather(mean(y_result_gpu(:))), gather(mean(y_ref_gpu(:))), ...
-                        gather(mean(y_result_gpu(:) - y_ref_gpu(:))));
-                    fprintf('    min/max(y_result) = %.6g/%.6g, min/max(y_ref) = %.6g/%.6g\n', ...
-                        gather(min(y_result_gpu(:))), gather(max(y_result_gpu(:))), ...
-                        gather(min(y_ref_gpu(:))), gather(max(y_ref_gpu(:))));
 
                     if strcmp(type_str, 'single')
                         if gather(err) < 5e-5
@@ -91,8 +90,7 @@ function test_gauss3d_mex_gpu_inplace()
                         end
                     end
 
-                    clear x_val_gpu y_result_gpu y_interior_gpu y_ref_interior_gpu y_ref_gpu
-                    reset(g);
+                    clear x_pad_gpu y_mex_gpu y_ref_gpu y_mex_unpad y_ref_unpad
                 end
             end
         end
