@@ -19,7 +19,7 @@ function test_gauss3d_mex_features()
 
     for isz = 1:numel(szs)
         sz = szs{isz};
-        type_str = 'double';
+        type_str = 'single';
 
         for isig = 1:numel(sigma_tests)
             sigma = sigma_tests{isig};
@@ -44,7 +44,7 @@ function test_gauss3d_mex_features()
                 pad_amt = floor(kernel_sz / 2);
 
                 rng(0);
-                x = rand(sz, type_str, 'single');
+                x = rand(sz, type_str);
                 x = x ./ max(x(:));
                 x_pad = padarray(x, pad_amt, 'replicate', 'both');
                 x_pad_gpu = gpuArray(x_pad);
