@@ -48,11 +48,11 @@ __global__ void gauss1d_lines_kernel(
     int out_idx = iz * nx * ny + iy * nx + ix;
 
     int center = klen / 2;
-    T val = 0;
+    double val = 0.0; // accumulate in double!
     for (int k = 0; k < klen; ++k) {
         int offset = k - center;
         int ci = idx_in_line + offset;
-        ci = min(max(ci, 0), line_len - 1); // boundary replicate
+        ci = min(max(ci, 0), line_len - 1);
 
         int cx = ix, cy = iy, cz = iz;
         if (dim == 0) cx = ci;
@@ -60,9 +60,9 @@ __global__ void gauss1d_lines_kernel(
         else cz = ci;
         int in_idx = cz * nx * ny + cy * nx + cx;
 
-        val += data[in_idx] * kernel[k];
+        val += static_cast<double>(data[in_idx]) * static_cast<double>(kernel[k]);
     }
-    data[out_idx] = val; // In-place write
+    data[out_idx] = static_cast<T>(val);
 }
 
 // --------- WARN IF KERNEL SIZE TOO SMALL ---------
