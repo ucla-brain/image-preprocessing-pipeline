@@ -180,6 +180,10 @@ extern "C" void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* 
 
     float sigma[3] = { (float)sigma_double[0], (float)sigma_double[1], (float)sigma_double[2] };
     gauss3d_separable_float_inplace((float*)ptr, nx, ny, nz, sigma, ksize);
+    CUDA_CHECK(cudaFree(buffer));
+
+    // Ensure all GPU work is finished
+    CUDA_CHECK(cudaDeviceSynchronize());
 
     plhs[0] = mxGPUCreateMxArrayOnGPU(img_gpu);
     // img_gpu is not destroyed, as output holds reference
