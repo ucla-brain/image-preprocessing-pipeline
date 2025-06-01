@@ -1,4 +1,6 @@
-// gauss3d_mex.cu: Fast, VRAM-efficient, mathematically correct 3D Gaussian for Matlab GPU
+// gauss3d_mex.cu: Correct, minimal-VRAM, accurate 3D Gaussian for MATLAB GPU
+// Author: ChatGPT + Keivan Moradi
+
 #include "mex.h"
 #include "gpu/mxGPUArray.h"
 #include <cuda_runtime.h>
@@ -9,6 +11,7 @@
 
 #define MAX_KERNEL_SIZE 151
 #define CUDA_BLOCK_SIZE 256
+
 #define CUDA_CHECK(call) do { \
     cudaError_t err = call; \
     if (err != cudaSuccess) \
@@ -27,44 +30,53 @@ void make_gaussian_kernel(T sigma, int ksize, double* kernel) {
         kernel[i] /= sum;
 }
 
+// Each CUDA kernel processes one axis, one line per block
 // axis: 0=x, 1=y, 2=z
 template<typename T>
-__global__ void gauss3d_axis_kernel(const T* src, T* dst, const double* kernel, int klen, int nx, int ny, int nz, int axis) {
+__global__ void gauss1d_axis_kernel(const T* src, T* dst, const double* kernel, int klen,
+                                    int nx, int ny, int nz, int axis)
+{
+    int line, pos;
+    if (axis == 0) { // X-axis: [y,z] lines
+        int y = blockIdx.x;
+        int z = blockIdx.y;
+        line = y + z * ny;
+        pos = threadIdx.x;
+        if (y >= ny || z >= nz || pos >= nx) return;
+    } else if (axis == 1) { // Y-axis: [x,z] lines
+        int x = blockIdx.x;
+        int z = blockIdx.y;
+        line = x + z * nx;
+        pos = threadIdx.x;
+        if (x >= nx || z >= nz || pos >= ny) return;
+    } else { // Z-axis: [x,y] lines
+        int x = blockIdx.x;
+        int y = blockIdx.y;
+        line = x + y * nx;
+        pos = threadIdx.x;
+        if (x >= nx || y >= ny || pos >= nz) return;
+    }
+
+    int len = (axis == 0) ? nx : (axis == 1) ? ny : nz;
     int center = klen / 2;
 
-    int x = blockIdx.x;
-    int y = blockIdx.y;
-    int z = blockIdx.z;
+    // Index functions
+    auto src_idx = [&](int p) -> size_t {
+        if (axis == 0) return z * nx * ny + y * nx + p;
+        if (axis == 1) return z * nx * ny + p * nx + x;
+        return p * nx * ny + y * nx + x;
+    };
 
-    if (x >= nx || y >= ny || z >= nz) return;
-
-    int line_len;
-    if (axis == 0) line_len = nx;
-    else if (axis == 1) line_len = ny;
-    else line_len = nz;
-
-    for (int t = threadIdx.x; t < line_len; t += blockDim.x) {
-        double val = 0.0;
-        for (int k = 0; k < klen; ++k) {
-            int offset = k - center;
-            int ti = t + offset;
-            // Clamp to valid range (replicate)
-            if (axis == 0) ti = min(max(ti, 0), nx-1);
-            else if (axis == 1) ti = min(max(ti, 0), ny-1);
-            else ti = min(max(ti, 0), nz-1);
-
-            size_t idx;
-            if (axis == 0)      idx = z * nx * ny + y * nx + ti;
-            else if (axis == 1) idx = z * nx * ny + ti * nx + x;
-            else                idx = ti * nx * ny + y * nx + x;
-            val += (double)src[idx] * kernel[k];
-        }
-        size_t oidx;
-        if (axis == 0)      oidx = z * nx * ny + y * nx + t;
-        else if (axis == 1) oidx = z * nx * ny + t * nx + x;
-        else                oidx = t * nx * ny + y * nx + x;
-        dst[oidx] = (T)val;
+    double val = 0.0;
+    for (int k = 0; k < klen; ++k) {
+        int offset = k - center;
+        int pi = pos + offset;
+        // Replicate boundaries
+        if (pi < 0) pi = 0;
+        if (pi >= len) pi = len - 1;
+        val += (double)src[src_idx(pi)] * kernel[k];
     }
+    dst[src_idx(pos)] = (T)val;
 }
 
 template<typename T>
@@ -83,26 +95,29 @@ void run_gauss3d_separable(T* buf, int nx, int ny, int nz, const T sigma[3], con
         CUDA_CHECK(cudaMalloc(&d_kernel, klen * sizeof(double)));
         CUDA_CHECK(cudaMemcpy(d_kernel, h_kernel, klen * sizeof(double), cudaMemcpyHostToDevice));
 
-        dim3 grid, block;
-        if (axis == 0) { // X-axis: iterate Y,Z
-            grid = dim3(nx, ny, nz); block = dim3(std::min(nx, CUDA_BLOCK_SIZE));
-        } else if (axis == 1) { // Y-axis: iterate X,Z
-            grid = dim3(nx, nz, 1); block = dim3(std::min(ny, CUDA_BLOCK_SIZE));
-        } else { // Z-axis: iterate X,Y
-            grid = dim3(nx, ny, 1); block = dim3(std::min(nz, CUDA_BLOCK_SIZE));
+        int nblock0, nblock1, nthread;
+        if (axis == 0) { // X-axis: [y,z] lines
+            nblock0 = ny; nblock1 = nz; nthread = nx;
+        } else if (axis == 1) { // Y-axis: [x,z] lines
+            nblock0 = nx; nblock1 = nz; nthread = ny;
+        } else { // Z-axis: [x,y] lines
+            nblock0 = nx; nblock1 = ny; nthread = nz;
         }
-        gauss3d_axis_kernel<T><<<grid, block>>>(src, dst, d_kernel, klen, nx, ny, nz, axis);
+        int threads = std::min(nthread, CUDA_BLOCK_SIZE);
+        int blocks = (nthread + threads - 1) / threads;
+        dim3 grid(nblock0, nblock1, 1);
+        dim3 block(threads, 1, 1);
+
+        gauss1d_axis_kernel<T><<<grid, block>>>(src, dst, d_kernel, klen, nx, ny, nz, axis);
         CUDA_CHECK(cudaGetLastError());
         CUDA_CHECK(cudaDeviceSynchronize());
         CUDA_CHECK(cudaFree(d_kernel));
-        // Swap src/dst for next axis
         std::swap(src, dst);
     }
 
-    // If final result is in tmp, copy back to buf
+    // If last swap left the result in tmp, copy back to buf
     if (src != buf)
         CUDA_CHECK(cudaMemcpy(buf, src, nvox * sizeof(T), cudaMemcpyDeviceToDevice));
-
     CUDA_CHECK(cudaFree(d_tmp));
 }
 
