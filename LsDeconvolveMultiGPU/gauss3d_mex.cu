@@ -1,5 +1,4 @@
-// gauss3d_mex.cu - Minimal vRAM, robust, 3D Gaussian (separable) for MATLAB GPU
-
+// gauss3d_mex_inplace.cu: In-place 3D Gaussian filter for MATLAB gpuArray input (no extra VRAM)
 #include "mex.h"
 #include "gpu/mxGPUArray.h"
 #include <cuda_runtime.h>
@@ -16,7 +15,7 @@
 
 template <typename T>
 __global__ void gauss1d_kernel(
-    const T* src, T* dst, int nx, int ny, int nz,
+    T* bufA, T* bufB, int nx, int ny, int nz,
     const float* kernel, int klen, int dim
 ) {
     int ix = blockIdx.x * blockDim.x + threadIdx.x;
@@ -33,7 +32,7 @@ __global__ void gauss1d_kernel(
     for (int k = 0; k < klen; ++k) {
         int offset = k - center;
         int ci = (dim == 0) ? ix + offset : (dim == 1) ? iy + offset : iz + offset;
-        ci = min(max(ci, 0), size[dim] - 1); // replicate boundary
+        ci = min(max(ci, 0), size[dim] - 1);
         int cidx;
         if (dim == 0)
             cidx = iz * nx * ny + iy * nx + ci;
@@ -41,16 +40,16 @@ __global__ void gauss1d_kernel(
             cidx = iz * nx * ny + ci * nx + ix;
         else
             cidx = ci * nx * ny + iy * nx + ix;
-        val += src[cidx] * kernel[k];
+        val += bufA[cidx] * kernel[k];
     }
-    dst[idx] = val;
+    bufB[idx] = val;
 }
 
 void make_gaussian_kernel(float sigma, float* kernel, int* klen) {
     int r = (int)ceilf(3.0f * sigma);
     *klen = 2*r + 1;
     if (*klen > MAX_KERNEL_SIZE)
-        mexErrMsgIdAndTxt("gauss3d:kernel", "Kernel size (%d) exceeds MAX_KERNEL_SIZE (%d)", *klen, MAX_KERNEL_SIZE);
+        mexErrMsgIdAndTxt("gauss3d:kernel", "Kernel size exceeds MAX_KERNEL_SIZE (%d)", MAX_KERNEL_SIZE);
     float sum = 0.0f;
     for (int i = -r; i <= r; ++i) {
         kernel[i+r] = expf(-0.5f * (i*i) / (sigma*sigma));
@@ -60,9 +59,9 @@ void make_gaussian_kernel(float sigma, float* kernel, int* klen) {
         kernel[i] /= sum;
 }
 
-// Minimal vRAM version: only two buffers for in-place swapping.
+// Minimal VRAM: 1 buffer (input), 1 temp buffer.
 template<typename T>
-void run_gauss3d(T* bufA, T* bufB, int nx, int ny, int nz, const float sigma[3]) {
+void run_gauss3d_inplace(T* bufA, int nx, int ny, int nz, float sigma[3]) {
     float *h_kernel = new float[MAX_KERNEL_SIZE];
     float *d_kernel;
     int klen;
@@ -70,7 +69,10 @@ void run_gauss3d(T* bufA, T* bufB, int nx, int ny, int nz, const float sigma[3])
     dim3 block(8,8,8);
     dim3 grid((nx+block.x-1)/block.x, (ny+block.y-1)/block.y, (nz+block.z-1)/block.z);
 
-    // Axis order: X (0), Y (1), Z (2)
+    // Allocate one temp buffer for swap
+    T* bufB;
+    CUDA_CHECK(cudaMalloc(&bufB, nx*ny*nz*sizeof(T)));
+
     T *src = bufA;
     T *dst = bufB;
     for (int dim = 0; dim < 3; ++dim) {
@@ -82,29 +84,30 @@ void run_gauss3d(T* bufA, T* bufB, int nx, int ny, int nz, const float sigma[3])
         CUDA_CHECK(cudaDeviceSynchronize());
         CUDA_CHECK(cudaFree(d_kernel));
 
-        // Swap pointers for next pass
-        T* tmp = src;
-        src = dst;
-        dst = tmp;
+        // Swap: after last pass, dst will be bufA if odd, bufB if even
+        T* tmp = src; src = dst; dst = tmp;
     }
+
+    // If output is not in bufA, copy back from bufB (odd number of passes swaps back)
+    if (src != bufA) {
+        CUDA_CHECK(cudaMemcpy(bufA, bufB, nx*ny*nz*sizeof(T), cudaMemcpyDeviceToDevice));
+    }
+    CUDA_CHECK(cudaFree(bufB));
     delete[] h_kernel;
-    // After three swaps, the output is always in bufB (src == bufB)
 }
 
-// MEX entry
+// MEX entry (in-place modification of input gpuArray)
 void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     mxInitGPU();
 
     if (nrhs < 2) mexErrMsgIdAndTxt("gauss3d:nrhs", "Need input array and sigma");
 
-    const mxGPUArray *img_gpu = mxGPUCreateFromMxArray(prhs[0]);
+    // Use input gpuArray for in-place output
+    mxGPUArray* img_gpu = mxGPUCreateFromMxArray(prhs[0]);
     const mwSize* sz = mxGPUGetDimensions(img_gpu);
     int nd = mxGPUGetNumberOfDimensions(img_gpu);
     if (nd != 3) mexErrMsgIdAndTxt("gauss3d:ndims", "Input must be 3D");
-
     int nx = (int)sz[0], ny = (int)sz[1], nz = (int)sz[2];
-    if (nx == 0 || ny == 0 || nz == 0)
-        mexErrMsgIdAndTxt("gauss3d:empty", "Input must be nonempty 3D array");
 
     float sigma[3];
     if (mxIsScalar(prhs[1])) sigma[0]=sigma[1]=sigma[2]=(float)mxGetScalar(prhs[1]);
@@ -114,35 +117,15 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     } else mexErrMsgIdAndTxt("gauss3d:sigma", "Sigma must be scalar or length-3 vector");
 
     mxClassID cls = mxGPUGetClassID(img_gpu);
-    mxGPUArray *A_gpu = mxGPUCreateGPUArray(3, sz, cls, mxREAL, MX_GPU_DO_NOT_INITIALIZE);
-    mxGPUArray *B_gpu = mxGPUCreateGPUArray(3, sz, cls, mxREAL, MX_GPU_DO_NOT_INITIALIZE);
+    void* ptr = mxGPUGetData(img_gpu);
 
-    // Copy input to A_gpu
-    size_t N = (size_t)nx*ny*nz;
-    size_t elsize = 0;
     if (cls == mxSINGLE_CLASS)
-        elsize = sizeof(float);
+        run_gauss3d_inplace<float>((float*)ptr, nx, ny, nz, sigma);
     else if (cls == mxDOUBLE_CLASS)
-        elsize = sizeof(double);
-    else
-        mexErrMsgIdAndTxt("gauss3d:class", "Input must be single or double");
-
-    void* input_ptr = (void*)mxGPUGetDataReadOnly(img_gpu);
-    void* A_ptr = (void*)mxGPUGetData(A_gpu);
-    CUDA_CHECK(cudaMemcpy(A_ptr, input_ptr, N * elsize, cudaMemcpyDeviceToDevice));
-
-    void* B_ptr = (void*)mxGPUGetData(B_gpu);
-
-    // Run filter (output will always be in B_gpu after 3 passes)
-    if (cls == mxSINGLE_CLASS)
-        run_gauss3d<float>((float*)A_ptr, (float*)B_ptr, nx, ny, nz, sigma);
-    else if (cls == mxDOUBLE_CLASS)
-        run_gauss3d<double>((double*)A_ptr, (double*)B_ptr, nx, ny, nz, sigma);
+        run_gauss3d_inplace<double>((double*)ptr, nx, ny, nz, sigma);
     else mexErrMsgIdAndTxt("gauss3d:class", "Input must be single or double");
 
-    plhs[0] = mxGPUCreateMxArrayOnGPU(B_gpu);
-
-    mxGPUDestroyGPUArray(img_gpu);
-    mxGPUDestroyGPUArray(A_gpu);
-    mxGPUDestroyGPUArray(B_gpu);
+    // Return the (modified) input as output, **do not destroy img_gpu**
+    plhs[0] = mxGPUCreateMxArrayOnGPU(img_gpu);
+    // mxGPUDestroyGPUArray(img_gpu); // Do not destroy if returning as output
 }
