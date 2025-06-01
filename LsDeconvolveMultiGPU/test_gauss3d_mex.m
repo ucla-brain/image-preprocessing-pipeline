@@ -1,5 +1,6 @@
 function test_gauss3d_mex_gpu_only()
-    % Compare gauss3d_mex and imgaussfilt3 on *the same gpuArray* input
+    % Compare gauss3d_mex and imgaussfilt3 on the same gpuArray input,
+    % with all calculations on the GPU (no gather).
 
     szs = {
         [32, 128, 128], ...
@@ -19,7 +20,6 @@ function test_gauss3d_mex_gpu_only()
             bytes = prod(sz) * sizeof(T);
             fprintf('\nTesting %s %s (%.2f GB)...\n', type_str, mat2str(sz), bytes/2^30);
 
-            % Single gpuArray input used for both!
             rng(0);
             x_val_gpu = gpuArray.rand(sz, type_str);
 
@@ -32,7 +32,6 @@ function test_gauss3d_mex_gpu_only()
             t_mex = toc;
             mem1 = g.AvailableMemory;
             vram_mex = mem0 - mem1;
-            y_result = gather(y_result_gpu);
 
             % --- imgaussfilt3(gpuArray) ---
             reset(g);
@@ -45,35 +44,38 @@ function test_gauss3d_mex_gpu_only()
             t_matlab = toc;
             mem1 = g.AvailableMemory;
             vram_matlab = mem0 - mem1;
-            y_ref = gather(y_ref_gpu);
 
-            % --- Exclude edges for validation ---
+            % --- Exclude edges for validation (still all on GPU) ---
             margin = max(ceil(4*sigma), 1);
             x_rng = (1+margin):(sz(1)-margin);
             y_rng = (1+margin):(sz(2)-margin);
             z_rng = (1+margin):(sz(3)-margin);
 
-            y_interior    = y_result(x_rng, y_rng, z_rng);
-            y_ref_interior = y_ref(x_rng, y_rng, z_rng);
+            y_interior_gpu    = y_result_gpu(x_rng, y_rng, z_rng);
+            y_ref_interior_gpu = y_ref_gpu(x_rng, y_rng, z_rng);
 
-            err = max(abs(y_interior(:) - y_ref_interior(:)));
-            rms_err = sqrt(mean((y_interior(:) - y_ref_interior(:)).^2));
-            rel_err = rms_err / (max(abs(y_ref_interior(:))) + eps);
+            err = max(abs(y_interior_gpu(:) - y_ref_interior_gpu(:)));
+            rms_err = sqrt(mean((y_interior_gpu(:) - y_ref_interior_gpu(:)).^2));
+            rel_err = rms_err / (max(abs(y_ref_interior_gpu(:))) + eps);
 
-            fprintf('  3D validation (interior): max = %.2e, RMS = %.2e, rel RMS = %.2e\n', err, rms_err, rel_err);
+            fprintf('  3D validation (interior): max = %.2e, RMS = %.2e, rel RMS = %.2e\n', ...
+                gather(err), gather(rms_err), gather(rel_err));
+
             fprintf('    mean(y_result) = %.6g, mean(y_ref) = %.6g, mean(diff) = %.6g\n', ...
-                mean(y_result(:)), mean(y_ref(:)), mean(y_result(:)-y_ref(:)));
+                gather(mean(y_result_gpu(:))), gather(mean(y_ref_gpu(:))), ...
+                gather(mean(y_result_gpu(:) - y_ref_gpu(:))));
             fprintf('    min/max(y_result) = %.6g/%.6g, min/max(y_ref) = %.6g/%.6g\n', ...
-                min(y_result(:)), max(y_result(:)), min(y_ref(:)), max(y_ref(:)));
+                gather(min(y_result_gpu(:))), gather(max(y_result_gpu(:))), ...
+                gather(min(y_ref_gpu(:))), gather(max(y_ref_gpu(:))));
 
             if strcmp(type_str, 'single')
-                if err < 5e-5
+                if gather(err) < 5e-5
                     fprintf('    PASS: single precision\n');
                 else
                     fprintf('    FAIL: single precision\n');
                 end
             else
-                if err < 1e-7
+                if gather(err) < 1e-7
                     fprintf('    PASS: double precision\n');
                 else
                     fprintf('    FAIL: double precision\n');
@@ -85,7 +87,7 @@ function test_gauss3d_mex_gpu_only()
             fprintf('  Speedup (gauss3d_mex/imgaussfilt3): %.2fx\n', t_matlab/t_mex);
             fprintf('  vRAM ratio (mex/Matlab): %.2f\n', vram_mex/max(1,vram_matlab));
 
-            clear y_result y_interior y_ref_interior y_ref y_result_gpu y_ref_gpu
+            clear y_result_gpu y_interior_gpu y_ref_interior_gpu y_ref_gpu
             reset(g);
         end
     end
