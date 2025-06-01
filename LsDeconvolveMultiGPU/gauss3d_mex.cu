@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <thread>   // For std::this_thread::sleep_for
+#include <chrono>   // For std::chrono::milliseconds
 
 #define CUDA_CHECK(call) do { \
     cudaError_t err = call; \
@@ -201,38 +203,66 @@ extern "C" void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* 
                 ksize[i] = 2 * (int)ceil(3.0 * sigma_double[i]) + 1;
         }
 
-        // --- OOM awareness ---
-        cudaError_t alloc_err = cudaMalloc((void**)&buffer, N * sizeof(float));
-        if (alloc_err != cudaSuccess) {
-            mexWarnMsgIdAndTxt("gauss3d:cuda", "CUDA OOM: Could not allocate workspace buffer (%.2f MB). Try reducing input size or call reset(gpuDevice).", N * sizeof(float) / (1024.0 * 1024.0));
+        // --------- OOM-aware cudaMalloc with retry -----------
+        int max_retries = 2;
+        int retries = 0;
+        cudaError_t alloc_err;
+        while (retries < max_retries) {
+            alloc_err = cudaMalloc(&buffer, N * sizeof(float));
+            if (alloc_err == cudaSuccess && buffer != nullptr) {
+                break;
+            } else {
+                size_t free_bytes = 0, total_bytes = 0;
+                cudaMemGetInfo(&free_bytes, &total_bytes);
+                mexWarnMsgIdAndTxt("gauss3d:cuda",
+                    "CUDA OOM: Tried to allocate %.2f MB (Free: %.2f MB). Attempt %d/%d.",
+                    N * sizeof(float) / 1024.0 / 1024.0,
+                    free_bytes / 1024.0 / 1024.0,
+                    retries+1, max_retries);
+                cudaDeviceSynchronize();
+                cudaFree(0);
+#if defined(_WIN32)
+                Sleep(100);
+#else
+                usleep(100000);
+#endif
+                retries++;
+                buffer = nullptr;
+            }
+        }
+        if (alloc_err != cudaSuccess || !buffer) {
+            mexWarnMsgIdAndTxt("gauss3d:cuda",
+                "CUDA OOM: Could not allocate workspace buffer (%.2f MB) after %d attempts. Try reducing input size or call reset(gpuDevice).",
+                N * sizeof(float) / 1024.0 / 1024.0, max_retries);
             error_flag = true;
-            // Do not proceed
-        } else {
-            float sigma[3] = { (float)sigma_double[0], (float)sigma_double[1], (float)sigma_double[2] };
-            gauss3d_separable_float((float*)ptr, buffer, nx, ny, nz, sigma, ksize, &error_flag);
-
-            CUDA_CHECK(cudaDeviceSynchronize());
-
-            // Output result (returns the same array, modifies in-place)
-            out_gpu = img_gpu;
-            plhs[0] = mxGPUCreateMxArrayOnGPU(out_gpu);
+            goto cleanup;
         }
 
-        // --- Free buffer, force sync and free(0) for fragmentation mitigation ---
-        if (buffer) {
-            CUDA_CHECK(cudaFree(buffer));
-            CUDA_CHECK(cudaDeviceSynchronize());
-            CUDA_CHECK(cudaFree(0));
-            buffer = nullptr;
-        }
+        float sigma[3] = { (float)sigma_double[0], (float)sigma_double[1], (float)sigma_double[2] };
+        gauss3d_separable_float((float*)ptr, buffer, nx, ny, nz, sigma, ksize, &error_flag);
+
+        // Synchronize before returning to MATLAB to catch any lingering errors
+        CUDA_CHECK(cudaDeviceSynchronize());
+
+        // Output result (returns the same array, modifies in-place)
+        out_gpu = img_gpu;
+        plhs[0] = mxGPUCreateMxArrayOnGPU(out_gpu);
 
     } catch (...) {
         mexPrintf("Unknown error in gauss3d_mex.cu. Possible OOM or kernel failure.\n");
         error_flag = true;
-        if (buffer) {
-            cudaFree(buffer);
-            cudaDeviceSynchronize();
-            cudaFree(0);
-        }
+        goto cleanup;
+    }
+
+cleanup:
+    if (buffer) {
+        cudaFree(buffer);
+        cudaDeviceSynchronize();  // Make sure all memory is actually freed
+        cudaFree(0);
+        buffer = nullptr;
+    }
+    // Do not destroy img_gpu if returned to MATLAB
+    if (error_flag) {
+        // Additional error logging can go here
     }
 }
