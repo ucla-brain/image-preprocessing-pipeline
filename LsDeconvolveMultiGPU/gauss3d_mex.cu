@@ -82,6 +82,18 @@ __global__ void half_to_float_kernel(const __half* src, float* dst, size_t N) {
         dst[idx] = __half2float(src[idx]);
 }
 
+// Gaussian kernel creation
+template <typename T>
+void make_gaussian_kernel(T sigma, int ksize, T* kernel) {
+    int r = ksize / 2;
+    double sum = 0.0;
+    for (int i = -r; i <= r; ++i) {
+        kernel[i + r] = (T)std::exp(-0.5 * (i * i) / (sigma * sigma));
+        sum += kernel[i + r];
+    }
+    for (int i = 0; i < ksize; ++i) kernel[i] = (T)(kernel[i] / sum);
+}
+
 // Host orchestration for half precision
 void gauss3d_separable_half(
     float* input,
@@ -144,18 +156,6 @@ void gauss3d_separable_half(
     delete[] h_kernel_h;
     CUDA_CHECK(cudaFree(d_a));
     CUDA_CHECK(cudaFree(d_b));
-}
-
-// Gaussian kernel creation
-template <typename T>
-void make_gaussian_kernel(T sigma, int ksize, T* kernel) {
-    int r = ksize / 2;
-    double sum = 0.0;
-    for (int i = -r; i <= r; ++i) {
-        kernel[i + r] = (T)std::exp(-0.5 * (i * i) / (sigma * sigma));
-        sum += kernel[i + r];
-    }
-    for (int i = 0; i < ksize; ++i) kernel[i] = (T)(kernel[i] / sum);
 }
 
 // CUDA 1D convolution kernels (constant memory only)
@@ -350,7 +350,8 @@ extern "C" void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* 
     if (nrhs < 2)
         mexErrMsgIdAndTxt("gauss3d:nrhs", "Usage: gauss3d_mex(x, sigma [, kernel_size, 'half'])");
 
-    mxGPUArray* img_gpu = mxGPUCreateFromMxArray(prhs[0]);
+    const mxGPUArray* img_gpu_const = mxGPUCreateFromMxArray(prhs[0]);
+    void* ptr = mxGPUGetData(const_cast<mxGPUArray*>(img_gpu_const));
     const mwSize* sz = mxGPUGetDimensions(img_gpu);
     int nd = mxGPUGetNumberOfDimensions(img_gpu);
     if (nd != 3)
