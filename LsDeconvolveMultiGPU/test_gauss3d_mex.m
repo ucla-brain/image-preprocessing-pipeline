@@ -139,7 +139,7 @@ function test_gauss3d_mex_features()
                         if strcmp(type_str, 'single')
                             t3 = tic;
                             if ischar(ksz) || isstring(ksz)
-                                y_half_gpu = gauss3d_mex(x_pad_gpu, sigma, [], 'half');
+                                y_half_gpu = gauss3d_mex(x_pad_gpu, sigma, 'half');
                             else
                                 y_half_gpu = gauss3d_mex(x_pad_gpu, sigma, kernel_sz, 'half');
                             end
