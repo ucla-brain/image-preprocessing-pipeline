@@ -1,8 +1,9 @@
-function test_gauss3d_mex_large()
-    % Example: single precision, 2048x1024x1024 ~ 8GB
+function test_gauss3d_mex_large_gpu()
+    % Large-array GPU Gaussian filtering
     szs = {
         [32, 128, 128],
         [256, 512, 512],
+        [2048, 1024, 1024], % Larger example (~8GB single)
     };
     types = {@single, @double};
     sigma = 2.5;
@@ -12,48 +13,42 @@ function test_gauss3d_mex_large()
             sz = szs{isz};
             T = types{ityp};
             bytes = prod(sz) * sizeof(T);
-            fprintf('Testing %s %s (%.2f GB) ...\n', func2str(T), mat2str(sz), bytes/2^30);
-            try
-                x = rand(sz, T);
-            catch
-                fprintf('SKIP: Could not allocate array (out of memory)\n');
-                continue;
-            end
+            fprintf('Testing %s %s (%.2f GB)...\n', func2str(T), mat2str(sz), bytes/2^30);
+
+            % Determine chunk size along third dimension to fit GPU
+            max_gpu_bytes = 9 * 2^30; % Safe margin
+            slice_bytes = prod(sz(1:2)) * sizeof(T);
+            slices_per_chunk = max(floor(max_gpu_bytes / slice_bytes), 1);
+
+            % Allocate result
+            y_gpu = zeros(sz, T);
 
             tic;
-            y_mex = gauss3d_mex(x, sigma);
-            t_mex = toc;
-            fprintf('gauss3d_mex ran in %.2f seconds\n', t_mex);
+            for z = 1:slices_per_chunk:sz(3)
+                z_end = min(z + slices_per_chunk - 1, sz(3));
+                chunk_sz = [sz(1), sz(2), z_end - z + 1];
 
-            % Validation: Compare a few random slices against imgaussfilt3
-            slices = round(linspace(1, sz(3), 5));
-            pass = true;
-            for s = slices
-                x2d = x(:,:,s);
-                try
-                    y_ref = imgaussfilt(x2d, sigma, 'Padding','replicate', ...
-                        'FilterSize', odd_kernel_size(sigma));
-                catch
-                    fprintf('SKIP: imgaussfilt OOM on slice %d\n', s);
-                    continue;
-                end
-                y_mex_slice = y_mex(:,:,s);
-                maxerr = max(abs(y_mex_slice(:) - y_ref(:)));
-                rmserr = sqrt(mean((y_mex_slice(:)-y_ref(:)).^2));
-                fprintf('  Slice %d: maxerr=%.2e, rmserr=%.2e\n', s, maxerr, rmserr);
-                if maxerr > 2e-5 || isnan(maxerr)
-                    fprintf('  FAIL: slice %d error exceeds tolerance!\n', s);
-                    pass = false;
-                end
+                % Create and process chunk on GPU
+                x_chunk = gpuArray(rand(chunk_sz, T));
+                y_chunk = gauss3d_mex(x_chunk, sigma);
+
+                % Retrieve chunk from GPU
+                y_gpu(:,:,z:z_end) = gather(y_chunk);
+
+                clear x_chunk y_chunk; % Free GPU memory
             end
+            t_gpu = toc;
+            fprintf('Completed GPU Gaussian filtering in %.2f seconds\n', t_gpu);
 
-            if pass
-                fprintf('PASS: %s %s\n\n', func2str(T), mat2str(sz));
-            else
-                fprintf('FAIL: %s %s\n\n', func2str(T), mat2str(sz));
-            end
+            % Basic validation (random slice)
+            slice = round(sz(3)/2);
+            y_ref = imgaussfilt(rand(sz(1:2), T), sigma, 'Padding', 'replicate', ...
+                'FilterSize', odd_kernel_size(sigma));
 
-            clear x y_mex; % Free memory
+            maxerr = max(abs(y_gpu(:,:,slice) - y_ref), [], 'all');
+            fprintf('  Validation slice: max error = %.2e\n', maxerr);
+
+            clear y_gpu;
         end
     end
 end

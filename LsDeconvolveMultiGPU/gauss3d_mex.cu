@@ -1,5 +1,6 @@
-// gauss3d_mex.cu
+// Revised gauss3d_mex.cu supporting gpuArray inputs
 #include "mex.h"
+#include "gpu/mxGPUArray.h"
 #include <cuda_runtime.h>
 #include <math.h>
 #include <algorithm>
@@ -59,7 +60,7 @@ void make_gaussian_kernel(float sigma, float* kernel, int* klen) {
 }
 
 template<typename T>
-void run_gauss3d(const T* d_img, T* d_tmp, T* d_out, int nx, int ny, int nz, float sigma[3]) {
+void run_gauss3d(T* d_img, T* d_tmp, T* d_out, int nx, int ny, int nz, float sigma[3]) {
     float *h_kernels[3];
     float *d_kernels[3];
     int klen[3];
@@ -73,19 +74,14 @@ void run_gauss3d(const T* d_img, T* d_tmp, T* d_out, int nx, int ny, int nz, flo
     dim3 block(8,8,8);
     dim3 grid((nx+block.x-1)/block.x, (ny+block.y-1)/block.y, (nz+block.z-1)/block.z);
 
-    // x axis
     gauss1d_kernel<T><<<grid, block>>>(d_img, d_tmp, nx, ny, nz, d_kernels[0], klen[0], 0);
     CUDA_CHECK(cudaDeviceSynchronize());
 
-    // y axis
     gauss1d_kernel<T><<<grid, block>>>(d_tmp, d_out, nx, ny, nz, d_kernels[1], klen[1], 1);
     CUDA_CHECK(cudaDeviceSynchronize());
 
-    // z axis (write back to d_tmp!)
     gauss1d_kernel<T><<<grid, block>>>(d_out, d_tmp, nx, ny, nz, d_kernels[2], klen[2], 2);
     CUDA_CHECK(cudaDeviceSynchronize());
-
-    // d_tmp now holds the final result!
 
     for (int d = 0; d < 3; ++d) {
         CUDA_CHECK(cudaFree(d_kernels[d]));
@@ -94,11 +90,12 @@ void run_gauss3d(const T* d_img, T* d_tmp, T* d_out, int nx, int ny, int nz, flo
 }
 
 void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
-    if (nrhs < 2) mexErrMsgIdAndTxt("gauss3d:nrhs", "Need input array and sigma");
-    if (mxGetNumberOfDimensions(prhs[0]) != 3)
-        mexErrMsgIdAndTxt("gauss3d:ndims", "Input must be 3D");
+    mxInitGPU();
 
-    const mwSize* sz = mxGetDimensions(prhs[0]);
+    if (nrhs < 2) mexErrMsgIdAndTxt("gauss3d:nrhs", "Need input array and sigma");
+
+    const mxGPUArray *img_gpu = mxGPUCreateFromMxArray(prhs[0]);
+    const mwSize* sz = mxGPUGetDimensions(img_gpu);
     int nx = (int)sz[0], ny = (int)sz[1], nz = (int)sz[2];
 
     float sigma[3];
@@ -108,37 +105,25 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
         for(int i=0;i<3;i++) sigma[i]=(float)ps[i];
     } else mexErrMsgIdAndTxt("gauss3d:sigma", "Sigma must be scalar or length-3 vector");
 
-    mxClassID cls = mxGetClassID(prhs[0]);
-    mxArray* out = mxCreateNumericArray(3, sz, cls, mxREAL);
-    plhs[0] = out;
+    mxClassID cls = mxGPUGetClassID(img_gpu);
+    mxGPUArray *out_gpu = mxGPUCreateGPUArray(3, sz, cls, mxREAL, MX_GPU_DO_NOT_INITIALIZE);
+
+    void *img_ptr = (void*)mxGPUGetDataReadOnly(img_gpu);
+    void *out_ptr = (void*)mxGPUGetData(out_gpu);
 
     size_t N = nx*ny*nz;
-    if (cls == mxSINGLE_CLASS) {
-        const float* img = (float*)mxGetData(prhs[0]);
-        float* d_img; float* d_tmp; float* d_out;
-        CUDA_CHECK(cudaMalloc(&d_img, N*sizeof(float)));
-        CUDA_CHECK(cudaMalloc(&d_tmp, N*sizeof(float)));
-        CUDA_CHECK(cudaMalloc(&d_out, N*sizeof(float)));
-        CUDA_CHECK(cudaMemcpy(d_img, img, N*sizeof(float), cudaMemcpyHostToDevice));
+    mxGPUArray *tmp_gpu = mxGPUCreateGPUArray(3, sz, cls, mxREAL, MX_GPU_DO_NOT_INITIALIZE);
+    void *tmp_ptr = (void*)mxGPUGetData(tmp_gpu);
 
-        run_gauss3d<float>(d_img, d_tmp, d_out, nx, ny, nz, sigma);
+    if (cls == mxSINGLE_CLASS)
+        run_gauss3d<float>((float*)img_ptr, (float*)tmp_ptr, (float*)out_ptr, nx, ny, nz, sigma);
+    else if (cls == mxDOUBLE_CLASS)
+        run_gauss3d<double>((double*)img_ptr, (double*)tmp_ptr, (double*)out_ptr, nx, ny, nz, sigma);
+    else mexErrMsgIdAndTxt("gauss3d:class", "Input must be single or double");
 
-        // d_tmp holds the final result after z axis
-        CUDA_CHECK(cudaMemcpy(mxGetData(out), d_tmp, N*sizeof(float), cudaMemcpyDeviceToHost));
-        CUDA_CHECK(cudaFree(d_img)); CUDA_CHECK(cudaFree(d_tmp)); CUDA_CHECK(cudaFree(d_out));
-    }
-    else if (cls == mxDOUBLE_CLASS) {
-        const double* img = (double*)mxGetData(prhs[0]);
-        double* d_img; double* d_tmp; double* d_out;
-        CUDA_CHECK(cudaMalloc(&d_img, N*sizeof(double)));
-        CUDA_CHECK(cudaMalloc(&d_tmp, N*sizeof(double)));
-        CUDA_CHECK(cudaMalloc(&d_out, N*sizeof(double)));
-        CUDA_CHECK(cudaMemcpy(d_img, img, N*sizeof(double), cudaMemcpyHostToDevice));
+    plhs[0] = mxGPUCreateMxArrayOnGPU(tmp_gpu);
 
-        run_gauss3d<double>(d_img, d_tmp, d_out, nx, ny, nz, sigma);
-
-        CUDA_CHECK(cudaMemcpy(mxGetData(out), d_tmp, N*sizeof(double), cudaMemcpyDeviceToHost));
-        CUDA_CHECK(cudaFree(d_img)); CUDA_CHECK(cudaFree(d_tmp)); CUDA_CHECK(cudaFree(d_out));
-    } else
-        mexErrMsgIdAndTxt("gauss3d:class", "Input must be single or double");
+    mxGPUDestroyGPUArray(img_gpu);
+    mxGPUDestroyGPUArray(tmp_gpu);
+    mxGPUDestroyGPUArray(out_gpu);
 }
