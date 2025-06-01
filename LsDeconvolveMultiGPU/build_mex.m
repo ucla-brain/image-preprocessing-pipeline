@@ -51,16 +51,15 @@ mex(mex_flags{:}, src_lz4_load, src_lz4_c);
 
 % CUDA optimization flags (for mexcuda)
 if ispc && ~ismac
-    extra_opts = {'-Xcompiler', '/O2,/arch:AVX2,/openmp'};
+    nvccflags = 'NVCCFLAGS="$NVCCFLAGS -Xcompiler ""/O2,/arch:AVX2,/openmp"" "';
 else
-    extra_opts = {'-Xcompiler', '-O2,-march=native,-fomit-frame-pointer,-fopenmp'};
+    nvccflags = 'NVCCFLAGS="$NVCCFLAGS -Xcompiler ''-O2,-march=native,-fomit-frame-pointer,-fopenmp'' "';
 end
-
 
 % CUDA include dirs (if any)
 root_dir = '.'; include_dir = './cuda_kernels';
 
 % Build CUDA Gaussian 3D MEX file (GPU)
-mexcuda('-R2018a', src_gauss3d, ['-I', root_dir], ['-I', include_dir], extra_opts{:});
+mexcuda('-R2018a', src_gauss3d, ['-I', root_dir], ['-I', include_dir], nvccflags);
 
 fprintf('All MEX files built successfully.\n');
