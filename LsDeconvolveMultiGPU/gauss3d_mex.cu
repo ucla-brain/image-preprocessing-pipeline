@@ -88,12 +88,14 @@ void gauss3d_separable_float(
     bool* error_flag)
 {
     int max_klen = std::max({ksize[0], ksize[1], ksize[2]});
+    float* h_kernel = nullptr;
+
     if (max_klen > MAX_KERNEL_SIZE) {
         mexWarnMsgIdAndTxt("gauss3d:ksize", "Kernel size exceeds MAX_KERNEL_SIZE (%d)", MAX_KERNEL_SIZE);
         if (error_flag) *error_flag = true;
         return;
     }
-    float* h_kernel = nullptr;
+
     h_kernel = new float[max_klen];
     float* src = input;
     float* dst = buffer;
@@ -116,6 +118,7 @@ void gauss3d_separable_float(
             mexWarnMsgIdAndTxt("gauss3d:cuda", "CUDA kernel launch error: %s", cudaGetErrorString(err));
             if (error_flag) *error_flag = true;
             delete[] h_kernel;
+            h_kernel = nullptr;
             return;
         }
         CUDA_CHECK(cudaDeviceSynchronize());
@@ -126,11 +129,8 @@ void gauss3d_separable_float(
         CUDA_CHECK(cudaMemcpy(input, src, nx * ny * nz * sizeof(float), cudaMemcpyDeviceToDevice));
     }
     delete[] h_kernel;
+    h_kernel = nullptr;
     if (error_flag) *error_flag = false; // set success if we made it here
-
-cleanup:
-    if (h_kernel) delete[] h_kernel;
-    if (error_flag) *error_flag = true;
 }
 
 // ================
@@ -216,7 +216,10 @@ extern "C" void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* 
     }
 
 cleanup:
-    if (buffer) cudaFree(buffer);
+    if (buffer) {
+        cudaFree(buffer);
+        buffer = nullptr;
+    }
     // Do not destroy img_gpu if returned to MATLAB
     // If error, possibly warn or log
     if (error_flag) {
