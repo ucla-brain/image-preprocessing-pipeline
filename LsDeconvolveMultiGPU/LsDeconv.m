@@ -162,6 +162,7 @@ function [] = LsDeconv(varargin)
         dxy_corr = min(dxy, Rxy / 3);
         [psf.psf, FWHMxy, FWHMz] = LsMakePSF(dxy_corr, dz, NA, rf, lambda_ex, lambda_em, fcyl, slitwidth);
         psf.inv = psf.psf(end:-1:1, end:-1:1, end:-1:1);
+        psf.shifted = ifftshift(psf.psf);
         p_log(log_file, ['   size of PSF (pixel): ' num2str(size(psf.psf, 1))  ' x ' num2str(size(psf.psf, 2)) ' x ' num2str(size(psf.psf, 3))]);
         p_log(log_file, ['   FWHHM of PSF lateral (nm): ' num2str(FWHMxy)]);
         p_log(log_file, ['   FWHHM of PSF axial (nm): ' num2str(FWHMz)]);

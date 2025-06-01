@@ -12,9 +12,9 @@ function bl = decon(bl, psf, niter, lambda, stop_criterion, regularize_interval,
     % - use_fft: true = use FFT-based convolution (faster, more memory), false = use convn (slower, low-memory)
 
     if use_fft
-        bl = deconFFT  (bl, psf.psf, fft_shape, niter, lambda, stop_criterion, regularize_interval, device_id);
+        bl = deconFFT(bl, psf.shifted, fft_shape, niter, lambda, stop_criterion, regularize_interval, device_id);
     else
-        bl = deconSpatial(bl, psf.psf, psf.inv, niter, lambda, stop_criterion, regularize_interval, device_id);
+        bl = deconSpatial(bl, psf.psf, psf.inv  , niter, lambda, stop_criterion, regularize_interval, device_id);
     end
 end
 
