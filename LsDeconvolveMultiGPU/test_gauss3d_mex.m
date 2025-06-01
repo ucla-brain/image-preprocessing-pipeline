@@ -205,7 +205,12 @@ function print_fail(str, col)
 end
 
 function print_result(pass, type_str, err, rms_err, rel_err, t_ref, t_mex, col, is_half)
-    mark = pass ? col('green', '✔️') : col('red','❌');
+    if nargin < 9, is_half = false; end
+    if pass
+        mark = col('green', '✔️');
+    else
+        mark = col('red', '❌');
+    end
     label = upper(type_str); if is_half, label = ['HALF (' label ')']; end
     fprintf('    %s %s: max=%.2e, RMS=%.2e, rel=%.2e\n', mark, label, err, rms_err, rel_err);
     if ~isempty(t_ref)
