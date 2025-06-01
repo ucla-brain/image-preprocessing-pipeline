@@ -1,5 +1,5 @@
 function test_gauss3d_mex_large_gpu()
-    % Large-array GPU Gaussian filtering
+    % Large-array GPU Gaussian filtering with gpuArray support
     szs = {
         [32, 128, 128],
         [256, 512, 512],
@@ -28,21 +28,24 @@ function test_gauss3d_mex_large_gpu()
                 z_end = min(z + slices_per_chunk - 1, sz(3));
                 chunk_sz = [sz(1), sz(2), z_end - z + 1];
 
-                % Create and process chunk on GPU
-                x_chunk = gpuArray(rand(chunk_sz, T));
-                y_chunk = gauss3d_mex(x_chunk, sigma);
+                % Create GPU input
+                x_chunk_gpu = gpuArray.rand(chunk_sz, T);
+
+                % Process chunk directly on GPU
+                y_chunk_gpu = gauss3d_mex(x_chunk_gpu, sigma);
 
                 % Retrieve chunk from GPU
-                y_gpu(:,:,z:z_end) = gather(y_chunk);
+                y_gpu(:,:,z:z_end) = gather(y_chunk_gpu);
 
-                clear x_chunk y_chunk; % Free GPU memory
+                clear x_chunk_gpu y_chunk_gpu; % Free GPU memory
             end
             t_gpu = toc;
             fprintf('Completed GPU Gaussian filtering in %.2f seconds\n', t_gpu);
 
             % Basic validation (random slice)
             slice = round(sz(3)/2);
-            y_ref = imgaussfilt(rand(sz(1:2), T), sigma, 'Padding', 'replicate', ...
+            x_validation = rand(sz(1:2), T);
+            y_ref = imgaussfilt(x_validation, sigma, 'Padding', 'replicate', ...
                 'FilterSize', odd_kernel_size(sigma));
 
             maxerr = max(abs(y_gpu(:,:,slice) - y_ref), [], 'all');
