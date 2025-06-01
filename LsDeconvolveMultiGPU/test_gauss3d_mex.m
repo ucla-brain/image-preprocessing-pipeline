@@ -44,7 +44,7 @@ function test_gauss3d_mex_features()
                 pad_amt = floor(kernel_sz / 2);
 
                 rng(0);
-                x = rand(sz, type_str);
+                x = rand(sz, type_str, 'single');
                 x = x ./ max(x(:));
                 x_pad = padarray(x, pad_amt, 'replicate', 'both');
                 x_pad_gpu = gpuArray(x_pad);
