@@ -9,7 +9,7 @@ function test_gauss3d_mex_features()
     hasCprintf = exist('cprintf','file') == 2;
     col = @(c,str) colored_str(c,str,hasCprintf);
 
-    szs = {[32, 64, 32], [512, 512, 256]};
+    szs = {[32, 64, 32], [512, 512, 512]};
     types = {@single};   % Single only!
     sigma_tests = {2.5, [2.5 2.5 2.5], [0.5 0.5 2.5], 0.25, 8};
     ksize_tests = {'auto', 9, [9 11 15], 3, 41};
