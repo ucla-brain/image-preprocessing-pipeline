@@ -50,9 +50,9 @@ function bl = deconSpatial(bl, psf, psf_inv, niter, lambda, stop_criterion, regu
         is_regularization_time = apply_regularization && (i > 1) && (i < niter) && (mod(i, regularize_interval) == 0);
 
         if is_regularization_time
-            % bl = imgaussfilt3(bl, 0.5);
-            clearvars buf;
-            bl = gauss3d_mex(bl, 0.5);
+            bl = imgaussfilt3(bl, 0.5);
+            % clearvars buf;
+            % bl = gauss3d_mex(bl, 0.5);
         end
 
         buf = convn(bl, psf, 'same');
@@ -115,9 +115,9 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regula
         is_regularization_time = apply_regularization && (i > 1) && (i < niter) && (mod(i, regularize_interval) == 0);
 
         if is_regularization_time
-            % bl = imgaussfilt3(bl, 0.5);
-            clearvars buf;
-            bl = gauss3d_mex(bl, 0.5);
+            bl = imgaussfilt3(bl, 0.5);
+            % clearvars buf;
+            % bl = gauss3d_mex(bl, 0.5);
         end
 
         buf = convFFT(bl, otf);
