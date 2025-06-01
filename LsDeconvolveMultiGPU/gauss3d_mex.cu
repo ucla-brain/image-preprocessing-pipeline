@@ -118,9 +118,17 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
 
     // Copy input to A_gpu
     size_t N = (size_t)nx*ny*nz;
+    size_t elsize = 0;
+    if (cls == mxSINGLE_CLASS)
+        elsize = sizeof(float);
+    else if (cls == mxDOUBLE_CLASS)
+        elsize = sizeof(double);
+    else
+        mexErrMsgIdAndTxt("gauss3d:class", "Input must be single or double");
+
     void* input_ptr = (void*)mxGPUGetDataReadOnly(img_gpu);
     void* A_ptr = (void*)mxGPUGetData(A_gpu);
-    CUDA_CHECK(cudaMemcpy(A_ptr, input_ptr, N * mxGPUGetElementSize(img_gpu), cudaMemcpyDeviceToDevice));
+    CUDA_CHECK(cudaMemcpy(A_ptr, input_ptr, N * elsize, cudaMemcpyDeviceToDevice));
 
     void* B_ptr = (void*)mxGPUGetData(B_gpu);
 
