@@ -1255,7 +1255,7 @@ function check_block_coverage_planes(stack_info, block)
     end
 
     % 6. True 3D interior-overlap check (ignore face/edge/corner)
-    disp('   Checking for true 3D interior overlaps (ignoring faces/edges/corners)...');
+    %disp('   Checking for true 3D interior overlaps (ignoring faces/edges/corners)...');
     N = size(p1, 1);
     true_overlaps = [];
     for i = 1:N-1
