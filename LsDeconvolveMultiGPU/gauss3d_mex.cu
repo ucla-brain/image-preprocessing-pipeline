@@ -39,7 +39,6 @@ __global__ void gauss1d_kernel(
 {
     int tid = blockIdx.x * blockDim.x + threadIdx.x;
     int nline, linelen;
-    int i, j, k;
     if (axis == 0) { linelen = nx; nline = ny * nz; }
     else if (axis == 1) { linelen = ny; nline = nx * nz; }
     else { linelen = nz; nline = nx * ny; }
