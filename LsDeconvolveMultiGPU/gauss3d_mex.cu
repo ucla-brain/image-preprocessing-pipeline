@@ -32,7 +32,9 @@ void make_gaussian_kernel(T sigma, int ksize, T* kernel) {
 // --------- CUDA KERNEL: Each block processes a line ---------
 template<typename T>
 __global__ void gauss1d_lines_kernel(
-    T* data, const T* kernel, int klen,
+    const T* __restrict__ data_in, // read-only input!
+    T* data_out,                   // output buffer!
+    const T* __restrict__ kernel, int klen,
     int nx, int ny, int nz,
     int dim, int line_len, int n_lines)
 {
@@ -40,53 +42,50 @@ __global__ void gauss1d_lines_kernel(
     int idx_in_line = threadIdx.x;
     if (line_idx >= n_lines || idx_in_line >= line_len) return;
 
+    // Compute the starting position of this line in 3D
     int ix = 0, iy = 0, iz = 0;
     if (dim == 0) { iy = line_idx % ny; iz = line_idx / ny; ix = idx_in_line; }
     else if (dim == 1) { ix = line_idx % nx; iz = line_idx / nx; iy = idx_in_line; }
     else { ix = line_idx % nx; iy = line_idx / nx; iz = idx_in_line; }
 
-    int out_idx = iz * nx * ny + iy * nx + ix;
-
     int center = klen / 2;
-    double val = 0.0; // accumulate in double!
+    double val = 0.0;
+
     for (int k = 0; k < klen; ++k) {
         int offset = k - center;
         int ci = idx_in_line + offset;
+        // Replicate boundary
         ci = min(max(ci, 0), line_len - 1);
 
         int cx = ix, cy = iy, cz = iz;
         if (dim == 0) cx = ci;
         else if (dim == 1) cy = ci;
         else cz = ci;
+
         int in_idx = cz * nx * ny + cy * nx + cx;
-
-        val += static_cast<double>(data[in_idx]) * static_cast<double>(kernel[k]);
+        val += static_cast<double>(data_in[in_idx]) * static_cast<double>(kernel[k]);
     }
-    data[out_idx] = static_cast<T>(val);
-}
 
-// --------- WARN IF KERNEL SIZE TOO SMALL ---------
-void warn_kernel_size(const double* sigma, const int* ksize, int do_warn) {
-    for (int i = 0; i < 3; ++i) {
-        int min_ksize = 2 * static_cast<int>(ceil(3.0 * sigma[i])) + 1;
-        if (ksize[i] < min_ksize && do_warn) {
-            mexWarnMsgIdAndTxt("gauss3d:kernelSizeTooSmall",
-                "Kernel size for axis %d (%d) is too small for sigma=%.3f (recommended at least %d). Results may be inaccurate.\n"
-                "To disable this warning, call gauss3d_mex(..., ..., ..., true) to disable warnings.",
-                i+1, ksize[i], sigma[i], min_ksize);
-        }
-    }
+    int out_idx = iz * nx * ny + iy * nx + ix;
+    data_out[out_idx] = static_cast<T>(val);
 }
 
 // --------- SEPARABLE GAUSS 3D (in-place, parallelized) ---------
 template<typename T>
 void run_gauss3d_inplace(T* buf, int nx, int ny, int nz, const T sigma[3], const int ksize[3]) {
+    size_t nvox = nx * ny * nz;
     T* h_kernel = new T[MAX_KERNEL_SIZE];
     T* d_kernel;
-    int klen;
+
+    // Allocate a temp buffer on the GPU for out-of-place computation
+    T* buf_tmp;
+    CUDA_CHECK(cudaMalloc(&buf_tmp, nvox * sizeof(T)));
+
+    T* src = buf;
+    T* dst = buf_tmp;
 
     for (int dim = 0; dim < 3; ++dim) {
-        klen = ksize[dim];
+        int klen = ksize[dim];
         if (klen > MAX_KERNEL_SIZE)
             mexErrMsgIdAndTxt("gauss3d:kernel", "Kernel size exceeds MAX_KERNEL_SIZE (%d)", MAX_KERNEL_SIZE);
         make_gaussian_kernel(sigma[dim], klen, h_kernel);
@@ -102,12 +101,22 @@ void run_gauss3d_inplace(T* buf, int nx, int ny, int nz, const T sigma[3], const
         dim3 block(block_size);
         dim3 grid(n_lines);
 
-        gauss1d_lines_kernel<T><<<grid, block>>>(
-            buf, d_kernel, klen, nx, ny, nz, dim, line_len, n_lines
-        );
+        gauss1d_lines_kernel<T><<<grid, block>>>(src, dst, d_kernel, klen, nx, ny, nz, dim, line_len, n_lines);
         CUDA_CHECK(cudaDeviceSynchronize());
         CUDA_CHECK(cudaFree(d_kernel));
+
+        // Swap src and dst for the next pass
+        T* tmp = src;
+        src = dst;
+        dst = tmp;
     }
+
+    // After 3 passes (odd), src points to buf_tmp, copy back if needed
+    if (src != buf) {
+        CUDA_CHECK(cudaMemcpy(buf, buf_tmp, nvox * sizeof(T), cudaMemcpyDeviceToDevice));
+    }
+
+    CUDA_CHECK(cudaFree(buf_tmp));
     delete[] h_kernel;
 }
 
