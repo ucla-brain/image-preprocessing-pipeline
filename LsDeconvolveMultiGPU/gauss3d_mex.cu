@@ -1,4 +1,4 @@
-// gauss3d_mex.cu - Robust 3D Gaussian convolution for MATLAB GPU (X->Y->Z, replicate padding)
+// gauss3d_mex.cu - Minimal vRAM, robust, 3D Gaussian (separable) for MATLAB GPU
 
 #include "mex.h"
 #include "gpu/mxGPUArray.h"
@@ -14,7 +14,6 @@
         mexErrMsgIdAndTxt("gauss3d:cuda", "CUDA error: %s", cudaGetErrorString(err)); \
 } while(0)
 
-// CUDA kernel for 1D convolution along specified dimension (with replicate padding)
 template <typename T>
 __global__ void gauss1d_kernel(
     const T* src, T* dst, int nx, int ny, int nz,
@@ -34,8 +33,7 @@ __global__ void gauss1d_kernel(
     for (int k = 0; k < klen; ++k) {
         int offset = k - center;
         int ci = (dim == 0) ? ix + offset : (dim == 1) ? iy + offset : iz + offset;
-        // Replicate (clamp) padding
-        ci = min(max(ci, 0), size[dim] - 1);
+        ci = min(max(ci, 0), size[dim] - 1); // replicate boundary
         int cidx;
         if (dim == 0)
             cidx = iz * nx * ny + iy * nx + ci;
@@ -48,7 +46,6 @@ __global__ void gauss1d_kernel(
     dst[idx] = val;
 }
 
-// Host-side Gaussian kernel builder
 void make_gaussian_kernel(float sigma, float* kernel, int* klen) {
     int r = (int)ceilf(3.0f * sigma);
     *klen = 2*r + 1;
@@ -63,48 +60,44 @@ void make_gaussian_kernel(float sigma, float* kernel, int* klen) {
         kernel[i] /= sum;
 }
 
-// Separable 3D convolution: always returns the result in d_tmp
+// Minimal vRAM version: only two buffers for in-place swapping.
 template<typename T>
-void run_gauss3d(T* d_img, T* d_tmp, T* d_out, int nx, int ny, int nz, float sigma[3]) {
-    float *h_kernels[3];
-    float *d_kernels[3];
-    int klen[3];
-    for (int d = 0; d < 3; ++d) {
-        h_kernels[d] = new float[MAX_KERNEL_SIZE];
-        make_gaussian_kernel(sigma[d], h_kernels[d], &klen[d]);
-        CUDA_CHECK(cudaMalloc(&d_kernels[d], klen[d] * sizeof(float)));
-        CUDA_CHECK(cudaMemcpy(d_kernels[d], h_kernels[d], klen[d] * sizeof(float), cudaMemcpyHostToDevice));
-    }
+void run_gauss3d(T* bufA, T* bufB, int nx, int ny, int nz, float sigma[3]) {
+    float *h_kernel = new float[MAX_KERNEL_SIZE];
+    float *d_kernel;
+    int klen;
 
     dim3 block(8,8,8);
     dim3 grid((nx+block.x-1)/block.x, (ny+block.y-1)/block.y, (nz+block.z-1)/block.z);
 
-    // Pass 1: X (src: d_img → dst: d_tmp)
-    gauss1d_kernel<T><<<grid, block>>>(d_img, d_tmp, nx, ny, nz, d_kernels[0], klen[0], 0);
-    CUDA_CHECK(cudaDeviceSynchronize());
+    // Axis order: X (0), Y (1), Z (2)
+    T *src = bufA;
+    T *dst = bufB;
+    for (int dim = 0; dim < 3; ++dim) {
+        make_gaussian_kernel(sigma[dim], h_kernel, &klen);
+        CUDA_CHECK(cudaMalloc(&d_kernel, klen * sizeof(float)));
+        CUDA_CHECK(cudaMemcpy(d_kernel, h_kernel, klen * sizeof(float), cudaMemcpyHostToDevice));
 
-    // Pass 2: Y (src: d_tmp → dst: d_out)
-    gauss1d_kernel<T><<<grid, block>>>(d_tmp, d_out, nx, ny, nz, d_kernels[1], klen[1], 1);
-    CUDA_CHECK(cudaDeviceSynchronize());
+        gauss1d_kernel<T><<<grid, block>>>(src, dst, nx, ny, nz, d_kernel, klen, dim);
+        CUDA_CHECK(cudaDeviceSynchronize());
+        CUDA_CHECK(cudaFree(d_kernel));
 
-    // Pass 3: Z (src: d_out → dst: d_tmp)
-    gauss1d_kernel<T><<<grid, block>>>(d_out, d_tmp, nx, ny, nz, d_kernels[2], klen[2], 2);
-    CUDA_CHECK(cudaDeviceSynchronize());
-
-    for (int d = 0; d < 3; ++d) {
-        CUDA_CHECK(cudaFree(d_kernels[d]));
-        delete[] h_kernels[d];
+        // Swap pointers for next pass
+        T* tmp = src;
+        src = dst;
+        dst = tmp;
     }
-    // After Z pass, d_tmp contains the final result!
+    delete[] h_kernel;
+    // After three swaps, if passes is odd, src == bufB (final), else src == bufA.
+    // We always return 'src' after 3 passes.
 }
 
-// Main entry point for MATLAB MEX
+// MEX entry
 void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     mxInitGPU();
 
     if (nrhs < 2) mexErrMsgIdAndTxt("gauss3d:nrhs", "Need input array and sigma");
 
-    // Accept both cpu and gpuArray input
     const mxGPUArray *img_gpu = mxGPUCreateFromMxArray(prhs[0]);
     const mwSize* sz = mxGPUGetDimensions(img_gpu);
     int nd = mxGPUGetNumberOfDimensions(img_gpu);
@@ -120,17 +113,28 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     } else mexErrMsgIdAndTxt("gauss3d:sigma", "Sigma must be scalar or length-3 vector");
 
     mxClassID cls = mxGPUGetClassID(img_gpu);
-    mxGPUArray *out_gpu = mxGPUCreateGPUArray(3, sz, cls, mxREAL, MX_GPU_DO_NOT_INITIALIZE);
+    mxGPUArray *A_gpu = mxGPUCreateGPUArray(3, sz, cls, mxREAL, MX_GPU_DO_NOT_INITIALIZE);
+    mxGPUArray *B_gpu = mxGPUCreateGPUArray(3, sz, cls, mxREAL, MX_GPU_DO_NOT_INITIALIZE);
 
-    void *img_ptr = (void*)mxGPUGetDataReadOnly(img_gpu);
-    void *out_ptr = (void*)mxGPUGetData(out_gpu);
+    // Copy input to A_gpu
+    size_t N = (size_t)nx*ny*nz;
+    void* input_ptr = (void*)mxGPUGetDataReadOnly(img_gpu);
+    void* A_ptr = (void*)mxGPUGetData(A_gpu);
+    CUDA_CHECK(cudaMemcpy(A_ptr, input_ptr, N * mxGPUGetElementSize(img_gpu), cudaMemcpyDeviceToDevice));
 
-    mxGPUArray *tmp_gpu = mxGPUCreateGPUArray(3, sz, cls, mxREAL, MX_GPU_DO_NOT_INITIALIZE);
-    void *tmp_ptr = (void*)mxGPUGetData(tmp_gpu);
+    void* B_ptr = (void*)mxGPUGetData(B_gpu);
 
-    // Run: X (img->tmp), Y (tmp->out), Z (out->tmp). Final result in tmp.
+    // Run filter (output may be in A or B)
     if (cls == mxSINGLE_CLASS)
-        run_gauss3d<float>((float*)img_ptr, (float*)tmp_ptr, (float*)out_ptr, nx, ny, nz, sigma);
+        run_gauss3d<float>((float*)A_ptr, (float*)B_ptr, nx, ny, nz, sigma);
     else if (cls == mxDOUBLE_CLASS)
-        run_gauss3d<double>((double*)img_ptr, (double*)tmp_ptr, (double*)out_ptr, nx, ny, nz, sigma);
-    else mexErrMsgIdAndTxt("gauss3d:class", "Input
+        run_gauss3d<double>((double*)A_ptr, (double*)B_ptr, nx, ny, nz, sigma);
+    else mexErrMsgIdAndTxt("gauss3d:class", "Input must be single or double");
+
+    // After 3 passes (odd), the output is in B_gpu
+    plhs[0] = mxGPUCreateMxArrayOnGPU(B_gpu);
+
+    mxGPUDestroyGPUArray(img_gpu);
+    mxGPUDestroyGPUArray(A_gpu);
+    mxGPUDestroyGPUArray(B_gpu);
+}
