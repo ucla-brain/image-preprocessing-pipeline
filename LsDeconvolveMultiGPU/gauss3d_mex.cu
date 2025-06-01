@@ -1,4 +1,7 @@
 // gauss3d_mex.cu - Robust 3D Gaussian filtering (constant memory, explicit kernel specializations)
+// Supports single/double precision MATLAB gpuArray input.
+// Uses one workspace buffer, in-place for last axis, and constant memory for the Gaussian kernel.
+
 #include "mex.h"
 #include "gpu/mxGPUArray.h"
 #include <cuda_runtime.h>
@@ -12,17 +15,13 @@
         mexErrMsgIdAndTxt("gauss3d:cuda", "CUDA error %s:%d: %s", __FILE__, __LINE__, cudaGetErrorString(err)); \
 } while(0)
 
-#define MAX_KERNEL_SIZE 51  // practical upper bound for constant/shared memory
+// MAX_KERNEL_SIZE: Increase to support larger sigmas (up to 64KB constant memory per kernel array)
+#define MAX_KERNEL_SIZE 51
 
-// ========================
-// Constant memory for kernel
-// ========================
 __constant__ float const_kernel_f[MAX_KERNEL_SIZE];
 __constant__ double const_kernel_d[MAX_KERNEL_SIZE];
 
-// ========================
 // Gaussian kernel creation
-// ========================
 template <typename T>
 void make_gaussian_kernel(T sigma, int ksize, T* kernel) {
     int r = ksize / 2;
@@ -34,9 +33,7 @@ void make_gaussian_kernel(T sigma, int ksize, T* kernel) {
     for (int i = 0; i < ksize; ++i) kernel[i] = (T)(kernel[i] / sum);
 }
 
-// =====================
 // CUDA 1D convolution kernels (constant memory only)
-// =====================
 __global__ void gauss1d_kernel_const_float(
     const float* src, float* dst,
     int nx, int ny, int nz,
@@ -127,9 +124,7 @@ __global__ void gauss1d_kernel_const_double(
     dst[idx] = acc;
 }
 
-// ===============================
-// Host orchestration with 1 buffer
-// ===============================
+// Host orchestration with 1 buffer, in-place for last axis
 template <typename T>
 void gauss3d_separable(
     T* input,
@@ -229,11 +224,11 @@ extern "C" void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* 
     size_t N = (size_t)nx * ny * nz;
     if (cls == mxSINGLE_CLASS) {
         CUDA_CHECK(cudaMalloc(&buffer, N * sizeof(float)));
-        float sigma[3]; for (int i = 0; i < 3; ++i) sigma[i] = (float)sigma_double[i];
+        float sigma[3] = { (float)sigma_double[0], (float)sigma_double[1], (float)sigma_double[2] };
         gauss3d_separable<float>((float*)ptr, (float*)buffer, nx, ny, nz, sigma, ksize);
     } else if (cls == mxDOUBLE_CLASS) {
         CUDA_CHECK(cudaMalloc(&buffer, N * sizeof(double)));
-        double sigma[3]; for (int i = 0; i < 3; ++i) sigma[i] = sigma_double[i];
+        double sigma[3] = { sigma_double[0], sigma_double[1], sigma_double[2] };
         gauss3d_separable<double>((double*)ptr, (double*)buffer, nx, ny, nz, sigma, ksize);
     } else {
         mexErrMsgIdAndTxt("gauss3d:class", "Input must be single or double gpuArray");
