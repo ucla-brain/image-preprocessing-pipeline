@@ -60,7 +60,7 @@ function test_gauss3d_mex_features()
                     if ischar(ksz)
                         y_mex_gpu = gauss3d_mex(x_pad_gpu, sigma);
                     else
-                        y_mex_gpu = gauss3d_mex(x_pad_gpu, sigma, kernel_sz);
+                        y_mex_gpu = gauss3d_mex(x_pad_gpu, sigma, kernel_sz, true);
                     end
 
                     % --- Check: type, class, and shape match input ---
