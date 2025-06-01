@@ -3,7 +3,7 @@ function test_gauss3d_mex_features()
 
     szs = {
         [32, 64, 32], ...
-        [64, 80, 96]
+        [512, 512, 512]
     };
     types = {@single, @double};
     sigma_tests = {2.5, [2.5 2.5 2.5], [1.5 2.0 2.5]};
