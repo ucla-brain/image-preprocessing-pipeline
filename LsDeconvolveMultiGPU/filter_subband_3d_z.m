@@ -14,7 +14,7 @@ function img3d = filter_subband_3d_z(img3d, sigma, levels, wavelet)
     % Apply filtering across Y axis
     for y = 1:Y
         slice = reshape(img3d(:, y, :), [X, Z]);
-        slice = filter_subband(slice, sigma, levels, wavelet, [1, 2]);
+        slice = filter_subband(slice, sigma, levels, wavelet, [2]);
         img3d(:, y, :) = slice;
     end
 
