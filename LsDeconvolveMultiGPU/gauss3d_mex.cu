@@ -182,8 +182,7 @@ extern "C" void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* 
     mxInitGPU();
 
     if (nrhs < 2) mexErrMsgIdAndTxt("gauss3d:nrhs", "Usage: gauss3d_mex(x, sigma [, kernel_size])");
-    const mxGPUArray* img_gpu_const = mxGPUCreateFromMxArray(prhs[0]);
-    mxGPUArray* img_gpu = const_cast<mxGPUArray*>(img_gpu_const); // No copy
+    mxGPUArray* img_gpu = mxGPUCreateFromMxArray(prhs[0]);
 
     const mwSize* sz = mxGPUGetDimensions(img_gpu);
     int nd = mxGPUGetNumberOfDimensions(img_gpu);
