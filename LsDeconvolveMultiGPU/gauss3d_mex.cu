@@ -206,6 +206,4 @@ extern "C" void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* 
 cleanup:
     if (buffer) cudaFree(buffer);
     // Only destroy img_gpu if not returned
-    if (error_flag && img_gpu) mxGPUDestroyArray(img_gpu);
-    // Don't destroy out_gpu if returned (per MATLAB MEX rule)
 }
