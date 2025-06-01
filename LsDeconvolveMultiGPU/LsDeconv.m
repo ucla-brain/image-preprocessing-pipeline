@@ -1229,8 +1229,8 @@ function check_block_coverage_planes(stack_info, block)
         end
         num_gaps = sum(covered(:) == 0);
         num_overlaps = sum(covered(:) > 1);
-        disp(['Blocks covering y=' num2str(y) ': ' num2str(numel(blocks))]);
-        disp(['XZ at y=' num2str(y) ': gaps=' num2str(num_gaps) ', overlaps=' num2str(num_overlaps)]);
+        disp(['     Blocks covering y=' num2str(y) ': ' num2str(numel(blocks))]);
+        disp(['     XZ at y=' num2str(y) ': gaps=' num2str(num_gaps) ', overlaps=' num2str(num_overlaps)]);
         if num_gaps > 0
             errors{end+1} = sprintf('XZ at y=%d: %d gaps', y, num_gaps);
         end
@@ -1247,15 +1247,15 @@ function check_block_coverage_planes(stack_info, block)
         end
         num_gaps = sum(covered(:) == 0);
         num_overlaps = sum(covered(:) > 1);
-        disp(['Blocks covering x=' num2str(x) ': ' num2str(numel(blocks))]);
-        disp(['YZ at x=' num2str(x) ': gaps=' num2str(num_gaps) ', overlaps=' num2str(num_overlaps)]);
+        disp(['     Blocks covering x=' num2str(x) ': ' num2str(numel(blocks))]);
+        disp(['     YZ at x=' num2str(x) ': gaps=' num2str(num_gaps) ', overlaps=' num2str(num_overlaps)]);
         if num_gaps > 0
             errors{end+1} = sprintf('YZ at x=%d: %d gaps', x, num_gaps);
         end
     end
 
     % 6. True 3D interior-overlap check (ignore face/edge/corner)
-    disp('Checking for true 3D interior overlaps (ignoring faces/edges/corners)...');
+    disp('      Checking for true 3D interior overlaps (ignoring faces/edges/corners)...');
     N = size(p1, 1);
     true_overlaps = [];
     for i = 1:N-1
@@ -1272,9 +1272,9 @@ function check_block_coverage_planes(stack_info, block)
         end
     end
     if isempty(true_overlaps)
-        disp('No true 3D interior overlaps found between blocks.');
+        disp('      No true 3D interior overlaps found between blocks.');
     else
-        disp('True 3D interior overlaps found between blocks:');
+        disp('      True 3D interior overlaps found between blocks:');
         disp(true_overlaps);
         errors{end+1} = sprintf('Found %d pairs of blocks with true interior overlap.', size(true_overlaps, 1));
     end
