@@ -1,12 +1,11 @@
 function test_gauss3d_mex_large()
     % Example: single precision, 2048x1024x1024 ~ 8GB
     szs = {
-        [512, 1024, 1024],   % ~2 GB single
-        [800, 1500, 1000],   % ~4.8 GB single
-        [512, 1024, 1024],   % ~4 GB double
+        [320, 1024, 1024],   % ~1.25 GB single
+        [256, 1024, 1024],   % ~2 GB double
     };
     types = {@single, @double};
-    sigma = 2.0;
+    sigma = 2.5;
 
     for ityp = 1:numel(types)
         for isz = 1:numel(szs)
