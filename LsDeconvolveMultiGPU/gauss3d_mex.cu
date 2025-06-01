@@ -14,7 +14,6 @@
     } \
 } while(0)
 
-// Max kernel size for Gaussian (fits in constant memory)
 #define MAX_KERNEL_SIZE 51
 __constant__ float const_kernel_f[MAX_KERNEL_SIZE];
 
@@ -30,9 +29,9 @@ void make_gaussian_kernel(float sigma, int ksize, float* kernel) {
         kernel[i] = static_cast<float>(kernel[i] / sum);
 }
 
-// CUDA 1D convolution kernel for float
+// CUDA 1D convolution kernel for float (with restrict)
 __global__ void gauss1d_kernel_const_float(
-    const float* src, float* dst,
+    const float* __restrict__ src, float* __restrict__ dst,
     size_t nx, size_t ny, size_t nz,
     int klen, int axis)
 {
@@ -87,49 +86,61 @@ void gauss3d_separable_float(
     bool* error_flag)
 {
     int max_klen = std::max({ksize[0], ksize[1], ksize[2]});
-    float* h_kernel = nullptr;
-
     if (max_klen > MAX_KERNEL_SIZE) {
         mexWarnMsgIdAndTxt("gauss3d:ksize", "Kernel size exceeds MAX_KERNEL_SIZE (%d)", MAX_KERNEL_SIZE);
         if (error_flag) *error_flag = true;
         return;
     }
-
-    h_kernel = new float[max_klen];
+    float* h_kernel = new float[max_klen];
     float* src = input;
     float* dst = buffer;
+    bool local_error = false;
+
+    // --- Use cudaOccupancyMaxPotentialBlockSize for kernel launch tuning ---
+    int minGrid, blockSize;
+    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize, gauss1d_kernel_const_float, 0, 0);
 
     for (int axis = 0; axis < 3; ++axis) {
         make_gaussian_kernel(sigma[axis], ksize[axis], h_kernel);
-        CUDA_CHECK(cudaMemcpyToSymbol(const_kernel_f, h_kernel, ksize[axis] * sizeof(float), 0, cudaMemcpyHostToDevice));
-
+        cudaError_t err = cudaMemcpyToSymbol(const_kernel_f, h_kernel, ksize[axis] * sizeof(float), 0, cudaMemcpyHostToDevice);
+        if (err != cudaSuccess) {
+            mexWarnMsgIdAndTxt("gauss3d:cuda", "CUDA memcpyToSymbol error: %s", cudaGetErrorString(err));
+            local_error = true;
+            break;
+        }
         size_t linelen = (axis == 0) ? nx : (axis == 1) ? ny : nz;
         size_t nline   = (axis == 0) ? ny * nz : (axis == 1) ? nx * nz : nx * ny;
         size_t total = linelen * nline;
-        int block = 256;
-        int grid = static_cast<int>((total + block - 1) / block);
+        int grid = static_cast<int>((total + blockSize - 1) / blockSize);
 
-        gauss1d_kernel_const_float<<<grid, block, 0>>>(
+        gauss1d_kernel_const_float<<<grid, blockSize, 0>>>(
             src, dst, nx, ny, nz, ksize[axis], axis);
 
-        cudaError_t err = cudaGetLastError();
+        err = cudaGetLastError();
         if (err != cudaSuccess) {
             mexWarnMsgIdAndTxt("gauss3d:cuda", "CUDA kernel launch error: %s", cudaGetErrorString(err));
-            if (error_flag) *error_flag = true;
-            delete[] h_kernel;
-            h_kernel = nullptr;
-            return;
+            local_error = true;
+            break;
         }
-        CUDA_CHECK(cudaDeviceSynchronize());
+        err = cudaDeviceSynchronize();
+        if (err != cudaSuccess) {
+            mexWarnMsgIdAndTxt("gauss3d:cuda", "CUDA device synchronize error: %s", cudaGetErrorString(err));
+            local_error = true;
+            break;
+        }
         std::swap(src, dst);
     }
-    // After 3 axes, src points to the result (due to odd number of swaps)
-    if (src != input) {
-        CUDA_CHECK(cudaMemcpy(input, src, nx * ny * nz * sizeof(float), cudaMemcpyDeviceToDevice));
+
+    if (!local_error && src != input) {
+        cudaError_t err = cudaMemcpy(input, src, nx * ny * nz * sizeof(float), cudaMemcpyDeviceToDevice);
+        if (err != cudaSuccess) {
+            mexWarnMsgIdAndTxt("gauss3d:cuda", "CUDA memcpy result error: %s", cudaGetErrorString(err));
+            local_error = true;
+        }
     }
+
     delete[] h_kernel;
-    h_kernel = nullptr;
-    if (error_flag) *error_flag = false; // set success if we made it here
+    if (error_flag) *error_flag = local_error;
 }
 
 // ================
@@ -191,37 +202,37 @@ extern "C" void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* 
         }
 
         // --- OOM awareness ---
-        cudaError_t alloc_err = cudaMalloc(&buffer, N * sizeof(float));
+        cudaError_t alloc_err = cudaMalloc((void**)&buffer, N * sizeof(float));
         if (alloc_err != cudaSuccess) {
             mexWarnMsgIdAndTxt("gauss3d:cuda", "CUDA OOM: Could not allocate workspace buffer (%.2f MB). Try reducing input size or call reset(gpuDevice).", N * sizeof(float) / (1024.0 * 1024.0));
             error_flag = true;
-            goto cleanup;
+            // Do not proceed
+        } else {
+            float sigma[3] = { (float)sigma_double[0], (float)sigma_double[1], (float)sigma_double[2] };
+            gauss3d_separable_float((float*)ptr, buffer, nx, ny, nz, sigma, ksize, &error_flag);
+
+            CUDA_CHECK(cudaDeviceSynchronize());
+
+            // Output result (returns the same array, modifies in-place)
+            out_gpu = img_gpu;
+            plhs[0] = mxGPUCreateMxArrayOnGPU(out_gpu);
         }
 
-        float sigma[3] = { (float)sigma_double[0], (float)sigma_double[1], (float)sigma_double[2] };
-        gauss3d_separable_float((float*)ptr, buffer, nx, ny, nz, sigma, ksize, &error_flag);
-
-        // Synchronize before returning to MATLAB to catch any lingering errors
-        CUDA_CHECK(cudaDeviceSynchronize());
-
-        // Output result (returns the same array, modifies in-place)
-        out_gpu = img_gpu;
-        plhs[0] = mxGPUCreateMxArrayOnGPU(out_gpu);
+        // --- Free buffer, force sync and free(0) for fragmentation mitigation ---
+        if (buffer) {
+            CUDA_CHECK(cudaFree(buffer));
+            CUDA_CHECK(cudaDeviceSynchronize());
+            CUDA_CHECK(cudaFree(0));
+            buffer = nullptr;
+        }
 
     } catch (...) {
         mexPrintf("Unknown error in gauss3d_mex.cu. Possible OOM or kernel failure.\n");
         error_flag = true;
-        goto cleanup;
-    }
-
-cleanup:
-    if (buffer) {
-        cudaFree(buffer);
-        buffer = nullptr;
-    }
-    // Do not destroy img_gpu if returned to MATLAB
-    // If error, possibly warn or log
-    if (error_flag) {
-        // Add any extra error logging here if needed
+        if (buffer) {
+            cudaFree(buffer);
+            cudaDeviceSynchronize();
+            cudaFree(0);
+        }
     }
 }
