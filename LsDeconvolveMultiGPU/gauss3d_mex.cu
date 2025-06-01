@@ -335,7 +335,11 @@ extern "C" void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* 
 
     int ksize[3];
     if (nrhs >= 3 && !mxIsLogicalScalar(prhs[2])) {
-        if (mxIsScalar(prhs[2])) {
+        if (mxIsEmpty(prhs[2])) {
+            // Use auto kernel size
+            for (int i = 0; i < 3; ++i)
+                ksize[i] = 2 * (int)ceil(3.0 * sigma_double[i]) + 1;
+        } else if (mxIsScalar(prhs[2])) {
             int k = (int)mxGetScalar(prhs[2]);
             ksize[0] = ksize[1] = ksize[2] = k;
         } else if (mxGetNumberOfElements(prhs[2]) == 3) {
