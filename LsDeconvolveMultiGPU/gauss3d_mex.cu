@@ -126,10 +126,10 @@ cleanup:
 // ================
 extern "C" void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     mxInitGPU();
-    float* buffer = nullptr;
-    bool error_flag = false;
-    mxGPUArray* out_gpu = nullptr;
+
     mxGPUArray* img_gpu = nullptr;
+    float* buffer = nullptr;
+    bool output_assigned = false;
 
     try {
         if (nrhs < 2)
@@ -141,8 +141,8 @@ extern "C" void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* 
         if (nd != 3)
             mexErrMsgIdAndTxt("gauss3d:ndims", "Input must be 3D.");
 
-        int nx = (int)sz[0], ny = (int)sz[1], nz = (int)sz[2];
-        size_t N = (size_t)nx * ny * nz;
+        int nx = static_cast<int>(sz[0]), ny = static_cast<int>(sz[1]), nz = static_cast<int>(sz[2]);
+        size_t N = static_cast<size_t>(nx) * ny * nz;
         mxClassID cls = mxGPUGetClassID(img_gpu);
         void* ptr = mxGPUGetData(img_gpu);
 
@@ -179,31 +179,45 @@ extern "C" void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* 
                 ksize[i] = 2 * (int)ceil(3.0 * sigma_double[i]) + 1;
         }
 
-        // --- OOM awareness ---
+        // --- OOM/fragmentation aware workspace alloc ---
         cudaError_t alloc_err = cudaMalloc(&buffer, N * sizeof(float));
         if (alloc_err != cudaSuccess) {
-            mexWarnMsgIdAndTxt("gauss3d:cuda", "CUDA OOM: Could not allocate workspace buffer (%.2f MB). Try reducing input size or call reset(gpuDevice).", N * sizeof(float) / (1024.0 * 1024.0));
+            mexWarnMsgIdAndTxt("gauss3d:cuda",
+                "CUDA OOM: Could not allocate workspace buffer (%.2f MB). Try reducing input size or call reset(gpuDevice).",
+                N * sizeof(float) / (1024.0 * 1024.0));
             goto cleanup;
         }
 
         float sigma[3] = { (float)sigma_double[0], (float)sigma_double[1], (float)sigma_double[2] };
-        gauss3d_separable_float((float*)ptr, buffer, nx, ny, nz, sigma, ksize, &error_flag);
+        bool kernel_error = false;
+        gauss3d_separable_float((float*)ptr, buffer, nx, ny, nz, sigma, ksize, &kernel_error);
+        if (kernel_error) {
+            mexWarnMsgIdAndTxt("gauss3d:cuda", "Error occurred in gauss3d_separable_float.");
+            goto cleanup;
+        }
 
-        // Synchronize before returning to MATLAB to catch any lingering errors
-        CUDA_CHECK(cudaDeviceSynchronize());
+        // Synchronize device (catch any async errors)
+        cudaError_t sync_err = cudaDeviceSynchronize();
+        if (sync_err != cudaSuccess) {
+            mexWarnMsgIdAndTxt("gauss3d:cuda", "CUDA post-op sync error: %s", cudaGetErrorString(sync_err));
+            goto cleanup;
+        }
 
-        // Output result
-        out_gpu = img_gpu;
-        plhs[0] = mxGPUCreateMxArrayOnGPU(out_gpu);
-
-    } catch (...) {
-        // Unified error handler
+        // Output to MATLAB
+        plhs[0] = mxGPUCreateMxArrayOnGPU(img_gpu);
+        output_assigned = true;
+    }
+    catch (const std::exception& e) {
+        mexPrintf("Caught std::exception: %s\n", e.what());
+    }
+    catch (...) {
         mexPrintf("Unknown error in gauss3d_mex.cu. Possible OOM or kernel failure.\n");
-        error_flag = true;
-        goto cleanup;
     }
 
 cleanup:
     if (buffer) cudaFree(buffer);
-    // Only destroy img_gpu if not returned
+
+    // Always try to return the input if no output was assigned (safe fallback)
+    if (!output_assigned && img_gpu)
+        plhs[0] = mxGPUCreateMxArrayOnGPU(img_gpu);
 }
