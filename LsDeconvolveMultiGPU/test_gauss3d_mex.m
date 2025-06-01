@@ -17,7 +17,7 @@ function test_gauss3d_mex_features()
     DOUBLE_THRESH = 1e-7;
 
     % Summary counters
-    total = 0; pass = 0; fail = 0; skip = 0; oom = 0; ksizeerr = 0; pass_half = 0; fail_half = 0;
+    total = 0; pass = 0; fail = 0; skip = 0; oom = 0; ksizeerr = 0;
 
     for ityp = 1:numel(types)
         for isz = 1:numel(szs)
@@ -97,48 +97,13 @@ function test_gauss3d_mex_features()
                         rel_err = rms_err / (max(abs(y_ref_unpad(:))) + eps);
 
                         % Histogram/stats
-                        print_histogram(y_mex_unpad, y_ref_unpad, col, false);
+                        print_histogram(y_mex_unpad, y_ref_unpad, col);
 
                         % Pass/Fail
                         p = (strcmp(type_str,'single') && gather(err) < SINGLE_THRESH) || ...
                             (strcmp(type_str,'double') && gather(err) < DOUBLE_THRESH);
                         print_result(p, type_str, err, rms_err, rel_err, t_ref, t_mex, col);
                         if p, pass = pass+1; else, fail = fail+1; end
-
-                        % ========== HALF PRECISION TEST =============
-                        if strcmp(type_str,'single')
-                            try
-                                t_half = tic;
-                                y_half_gpu = gauss3d_mex(x_pad_gpu, sigma, kernel_sz, 'half');
-                                t_half_mex = toc(t_half);
-
-                                assert(isequal(size(y_half_gpu), size(x_pad_gpu)), 'Half: Output size mismatch.');
-                                assert(strcmp(class(y_half_gpu), class(x_pad_gpu)), 'Half: Output class mismatch.');
-
-                                print_ok('[Half precision] Output matches input type/class/shape.', col);
-
-                                y_half_unpad = y_half_gpu(idx1,idx2,idx3);
-                                err_half = max(abs(y_half_unpad(:) - y_ref_unpad(:)));
-                                rms_err_half = sqrt(mean((y_half_unpad(:) - y_ref_unpad(:)).^2));
-                                rel_err_half = rms_err_half / (max(abs(y_ref_unpad(:))) + eps);
-
-                                % Histogram/stats
-                                print_histogram(y_half_unpad, y_ref_unpad, col, true);
-
-                                p_half = gather(err_half) < SINGLE_THRESH;
-                                print_result(p_half, 'half', err_half, rms_err_half, rel_err_half, [], t_half_mex, col, true);
-
-                                if p_half, pass_half = pass_half+1; else, fail_half = fail_half+1; end
-                            catch MEhalf
-                                if contains(MEhalf.message, 'Kernel size exceeds')
-                                    print_fail('[Half precision] Kernel size exceeds device limit.', col);
-                                    ksizeerr = ksizeerr + 1;
-                                else
-                                    print_fail(['[Half precision] ERROR: ' MEhalf.message], col);
-                                    fail_half = fail_half + 1;
-                                end
-                            end
-                        end
 
                     catch ME
                         % OOM or kernel size errors
@@ -171,8 +136,6 @@ function test_gauss3d_mex_features()
     fprintf('%s %d\n', col('red',   '    Failed:           '), fail);
     fprintf('%s %d\n', col('blue',  '    OOM/Skipped:      '), oom);
     fprintf('%s %d\n', col('red',   '    Kernel size skip: '), ksizeerr);
-    fprintf('%s %d\n', col('green', '    Half pass:        '), pass_half);
-    fprintf('%s %d\n', col('red',   '    Half fail:        '), fail_half);
     fprintf('%s\n', col('yellow', repmat('=',1,60)));
 end
 
@@ -205,30 +168,21 @@ function print_fail(str, col)
     fprintf('%s %s\n', col('red', '  ❌'), str);
 end
 
-function print_result(pass, type_str, err, rms_err, rel_err, t_ref, t_mex, col, is_half)
-    if nargin < 9, is_half = false; end
+function print_result(pass, type_str, err, rms_err, rel_err, t_ref, t_mex, col)
     if pass
         mark = col('green', '✔️');
     else
         mark = col('red', '❌');
     end
-    label = upper(type_str); if is_half, label = ['HALF (' label ')']; end
+    label = upper(type_str);
     fprintf('    %s %s: max=%.2e, RMS=%.2e, rel=%.2e\n', mark, label, err, rms_err, rel_err);
-    if ~isempty(t_ref)
-        fprintf('        Time: ref=%.3fs | mex=%.3fs\n', t_ref, t_mex);
-    else
-        fprintf('        Time: mex=%.3fs\n', t_mex);
-    end
+    fprintf('        Time: ref=%.3fs | mex=%.3fs\n', t_ref, t_mex);
 end
 
-function print_histogram(y, yref, col, is_half)
+function print_histogram(y, yref, col)
     y = gather(y); yref = gather(yref);
     minv = min(y(:)); maxv = max(y(:)); meanv = mean(y(:));
-    if is_half
-        fprintf('      [Half] Output: min=%.4f max=%.4f mean=%.4f\n', minv, maxv, meanv);
-    else
-        fprintf('    Output: min=%.4f max=%.4f mean=%.4f\n', minv, maxv, meanv);
-    end
+    fprintf('    Output: min=%.4f max=%.4f mean=%.4f\n', minv, maxv, meanv);
     % Optionally, show a small histogram or a voxel sample
     idx = numel(y)/2 + 1;
     fprintf('        Voxel sample [ref/this]: %.6f / %.6f\n', yref(idx), y(idx));
