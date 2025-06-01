@@ -1,7 +1,7 @@
 % ===============================
 % build_mex.m
 % ===============================
-% Compile semaphore, queue, and chunked LZ4 MEX files.
+% Compile semaphore, queue, chunked LZ4, and GPU Gaussian MEX files.
 % Downloads lz4.c/.h from GitHub if missing.
 % Requires MATLAB R2018a+ (-R2018a mxArray API).
 
@@ -19,6 +19,7 @@ src_gauss3d = 'gauss3d_mex.cu';
 lz4_c_url  = 'https://raw.githubusercontent.com/lz4/lz4/dev/lib/lz4.c';
 lz4_h_url  = 'https://raw.githubusercontent.com/lz4/lz4/dev/lib/lz4.h';
 
+% Download lz4.c/.h if missing
 if ~isfile('lz4.c')
     fprintf('Downloading lz4.c ...\n');
     try, websave('lz4.c', lz4_c_url);
@@ -30,24 +31,37 @@ if ~isfile('lz4.h')
     catch, error('Failed to download lz4.h'); end
 end
 
-% Compile
+% MEX optimization flags (for CPU builds)
 mex_flags = {'-R2018a'};
 if ispc && ~ismac
-    mex_flags = [mex_flags, 'CFLAGS="$CFLAGS /O2 /arch:AVX2"', 'CXXFLAGS="$CXXFLAGS /O2 /arch:AVX2"'];
+    mex_flags = [mex_flags, ...
+        'CFLAGS="$CFLAGS /O2 /arch:AVX2 /openmp"', ...
+        'CXXFLAGS="$CXXFLAGS /O2 /arch:AVX2 /openmp"'];
 else
-    mex_flags = [mex_flags, 'CFLAGS="$CFLAGS -O2 -march=native -fomit-frame-pointer"', ...
-                           'CXXFLAGS="$CXXFLAGS -O2 -march=native -fomit-frame-pointer"'];
+    mex_flags = [mex_flags, ...
+        'CFLAGS="$CFLAGS -O2 -march=native -fomit-frame-pointer -fopenmp"', ...
+        'CXXFLAGS="$CXXFLAGS -O2 -march=native -fomit-frame-pointer -fopenmp"'];
 end
 
-%mex(mex_flags{:}, src_semaphore);
-%mex(mex_flags{:}, src_queue);
-%mex(mex_flags{:}, src_lz4_save, src_lz4_c);
-%mex(mex_flags{:}, src_lz4_load, src_lz4_c);
+% Build semaphore/queue/lz4 MEX files (CPU)
+mex(mex_flags{:}, src_semaphore);
+mex(mex_flags{:}, src_queue);
+mex(mex_flags{:}, src_lz4_save, src_lz4_c);
+mex(mex_flags{:}, src_lz4_load, src_lz4_c);
 
-% nvcc_flags = '-O2 -Xcompiler -march=native -Xcompiler -fomit-frame-pointer';
-% 'CFLAGS="$CFLAGS -O2 -march=native -fomit-frame-pointer"', ...
-% 'CXXFLAGS="$CXXFLAGS -O2 -march=native -fomit-frame-pointer"', ...
-% 'NVCCFLAGS="$NVCCFLAGS -O2 -Xcompiler -march=native -Xcompiler -fomit-frame-pointer"'
-% build_xml = "..."; '-f', build_xml,
+% CUDA optimization flags (for mexcuda)
+if ispc && ~ismac
+    extra_opts = {'-compiler-options', '/O2 /arch:AVX2 /openmp', ...
+                  '-Xcompiler', '/O2,/arch:AVX2,/openmp'};
+else
+    extra_opts = {'-compiler-options', '-O2 -march=native -fomit-frame-pointer -fopenmp', ...
+                  '-Xcompiler', '-O2,-march=native,-fomit-frame-pointer,-fopenmp'};
+end
+
+% CUDA include dirs (if any)
 root_dir = '.'; include_dir = './cuda_kernels';
-mexcuda('-R2018a', src_gauss3d, ['-I', root_dir], ['-I', include_dir]);
+
+% Build CUDA Gaussian 3D MEX file (GPU)
+mexcuda('-R2018a', src_gauss3d, ['-I', root_dir], ['-I', include_dir], extra_opts{:});
+
+fprintf('All MEX files built successfully.\n');
