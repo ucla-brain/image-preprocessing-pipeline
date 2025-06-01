@@ -4,7 +4,7 @@
 % Compile semaphore, queue, chunked LZ4, and GPU Gaussian MEX files.
 % Downloads lz4.c/.h from GitHub if missing.
 % Requires MATLAB R2018a+ (-R2018a mxArray API).
-
+debug = true;
 if verLessThan('matlab', '9.4')
     error('This script requires MATLAB R2018a or newer (for -R2018a MEX API)');
 end
@@ -33,15 +33,20 @@ end
 
 % MEX optimization flags (for CPU builds)
 mex_flags = {'-R2018a'};
-if ispc && ~ismac
-    mex_flags = [mex_flags, ...
-        'CFLAGS="$CFLAGS /O2 /arch:AVX2 /openmp"', ...
-        'CXXFLAGS="$CXXFLAGS /O2 /arch:AVX2 /openmp"'];
+if debug
+    if ispc && ~ismac
+        nvccflags = 'NVCCFLAGS="$NVCCFLAGS -G -std=c++14 -Xcompiler ""/Od,/Zi"" "';
+    else
+        nvccflags = 'NVCCFLAGS="$NVCCFLAGS -G -std=c++14 -Xcompiler ''-O0,-g'' "';
+    end
 else
-    mex_flags = [mex_flags, ...
-        'CFLAGS="$CFLAGS -O2 -march=native -fomit-frame-pointer -fopenmp"', ...
-        'CXXFLAGS="$CXXFLAGS -O2 -march=native -fomit-frame-pointer -fopenmp"'];
+    if ispc && ~ismac
+        nvccflags = 'NVCCFLAGS="$NVCCFLAGS -O2 -std=c++14 -Xcompiler ""/O2,/arch:AVX2,/openmp"" "';
+    else
+        nvccflags = 'NVCCFLAGS="$NVCCFLAGS -O2 -std=c++14 -Xcompiler ''-O2,-march=native,-fomit-frame-pointer,-fopenmp'' "';
+    end
 end
+
 
 % Build semaphore/queue/lz4 MEX files (CPU)
 mex(mex_flags{:}, src_semaphore);
