@@ -280,8 +280,8 @@ end
 function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(stack_info, psf_size, filter, block_size_max, ram_available, final_image_bytes_per_voxel)
     % Parameters for RAM and block sizing
     ram_usage_portion = 0.5;               % Use at most 50% of available RAM
-    R_bytes_per_voxel = 4;                   % Use 4 for single, 8 for double (adjust as needed)
-    max_elements_per_dim = 1290;           % 3D cube limit from 2^31-1 elements
+    R_bytes_per_voxel = 4;                 % Use 4 for single, 8 for double (adjust as needed)
+    max_elements_per_dim = 1290;           % 3D cube limit from (2^31-1)^(1/3) elements
     max_elements_total  = 2^31 - 1;        % MATLAB's total element limit
 
     % Compute the max z size that fits in RAM (capped at 1290 and stack_info.z)
@@ -298,9 +298,6 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(stack
 
     % Cap total block size to max allowed elements
     block_size_max = min(block_size_max, max_elements_total);
-
-    % For later use in dimension checks
-    max_dim = max_elements_per_dim;
 
     best_score = -Inf;
     best = struct();
@@ -322,7 +319,7 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(stack
             g_pad = gaussian_pad_size(bl_shape, filter.gaussian_size);
             bl_shape_max = bl_shape + 2*g_pad;
 
-            if any(bl_shape > max_dim)
+            if any(bl_shape > max_elements_per_dim)
                 continue;
             end
             if prod(bl_shape_max) > block_size_max
