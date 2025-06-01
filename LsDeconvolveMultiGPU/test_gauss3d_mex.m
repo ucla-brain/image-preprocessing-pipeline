@@ -1,6 +1,6 @@
 function test_gauss3d_mex_features()
 % Robust & colorful test harness for gauss3d_mex vs imgaussfilt3 (GPU/CPU fallback).
-% Single-precision only. Includes performance, color, and summary.
+% Single-precision only. Shows performance, speedup, pass/fail, and summary.
 
     g = gpuDevice(1);
     reset(g);
@@ -19,8 +19,8 @@ function test_gauss3d_mex_features()
     total = 0; pass = 0; fail = 0; skip = 0; oom = 0; ksizeerr = 0;
 
     % Print summary header
-    fprintf('%-5s %-11s %-20s %-14s %-16s %-8s %-8s %-8s %-8s\n', ...
-        'Test', 'Type', 'Size', 'Sigma', 'Kernel', 'maxErr', 'RMS', 'relErr', 'mex(s)');
+    fprintf('%-4s %-5s %-11s %-20s %-14s %-16s %-8s %-8s %-8s %-8s %-10s\n', ...
+        'PF', 'Test', 'Type', 'Size', 'Sigma', 'Kernel', 'maxErr', 'RMS', 'relErr', 'mex(s)', 'Speedup');
 
     for ityp = 1:numel(types)
         for isz = 1:numel(szs)
@@ -95,18 +95,32 @@ function test_gauss3d_mex_features()
                         rms_err = sqrt(mean((y_mex_unpad(:) - y_ref_unpad(:)).^2));
                         rel_err = rms_err / (max(abs(y_ref_unpad(:))) + eps);
 
-                        % Print single-line result (left-aligned)
-                        fprintf('%-5d %-11s %-20s %-14s %-16s %-8.2e %-8.2e %-8.2e %-8.3f\n', ...
-                            total, type_str, mat2str(sz), mat2str(sigma), kdesc, err, rms_err, rel_err, t_mex);
-
-                        % Optional: print histogram/stats
-                        % print_histogram(y_mex_unpad, y_ref_unpad, col);
+                        % Speedup (relative to reference)
+                        speedup = t_ref / t_mex;
+                        if isfinite(speedup)
+                            if speedup > 1
+                                speed_str = sprintf('+%.0f%%', 100*(speedup-1));
+                            else
+                                speed_str = sprintf('-%.0f%%', 100*(1-speedup));
+                            end
+                        else
+                            speed_str = 'N/A';
+                        end
 
                         % Pass/Fail
                         p = (strcmp(type_str,'single') && gather(err) < SINGLE_THRESH);
-                        if p, pass = pass+1;
-                        else, fail = fail+1;
+
+                        % Print single-line result (left-aligned)
+                        if p
+                            pf = col('green', '✔️');
+                            pass = pass+1;
+                        else
+                            pf = col('red', '❌');
+                            fail = fail+1;
                         end
+
+                        fprintf('%-4s %-5d %-11s %-20s %-14s %-16s %-8.2e %-8.2e %-8.2e %-8.3f %-10s\n', ...
+                            pf, total, type_str, mat2str(sz), mat2str(sigma), kdesc, err, rms_err, rel_err, t_mex, speed_str);
 
                     catch ME
                         % OOM or kernel size errors
