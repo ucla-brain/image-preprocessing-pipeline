@@ -49,6 +49,7 @@ function test_gauss3d_mex_features()
 
                     rng(0);
                     x = rand(sz, type_str);
+                    x = x ./ max(x(:));
                     x_pad = padarray(x, pad_amt, 'replicate', 'both');
                     x_pad_gpu = gpuArray(x_pad);
                     opts = {'Padding', 'replicate', 'FilterSize', kernel_sz, 'FilterDomain', 'spatial'};
