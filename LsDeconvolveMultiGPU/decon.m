@@ -101,7 +101,7 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regula
         if use_gpu, R = gpuArray(R); end
     end
 
-    [bl, pad_pre, pad_post] = pad_block_to_fft_shape(bl, fft_shape, 'replicate');
+    [bl, pad_pre, pad_post] = pad_block_to_fft_shape(bl, fft_shape, 'symmetric');
 
     if stop_criterion > 0
         delta_prev = norm(bl(:));
@@ -162,13 +162,6 @@ function x = convFFT(x, otf)
     x = real(x);              % final output
 end
 
-function device = device_name(id)
-    device = 'CPU ';
-    if id > 0
-        device = ['GPU' num2str(id)];
-    end
-end
-
 function [otf, otf_conj] = calculate_otf(psf_shifted, fft_shape, device_id)
     t_compute = tic;
     if ~isa(psf_shifted, 'single'), psf_shifted = single(psf_shifted); end
@@ -214,15 +207,34 @@ function bl = unpad_block(bl, pad_pre, pad_post)
     pad_pre  = [pad_pre(:)'  zeros(1,3-numel(pad_pre))];
     pad_post = [pad_post(:)' zeros(1,3-numel(pad_post))];
     sz = size(bl);
+    sz = [sz, ones(1, 3-numel(sz))];  % Ensure length 3 for safety
 
-    % Assert block is large enough to unpad
-    unpad_sz = sz - pad_pre - pad_post;
-    assert(all(unpad_sz >= 1), ...
-        sprintf('unpad_block: unpadding too much. Size after unpad would be [%s]', num2str(unpad_sz)))
+    % Compute the index range for each dimension and check validity
+    idx = cell(1, 3);
+    for dim = 1:3
+        start_idx = pad_pre(dim) + 1;
+        end_idx   = sz(dim) - pad_post(dim);
+        if start_idx > end_idx || end_idx < 1
+            error(['unpad_block: Attempted to unpad dimension %d with invalid indices: [%d:%d], ' ...
+                'input size: [%s], pad_pre: [%s], pad_post: [%s]'], ...
+                dim, start_idx, end_idx, num2str(sz), num2str(pad_pre), num2str(pad_post));
+        end
+        idx{dim} = start_idx:end_idx;
+    end
 
-    idx = arrayfun(@(dim) ...
-        (pad_pre(dim)+1):(sz(dim)-pad_post(dim)), ...
-        1:ndims(bl), 'UniformOutput', false);
+    % Actually unpad
+    bl = bl(idx{1}, idx{2}, idx{3});
 
-    bl = bl(idx{:});
+    % Optional: Check if result has at least one element in every dim
+    if any(size(bl) < 1)
+        error(['unpad_block: Output block size is empty in at least one dimension! ' ...
+            'Resulting size: [%s]'], num2str(size(bl)));
+    end
+end
+
+function device = device_name(id)
+    device = 'CPU ';
+    if id > 0
+        device = ['GPU' num2str(id)];
+    end
 end
