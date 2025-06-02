@@ -77,7 +77,7 @@ function test_gauss3d_mex_features()
 
                         % gauss3d_mex single (standard)
                         t2 = tic;
-                        buffer_gpu = zeros(size(x_pad_gpu), 'like', x_pad_gpu, 'gpuArray');
+                        buffer_gpu = gpuArray.zeros(size(x_pad_gpu), 'single');
                         y_mex_gpu = gauss3d_mex(x_pad_gpu, buffer_gpu, sigma, kernel_sz);
                         t_mex = toc(t2);
 
