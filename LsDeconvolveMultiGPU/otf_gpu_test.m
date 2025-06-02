@@ -49,14 +49,29 @@ for s = 1:length(sigmas)
         psf_pad = psf_pad(1:sz(1), 1:sz(2), 1:sz(3));
 
         % -- Run MEX
-        t_mex = tic;
-        [otf_mex, otf_conj_mex] = otf_gpu_mex(psf_shifted_gpu, sz);
-        t_mex = toc(t_mex);
+                Nrep = 10;   % Repeat for robustness
 
-        % -- Run MATLAB reference
-        t_mat = tic;
+        % --- Warm up GPU and code paths
+        [~,~] = otf_gpu_mex(psf_shifted_gpu, sz);
         otf_mat = fftn(psf_pad);
-        t_mat = toc(t_mat);
+
+        % --- MEX timing (repeat, ignore first run) ---
+        t_mex_all = zeros(1,Nrep);
+        for rr = 1:Nrep
+            t0 = tic;
+            [otf_mex, otf_conj_mex] = otf_gpu_mex(psf_shifted_gpu, sz);
+            t_mex_all(rr) = toc(t0);
+        end
+        t_mex = mean(t_mex_all(2:end)); % average, ignore first
+
+        % --- MATLAB timing (repeat, ignore first run) ---
+        t_mat_all = zeros(1,Nrep);
+        for rr = 1:Nrep
+            t0 = tic;
+            otf_mat = fftn(psf_pad);
+            t_mat_all(rr) = toc(t0);
+        end
+        t_mat = mean(t_mat_all(2:end)); % average, ignore first
 
         otf_mat = single(otf_mat);  % force single precision for fair diff
 
