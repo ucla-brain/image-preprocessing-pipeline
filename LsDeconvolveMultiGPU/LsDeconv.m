@@ -1001,7 +1001,7 @@ end
 function device = current_device(gpu)
     device = 'CPU';
     if gpu > 0
-        device = 'GPU';
+        device = sprintf('GPU%d', gpu);
     end
 end
 
