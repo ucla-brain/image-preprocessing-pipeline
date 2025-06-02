@@ -88,7 +88,7 @@ def get_all_gpu_indices():
         return []
 
 
-def estimate_block_size_max(gpu_indices, num_workers, bytes_per_element=4, base_reserve_gb=0.75, per_worker_mib=422.5,
+def estimate_block_size_max(gpu_indices, workers_per_gpu, bytes_per_element=4, base_reserve_gb=0.75, per_worker_mib=422.5,
                             num_blocks_on_gpu=2):
     max_allowed = 2 ** 31 - 1
     try:
@@ -106,7 +106,7 @@ def estimate_block_size_max(gpu_indices, num_workers, bytes_per_element=4, base_
             return max_allowed
 
         min_vram_mib = min(selected_memories)
-        usable_mib = min_vram_mib - base_reserve_gb * 1024 - num_workers / len(gpu_indices) * per_worker_mib
+        usable_mib = min_vram_mib - base_reserve_gb * 1024 - workers_per_gpu * per_worker_mib
         if usable_mib <= 0:
             log.warning(f"Estimated usable VRAM ({usable_mib:.1f} MiB) is too low. Falling back to max_allowed.")
             return max_allowed
@@ -152,8 +152,7 @@ def main():
         default_cores // len(default_gpu_indices)
         if len(default_gpu_indices) > 0 else 0
     )
-    block_size_default = estimate_block_size_max(default_gpu_indices,
-                                                 default_workers_per_gpu * len(default_gpu_indices))
+    block_size_default = estimate_block_size_max(default_gpu_indices, default_workers_per_gpu)
 
     parser = argparse.ArgumentParser(
         description='Python wrapper for MATLAB deconvolution.',
@@ -256,7 +255,7 @@ def main():
     if user_specified_subset or not user_overrode_block_size:
         args.block_size_max = estimate_block_size_max(
             args.gpu_indices,
-            args.gpu_workers_per_gpu * len(args.gpu_indices),
+            args.gpu_workers_per_gpu,
             num_blocks_on_gpu=11 if args.use_fft else (2 + (1 if args.lambda_damping else 0)),
         )
         log.info(f"Re-estimated block_size_max: {args.block_size_max}")
