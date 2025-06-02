@@ -219,7 +219,7 @@ extern "C" void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* 
                     retries+1, max_retries);
                 cudaDeviceSynchronize();
                 cudaFree(0);
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                std::this_thread::sleep_for(std::chrono::milliseconds(1000));
                 retries++;
                 buffer = nullptr;
             }
