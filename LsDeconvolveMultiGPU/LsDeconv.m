@@ -348,7 +348,75 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(stack
     nz = ceil(stack_info.z / z);
 end
 
-function pad_size = gaussian_pad_size(image_size, sigma)
+function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(stack_info, psf_size, filter, block_size_max, ram_available, final_image_bytes_per_voxel)
+    % Parameters for RAM and block sizing
+    ram_usage_portion = 0.5;               % Use at most 50% of available RAM
+    R_bytes_per_voxel = 4;                 % Use 4 for single, 8 for double (adjust as needed)
+    max_elements_per_dim = 1290;           % 3D cube limit from (2^31-1)^(1/3) elements
+    max_elements_total  = 2^31 - 1;        % MATLAB's total element limit
+
+    % Compute the max z size that fits in RAM (capped at 1290 and stack_info.z)
+    z_max_ram = floor(ram_available * ram_usage_portion / ((R_bytes_per_voxel + final_image_bytes_per_voxel) * stack_info.x * stack_info.y));
+    z_max = min(z_max_ram, stack_info.z);
+
+    % Set min and max block sizes, capping to allowed per-dimension limit
+    min_block = min([floor(max_elements_per_dim/4) floor(max_elements_per_dim/4) floor(max_elements_per_dim/4)], ...
+                    [stack_info.x                  stack_info.y                  stack_info.z]);
+
+    max_block = min([max_elements_per_dim    max_elements_per_dim    max_elements_per_dim], ...
+                    [stack_info.x            stack_info.y            z_max]);
+
+    % Cap total block size to max allowed elements
+    block_size_max = min(block_size_max, max_elements_total);
+
+    best_score = -Inf;
+    best = struct();
+    num_failed = 0;
+
+    % Use coarse step for initial sweep (square xy blocks)
+    for z = max_block(3):-1:min_block(3)
+        for xy = max_block(1):-1:min_block(1)
+            x = xy; y = xy;
+            bl_core = [x y z];
+
+            d_pad = decon_pad_size(psf_size);
+            if any(filter.gaussian_sigma > 0),
+                d_pad = max(d_pad, gaussian_pad_size(bl_core, filter.gaussian_sigma, filter.gaussian_size));
+            end
+            bl_shape = bl_core + 2*d_pad;
+
+            if filter.use_fft, bl_shape = next_fast_len(bl_shape); end
+
+            if any(bl_shape > max_elements_per_dim), continue; end
+            if prod(bl_shape) > block_size_max, continue; end
+
+            score = prod(bl_core);
+            if score > best_score
+                best_score = score;
+                best = struct('bl_core', bl_core, 'd_pad', d_pad, 'fft_shape', bl_shape);
+                num_failed = 0;
+            else
+                if ~isempty(fieldnames(best))
+                    num_failed = num_failed + 1;
+                    if num_failed > 100, break; end
+                end
+            end
+        end
+    end
+
+    if isempty(fieldnames(best))
+        error('autosplit: No block shape fits in memory. Try increasing block_size_max or reducing min_block.');
+    end
+
+    x     = best.bl_core(1); y     = best.bl_core(2); z     = best.bl_core(3);
+    x_pad =   best.d_pad(1); y_pad =   best.d_pad(2); z_pad =   best.d_pad(3);
+    fft_shape = best.fft_shape;
+    nx = ceil(stack_info.x / x);
+    ny = ceil(stack_info.y / y);
+    nz = ceil(stack_info.z / z);
+end
+
+function pad_size = gaussian_pad_size(image_size, sigma, kernel)
     % Accepts sigma (scalar or vector), computes pad_size for each dimension.
     if isscalar(sigma)
         sigma = repmat(sigma, size(image_size));
@@ -359,11 +427,11 @@ function pad_size = gaussian_pad_size(image_size, sigma)
     if numel(pad_size) ~= numel(image_size)
         pad_size = [pad_size; zeros(numel(image_size) - numel(pad_size), 1)];
     end
-    pad_size = pad_size(:).'; % Row vector (consistent with image_size)
+    pad_size = ceil(max(pad_size(:).', kernel(:).') / 2);
 end
 
 function pad = decon_pad_size(psf_sz)
-    pad = psf_sz;
+    pad = psf_sz(:).';
 end
 
 function n_vec = next_fast_len(n_vec)
@@ -678,7 +746,11 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
     end
 
     if min(filter.gaussian_sigma(:)) > 0
-        bl = imgaussfilt3(bl, filter.gaussian_sigma, 'FilterSize', filter.gaussian_size, 'Padding', 'symmetric');
+        if gpu
+            bl = gauss3d_mex(bl, filter.gaussian_sigma, filter.gaussian_size, true);
+        else
+            bl = imgaussfilt3(bl, filter.gaussian_sigma, 'FilterSize', filter.gaussian_size, 'Padding', 'symmetric');
+        end
         bl = bl - filter.dark;
         bl = max(bl, 0);
     end

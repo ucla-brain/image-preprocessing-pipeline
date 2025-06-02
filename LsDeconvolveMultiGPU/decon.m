@@ -50,7 +50,7 @@ function bl = deconSpatial(bl, psf, psf_inv, niter, lambda, stop_criterion, regu
         is_regularization_time = apply_regularization && (i > 1) && (i < niter) && (mod(i, regularize_interval) == 0);
 
         if is_regularization_time
-            bl = imgaussfilt3(bl, 0.5);
+            if use_gpu, bl = gauss3d_mex(bl, 0.5); else, bl = imgaussfilt3(bl, 0.5); end
         end
 
         buf = convn(bl, psf, 'same');
@@ -93,11 +93,12 @@ end
 
 % === Frequency-domain version with cached OTFs ===
 function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regularize_interval, device_id)
+    use_gpu = isgpuarray(bl);
     [otf, otf_conj] = calculate_otf(psf, fft_shape, device_id);
 
     if regularize_interval < niter && lambda > 0
         R = single(1/26 * ones(3,3,3)); R(2,2,2) = 0;
-        if device_id > 0, R = gpuArray(R); end
+        if use_gpu, R = gpuArray(R); end
     end
 
     [bl, pad_pre, pad_post] = pad_block_to_fft_shape(bl, fft_shape, 'replicate');
@@ -113,7 +114,7 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regula
         is_regularization_time = apply_regularization && (i > 1) && (i < niter) && (mod(i, regularize_interval) == 0);
 
         if is_regularization_time
-            bl = imgaussfilt3(bl, 0.5);
+            if use_gpu, bl = gauss3d_mex(bl, 0.5); else, bl = imgaussfilt3(bl, 0.5); end
         end
 
         buf = convFFT(bl, otf);

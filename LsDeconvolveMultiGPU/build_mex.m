@@ -14,7 +14,7 @@ src_queue = 'queue.c';
 src_lz4_save = 'save_lz4_mex.c';
 src_lz4_load = 'load_lz4_mex.c';
 src_lz4_c = 'lz4.c';
-#src_gauss3d = 'gauss3d_mex.cu';
+src_gauss3d = 'gauss3d_mex.cu';
 
 lz4_c_url  = 'https://raw.githubusercontent.com/lz4/lz4/dev/lib/lz4.c';
 lz4_h_url  = 'https://raw.githubusercontent.com/lz4/lz4/dev/lib/lz4.h';
@@ -54,17 +54,17 @@ mex(mex_flags{:}, src_queue);
 mex(mex_flags{:}, src_lz4_save, src_lz4_c);
 mex(mex_flags{:}, src_lz4_load, src_lz4_c);
 
-%% CUDA optimization flags (for mexcuda)
-%if ispc && ~ismac
-%    nvccflags = 'NVCCFLAGS="$NVCCFLAGS -G -std=c++14 -Xcompiler ""/O2,/arch:AVX2,/openmp"" "';
-%else
-%    nvccflags = 'NVCCFLAGS="$NVCCFLAGS -G -std=c++14 -Xcompiler ''-O2,-march=native,-fopenmp'' "';
-%end
-%
-%% CUDA include dirs (if any)
-%root_dir = '.'; include_dir = './cuda_kernels';
-%
-%% Build CUDA Gaussian 3D MEX file (GPU)
-%mexcuda('-R2018a', src_gauss3d, ['-I', root_dir], ['-I', include_dir], nvccflags);
+% CUDA optimization flags (for mexcuda)
+if ispc && ~ismac
+    nvccflags = 'NVCCFLAGS="$NVCCFLAGS -G -std=c++14 -Xcompiler ""/O2,/arch:AVX2,/openmp"" "';
+else
+    nvccflags = 'NVCCFLAGS="$NVCCFLAGS -G -std=c++14 -Xcompiler ''-O2,-march=native,-fopenmp'' "';
+end
+
+% CUDA include dirs (if any)
+root_dir = '.'; include_dir = './cuda_kernels';
+
+% Build CUDA Gaussian 3D MEX file (GPU)
+mexcuda('-R2018a', src_gauss3d, ['-I', root_dir], ['-I', include_dir], nvccflags);
 
 fprintf('All MEX files built successfully.\n');
