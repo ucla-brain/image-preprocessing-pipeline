@@ -1,6 +1,6 @@
 function test_otf_gpu_mex
 fprintf('\n=== Testing otf_gpu_mex ===\n');
-results = [];
+results = {}; % <-- Use cell array!
 
 %% 1. Synthetic Gaussian Test (main)
 fft_shape = [96 88 80];  % nonsymmetric, large
@@ -15,31 +15,34 @@ psf = exp(...
 psf = psf / sum(psf(:));
 psf_shifted = ifftshift(psf);
 psf_shifted_gpu = gpuArray(single(psf_shifted));
-results(end+1) = run_one_otf_test('Asym Gaussian', psf_shifted_gpu, fft_shape);
+results{end+1} = run_one_otf_test('Asym Gaussian', psf_shifted_gpu, fft_shape);
 
 %% 2. Edge test: All-ones input, minimal size (should yield sum everywhere)
 psf = ones(2,2,2,'single','gpuArray');
 fft_shape = [4 4 4];
 psf_shifted_gpu = ifftshift(psf); % shift still applied
-results(end+1) = run_one_otf_test('All-ones 2x2x2→4x4x4', psf_shifted_gpu, fft_shape);
+results{end+1} = run_one_otf_test('All-ones 2x2x2→4x4x4', psf_shifted_gpu, fft_shape);
 
 %% 3. Random noise, odd shape
 psf = rand(7,9,5,'single','gpuArray');
 fft_shape = [11 13 7];
 psf_shifted_gpu = ifftshift(psf);
-results(end+1) = run_one_otf_test('Rand noise 7x9x5→11x13x7', psf_shifted_gpu, fft_shape);
+results{end+1} = run_one_otf_test('Rand noise 7x9x5→11x13x7', psf_shifted_gpu, fft_shape);
 
 %% 4. Zero input (output must be all zeros)
 psf = zeros(5,7,3,'single','gpuArray');
 fft_shape = [8 8 8];
 psf_shifted_gpu = ifftshift(psf);
-results(end+1) = run_one_otf_test('Zero PSF', psf_shifted_gpu, fft_shape);
+results{end+1} = run_one_otf_test('Zero PSF', psf_shifted_gpu, fft_shape);
 
 %% 5. Identity: shape-matched, no padding
 psf = rand(9,8,6,'single','gpuArray');
 fft_shape = size(psf);
 psf_shifted_gpu = ifftshift(psf);
-results(end+1) = run_one_otf_test('Identity shape', psf_shifted_gpu, fft_shape);
+results{end+1} = run_one_otf_test('Identity shape', psf_shifted_gpu, fft_shape);
+
+% Convert cell to struct array for summary
+results = [results{:}];
 
 %% Summary
 fprintf('\n');
