@@ -88,7 +88,7 @@ def get_all_gpu_indices():
         return []
 
 
-def estimate_block_size_max(gpu_indices, num_workers, bytes_per_element=4, base_reserve_gb=1.0, per_worker_mib=160.0,
+def estimate_block_size_max(gpu_indices, num_workers, bytes_per_element=4, base_reserve_gb=0.75, per_worker_mib=160.0,
                             num_blocks_on_gpu=2):
     max_allowed = 2 ** 31 - 1
     try:
@@ -257,7 +257,7 @@ def main():
         args.block_size_max = estimate_block_size_max(
             args.gpu_indices,
             args.gpu_workers_per_gpu * len(args.gpu_indices),
-            per_worker_mib=160 if args.use_fft else 422.5,
+            per_worker_mib=320 if args.use_fft else 422.5,
             num_blocks_on_gpu=(8 if args.use_fft else 2) + (1 if args.lambda_damping else 0),
         )
         log.info(f"Re-estimated block_size_max: {args.block_size_max}")
