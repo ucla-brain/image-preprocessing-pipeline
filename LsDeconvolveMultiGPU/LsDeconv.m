@@ -1000,13 +1000,6 @@ function semaphore_create(semkey, value)
     disp(['semaphore ' num2str(semkey) ' is created with the initial value of ' num2str(value)]);
 end
 
-function device = current_device(gpu)
-    device = 'CPU';
-    if gpu > 0
-        device = sprintf('GPU%d', gpu);
-    end
-end
-
 function [x, y, z, bit_depth] = getstackinfo(datadir)
     filelist = dir(fullfile(datadir, '*.tif'));
     if numel(filelist) == 0

@@ -77,7 +77,7 @@ function bl = deconSpatial(bl, psf, psf_inv, niter, lambda, stop_criterion, regu
             delta_current = norm(bl(:));
             delta_rel = abs(delta_prev - delta_current) / delta_prev * 100;
             delta_prev = delta_current;
-            disp([device_name(device_id) ': Iter ' num2str(i) ...
+            disp([current_device(device_id) ': Iter ' num2str(i) ...
                   ', ΔD: ' num2str(delta_rel,3) ...
                   ', ΔT: ' num2str(round(toc(start_time),1)) 's']);
             if i > 1 && delta_rel <= stop_criterion
@@ -85,7 +85,7 @@ function bl = deconSpatial(bl, psf, psf_inv, niter, lambda, stop_criterion, regu
                 break
             end
         else
-            disp([device_name(device_id) ': Iter ' num2str(i) ...
+            disp([current_device(device_id) ': Iter ' num2str(i) ...
                   ', ΔT: ' num2str(round(toc(start_time),1)) 's']);
         end
     end
@@ -139,7 +139,7 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regula
             delta_current = norm(bl(:));
             delta_rel = abs(delta_prev - delta_current) / delta_prev * 100;
             delta_prev = delta_current;
-            disp([device_name(device_id) ': Iter ' num2str(i) ...
+            disp([current_device(device_id) ': Iter ' num2str(i) ...
                   ', ΔD: ' num2str(delta_rel,3) ...
                   ', ΔT: ' num2str(round(toc(start_time),1)) 's']);
             if i > 1 && delta_rel <= stop_criterion
@@ -147,7 +147,7 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regula
                 break
             end
         else
-            disp([device_name(device_id) ': Iter ' num2str(i) ...
+            disp([current_device(device_id) ': Iter ' num2str(i) ...
                   ', ΔT: ' num2str(round(toc(start_time),2)) 's']);
         end
     end
@@ -176,7 +176,7 @@ function [otf, otf_conj] = calculate_otf(psf_shifted, fft_shape, device_id)
         otf_conj = conj(otf);
     end
     fprintf('%s: OTF computed for size %s in %.2fs\n', ...
-        device_name(device_id), mat2str(fft_shape), toc(t_compute));
+        current_device(device_id), mat2str(fft_shape), toc(t_compute));
 end
 
 function [bl, pad_pre, pad_post] = pad_block_to_fft_shape(bl, fft_shape, mode)
@@ -229,12 +229,5 @@ function bl = unpad_block(bl, pad_pre, pad_post)
     if any(size(bl) < 1)
         error(['unpad_block: Output block size is empty in at least one dimension! ' ...
             'Resulting size: [%s]'], num2str(size(bl)));
-    end
-end
-
-function device = device_name(id)
-    device = 'CPU ';
-    if id > 0
-        device = ['GPU' num2str(id)];
     end
 end
