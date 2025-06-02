@@ -15,7 +15,7 @@ src_lz4_save = 'save_lz4_mex.c';
 src_lz4_load = 'load_lz4_mex.c';
 src_lz4_c = 'lz4.c';
 src_gauss3d = 'gauss3d_mex.cu';
-src_otf_gpu = 'otf_gpu_mex.cu'
+src_otf_gpu = 'otf_gpu_mex.cu';
 
 lz4_c_url  = 'https://raw.githubusercontent.com/lz4/lz4/dev/lib/lz4.c';
 lz4_h_url  = 'https://raw.githubusercontent.com/lz4/lz4/dev/lib/lz4.h';
