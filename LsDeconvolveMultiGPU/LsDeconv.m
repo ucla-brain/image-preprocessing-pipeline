@@ -356,7 +356,7 @@ function pad_size = gaussian_pad_size(image_size, sigma, kernel)
     if numel(pad_size) ~= numel(image_size)
         pad_size = [pad_size; zeros(numel(image_size) - numel(pad_size), 1)];
     end
-    pad_size = ceil(max(pad_size(:).', kernel(:).') / 2);
+    pad_size = ceil(max(pad_size(:).', kernel(:).'));
 end
 
 function pad = decon_pad_size(psf_sz)
