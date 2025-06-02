@@ -140,7 +140,7 @@ function test_gauss3d_mex_features()
                         end
                     end
 
-                    clear x_pad_gpu y_mex_gpu y_ref_gpu y_mex_unpad y_ref_unpad
+                    clear x_pad_gpu y_mex_gpu y_ref_gpu y_mex_unpad y_ref_unpad buffer_gpu
                 end
             end
         end
