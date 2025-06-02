@@ -19,6 +19,9 @@ psf_shifted_gpu = gpuArray(single(psf_shifted));
 gpuDevice;
 t_mex = tic;
 [otf_mex, otf_conj_mex] = otf_gpu_mex(psf_shifted_gpu, fft_shape);
+otf_mex = arrayfun(@(r, i) complex(r, i), real(otf_mex), imag(otf_mex));
+otf_conj_mex = arrayfun(@(r, i) complex(r, i), real(otf_conj_mex), imag(otf_conj_mex));
+
 mex_time = toc(t_mex);
 
 % Run MATLAB version
