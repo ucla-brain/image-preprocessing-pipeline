@@ -289,12 +289,11 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(stack
     z_max = min(z_max_ram, stack_info.z);
 
     % Set min and max block sizes, capping to allowed per-dimension limit
-    min_block = min([floor(max_elements_per_dim/4) floor(max_elements_per_dim/4) floor(max_elements_per_dim/4);
-                     stack_info.x                  stack_info.y                  stack_info.z]);
+    min_block = min([floor(max_elements_per_dim/4) floor(max_elements_per_dim/4) floor(max_elements_per_dim/4)],
+                    [stack_info.x                  stack_info.y                  stack_info.z]);
 
-    max_block = [min(max_elements_per_dim, stack_info.x), ...
-                 min(max_elements_per_dim, stack_info.y), ...
-                 min(max_elements_per_dim, z_max       )];
+    max_block = min([max_elements_per_dim    max_elements_per_dim    max_elements_per_dim], ...
+                    [stack_info.x            stack_info.y            z_max]);
 
     % Cap total block size to max allowed elements
     block_size_max = min(block_size_max, max_elements_total);
@@ -316,7 +315,7 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(stack
 
             bl_shape_max = bl_shape;
             if any(filter.gaussian_sigma > 0),
-                g_pad = gaussian_pad_size(bl_core, filter.gaussian_sigma);
+                g_pad = max(gaussian_pad_size(bl_core, filter.gaussian_sigma), filter.gaussian_size)
                 bl_shape_max = bl_shape + g_pad; % 2*g_pad is not needed
             end
 
