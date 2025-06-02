@@ -289,7 +289,7 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(stack
     z_max = min(z_max_ram, stack_info.z);
 
     % Set min and max block sizes, capping to allowed per-dimension limit
-    min_block = min([floor(max_elements_per_dim/4) floor(max_elements_per_dim/4) floor(max_elements_per_dim/4)],
+    min_block = min([floor(max_elements_per_dim/4) floor(max_elements_per_dim/4) floor(max_elements_per_dim/4)], ...
                     [stack_info.x                  stack_info.y                  stack_info.z]);
 
     max_block = min([max_elements_per_dim    max_elements_per_dim    max_elements_per_dim], ...
