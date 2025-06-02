@@ -79,6 +79,6 @@ root_dir = '.'; include_dir = './mex_files';
 
 % Build CUDA Gaussian 3D MEX file (GPU)
 mexcuda(mex_flags{:}, src_gauss3d, ['-I', root_dir], ['-I', include_dir], nvccflags);
-mexcuda(mex_flags{:}, src_otf_gpu, ['-I', root_dir], ['-I', include_dir], nvccflags, '-lcufft');
+mexcuda(mex_flags{:}, src_otf_gpu, ['-I', root_dir], ['-I', include_dir], nvccflags, '-L/usr/local/cuda/lib64', '-lcufft');
 
 fprintf('All MEX files built successfully.\n');
