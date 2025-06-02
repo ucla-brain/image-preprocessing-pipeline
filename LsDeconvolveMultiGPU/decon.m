@@ -172,12 +172,16 @@ end
 function [otf, otf_conj] = calculate_otf(psf_shifted, fft_shape, device_id)
     t_compute = tic;
     if ~isa(psf_shifted, 'single'), psf_shifted = single(psf_shifted); end
-    if device_id > 0, psf_shifted = gpuArray(psf_shifted); end
-    [otf, ~, ~] = pad_block_to_fft_shape(psf_shifted, fft_shape, 0);
-    otf = fftn(otf);
-    % if device_id > 0, otf = arrayfun(@(r, i) complex(r, i), real(otf), imag(otf)); end
-    otf_conj = conj(otf);
-    % if device_id > 0, otf_conj = arrayfun(@(r, i) complex(r, i), real(otf_conj), imag(otf_conj)); end
+    if device_id > 0
+        psf_shifted = gpuArray(psf_shifted);
+        [otf, otf_conj] = otf_gpu_mex(psf_shifted, fft_shape);
+        % if device_id > 0, otf = arrayfun(@(r, i) complex(r, i), real(otf), imag(otf)); end
+        % if device_id > 0, otf_conj = arrayfun(@(r, i) complex(r, i), real(otf_conj), imag(otf_conj)); end
+    else
+        [otf, ~, ~] = pad_block_to_fft_shape(psf_shifted, fft_shape, 0);
+        otf = fftn(otf);
+        otf_conj = conj(otf);
+    end
     fprintf('%s: OTF computed for size %s in %.2fs\n', ...
         device_name(device_id), mat2str(fft_shape), toc(t_compute));
 end
