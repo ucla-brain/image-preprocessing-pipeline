@@ -285,7 +285,7 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(stack
     ram_usage_portion = 0.5;               % Use at most 50% of available RAM
     R_bytes_per_voxel = 4;                 % Use 4 for single, 8 for double (adjust as needed)
     max_elements_per_dim = min(1290, floor(block_size_max^(1/3)));  % 3D cube limit from (2^31-1)^(1/3) = 1290 elements
-    if filter.use_fft, max_elements_per_dim = min(1215, max_elements_per_dim); end
+    % if filter.use_fft, max_elements_per_dim = min(1215, max_elements_per_dim); end
     max_elements_total  = 2^31 - 1;        % MATLAB's total element limit
 
     % Compute the max z size that fits in RAM (capped at 1290 and stack_info.z)
