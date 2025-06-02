@@ -2,7 +2,6 @@
 #include "gpu/mxGPUArray.h"
 #include <cuda_runtime.h>
 #include <cufft.h>
-#include <cassert>
 
 #define CUDA_CHECK(err) \
     if (err != cudaSuccess) { \
@@ -14,7 +13,7 @@
         mexErrMsgIdAndTxt("otf_gpu_mex:CUFFT", "cuFFT error %s:%d: %d\n", __FILE__, __LINE__, err); \
     }
 
-// Kernel for centered zero-padding/cropping (real → complex, zero imag part)
+// Kernel for centered zero-padding and cropping (real to complex)
 __global__ void zero_pad_crop_centered(
     const float* src, size_t sx, size_t sy, size_t sz,
     float2* dst, size_t dx, size_t dy, size_t dz,
