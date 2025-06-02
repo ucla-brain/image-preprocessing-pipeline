@@ -679,8 +679,13 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
     end
 
     if min(filter.gaussian_sigma(:)) > 0
-        % bl = imgaussfilt3(bl, filter.gaussian_sigma, 'FilterSize', filter.gaussian_size, 'Padding', 'symmetric');
-        bl = gauss3d_mex(bl, filter.gaussian_sigma, filter.gaussian_size, true);
+        if gpu
+            buf = gpuArray.zeros(size(bl), 'single');
+            bl = gauss3d_mex(bl, buf, filter.gaussian_sigma, filter.gaussian_size, true);
+            clearvars buf;
+        else
+            bl = imgaussfilt3(bl, filter.gaussian_sigma, 'FilterSize', filter.gaussian_size, 'Padding', 'symmetric');
+        end
         bl = bl - filter.dark;
         bl = max(bl, 0);
     end
