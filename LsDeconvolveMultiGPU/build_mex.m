@@ -10,7 +10,7 @@ if verLessThan('matlab', '9.4')
 end
 
 src_semaphore = 'semaphore.c';
-src_queue = 'queue.c';
+% src_queue = 'queue.c';
 src_lz4_save = 'save_lz4_mex.c';
 src_lz4_load = 'load_lz4_mex.c';
 src_lz4_c = 'lz4.c';
@@ -54,7 +54,7 @@ end
 
 % Build semaphore/queue/lz4 MEX files (CPU)
 mex(mex_flags_cpu{:}, src_semaphore);
-mex(mex_flags_cpu{:}, src_queue);
+% mex(mex_flags_cpu{:}, src_queue);
 mex(mex_flags_cpu{:}, src_lz4_save, src_lz4_c);
 mex(mex_flags_cpu{:}, src_lz4_load, src_lz4_c);
 
@@ -74,7 +74,7 @@ else
 end
 
 % CUDA include dirs (if any)
-root_dir = '.'; include_dir = './cuda_kernels';
+root_dir = '.'; include_dir = './mex_files';
 
 % Build CUDA Gaussian 3D MEX file (GPU)
 mexcuda(mex_flags{:}, src_gauss3d, ['-I', root_dir], ['-I', include_dir], nvccflags);

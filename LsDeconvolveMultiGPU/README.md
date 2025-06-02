@@ -223,7 +223,7 @@ echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
 
 These settings will help prevent memory allocation failures during GPU-intensive processing and ensure more reliable performance for large dataset deconvolution.
 
-# Notes on FFT-Based Deconvolution and OTF Caching in LsDeconvMultiGPU
+# Notes on FFT-Based Deconvolution
 
 ## Performance vs Memory Tradeoff
 
@@ -247,78 +247,6 @@ Deconvolution of a 3D volume with **8266 × 12778 × 7912 = 835,688,764,576 voxe
 🧠 **Key Insights**:
 - On low-VRAM GPUs (e.g., RTX 2080), spatial deconvolution can outperform FFT due to memory pressure and block fragmentation.
 - On high-VRAM GPUs (e.g., A100 80 GB), FFT-based deconvolution shows ~2x speed advantage by processing large blocks in fewer iterations.
-
-
-
-## OTF Computation and Caching
-
-FFT-based deconvolution relies on computing the **Optical Transfer Function (OTF)** and its conjugate from the PSF. The OTF is specific to both the **PSF** and the **block size** of the image data.
-
-- The **PSF remains fixed**, but the **block size varies**, meaning that a new OTF must be computed for each unique block size.
-- These OTF computations are nontrivial and can become a bottleneck if repeated frequently.
-
-To address this, the pipeline uses a **caching mechanism** to store computed OTFs and reuse them whenever possible.
-
-- OTFs are cached in a directory under `/tmp/otf_cache` on Unix-like systems, or the system's equivalent temporary directory on Windows.
-- Since `/tmp` is used heavily, **fast access to this directory significantly improves performance** when new block sizes are processed.
-
-## Recommendation: Use tmpfs for OTF Cache Storage
-
-We recommend mounting `/tmp` as a `tmpfs` RAM-backed filesystem to speed up OTF caching:
-
-- On **Ubuntu Desktop**, `/tmp` is mounted as `tmpfs` by default.
-- On **Ubuntu Server**, you must manually enable this feature.
-
----
-
-## How to Enable tmpfs for `/tmp` on Ubuntu Server
-
-### 1. Create the `tmp.mount` unit
-
-```bash
-sudo nano /etc/systemd/system/tmp.mount
-```
-
-```ini
-[Unit]
-Description=Temporary Directory (/tmp)
-Before=local-fs.target
-ConditionPathIsSymbolicLink=!/tmp
-
-[Mount]
-What=tmpfs
-Where=/tmp
-Type=tmpfs
-Options=mode=1777,noatime,noexec,nosuid,size=2G
-
-[Install]
-WantedBy=local-fs.target
-```
-You can increase size=2G based on available system RAM.
-On Ubuntu Desktop, the default behavior for /tmp mounted as tmpfs allows usage up to approximately 50% to 60% of total system RAM, unless explicitly overridden.
-For example:
-
-- A system with 512 GB RAM typically defaults to 300 GB for /tmp.
-
-- A system with 4 TB RAM might default to around 2–2.5 TB, though exact limits can vary depending on kernel and systemd policies.
-
-The size= option sets a maximum usage cap, not a preallocated block.
-The memory is only used as needed.
-
-### 2. Reload systemd and enable the mount
-```bash
-sudo systemctl daemon-reexec
-sudo systemctl enable tmp.mount
-sudo systemctl start tmp.mount
-```
-### 3. Verify that /tmp is mounted as tmpfs
-```bash
-mount | grep /tmp
-```
-You should see a line like:
-```bash
-tmpfs on /tmp type tmpfs (rw,nosuid,nodev,noexec,relatime,size=2G,mode=1777)
-```
 
 
 ## Licensing and Attribution
