@@ -158,8 +158,4 @@ extern "C" void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* 
 
     // --- Return modified input_gpu ---
     plhs[0] = mxGPUCreateMxArrayOnGPU(input_mx);
-
-    // --- Clean up ---
-    mxGPUDestroyGPUArray(input_mx);
-    mxGPUDestroyGPUArray(buffer_mx);
 }
