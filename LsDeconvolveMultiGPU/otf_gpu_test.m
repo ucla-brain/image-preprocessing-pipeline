@@ -30,7 +30,9 @@ psf_pad = padarray(psf_shifted_gpu, prepad, 0, 'pre');
 psf_pad = padarray(psf_pad, postpad, 0, 'post');
 psf_pad = psf_pad(1:fft_shape(1), 1:fft_shape(2), 1:fft_shape(3)); % crop if needed
 otf_matlab = fftn(psf_pad);
+otf_matlab = arrayfun(@(r, i) complex(r, i), real(otf_matlab), imag(otf_matlab));
 otf_conj_matlab = conj(otf_matlab);
+otf_conj_matlab = arrayfun(@(r, i) complex(r, i), real(otf_conj_matlab), imag(otf_conj_matlab));
 matlab_time = toc(t_matlab);
 
 % Accuracy checks
