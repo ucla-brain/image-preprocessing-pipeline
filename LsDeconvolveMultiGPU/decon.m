@@ -193,6 +193,9 @@ function [bl, pad_pre, pad_post] = pad_block_to_fft_shape(bl, fft_shape, mode)
     fft_shape = [fft_shape(:)', ones(1, 3-numel(fft_shape))]; % ensure row vector, 3 elements
 
     % Compute missing for each dimension
+    assert(all(fft_shape >= sz), ...
+        sprintf('pad_block_to_fft_shape: bl [%s] is larger than FFT shape [%s], cannot pad', ...
+        num2str(sz), num2str(fft_shape)))
     missing = max(fft_shape - sz, 0);
 
     % Vectorized pad pre and post calculation
@@ -211,6 +214,11 @@ function bl = unpad_block(bl, pad_pre, pad_post)
     pad_pre  = [pad_pre(:)'  zeros(1,3-numel(pad_pre))];
     pad_post = [pad_post(:)' zeros(1,3-numel(pad_post))];
     sz = size(bl);
+
+    % Assert block is large enough to unpad
+    unpad_sz = sz - pad_pre - pad_post;
+    assert(all(unpad_sz >= 1), ...
+        sprintf('unpad_block: unpadding too much. Size after unpad would be [%s]', num2str(unpad_sz)))
 
     idx = arrayfun(@(dim) ...
         (pad_pre(dim)+1):(sz(dim)-pad_post(dim)), ...
