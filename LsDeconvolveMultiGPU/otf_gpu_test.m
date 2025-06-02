@@ -49,7 +49,7 @@ for s = 1:length(sigmas)
         psf_pad = psf_pad(1:sz(1), 1:sz(2), 1:sz(3));
 
         % -- Run MEX
-                Nrep = 10;   % Repeat for robustness
+        Nrep = 1;   % Repeat for robustness
 
         % --- Warm up GPU and code paths
         [~,~] = otf_gpu_mex(psf_shifted_gpu, sz);
