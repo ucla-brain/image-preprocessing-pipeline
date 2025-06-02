@@ -205,9 +205,6 @@ extern "C" void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* 
         int max_retries = 2;
         int retries = 0;
         cudaError_t alloc_err;
-        int max_retries = 2;
-        int retries = 0;
-        cudaError_t alloc_err;
         while (retries < max_retries) {
             alloc_err = cudaMalloc(&buffer, N * sizeof(float));
             if (alloc_err == cudaSuccess && buffer != nullptr) {
