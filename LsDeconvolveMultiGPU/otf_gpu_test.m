@@ -1,45 +1,69 @@
 function test_otf_gpu_mex
 fprintf('\n=== Testing otf_gpu_mex ===\n');
-results = {}; % <-- Use cell array!
+assert(exist('otf_gpu_mex', 'file') == 3, ...
+    'otf_gpu_mex MEX not found on path. Please compile it first.');
 
-%% 1. Synthetic Gaussian Test (main)
-fft_shape = [96 88 80];  % nonsymmetric, large
-psf_sz = [47 33 25];
-sigma = [6 11 3.5];
-center = (psf_sz+1)/2;
-[x,y,z] = ndgrid(1:psf_sz(1), 1:psf_sz(2), 1:psf_sz(3));
-psf = exp(...
-    -0.5*((x-center(1))/sigma(1)).^2 ...
-    -0.5*((y-center(2))/sigma(2)).^2 ...
-    -0.5*((z-center(3))/sigma(3)).^2 );
-psf = psf / sum(psf(:));
+try, g = gpuDevice; reset(g); end
+
+results = {};
+
+% -------- Test Definitions --------
+testcases = {
+    % name,            psf_sz,     fft_shape,      sigma/fill,      type
+    {'Asym Gaussian',  [47 33 25], [96 88 80],     [6 11 3.5],      'gaussian'}
+    {'All-ones',       [2 2 2],    [4 4 4],        1,               'ones'}
+    {'Rand noise',     [7 9 5],    [11 13 7],      [],              'rand'}
+    {'Zero PSF',       [5 7 3],    [8 8 8],        0,               'zeros'}
+    {'Identity shape', [9 8 6],    [9 8 6],        [],              'rand'}
+};
+
+for k = 1:numel(testcases)
+    t = testcases{k};
+    name = t{1}; psf_sz = t{2}; fft_shape = t{3}; par = t{4}; mode = t{5};
+    % ---- Create PSF ----
+    switch mode
+        case 'gaussian'
+            sigma = par;
+            center = (psf_sz+1)/2;
+            [x,y,z] = ndgrid(1:psf_sz(1), 1:psf_sz(2), 1:psf_sz(3));
+            psf = exp(-0.5*((x-center(1))/sigma(1)).^2 ...
+                      -0.5*((y-center(2))/sigma(2)).^2 ...
+                      -0.5*((z-center(3))/sigma(3)).^2 );
+            psf = psf / sum(psf(:));
+        case 'ones'
+            psf = ones(psf_sz, 'single');
+        case 'zeros'
+            psf = zeros(psf_sz, 'single');
+        case 'rand'
+            rng(42); % For repeatability!
+            psf = rand(psf_sz, 'single');
+        otherwise
+            error('Unknown mode: %s', mode);
+    end
+    % ---- Shift and move to GPU ----
+    psf_shifted = ifftshift(psf);
+    psf_shifted_gpu = gpuArray(single(psf_shifted));
+    % ---- Run main test ----
+    results{end+1} = run_one_otf_test(name, psf_shifted_gpu, fft_shape, psf_shifted);
+    % ---- Reset GPU between tests to catch any leaks ----
+    try, g = gpuDevice; reset(g); end
+end
+
+% Additional permutation test for FFT axis order
+psf = rand(8, 7, 6, 'single');
+fft_shape = [8 7 6];
 psf_shifted = ifftshift(psf);
-psf_shifted_gpu = gpuArray(single(psf_shifted));
-results{end+1} = run_one_otf_test('Asym Gaussian', psf_shifted_gpu, fft_shape);
+psf_shifted_gpu = gpuArray(psf_shifted);
 
-%% 2. Edge test: All-ones input, minimal size (should yield sum everywhere)
-psf = ones(2,2,2,'single','gpuArray');
-fft_shape = [4 4 4];
-psf_shifted_gpu = ifftshift(psf); % shift still applied
-results{end+1} = run_one_otf_test('All-ones 2x2x2→4x4x4', psf_shifted_gpu, fft_shape);
-
-%% 3. Random noise, odd shape
-psf = rand(7,9,5,'single','gpuArray');
-fft_shape = [11 13 7];
-psf_shifted_gpu = ifftshift(psf);
-results{end+1} = run_one_otf_test('Rand noise 7x9x5→11x13x7', psf_shifted_gpu, fft_shape);
-
-%% 4. Zero input (output must be all zeros)
-psf = zeros(5,7,3,'single','gpuArray');
-fft_shape = [8 8 8];
-psf_shifted_gpu = ifftshift(psf);
-results{end+1} = run_one_otf_test('Zero PSF', psf_shifted_gpu, fft_shape);
-
-%% 5. Identity: shape-matched, no padding
-psf = rand(9,8,6,'single','gpuArray');
-fft_shape = size(psf);
-psf_shifted_gpu = ifftshift(psf);
-results{end+1} = run_one_otf_test('Identity shape', psf_shifted_gpu, fft_shape);
+% Permute the axes and test: does otf_gpu_mex care about memory order?
+for perm = {[1 2 3], [2 1 3], [3 2 1]}
+    perm = perm{1};
+    perm_name = sprintf('Axis perm [%d %d %d]', perm);
+    psf_perm = permute(psf_shifted, perm);
+    fft_shape_perm = size(psf_perm);
+    results{end+1} = run_one_otf_test(perm_name, gpuArray(psf_perm), fft_shape_perm, psf_perm);
+    try, g = gpuDevice; reset(g); end
+end
 
 % Convert cell to struct array for summary
 results = [results{:}];
@@ -61,22 +85,22 @@ else
 end
 end
 
-function result = run_one_otf_test(name, psf_shifted_gpu, fft_shape)
+function result = run_one_otf_test(name, psf_shifted_gpu, fft_shape, psf_shifted_cpu)
 rel_tol = 1e-6;
 try
-    gpuDevice;
+    % Main MEX run (always single precision)
     t_mex = tic;
     [otf_mex, otf_conj_mex] = otf_gpu_mex(psf_shifted_gpu, fft_shape);
     otf_mex = arrayfun(@(r, i) complex(r, i), real(otf_mex), imag(otf_mex));
     otf_conj_mex = arrayfun(@(r, i) complex(r, i), real(otf_conj_mex), imag(otf_conj_mex));
     mex_time = toc(t_mex);
 
+    % MATLAB reference (single precision throughout)
     t_matlab = tic;
-    psf_sz = size(psf_shifted_gpu);
-    padsize = max(fft_shape - psf_sz, 0);
+    padsize = max(fft_shape - size(psf_shifted_cpu), 0);
     prepad = floor(padsize/2);
     postpad = padsize - prepad;
-    psf_pad = padarray(psf_shifted_gpu, prepad, 0, 'pre');
+    psf_pad = padarray(single(psf_shifted_cpu), prepad, 0, 'pre');
     psf_pad = padarray(psf_pad, postpad, 0, 'post');
     psf_pad = psf_pad(1:fft_shape(1), 1:fft_shape(2), 1:fft_shape(3));
     otf_matlab = fftn(psf_pad);
@@ -85,7 +109,7 @@ try
     otf_conj_matlab = arrayfun(@(r, i) complex(r, i), real(otf_conj_matlab), imag(otf_conj_matlab));
     matlab_time = toc(t_matlab);
 
-    % Main test: normed relative error, all outputs finite, not all zeros
+    % Accuracy and finite/zero checks
     err_otf = gather(norm(otf_matlab(:)-otf_mex(:)) / norm(otf_matlab(:)));
     err_conj = gather(norm(otf_conj_matlab(:)-otf_conj_mex(:)) / norm(otf_conj_matlab(:)));
     out_ok = all(isfinite(gather(otf_mex(:)))) && all(isfinite(gather(otf_conj_mex(:))));
@@ -95,6 +119,17 @@ try
     perf_gain = (matlab_time - mex_time)/matlab_time*100;
     fprintf('Test %-25s %s  OTF rel.err %.2g | conj %.2g | perf gain: %+5.1f%%\n', ...
         name, pass_symbol(passed,false), err_otf, err_conj, perf_gain);
+
+    % Debugging for failed cases: print first slice
+    if ~passed
+        fprintf('  -- DEBUG: max abs diff (real): %g\n', max(abs(gather(real(otf_mex(:))-real(otf_matlab(:))))));
+        fprintf('  -- DEBUG: max abs diff (imag): %g\n', max(abs(gather(imag(otf_mex(:))-imag(otf_matlab(:))))));
+        try
+            fprintf('  -- DEBUG: showing real part of OTF (first XY slice)\n');
+            disp(gather(real(otf_mex(:,:,1))));
+            disp(gather(real(otf_matlab(:,:,1))));
+        end
+    end
 
     result = struct('name',name, 'rel_error', max(err_otf,err_conj), 'perf_gain', perf_gain, 'passed', passed);
 catch err
