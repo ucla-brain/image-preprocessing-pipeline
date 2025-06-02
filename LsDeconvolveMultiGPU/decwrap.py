@@ -106,7 +106,7 @@ def estimate_block_size_max(gpu_indices, num_workers, bytes_per_element=4, base_
             return max_allowed
 
         min_vram_mib = min(selected_memories)
-        usable_mib = min_vram_mib - base_reserve_gb * 1024 - num_workers * per_worker_mib
+        usable_mib = min_vram_mib - base_reserve_gb * 1024 - num_workers / len(gpu_indices) * per_worker_mib
         if usable_mib <= 0:
             log.warning(f"Estimated usable VRAM ({usable_mib:.1f} MiB) is too low. Falling back to max_allowed.")
             return max_allowed
