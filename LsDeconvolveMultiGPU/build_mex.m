@@ -35,6 +35,32 @@ end
 mex_flags = {'-R2018a'};
 if debug
     if ispc && ~ismac
+        % Windows debug
+        mex_flags_cpu = [mex_flags, {'COMPFLAGS="$COMPFLAGS /Od /Zi /openmp"'}];
+    else
+        % POSIX debug
+        mex_flags_cpu = [mex_flags, {'CFLAGS="$CFLAGS -O0 -g -fopenmp"', 'CXXFLAGS="$CXXFLAGS -O0 -g -fopenmp"'}];
+    end
+else
+    if ispc && ~ismac
+        % Windows release
+        mex_flags_cpu = [mex_flags, {'COMPFLAGS="$COMPFLAGS /O2 /arch:AVX2 /openmp"'}];
+    else
+        % POSIX release (Linux/macOS)
+        mex_flags_cpu = [mex_flags, {'CFLAGS="$CFLAGS -O3 -march=native -fomit-frame-pointer -fopenmp"', ...
+                                     'CXXFLAGS="$CXXFLAGS -O3 -march=native -fomit-frame-pointer -fopenmp"'}];
+    end
+end
+
+% Build semaphore/queue/lz4 MEX files (CPU)
+mex(mex_flags_cpu{:}, src_semaphore);
+mex(mex_flags_cpu{:}, src_queue);
+mex(mex_flags_cpu{:}, src_lz4_save, src_lz4_c);
+mex(mex_flags_cpu{:}, src_lz4_load, src_lz4_c);
+
+% CUDA optimization flags (for mexcuda)
+if debug
+    if ispc && ~ismac
         nvccflags = 'NVCCFLAGS="$NVCCFLAGS -G -std=c++14 -Xcompiler ""/Od,/Zi"" "';
     else
         nvccflags = 'NVCCFLAGS="$NVCCFLAGS -G -std=c++14 -Xcompiler ''-O0,-g'' "';
@@ -47,24 +73,10 @@ else
     end
 end
 
-
-% Build semaphore/queue/lz4 MEX files (CPU)
-mex(mex_flags{:}, src_semaphore);
-mex(mex_flags{:}, src_queue);
-mex(mex_flags{:}, src_lz4_save, src_lz4_c);
-mex(mex_flags{:}, src_lz4_load, src_lz4_c);
-
-% CUDA optimization flags (for mexcuda)
-if ispc && ~ismac
-    nvccflags = 'NVCCFLAGS="$NVCCFLAGS -G -std=c++14 -Xcompiler ""/O2,/arch:AVX2,/openmp"" "';
-else
-    nvccflags = 'NVCCFLAGS="$NVCCFLAGS -G -std=c++14 -Xcompiler ''-O2,-march=native,-fopenmp'' "';
-end
-
 % CUDA include dirs (if any)
 root_dir = '.'; include_dir = './cuda_kernels';
 
 % Build CUDA Gaussian 3D MEX file (GPU)
-mexcuda('-R2018a', src_gauss3d, ['-I', root_dir], ['-I', include_dir], nvccflags);
+mexcuda(mex_flags{:}, src_gauss3d, ['-I', root_dir], ['-I', include_dir], nvccflags);
 
 fprintf('All MEX files built successfully.\n');
