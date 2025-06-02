@@ -1,98 +1,121 @@
-function test_otf_gpu_mex_tabular
-fprintf('\n');
-fprintf('PF   Test  Type    Size              Sigma         Kernel          maxErr    RMS       relErr    mex(s)   Speedup\n');
-fprintf('---------------------------------------------------------------------------------------------------------------\n');
+#include "mex.h"
+#include "gpu/mxGPUArray.h"
+#include <cuda_runtime.h>
+#include <cufft.h>
 
-sz = [32 64 32];
-kernels = {'auto', 9, [9 11 15], 3, 41};
-sigmas = {2.5, [2.5 2.5 2.5], [0.5 0.5 2.5], 0.25, 8};
-results = [];
+#define CUDA_CHECK(err) \
+    if (err != cudaSuccess) { \
+        mexErrMsgIdAndTxt("otf_gpu_mex:CUDA", "CUDA error %s:%d: %s\n", __FILE__, __LINE__, cudaGetErrorString(err)); \
+    }
 
-test_id = 1;
-for s = 1:length(sigmas)
-    sigma = sigmas{s};
-    for k = 1:length(kernels)
-        kernel = kernels{k};
+#define CUFFT_CHECK(err) \
+    if (err != CUFFT_SUCCESS) { \
+        mexErrMsgIdAndTxt("otf_gpu_mex:CUFFT", "cuFFT error %s:%d: %d\n", __FILE__, __LINE__, err); \
+    }
 
-        % For reporting
-        sigma_disp = fmtvec(sigma);
-        kernel_disp = fmtvec(kernel);
+// Swapped kernel: x/z are swapped
+__global__ void zero_pad_crop_centered_swapped(
+    const float* src, size_t sx, size_t sy, size_t sz,    // Source dims (MATLAB order)
+    float2* dst, size_t dx, size_t dy, size_t dz,         // Dest dims (MATLAB order, but dx/dz swapped for FFT)
+    ptrdiff_t pre_x, ptrdiff_t pre_y, ptrdiff_t pre_z)    // Padding (MATLAB order)
+{
+    // z and x are swapped for grid/block launch
+    size_t z = blockIdx.x * blockDim.x + threadIdx.x;     // Now, block.x is over z
+    size_t y = blockIdx.y * blockDim.y + threadIdx.y;
+    size_t x = blockIdx.z * blockDim.z + threadIdx.z;     // block.z is over x
+    if (x < dx && y < dy && z < dz) {
+        ptrdiff_t src_x = (ptrdiff_t)x - pre_x;
+        ptrdiff_t src_y = (ptrdiff_t)y - pre_y;
+        ptrdiff_t src_z = (ptrdiff_t)z - pre_z;
+        size_t dst_idx = x + dx * (y + dy * z); // MATLAB column-major
+        if (src_x >= 0 && (size_t)src_x < sx &&
+            src_y >= 0 && (size_t)src_y < sy &&
+            src_z >= 0 && (size_t)src_z < sz) {
+            size_t src_idx = (size_t)src_x + sx * ((size_t)src_y + sy * (size_t)src_z);
+            dst[dst_idx].x = src[src_idx];
+            dst[dst_idx].y = 0.0f;
+        } else {
+            dst[dst_idx].x = 0.0f;
+            dst[dst_idx].y = 0.0f;
+        }
+    }
+}
 
-        % Build PSF (Gaussian with custom kernel size or auto, always single)
-        if isequal(kernel, 'auto')
-            kernsz = sz;
-        elseif isnumeric(kernel) && isscalar(kernel)
-            kernsz = min(sz, kernel*ones(1,3));
-        elseif isnumeric(kernel) && isvector(kernel)
-            kernsz = min(sz, kernel(:)');
-            if numel(kernsz)==1, kernsz = kernsz*ones(1,3); end
-        else
-            kernsz = sz;
-        end
-        center = (kernsz+1)/2;
-        [x,y,z] = ndgrid(1:kernsz(1), 1:kernsz(2), 1:kernsz(3));
-        if numel(sigma)==1
-            psf = exp(-0.5*(((x-center(1))/sigma).^2 + ((y-center(2))/sigma).^2 + ((z-center(3))/sigma).^2));
-        else
-            psf = exp(-0.5*((x-center(1))/sigma(1)).^2 -0.5*((y-center(2))/sigma(2)).^2 -0.5*((z-center(3))/sigma(3)).^2);
-        end
-        psf = psf / sum(psf(:));
-        psf_shifted = ifftshift(single(psf));
-        psf_shifted_gpu = gpuArray(psf_shifted);
+// Conjugate kernel (no change)
+__global__ void conjugate_kernel(const float2* src, float2* dst, size_t N) {
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < N) {
+        dst[idx].x = src[idx].x;
+        dst[idx].y = -src[idx].y;
+    }
+}
 
-        % Zero pad to output size
-        padsize = max(sz - kernsz, 0);
-        prepad = floor(padsize/2);
-        postpad = padsize - prepad;
-        psf_pad = padarray(psf_shifted, prepad, 0, 'pre');
-        psf_pad = padarray(psf_pad, postpad, 0, 'post');
-        psf_pad = psf_pad(1:sz(1), 1:sz(2), 1:sz(3));
+void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
+{
+    if (nrhs != 2)
+        mexErrMsgIdAndTxt("otf_gpu_mex:CUDA", "2 inputs required: psf, fft_shape.");
+    if (nlhs < 2)
+        mexErrMsgIdAndTxt("otf_gpu_mex:CUDA", "2 outputs required: otf, otf_conj.");
 
-        % -- Run MEX
-        t_mex = tic;
-        [otf_mex, otf_conj_mex] = otf_gpu_mex(psf_shifted_gpu, sz);
-        t_mex = toc(t_mex);
+    mxInitGPU();
 
-        % -- Run MATLAB reference
-        t_mat = tic;
-        otf_mat = fftn(psf_pad);
-        t_mat = toc(t_mat);
+    // Input: PSF (3D, single, gpuArray)
+    const mxGPUArray* psf = mxGPUCreateFromMxArray(prhs[0]);
+    if (mxGPUGetClassID(psf) != mxSINGLE_CLASS)
+        mexErrMsgIdAndTxt("otf_gpu_mex:psfType", "Input psf must be single.");
+    if (mxGPUGetNumberOfDimensions(psf) != 3)
+        mexErrMsgIdAndTxt("otf_gpu_mex:psfDims", "Input psf must be 3D.");
 
-        otf_mat = single(otf_mat);  % force single precision for fair diff
+    const mwSize* psf_dims = mxGPUGetDimensions(psf);
+    size_t sx = static_cast<size_t>(psf_dims[0]);
+    size_t sy = static_cast<size_t>(psf_dims[1]);
+    size_t sz = static_cast<size_t>(psf_dims[2]);
+    const float* d_psf = static_cast<const float*>(mxGPUGetDataReadOnly(psf));
 
-        maxErr = double(max(abs(otf_mat(:)-gather(otf_mex(:)))));
-        rmsErr = double(rms(otf_mat(:)-gather(otf_mex(:))));
-        relErr = double(norm(otf_mat(:)-gather(otf_mex(:))) / max(norm(otf_mat(:)),eps('single')));
+    // Input: fft_shape ([3] double)
+    if (!mxIsDouble(prhs[1]) || mxGetNumberOfElements(prhs[1]) != 3)
+        mexErrMsgIdAndTxt("otf_gpu_mex:fftShape", "fft_shape must be [nx ny nz] double array.");
+    double* fft_shape = mxGetPr(prhs[1]);
+    size_t dx = static_cast<size_t>(fft_shape[0]);
+    size_t dy = static_cast<size_t>(fft_shape[1]);
+    size_t dz = static_cast<size_t>(fft_shape[2]);
 
-        pf = relErr < 2e-6; % relax to 2e-6 for roundoff
-        pfmark = pass_symbol(pf);
+    mwSize out_dims[3] = {static_cast<mwSize>(dx), static_cast<mwSize>(dy), static_cast<mwSize>(dz)};
+    size_t N = dx * dy * dz;
 
-        % Speedup
-        speedup = 100*(t_mat-t_mex)/t_mat;
+    // Centered padding like MATLAB
+    ptrdiff_t prepad_x = static_cast<ptrdiff_t>((dx - sx)/2);
+    ptrdiff_t prepad_y = static_cast<ptrdiff_t>((dy - sy)/2);
+    ptrdiff_t prepad_z = static_cast<ptrdiff_t>((dz - sz)/2);
 
-        % Print table row
-        fprintf('%-3s  %-4d  %-7s %-18s %-13s %-15s %8.2e %8.2e %8.2e %7.3f %+7.0f%%\n', ...
-            pfmark, test_id, 'single', fmtvec(sz), sigma_disp, kernel_disp, maxErr, rmsErr, relErr, t_mex, speedup);
+    // Allocate output buffer (single, complex, gpuArray)
+    mxGPUArray* otf_gpu = mxGPUCreateGPUArray(3, out_dims, mxSINGLE_CLASS, mxCOMPLEX, MX_GPU_DO_NOT_INITIALIZE);
+    float2* d_otf = static_cast<float2*>(mxGPUGetData(otf_gpu));
 
-        results = [results; pf];
-        test_id = test_id+1;
-    end
-end
+    // Swapped block/grid config
+    dim3 block(8,8,8), grid((dz+7)/8, (dy+7)/8, (dx+7)/8);
+    zero_pad_crop_centered_swapped<<<grid, block>>>(
+        d_psf, sx, sy, sz, d_otf, dx, dy, dz, prepad_x, prepad_y, prepad_z
+    );
+    CUDA_CHECK(cudaGetLastError());
 
-fprintf('---------------------------------------------------------------------------------------------------------------\n');
-fprintf('Total: %d, Passed: %d, Failed: %d\n', length(results), sum(results), sum(~results));
-end
+    // cuFFT: 3D FFT with swapped dims (dz, dy, dx)
+    cufftHandle plan;
+    CUFFT_CHECK(cufftPlan3d(&plan, (int)dz, (int)dy, (int)dx, CUFFT_C2C));
+    CUFFT_CHECK(cufftExecC2C(plan, reinterpret_cast<cufftComplex*>(d_otf), reinterpret_cast<cufftComplex*>(d_otf), CUFFT_FORWARD));
+    CUFFT_CHECK(cufftDestroy(plan));
 
-function str = fmtvec(v)
-if ischar(v), str = v; return; end
-if isscalar(v), str = sprintf('%.2g',v); return; end
-str = sprintf('[%s]', strjoin(arrayfun(@(x) sprintf('%.2g',x), v, 'uni',0),' '));
-end
+    // Allocate buffer for conjugate
+    mxGPUArray* otf_conj_gpu = mxGPUCreateGPUArray(3, out_dims, mxSINGLE_CLASS, mxCOMPLEX, MX_GPU_DO_NOT_INITIALIZE);
+    float2* d_otf_conj = static_cast<float2*>(mxGPUGetData(otf_conj_gpu));
 
-function s = pass_symbol(pf)
-if pf, s = char([11035 65039 10004 65039]); else, s = char([10060 10060 10060 10060]); end % ✅ or ❌❌❌❌
-end
+    // Compute conjugate
+    conjugate_kernel<<<(N+255)/256, 256>>>(d_otf, d_otf_conj, N);
+    CUDA_CHECK(cudaGetLastError());
 
-function out = rms(x)
-out = sqrt(mean(abs(x).^2));
-end
+    CUDA_CHECK(cudaDeviceSynchronize());
+    plhs[0] = mxGPUCreateMxArrayOnGPU(otf_gpu);
+    plhs[1] = mxGPUCreateMxArrayOnGPU(otf_conj_gpu);
+
+    mxGPUDestroyGPUArray(psf);
+}
