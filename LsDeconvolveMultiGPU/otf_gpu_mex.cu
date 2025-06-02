@@ -13,20 +13,21 @@
         mexErrMsgIdAndTxt("otf_gpu_mex:CUFFT", "cuFFT error %s:%d: %d\n", __FILE__, __LINE__, err); \
     }
 
-// Kernel for centered zero-padding and cropping (real to complex)
-__global__ void zero_pad_crop_centered(
-    const float* src, size_t sx, size_t sy, size_t sz,
-    float2* dst, size_t dx, size_t dy, size_t dz,
-    ptrdiff_t pre_x, ptrdiff_t pre_y, ptrdiff_t pre_z)
+// Swapped kernel: x/z are swapped
+__global__ void zero_pad_crop_centered_swapped(
+    const float* src, size_t sx, size_t sy, size_t sz,    // Source dims (MATLAB order)
+    float2* dst, size_t dx, size_t dy, size_t dz,         // Dest dims (MATLAB order, but dx/dz swapped for FFT)
+    ptrdiff_t pre_x, ptrdiff_t pre_y, ptrdiff_t pre_z)    // Padding (MATLAB order)
 {
-    size_t x = blockIdx.x * blockDim.x + threadIdx.x;
+    // z and x are swapped for grid/block launch
+    size_t z = blockIdx.x * blockDim.x + threadIdx.x;     // Now, block.x is over z
     size_t y = blockIdx.y * blockDim.y + threadIdx.y;
-    size_t z = blockIdx.z * blockDim.z + threadIdx.z;
+    size_t x = blockIdx.z * blockDim.z + threadIdx.z;     // block.z is over x
     if (x < dx && y < dy && z < dz) {
         ptrdiff_t src_x = (ptrdiff_t)x - pre_x;
         ptrdiff_t src_y = (ptrdiff_t)y - pre_y;
         ptrdiff_t src_z = (ptrdiff_t)z - pre_z;
-        size_t dst_idx = x + dx * (y + dy * z);
+        size_t dst_idx = x + dx * (y + dy * z); // MATLAB column-major
         if (src_x >= 0 && (size_t)src_x < sx &&
             src_y >= 0 && (size_t)src_y < sy &&
             src_z >= 0 && (size_t)src_z < sz) {
@@ -40,7 +41,7 @@ __global__ void zero_pad_crop_centered(
     }
 }
 
-// Kernel for conjugating a complex array
+// Conjugate kernel (no change)
 __global__ void conjugate_kernel(const float2* src, float2* dst, size_t N) {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < N) {
@@ -52,9 +53,9 @@ __global__ void conjugate_kernel(const float2* src, float2* dst, size_t N) {
 void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
 {
     if (nrhs != 2)
-        mexErrMsgIdAndTxt("otf_gpu_mex:nrhs", "2 inputs required: psf, fft_shape.");
+        mexErrMsgIdAndTxt("otf_gpu_mex:CUDA", "2 inputs required: psf, fft_shape.");
     if (nlhs < 2)
-        mexErrMsgIdAndTxt("otf_gpu_mex:nlhs", "2 outputs required: otf, otf_conj.");
+        mexErrMsgIdAndTxt("otf_gpu_mex:CUDA", "2 outputs required: otf, otf_conj.");
 
     mxInitGPU();
 
@@ -91,17 +92,17 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
     mxGPUArray* otf_gpu = mxGPUCreateGPUArray(3, out_dims, mxSINGLE_CLASS, mxCOMPLEX, MX_GPU_DO_NOT_INITIALIZE);
     float2* d_otf = static_cast<float2*>(mxGPUGetData(otf_gpu));
 
-    // Pad/crop input into output buffer
-    dim3 block(8,8,8), grid((dx+7)/8, (dy+7)/8, (dz+7)/8);
-    zero_pad_crop_centered<<<grid, block>>>(
+    // Swapped block/grid config
+    dim3 block(8,8,8), grid((dz+7)/8, (dy+7)/8, (dx+7)/8);
+    zero_pad_crop_centered_swapped<<<grid, block>>>(
         d_psf, sx, sy, sz, d_otf, dx, dy, dz, prepad_x, prepad_y, prepad_z
     );
     CUDA_CHECK(cudaGetLastError());
     CUDA_CHECK(cudaDeviceSynchronize());
 
-    // cuFFT: 3D FFT (in-place)
+    // cuFFT: 3D FFT with swapped dims (dz, dy, dx)
     cufftHandle plan;
-    CUFFT_CHECK(cufftPlan3d(&plan, (int)dx, (int)dy, (int)dz, CUFFT_C2C));
+    CUFFT_CHECK(cufftPlan3d(&plan, (int)dz, (int)dy, (int)dx, CUFFT_C2C));
     CUFFT_CHECK(cufftExecC2C(plan, reinterpret_cast<cufftComplex*>(d_otf), reinterpret_cast<cufftComplex*>(d_otf), CUFFT_FORWARD));
     CUFFT_CHECK(cufftDestroy(plan));
     CUDA_CHECK(cudaDeviceSynchronize());
@@ -115,13 +116,9 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
     CUDA_CHECK(cudaGetLastError());
     CUDA_CHECK(cudaDeviceSynchronize());
 
-    // Final sync before returning
     CUDA_CHECK(cudaDeviceSynchronize());
-
-    // Return to MATLAB as gpuArray
     plhs[0] = mxGPUCreateMxArrayOnGPU(otf_gpu);
     plhs[1] = mxGPUCreateMxArrayOnGPU(otf_conj_gpu);
 
-    // Cleanup (only input, outputs now owned by MATLAB)
     mxGPUDestroyGPUArray(psf);
 }
