@@ -563,12 +563,12 @@ function deconvolve(filelist, psf, numit, damping, ...
         x1     = startp(x);           x2 = endp(x);
         y1     = startp(y);           y2 = endp(y);
         z1     = startp(z);           z2 = endp(z);
-        semaphore('wait', semkey_loading);
+        % semaphore('wait', semkey_loading);
         send(dQueue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' is loading ...']);
         loading_start = tic;
         bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info);
         send(dQueue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' is loaded in ' num2str(round(toc(loading_start), 1))]);
-        semaphore('post', semkey_loading);
+        % semaphore('post', semkey_loading);
 
         % get min-max of raw data stack
         if ~ismember(stack_info.bit_depth, [8, 16])
