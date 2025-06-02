@@ -315,7 +315,7 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(stack
 
             bl_shape_max = bl_shape;
             if any(filter.gaussian_sigma > 0),
-                g_pad = max(gaussian_pad_size(bl_core, filter.gaussian_sigma), filter.gaussian_size)
+                g_pad = max(gaussian_pad_size(bl_core, filter.gaussian_sigma), filter.gaussian_size);
                 bl_shape_max = bl_shape + g_pad; % 2*g_pad is not needed
             end
 
