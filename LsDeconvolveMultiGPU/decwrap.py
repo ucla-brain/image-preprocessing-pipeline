@@ -219,7 +219,10 @@ def main():
     parser.add_argument('--denoise-strength', type=int, default=1,
                         help='Denoising strength (e.g., 1 to 255 for 8-bit images)')
     parser.add_argument('--destripe-sigma', type=float, default=0.0,
-                        help='Sigma of destriping filter along the z-axis. Use 0 to disable filtering.')
+                        help='Standard deviation (sigma) of the destriping filter applied along the z-axis. '
+                             'Set to 0 to disable destriping. '
+                             'A value around 1000 is recommended for older cameras to remove stripe artifacts; '
+                             'for most modern cameras, destriping is usually unnecessary.')
     parser.add_argument('--regularize-interval', type=int, default=3,
                         help='Apply a 3D Gaussian smoothing filter (σ=0.5) to the deconvolved volume every N iterations. '
                              'Enables blind deconvolution by updating the PSF after each smoothing step. '
