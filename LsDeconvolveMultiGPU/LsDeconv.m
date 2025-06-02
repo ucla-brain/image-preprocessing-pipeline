@@ -448,10 +448,10 @@ function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
     semkey_single = 1e3;
     semkey_loading_base = 1e4;
     semaphore_create(semkey_single, 1);
-    gpu_queue_key = 6969;
-    queue('create', gpu_queue_key, unique_gpus);
+    semkey_gpu_base = 1e5;
+    % queue('create', semkey_gpu_base, unique_gpus);
     for gpu = unique_gpus
-        % semaphore_create(gpu, 1);
+        semaphore_create(semkey_gpu_base + gpu, 1);
         semaphore_create(gpu + semkey_loading_base, 12);
     end
 
@@ -487,7 +487,7 @@ function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
                 deconvolve( ...
                     filelist, psf, numit, damping, ...
                     block, stack_info, min_max_path, ...
-                    stop_criterion, gpus(idx), gpu_queue_key, ...
+                    stop_criterion, gpus(idx), semkey_gpu_base, ...
                     cache_drive, filter, starting_block + idx - 1, dQueue);
             end
             delete(pool);
@@ -498,10 +498,10 @@ function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
     % clear locks and semaphors
     semaphore_destroy(semkey_single);
     for gpu = unique_gpus
-        % semaphore_destroy(gpu);
+        semaphore_destroy(semkey_gpu_base + gpu);
         semaphore_destroy(gpu + semkey_loading_base);
     end
-    queue('destroy', gpu_queue_key);
+    % queue('destroy', semkey_gpu_base);
 
     % postprocess and write tif files
     % delete(gcp('nocreate'));
@@ -519,7 +519,7 @@ end
 
 function deconvolve(filelist, psf, numit, damping, ...
     block, stack_info, min_max_path, ...
-    stop_criterion, gpu, gpu_queue_key, cache_drive, ...
+    stop_criterion, gpu, semkey_gpu_base, cache_drive, ...
     filter, starting_block, dQueue)
     
     semkey_single = 1e3;
@@ -577,7 +577,7 @@ function deconvolve(filelist, psf, numit, damping, ...
         end
         block_processing_start = tic;
         expected_size = size(bl);  % Store size before processing
-        [bl, lb, ub] = process_block(bl, block, psf, numit, damping, stop_criterion, gpu, gpu_queue_key, filter);
+        [bl, lb, ub] = process_block(bl, block, psf, numit, damping, stop_criterion, filter, gpu, semkey_gpu_base);
         % === Check padded block size is unchanged by process_block ===
         actual_size = size(bl);
         assert(isequal(actual_size, expected_size), ...
@@ -664,13 +664,13 @@ function deconvolve(filelist, psf, numit, damping, ...
     end
 end
 
-function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criterion, gpu, gpu_queue_key, filter)
+function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criterion, filter, gpu, semkey_gpu_base)
     bl_size = size(bl);
-    gpu_id = 0;
     if gpu && (min(filter.gaussian_sigma(:)) > 0 || niter > 0)
         % get the next available gpu
-        gpu_id = queue('wait', gpu_queue_key);
-        gpu_device = gpuDevice(gpu_id);
+        % gpu = queue('wait', semkey_gpu_base);
+        semaphore('w', semkey_gpu_base + gpu);
+        gpu_device = gpuDevice(gpu);
         bl = gpuArray(bl);
     end
 
@@ -686,19 +686,20 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
 
     if niter > 0 && max(bl(:)) > eps('single')
         % deconvolve block using Lucy-Richardson or blind algorithm
-        bl = decon(bl, psf, niter, lambda, stop_criterion, filter.regularize_interval, gpu_id, filter.use_fft, block.fft_shape);
+        bl = decon(bl, psf, niter, lambda, stop_criterion, filter.regularize_interval, gpu, filter.use_fft, block.fft_shape);
     end
 
     % since prctile function needs high vram usage gather it to avoid low
     % memory error
-    if gpu && isgpuarray(bl) && free_GPU_vRAM(gpu_id, gpu_device) < 60
+    if gpu && isgpuarray(bl) && free_GPU_vRAM(gpu, gpu_device) < 60
         % Reseting the GPU
         bl = gather(bl);
         reset(gpu_device);  % to free 2 extra copies of bl in gpu
-        if free_GPU_vRAM(gpu_id, gpu_device) > 43
+        if free_GPU_vRAM(gpu, gpu_device) > 43
             bl = gpuArray(bl);
         else
-            queue('post', gpu_queue_key, gpu_id);
+            % queue('post', semkey_gpu_base, gpu);
+            semaphore('p', semkey_gpu_base + gpu);
         end
     end
 
@@ -707,7 +708,8 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
     if gpu && isgpuarray(bl)
         bl = gather(bl);
         reset(gpu_device);  % to free gpu memory
-        queue('post', gpu_queue_key, gpu_id);
+        % queue('post', semkey_gpu_base, gpu);
+        semaphore('p', semkey_gpu_base + gpu);
     end
 
     if filter.destripe_sigma > 0
