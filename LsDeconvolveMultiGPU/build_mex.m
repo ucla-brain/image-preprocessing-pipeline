@@ -54,10 +54,11 @@ else
 end
 
 % Build semaphore/queue/lz4 MEX files (CPU)
-mex(mex_flags_cpu{:}, src_semaphore);
 % mex(mex_flags_cpu{:}, src_queue);
-mex(mex_flags_cpu{:}, src_lz4_save, src_lz4_c);
-mex(mex_flags_cpu{:}, src_lz4_load, src_lz4_c);
+
+% mex(mex_flags_cpu{:}, src_semaphore);
+% mex(mex_flags_cpu{:}, src_lz4_save, src_lz4_c);
+% mex(mex_flags_cpu{:}, src_lz4_load, src_lz4_c);
 
 % CUDA optimization flags (for mexcuda)
 if debug
@@ -78,7 +79,7 @@ end
 root_dir = '.'; include_dir = './mex_files';
 
 % Build CUDA Gaussian 3D MEX file (GPU)
-mexcuda(mex_flags{:}, src_gauss3d, ['-I', root_dir], ['-I', include_dir], nvccflags);
+% mexcuda(mex_flags{:}, src_gauss3d, ['-I', root_dir], ['-I', include_dir], nvccflags);
 mexcuda(mex_flags{:}, src_otf_gpu, ['-I', root_dir], ['-I', include_dir], nvccflags, '-lcufft');
 
 fprintf('All MEX files built successfully.\n');

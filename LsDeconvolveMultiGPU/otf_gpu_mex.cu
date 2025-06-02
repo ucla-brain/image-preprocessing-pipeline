@@ -103,7 +103,8 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
 
     // ---- cuFFT: 3D FFT (in-place) ----
     cufftHandle plan;
-    CUFFT_CHECK(cufftPlan3d((int)dx, (int)dy, (int)dz, CUFFT_C2C));
+    cufftHandle plan;
+    CUFFT_CHECK(cufftPlan3d(&plan, (int)dx, (int)dy, (int)dz, CUFFT_C2C));
     CUFFT_CHECK(cufftExecC2C(plan, reinterpret_cast<cufftComplex*>(d_otf), reinterpret_cast<cufftComplex*>(d_otf), CUFFT_FORWARD));
     CUFFT_CHECK(cufftDestroy(plan));
     CUDA_CHECK(cudaDeviceSynchronize());
