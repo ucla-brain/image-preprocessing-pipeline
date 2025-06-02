@@ -9,7 +9,7 @@ function test_gauss3d_mex_features()
     hasCprintf = exist('cprintf','file') == 2;
     col = @(c,str) colored_str(c,str,hasCprintf);
 
-    szs = {[32, 64, 32], [512, 512, 512]};
+    szs = {[32, 64, 32], [512, 512, 256]};
     types = {@single};   % Single only!
     sigma_tests = {2.5, [2.5 2.5 2.5], [0.5 0.5 2.5], 0.25, 8};
     ksize_tests = {'auto', 9, [9 11 15], 3, 41};
@@ -77,8 +77,7 @@ function test_gauss3d_mex_features()
 
                         % gauss3d_mex single (standard)
                         t2 = tic;
-                        buffer_gpu = gpuArray.zeros(size(x_pad_gpu), 'single');
-                        y_mex_gpu = gauss3d_mex(x_pad_gpu, buffer_gpu, sigma, kernel_sz);
+                        y_mex_gpu = gauss3d_mex(x_pad_gpu, sigma, kernel_sz);
                         t_mex = toc(t2);
 
                         % Output checks and stats
@@ -140,7 +139,7 @@ function test_gauss3d_mex_features()
                         end
                     end
 
-                    clear x_pad_gpu y_mex_gpu y_ref_gpu y_mex_unpad y_ref_unpad buffer_gpu
+                    clear x_pad_gpu y_mex_gpu y_ref_gpu y_mex_unpad y_ref_unpad
                 end
             end
         end
