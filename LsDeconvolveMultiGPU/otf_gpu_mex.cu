@@ -14,7 +14,32 @@
         mexErrMsgIdAndTxt("otf_gpu_mex:CUFFT", "cuFFT error %s:%d: %d\n", __FILE__, __LINE__, err); \
     }
 
-// Kernel for centered zero-padding and cropping
+// Kernel for centered zero-padding and cropping (real output)
+__global__ void zero_pad_crop_centered_real(
+    const float* src, size_t sx, size_t sy, size_t sz,
+    float* dst, size_t dx, size_t dy, size_t dz,
+    ptrdiff_t pre_x, ptrdiff_t pre_y, ptrdiff_t pre_z)
+{
+    size_t x = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t y = blockIdx.y * blockDim.y + threadIdx.y;
+    size_t z = blockIdx.z * blockDim.z + threadIdx.z;
+    if (x < dx && y < dy && z < dz) {
+        ptrdiff_t src_x = (ptrdiff_t)x - pre_x;
+        ptrdiff_t src_y = (ptrdiff_t)y - pre_y;
+        ptrdiff_t src_z = (ptrdiff_t)z - pre_z;
+        size_t dst_idx = x + dx * (y + dy * z);
+        if (src_x >= 0 && (size_t)src_x < sx &&
+            src_y >= 0 && (size_t)src_y < sy &&
+            src_z >= 0 && (size_t)src_z < sz) {
+            size_t src_idx = (size_t)src_x + sx * ((size_t)src_y + sy * (size_t)src_z);
+            dst[dst_idx] = src[src_idx];
+        } else {
+            dst[dst_idx] = 0.0f;
+        }
+    }
+}
+
+// Kernel for centered zero-padding and cropping (complex output)
 __global__ void zero_pad_crop_centered(
     const float* src, size_t sx, size_t sy, size_t sz,
     float2* dst, size_t dx, size_t dy, size_t dz,
@@ -32,8 +57,8 @@ __global__ void zero_pad_crop_centered(
             src_y >= 0 && (size_t)src_y < sy &&
             src_z >= 0 && (size_t)src_z < sz) {
             size_t src_idx = (size_t)src_x + sx * ((size_t)src_y + sy * (size_t)src_z);
-            dst[dst_idx].x = src[src_idx]; // real part
-            dst[dst_idx].y = 0.0f;         // imag part
+            dst[dst_idx].x = src[src_idx];
+            dst[dst_idx].y = 0.0f;
         } else {
             dst[dst_idx].x = 0.0f;
             dst[dst_idx].y = 0.0f;
@@ -88,6 +113,20 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
     ptrdiff_t prepad_x = static_cast<ptrdiff_t>((dx - sx)/2);
     ptrdiff_t prepad_y = static_cast<ptrdiff_t>((dy - sy)/2);
     ptrdiff_t prepad_z = static_cast<ptrdiff_t>((dz - sz)/2);
+
+    // ---- DEBUG: Output only the padded/cropped real array ----
+    if (nlhs == 3) {
+        mxGPUArray* pad_gpu = mxGPUCreateGPUArray(3, out_dims, mxSINGLE_CLASS, mxREAL, MX_GPU_DO_NOT_INITIALIZE);
+        float* d_pad = static_cast<float*>(mxGPUGetData(pad_gpu));
+        dim3 block(8,8,8), grid((dx+7)/8, (dy+7)/8, (dz+7)/8);
+        zero_pad_crop_centered_real<<<grid, block>>>(
+            d_psf, sx, sy, sz, d_pad, dx, dy, dz, prepad_x, prepad_y, prepad_z
+        );
+        CUDA_CHECK(cudaGetLastError());
+        CUDA_CHECK(cudaDeviceSynchronize());
+        plhs[2] = mxGPUCreateMxArrayOnGPU(pad_gpu);
+        mxGPUDestroyGPUArray(pad_gpu);
+    }
 
     // ---- Allocate output buffer (single, complex, gpuArray) ----
     mxGPUArray* otf_gpu = mxGPUCreateGPUArray(3, out_dims, mxSINGLE_CLASS, mxCOMPLEX, MX_GPU_DO_NOT_INITIALIZE);
