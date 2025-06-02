@@ -3,7 +3,7 @@ fprintf('Testing maximum *fast* OTF cube size for sigma = [0.5 0.5 2.5], psf siz
 
 psf_sz = [9 9 21];
 sigma = [0.5 0.5 2.5];
-maxNpossible = 881;
+maxNpossible = 800; %1290
 startN = 64;
 
 % Prepare PSF only once
