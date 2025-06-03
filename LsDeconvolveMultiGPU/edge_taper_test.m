@@ -158,7 +158,7 @@ try
 
         % CPU timing (optional for very large arrays, may take much longer)
         cpu_time = [];
-        cpu_test_possible = all(bl_large_sz < 300); % avoid OOM on huge arrays
+        cpu_test_possible = true; % all(bl_large_sz < 300); % avoid OOM on huge arrays
         if cpu_test_possible
             for k = 1:2
                 tic;
