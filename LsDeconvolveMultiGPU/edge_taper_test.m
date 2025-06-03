@@ -2,6 +2,47 @@ try
     pass_thresh = 0.2;     % Acceptable max diff (for 3D vs 2D)
     mean_thresh = 0.03;    % Acceptable mean diff
 
+    %% 0. 2D edgetaper vs edge_taper_auto (CPU/GPU) test
+    try
+        img_sz = [128, 128];
+        psf_sz = [11, 11];
+
+        rng(1);
+        img = rand(img_sz, 'single');
+        psf = fspecial('gaussian', psf_sz, 2);
+        psf = single(psf / sum(psf(:)));
+
+        edgetaper_ref = edgetaper(img, psf);
+        out_cpu = edge_taper_auto(img, psf);
+        out_gpu = edge_taper_auto(gpuArray(img), gpuArray(psf));
+        out_gpu_cpu = gather(out_gpu);
+
+        diff_cpu = abs(edgetaper_ref - out_cpu);
+        maxdiff_cpu = max(diff_cpu(:));
+        meandiff_cpu = mean(diff_cpu(:));
+        fprintf('2D CPU: max diff %.3g, mean diff %.3g\n', maxdiff_cpu, meandiff_cpu);
+        if maxdiff_cpu < 5e-4 && meandiff_cpu < 1e-4
+            print_pass('CPU edge_taper_auto matches MATLAB edgetaper (2D)');
+        else
+            print_fail('CPU edge_taper_auto does NOT match MATLAB edgetaper (2D)');
+        end
+
+        diff_gpu = abs(edgetaper_ref - out_gpu_cpu);
+        maxdiff_gpu = max(diff_gpu(:));
+        meandiff_gpu = mean(diff_gpu(:));
+        fprintf('2D GPU: max diff %.3g, mean diff %.3g\n', maxdiff_gpu, meandiff_gpu);
+        if maxdiff_gpu < 5e-4 && meandiff_gpu < 1e-4
+            print_pass('GPU edge_taper_auto matches MATLAB edgetaper (2D)');
+        else
+            print_fail('GPU edge_taper_auto does NOT match MATLAB edgetaper (2D)');
+        end
+
+        twod_ok = maxdiff_cpu < 5e-4 && meandiff_cpu < 1e-4 && maxdiff_gpu < 5e-4 && meandiff_gpu < 1e-4;
+    catch ME
+        print_fail(['2D edgetaper vs edge_taper_auto test failed: ' ME.message]);
+        twod_ok = false;
+    end
+
     %% 1. Standard 3D test
     sz = [64, 64, 32];
     A = rand(sz, 'single');
@@ -141,7 +182,6 @@ try
         bl_large_g = gpuArray(bl_large);
         psf_large_g = gpuArray(psf_large);
 
-        % GPU timing
         gpu_time = [];
         for k = 1:3
             tic;
@@ -151,9 +191,8 @@ try
         end
         t_gpu = min(gpu_time);
 
-        % CPU timing (can take a long time, enable with caution!)
         cpu_time = [];
-        cpu_test_possible = false; % set to true to actually test
+        cpu_test_possible = false; % set to true to actually test CPU
         if cpu_test_possible
             fprintf('\x1b[1;33m⚠️  WARNING:\x1b[0m Running large CPU filter, may take minutes...\n');
             for k = 1:2
@@ -242,7 +281,7 @@ try
     end
 
     %% Final overall summary
-    summary_ok = all_ok && maxdiff < pass_thresh && meandiff < mean_thresh && ...
+    summary_ok = twod_ok && all_ok && maxdiff < pass_thresh && meandiff < mean_thresh && ...
         max(et_gpu_cpu(:)) <= 1 && min(et_gpu_cpu(:)) >= 0 && ...
         isequal(size(et_gpu_cpu), sz) && conv_ok && large_block_ok && cpu_gpu_identical_ok;
     if summary_ok
@@ -261,30 +300,4 @@ end
 
 function print_fail(msg)
     fprintf('\x1b[1;31m❌ FAIL:\x1b[0m %s\n', msg);
-end
-
-function taper = make_taper(dimsz, taper_width)
-    % Robust 1D taper vector, always length==dimsz, regardless of input type
-    dimsz = double(dimsz);
-    taper_width = double(taper_width);
-    taper_width = min([taper_width, floor(dimsz/2)]);
-    if taper_width <= 0
-        taper = ones(round(dimsz),1,'single');
-        return
-    end
-    ramp = linspace(0,1,round(taper_width)+1)';
-    if 2*taper_width < dimsz
-        plateau = ones(round(dimsz-2*taper_width),1,'single');
-        ramp_down = flipud(ramp(1:end-1));
-        taper = [ramp; plateau; ramp_down];
-    else
-        ramp_down = flipud(ramp(1:end-1));
-        taper = [ramp; ramp_down];
-    end
-    if numel(taper) > round(dimsz)
-        taper = taper(1:round(dimsz));
-    elseif numel(taper) < round(dimsz)
-        taper = [taper; ones(round(dimsz - numel(taper)), 1, 'single')];
-    end
-    taper = single(taper(:));
 end
