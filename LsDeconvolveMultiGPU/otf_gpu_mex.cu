@@ -183,6 +183,4 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
     plhs[1] = mxGPUCreateMxArrayOnGPU(otf_conj_gpu);
 
     mxGPUDestroyGPUArray(psf);
-    mxGPUDestroyGPUArray(otf_gpu);
-    mxGPUDestroyGPUArray(otf_conj_gpu);
 }
