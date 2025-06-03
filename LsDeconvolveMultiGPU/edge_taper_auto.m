@@ -9,20 +9,20 @@ function bl = edge_taper_auto(bl, psf)
 % Requires conv3d_mex for GPU 3D convolution.
 % Requires make_taper.m in your path.
 
-    % DEBUG: Print array types/sizes
+    % === DEBUG: Print array types/sizes BEFORE reshape ===
     disp(['class(bl): ' class(bl) ', ndims(bl): ' num2str(ndims(bl)) ', size: ' mat2str(size(bl))]);
     disp(['class(psf): ' class(psf) ', ndims(psf): ' num2str(ndims(psf)) ', size: ' mat2str(size(psf))]);
 
-    % Promote both bl and psf to 3D (guaranteed)
+    % === Promote both bl and psf to 3D (guaranteed, even if already 3D) ===
     sz_bl  = size(bl);
     sz_psf = size(psf);
-    if numel(sz_bl) < 3,  sz_bl(3)  = 1; end
+    if numel(sz_bl)  < 3, sz_bl(3)  = 1; end
     if numel(sz_psf) < 3, sz_psf(3) = 1; end
     bl  = reshape(bl,  sz_bl(1), sz_bl(2), sz_bl(3));
     psf = reshape(psf, sz_psf(1), sz_psf(2), sz_psf(3));
     orig_2d = (sz_bl(3) == 1);
 
-    % DEBUG: Print array types/sizes
+    % === DEBUG: Print array types/sizes AFTER reshape ===
     disp(['class(bl): ' class(bl) ', ndims(bl): ' num2str(ndims(bl)) ', size: ' mat2str(size(bl))]);
     disp(['class(psf): ' class(psf) ', ndims(psf): ' num2str(ndims(psf)) ', size: ' mat2str(size(psf))]);
 
@@ -30,12 +30,11 @@ function bl = edge_taper_auto(bl, psf)
     psf = psf ./ sum(psf(:));
 
     if isa(bl, 'gpuArray')
-        assert(strcmp(classUnderlying(bl), 'single') && ndims(bl) == 3, ...
-            'bl must be 3D gpuArray single');
+        assert(strcmp(classUnderlying(bl), 'single'), 'bl must be gpuArray single');
         if ~isa(psf, 'gpuArray'), psf = gpuArray(psf); end
-        assert(strcmp(classUnderlying(psf), 'single') && ndims(psf) == 3, ...
-            'psf must be 3D gpuArray single');
-        bl_blur = conv3d_mex(bl, psf);
+        assert(strcmp(classUnderlying(psf), 'single'), 'psf must be gpuArray single');
+
+        bl_blur = conv3d_mex(bl, psf); % your CUDA MEX
 
         sz = size(bl);
         mask = 1;
@@ -54,18 +53,17 @@ function bl = edge_taper_auto(bl, psf)
 
     else
         if isa(psf, 'gpuArray'), psf = gather(psf); end
-        if ndims(bl) == 2
-            bl = edgetaper(bl, psf);
-        elseif ndims(bl) == 3
+        if size(bl,3) == 1
+            bl = edgetaper(bl(:,:,1), psf(:,:,1));
+            bl = reshape(bl, sz_bl(1), sz_bl(2), 1); % Keep as 3D for consistency
+        else
             for k = 1:size(bl,3)
                 bl(:,:,k) = edgetaper(bl(:,:,k), psf(:,:,min(k,size(psf,3))));
             end
-        else
-            error('CPU path only supports 2D or 3D arrays');
         end
     end
 
-    % Squeeze if original input was 2D
+    % Return to 2D if original was 2D
     if orig_2d
         bl = squeeze(bl);
     end
