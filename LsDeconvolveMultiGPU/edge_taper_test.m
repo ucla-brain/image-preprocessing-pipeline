@@ -71,3 +71,11 @@ try
 catch ME
     print_fail(['Test script crashed: ' ME.message]);
 end
+
+function print_pass(msg)
+    fprintf('\x1b[1;32m✅ PASS:\x1b[0m %s\n', msg);
+end
+
+function print_fail(msg)
+    fprintf('\x1b[1;31m❌ FAIL:\x1b[0m %s\n', msg);
+end
