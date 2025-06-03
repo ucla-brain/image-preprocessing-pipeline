@@ -1,3 +1,5 @@
+all_ok = true;
+
 try
     pass_thresh = 0.2;     % Acceptable max diff (for 3D)
     mean_thresh = 0.03;    % Acceptable mean diff
@@ -41,9 +43,11 @@ try
             print_pass(sprintf('2D (512x512) CPU and GPU edge_taper_auto are identical (max %.2g, mean %.2g)', max_diff, mean_diff));
         else
             print_fail(sprintf('2D (512x512) CPU and GPU edge_taper_auto differ! (max %.2g, mean %.2g)', max_diff, mean_diff));
+            all_ok = false;
         end
     catch ME
         print_fail(['2D (512x512) CPU vs GPU edge_taper_auto test failed: ' ME.message]);
+        all_ok = false;
     end
 
     %% 2. Standard 3D test
@@ -73,6 +77,7 @@ try
         print_pass(sprintf('Central slice: max diff %.4g, mean diff %.4g', maxdiff, meandiff));
     else
         print_fail(sprintf('Central slice: max diff %.4g, mean diff %.4g', maxdiff, meandiff));
+        all_ok = false;
     end
 
     %% 3. Full 3D value range
@@ -80,6 +85,7 @@ try
         print_pass('GPU-tapered 3D volume values are within expected [0,1] range');
     else
         print_fail('GPU-tapered 3D volume values out of expected range!');
+        all_ok = false;
     end
 
     %% 4. Small array edge case
@@ -93,6 +99,7 @@ try
         print_pass('Small 3D GPU array processed without reshape error');
     catch ME
         print_fail(sprintf('Small 3D GPU array failed: %s', ME.message));
+        all_ok = false;
     end
 
     %% 5. Output size matches input
@@ -100,10 +107,10 @@ try
         print_pass('Output size matches input size for 3D GPU test');
     else
         print_fail('Output size does not match input size for 3D GPU test');
+        all_ok = false;
     end
 
     %% 6. Test conv3d_mex against MATLAB's CPU reference (convn + replicate padding)
-    conv_ok = false;
     try
         img_sz = [24, 25, 22];
         ker_sz = [7, 5, 3];
@@ -125,15 +132,17 @@ try
             mean_conv_diff = mean(diff_conv(:));
             if max_conv_diff < 5e-4 && mean_conv_diff < 1e-4
                 print_pass(sprintf('conv3d_mex matches convn+replicate (max %.2g, mean %.2g)', max_conv_diff, mean_conv_diff));
-                conv_ok = true;
             else
                 print_fail(sprintf('conv3d_mex vs convn+replicate: max diff %.2g, mean %.2g', max_conv_diff, mean_conv_diff));
+                all_ok = false;
             end
         else
             print_fail('conv3d_mex output shape does not match CPU reference!');
+            all_ok = false;
         end
     catch ME
         print_fail(['conv3d_mex test failed: ' ME.message]);
+        all_ok = false;
     end
 
     %% 7. Trivial all-ones kernel/input test
@@ -153,9 +162,11 @@ try
             print_pass('Trivial all-ones kernel/input test: center value is correct (27)');
         else
             print_fail(sprintf('Trivial all-ones test: center values gpu: %.4g, cpu: %.4g', center_val_gpu, center_val_cpu));
+            all_ok = false;
         end
     catch ME
         print_fail(['Trivial all-ones test failed: ' ME.message]);
+        all_ok = false;
     end
 
     %% 8. Large 3D block edge_taper_auto GPU performance/stress test
@@ -184,9 +195,11 @@ try
             print_pass(sprintf('Large 3D edge_taper_auto: GPU %.3fs', t_gpu));
         else
             print_fail('Large 3D block: edge_taper_auto output contains non-finite or out-of-bounds values!');
+            all_ok = false;
         end
     catch ME
         print_fail(['Large 3D block edge_taper_auto test failed: ' ME.message]);
+        all_ok = false;
     end
 
     %% 9. Direct CPU vs GPU edge_taper_auto on identical large 3D block
@@ -225,15 +238,19 @@ try
             print_pass(sprintf('CPU and GPU edge_taper_auto agree (max %.3g, mean %.3g)', max_diff, mean_diff));
         else
             print_fail(sprintf('CPU and GPU edge_taper_auto differ! (max %.3g, mean %.3g)', max_diff, mean_diff));
+            all_ok = false;
         end
     catch ME
         print_fail(['Large 3D CPU vs GPU edge_taper_auto test failed: ' ME.message]);
+        all_ok = false;
     end
 
     %% Final overall summary
-    % Mark all tests as pass only if everything above passed
-    % You can add more conditions as you like (eg. conv_ok)
-    print_pass('ALL TESTS PASSED 🎉');
+    if all_ok
+        print_pass('ALL TESTS PASSED 🎉');
+    else
+        print_fail('Some tests failed.');
+    end
 
 catch ME
     print_fail(['Test script crashed: ' ME.message]);

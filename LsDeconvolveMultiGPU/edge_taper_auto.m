@@ -16,8 +16,6 @@ function bl = edge_taper_auto(bl, psf)
         psf = reshape(psf, size(psf,1), size(psf,2), 1);
     end
 
-    % (Now everything below is unchanged...)
-
     % Normalize PSF
     psf = psf ./ sum(psf(:));
 
@@ -36,7 +34,7 @@ function bl = edge_taper_auto(bl, psf)
         for d = 1:3
             dimsz = sz(d);
             taper_width = max(8, round(size(psf, d)/2));
-            taper = make_taper(dimsz, taper_width);
+            taper = make_taper(dimsz, taper_width); % always length==dimsz!
             taper = cast(taper, 'like', bl);
             assert(numel(taper) == dimsz, ...
                 'Taper length %d does not match dim %d', numel(taper), dimsz);
