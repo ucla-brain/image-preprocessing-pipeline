@@ -17,28 +17,22 @@ __global__ void conv3d_single(
     int kz2 = kz / 2;
 
     float acc = 0.0f;
+    // Loop over kernel
     for (int dz = 0; dz < kz; dz++) {
-        int iz = z + dz - kz2;
-        // Clamp for replicate boundary
-        iz = iz < 0 ? 0 : (iz >= nz ? nz - 1 : iz);
+        int iz = z + dz - kz2;  // image z index
+        iz = max(0, min(iz, nz-1));
         for (int dy = 0; dy < ky; dy++) {
             int iy = y + dy - ky2;
-            iy = iy < 0 ? 0 : (iy >= ny ? ny - 1 : iy);
+            iy = max(0, min(iy, ny-1));
             for (int dx = 0; dx < kx; dx++) {
                 int ix = x + dx - kx2;
-                ix = ix < 0 ? 0 : (ix >= nx ? nx - 1 : ix);
-
-                // MATLAB column-major order for 3D: (ix,iy,iz) = [x,y,z]
-                int img_idx = ix + iy * nx + iz * nx * ny;
-                int ker_idx = dx + dy * kx + dz * kx * ky; // C-style flat
-
-                acc += img[img_idx] * kernel[ker_idx];
+                ix = max(0, min(ix, nx-1));
+                // COL-MAJOR: x + y*nx + z*nx*ny
+                acc += img[ix + iy*nx + iz*nx*ny] * kernel[dx + dy*kx + dz*kx*ky];
             }
         }
     }
-    // Write output
-    int out_idx = x + y * nx + z * nx * ny;
-    out[out_idx] = acc;
+    out[x + y*nx + z*nx*ny] = acc;
 }
 
 void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
