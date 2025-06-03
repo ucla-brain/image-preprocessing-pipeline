@@ -47,7 +47,7 @@ try
     try
         Asmall_gpu = gpuArray(Asmall);
         PSFsmall_gpu = gpuArray(PSFsmall);
-        ~ = edge_taper_auto(Asmall_gpu, PSFsmall_gpu);
+        edge_taper_auto(Asmall_gpu, PSFsmall_gpu); % <-- No ~=
         print_pass('Small 3D GPU array processed without reshape error');
     catch ME
         print_fail(sprintf('Small 3D GPU array failed: %s', ME.message));
