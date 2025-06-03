@@ -17,7 +17,7 @@ try
 
         et_ref  = edgetaper(A, PSF);           % CPU MATLAB reference
 
-        A_gpu   = gpuArray(A);
+        A_gpu   = gpuArray(reshape(A, sz(1), sz(2), 1));
         PSF_gpu = gpuArray(PSF);
         et_gpu  = edge_taper_auto(A_gpu, PSF_gpu);
         et_gpu_cpu = gather(et_gpu);
