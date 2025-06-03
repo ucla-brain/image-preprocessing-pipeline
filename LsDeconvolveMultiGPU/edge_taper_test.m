@@ -140,7 +140,7 @@ try
     large_block_ok = true;
     try
         bl_large_sz = [512, 512, 512];      % ~1.5GB, adjust for your GPU RAM
-        psf_large_sz = [21, 21, 11];
+        psf_large_sz = [9, 9, 21];
         bl_large = rand(bl_large_sz, 'single');
         psf_large = rand(psf_large_sz, 'single'); psf_large = psf_large / sum(psf_large(:));
         bl_large_g = gpuArray(bl_large);
