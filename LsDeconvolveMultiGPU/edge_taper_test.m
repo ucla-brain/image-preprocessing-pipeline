@@ -77,6 +77,7 @@ try
     end
 
     % 6. Test conv3d_mex against MATLAB's CPU reference (convn + replicate padding)
+    conv_ok = false;
     try
         img_sz = [24, 25, 22];
         ker_sz = [7, 5, 3];
@@ -101,6 +102,7 @@ try
             mean_conv_diff = mean(diff_conv(:));
             if max_conv_diff < 5e-4 && mean_conv_diff < 1e-4
                 print_pass(sprintf('conv3d_mex matches convn+replicate (max %.2g, mean %.2g)', max_conv_diff, mean_conv_diff));
+                conv_ok = true;
             else
                 print_fail(sprintf('conv3d_mex vs convn+replicate: max diff %.2g, mean %.2g', max_conv_diff, mean_conv_diff));
             end
@@ -111,9 +113,32 @@ try
         print_fail(['conv3d_mex test failed: ' ME.message]);
     end
 
+    % 7. Trivial all-ones kernel/input test
+    try
+        I = ones(5,5,5,'single');
+        K = ones(3,3,3,'single');
+        Ig = gpuArray(I);
+        Kg = gpuArray(K);
+        O_gpu = conv3d_mex(Ig, Kg);
+        O_gpu_cpu = gather(O_gpu);
+        pad = floor(size(K)/2);
+        Ipad = padarray(I, pad, 'replicate', 'both');
+        O_cpu_full = convn(Ipad, K, 'valid');
+        center_val_gpu = O_gpu_cpu(3,3,3);
+        center_val_cpu = O_cpu_full(3,3,3);
+        if abs(center_val_gpu - 27) < 1e-4 && abs(center_val_cpu - 27) < 1e-4
+            print_pass('Trivial all-ones kernel/input test: center value is correct (27)');
+        else
+            print_fail(sprintf('Trivial all-ones test: center values gpu: %.4g, cpu: %.4g', center_val_gpu, center_val_cpu));
+            all_ok = false;
+        end
+    catch ME
+        print_fail(['Trivial all-ones test failed: ' ME.message]);
+    end
+
     % Final overall summary
     summary_ok = all_ok && maxdiff < pass_thresh && meandiff < mean_thresh && ...
-          max(et_gpu_cpu(:)) <= 1 && min(et_gpu_cpu(:)) >= 0 && isequal(size(et_gpu_cpu), sz);
+          max(et_gpu_cpu(:)) <= 1 && min(et_gpu_cpu(:)) >= 0 && isequal(size(et_gpu_cpu), sz) && conv_ok;
     if summary_ok
         print_pass('ALL TESTS PASSED 🎉');
     end
