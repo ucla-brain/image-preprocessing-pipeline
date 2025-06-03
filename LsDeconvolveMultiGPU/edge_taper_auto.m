@@ -26,8 +26,13 @@ function bl = edge_taper_auto(bl, psf)
         for d = 1:3
             dimsz = sz(d);
             taper_width = max(8, round(size(psf, d)/2));
-            taper = make_taper(dimsz, taper_width);
-            taper = cast(taper, 'like', bl); % Ensure on GPU, single
+            taper = make_taper(dimsz, taper_width); % always length==dimsz!
+            taper = cast(taper, 'like', bl);
+
+            % Defensive: Guarantee shape matches exactly
+            assert(numel(taper) == dimsz, ...
+                'Taper length %d does not match dim %d', numel(taper), dimsz);
+
             shape = ones(1,3); shape(d) = dimsz;
             mask = mask .* reshape(taper, shape);
         end
@@ -64,11 +69,11 @@ function taper = make_taper(dimsz, taper_width)
     else
         ramp_down = flipud(ramp(1:end-1));
         taper = [ramp; ramp_down];
-        % Guarantee correct length, crop or pad with ones if needed
-        if numel(taper) > dimsz
-            taper = taper(1:dimsz);
-        elseif numel(taper) < dimsz
-            taper = [taper; ones(dimsz - numel(taper), 1, 'single')];
-        end
+    end
+    % Ensure output is exactly dimsz long
+    if numel(taper) > dimsz
+        taper = taper(1:dimsz);
+    elseif numel(taper) < dimsz
+        taper = [taper; ones(dimsz - numel(taper), 1, 'single')];
     end
 end
