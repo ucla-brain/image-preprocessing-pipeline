@@ -12,7 +12,7 @@ function bl = decon(bl, psf, niter, lambda, stop_criterion, regularize_interval,
     % - use_fft: true = use FFT-based convolution (faster, more memory), false = use convn (slower, low-memory)
 
     if use_fft
-        bl = deconFFT(bl, psf.shifted, fft_shape, niter, lambda, stop_criterion, regularize_interval, device_id);
+        bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regularize_interval, device_id);
     else
         bl = deconSpatial(bl, psf.psf, psf.inv  , niter, lambda, stop_criterion, regularize_interval, device_id);
     end
@@ -94,12 +94,15 @@ end
 % === Frequency-domain version with cached OTFs ===
 function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regularize_interval, device_id)
     use_gpu = isgpuarray(bl);
-    [otf, otf_conj] = calculate_otf(psf, fft_shape, device_id);
+
+    [otf, otf_conj] = calculate_otf(psf.shifted, fft_shape, device_id);
 
     if regularize_interval < niter && lambda > 0
         R = single(1/26 * ones(3,3,3)); R(2,2,2) = 0;
         if use_gpu, R = gpuArray(R); end
     end
+
+    bl = edge_taper_inplace(bl, psf.psf);
 
     [bl, pad_pre, pad_post] = pad_block_to_fft_shape(bl, fft_shape, 'symmetric');
 
@@ -230,4 +233,50 @@ function bl = unpad_block(bl, pad_pre, pad_post)
         error(['unpad_block: Output block size is empty in at least one dimension! ' ...
             'Resulting size: [%s]'], num2str(size(bl)));
     end
+end
+
+function bl = edge_taper_inplace(bl, psf)
+%EDGE_TAPER_INPLACE Edge tapering (in-place) for CPU or GPU arrays
+%   bl = edge_taper_inplace(bl, psf)
+%   - bl: 2D/3D image (CPU/gpuArray, single/double)
+%   - psf: PSF, will be cast and moved to same device as bl if needed
+
+    % Normalize PSF in-place
+    if ~isa(psf, class(bl))
+        psf = cast(psf, class(bl));
+    end
+    if isa(bl, 'gpuArray') && ~isa(psf, 'gpuArray')
+        psf = gpuArray(psf);
+    elseif ~isa(bl, 'gpuArray') && isa(psf, 'gpuArray')
+        psf = gather(psf);
+    end
+    psf = psf ./ sum(psf(:));
+
+    % Blur image with PSF (reuse bl to minimize VRAM)
+    bl_blur = imfilter(bl, psf, 'replicate', 'same', 'conv');
+
+    % Build edge mask (reuse existing arrays where possible)
+    sz = size(bl);
+    nd = numel(sz);
+    mask = 1; % Will be reused for each dim (implicit singleton expansion)
+    for d = 1:nd
+        dimsz = sz(d);
+        taper_width = max(8, round(size(psf, d)/2));
+        if taper_width > 0 && 2*taper_width < dimsz
+            x = linspace(0,1,taper_width+1)';
+            mid = ones(dimsz-2*taper_width,1,'like',bl);
+            taper = [x; mid; flipud(x)];
+        else
+            taper = ones(dimsz,1,'like',bl);
+        end
+        shape = ones(1,nd); shape(d) = dimsz;
+        mask = mask .* reshape(taper, shape); % In-place broadcast
+    end
+    if isa(bl, 'gpuArray') && ~isa(mask,'gpuArray')
+        mask = gpuArray(mask);
+    end
+
+    % In-place blend: bl = mask .* bl + (1-mask) .* bl_blur
+    bl = mask .* bl + (1-mask) .* bl_blur;
+    % bl_blur will be garbage-collected; mask is ephemeral.
 end
