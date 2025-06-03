@@ -17,9 +17,8 @@ __global__ void conv3d_single(
     int kz2 = kz / 2;
 
     float acc = 0.0f;
-    // Loop over kernel
     for (int dz = 0; dz < kz; dz++) {
-        int iz = z + dz - kz2;  // image z index
+        int iz = z + dz - kz2;
         iz = max(0, min(iz, nz-1));
         for (int dy = 0; dy < ky; dy++) {
             int iy = y + dy - ky2;
@@ -27,8 +26,11 @@ __global__ void conv3d_single(
             for (int dx = 0; dx < kx; dx++) {
                 int ix = x + dx - kx2;
                 ix = max(0, min(ix, nx-1));
-                // COL-MAJOR: x + y*nx + z*nx*ny
-                acc += img[ix + iy*nx + iz*nx*ny] * kernel[dx + dy*kx + dz*kx*ky];
+                // Flip the kernel in all 3 dimensions for convolution!
+                int fx = kx-1-dx;
+                int fy = ky-1-dy;
+                int fz = kz-1-dz;
+                acc += img[ix + iy*nx + iz*nx*ny] * kernel[fx + fy*kx + fz*kx*ky];
             }
         }
     }
