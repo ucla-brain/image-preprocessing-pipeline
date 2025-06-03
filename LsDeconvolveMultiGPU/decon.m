@@ -249,9 +249,6 @@ function bl = edge_taper_inplace(bl, psf)
     else
         if isa(psf, 'gpuArray'), psf = gather(psf); end
     end
-    if ~strcmp(class(psf), class(bl))
-        psf = feval(class(bl), psf);
-    end
     psf = psf ./ sum(psf(:));
 
     % Blur image with PSF (reuse bl to minimize VRAM)
