@@ -104,7 +104,7 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regula
 
     bl = edgetaper_3d(bl, psf.psf);
 
-    [bl, pad_pre, pad_post] = pad_block_to_fft_shape(bl, fft_shape, 'symmetric');
+    [bl, pad_pre, pad_post] = pad_block_to_fft_shape(bl, fft_shape, 0); % 'symmetric'
 
     if stop_criterion > 0
         delta_prev = norm(bl(:));

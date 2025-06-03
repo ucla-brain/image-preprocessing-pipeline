@@ -312,7 +312,7 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(stack
             x = xy; y = xy;
             bl_core = [x y z];
 
-            d_pad = decon_pad_size(psf_size);
+            d_pad = decon_pad_size(psf_size, filter.use_fft);
             if any(filter.gaussian_sigma > 0),
                 d_pad = max(d_pad, gaussian_pad_size(bl_core, filter.gaussian_sigma, filter.gaussian_size));
             end
@@ -365,8 +365,12 @@ function pad_size = gaussian_pad_size(image_size, sigma, kernel)
     pad_size = ceil(max(pad_size(:).', kernel(:).'));
 end
 
-function pad = decon_pad_size(psf_sz)
-    pad = ceil(psf_sz(:).' * 4);
+function pad = decon_pad_size(psf_sz, use_fft)
+    if use_fft
+        pad = ceil(psf_sz(:).' * 5);
+    else
+        pad = ceil(psf_sz(:).' * 4);
+    end
 end
 
 function n_vec = next_fast_len(n_vec)
