@@ -12,19 +12,33 @@ __global__ void conv3d_single(
     int z = blockIdx.z * blockDim.z + threadIdx.z;
     if (x >= nx || y >= ny || z >= nz) return;
 
-    int kx2 = kx / 2, ky2 = ky / 2, kz2 = kz / 2;
+    int kx2 = kx / 2;
+    int ky2 = ky / 2;
+    int kz2 = kz / 2;
+
     float acc = 0.0f;
     for (int dz = 0; dz < kz; dz++) {
-        int zz = min(max(z + dz - kz2, 0), nz-1);
+        int iz = z + dz - kz2;
+        // Clamp for replicate boundary
+        iz = iz < 0 ? 0 : (iz >= nz ? nz - 1 : iz);
         for (int dy = 0; dy < ky; dy++) {
-            int yy = min(max(y + dy - ky2, 0), ny-1);
+            int iy = y + dy - ky2;
+            iy = iy < 0 ? 0 : (iy >= ny ? ny - 1 : iy);
             for (int dx = 0; dx < kx; dx++) {
-                int xx = min(max(x + dx - kx2, 0), nx-1);
-                acc += img[zz*nx*ny + yy*nx + xx] * kernel[dz*kx*ky + dy*kx + dx];
+                int ix = x + dx - kx2;
+                ix = ix < 0 ? 0 : (ix >= nx ? nx - 1 : ix);
+
+                // MATLAB column-major order for 3D: (ix,iy,iz) = [x,y,z]
+                int img_idx = ix + iy * nx + iz * nx * ny;
+                int ker_idx = dx + dy * kx + dz * kx * ky; // C-style flat
+
+                acc += img[img_idx] * kernel[ker_idx];
             }
         }
     }
-    out[z*nx*ny + y*nx + x] = acc;
+    // Write output
+    int out_idx = x + y * nx + z * nx * ny;
+    out[out_idx] = acc;
 }
 
 void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
@@ -42,8 +56,8 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
     const mwSize *isz = mxGPUGetDimensions(img);
     const mwSize *ksz = mxGPUGetDimensions(ker);
 
-    int nx = isz[0], ny = isz[1], nz = isz[2];
-    int kx = ksz[0], ky = ksz[1], kz = ksz[2];
+    int nx = (int)isz[0], ny = (int)isz[1], nz = (int)isz[2];
+    int kx = (int)ksz[0], ky = (int)ksz[1], kz = (int)ksz[2];
 
     const float *d_img = (const float*)mxGPUGetDataReadOnly(img);
     const float *d_ker = (const float*)mxGPUGetDataReadOnly(ker);
