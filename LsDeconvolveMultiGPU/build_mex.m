@@ -76,7 +76,7 @@ else
 end
 
 % CUDA include dirs (if any)
-root_dir = '.'; include_dir = './mex_files';
+root_dir = '.'; include_dir = './mex_incubator';
 
 % Build CUDA Gaussian 3D MEX file (GPU)
 mexcuda(mex_flags{:}, src_gauss3d, ['-I', root_dir], ['-I', include_dir], nvccflags);
