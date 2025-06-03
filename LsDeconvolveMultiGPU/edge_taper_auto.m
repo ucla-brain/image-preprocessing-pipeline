@@ -13,10 +13,14 @@ function bl = edge_taper_auto(bl, psf)
     disp(['class(bl): ' class(bl) ', ndims(bl): ' num2str(ndims(bl)) ', size: ' mat2str(size(bl))]);
     disp(['class(psf): ' class(psf) ', ndims(psf): ' num2str(ndims(psf)) ', size: ' mat2str(size(psf))]);
 
-    % Always reshape to 3D [M N Z], even if already 3D
-    bl  = reshape(bl,  size(bl,1), size(bl,2), max(size(bl,3), 1));
-    psf = reshape(psf, size(psf,1), size(psf,2), max(size(psf,3), 1));
-    orig_2d = (size(bl,3) == 1);
+    % Promote both bl and psf to 3D (guaranteed)
+    sz_bl  = size(bl);
+    sz_psf = size(psf);
+    if numel(sz_bl) < 3,  sz_bl(3)  = 1; end
+    if numel(sz_psf) < 3, sz_psf(3) = 1; end
+    bl  = reshape(bl,  sz_bl(1), sz_bl(2), sz_bl(3));
+    psf = reshape(psf, sz_psf(1), sz_psf(2), sz_psf(3));
+    orig_2d = (sz_bl(3) == 1);
 
     % DEBUG: Print array types/sizes
     disp(['class(bl): ' class(bl) ', ndims(bl): ' num2str(ndims(bl)) ', size: ' mat2str(size(bl))]);
