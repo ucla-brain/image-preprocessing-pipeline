@@ -51,22 +51,24 @@ function bl = edge_taper_auto(bl, psf)
 end
 
 function taper = make_taper(dimsz, taper_width)
-    % Robustly generate a 1D edge taper of length dimsz and ramp width taper_width
     taper_width = min([taper_width, floor(dimsz/2)]);
     if taper_width <= 0
         taper = ones(dimsz,1,'single');
+        return
+    end
+    ramp = linspace(0,1,taper_width+1)';
+    if 2*taper_width < dimsz
+        plateau = ones(dimsz-2*taper_width,1,'single');
+        ramp_down = flipud(ramp(1:end-1));
+        taper = [ramp; plateau; ramp_down];
     else
-        ramp = linspace(0,1,taper_width+1)';
-        plateau_len = dimsz - 2*taper_width;
-        if plateau_len > 0
-            plateau = ones(plateau_len,1,'single');
-            ramp_down = flipud(ramp(1:end-1));
-            taper = [ramp; plateau; ramp_down];
-        else
-            % If plateau is negative or zero, just ramp up/down and crop to size
-            ramp_down = flipud(ramp(1:end-1));
-            taper = [ramp; ramp_down];
+        ramp_down = flipud(ramp(1:end-1));
+        taper = [ramp; ramp_down];
+        % Guarantee correct length, crop or pad with ones if needed
+        if numel(taper) > dimsz
             taper = taper(1:dimsz);
+        elseif numel(taper) < dimsz
+            taper = [taper; ones(dimsz - numel(taper), 1, 'single')];
         end
     end
 end
