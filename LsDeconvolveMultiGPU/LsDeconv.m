@@ -524,6 +524,17 @@ function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
             outpath, cache_drive, min_max_path, log_file, clipval, ...
             stack_info, resume, block, amplification);
     end
+
+    try
+        status = rmdir(cache_drive, 's');
+        if status
+            p_log(log_file, sprintf('[Cache folder deleting]: succeeded for "%s"!', cache_drive));
+        else
+            p_log(log_file, sprintf('[Cache folder deleting]: failed for "%s"!', cache_drive));
+        end
+    catch ME
+        p_log(log_file, sprintf('[Cache folder deleting]: failed for "%s": %s', cache_drive, ME.message));
+    end
     
     p_log(log_file, ['deconvolution finished at ' char(datetime)]);
     p_log(log_file, ['elapsed time: ' char(duration(datetime('now') - start_time, 'Format', 'dd:hh:mm:ss'))]);
@@ -970,10 +981,6 @@ function postprocess_save(...
     end
     semaphore_destroy(semkey_single);
     semaphore_destroy(semkey_multi);
-    % delte tmp files
-    % for i = 1 : blnr
-    %     delete(convertStringsToChars(blocklist(i)));
-    % end
 end
 
 function bl = load_bl(path, semkey)
