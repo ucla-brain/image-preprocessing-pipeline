@@ -10,9 +10,11 @@ function bl = edge_taper_auto(bl, psf)
 % Requires make_taper.m in your path.
 
     % --- Promote to 3D if 2D, for both CPU and GPU ---
-    orig_2d = (ndims(bl) == 2);
-    if orig_2d
+    orig_2d = (ndims(bl) == 2) || (ndims(bl) == 3 && size(bl,3) == 1);
+    if ndims(bl) == 2
         bl = reshape(bl, size(bl,1), size(bl,2), 1);
+    end
+    if ndims(psf) == 2
         psf = reshape(psf, size(psf,1), size(psf,2), 1);
     end
 
@@ -27,14 +29,14 @@ function bl = edge_taper_auto(bl, psf)
         assert(strcmp(classUnderlying(psf), 'single') && ndims(psf) == 3, ...
             'psf must be 3D gpuArray single');
 
-        bl_blur = conv3d_mex(bl, psf); % custom CUDA MEX
+        bl_blur = conv3d_mex(bl, psf);
 
         sz = size(bl);
         mask = 1;
         for d = 1:3
             dimsz = sz(d);
             taper_width = max(8, round(size(psf, d)/2));
-            taper = make_taper(dimsz, taper_width); % always length==dimsz!
+            taper = make_taper(dimsz, taper_width);
             taper = cast(taper, 'like', bl);
             assert(numel(taper) == dimsz, ...
                 'Taper length %d does not match dim %d', numel(taper), dimsz);
@@ -59,7 +61,7 @@ function bl = edge_taper_auto(bl, psf)
         end
     end
 
-    % Return to 2D if that was the input
+    % Return to 2D if original was 2D or 3D with size(bl,3)==1
     if orig_2d
         bl = squeeze(bl);
     end
