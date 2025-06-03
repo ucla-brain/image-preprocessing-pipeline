@@ -1,35 +1,73 @@
-% Test edge taper: MATLAB edgetaper (CPU 2D) vs. GPU CUDA (3D)
+try
+    % Parameters
+    pass_thresh = 0.2;     % Acceptable max diff (for 3D vs 2D)
+    mean_thresh = 0.03;    % Acceptable mean diff
 
-% --- Make test image and PSF ---
-sz = [64, 64, 32];
-A = rand(sz, 'single');
-PSF = fspecial('gaussian', 15, 2);           % 2D PSF
-PSF3 = zeros(15, 15, 7, 'single');           % Make 3D PSF for GPU
-for z = 1:7
-    PSF3(:,:,z) = fspecial('gaussian', 15, 2) * exp(-((z-4).^2)/6);
+    % 1. Standard 3D test
+    sz = [64, 64, 32];
+    A = rand(sz, 'single');
+    PSF = fspecial('gaussian', 15, 2);
+    PSF3 = zeros(15, 15, 7, 'single');
+    for z = 1:7
+        PSF3(:,:,z) = fspecial('gaussian', 15, 2) * exp(-((z-4).^2)/6);
+    end
+    PSF3 = PSF3 / sum(PSF3(:));
+
+    % CPU edgetaper on central slice
+    A2D = A(:,:,round(sz(3)/2));
+    et_cpu = edgetaper(A2D, PSF);
+
+    % GPU 3D edge taper
+    Ag = gpuArray(A);
+    PSFg = gpuArray(PSF3);
+    et_gpu = edge_taper_auto(Ag, PSFg);
+    et_gpu_cpu = gather(et_gpu);
+
+    % Central slice compare
+    diff_central = abs(et_cpu - et_gpu_cpu(:,:,round(sz(3)/2)));
+    maxdiff = max(diff_central(:));
+    meandiff = mean(diff_central(:));
+    if maxdiff < pass_thresh && meandiff < mean_thresh
+        print_pass(sprintf('Central slice: max diff %.4g, mean diff %.4g', maxdiff, meandiff));
+    else
+        print_fail(sprintf('Central slice: max diff %.4g, mean diff %.4g', maxdiff, meandiff));
+    end
+
+    % 2. Full 3D array self-consistency (should match original except at boundaries)
+    if max(et_gpu_cpu(:)) <= 1 && min(et_gpu_cpu(:)) >= 0
+        print_pass('GPU-tapered 3D volume values are within expected [0,1] range');
+    else
+        print_fail('GPU-tapered 3D volume values out of expected range!');
+    end
+
+    % 3. Small array edge case (robustness)
+    small_sz = [7,6,5];
+    Asmall = rand(small_sz, 'single');
+    PSFsmall = rand(3,3,3, 'single'); PSFsmall = PSFsmall/sum(PSFsmall(:));
+    try
+        Asmall_gpu = gpuArray(Asmall);
+        PSFsmall_gpu = gpuArray(PSFsmall);
+        out_small = edge_taper_auto(Asmall_gpu, PSFsmall_gpu);
+        print_pass('Small 3D GPU array processed without reshape error');
+    catch ME
+        print_fail(sprintf('Small 3D GPU array failed: %s', ME.message));
+    end
+
+    % 4. Taper vector length matches dimension (test all dims/tapers)
+    all_ok = true;
+    for n = 1:20
+        for t = 0:n
+            taper = make_taper(n, t);
+            if numel(taper) ~= n
+                all_ok = false;
+                print_fail(sprintf('make_taper(%d, %d) returns %d elements', n, t, numel(taper)));
+            end
+        end
+    end
+    if all_ok
+        print_pass('make_taper robust for all dims/taper_width');
+    end
+
+catch ME
+    print_fail(['Test script crashed: ' ME.message]);
 end
-PSF3 = PSF3 / sum(PSF3(:));
-
-% --- 2D edge taper on CPU (middle slice) ---
-A2D = A(:,:,round(sz(3)/2));
-et_cpu = edgetaper(A2D, PSF);
-
-% --- 3D edge taper with CUDA on GPU ---
-Ag = gpuArray(A);
-PSFg = gpuArray(PSF3);
-et_gpu = edge_taper_auto(Ag, PSFg);
-et_gpu_cpu = gather(et_gpu);
-
-% --- Show center slice: CPU vs. GPU ---
-figure;
-subplot(1,3,1);
-imagesc(A2D); axis image; colorbar; title('Original slice');
-subplot(1,3,2);
-imagesc(et_cpu); axis image; colorbar; title('CPU edgetaper (2D)');
-subplot(1,3,3);
-imagesc(et_gpu_cpu(:,:,round(sz(3)/2))); axis image; colorbar; title('GPU edge taper (3D)');
-
-% --- Quantitative difference ---
-diff = et_cpu - et_gpu_cpu(:,:,round(sz(3)/2));
-fprintf('Max abs difference in central slice: %g\n', max(abs(diff(:))));
-fprintf('Mean abs difference in central slice: %g\n', mean(abs(diff(:))));
