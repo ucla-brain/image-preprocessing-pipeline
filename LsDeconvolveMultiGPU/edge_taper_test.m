@@ -139,7 +139,7 @@ try
     % 8. Large 3D block edge_taper_auto GPU performance/stress test
     large_block_ok = true;
     try
-        bl_large_sz = [256, 256, 96];      % ~1.5GB, adjust for your GPU RAM
+        bl_large_sz = [512, 512, 512];      % ~1.5GB, adjust for your GPU RAM
         psf_large_sz = [21, 21, 11];
         bl_large = rand(bl_large_sz, 'single');
         psf_large = rand(psf_large_sz, 'single'); psf_large = psf_large / sum(psf_large(:));
