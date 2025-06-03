@@ -18,6 +18,10 @@ function bl = edge_taper_auto(bl, psf)
     psf = reshape(psf, size(psf,1), size(psf,2), max(size(psf,3), 1));
     orig_2d = (size(bl,3) == 1);
 
+    % DEBUG: Print array types/sizes
+    disp(['class(bl): ' class(bl) ', ndims(bl): ' num2str(ndims(bl)) ', size: ' mat2str(size(bl))]);
+    disp(['class(psf): ' class(psf) ', ndims(psf): ' num2str(ndims(psf)) ', size: ' mat2str(size(psf))]);
+
     % Normalize PSF
     psf = psf ./ sum(psf(:));
 
