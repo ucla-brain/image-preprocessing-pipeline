@@ -47,7 +47,7 @@ try
     try
         Asmall_gpu = gpuArray(Asmall);
         PSFsmall_gpu = gpuArray(PSFsmall);
-        out_small = edge_taper_auto(Asmall_gpu, PSFsmall_gpu);
+        ~ = edge_taper_auto(Asmall_gpu, PSFsmall_gpu);
         print_pass('Small 3D GPU array processed without reshape error');
     catch ME
         print_fail(sprintf('Small 3D GPU array failed: %s', ME.message));
@@ -68,6 +68,56 @@ try
         print_pass('make_taper robust for all dims/taper_width');
     end
 
+    % 5. Output size matches input
+    if isequal(size(et_gpu_cpu), sz)
+        print_pass('Output size matches input size for 3D GPU test');
+    else
+        print_fail('Output size does not match input size for 3D GPU test');
+        all_ok = false;
+    end
+
+    % 6. Test conv3d_mex against MATLAB's CPU reference (convn + replicate padding)
+    try
+        img_sz = [24, 25, 22];
+        ker_sz = [7, 5, 3];
+        I = rand(img_sz, 'single');
+        K = rand(ker_sz, 'single');
+        K = K / sum(K(:));
+        Ig = gpuArray(I);
+        Kg = gpuArray(K);
+
+        % GPU result
+        O_gpu = conv3d_mex(Ig, Kg);
+        O_gpu_cpu = gather(O_gpu);
+
+        % CPU reference using convn with replicate boundary (pad & crop)
+        pad = floor(ker_sz/2);
+        Ipad = padarray(I, pad, 'replicate', 'both');
+        O_cpu_full = convn(Ipad, K, 'valid');  % valid convolution after padding gives same as 'same' with replicate
+        % Shape should match
+        if isequal(size(O_gpu_cpu), size(O_cpu_full))
+            diff_conv = abs(O_cpu_full - O_gpu_cpu);
+            max_conv_diff = max(diff_conv(:));
+            mean_conv_diff = mean(diff_conv(:));
+            if max_conv_diff < 5e-4 && mean_conv_diff < 1e-4
+                print_pass(sprintf('conv3d_mex matches convn+replicate (max %.2g, mean %.2g)', max_conv_diff, mean_conv_diff));
+            else
+                print_fail(sprintf('conv3d_mex vs convn+replicate: max diff %.2g, mean %.2g', max_conv_diff, mean_conv_diff));
+            end
+        else
+            print_fail('conv3d_mex output shape does not match CPU reference!');
+        end
+    catch ME
+        print_fail(['conv3d_mex test failed: ' ME.message]);
+    end
+
+    % Final overall summary
+    summary_ok = all_ok && maxdiff < pass_thresh && meandiff < mean_thresh && ...
+          max(et_gpu_cpu(:)) <= 1 && min(et_gpu_cpu(:)) >= 0 && isequal(size(et_gpu_cpu), sz);
+    if summary_ok
+        print_pass('ALL TESTS PASSED 🎉');
+    end
+
 catch ME
     print_fail(['Test script crashed: ' ME.message]);
 end
@@ -78,4 +128,30 @@ end
 
 function print_fail(msg)
     fprintf('\x1b[1;31m❌ FAIL:\x1b[0m %s\n', msg);
+end
+
+function taper = make_taper(dimsz, taper_width)
+    % Robust 1D taper vector, always length==dimsz, regardless of input type
+    dimsz = double(dimsz);
+    taper_width = double(taper_width);
+    taper_width = min([taper_width, floor(dimsz/2)]);
+    if taper_width <= 0
+        taper = ones(round(dimsz),1,'single');
+        return
+    end
+    ramp = linspace(0,1,round(taper_width)+1)';
+    if 2*taper_width < dimsz
+        plateau = ones(round(dimsz-2*taper_width),1,'single');
+        ramp_down = flipud(ramp(1:end-1));
+        taper = [ramp; plateau; ramp_down];
+    else
+        ramp_down = flipud(ramp(1:end-1));
+        taper = [ramp; ramp_down];
+    end
+    % Defensive: guarantee length matches
+    if numel(taper) > round(dimsz)
+        taper = taper(1:round(dimsz));
+    elseif numel(taper) < round(dimsz)
+        taper = [taper; ones(round(dimsz - numel(taper)), 1, 'single')];
+    end
 end
