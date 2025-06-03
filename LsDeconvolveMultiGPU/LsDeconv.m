@@ -1108,20 +1108,23 @@ function p_log(log_file, message)
     fprintf(log_file, '%s\r\n', message);
 end
 
-function dark_ = dark(filter, bit_depth)
-    if bit_depth == 8
-        a=zeros(filter.gaussian_size, "uint8");
-    elseif bit_depth == 16
-        a=zeros(filter.gaussian_size, "uint16");
-    else
-        warning('unsupported image bit depth');
-        a=zeros(filter.gaussian_size);
+function baseline_subtraction = dark(filter, bit_depth)
+    baseline_subtraction = 0;
+    if any(filter.gaussian_sigma > 0)
+        if bit_depth == 8
+            a=zeros(filter.gaussian_size, "uint8");
+        elseif bit_depth == 16
+            a=zeros(filter.gaussian_size, "uint16");
+        else
+            warning('unsupported image bit depth');
+            a=zeros(filter.gaussian_size);
+        end
+        % dark is a value greater than 10 surrounded by zeros
+        a(ceil(filter.gaussian_size(1)/2), ceil(filter.gaussian_size(2)/2), ceil(filter.gaussian_size(3)/2)) = filter.dark;
+        a=im2single(a);
+        a=imgaussfilt3(a, filter.gaussian_sigma, 'FilterSize', filter.gaussian_size, 'Padding', 'symmetric');
+        baseline_subtraction = max(a(:));
     end
-    % dark is a value greater than 10 surrounded by zeros
-    a(ceil(filter.gaussian_size(1)/2), ceil(filter.gaussian_size(2)/2), ceil(filter.gaussian_size(3)/2)) = filter.dark;
-    a=im2single(a);
-    a=imgaussfilt3(a, filter.gaussian_sigma, 'FilterSize', filter.gaussian_size, 'Padding', 'symmetric');
-    dark_ = max(a(:));
 end
 
 %writes 32bit float tiff-imges
