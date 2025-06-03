@@ -4,7 +4,41 @@ try
     pass_thresh = 0.2;     % Acceptable max diff (for 3D)
     mean_thresh = 0.03;    % Acceptable mean diff
 
-    %% 1. Standard 3D test
+    %% 1. 2D edgetaper (CPU) vs edge_taper_auto (GPU)
+    try
+        fprintf('\n--- 2D edgetaper (CPU) vs edge_taper_auto (GPU) test ---\n');
+        sz = [256, 256];
+        psf_sz = [17, 17];
+
+        rng(99);
+        A = rand(sz, 'single');
+        PSF = single(fspecial('gaussian', psf_sz, 3));
+        PSF = PSF / sum(PSF(:));
+
+        et_ref  = edgetaper(A, PSF);           % CPU MATLAB reference
+
+        A_gpu   = gpuArray(A);
+        PSF_gpu = gpuArray(PSF);
+        et_gpu  = edge_taper_auto(A_gpu, PSF_gpu);
+        et_gpu_cpu = gather(et_gpu);
+
+        diff = abs(et_gpu_cpu - et_ref);
+        max_diff = max(diff(:));
+        mean_diff = mean(diff(:));
+        fprintf('Max abs diff: %.6g, Mean abs diff: %.6g\n', max_diff, mean_diff);
+
+        if max_diff < 1e-6 && mean_diff < 1e-7
+            print_pass('2D edge_taper_auto (GPU) matches edgetaper (CPU)!');
+        else
+            print_fail(sprintf('2D edge_taper_auto (GPU) vs edgetaper (CPU) differ! (max %.3g, mean %.3g)', max_diff, mean_diff));
+            all_ok = false;
+        end
+    catch ME
+        print_fail(['2D edgetaper vs edge_taper_auto test failed: ' ME.message]);
+        all_ok = false;
+    end
+
+    %% 2. Standard 3D test
     sz = [64, 64, 32];
     A = rand(sz, 'single');
     PSF = fspecial('gaussian', 15, 2);
@@ -34,7 +68,7 @@ try
         all_ok = false;
     end
 
-    %% 2. Full 3D value range
+    %% 3. Full 3D value range
     if max(et_gpu_cpu(:)) <= 1 && min(et_gpu_cpu(:)) >= 0
         print_pass('GPU-tapered 3D volume values are within expected [0,1] range');
     else
@@ -42,7 +76,7 @@ try
         all_ok = false;
     end
 
-    %% 3. Small array edge case
+    %% 4. Small array edge case
     small_sz = [7,6,5];
     Asmall = rand(small_sz, 'single');
     PSFsmall = rand(3,3,3, 'single'); PSFsmall = PSFsmall/sum(PSFsmall(:));
@@ -56,7 +90,7 @@ try
         all_ok = false;
     end
 
-    %% 4. Output size matches input
+    %% 5. Output size matches input
     if isequal(size(et_gpu_cpu), sz)
         print_pass('Output size matches input size for 3D GPU test');
     else
@@ -64,7 +98,7 @@ try
         all_ok = false;
     end
 
-    %% 5. Test conv3d_mex against MATLAB's CPU reference (convn + replicate padding)
+    %% 6. Test conv3d_mex against MATLAB's CPU reference (convn + replicate padding)
     try
         img_sz = [24, 25, 22];
         ker_sz = [7, 5, 3];
@@ -99,7 +133,7 @@ try
         all_ok = false;
     end
 
-    %% 6. Trivial all-ones kernel/input test
+    %% 7. Trivial all-ones kernel/input test
     try
         I = ones(5,5,5,'single');
         K = ones(3,3,3,'single');
@@ -123,7 +157,7 @@ try
         all_ok = false;
     end
 
-    %% 7. Large 3D block edge_taper_auto GPU performance/stress test
+    %% 8. Large 3D block edge_taper_auto GPU performance/stress test
     try
         bl_large_sz = [512, 512, 512];
         psf_large_sz = [9, 9, 21];
