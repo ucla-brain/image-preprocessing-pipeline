@@ -1,12 +1,22 @@
 /*
-Written by Keivan Moradi code review by ChatGPT 4.1 2025
-GPL v3 license
-
-I made the cuda version of otf function in matlab hopping to reduce the ram usage, but in reality its ram usage is
-similar to matlab. Speed improvement is significant for large array because of native compilation and other optimizations
-*/
-
-// File: otf_gpu_mex.cu
+ * otf_gpu_mex.cu
+ * Author: Keivan Moradi | Code review: ChatGPT 4.1 (2025)
+ * License: GPL v3
+ *
+ * This CUDA MEX implementation provides a high-performance GPU version of MATLAB's OTF (Optical Transfer Function)
+ * computation, supporting arbitrary 3D single-precision PSFs and FFT sizes. While GPU VRAM usage is similar to MATLAB's
+ * built-in fftn due to the nature of large temporary buffers, this version provides significant speedups for large arrays
+ * thanks to native GPU execution, memory locality, and parallelization.
+ *
+ * Key features:
+ *  - Accepts an unshifted (standard MATLAB-style) 3D PSF and performs centered zero-padding and axis-wise ifftshift internally,
+ *    ensuring OTF/OTF_conj match MATLAB's fftn(padarray(ifftshift(psf),...)) convention.
+ *  - Handles padding, shifting, and cuFFT execution transparently for the user.
+ *  - Outputs both the OTF and its conjugate, suitable for deconvolution and Wiener filtering.
+ *  - Carefully designed for reproducibility and easy integration into MATLAB pipelines.
+ *
+ * Intended for large-scale 3D microscopy and imaging applications where MATLAB's memory and speed become limiting factors.
+ */
 
 #include "mex.h"
 #include "gpu/mxGPUArray.h"
@@ -156,7 +166,7 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
 
     // ---- cuFFT: 3D FFT (dz, dy, dx) ----
     cufftHandle plan;
-    CUFFT_CHECK(cufftPlan3d((int)dz, (int)dy, (int)dx, CUFFT_C2C));
+    CUFFT_CHECK(cufftPlan3d(&plan, (int)dz, (int)dy, (int)dx, CUFFT_C2C));
     CUFFT_CHECK(cufftExecC2C(plan, reinterpret_cast<cufftComplex*>(d_otf), reinterpret_cast<cufftComplex*>(d_otf), CUFFT_FORWARD));
     CUFFT_CHECK(cufftDestroy(plan));
 
