@@ -21,6 +21,7 @@ function bl = edge_taper_auto(bl, psf)
     else
         assert(strcmp(class(bl), 'single') && ndims(bl) == 3, 'bl must be 3D single');
         if isa(psf, 'gpuArray'), psf = gather(psf); end
+        if ~isa(psf, 'double' ), psf = double(psf); end
         bl_blur = imfilter(bl, psf, 'replicate', 'same', 'conv');
     end
 
