@@ -9,20 +9,17 @@ function bl = edge_taper_auto(bl, psf)
 % Requires conv3d_mex for GPU 3D convolution.
 % Requires make_taper.m in your path.
 
-    % === DEBUG: Print array types/sizes BEFORE reshape ===
+    % DEBUG: Print array types/sizes BEFORE promotion
     disp(['class(bl): ' class(bl) ', ndims(bl): ' num2str(ndims(bl)) ', size: ' mat2str(size(bl))]);
     disp(['class(psf): ' class(psf) ', ndims(psf): ' num2str(ndims(psf)) ', size: ' mat2str(size(psf))]);
 
-    % === Promote both bl and psf to 3D (guaranteed, even if already 3D) ===
-    sz_bl  = size(bl);
-    sz_psf = size(psf);
-    if numel(sz_bl)  < 3, sz_bl(3)  = 1; end
-    if numel(sz_psf) < 3, sz_psf(3) = 1; end
-    bl  = reshape(bl,  sz_bl(1), sz_bl(2), sz_bl(3));
-    psf = reshape(psf, sz_psf(1), sz_psf(2), sz_psf(3));
-    orig_2d = (sz_bl(3) == 1);
+    % Promote both bl and psf to 3D (guaranteed, even if already 3D)
+    bl  = promote_to_3d(bl);
+    psf = promote_to_3d(psf);
 
-    % === DEBUG: Print array types/sizes AFTER reshape ===
+    orig_2d = (size(bl,3) == 1);
+
+    % DEBUG: Print array types/sizes AFTER promotion
     disp(['class(bl): ' class(bl) ', ndims(bl): ' num2str(ndims(bl)) ', size: ' mat2str(size(bl))]);
     disp(['class(psf): ' class(psf) ', ndims(psf): ' num2str(ndims(psf)) ', size: ' mat2str(size(psf))]);
 
@@ -55,7 +52,7 @@ function bl = edge_taper_auto(bl, psf)
         if isa(psf, 'gpuArray'), psf = gather(psf); end
         if size(bl,3) == 1
             bl = edgetaper(bl(:,:,1), psf(:,:,1));
-            bl = reshape(bl, sz_bl(1), sz_bl(2), 1); % Keep as 3D for consistency
+            bl = reshape(bl, size(bl,1), size(bl,2), 1); % keep as 3D for consistency
         else
             for k = 1:size(bl,3)
                 bl(:,:,k) = edgetaper(bl(:,:,k), psf(:,:,min(k,size(psf,3))));
@@ -63,8 +60,16 @@ function bl = edge_taper_auto(bl, psf)
         end
     end
 
-    % Return to 2D if original was 2D
+    % Squeeze to 2D if original input was 2D
     if orig_2d
         bl = squeeze(bl);
     end
+end
+
+function arr3 = promote_to_3d(arr)
+    sz = size(arr);
+    if numel(sz) < 3
+        sz(3) = 1;
+    end
+    arr3 = reshape(arr, sz(1), sz(2), sz(3));
 end
