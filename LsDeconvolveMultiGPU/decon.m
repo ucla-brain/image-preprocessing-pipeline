@@ -12,7 +12,7 @@ function bl = decon(bl, psf, niter, lambda, stop_criterion, regularize_interval,
     % - use_fft: true = use FFT-based convolution (faster, more memory), false = use convn (slower, low-memory)
 
     if use_fft
-        bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regularize_interval, device_id);
+        bl = deconFFT(bl, psf.psf, fft_shape, niter, lambda, stop_criterion, regularize_interval, device_id);
     else
         bl = deconSpatial(bl, psf.psf, psf.inv  , niter, lambda, stop_criterion, regularize_interval, device_id);
     end
@@ -95,14 +95,14 @@ end
 function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regularize_interval, device_id)
     use_gpu = isgpuarray(bl);
 
-    [otf, otf_conj] = calculate_otf(psf.shifted, fft_shape, device_id);
+    [otf, otf_conj] = calculate_otf(psf, fft_shape, device_id);
 
     if regularize_interval < niter && lambda > 0
         R = single(1/26 * ones(3,3,3)); R(2,2,2) = 0;
         if use_gpu, R = gpuArray(R); end
     end
 
-    bl = edgetaper_3d(bl, psf.psf);
+    bl = edgetaper_3d(bl, psf);
 
     [bl, pad_pre, pad_post] = pad_block_to_fft_shape(bl, fft_shape, 0); % 'symmetric'
 
@@ -165,16 +165,17 @@ function x = convFFT(x, otf)
     x = real(x);              % final output
 end
 
-function [otf, otf_conj] = calculate_otf(psf_shifted, fft_shape, device_id)
+function [otf, otf_conj] = calculate_otf(psf, fft_shape, device_id)
     t_compute = tic;
-    if ~isa(psf_shifted, 'single'), psf_shifted = single(psf_shifted); end
+    if ~isa(psf, 'single'), psf = single(psf); end
     if device_id > 0
-        psf_shifted = gpuArray(psf_shifted);
-        [otf, otf_conj] = otf_gpu_mex(psf_shifted, fft_shape);
+        psf = gpuArray(psf);
+        [otf, otf_conj] = otf_gpu_mex(psf, fft_shape);
         % if device_id > 0, otf = arrayfun(@(r, i) complex(r, i), real(otf), imag(otf)); end
         % if device_id > 0, otf_conj = arrayfun(@(r, i) complex(r, i), real(otf_conj), imag(otf_conj)); end
     else
-        [otf, ~, ~] = pad_block_to_fft_shape(psf_shifted, fft_shape, 0);
+        [otf, ~, ~] = pad_block_to_fft_shape(psf, fft_shape, 0);
+        otf = ifftshift(otf);
         otf = fftn(otf);
         otf_conj = conj(otf);
     end

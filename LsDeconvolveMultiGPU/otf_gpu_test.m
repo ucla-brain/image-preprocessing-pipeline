@@ -1,10 +1,10 @@
-function test_otf_gpu_mex_tabular
+function otf_gpu_test
 fprintf('\n');
 fprintf('PF   Test  Type    Size              Sigma         Kernel          maxErr    RMS       relErr    mex(s)   Speedup\n');
 fprintf('---------------------------------------------------------------------------------------------------------------\n');
 
 sz = [120 120 120];
-kernels = {'auto', 9, [9 11 15], 3, 41};
+kernels = {'auto', 9, [9 9 21], 3, 41};
 sigmas = {2.5, [2.5 2.5 2.5], [0.5 0.5 2.5], 0.25, 8};
 results = [];
 
@@ -37,14 +37,13 @@ for s = 1:length(sigmas)
             psf = exp(-0.5*((x-center(1))/sigma(1)).^2 -0.5*((y-center(2))/sigma(2)).^2 -0.5*((z-center(3))/sigma(3)).^2);
         end
         psf = psf / sum(psf(:));
-        psf_shifted = ifftshift(single(psf));
-        psf_shifted_gpu = gpuArray(psf_shifted);
+        psf = single(psf); % <--- unshifted
 
-        % Zero pad to output size
+        % Zero pad to output size (unpadded/unshifted for MEX)
         padsize = max(sz - kernsz, 0);
         prepad = floor(padsize/2);
         postpad = padsize - prepad;
-        psf_pad = padarray(psf_shifted, prepad, 0, 'pre');
+        psf_pad = padarray(psf, prepad, 0, 'pre');
         psf_pad = padarray(psf_pad, postpad, 0, 'post');
         psf_pad = psf_pad(1:sz(1), 1:sz(2), 1:sz(3));
 
@@ -52,14 +51,15 @@ for s = 1:length(sigmas)
         Nrep = 10;   % Repeat for robustness
 
         % --- Warm up GPU and code paths
-        [~,~] = otf_gpu_mex(psf_shifted_gpu, sz);
-        otf_mat = fftn(psf_pad);
+        [~,~] = otf_gpu_mex(gpuArray(psf), sz);
+        % --- MATLAB reference: pad, ifftshift, fftn
+        otf_mat = fftn(ifftshift(psf_pad));
 
         % --- MEX timing (repeat, ignore first run) ---
         t_mex_all = zeros(1,Nrep);
         for rr = 1:Nrep
             t0 = tic;
-            [otf_mex, otf_conj_mex] = otf_gpu_mex(psf_shifted_gpu, sz);
+            [otf_mex, otf_conj_mex] = otf_gpu_mex(gpuArray(psf), sz);
             t_mex_all(rr) = toc(t0);
         end
         t_mex = mean(t_mex_all(2:end)); % average, ignore first
@@ -68,7 +68,7 @@ for s = 1:length(sigmas)
         t_mat_all = zeros(1,Nrep);
         for rr = 1:Nrep
             t0 = tic;
-            otf_mat = fftn(psf_pad);
+            otf_mat = fftn(ifftshift(psf_pad));
             t_mat_all(rr) = toc(t0);
         end
         t_mat = mean(t_mat_all(2:end)); % average, ignore first
