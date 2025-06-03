@@ -1,4 +1,4 @@
-function bl = edge_taper_auto(bl, psf)
+function bl = edgetaper_3d(bl, psf)
 % EDGE_TAPER_AUTO  Edge tapering for 3D (GPU: conv3d_mex, CPU: imfilter)
 %   bl  - image, 3D, single, cpu or gpuArray(single)
 %   psf - psf, 3D, single, cpu or gpuArray(single)

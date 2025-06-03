@@ -4,9 +4,9 @@ try
     pass_thresh = 1e-5;     % Acceptable max diff (for 3D)
     mean_thresh = 1e-6;     % Acceptable mean diff
 
-    %% 1. Large 3D edge_taper_auto: CPU vs GPU, performance + correctness
+    %% 1. Large 3D edgetaper_3d: CPU vs GPU, performance + correctness
     try
-        fprintf('\n--- Large 3D edge_taper_auto: CPU vs GPU test ---\n');
+        fprintf('\n--- Large 3D edgetaper_3d: CPU vs GPU test ---\n');
         sz = [512, 512, 512];
         psf_sz = [9, 9, 21];
 
@@ -17,7 +17,7 @@ try
 
         % CPU
         tic;
-        bl_tapered_cpu = edge_taper_auto(bl, psf);
+        bl_tapered_cpu = edgetaper_3d(bl, psf);
         t_cpu = toc;
 
         % GPU
@@ -25,7 +25,7 @@ try
         psf_gpu = gpuArray(psf);
         wait(gpuDevice);
         tic;
-        bl_tapered_gpu = edge_taper_auto(bl_gpu, psf_gpu);
+        bl_tapered_gpu = edgetaper_3d(bl_gpu, psf_gpu);
         wait(gpuDevice);
         t_gpu = toc;
         bl_tapered_gpu_cpu = gather(bl_tapered_gpu);
@@ -38,13 +38,13 @@ try
         fprintf('Max abs diff: %.6g, Mean abs diff: %.6g\n', max_diff, mean_diff);
 
         if max_diff < pass_thresh && mean_diff < mean_thresh
-            print_pass(sprintf('Large 3D CPU and GPU edge_taper_auto outputs are identical (max %.2g, mean %.2g)', max_diff, mean_diff));
+            print_pass(sprintf('Large 3D CPU and GPU edgetaper_3d outputs are identical (max %.2g, mean %.2g)', max_diff, mean_diff));
         else
-            print_fail(sprintf('Large 3D CPU and GPU edge_taper_auto differ! (max %.2g, mean %.2g)', max_diff, mean_diff));
+            print_fail(sprintf('Large 3D CPU and GPU edgetaper_3d differ! (max %.2g, mean %.2g)', max_diff, mean_diff));
             all_ok = false;
         end
     catch ME
-        print_fail(['Large 3D edge_taper_auto CPU vs GPU test failed: ' ME.message]);
+        print_fail(['Large 3D edgetaper_3d CPU vs GPU test failed: ' ME.message]);
         all_ok = false;
     end
 
@@ -60,8 +60,8 @@ try
 
     Ag = gpuArray(A);
     PSFg = gpuArray(PSF3);
-    et_cpu = edge_taper_auto(A, PSF3);
-    et_gpu = edge_taper_auto(Ag, PSFg);
+    et_cpu = edgetaper_3d(A, PSF3);
+    et_gpu = edgetaper_3d(Ag, PSFg);
     et_gpu_cpu = gather(et_gpu);
 
     diff_central = abs(et_cpu(:,:,round(sz(3)/2)) - et_gpu_cpu(:,:,round(sz(3)/2)));
@@ -89,7 +89,7 @@ try
     try
         Asmall_gpu = gpuArray(Asmall);
         PSFsmall_gpu = gpuArray(PSFsmall);
-        edge_taper_auto(Asmall_gpu, PSFsmall_gpu);
+        edgetaper_3d(Asmall_gpu, PSFsmall_gpu);
         print_pass('Small 3D GPU array processed without reshape error');
     catch ME
         print_fail(sprintf('Small 3D GPU array failed: %s', ME.message));
