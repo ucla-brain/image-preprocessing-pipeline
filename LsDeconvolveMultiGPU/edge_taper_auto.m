@@ -1,31 +1,72 @@
 function bl = edge_taper_auto(bl, psf)
-    psf = psf / sum(psf(:));
+% EDGE_TAPER_AUTO  Edge tapering for 3D volumes (GPU: custom CUDA, CPU: edgetaper)
+%   bl  - image, 3D, single, cpu or gpuArray(single)
+%   psf - psf, 3D, single, cpu or gpuArray(single)
+%
+% On GPU: expects both bl and psf to be 3D, single, gpuArray
+% On CPU: uses MATLAB's edgetaper for each slice (2D only)
+%
+% Requires conv3d_mex for GPU 3D convolution.
+
+    % Normalize PSF
+    psf = psf ./ sum(psf(:));
+
     if isa(bl, 'gpuArray')
+        % --- GPU path (3D only) ---
+        assert(strcmp(classUnderlying(bl), 'single') && ndims(bl) == 3, ...
+            'bl must be 3D gpuArray single');
         if ~isa(psf, 'gpuArray'), psf = gpuArray(psf); end
-        bl_blur = conv3d_mex(bl, psf);  % your mexcuda kernel (single precision)
-        % Build and apply mask as in edge_taper_inplace (see below)
+        assert(strcmp(classUnderlying(psf), 'single') && ndims(psf) == 3, ...
+            'psf must be 3D gpuArray single');
+
+        bl_blur = conv3d_mex(bl, psf); % custom CUDA MEX, see earlier message
+
         sz = size(bl);
-        nd = numel(sz);
         mask = 1;
-        for d = 1:nd
+        for d = 1:3
             dimsz = sz(d);
             taper_width = max(8, round(size(psf, d)/2));
-            if taper_width > 0 && 2*taper_width < dimsz
-                x = linspace(0,1,taper_width+1)';
-                mid = ones(dimsz-2*taper_width,1,'like',bl);
-                taper = [x; mid; flipud(x)];
-            else
-                taper = ones(dimsz,1,'like',bl);
-            end
-            shape = ones(1,nd); shape(d) = dimsz;
+            taper = make_taper(dimsz, taper_width);
+            taper = cast(taper, 'like', bl); % Ensure on GPU, single
+            shape = ones(1,3); shape(d) = dimsz;
             mask = mask .* reshape(taper, shape);
         end
         if ~isa(mask,'gpuArray'), mask = gpuArray(mask); end
-        bl = mask .* bl + (1-mask) .* bl_blur;
+
+        bl = mask .* bl + (1 - mask) .* bl_blur;
+
     else
+        % --- CPU path (2D edgetaper) ---
         if isa(psf, 'gpuArray'), psf = gather(psf); end
-        bl = edgetaper(bl, psf);  % MATLAB built-in (for 2D)
-        % For 3D, loop over slices:
-        % for z = 1:size(bl,3), bl(:,:,z) = edgetaper(bl(:,:,z), psf(:,:,min(z,end))); end
+        if ndims(bl) == 2
+            bl = edgetaper(bl, psf);
+        elseif ndims(bl) == 3
+            for k = 1:size(bl,3)
+                bl(:,:,k) = edgetaper(bl(:,:,k), psf(:,:,min(k,size(psf,3))));
+            end
+        else
+            error('CPU path only supports 2D or 3D arrays');
+        end
+    end
+end
+
+function taper = make_taper(dimsz, taper_width)
+    % Robustly generate a 1D edge taper of length dimsz and ramp width taper_width
+    taper_width = min([taper_width, floor(dimsz/2)]);
+    if taper_width <= 0
+        taper = ones(dimsz,1,'single');
+    else
+        ramp = linspace(0,1,taper_width+1)';
+        plateau_len = dimsz - 2*taper_width;
+        if plateau_len > 0
+            plateau = ones(plateau_len,1,'single');
+            ramp_down = flipud(ramp(1:end-1));
+            taper = [ramp; plateau; ramp_down];
+        else
+            % If plateau is negative or zero, just ramp up/down and crop to size
+            ramp_down = flipud(ramp(1:end-1));
+            taper = [ramp; ramp_down];
+            taper = taper(1:dimsz);
+        end
     end
 end
