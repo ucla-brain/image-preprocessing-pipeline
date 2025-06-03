@@ -13,9 +13,9 @@ function bl = edge_taper_auto(bl, psf)
     disp(['class(bl): ' class(bl) ', ndims(bl): ' num2str(ndims(bl)) ', size: ' mat2str(size(bl))]);
     disp(['class(psf): ' class(psf) ', ndims(psf): ' num2str(ndims(psf)) ', size: ' mat2str(size(psf))]);
 
-    % Promote both bl and psf to 3D (guaranteed, even if already 3D)
-    bl  = promote_to_3d(bl);
-    psf = promote_to_3d(psf);
+    % Promote both bl and psf to 3D (safe allocation)
+    bl  = promote_to_3d_safe(bl);
+    psf = promote_to_3d_safe(psf);
 
     orig_2d = (size(bl,3) == 1);
 
@@ -51,8 +51,11 @@ function bl = edge_taper_auto(bl, psf)
     else
         if isa(psf, 'gpuArray'), psf = gather(psf); end
         if size(bl,3) == 1
-            bl = edgetaper(bl(:,:,1), psf(:,:,1));
-            bl = reshape(bl, size(bl,1), size(bl,2), 1); % keep as 3D for consistency
+            bl2d = edgetaper(bl(:,:,1), psf(:,:,1));
+            % Safe assignment for 3D
+            bl_tmp = zeros(size(bl,1), size(bl,2), 1, 'like', bl);
+            bl_tmp(:,:,1) = bl2d;
+            bl = bl_tmp;
         else
             for k = 1:size(bl,3)
                 bl(:,:,k) = edgetaper(bl(:,:,k), psf(:,:,min(k,size(psf,3))));
@@ -66,10 +69,15 @@ function bl = edge_taper_auto(bl, psf)
     end
 end
 
-function arr3 = promote_to_3d(arr)
+function arr3 = promote_to_3d_safe(arr)
     sz = size(arr);
     if numel(sz) < 3
         sz(3) = 1;
     end
-    arr3 = reshape(arr, sz(1), sz(2), sz(3));
+    if size(arr,3) == 1 && ndims(arr) == 2
+        arr3 = zeros(sz(1), sz(2), 1, 'like', arr);
+        arr3(:,:,1) = arr;
+    else
+        arr3 = arr; % already 3D
+    end
 end
