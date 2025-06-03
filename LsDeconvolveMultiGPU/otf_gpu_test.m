@@ -3,7 +3,7 @@ fprintf('\n');
 fprintf('PF   Test  Type    Size              Sigma         Kernel          maxErr    RMS       relErr    mex(s)   Speedup\n');
 fprintf('---------------------------------------------------------------------------------------------------------------\n');
 
-sz = [256 256 256];
+sz = [250 250 250];
 kernels = {'auto', 9, [9 9 21], 3, 41};
 sigmas = {2.5, [2.5 2.5 2.5], [0.5 0.5 2.5], 0.25, 8};
 results = [];
