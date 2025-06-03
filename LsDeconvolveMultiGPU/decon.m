@@ -243,14 +243,11 @@ function bl = edge_taper_inplace(bl, psf)
 
     % Normalize PSF in-place
     % Ensure PSF is same class as bl (single/double) and same device (CPU/GPU)
+    % Ensure PSF is same device and type as bl
     if isa(bl, 'gpuArray')
-        if ~isa(psf, 'gpuArray')
-            psf = gpuArray(psf);
-        end
+        if ~isa(psf, 'gpuArray'), psf = gpuArray(psf); end
     else
-        if isa(psf, 'gpuArray')
-            psf = gather(psf);
-        end
+        if isa(psf, 'gpuArray'), psf = gather(psf); end
     end
     if ~strcmp(class(psf), class(bl))
         psf = feval(class(bl), psf);
