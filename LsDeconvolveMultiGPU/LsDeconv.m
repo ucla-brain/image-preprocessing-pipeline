@@ -198,7 +198,7 @@ function [] = LsDeconv(varargin)
             block.stack_info = stack_info;
             [block.nx, block.ny, block.nz, block.x, block.y, block.z, ...
              block.x_pad, block.y_pad, block.z_pad, block.fft_shape] = ...
-                autosplit(stack_info, size(psf.psf), filter, block_size_max, ram_total, final_image_bytes_per_voxel);
+                autosplit(stack_info, size(psf.psf), filter, block_size_max, ram_total, final_image_bytes_per_voxel, numit);
 
             [block.p1, block.p2] = split(stack_info, block);
             save(block_path, 'block');
@@ -283,7 +283,9 @@ function [] = LsDeconv(varargin)
     end
 end
 
-function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(stack_info, psf_size, filter, block_size_max, ram_available, final_image_bytes_per_voxel)
+function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(...
+    stack_info, psf_size, filter, block_size_max, ram_available, final_image_bytes_per_voxel, numit)
+
     % Parameters for RAM and block sizing
     ram_usage_portion = 0.5;               % Use at most 50% of available RAM
     R_bytes_per_voxel = 4;                 % Use 4 for single, 8 for double (adjust as needed)
@@ -309,13 +311,15 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(stack
     best = struct();
     num_failed = 0;
 
+    d_pad = [0 0 0];
+    if filter.destripe_sigma > 0, d_pad = max(d_pad, [1 1 1]); end
+    if numit > 0, d_pad =  d_pad = max(d_pad, decon_pad_size(psf_size)); end
     % Use coarse step for initial sweep (square xy blocks)
     for z = max_block(3):-1:min_block(3)
         for xy = max_block(1):-1:min_block(1)
             x = xy; y = xy;
             bl_core = [x y z];
 
-            d_pad = decon_pad_size(psf_size, filter.use_fft);
             if any(filter.gaussian_sigma > 0),
                 d_pad = max(d_pad, gaussian_pad_size(bl_core, filter.gaussian_sigma, filter.gaussian_size));
             end
@@ -368,12 +372,8 @@ function pad_size = gaussian_pad_size(image_size, sigma, kernel)
     pad_size = ceil(max(pad_size(:).', kernel(:).'));
 end
 
-function pad = decon_pad_size(psf_sz, use_fft)
-    if use_fft
-        pad = ceil(psf_sz(:).' * 4);
-    else
-        pad = ceil(psf_sz(:).' * 4);
-    end
+function pad = decon_pad_size(psf_sz)
+    pad = ceil(psf_sz(:).' * 4);
 end
 
 function n_vec = next_fast_len(n_vec)
