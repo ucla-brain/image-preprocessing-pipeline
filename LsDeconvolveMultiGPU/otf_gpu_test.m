@@ -39,19 +39,15 @@ for s = 1:length(sigmas)
         psf = psf / sum(psf(:));
         psf = single(psf); % <--- unshifted
 
-        % Zero pad to output size (unpadded/unshifted for MEX)
-        padsize = max(sz - kernsz, 0);
-        prepad = floor(padsize/2);
-        postpad = padsize - prepad;
-        psf_pad = padarray(psf, prepad, 0, 'pre');
-        psf_pad = padarray(psf_pad, postpad, 0, 'post');
-        psf_pad = psf_pad(1:sz(1), 1:sz(2), 1:sz(3));
+        % Use the provided padding function
+        [psf_pad, pad_pre, pad_post] = pad_block_to_fft_shape(psf, sz, 0);
 
         % -- Run MEX
         Nrep = 10;   % Repeat for robustness
 
         % --- Warm up GPU and code paths
         [~,~] = otf_gpu_mex(gpuArray(psf), sz);
+
         % --- MATLAB reference: pad, ifftshift, fftn
         otf_mat = fftn(ifftshift(psf_pad));
 
@@ -105,9 +101,32 @@ str = sprintf('[%s]', strjoin(arrayfun(@(x) sprintf('%.2g',x), v, 'uni',0),' '))
 end
 
 function s = pass_symbol(pf)
-if pf, s = char([11035 65039 10004 65039]); else, s = char([10060 10060 10060 10060]); end % ✅ or ❌❌❌❌
+if pf, s = char([11035 65039 10004 65039]); else, s = char([10060 10060 10060 10060]); end % ✅ or ❌
 end
 
 function out = rms(x)
 out = sqrt(mean(abs(x).^2));
+end
+
+function [bl, pad_pre, pad_post] = pad_block_to_fft_shape(bl, fft_shape, mode)
+    % Ensure 3 dimensions for both bl and fft_shape
+    sz = size(bl);
+    sz = [sz, ones(1, 3-numel(sz))];      % pad size to 3 elements if needed
+    fft_shape = [fft_shape(:)', ones(1, 3-numel(fft_shape))]; % ensure row vector, 3 elements
+
+    % Compute missing for each dimension
+    assert(all(fft_shape >= sz), ...
+        sprintf('pad_block_to_fft_shape: bl [%s] is larger than FFT shape [%s], cannot pad', ...
+        num2str(sz), num2str(fft_shape)))
+    missing = max(fft_shape - sz, 0);
+
+    % Vectorized pad pre and post calculation
+    pad_pre = floor(missing/2);
+    pad_post = ceil(missing/2);
+
+    % Only pad if needed
+    if any(pad_pre > 0 | pad_post > 0)
+        bl = padarray(bl, pad_pre, mode, 'pre');
+        bl = padarray(bl, pad_post, mode, 'post');
+    end
 end
