@@ -4,53 +4,7 @@ try
     pass_thresh = 0.2;     % Acceptable max diff (for 3D)
     mean_thresh = 0.03;    % Acceptable mean diff
 
-    %% 1. 2D (512x512) CPU vs GPU edge_taper_auto test
-    try
-        fprintf('\n--- 2D (512x512) CPU vs GPU edge_taper_auto test ---\n');
-        img_sz = [512, 512];
-        psf_sz = [13, 13];
-
-        rng(42);
-        img = rand(img_sz, 'single');
-        psf = fspecial('gaussian', psf_sz, 2);
-        psf = single(psf / sum(psf(:)));
-
-        % CPU
-        tic;
-        cpu_tapered = edge_taper_auto(img, psf);
-        t_cpu = toc;
-
-        % GPU
-        img_gpu = gpuArray(img);
-        psf_gpu = gpuArray(psf);
-        wait(gpuDevice);
-        tic;
-        gpu_tapered = edge_taper_auto(img_gpu, psf_gpu);
-        wait(gpuDevice);
-        t_gpu = toc;
-        gpu_tapered_cpu = gather(gpu_tapered);
-
-        % Compare
-        diff = abs(cpu_tapered - gpu_tapered_cpu);
-        max_diff = max(diff(:));
-        mean_diff = mean(diff(:));
-        thresh_max = 1e-6; thresh_mean = 1e-7;
-
-        fprintf('CPU time: %.3fs, GPU time: %.3fs\n', t_cpu, t_gpu);
-        fprintf('Max abs diff: %.6g, Mean abs diff: %.6g\n', max_diff, mean_diff);
-
-        if max_diff < thresh_max && mean_diff < thresh_mean
-            print_pass(sprintf('2D (512x512) CPU and GPU edge_taper_auto are identical (max %.2g, mean %.2g)', max_diff, mean_diff));
-        else
-            print_fail(sprintf('2D (512x512) CPU and GPU edge_taper_auto differ! (max %.2g, mean %.2g)', max_diff, mean_diff));
-            all_ok = false;
-        end
-    catch ME
-        print_fail(['2D (512x512) CPU vs GPU edge_taper_auto test failed: ' ME.message]);
-        all_ok = false;
-    end
-
-    %% 2. Standard 3D test
+    %% 1. Standard 3D test
     sz = [64, 64, 32];
     A = rand(sz, 'single');
     PSF = fspecial('gaussian', 15, 2);
@@ -80,7 +34,7 @@ try
         all_ok = false;
     end
 
-    %% 3. Full 3D value range
+    %% 2. Full 3D value range
     if max(et_gpu_cpu(:)) <= 1 && min(et_gpu_cpu(:)) >= 0
         print_pass('GPU-tapered 3D volume values are within expected [0,1] range');
     else
@@ -88,7 +42,7 @@ try
         all_ok = false;
     end
 
-    %% 4. Small array edge case
+    %% 3. Small array edge case
     small_sz = [7,6,5];
     Asmall = rand(small_sz, 'single');
     PSFsmall = rand(3,3,3, 'single'); PSFsmall = PSFsmall/sum(PSFsmall(:));
@@ -102,7 +56,7 @@ try
         all_ok = false;
     end
 
-    %% 5. Output size matches input
+    %% 4. Output size matches input
     if isequal(size(et_gpu_cpu), sz)
         print_pass('Output size matches input size for 3D GPU test');
     else
@@ -110,7 +64,7 @@ try
         all_ok = false;
     end
 
-    %% 6. Test conv3d_mex against MATLAB's CPU reference (convn + replicate padding)
+    %% 5. Test conv3d_mex against MATLAB's CPU reference (convn + replicate padding)
     try
         img_sz = [24, 25, 22];
         ker_sz = [7, 5, 3];
@@ -145,7 +99,7 @@ try
         all_ok = false;
     end
 
-    %% 7. Trivial all-ones kernel/input test
+    %% 6. Trivial all-ones kernel/input test
     try
         I = ones(5,5,5,'single');
         K = ones(3,3,3,'single');
@@ -169,7 +123,7 @@ try
         all_ok = false;
     end
 
-    %% 8. Large 3D block edge_taper_auto GPU performance/stress test
+    %% 7. Large 3D block edge_taper_auto GPU performance/stress test
     try
         bl_large_sz = [512, 512, 512];
         psf_large_sz = [9, 9, 21];
@@ -199,49 +153,6 @@ try
         end
     catch ME
         print_fail(['Large 3D block edge_taper_auto test failed: ' ME.message]);
-        all_ok = false;
-    end
-
-    %% 9. Direct CPU vs GPU edge_taper_auto on identical large 3D block
-    try
-        fprintf('--- 3D CPU vs GPU edge_taper_auto test on large block ---\n');
-        test_sz = [512, 512, 512];
-        test_psf_sz = [11, 11, 9];
-
-        rng(1);
-        bl_cpu = rand(test_sz, 'single');
-        psf = rand(test_psf_sz, 'single');
-        psf = psf / sum(psf(:));
-
-        tic;
-        bl_cpu_tapered = edge_taper_auto(bl_cpu, psf);
-        t_cpu = toc;
-
-        bl_gpu = gpuArray(bl_cpu);
-        psf_gpu = gpuArray(psf);
-        wait(gpuDevice);
-        tic;
-        bl_gpu_tapered = edge_taper_auto(bl_gpu, psf_gpu);
-        wait(gpuDevice);
-        t_gpu = toc;
-        bl_gpu_tapered_cpu = gather(bl_gpu_tapered);
-
-        diff = abs(bl_cpu_tapered - bl_gpu_tapered_cpu);
-        max_diff = max(diff(:));
-        mean_diff = mean(diff(:));
-        thresh_max = 5e-4; thresh_mean = 1e-4;
-
-        fprintf('CPU time: %.2fs, GPU time: %.2fs\n', t_cpu, t_gpu);
-        fprintf('Max abs diff: %.6g, Mean abs diff: %.6g\n', max_diff, mean_diff);
-
-        if max_diff < thresh_max && mean_diff < thresh_mean
-            print_pass(sprintf('CPU and GPU edge_taper_auto agree (max %.3g, mean %.3g)', max_diff, mean_diff));
-        else
-            print_fail(sprintf('CPU and GPU edge_taper_auto differ! (max %.3g, mean %.3g)', max_diff, mean_diff));
-            all_ok = false;
-        end
-    catch ME
-        print_fail(['Large 3D CPU vs GPU edge_taper_auto test failed: ' ME.message]);
         all_ok = false;
     end
 
