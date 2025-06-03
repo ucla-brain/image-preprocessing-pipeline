@@ -242,13 +242,18 @@ function bl = edge_taper_inplace(bl, psf)
 %   - psf: PSF, will be cast and moved to same device as bl if needed
 
     % Normalize PSF in-place
-    if ~isa(psf, class(bl))
-        psf = cast(psf, class(bl));
+    % Ensure PSF is same class as bl (single/double) and same device (CPU/GPU)
+    if isa(bl, 'gpuArray')
+        if ~isa(psf, 'gpuArray')
+            psf = gpuArray(psf);
+        end
+    else
+        if isa(psf, 'gpuArray')
+            psf = gather(psf);
+        end
     end
-    if isa(bl, 'gpuArray') && ~isa(psf, 'gpuArray')
-        psf = gpuArray(psf);
-    elseif ~isa(bl, 'gpuArray') && isa(psf, 'gpuArray')
-        psf = gather(psf);
+    if ~strcmp(class(psf), class(bl))
+        psf = feval(class(bl), psf);
     end
     psf = psf ./ sum(psf(:));
 
