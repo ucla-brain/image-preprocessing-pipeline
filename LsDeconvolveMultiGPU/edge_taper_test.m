@@ -136,6 +136,70 @@ try
         print_fail(['Trivial all-ones test failed: ' ME.message]);
     end
 
+    % 8. Large 3D block edge_taper_auto GPU performance/stress test
+    try
+        bl_large_sz = [256, 256, 96];      % ~1.5GB, adjust for your GPU RAM
+        psf_large_sz = [21, 21, 11];
+        bl_large = rand(bl_large_sz, 'single');
+        psf_large = rand(psf_large_sz, 'single'); psf_large = psf_large / sum(psf_large(:));
+        bl_large_g = gpuArray(bl_large);
+        psf_large_g = gpuArray(psf_large);
+
+        % GPU timing
+        gpu_time = [];
+        for k = 1:3
+            tic;
+            bl_large_tapered = edge_taper_auto(bl_large_g, psf_large_g);
+            wait(gpuDevice);  % Make sure operation completes
+            gpu_time(k) = toc;
+        end
+        t_gpu = min(gpu_time);
+
+        % CPU timing (optional for very large arrays, may take much longer)
+        cpu_time = [];
+        cpu_test_possible = all(bl_large_sz < 300); % avoid OOM on huge arrays
+        if cpu_test_possible
+            for k = 1:2
+                tic;
+                % "Best effort" CPU equivalent for comparison: use imfilter, handle boundary
+                bl_cpu = bl_large;
+                bl_blur = imfilter(bl_cpu, psf_large, 'replicate', 'same', 'conv');
+                % Construct edge mask (copy your mask code for CPU here if needed)
+                mask = ones(bl_large_sz, 'single');
+                for d = 1:3
+                    dimsz = bl_large_sz(d);
+                    taper_width = max(8, round(psf_large_sz(d)/2));
+                    taper = make_taper(dimsz, taper_width);
+                    shape = ones(1,3); shape(d) = dimsz;
+                    mask = mask .* reshape(taper, shape);
+                end
+                bl_large_cpu = mask .* bl_cpu + (1-mask) .* bl_blur;
+                cpu_time(k) = toc;
+            end
+            t_cpu = min(cpu_time);
+        else
+            t_cpu = NaN;
+        end
+
+        bl_large_tapered_cpu = gather(bl_large_tapered);
+
+        if all(isfinite(bl_large_tapered_cpu(:))) && ...
+           max(bl_large_tapered_cpu(:)) <= 1 && ...
+           min(bl_large_tapered_cpu(:)) >= 0
+            if ~isnan(t_cpu)
+                perf_ratio = t_cpu / t_gpu * 100;
+                print_pass(sprintf('Large 3D edge_taper_auto: GPU %.3fs, CPU %.3fs (GPU is %.1f%% faster)', ...
+                    t_gpu, t_cpu, perf_ratio));
+            else
+                print_pass(sprintf('Large 3D edge_taper_auto: GPU %.3fs, CPU timing N/A (too big)', t_gpu));
+            end
+        else
+            print_fail('Large 3D block: edge_taper_auto output contains non-finite or out-of-bounds values!');
+        end
+    catch ME
+        print_fail(['Large 3D block edge_taper_auto test failed: ' ME.message]);
+    end
+
     % Final overall summary
     summary_ok = all_ok && maxdiff < pass_thresh && meandiff < mean_thresh && ...
           max(et_gpu_cpu(:)) <= 1 && min(et_gpu_cpu(:)) >= 0 && isequal(size(et_gpu_cpu), sz) && conv_ok;
@@ -153,30 +217,4 @@ end
 
 function print_fail(msg)
     fprintf('\x1b[1;31m❌ FAIL:\x1b[0m %s\n', msg);
-end
-
-function taper = make_taper(dimsz, taper_width)
-    % Robust 1D taper vector, always length==dimsz, regardless of input type
-    dimsz = double(dimsz);
-    taper_width = double(taper_width);
-    taper_width = min([taper_width, floor(dimsz/2)]);
-    if taper_width <= 0
-        taper = ones(round(dimsz),1,'single');
-        return
-    end
-    ramp = linspace(0,1,round(taper_width)+1)';
-    if 2*taper_width < dimsz
-        plateau = ones(round(dimsz-2*taper_width),1,'single');
-        ramp_down = flipud(ramp(1:end-1));
-        taper = [ramp; plateau; ramp_down];
-    else
-        ramp_down = flipud(ramp(1:end-1));
-        taper = [ramp; ramp_down];
-    end
-    % Defensive: guarantee length matches
-    if numel(taper) > round(dimsz)
-        taper = taper(1:round(dimsz));
-    elseif numel(taper) < round(dimsz)
-        taper = [taper; ones(round(dimsz - numel(taper)), 1, 'single')];
-    end
 end
