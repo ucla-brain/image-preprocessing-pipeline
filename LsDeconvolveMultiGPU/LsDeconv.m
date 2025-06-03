@@ -313,7 +313,7 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(...
 
     d_pad = [0 0 0];
     if filter.destripe_sigma > 0, d_pad = max(d_pad, [1 1 1]); end
-    if numit > 0, d_pad =  d_pad = max(d_pad, decon_pad_size(psf_size)); end
+    if numit > 0, d_pad = max(d_pad, decon_pad_size(psf_size)); end
     % Use coarse step for initial sweep (square xy blocks)
     for z = max_block(3):-1:min_block(3)
         for xy = max_block(1):-1:min_block(1)
@@ -700,7 +700,7 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
         bl = gpuArray(bl);
     end
 
-    if min(filter.gaussian_sigma(:)) > 0
+    if any(filter.gaussian_sigma > 0)
         if gpu
             bl = gauss3d_mex(bl, filter.gaussian_sigma, filter.gaussian_size, true);
         else
