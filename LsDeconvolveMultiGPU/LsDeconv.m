@@ -229,7 +229,11 @@ function [] = LsDeconv(varargin)
         p_log(log_file, ['   regularization interval: ' num2str(filter.regularize_interval)]);
         p_log(log_file, ['   Tikhonov regularization lambda (0 to 1): ' num2str(damping)]);
         p_log(log_file, ['   early stopping criterion (%): ' num2str(stop_criterion)]);
-        p_log(log_file, ['   deconvolve in frequency domain: ' num2str(filter.use_fft)]);
+        if filter.use_fft
+        p_log(log_file, ['   deconvolve in frequency domain: yes']);
+        else
+        p_log(log_file, ['   deconvolve in frequency domain: no']);
+        end
         if filter.use_fft
         p_log(log_file, ['   fft shape: ' num2str(block.fft_shape)]);
         end
