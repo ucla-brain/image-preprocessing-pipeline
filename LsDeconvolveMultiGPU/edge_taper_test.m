@@ -137,6 +137,7 @@ try
     end
 
     % 8. Large 3D block edge_taper_auto GPU performance/stress test
+    large_block_ok = true;
     try
         bl_large_sz = [256, 256, 96];      % ~1.5GB, adjust for your GPU RAM
         psf_large_sz = [21, 21, 11];
@@ -161,10 +162,9 @@ try
         if cpu_test_possible
             for k = 1:2
                 tic;
-                % "Best effort" CPU equivalent for comparison: use imfilter, handle boundary
                 bl_cpu = bl_large;
-                bl_blur = imfilter(bl_cpu, psf_large, 'replicate', 'same', 'conv');
-                % Construct edge mask (copy your mask code for CPU here if needed)
+                % *** PATCH: Cast filter kernel to double for imfilter! ***
+                bl_blur = imfilter(bl_cpu, double(psf_large), 'replicate', 'same', 'conv');
                 mask = ones(bl_large_sz, 'single');
                 for d = 1:3
                     dimsz = bl_large_sz(d);
@@ -195,14 +195,15 @@ try
             end
         else
             print_fail('Large 3D block: edge_taper_auto output contains non-finite or out-of-bounds values!');
+            large_block_ok = false;
         end
     catch ME
         print_fail(['Large 3D block edge_taper_auto test failed: ' ME.message]);
+        large_block_ok = false;
     end
 
-    % Final overall summary
     summary_ok = all_ok && maxdiff < pass_thresh && meandiff < mean_thresh && ...
-          max(et_gpu_cpu(:)) <= 1 && min(et_gpu_cpu(:)) >= 0 && isequal(size(et_gpu_cpu), sz) && conv_ok;
+        max(et_gpu_cpu(:)) <= 1 && min(et_gpu_cpu(:)) >= 0 && isequal(size(et_gpu_cpu), sz) && conv_ok && large_block_ok;
     if summary_ok
         print_pass('ALL TESTS PASSED 🎉');
     end
