@@ -1,9 +1,8 @@
 try
-    % Parameters
     pass_thresh = 0.2;     % Acceptable max diff (for 3D vs 2D)
     mean_thresh = 0.03;    % Acceptable mean diff
 
-    % 1. Standard 3D test
+    %% 1. Standard 3D test
     sz = [64, 64, 32];
     A = rand(sz, 'single');
     PSF = fspecial('gaussian', 15, 2);
@@ -23,7 +22,6 @@ try
     et_gpu = edge_taper_auto(Ag, PSFg);
     et_gpu_cpu = gather(et_gpu);
 
-    % Central slice compare
     diff_central = abs(et_cpu - et_gpu_cpu(:,:,round(sz(3)/2)));
     maxdiff = max(diff_central(:));
     meandiff = mean(diff_central(:));
@@ -33,27 +31,27 @@ try
         print_fail(sprintf('Central slice: max diff %.4g, mean diff %.4g', maxdiff, meandiff));
     end
 
-    % 2. Full 3D array self-consistency (should match original except at boundaries)
+    %% 2. Full 3D value range
     if max(et_gpu_cpu(:)) <= 1 && min(et_gpu_cpu(:)) >= 0
         print_pass('GPU-tapered 3D volume values are within expected [0,1] range');
     else
         print_fail('GPU-tapered 3D volume values out of expected range!');
     end
 
-    % 3. Small array edge case (robustness)
+    %% 3. Small array edge case
     small_sz = [7,6,5];
     Asmall = rand(small_sz, 'single');
     PSFsmall = rand(3,3,3, 'single'); PSFsmall = PSFsmall/sum(PSFsmall(:));
     try
         Asmall_gpu = gpuArray(Asmall);
         PSFsmall_gpu = gpuArray(PSFsmall);
-        edge_taper_auto(Asmall_gpu, PSFsmall_gpu); % <-- No ~=
+        edge_taper_auto(Asmall_gpu, PSFsmall_gpu);
         print_pass('Small 3D GPU array processed without reshape error');
     catch ME
         print_fail(sprintf('Small 3D GPU array failed: %s', ME.message));
     end
 
-    % 4. Taper vector length matches dimension (test all dims/tapers)
+    %% 4. Taper vector length matches dimension
     all_ok = true;
     for n = 1:20
         for t = 0:n
@@ -68,7 +66,7 @@ try
         print_pass('make_taper robust for all dims/taper_width');
     end
 
-    % 5. Output size matches input
+    %% 5. Output size matches input
     if isequal(size(et_gpu_cpu), sz)
         print_pass('Output size matches input size for 3D GPU test');
     else
@@ -76,7 +74,7 @@ try
         all_ok = false;
     end
 
-    % 6. Test conv3d_mex against MATLAB's CPU reference (convn + replicate padding)
+    %% 6. Test conv3d_mex against MATLAB's CPU reference (convn + replicate padding)
     conv_ok = false;
     try
         img_sz = [24, 25, 22];
@@ -87,15 +85,12 @@ try
         Ig = gpuArray(I);
         Kg = gpuArray(K);
 
-        % GPU result
         O_gpu = conv3d_mex(Ig, Kg);
         O_gpu_cpu = gather(O_gpu);
 
-        % CPU reference using convn with replicate boundary (pad & crop)
         pad = floor(ker_sz/2);
         Ipad = padarray(I, pad, 'replicate', 'both');
-        O_cpu_full = convn(Ipad, K, 'valid');  % valid convolution after padding gives same as 'same' with replicate
-        % Shape should match
+        O_cpu_full = convn(Ipad, K, 'valid');
         if isequal(size(O_gpu_cpu), size(O_cpu_full))
             diff_conv = abs(O_cpu_full - O_gpu_cpu);
             max_conv_diff = max(diff_conv(:));
@@ -113,7 +108,7 @@ try
         print_fail(['conv3d_mex test failed: ' ME.message]);
     end
 
-    % 7. Trivial all-ones kernel/input test
+    %% 7. Trivial all-ones kernel/input test
     try
         I = ones(5,5,5,'single');
         K = ones(3,3,3,'single');
@@ -136,10 +131,10 @@ try
         print_fail(['Trivial all-ones test failed: ' ME.message]);
     end
 
-    % 8. Large 3D block edge_taper_auto GPU performance/stress test
+    %% 8. Large 3D block edge_taper_auto GPU performance/stress test
     large_block_ok = true;
     try
-        bl_large_sz = [512, 512, 512];      % ~1.5GB, adjust for your GPU RAM
+        bl_large_sz = [512, 512, 512];
         psf_large_sz = [9, 9, 21];
         bl_large = rand(bl_large_sz, 'single');
         psf_large = rand(psf_large_sz, 'single'); psf_large = psf_large / sum(psf_large(:));
@@ -151,19 +146,19 @@ try
         for k = 1:3
             tic;
             bl_large_tapered = edge_taper_auto(bl_large_g, psf_large_g);
-            wait(gpuDevice);  % Make sure operation completes
+            wait(gpuDevice);
             gpu_time(k) = toc;
         end
         t_gpu = min(gpu_time);
 
-        % CPU timing (optional for very large arrays, may take much longer)
+        % CPU timing (can take a long time, enable with caution!)
         cpu_time = [];
-        cpu_test_possible = true; % all(bl_large_sz < 300); % avoid OOM on huge arrays
+        cpu_test_possible = false; % set to true to actually test
         if cpu_test_possible
+            fprintf('\x1b[1;33m⚠️  WARNING:\x1b[0m Running large CPU filter, may take minutes...\n');
             for k = 1:2
                 tic;
                 bl_cpu = bl_large;
-                % *** PATCH: Cast filter kernel to double for imfilter! ***
                 bl_blur = imfilter(bl_cpu, double(psf_large), 'replicate', 'same', 'conv');
                 mask = ones(bl_large_sz, 'single');
                 for d = 1:3
@@ -202,10 +197,58 @@ try
         large_block_ok = false;
     end
 
+    %% 9. Direct CPU vs GPU edge_taper_auto on identical large 3D block
+    cpu_gpu_identical_ok = true;
+    try
+        fprintf('--- 3D CPU vs GPU edge_taper_auto test on large block ---\n');
+        test_sz = [512, 512, 512];
+        test_psf_sz = [11, 11, 9];
+
+        rng(1);
+        bl_cpu = rand(test_sz, 'single');
+        psf = rand(test_psf_sz, 'single');
+        psf = psf / sum(psf(:));
+
+        tic;
+        bl_cpu_tapered = edge_taper_auto(bl_cpu, psf);
+        t_cpu = toc;
+
+        bl_gpu = gpuArray(bl_cpu);
+        psf_gpu = gpuArray(psf);
+        wait(gpuDevice);
+        tic;
+        bl_gpu_tapered = edge_taper_auto(bl_gpu, psf_gpu);
+        wait(gpuDevice);
+        t_gpu = toc;
+        bl_gpu_tapered_cpu = gather(bl_gpu_tapered);
+
+        diff = abs(bl_cpu_tapered - bl_gpu_tapered_cpu);
+        max_diff = max(diff(:));
+        mean_diff = mean(diff(:));
+        thresh_max = 5e-4; thresh_mean = 1e-4;
+
+        fprintf('CPU time: %.2fs, GPU time: %.2fs\n', t_cpu, t_gpu);
+        fprintf('Max abs diff: %.6g, Mean abs diff: %.6g\n', max_diff, mean_diff);
+
+        if max_diff < thresh_max && mean_diff < thresh_mean
+            print_pass(sprintf('CPU and GPU edge_taper_auto agree (max %.3g, mean %.3g)', max_diff, mean_diff));
+        else
+            print_fail(sprintf('CPU and GPU edge_taper_auto differ! (max %.3g, mean %.3g)', max_diff, mean_diff));
+            cpu_gpu_identical_ok = false;
+        end
+    catch ME
+        print_fail(['Large 3D CPU vs GPU edge_taper_auto test failed: ' ME.message]);
+        cpu_gpu_identical_ok = false;
+    end
+
+    %% Final overall summary
     summary_ok = all_ok && maxdiff < pass_thresh && meandiff < mean_thresh && ...
-        max(et_gpu_cpu(:)) <= 1 && min(et_gpu_cpu(:)) >= 0 && isequal(size(et_gpu_cpu), sz) && conv_ok && large_block_ok;
+        max(et_gpu_cpu(:)) <= 1 && min(et_gpu_cpu(:)) >= 0 && ...
+        isequal(size(et_gpu_cpu), sz) && conv_ok && large_block_ok && cpu_gpu_identical_ok;
     if summary_ok
         print_pass('ALL TESTS PASSED 🎉');
+    else
+        print_fail('Some tests failed.');
     end
 
 catch ME
@@ -218,4 +261,30 @@ end
 
 function print_fail(msg)
     fprintf('\x1b[1;31m❌ FAIL:\x1b[0m %s\n', msg);
+end
+
+function taper = make_taper(dimsz, taper_width)
+    % Robust 1D taper vector, always length==dimsz, regardless of input type
+    dimsz = double(dimsz);
+    taper_width = double(taper_width);
+    taper_width = min([taper_width, floor(dimsz/2)]);
+    if taper_width <= 0
+        taper = ones(round(dimsz),1,'single');
+        return
+    end
+    ramp = linspace(0,1,round(taper_width)+1)';
+    if 2*taper_width < dimsz
+        plateau = ones(round(dimsz-2*taper_width),1,'single');
+        ramp_down = flipud(ramp(1:end-1));
+        taper = [ramp; plateau; ramp_down];
+    else
+        ramp_down = flipud(ramp(1:end-1));
+        taper = [ramp; ramp_down];
+    end
+    if numel(taper) > round(dimsz)
+        taper = taper(1:round(dimsz));
+    elseif numel(taper) < round(dimsz)
+        taper = [taper; ones(round(dimsz - numel(taper)), 1, 'single')];
+    end
+    taper = single(taper(:));
 end
