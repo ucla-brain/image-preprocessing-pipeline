@@ -17,10 +17,12 @@ try
 
         et_ref  = edgetaper(A, PSF);           % CPU MATLAB reference
 
+        % --- Convert to 3D before sending to GPU ---
         A_gpu   = gpuArray(reshape(A, sz(1), sz(2), 1));
-        PSF_gpu = gpuArray(PSF);
+        PSF_gpu = gpuArray(reshape(PSF, psf_sz(1), psf_sz(2), 1));
         et_gpu  = edge_taper_auto(A_gpu, PSF_gpu);
         et_gpu_cpu = gather(et_gpu);
+        et_gpu_cpu = squeeze(et_gpu_cpu); % Remove singleton dimension for fair comparison
 
         diff = abs(et_gpu_cpu - et_ref);
         max_diff = max(diff(:));
