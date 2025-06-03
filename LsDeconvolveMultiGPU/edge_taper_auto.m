@@ -9,14 +9,14 @@ function bl = edge_taper_auto(bl, psf)
 % Requires conv3d_mex for GPU 3D convolution.
 % Requires make_taper.m in your path.
 
-    % --- Promote to 3D if 2D, for both CPU and GPU ---
-    orig_2d = (ndims(bl) == 2) || (ndims(bl) == 3 && size(bl,3) == 1);
+    % Always promote to 3D if 2D
     if ndims(bl) == 2
         bl = reshape(bl, size(bl,1), size(bl,2), 1);
     end
     if ndims(psf) == 2
         psf = reshape(psf, size(psf,1), size(psf,2), 1);
     end
+    orig_2d = (size(bl,3) == 1);
 
     % Normalize PSF
     psf = psf ./ sum(psf(:));
