@@ -1,3 +1,55 @@
+/*
+    gauss3d_mex.cu
+
+    High-performance 3D Gaussian filtering for MATLAB gpuArray inputs.
+
+    ----------------------------------------------------------------------------
+    Author:       Keivan Moradi (with assistance from ChatGPT v4.1, 2025)
+    License:      GPL v3
+    ----------------------------------------------------------------------------
+
+    Overview:
+    ---------
+    This MEX function implements a fast, memory-efficient, block-wise **3D Gaussian filter**
+    for single-precision (`single`) 3D gpuArray data in MATLAB, using CUDA for GPU acceleration.
+    It is **API-compatible** with MATLAB's `imgaussfilt3`, but is highly optimized
+    for batch processing and large volumes, and designed to be integrated into GPU deconvolution pipelines.
+
+    Key Features:
+    -------------
+      - **Heavy CUDA optimization**: Performs separable convolution along all 3 axes using constant-memory kernels, and launches tuned CUDA kernels for maximum performance.
+      - **Workspace control**: Accepts user-provided block padding and kernel size to allow batch-wise processing (important for large volumes or integration in multi-step GPU workflows).
+      - **OOM-resilient**: Attempts memory allocation with automatic retries and helpful warnings when out-of-memory occurs.
+      - **MATLAB gpuArray interface**: Input and output are both MATLAB `gpuArray(single)` objects, fully compatible with native MATLAB workflows.
+      - **Flexible sigma and kernel size**: Accepts scalar or vector `sigma` and kernel size for anisotropic filtering.
+      - **Open source, GPL v3**.
+
+    Differences from MATLAB's `imgaussfilt3`:
+    -----------------------------------------
+      1. **Much faster** on large data: Algorithm is hand-optimized for GPU with memory reuse and minimal transfers.
+      2. **External workspace control**: Padding/batching is managed outside the function, making it suitable for tiled processing during deconvolution or large-scale pipelines.
+      3. **Separable convolution**: Uses 1D convolutions in 3 passes, exploiting constant memory for kernel coefficients.
+      4. **Direct gpuArray support**: Does not require conversion or intermediate CPU copies.
+
+    Usage Example (in MATLAB):
+    --------------------------
+        x = gpuArray(single(randn(128,128,64)));
+        y = gauss3d_mex(x, 2.0);               % Isotropic sigma
+        y = gauss3d_mex(x, [2 1 4], [9 5 15]); % Anisotropic sigma & kernel size
+
+    Notes:
+    ------
+      - Input must be a 3D `gpuArray` of single precision.
+      - Designed for block-wise and pipelined use, e.g., in deconvolution, denoising, or pre-processing.
+      - All main computation is performed on the GPU with minimal synchronization overhead.
+
+    Acknowledgments:
+    ----------------
+      - Original algorithm and MEX/CUDA optimizations by Keivan Moradi.
+      - ChatGPT (OpenAI GPT-4.1, 2025) provided structural and code review assistance.
+
+*/
+
 #include "mex.h"
 #include "gpu/mxGPUArray.h"
 #include <cuda_runtime.h>
