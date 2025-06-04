@@ -9,12 +9,8 @@
 if ispc
     this_xml = fullfile(fileparts(mfilename('fullpath')), 'nvcc_msvcpp2022.xml');
     assert(isfile(this_xml), 'nvcc_msvcpp2022.xml not found!');
-    [status, msg] = system(['"' fullfile(matlabroot,'bin','mexcuda') '" -setup "' this_xml '"']);
-    if status ~= 0
-        error('Failed to set up mexcuda with nvcc_msvcpp2022.xml: %s', msg);
-    else
-        fprintf('mexcuda is now configured to use: %s\n', this_xml);
-    end
+    mexcuda('-setup', this_xml);
+    fprintf('mexcuda is now configured to use: %s\n', this_xml);
 end
 
 debug = false;
