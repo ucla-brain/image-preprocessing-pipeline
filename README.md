@@ -11,11 +11,11 @@ Python code for stitching and image enhancement of Light Sheet data
 * Install [anaconda python distribution](https://www.anaconda.com/products/individual):
   make a dedicated python environment for stitching:
 <!--- -c pytorch "pytorch>=2.2.1" "pytorch-cuda>=11.8" ptwt-->
-   `conda create -n stitching -c conda-forge -c nvidia -c pytorch python=3.11 pycudadecon "pytorch>=2.2.1" "pytorch-cuda>=11.8" psutil tqdm tifffile numpy scipy scikit-image scikit-learn matplotlib pandas 'imagecodecs>=2023.7.10' freeimage git mpi4py=3.1.5 hdf5plugin h5py ffmpeg cmake numba "numexpr>=2.8.4" jupyter ipykernel libopencv=4.8.* opencv=4.8.* py-opencv=4.8.* pynrrd`
+   `conda create -n stitching -c conda-forge -c nvidia -c pytorch python=3.11 pycudadecon "pytorch>=2.2.1" "pytorch-cuda>=11.8" psutil tqdm tifffile numpy scipy scikit-image scikit-learn matplotlib pandas 'imagecodecs>=2023.7.10' freeimage git mpi4py=3.1.5 ffmpeg cmake numba "numexpr>=2.8.4" jupyter ipykernel libopencv=4.8.* opencv=4.8.* py-opencv=4.8.* pynrrd`
 
    `conda activate stitching`
     
-   `pip install dcimg cpufeature pyvista ptwt`
+   `pip install dcimg cpufeature pyvista ptwt imaris_ims_file_reader`
    
 <!--- `conda install jaxlib=*=*cuda* jax cuda-nvcc -c conda-forge -c nvidia` -->
    
