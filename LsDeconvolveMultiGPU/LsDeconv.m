@@ -706,8 +706,10 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
         else
             bl = imgaussfilt3(bl, filter.gaussian_sigma, 'FilterSize', filter.gaussian_size, 'Padding', 'symmetric');
         end
-        bl = bl - filter.dark;
-        bl = max(bl, 0);
+        if filter.dark > 0
+            bl = bl - filter.dark;
+            bl = max(bl, 0);
+        end
     end
 
     if niter > 0 && max(bl(:)) > eps('single')
