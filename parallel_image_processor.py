@@ -35,25 +35,17 @@ def imread_tsv(tsv_volume: TSVVolume, extent: VExtent, d_type: str):
     return tsv_volume.imread(extent, d_type)[0]
 
 
-# Combines byte strings in a list: [b'1', b'6', b'0', b'0'] -> '1600'
-def combine_bytes(lst):
-    return ''.join(byte.decode('utf-8') for byte in lst)
-
-
 class ImarisZWrapper:
     @staticmethod
     @contextmanager
     def _suppress_stdout():
         with open(os.devnull, "w") as devnull:
             old_stdout = sys.stdout
-            old_stderr = sys.stderr
             sys.stdout = devnull
-            sys.stderr = devnull
             try:
                 yield
             finally:
                 sys.stdout = old_stdout
-                sys.stderr = old_stderr
 
     def __init__(self, ims_path, timepoint=0, channel=0):
         with self._suppress_stdout():
@@ -115,7 +107,6 @@ class MultiProcess(Process):
             save_images: bool = True,
             alternating_downsampling_method: bool = True,
             down_sampled_dtype: str = "float32",
-            enable_axis_correction: bool = True
     ):
         Process.__init__(self)
         self.daemon = False
@@ -161,7 +152,6 @@ class MultiProcess(Process):
             else:
                 self.calculate_down_sampling_target(shape, False, alternating_downsampling_method)
         self.rotation = rotation
-        self.enable_axis_correction = enable_axis_correction
 
     def calculate_down_sampling_target(self, new_shape: Tuple[int, int], is_rotated: bool,
                                        alternating_downsampling_method: bool):
@@ -270,22 +260,6 @@ class MultiProcess(Process):
         if is_tsv:
             x0, x1, y0, y1 = images.volume.x0, images.volume.x1, images.volume.y0, images.volume.y1
         if is_ims:
-            # file = h5py.File(images)
-            # images = file[f"DataSet/ResolutionLevel 0/TimePoint 0/Channel {channel}/Data"]
-            # attrs = file[f"DataSetInfo/Image"].attrs
-            # if (self.enable_axis_correction and
-            #         all(key in attrs for key in ['ExtMin0', 'ExtMax0', 'ExtMin1', 'ExtMax1', 'ExtMin2', 'ExtMax2'])):
-            #     x_min = float(combine_bytes(attrs['ExtMin0']))
-            #     x_max = float(combine_bytes(attrs['ExtMax0']))
-            #     y_min = float(combine_bytes(attrs['ExtMin1']))
-            #     y_max = float(combine_bytes(attrs['ExtMax1']))
-            #     z_min = float(combine_bytes(attrs['ExtMin2']))
-            #     z_max = float(combine_bytes(attrs['ExtMax2']))
-            #     flip_x = abs(x_min) > abs(x_max)
-            #     flip_y = abs(y_min) > abs(y_max)
-            #     flip_z = abs(z_min) > abs(z_max)
-            #     num_images = int(combine_bytes(attrs['Z']))
-
             images = ImarisZWrapper(images, timepoint=0, channel=channel)
             num_images = len(images)
 
@@ -535,7 +509,6 @@ def parallel_image_processor(
         resume: bool = True,
         needed_memory: int = None,
         save_images: bool = True,
-        enable_axis_correction: bool = True,
         return_downsampled_path: bool = False
 ):
     """
@@ -690,18 +663,12 @@ def parallel_image_processor(
     print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}starting workers ...")
     for worker in tqdm(range(workers), desc=' workers'):
         if progress_queue.qsize() + worker < num_images:
-            #print(f"Debug print - images in multi process: {len(images)}")
-            #print(f"Debug print - destination in multi process: {destination}")
-            #print(f"Debug print - kwargs in multi process: {kwargs}")
-            #print(f"Debug print - args in multi process: {args}")
-            #print(f"Debug print - dsp in multi process: {downsampled_path}")
-            #sys.exit()
             MultiProcess(
                 progress_queue, args_queue, semaphore, fun, images, destination, args, kwargs, shape, dtype,
                 rename=rename, tif_prefix=tif_prefix,
                 source_voxel=source_voxel, target_voxel=target_voxel, down_sampled_path=downsampled_path,
                 rotation=rotation, channel=channel, timeout=timeout, compression=compression, resume=resume,
-                needed_memory=needed_memory, save_images=save_images, enable_axis_correction=enable_axis_correction).start()
+                needed_memory=needed_memory, save_images=save_images).start()
         else:
             print('\n the existing workers can finish the job! no more workers are needed.')
             workers = worker

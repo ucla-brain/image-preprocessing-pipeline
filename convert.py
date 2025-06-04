@@ -128,7 +128,6 @@ def main(args: Namespace):
             downsampled_path=args.downsample_path,
             alternating_downsampling_method=False if args.downsample_method else True,
             down_sampled_dtype=args.downsample_dtype,
-            enable_axis_correction=args.enable_axis_correction
         )
     elif input_path.is_dir():
         tif_2d_folder = input_path
@@ -383,7 +382,10 @@ if __name__ == '__main__':
     parser.add_argument("--voxel-size-target", "-dt", type=float, default=None,
                         help="target voxel size in µm for 3D down-sampling.")
     parser.add_argument("--timeout", type=float, default=None,
-                        help="timeout in seconds for image reading. applies to image series and tsv volumes (not ims). adds up to 30 percent overhead for copying the data from one process to another.")
+                        help="timeout in seconds for image reading. "
+                             "Use it to work with 2D tif series that might have damaged files. "
+                             "Applies to image series and tsv volumes (not ims). "
+                             "Adds up to 30 percent overhead for copying the data from one process to another.")
     parser.add_argument("--rename", default=False, action=BooleanOptionalAction,
                         help="applies to tif to tif conversion only. sorts input files and renumbers them like img_000000.tif. Default is --no-rename.")
     parser.add_argument("--resume", default=False, action=BooleanOptionalAction,
@@ -391,10 +393,10 @@ if __name__ == '__main__':
     parser.add_argument("--needed-memory", type=int, default=1,
                         help="Memory needed per thread in GB. Default is 1 GB.")
     parser.add_argument("--save-images", default=True, action=BooleanOptionalAction,
-                        help="save the processed images. Default is --save-images. if you just need to do downsampling use --no-save-images.")
+                        help="save the processed images. Default is --save-images. "
+                             "if you just need to do downsampling use --no-save-images.")
     parser.add_argument("--threads-per-gpu", type=int, default=1,
-                        help="Number of images processed on one GPU at a time. Default is 1. Increase if the image sizes are small and multiple images fit into the vRAM.")
-    parser.add_argument("--enable-axis-correction", default=True, action=BooleanOptionalAction,
-                        help="include to automatically flip axes if necessary when processing .ims files")
+                        help="Number of images processed on one GPU at a time. Default is 1. "
+                             "Increase if the image sizes are small and multiple images fit into the vRAM.")
     main(parser.parse_args())
 
