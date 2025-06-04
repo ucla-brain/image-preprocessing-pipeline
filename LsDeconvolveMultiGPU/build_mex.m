@@ -9,7 +9,11 @@
 if ispc
     this_xml = fullfile(fileparts(mfilename('fullpath')), 'nvcc_msvcpp2022.xml');
     assert(isfile(this_xml), 'nvcc_msvcpp2022.xml not found!');
-    mexcuda('-setup', this_xml);
+    % Register the XML config file (safe, even if already registered)
+    mex('-setup', this_xml, '-v', 'C++');       % Registers as a C++ compiler
+    mex('-setup', this_xml, '-v', 'CUDA');      % Registers as a CUDA compiler (MATLAB R2020b+)
+    % Select as the current CUDA compiler
+    mexcuda('-setup'); % This will now use your xml if only one CUDA config is present
     fprintf('mexcuda is now configured to use: %s\n', this_xml);
 end
 
