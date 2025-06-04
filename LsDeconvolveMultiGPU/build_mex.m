@@ -4,6 +4,19 @@
 % Compile semaphore, queue, chunked LZ4, and GPU Gaussian MEX files.
 % Downloads lz4.c/.h from GitHub if missing.
 % Requires MATLAB R2018a+ (-R2018a mxArray API).
+
+% --- PATCH: Force mexcuda -setup to use local nvcc_msvcpp2022.xml on Windows ---
+if ispc
+    this_xml = fullfile(fileparts(mfilename('fullpath')), 'nvcc_msvcpp2022.xml');
+    assert(isfile(this_xml), 'nvcc_msvcpp2022.xml not found!');
+    [status, msg] = system(['"' fullfile(matlabroot,'bin','mexcuda') '" -setup "' this_xml '"']);
+    if status ~= 0
+        error('Failed to set up mexcuda with nvcc_msvcpp2022.xml: %s', msg);
+    else
+        fprintf('mexcuda is now configured to use: %s\n', this_xml);
+    end
+end
+
 debug = false;
 if verLessThan('matlab', '9.4')
     error('This script requires MATLAB R2018a or newer (for -R2018a MEX API)');
