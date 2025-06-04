@@ -73,6 +73,33 @@ Key scripts check file paths, validate image data, and provide meaningful error 
 
 ---
 
+## ⚠️ Windows CUDA/Visual Studio Compatibility
+
+To compile CUDA MEX files with MATLAB on Windows, you must have a **supported Microsoft Visual C++ (MSVC) toolset** installed.
+
+### Quick Steps
+
+1. **Open Visual Studio Installer**  
+   - Click **Modify** for your Visual Studio 2022 installation.  
+   - Under **Individual Components**, install **MSVC v14.39** (or any version ≤ 14.39).
+
+2. **No manual path setup required**  
+   - This repository provides a pre-configured `nvcc_msvcpp2022.xml` options file, which automatically directs MATLAB/nvcc to the correct MSVC toolset.
+
+3. **Build your CUDA MEX files as usual using this script.**  
+   - The build script uses the custom XML to select the proper compiler.
+
+### Why is this necessary?
+
+- CUDA does **not support the very latest MSVC versions** until NVIDIA releases a CUDA update.  
+- The provided XML ensures compatibility, but you must still have a *supported* MSVC toolset installed.
+
+### Reference
+
+- See [NVIDIA’s CUDA on Windows Compatibility](https://docs.nvidia.com/cuda/cuda-installation-guide-microsoft-windows/index.html#system-requirements) for details on supported MSVC versions.
+
+---
+
 ## Python Wrapper
 
 The `decwrap.py` script provides a convenient Python interface for running the MATLAB-based deconvolution pipeline directly from the command line. **Using this Python wrapper is strongly recommended over launching MATLAB manually**, as it includes critical features such as:
@@ -86,7 +113,7 @@ This ensures more reliable performance and reproducibility, especially on high-p
 
 ### Example:
 ```bash
-python decwrap.py -i /mnt/data/2D_tif_series --dxy 0.4 --dz 1.2 --lambda_ex 561 --lambda_em 600 --gpu-indices 1 2 --gpu-workers-per-gpu 4 --resume --sigma 0.5 0.5 1.5 --filter_size 5 5 15
+python decwrap.py -i /mnt/data/2D_tif_series --dxy 0.4 --dz 1.2 --lambda-ex 561 --lambda_em 600 --gpu-indices 1 2 --gpu-workers-per-gpu 4 --resume --gaussian-sigma 0.5 0.5 1.5 --gaussian-filter-size 5 5 15
 ```
 
 ### Key Features of the Wrapper:
