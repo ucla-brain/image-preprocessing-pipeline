@@ -2,15 +2,12 @@ function img = filter_subband(img, sigma, levels, wavelet, axes)
     % Applies Gaussian notch filtering to wavelet subbands
     % axes: [1] for vertical filtering, [2] for horizontal filtering
 
-    % original_class = class(img);
-    % img = im2single(img);
-
     % Pad image to even dimensions
     pad = mod(size(img), 2);
     img = padarray(img, pad, 'post');
 
     % Dynamic range compression
-    % img = log1p(img);
+    img = log1p(img);
 
     % Wavelet decomposition
     if levels == 0
@@ -52,23 +49,11 @@ function img = filter_subband(img, sigma, levels, wavelet, axes)
 
     % Wavelet reconstruction
     img = waverec2(C, S, wavelet);
-    % img = expm1(img);
+    img = expm1(img);
 
     % Unpadding (generalized)
     idx = arrayfun(@(d) 1:(size(img, d) - pad(d)), 1:ndims(img), 'UniformOutput', false);
     img = img(idx{:});
-
-    % Restore class
-    % switch original_class
-    %     case 'uint8'
-    %         img = im2uint8(img);
-    %     case 'uint16'
-    %         img = im2uint16(img);
-    %     case 'double'
-    %         img = im2double(img);
-    %     otherwise
-    %         img = max(min(img, 1), 0);
-    % end
 end
 
 function mat = filter_coefficient(mat, sigma, axis)
@@ -78,7 +63,7 @@ function mat = filter_coefficient(mat, sigma, axis)
     mat = fft(mat, n, axis);
 
     % Gaussian filter
-    g = gaussian_notch_filter_1d(n, sigma);
+    g = gaussian_notch_filter_1d(n, sigma, isgpuarray(mat));
     if axis == 1
         g = repmat(g(:), 1, size(mat, 2));
     elseif axis == 2
@@ -97,8 +82,10 @@ function mat = filter_coefficient(mat, sigma, axis)
     mat = real(ifft(mat, n, axis));
 end
 
-function g = gaussian_notch_filter_1d(n, sigma)
+function g = gaussian_notch_filter_1d(n, sigma, use_gpu)
     x = (0:n-1) - floor(n/2);
+    x = single(x);
+    if use_gpu, x = gpuArray(x); end
     g = 1 - exp(-(x .^ 2) / (2 * sigma ^ 2));
     g = fftshift(g);
 end
