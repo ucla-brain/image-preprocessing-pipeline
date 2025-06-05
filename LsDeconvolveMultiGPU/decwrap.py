@@ -25,6 +25,9 @@ def find_matlab_executable():
     if shutil.which(matlab_exec):
         return matlab_exec
     possible_paths = [
+        Path("C:/Program Files/MATLAB/R2025a/bin/matlab.exe"),
+        Path("/usr/local/MATLAB/R2025a/bin/matlab"),
+        Path("/opt/MATLAB/R2025a/bin/matlab"),
         Path("C:/Program Files/MATLAB/R2023a/bin/matlab.exe"),
         Path("/usr/local/MATLAB/R2023a/bin/matlab"),
         Path("/opt/MATLAB/R2023a/bin/matlab")
