@@ -1,30 +1,37 @@
-function img3d = filter_subband_3d_z(img3d, sigma, levels, wavelet)
+function bl = filter_subband_3d_z(bl, sigma, levels, wavelet)
     % Applies filter_subband to each XZ slice (along Y-axis)
     % In-place update version to avoid extra allocation
-
-    [X, Y, Z] = size(img3d);
-    original_class = class(img3d);
-    if ~isa(img3d, 'single')
-        img3d = single(img3d);
+    start_time = tic;
+    [X, Y, Z] = size(bl);
+    if isgpuarray(bl)
+        % Use underlyingType to get the data type inside the gpuArray
+        original_class = underlyingType(bl);
+    else
+        original_class = class(bl);
+    end
+    if ~strcmp(original_class, 'single')
+        bl = single(bl);
     end
 
     % Dynamic range compression
-    img3d = log1p(img3d);
+    bl = log1p(bl);
 
     % Apply filtering across Y axis
     for y = 1:Y
-        slice = reshape(img3d(:, y, :), [X, Z]);
+        slice = reshape(bl(:, y, :), [X, Z]);
         slice = filter_subband(slice, sigma, levels, wavelet, [2]);
-        img3d(:, y, :) = slice;
+        bl(:, y, :) = slice;
     end
 
     % Undo compression
-    img3d = expm1(img3d);
+    bl = expm1(bl);
 
     % Restore original data type
-    if ~isa(img3d, original_class)
-        img3d = cast(img3d, original_class);
+    % Restore original data type (remains on GPU if started as gpuArray)
+    if ~strcmp(classUnderlying(bl), original_class)
+        bl = cast(bl, original_class);
     end
+    fprintf("destripe ΔT: %.1f s\n", toc(start_time))
 end
 
 function img = filter_subband(img, sigma, levels, wavelet, axes)
