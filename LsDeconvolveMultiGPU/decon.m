@@ -43,6 +43,7 @@ function bl = deconSpatial(bl, psf, psf_inv, niter, lambda, stop_criterion, regu
         delta_prev = norm(bl(:));
     end
 
+    bl = edgetaper_3d(bl, psf);
     for i = 1:niter
         start_time = tic;
 
@@ -171,8 +172,6 @@ function [otf, otf_conj] = calculate_otf(psf, fft_shape, device_id)
     if device_id > 0
         psf = gpuArray(psf);
         [otf, otf_conj] = otf_gpu_mex(psf, fft_shape);
-        % if device_id > 0, otf = arrayfun(@(r, i) complex(r, i), real(otf), imag(otf)); end
-        % if device_id > 0, otf_conj = arrayfun(@(r, i) complex(r, i), real(otf_conj), imag(otf_conj)); end
     else
         [otf, ~, ~] = pad_block_to_fft_shape(psf, fft_shape, 0);
         otf = ifftshift(otf);
