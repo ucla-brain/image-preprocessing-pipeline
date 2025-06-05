@@ -7,7 +7,7 @@ function bl = filter_subband_3d_z(bl, sigma, levels, wavelet)
     if isgpuarray(bl)
         % Use underlyingType to get the data type inside the gpuArray
         original_class = underlyingType(bl);
-        dev = gpuDevice(bl);
+        dev = gpuDevice();
         device = sprintf("GPU%d", dev.Index);
     else
         original_class = class(bl);
