@@ -6,9 +6,6 @@ function img = filter_subband(img, sigma, levels, wavelet, axes)
     pad = mod(size(img), 2);
     img = padarray(img, pad, 'post');
 
-    % Dynamic range compression
-    img = log1p(img);
-
     % Wavelet decomposition
     if levels == 0
         levels = wmaxlev(size(img), wavelet);
@@ -49,7 +46,6 @@ function img = filter_subband(img, sigma, levels, wavelet, axes)
 
     % Wavelet reconstruction
     img = waverec2(C, S, wavelet);
-    img = expm1(img);
 
     % Unpadding (generalized)
     idx = arrayfun(@(d) 1:(size(img, d) - pad(d)), 1:ndims(img), 'UniformOutput', false);
