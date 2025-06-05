@@ -3,15 +3,20 @@ function bl = filter_subband_3d_z(bl, sigma, levels, wavelet)
     % In-place update version to avoid extra allocation
     start_time = tic;
     [X, Y, Z] = size(bl);
+    device = "CPU";
     if isgpuarray(bl)
-        % Use underlyingType to get the data type inside the gpuArray
         original_class = underlyingType(bl);
+        dev = gpuDevice(bl);
+        device = sprintf("GPU%d", dev.Index);
     else
         original_class = class(bl);
     end
     if ~strcmp(original_class, 'single')
         bl = single(bl);
     end
+
+    % Optional: check for negatives
+    % assert(all(gather(bl(:)) >= 0), 'Input contains negative values, cannot apply log1p.');
 
     % Dynamic range compression
     bl = log1p(bl);
@@ -26,13 +31,13 @@ function bl = filter_subband_3d_z(bl, sigma, levels, wavelet)
     % Undo compression
     bl = expm1(bl);
 
-    % Restore original data type
     % Restore original data type (remains on GPU if started as gpuArray)
     if ~strcmp(classUnderlying(bl), original_class)
         bl = cast(bl, original_class);
     end
-    fprintf("destripe ΔT: %.1f s\n", toc(start_time))
+    fprintf("%s: destripe ΔT: %.1f s\n", device, toc(start_time))
 end
+
 
 function img = filter_subband(img, sigma, levels, wavelet, axes)
     % Applies Gaussian notch filtering to wavelet subbands
