@@ -374,7 +374,7 @@ end
 
 function pad = decon_pad_size(psf_sz, use_fft)
     if use_fft
-        pad = ceil(psf_sz(:).' * 2);
+        pad = ceil(psf_sz(:).' * 3);
     else
         pad = ceil(psf_sz(:).' * 4);
     end
