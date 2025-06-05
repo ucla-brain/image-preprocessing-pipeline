@@ -6,9 +6,8 @@ function img = filter_subband(img, sigma, levels, wavelet, axes)
     % img = im2single(img);
 
     % Pad image to even dimensions
-    pad_x = mod(-size(img,1), 2); % 0 if even, 1 if odd
-    pad_y = mod(-size(img,2), 2);
-    img = padarray(img, [pad_x, pad_y], 'post');
+    pad = mod(size(img), 2);
+    img = padarray(img, pad, 'post');
 
     % Dynamic range compression
     % img = log1p(img);
@@ -55,8 +54,9 @@ function img = filter_subband(img, sigma, levels, wavelet, axes)
     img = waverec2(C, S, wavelet);
     % img = expm1(img);
 
-    % Crop
-    img = img(1:end - pad_x, 1:end - pad_y);
+    % Unpadding (generalized)
+    idx = arrayfun(@(d) 1:(size(img, d) - pad(d)), 1:ndims(img), 'UniformOutput', false);
+    img = img(idx{:});
 
     % Restore class
     % switch original_class
@@ -73,7 +73,7 @@ end
 
 function mat = filter_coefficient(mat, sigma, axis)
     % clamping sigma to avoid potential division by zero or numerical instability
-    sigma = max(sigma, 1e-5);
+    sigma = max(sigma, eps('single'));
     n = size(mat, axis);
     mat = fft(mat, n, axis);
 
@@ -85,6 +85,11 @@ function mat = filter_coefficient(mat, sigma, axis)
         g = repmat(g, size(mat, 1), 1);
     else
         error('Invalid axis');
+    end
+
+    % Convert filter to gpuArray if mat is gpuArray
+    if isgpuarray(mat)
+        g = gpuArray(g);
     end
 
     % Apply filter to complex spectrum

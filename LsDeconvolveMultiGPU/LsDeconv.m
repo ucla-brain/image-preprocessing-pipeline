@@ -424,6 +424,160 @@ function [p1, p2] = split(stack_info, block)
     end
 end
 
+function check_block_coverage_planes(stack_info, block)
+    % disp('Checking block coverage for errors ...');
+
+    p1 = block.p1;
+    p2 = block.p2;
+    errors = {};
+
+    % 1. Block boundary checks
+    for k = 1:size(p1,1)
+        if any(p1(k,:) < 1) || any(p2(k,:) > [stack_info.x, stack_info.y, stack_info.z])
+            errors{end+1} = sprintf('Block %d out of bounds: p1=%s, p2=%s', ...
+                k, mat2str(p1(k,:)), mat2str(p2(k,:)));
+        end
+        if any(p1(k,:) > p2(k,:))
+            errors{end+1} = sprintf('Block %d has p1 > p2: p1=%s, p2=%s', ...
+                k, mat2str(p1(k,:)), mat2str(p2(k,:)));
+        end
+    end
+
+    % 2. Z-plane coverage
+    z_cover = zeros(1, stack_info.z);
+    for k = 1:size(p1,1)
+        z_range = p1(k,3):p2(k,3);
+        z_cover(z_range) = z_cover(z_range) + 1;
+    end
+    missing_z = find(z_cover == 0);
+    if ~isempty(missing_z)
+        errors{end+1} = sprintf('Missing Z planes: %s', mat2str(missing_z));
+    end
+    if numel(find(z_cover > 0)) ~= stack_info.z
+        errors{end+1} = sprintf('Unique covered Z planes = %d, expected %d', ...
+            numel(find(z_cover > 0)), stack_info.z);
+    end
+    if max(p2(:,3)) > stack_info.z
+        errors{end+1} = sprintf('Blocks extend past last Z-plane! Max p2(:,3)=%d, stack_info.z=%d', ...
+            max(p2(:,3)), stack_info.z);
+    end
+    if min(p1(:,3)) < 1
+        errors{end+1} = sprintf('Blocks start before Z=1! Min p1(:,3)=%d', min(p1(:,3)));
+    end
+
+    % 3. XY coverage at first and last z planes
+    for z = [1, stack_info.z]
+        covered = zeros(stack_info.x, stack_info.y);
+        blocks = find(p1(:,3) <= z & p2(:,3) >= z);
+        for k = blocks.'
+            xs = p1(k,1):p2(k,1);
+            ys = p1(k,2):p2(k,2);
+            covered(xs, ys) = covered(xs, ys) + 1;
+        end
+        num_gaps = sum(covered(:) == 0);
+        num_overlaps = sum(covered(:) > 1); % This counts pixels covered by more than 1 block (not face/edge)
+        %disp(['   Blocks covering z=' num2str(z) ': ' num2str(numel(blocks))]);
+        %disp(['   XY at z=' num2str(z) ': gaps=' num2str(num_gaps) ', overlaps=' num2str(num_overlaps)]);
+        if num_gaps > 0
+            errors{end+1} = sprintf('XY at z=%d: %d gaps', z, num_gaps);
+        end
+        % Only error if overlaps are >0 *AND* not just at the faces
+        % But for most tiling schemes, face/edge/corner overlaps are fine and expected,
+        % so we don't report overlaps here unless you want to.
+    end
+
+    % 4. XZ coverage at first and last y planes
+    for y = [1, stack_info.y]
+        covered = zeros(stack_info.x, stack_info.z);
+        blocks = find(p1(:,2) <= y & p2(:,2) >= y);
+        for k = blocks.'
+            xs = p1(k,1):p2(k,1);
+            zs = p1(k,3):p2(k,3);
+            covered(xs, zs) = covered(xs, zs) + 1;
+        end
+        num_gaps = sum(covered(:) == 0);
+        num_overlaps = sum(covered(:) > 1);
+        %disp(['   Blocks covering y=' num2str(y) ': ' num2str(numel(blocks))]);
+        %disp(['   XZ at y=' num2str(y) ': gaps=' num2str(num_gaps) ', overlaps=' num2str(num_overlaps)]);
+        if num_gaps > 0
+            errors{end+1} = sprintf('XZ at y=%d: %d gaps', y, num_gaps);
+        end
+    end
+
+    % 5. YZ coverage at first and last x planes
+    for x = [1, stack_info.x]
+        covered = zeros(stack_info.y, stack_info.z);
+        blocks = find(p1(:,1) <= x & p2(:,1) >= x);
+        for k = blocks.'
+            ys = p1(k,2):p2(k,2);
+            zs = p1(k,3):p2(k,3);
+            covered(ys, zs) = covered(ys, zs) + 1;
+        end
+        num_gaps = sum(covered(:) == 0);
+        num_overlaps = sum(covered(:) > 1);
+        %disp(['   Blocks covering x=' num2str(x) ': ' num2str(numel(blocks))]);
+        %disp(['   YZ at x=' num2str(x) ': gaps=' num2str(num_gaps) ', overlaps=' num2str(num_overlaps)]);
+        if num_gaps > 0
+            errors{end+1} = sprintf('YZ at x=%d: %d gaps', x, num_gaps);
+        end
+    end
+
+    % 6. True 3D interior-overlap check (ignore face/edge/corner)
+    %disp('   Checking for true 3D interior overlaps (ignoring faces/edges/corners)...');
+    N = size(p1, 1);
+    true_overlaps = [];
+    for i = 1:N-1
+        p1_i = p1(i, :); p2_i = p2(i, :);
+        for j = i+1:N
+            p1_j = p1(j, :); p2_j = p2(j, :);
+            overlap_x = min(p2_i(1), p2_j(1)) - max(p1_i(1), p1_j(1)) + 1;
+            overlap_y = min(p2_i(2), p2_j(2)) - max(p1_i(2), p1_j(2)) + 1;
+            overlap_z = min(p2_i(3), p2_j(3)) - max(p1_i(3), p1_j(3)) + 1;
+            % All axes must have overlap > 1 (true interior)
+            if overlap_x > 1 && overlap_y > 1 && overlap_z > 1
+                true_overlaps = [true_overlaps; i, j];
+            end
+        end
+    end
+    if isempty(true_overlaps)
+        %disp('   No true 3D interior overlaps found between blocks.');
+    else
+        %disp('   True 3D interior overlaps found between blocks:');
+        disp(true_overlaps);
+        errors{end+1} = sprintf('Found %d pairs of blocks with true interior overlap.', size(true_overlaps, 1));
+    end
+
+    % 7. Warn if any block is much smaller than nominal
+    % nominal_block_size = [block.x, block.y, block.z];
+    % actual_sizes = block.p2 - block.p1 + 1;
+    % axis_labels = 'XYZ';
+    % for i = 1:size(actual_sizes, 1)
+    %     too_small = actual_sizes(i,:) < 0.5 * nominal_block_size;
+    %     if any(too_small)
+    %         % MATLAB R2019b+: strjoin(string)
+    %         axstr = '';
+    %         for dim = 1:3
+    %             if too_small(dim)
+    %                 axstr = [axstr, axis_labels(dim)];
+    %             end
+    %         end
+    %         if isempty(axstr)
+    %             axstr = '-';
+    %         end
+    %         fprintf('Warning: Block %d is small in axis %s. Size: [%s], Expected: [%s]\n', ...
+    %             i, axstr, num2str(actual_sizes(i,:)), num2str(nominal_block_size));
+    %     end
+    % end
+
+    % Final report
+    if ~isempty(errors)
+        err_msg = sprintf('Block coverage error(s) detected:\n%s', strjoin(errors, '\n'));
+        error(err_msg);
+    else
+        disp('   Block coverage test: PASSED');
+    end
+end
+
 function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
     damping, clipval, stop_criterion, gpus, cache_drive, amplification, ...
     filter, resume, starting_block)
@@ -694,6 +848,61 @@ function deconvolve(filelist, psf, numit, damping, ...
     end
 end
 
+function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
+    % Load a padded 3D block from the stack, using only available planes,
+    % and pad symmetrically to the target block size
+
+    block_start = [x1, y1, z1];
+    block_end   = [x2, y2, z2];
+    block_pad   = [block.x_pad, block.y_pad, block.z_pad];
+    volume_size = [stack_info.x, stack_info.y, stack_info.z];
+
+    % Request region (may go out of bounds at the edges)
+    requested_start = block_start - block_pad;
+    requested_end   = block_end   + block_pad;
+
+    % In-bounds region (what we can actually read)
+    read_start = max(1, requested_start);
+    read_end   = min(volume_size, requested_end);
+
+    % Indices to load for each axis
+    x_indices = read_start(1):read_end(1);
+    y_indices = read_start(2):read_end(2);
+    z_indices = read_start(3):read_end(3);
+
+    % Only allocate space for what we read from disk
+    bl = zeros(numel(x_indices), numel(y_indices), numel(z_indices), 'single');
+
+    % Read the valid slices
+    for k = 1:numel(z_indices)
+        slice_idx = z_indices(k);
+        slice = imread(filelist{slice_idx}, ...
+            'PixelRegion', {[y_indices(1), y_indices(end)], [x_indices(1), x_indices(end)]});
+        bl(:, :, k) = im2single(slice)';
+    end
+
+    % How much to pad before and after in each axis
+    pad_before = read_start - requested_start;
+    pad_after  = requested_end - read_end;
+
+    % Final block size after all padding
+    block_core_size = block_end - block_start + 1;
+    block_target_size = block_core_size + 2 * block_pad;
+
+    % Pad as needed to reach the requested size
+    if any(pad_before > 0)
+        bl = padarray(bl, pad_before, 'symmetric', 'pre');
+    end
+    if any(pad_after > 0)
+        bl = padarray(bl, pad_after, 'symmetric', 'post');
+    end
+
+    % Final check
+    assert(isequal(size(bl), block_target_size), ...
+        sprintf('[load_block] Output size mismatch! Got [%s], expected [%s]', ...
+        num2str(size(bl)), num2str(block_target_size)));
+end
+
 function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criterion, filter, gpu, semkey_gpu_base)
     bl_size = size(bl);
     if gpu && (min(filter.gaussian_sigma(:)) > 0 || niter > 0)
@@ -721,6 +930,10 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
         bl = decon(bl, psf, niter, lambda, stop_criterion, filter.regularize_interval, gpu, filter.use_fft, block.fft_shape);
     end
 
+    if filter.destripe_sigma > 0
+        bl = filter_subband_3d_z(bl, filter.destripe_sigma, 0, "db9");
+    end
+
     % since prctile function needs high vram usage gather it to avoid low
     % memory error
     if gpu && isgpuarray(bl) && free_GPU_vRAM(gpu, gpu_device) < 60
@@ -742,10 +955,6 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
         reset(gpu_device);  % to free gpu memory
         % queue('post', semkey_gpu_base, gpu);
         semaphore('p', semkey_gpu_base + gpu);
-    end
-
-    if filter.destripe_sigma > 0
-        bl = filter_subband_3d_z(bl, filter.destripe_sigma, 0, "db9");
     end
 
     assert(all(size(bl) == bl_size), '[process_block]: block size mismatch!');
@@ -1180,213 +1389,4 @@ function message = save_image_2d(im, path, s, rawmax, save_time)
         end
     end
     message = ['   saved img_' s ' in ' num2str(round(toc(save_time), 1)) ' seconds and after ' num2str(num_retries) ' attempts.'];
-end
-
-function check_block_coverage_planes(stack_info, block)
-    % disp('Checking block coverage for errors ...');
-
-    p1 = block.p1;
-    p2 = block.p2;
-    errors = {};
-
-    % 1. Block boundary checks
-    for k = 1:size(p1,1)
-        if any(p1(k,:) < 1) || any(p2(k,:) > [stack_info.x, stack_info.y, stack_info.z])
-            errors{end+1} = sprintf('Block %d out of bounds: p1=%s, p2=%s', ...
-                k, mat2str(p1(k,:)), mat2str(p2(k,:)));
-        end
-        if any(p1(k,:) > p2(k,:))
-            errors{end+1} = sprintf('Block %d has p1 > p2: p1=%s, p2=%s', ...
-                k, mat2str(p1(k,:)), mat2str(p2(k,:)));
-        end
-    end
-
-    % 2. Z-plane coverage
-    z_cover = zeros(1, stack_info.z);
-    for k = 1:size(p1,1)
-        z_range = p1(k,3):p2(k,3);
-        z_cover(z_range) = z_cover(z_range) + 1;
-    end
-    missing_z = find(z_cover == 0);
-    if ~isempty(missing_z)
-        errors{end+1} = sprintf('Missing Z planes: %s', mat2str(missing_z));
-    end
-    if numel(find(z_cover > 0)) ~= stack_info.z
-        errors{end+1} = sprintf('Unique covered Z planes = %d, expected %d', ...
-            numel(find(z_cover > 0)), stack_info.z);
-    end
-    if max(p2(:,3)) > stack_info.z
-        errors{end+1} = sprintf('Blocks extend past last Z-plane! Max p2(:,3)=%d, stack_info.z=%d', ...
-            max(p2(:,3)), stack_info.z);
-    end
-    if min(p1(:,3)) < 1
-        errors{end+1} = sprintf('Blocks start before Z=1! Min p1(:,3)=%d', min(p1(:,3)));
-    end
-
-    % 3. XY coverage at first and last z planes
-    for z = [1, stack_info.z]
-        covered = zeros(stack_info.x, stack_info.y);
-        blocks = find(p1(:,3) <= z & p2(:,3) >= z);
-        for k = blocks.'
-            xs = p1(k,1):p2(k,1);
-            ys = p1(k,2):p2(k,2);
-            covered(xs, ys) = covered(xs, ys) + 1;
-        end
-        num_gaps = sum(covered(:) == 0);
-        num_overlaps = sum(covered(:) > 1); % This counts pixels covered by more than 1 block (not face/edge)
-        %disp(['   Blocks covering z=' num2str(z) ': ' num2str(numel(blocks))]);
-        %disp(['   XY at z=' num2str(z) ': gaps=' num2str(num_gaps) ', overlaps=' num2str(num_overlaps)]);
-        if num_gaps > 0
-            errors{end+1} = sprintf('XY at z=%d: %d gaps', z, num_gaps);
-        end
-        % Only error if overlaps are >0 *AND* not just at the faces
-        % But for most tiling schemes, face/edge/corner overlaps are fine and expected,
-        % so we don't report overlaps here unless you want to.
-    end
-
-    % 4. XZ coverage at first and last y planes
-    for y = [1, stack_info.y]
-        covered = zeros(stack_info.x, stack_info.z);
-        blocks = find(p1(:,2) <= y & p2(:,2) >= y);
-        for k = blocks.'
-            xs = p1(k,1):p2(k,1);
-            zs = p1(k,3):p2(k,3);
-            covered(xs, zs) = covered(xs, zs) + 1;
-        end
-        num_gaps = sum(covered(:) == 0);
-        num_overlaps = sum(covered(:) > 1);
-        %disp(['   Blocks covering y=' num2str(y) ': ' num2str(numel(blocks))]);
-        %disp(['   XZ at y=' num2str(y) ': gaps=' num2str(num_gaps) ', overlaps=' num2str(num_overlaps)]);
-        if num_gaps > 0
-            errors{end+1} = sprintf('XZ at y=%d: %d gaps', y, num_gaps);
-        end
-    end
-
-    % 5. YZ coverage at first and last x planes
-    for x = [1, stack_info.x]
-        covered = zeros(stack_info.y, stack_info.z);
-        blocks = find(p1(:,1) <= x & p2(:,1) >= x);
-        for k = blocks.'
-            ys = p1(k,2):p2(k,2);
-            zs = p1(k,3):p2(k,3);
-            covered(ys, zs) = covered(ys, zs) + 1;
-        end
-        num_gaps = sum(covered(:) == 0);
-        num_overlaps = sum(covered(:) > 1);
-        %disp(['   Blocks covering x=' num2str(x) ': ' num2str(numel(blocks))]);
-        %disp(['   YZ at x=' num2str(x) ': gaps=' num2str(num_gaps) ', overlaps=' num2str(num_overlaps)]);
-        if num_gaps > 0
-            errors{end+1} = sprintf('YZ at x=%d: %d gaps', x, num_gaps);
-        end
-    end
-
-    % 6. True 3D interior-overlap check (ignore face/edge/corner)
-    %disp('   Checking for true 3D interior overlaps (ignoring faces/edges/corners)...');
-    N = size(p1, 1);
-    true_overlaps = [];
-    for i = 1:N-1
-        p1_i = p1(i, :); p2_i = p2(i, :);
-        for j = i+1:N
-            p1_j = p1(j, :); p2_j = p2(j, :);
-            overlap_x = min(p2_i(1), p2_j(1)) - max(p1_i(1), p1_j(1)) + 1;
-            overlap_y = min(p2_i(2), p2_j(2)) - max(p1_i(2), p1_j(2)) + 1;
-            overlap_z = min(p2_i(3), p2_j(3)) - max(p1_i(3), p1_j(3)) + 1;
-            % All axes must have overlap > 1 (true interior)
-            if overlap_x > 1 && overlap_y > 1 && overlap_z > 1
-                true_overlaps = [true_overlaps; i, j];
-            end
-        end
-    end
-    if isempty(true_overlaps)
-        %disp('   No true 3D interior overlaps found between blocks.');
-    else
-        %disp('   True 3D interior overlaps found between blocks:');
-        disp(true_overlaps);
-        errors{end+1} = sprintf('Found %d pairs of blocks with true interior overlap.', size(true_overlaps, 1));
-    end
-
-    % 7. Warn if any block is much smaller than nominal
-    % nominal_block_size = [block.x, block.y, block.z];
-    % actual_sizes = block.p2 - block.p1 + 1;
-    % axis_labels = 'XYZ';
-    % for i = 1:size(actual_sizes, 1)
-    %     too_small = actual_sizes(i,:) < 0.5 * nominal_block_size;
-    %     if any(too_small)
-    %         % MATLAB R2019b+: strjoin(string)
-    %         axstr = '';
-    %         for dim = 1:3
-    %             if too_small(dim)
-    %                 axstr = [axstr, axis_labels(dim)];
-    %             end
-    %         end
-    %         if isempty(axstr)
-    %             axstr = '-';
-    %         end
-    %         fprintf('Warning: Block %d is small in axis %s. Size: [%s], Expected: [%s]\n', ...
-    %             i, axstr, num2str(actual_sizes(i,:)), num2str(nominal_block_size));
-    %     end
-    % end
-
-    % Final report
-    if ~isempty(errors)
-        err_msg = sprintf('Block coverage error(s) detected:\n%s', strjoin(errors, '\n'));
-        error(err_msg);
-    else
-        disp('   Block coverage test: PASSED');
-    end
-end
-
-function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
-    % Load a padded 3D block from the stack, using only available planes,
-    % and pad symmetrically to the target block size
-
-    block_start = [x1, y1, z1];
-    block_end   = [x2, y2, z2];
-    block_pad   = [block.x_pad, block.y_pad, block.z_pad];
-    volume_size = [stack_info.x, stack_info.y, stack_info.z];
-
-    % Request region (may go out of bounds at the edges)
-    requested_start = block_start - block_pad;
-    requested_end   = block_end   + block_pad;
-
-    % In-bounds region (what we can actually read)
-    read_start = max(1, requested_start);
-    read_end   = min(volume_size, requested_end);
-
-    % Indices to load for each axis
-    x_indices = read_start(1):read_end(1);
-    y_indices = read_start(2):read_end(2);
-    z_indices = read_start(3):read_end(3);
-
-    % Only allocate space for what we read from disk
-    bl = zeros(numel(x_indices), numel(y_indices), numel(z_indices), 'single');
-
-    % Read the valid slices
-    for k = 1:numel(z_indices)
-        slice_idx = z_indices(k);
-        slice = imread(filelist{slice_idx}, ...
-            'PixelRegion', {[y_indices(1), y_indices(end)], [x_indices(1), x_indices(end)]});
-        bl(:, :, k) = im2single(slice)';
-    end
-
-    % How much to pad before and after in each axis
-    pad_before = read_start - requested_start;
-    pad_after  = requested_end - read_end;
-
-    % Final block size after all padding
-    block_core_size = block_end - block_start + 1;
-    block_target_size = block_core_size + 2 * block_pad;
-
-    % Pad as needed to reach the requested size
-    if any(pad_before > 0)
-        bl = padarray(bl, pad_before, 'symmetric', 'pre');
-    end
-    if any(pad_after > 0)
-        bl = padarray(bl, pad_after, 'symmetric', 'post');
-    end
-
-    % Final check
-    assert(isequal(size(bl), block_target_size), ...
-        sprintf('[load_block] Output size mismatch! Got [%s], expected [%s]', ...
-        num2str(size(bl)), num2str(block_target_size)));
 end
