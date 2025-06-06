@@ -95,10 +95,10 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     if (nrhs < 4)
         mexErrMsgIdAndTxt("deconFFT_mex:nrhs", "Requires at least 4 inputs: bl, otf, otf_conj, lambda");
 
-    // Correct pointer types: modifiable for bl, read-only for otf, otf_conj
-    mxGPUArray* bl_gpu = mxGPUCreateFromMxArray(prhs[0]);
-    const mxGPUArray* otf_gpu = mxGPUCreateFromMxArrayReadOnly(prhs[1]);
-    const mxGPUArray* otf_conj_gpu = mxGPUCreateFromMxArrayReadOnly(prhs[2]);
+    // All inputs as mxGPUArray* (no const)
+    mxGPUArray* bl_gpu         = mxGPUCreateFromMxArray(prhs[0]);
+    mxGPUArray* otf_gpu        = mxGPUCreateFromMxArray(prhs[1]);
+    mxGPUArray* otf_conj_gpu   = mxGPUCreateFromMxArray(prhs[2]);
     float lambda = *(float*)mxGetData(prhs[3]);
 
     const mwSize* sz = mxGPUGetDimensions(bl_gpu);
@@ -109,8 +109,8 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
         mexErrMsgIdAndTxt("deconFFT_mex:size", "Array size too large for size_t.");
 
     float* d_bl = (float*)mxGPUGetData(bl_gpu); // IN-PLACE!
-    const cufftComplex* d_otf = (const cufftComplex*)mxGPUGetDataReadOnly(otf_gpu);
-    const cufftComplex* d_otf_conj = (const cufftComplex*)mxGPUGetDataReadOnly(otf_conj_gpu);
+    cufftComplex* d_otf = (cufftComplex*)mxGPUGetDataReadOnly(otf_gpu); // treat as read-only
+    cufftComplex* d_otf_conj = (cufftComplex*)mxGPUGetDataReadOnly(otf_conj_gpu); // treat as read-only
 
     cufftHandle plan_fwd, plan_inv;
     CUFFT_CHECK(cufftPlan3d(&plan_fwd, dz, dy, dx, CUFFT_R2C));
@@ -136,7 +136,6 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     convFFT(d_bl, d_otf_conj, d_buf, dx, dy, dz, plan_fwd, plan_inv);
 
     if (lambda > 0) {
-        // reg = convFFT(bl, otf_reg) [for now, just copy bl; user must provide reg if needed]
         CUDA_CHECK(cudaMemcpy(d_reg, d_bl, nvox * sizeof(float), cudaMemcpyDeviceToDevice));
         weighted_sum<<<nblocks, nthreads>>>(d_bl, d_buf, d_reg, lambda, nvox);
         CUDA_CHECK(cudaGetLastError());
