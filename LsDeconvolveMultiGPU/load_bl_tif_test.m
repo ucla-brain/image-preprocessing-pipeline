@@ -18,11 +18,18 @@ function load_bl_tif_test()
     info = imfinfo(filelist{1});
     imageHeight = info.Height;
     imageWidth = info.Width;
+    bitDepth = info.BitDepth;
+
+    if bitDepth ~= 16
+        error('Expected 16-bit grayscale TIFF images.');
+    end
 
     blockSizes = [64, 64; 128, 96; 240, 240];
     testZ = [round(numSlices / 2), max(1, numSlices - 3)];
+    totalTests = size(blockSizes, 1) * numel(testZ);
 
-    results = [];
+    results = zeros(totalTests, 8); % columns: pass, zidx, blkH, blkW, x, y, maxerr, speedup
+    testIdx = 1;
 
     fprintf('\n%-4s | %-6s | %-9s | %-13s | %-11s | %-12s\n', ...
         'pass', 'Z', 'BlockSize', '(X,Y)', 'Max Error', 'Speedup');
@@ -41,11 +48,11 @@ function load_bl_tif_test()
 
             % MATLAB reference
             t1 = tic;
-            bl_gt = zeros(blkW, blkH, numel(z_indices), 'uint16');  % width x height x depth
+            bl_gt = zeros(blkW, blkH, numel(z_indices), 'uint16');  % [W, H, Z] order
             for k = 1:numel(z_indices)
                 slice = imread(filelist{z_indices(k)}, ...
                     'PixelRegion', {[y_indices(1), y_indices(end)], [x_indices(1), x_indices(end)]});
-                bl_gt(:, :, k) = slice';
+                bl_gt(:, :, k) = slice';  % transpose to match [W, H]
             end
             t_ref = toc(t1);
 
@@ -54,16 +61,17 @@ function load_bl_tif_test()
             bl_mex = load_bl_tif(filelist(z_indices), y, x, blkH, blkW);
             t_mex = toc(t2);
 
+            % Comparison
             diff = abs(bl_mex - bl_gt);
             maxerr = max(diff(:));
             pass = maxerr == 0;
+            symbol = char(pass * 10003 + ~pass * 10007);  % ✓ or ✗
 
-            % Print table row
-            symbol = char(10003 * pass + 10007 * ~pass); % ✅ or ❌
             fprintf('  %s  | %-6d | [%3d,%3d]  | (%5d,%5d) | %1.4e | %8.2fx\n', ...
                 symbol, zidx, blkH, blkW, x, y, maxerr, t_ref / t_mex);
 
-            results = [results; pass, zidx, blkH, blkW, x, y, maxerr, t_ref / t_mex];
+            results(testIdx, :) = [pass, zidx, blkH, blkW, x, y, maxerr, t_ref / t_mex];
+            testIdx = testIdx + 1;
         end
     end
 
