@@ -27,7 +27,7 @@ function load_bl_tif_test()
         error('Expected 16-bit grayscale TIFF images.');
     end
 
-    blockSizes = [64, 64; 128, 96; 240, 240];
+    blockSizes = [32, 12; 12, 23; 23, 12];
     testZ = [round(numSlices / 2), max(1, numSlices - 3)];
     totalTests = size(blockSizes, 1) * numel(testZ);
 
