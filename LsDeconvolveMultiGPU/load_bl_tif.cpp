@@ -35,11 +35,13 @@ void load_subregion(const LoadTask& task) {
         mexErrMsgIdAndTxt("TIFFLoad:NotGrayscale", "Only grayscale TIFFs are supported: %s", task.filename.c_str());
     if ((bitsPerSample != 8 && bitsPerSample != 16))
         mexErrMsgIdAndTxt("TIFFLoad:UnsupportedDepth", "Only 8/16-bit TIFFs are supported.");
-    if (task.x + task.width > imgWidth || task.y + task.height > imgHeight)
+
+    if ((uint32_t)(task.x + task.width) > imgWidth || (uint32_t)(task.y + task.height) > imgHeight)
         mexErrMsgIdAndTxt("TIFFLoad:SubregionBounds", "Subregion out of bounds in: %s", task.filename.c_str());
 
     size_t pixelSize = bitsPerSample / 8;
-    std::vector<uint8_t> rowBuffer(imgWidth * samplesPerPixel * pixelSize);
+    size_t scanlineSize = imgWidth * samplesPerPixel * pixelSize;
+    std::vector<uint8_t> rowBuffer(scanlineSize);
 
     for (int row = 0; row < task.height; ++row) {
         if (!TIFFReadScanline(tif, rowBuffer.data(), task.y + row))
@@ -50,8 +52,12 @@ void load_subregion(const LoadTask& task) {
             size_t dstIdx = row + col * task.height + task.zindex * task.dst_stride;
 
             if (task.type == mxUINT8_CLASS) {
+                if (srcIdx >= rowBuffer.size())
+                    mexErrMsgTxt("Read access out of scanline bounds (uint8).");
                 ((uint8_T*)task.dst)[dstIdx] = rowBuffer[srcIdx];
             } else {
+                if ((task.x + col) >= imgWidth)
+                    mexErrMsgTxt("Read access out of scanline bounds (uint16).");
                 ((uint16_T*)task.dst)[dstIdx] = ((uint16_T*)rowBuffer.data())[task.x + col];
             }
         }
@@ -60,15 +66,13 @@ void load_subregion(const LoadTask& task) {
     TIFFClose(tif);
 }
 
-// MATLAB call: bl = load_bl_tif(files, y, x, height, width [, num_threads])
 void mexFunction(int nlhs, mxArray* plhs[],
                  int nrhs, const mxArray* prhs[]) {
     if (nrhs == 0)
-        mexErrMsgTxt("Usage: img = load_bl_mex(files, y, x, height, width [, num_threads])");
+        mexErrMsgTxt("Usage: img = load_bl_tif(files, y, x, height, width [, num_threads])");
     if (nrhs < 5)
         mexErrMsgTxt("Expected at least 5 input arguments.");
 
-    // Parse file list
     if (!mxIsCell(prhs[0]))
         mexErrMsgTxt("First argument must be a cell array of filenames.");
     size_t numSlices = mxGetNumberOfElements(prhs[0]);
@@ -87,7 +91,7 @@ void mexFunction(int nlhs, mxArray* plhs[],
     int nthreads = (nrhs >= 6) ? (int)mxGetScalar(prhs[5]) : std::min<int>(std::thread::hardware_concurrency(), numSlices);
     if (nthreads < 1) nthreads = 1;
 
-    // Probe first image for output type and sanity check
+    // Probe first image for type
     TIFF* tif = TIFFOpen(filenames[0].c_str(), "r");
     if (!tif)
         mexErrMsgIdAndTxt("TIFFLoad:OpenFail", "Failed to open: %s", filenames[0].c_str());
@@ -103,7 +107,7 @@ void mexFunction(int nlhs, mxArray* plhs[],
         mexErrMsgTxt("Only grayscale TIFFs are supported.");
     if (bitsPerSample != 8 && bitsPerSample != 16)
         mexErrMsgTxt("Only 8-bit or 16-bit grayscale TIFFs are supported.");
-    if (x + width > imgWidth || y + height > imgHeight)
+    if ((uint32_t)(x + width) > imgWidth || (uint32_t)(y + height) > imgHeight)
         mexErrMsgTxt("Requested subregion is out of bounds.");
 
     mxClassID outType = (bitsPerSample == 8) ? mxUINT8_CLASS : mxUINT16_CLASS;
@@ -115,7 +119,7 @@ void mexFunction(int nlhs, mxArray* plhs[],
     void* outData = mxGetData(plhs[0]);
     int stride = height * width;
 
-    // Prepare thread tasks
+    // Prepare threaded tasks
     std::vector<std::future<void>> futures;
     std::mutex queue_mutex;
     size_t task_idx = 0;
@@ -136,6 +140,6 @@ void mexFunction(int nlhs, mxArray* plhs[],
 
     for (int i = 0; i < nthreads; ++i)
         futures.push_back(std::async(std::launch::async, worker));
-    for (auto& future : futures)
-        future.get(); // wait for all threads
+    for (auto& f : futures)
+        f.get();
 }
