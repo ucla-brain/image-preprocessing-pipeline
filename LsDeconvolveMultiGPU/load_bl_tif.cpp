@@ -51,9 +51,7 @@ void load_subregion(const LoadTask& task) {
 
         for (int col = 0; col < task.width; ++col) {
             size_t srcIdx = static_cast<size_t>(task.x + col) * pixelSize;
-            size_t dstIdx = static_cast<size_t>(col) +
-                            static_cast<size_t>(row) * task.width +
-                            task.zindex * task.planeStride;
+            size_t dstIdx = static_cast<size_t>(col) + static_cast<size_t>(row) * task.width + task.zindex * task.planeStride;
 
             if (task.type == mxUINT8_CLASS) {
                 ((uint8_ptr)task.dst)[dstIdx] = rowBuffer[srcIdx];
