@@ -97,8 +97,8 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
 
     // Correct pointer types
     mxGPUArray* bl_gpu = mxGPUCreateFromMxArray(prhs[0]);                   // IN-PLACE
-    const mxGPUArray* otf_gpu = mxGPUCreateFromMxArray(prhs[1]);            // read-only
-    const mxGPUArray* otf_conj_gpu = mxGPUCreateFromMxArray(prhs[2]);       // read-only
+    const mxGPUArray* otf_gpu = mxGPUCreateFromMxArrayReadOnly(prhs[1]);            // read-only
+    const mxGPUArray* otf_conj_gpu = mxGPUCreateFromMxArrayReadOnly(prhs[2]);       // read-only
     float lambda = *(float*)mxGetData(prhs[3]);
 
     const mwSize* sz = mxGPUGetDimensions(bl_gpu);
