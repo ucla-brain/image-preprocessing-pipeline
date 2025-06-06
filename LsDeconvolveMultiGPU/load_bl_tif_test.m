@@ -38,15 +38,15 @@ function load_bl_tif_test()
             for k = 1:numel(z_indices)
                 slice = imread(filelist{z_indices(k)}, ...
                     'PixelRegion', {[y_indices(1), y_indices(end)], [x_indices(1), x_indices(end)]});
-                bl_gt(:, :, k) = slice';
+                bl_gt(:, :, k) = im2single(slice)';
             end
 
-            bl_mex = load_bl_tif(filelist(z_indices), y, x, blkH, blkW);
+            bl_mex = im2single(load_bl_tif(filelist(z_indices), y, x, blkH, blkW));
 
             disp("Size of bl_mex:"); disp(size(bl_mex));
             disp("Size of bl_gt:"); disp(size(bl_gt));
 
-            diff = abs(single(bl_mex) - bl_gt);
+            diff = abs(bl_mex - bl_gt);
             maxerr = max(diff(:));
 
             fprintf('Test z=%d, block=[%d,%d] at (x=%d,y=%d): max error = %.4g\n', ...
