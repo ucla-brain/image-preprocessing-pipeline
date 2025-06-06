@@ -54,20 +54,12 @@ void load_subregion(const LoadTask& task) {
             size_t dstIdx = static_cast<size_t>(row) + static_cast<size_t>(col) * task.height + task.zindex * task.dst_stride;
 
             if (task.type == mxUINT8_CLASS) {
-                if (srcIdx >= rowBuffer.size())
-                    mexErrMsgTxt("Read access out of scanline bounds (uint8).");
                 ((uint8_ptr)task.dst)[dstIdx] = rowBuffer[srcIdx];
             } else if (task.type == mxUINT16_CLASS) {
-                size_t index16 = task.x + col;
-                if ((index16 + 1) * sizeof(uint16_T) > rowBuffer.size())
-                    mexErrMsgTxt("Read access out of scanline bounds (uint16).");
-                ((uint16_ptr)task.dst)[dstIdx] = ((uint16_T*)rowBuffer.data())[index16];
-            } else {
-                mexErrMsgTxt("This function supports only uint8 and uint16.");
+                ((uint16_ptr)task.dst)[dstIdx] = ((uint16_T*)rowBuffer.data())[task.x + col];
             }
         }
     }
-
     TIFFClose(tif);
 }
 
