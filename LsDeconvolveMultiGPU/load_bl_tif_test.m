@@ -42,6 +42,11 @@ function load_bl_tif_test()
             end
 
             bl_mex = load_bl_tif(filelist(z_indices), y, x, blkH, blkW);
+
+            disp("Size of bl_mex:"); disp(size(bl_mex));
+            disp("Size of bl_gt:"); disp(size(bl_gt));
+
+
             diff = abs(im2single(bl_mex) - bl_gt);
             maxerr = max(diff(:));
 

@@ -49,7 +49,7 @@ void load_subregion(const LoadTask& task) {
 
         for (int col = 0; col < task.width; ++col) {
             size_t srcIdx = (task.x + col) * pixelSize;
-            size_t dstIdx = row + col * task.height + task.zindex * task.dst_stride;
+            size_t dstIdx = col + row * task.width + task.zindex * task.dst_stride;
 
             if (task.type == mxUINT8_CLASS) {
                 if (srcIdx >= rowBuffer.size())
