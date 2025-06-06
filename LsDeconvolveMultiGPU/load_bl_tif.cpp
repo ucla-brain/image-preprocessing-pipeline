@@ -21,45 +21,50 @@ struct LoadTask
 // ------------------------------------------------------------
 //  Copy one TIFF file's sub-region into the MATLAB output
 // ------------------------------------------------------------
-void load_subregion(const LoadTask& task)
-{
+void load_subregion(const LoadTask& task) {
     TIFF* tif = TIFFOpen(task.filename.c_str(), "r");
     if (!tif)
         mexErrMsgIdAndTxt("TIFFLoad:OpenFail", "Failed to open: %s", task.filename.c_str());
 
-    uint32_t imgW, imgH;
-    uint16_t bps, spp = 1;
-    TIFFGetField(tif, TIFFTAG_IMAGEWIDTH , &imgW);
-    TIFFGetField(tif, TIFFTAG_IMAGELENGTH, &imgH);
-    TIFFGetField(tif, TIFFTAG_BITSPERSAMPLE, &bps);
-    TIFFGetFieldDefaulted(tif, TIFFTAG_SAMPLESPERPIXEL, &spp);
+    uint32_t imgWidth, imgHeight;
+    uint16_t bitsPerSample, samplesPerPixel = 1;
+    TIFFGetField(tif, TIFFTAG_IMAGEWIDTH, &imgWidth);
+    TIFFGetField(tif, TIFFTAG_IMAGELENGTH, &imgHeight);
+    TIFFGetField(tif, TIFFTAG_BITSPERSAMPLE, &bitsPerSample);
+    TIFFGetFieldDefaulted(tif, TIFFTAG_SAMPLESPERPIXEL, &samplesPerPixel);
 
-    if (spp != 1)
+    if (samplesPerPixel != 1)
         mexErrMsgIdAndTxt("TIFFLoad:NotGrayscale", "Only grayscale TIFFs are supported: %s", task.filename.c_str());
-    if (bps != 8 && bps != 16)
+    if (bitsPerSample != 8 && bitsPerSample != 16)
         mexErrMsgIdAndTxt("TIFFLoad:UnsupportedDepth", "Only 8/16-bit TIFFs are supported.");
-    if ((uint32_t)(task.x + task.width ) > imgW || (uint32_t)(task.y + task.height) > imgH)
+    if ((uint32_t)(task.x + task.width - 1) > imgWidth || (uint32_t)(task.y + task.height - 1) > imgHeight)
         mexErrMsgIdAndTxt("TIFFLoad:SubregionBounds", "Subregion out of bounds in: %s", task.filename.c_str());
 
-    const size_t pixelSize = bps / 8;
-    const size_t scanline = imgW * pixelSize;
-    std::vector<uint8_t> rowBuf(scanline);
+    size_t pixelSize = bitsPerSample / 8;
+    if (pixelSize != 1 && pixelSize != 2)
+        mexErrMsgIdAndTxt("TIFFLoad:InvalidPixelSize", "Unsupported pixel size: %zu", pixelSize);
 
-    for (int row = 0; row < task.height; ++row)
-    {
-        // FIXED: Subtract 1 from task.y to convert 1-based (MATLAB) to 0-based (C)
-        if (!TIFFReadScanline(tif, rowBuf.data(), task.y - 1 + row))
+    size_t scanlineSize = imgWidth * pixelSize;
+    std::vector<uint8_t> rowBuffer(scanlineSize);
+
+    for (int row = 0; row < task.height; ++row) {
+        if (!TIFFReadScanline(tif, rowBuffer.data(), task.y - 1 + row))
             mexErrMsgIdAndTxt("TIFFLoad:ReadError", "Failed to read scanline in: %s", task.filename.c_str());
 
-        for (int col = 0; col < task.width; ++col)
-        {
-            const size_t srcIdx = static_cast<size_t>(task.x + col) * pixelSize;
-            size_t dstPixel =  static_cast<size_t>(row)
-                             + static_cast<size_t>(col) * task.height
-                             + task.zindex * task.planeStride;
-            size_t dstByte = dstPixel * pixelSize;
-            std::memcpy(static_cast<uint8_t*>(task.dst) + dstByte,
-                        rowBuf.data() + srcIdx, pixelSize);
+        for (int col = 0; col < task.width; ++col) {
+            size_t srcIdx = static_cast<size_t>(task.x - 1 + col) * pixelSize; // <-- FIXED!
+            size_t dstPixelOffset = static_cast<size_t>(row) +
+                                    static_cast<size_t>(col) * task.height +
+                                    task.zindex * task.planeStride;
+            size_t dstByteOffset = dstPixelOffset * pixelSize;
+
+            if (task.type == mxUINT8_CLASS || task.type == mxUINT16_CLASS) {
+                std::memcpy(static_cast<uint8_t*>(task.dst) + dstByteOffset,
+                            rowBuffer.data() + srcIdx,
+                            pixelSize);
+            } else {
+                mexErrMsgIdAndTxt("TIFFLoad:UnsupportedType", "Unsupported output data type.");
+            }
         }
     }
     TIFFClose(tif);
