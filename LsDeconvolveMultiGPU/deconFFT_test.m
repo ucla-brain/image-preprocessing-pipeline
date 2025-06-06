@@ -3,19 +3,19 @@ function deconFFT_test
 % Reports results in a pretty, colored table
 
 tests = {
-    'Small array, lambda=0',      [64,64,32],  0.0
-    'Medium array, lambda=0',     [128,128,64],0.0
-    'Large array, lambda=0',      [512,512,128],0.0
-    'Large array, lambda=0.05',   [512,512,128],0.05
-    'Non-cube, lambda=0',         [32,48,96],  0.0
-    'Non-cube, lambda=0.1',       [32,48,96],  0.1
+    'Small array, lambda=0',      [64,64,32],    0.0
+    'Medium array, lambda=0',     [128,128,64],  0.0
+    'Large array, lambda=0',      [512,512,128], 0.0
+    'Large array, lambda=0.05',   [512,512,128], 0.05
+    'Non-cube, lambda=0',         [32,48,96],    0.0
+    'Non-cube, lambda=0.1',       [32,48,96],    0.1
 };
 
 tol = 2e-4; % accuracy threshold (adjust for your kernel if needed)
 gpu = gpuDevice;
 fprintf('Using GPU: %s\n', gpu.Name);
 
-results = cell(size(tests,1), 7);
+results = cell(size(tests,1), 8);
 
 for k = 1:size(tests,1)
     label = tests{k,1};
@@ -40,7 +40,7 @@ for k = 1:size(tests,1)
     buf = convFFT_matlab(buf, otf_conj);
     if lambda > 0
         % Simple Tikhonov regularization: 3D Laplacian kernel
-        R = fspecial3('laplacian', [3 3 3]); % 3D Laplacian (minimalist)
+        R = fspecial3('laplacian', [3 3 3]); % now robust
         reg = convFFT_matlab(bl, fftn(R, sz));
         result_ref = bl .* buf .* (1-lambda) + reg .* lambda;
     else
@@ -77,7 +77,7 @@ for k = 1:size(tests,1)
 end
 
 % --- Print Table ---
-header = ["Pass", "Test", "bl size", "lambda", "Max abs diff", "Mean abs diff", "Rel norm diff", "GPU speedup (%)"];
+header = ["Pass", "Test", "Input size", "lambda", "Max abs diff", "Mean abs diff", "Rel norm diff", "GPU speedup (%)"];
 fmt = ['%-8s  %-22s  %-13s  %-8s  %-14s  %-14s  %-15s  %-15s\n'];
 fprintf('\n');
 fprintf(fmt, header{:});
@@ -109,7 +109,9 @@ end
 
 function h = fspecial3(type, sz, sigma)
 % Minimal 3D gaussian/laplacian generator for testing
-if isscalar(sz), sz = repmat(sz,1,3); end
+if isscalar(sz)
+    sz = repmat(sz,1,3);
+end
 if nargin < 3, sigma = 1; end
 switch lower(type)
     case 'gaussian'
@@ -120,10 +122,11 @@ switch lower(type)
         h = h/sum(h(:));
     case 'laplacian'
         h = zeros(sz, 'single');
-        h(floor(sz(1)/2)+1, floor(sz(2)/2)+1, floor(sz(3)/2)+1) = -6;
-        h(floor(sz(1)/2)+[0,-1,+1], floor(sz(2)/2)+1, floor(sz(3)/2)+1) = 1;
-        h(floor(sz(1)/2)+1, floor(sz(2)/2)+[0,-1,+1], floor(sz(3)/2)+1) = 1;
-        h(floor(sz(1)/2)+1, floor(sz(2)/2)+1, floor(sz(3)/2)+[0,-1,+1]) = 1;
+        c = floor(sz/2)+1;
+        h(c(1),c(2),c(3)) = -6;
+        h([c(1)-1,c(1)+1],c(2),c(3)) = 1;
+        h(c(1),[c(2)-1,c(2)+1],c(3)) = 1;
+        h(c(1),c(2),[c(3)-1,c(3)+1]) = 1;
     otherwise
         error('Unknown kernel');
 end
