@@ -95,10 +95,10 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     if (nrhs < 4)
         mexErrMsgIdAndTxt("deconFFT_mex:nrhs", "Requires at least 4 inputs: bl, otf, otf_conj, lambda");
 
-    // Correct pointer types
-    mxGPUArray* bl_gpu = mxGPUCreateFromMxArray(prhs[0]);                   // IN-PLACE
-    const mxGPUArray* otf_gpu = mxGPUCreateFromMxArrayReadOnly(prhs[1]);            // read-only
-    const mxGPUArray* otf_conj_gpu = mxGPUCreateFromMxArrayReadOnly(prhs[2]);       // read-only
+    // Correct pointer types: modifiable for bl, read-only for otf, otf_conj
+    mxGPUArray* bl_gpu = mxGPUCreateFromMxArray(prhs[0]);
+    const mxGPUArray* otf_gpu = mxGPUCreateFromMxArrayReadOnly(prhs[1]);
+    const mxGPUArray* otf_conj_gpu = mxGPUCreateFromMxArrayReadOnly(prhs[2]);
     float lambda = *(float*)mxGetData(prhs[3]);
 
     const mwSize* sz = mxGPUGetDimensions(bl_gpu);
