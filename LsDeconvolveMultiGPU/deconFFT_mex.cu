@@ -75,6 +75,11 @@ __global__ void multiply_complex(cufftComplex* a, const cufftComplex* b, size_t 
     }
 }
 
+__global__ void scale_array(float* a, size_t n, float s) {
+    size_t idx = size_t(blockDim.x) * blockIdx.x + threadIdx.x;
+    if (idx < n) a[idx] *= s;
+}
+
 void convFFT(float* d_in, const cufftComplex* d_otf, float* d_out,
              int dx, int dy, int dz, cufftHandle plan_fwd, cufftHandle plan_inv) {
     size_t nvox = size_t(dx) * dy * dz;
@@ -86,6 +91,8 @@ void convFFT(float* d_in, const cufftComplex* d_otf, float* d_out,
     multiply_complex<<<nblocks, nthreads>>>(d_buf, d_otf, nvox);
     CUDA_CHECK(cudaGetLastError());
     CUFFT_CHECK(cufftExecC2R(plan_inv, d_buf, d_out));
+    int N = dx*dy*dz;
+    scale_array<<<nblocks, nthreads>>>(d_out, N, 1.0f/N);
     CUDA_CHECK(cudaFree(d_buf));
 }
 

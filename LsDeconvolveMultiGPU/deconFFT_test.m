@@ -1,6 +1,6 @@
 function deconFFT_test
 % Comprehensive test & benchmark for deconFFT_mex
-% Reports results in a pretty, colored table
+% Compares MATLAB CPU, MATLAB GPU, and custom CUDA MEX results.
 
 tests = {
     'Small array, lambda=0',      [64,64,32],    0.0
@@ -15,7 +15,7 @@ tol = 2e-4; % accuracy threshold (adjust for your kernel if needed)
 gpu = gpuDevice;
 fprintf('Using GPU: %s\n', gpu.Name);
 
-results = cell(size(tests,1), 8);
+results = cell(size(tests,1), 12);
 
 for k = 1:size(tests,1)
     label = tests{k,1};
@@ -32,15 +32,14 @@ for k = 1:size(tests,1)
     otf_gpu = gpuArray(single(otf));
     otf_conj_gpu = gpuArray(single(otf_conj));
 
-    % -- MATLAB Reference
+    % -- MATLAB CPU Reference
     cpu_tic = tic;
     buf = convFFT_matlab(bl, otf);
     buf = max(buf, eps('single'));
     buf = bl ./ buf;
     buf = convFFT_matlab(buf, otf_conj);
     if lambda > 0
-        % Simple Tikhonov regularization: 3D Laplacian kernel
-        R = fspecial3('laplacian', [3 3 3]); % now robust
+        R = fspecial3('laplacian', [3 3 3]);
         reg = convFFT_matlab(bl, fftn(R, sz));
         result_ref = bl .* buf .* (1-lambda) + reg .* lambda;
     else
@@ -49,54 +48,96 @@ for k = 1:size(tests,1)
     result_ref = abs(result_ref);
     cpu_time = toc(cpu_tic);
 
+    % -- MATLAB GPU Reference
+    gpu_ref_tic = tic;
+    buf_gpu = convFFT_matlab(bl_gpu, otf_gpu);
+    buf_gpu = max(buf_gpu, eps('single'));
+    buf_gpu = bl_gpu ./ buf_gpu;
+    buf_gpu = convFFT_matlab(buf_gpu, otf_conj_gpu);
+    if lambda > 0
+        Rg = gpuArray(fspecial3('laplacian', [3 3 3]));
+        reg_gpu = convFFT_matlab(bl_gpu, fftn(Rg, sz));
+        result_ref_gpu = bl_gpu .* buf_gpu .* (1-lambda) + reg_gpu .* lambda;
+    else
+        result_ref_gpu = bl_gpu .* buf_gpu;
+    end
+    result_ref_gpu = abs(result_ref_gpu);
+    wait(gpu);
+    gpu_ref_time = toc(gpu_ref_tic);
+    result_ref_gpu_host = gather(result_ref_gpu);
+
     % -- GPU MEX
-    gpu_tic = tic;
+    mex_tic = tic;
     result_gpu = deconFFT_mex(bl_gpu, otf_gpu, otf_conj_gpu, single(lambda));
     wait(gpu);
-    gpu_time = toc(gpu_tic);
+    mex_time = toc(mex_tic);
     result_gpu_host = gather(result_gpu);
 
-    % -- Accuracy
-    diff = result_ref - result_gpu_host;
-    max_diff = max(abs(diff(:)));
-    mean_diff = mean(abs(diff(:)));
-    rel_norm = norm(diff(:)) / norm(result_ref(:));
-    pass = (rel_norm < tol) || (max_diff < tol);
+    % -- Accuracy (vs CPU and vs MATLAB GPU)
+    diff_cpu = result_ref - result_gpu_host;
+    max_diff_cpu = max(abs(diff_cpu(:)));
+    mean_diff_cpu = mean(abs(diff_cpu(:)));
+    rel_norm_cpu = norm(diff_cpu(:)) / norm(result_ref(:));
+    pass_cpu = (rel_norm_cpu < tol) || (max_diff_cpu < tol);
+
+    diff_gpu = result_ref_gpu_host - result_gpu_host;
+    max_diff_gpu = max(abs(diff_gpu(:)));
+    mean_diff_gpu = mean(abs(diff_gpu(:)));
+    rel_norm_gpu = norm(diff_gpu(:)) / norm(result_ref_gpu_host(:));
+    pass_gpu = (rel_norm_gpu < tol) || (max_diff_gpu < tol);
 
     % -- Perf gain
-    speedup = (cpu_time/gpu_time - 1)*100;
+    speedup_cpu = (cpu_time/mex_time - 1)*100;
+    speedup_gpu = (gpu_ref_time/mex_time - 1)*100;
 
-    results{k,1} = pass;
-    results{k,2} = label;
-    results{k,3} = sprintf('%dx%dx%d', sz);
-    results{k,4} = lambda;
-    results{k,5} = max_diff;
-    results{k,6} = mean_diff;
-    results{k,7} = rel_norm;
-    results{k,8} = speedup;
+    % Store results
+    results{k,1}  = pass_cpu;
+    results{k,2}  = pass_gpu;
+    results{k,3}  = label;
+    results{k,4}  = sprintf('%dx%dx%d', sz);
+    results{k,5}  = lambda;
+    results{k,6}  = max_diff_cpu;
+    results{k,7}  = mean_diff_cpu;
+    results{k,8}  = rel_norm_cpu;
+    results{k,9}  = max_diff_gpu;
+    results{k,10} = mean_diff_gpu;
+    results{k,11} = rel_norm_gpu;
+    results{k,12} = [cpu_time, gpu_ref_time, mex_time, speedup_cpu, speedup_gpu];
 end
 
 % --- Print Table ---
-header = ["Pass", "Test", "Input size", "lambda", "Max abs diff", "Mean abs diff", "Rel norm diff", "GPU speedup (%)"];
-fmt = ['%-8s  %-22s  %-13s  %-8s  %-14s  %-14s  %-15s  %-15s\n'];
+header = ["Pass(CPU)", "Pass(GPU)", "Test", "Input size", "lambda", ...
+          "Max abs diff (CPU)", "Mean abs diff (CPU)", "Rel norm (CPU)", ...
+          "Max abs diff (GPU)", "Mean abs diff (GPU)", "Rel norm (GPU)", ...
+          "Perf (s) [CPU, GPUref, MEX] / Speedup [% CPU, % GPUref]"];
+fmt = ['%-10s  %-10s  %-22s  %-13s  %-8s  %-17s  %-19s  %-14s  %-17s  %-19s  %-14s  %-38s\n'];
 fprintf('\n');
 fprintf(fmt, header{:});
-fprintf('%s\n', repmat('-',1,100));
+fprintf('%s\n', repmat('-',1,180));
 for k = 1:size(results,1)
+    % Unicode + color
     if results{k,1}
-        pass_str = [char(10003), ' ']; % ✓
-        cstr = '\033[32m'; % Green
+        pass_str_cpu = [char(10003), ' ']; cstr_cpu = '\033[32m';
     else
-        pass_str = [char(10007), ' ']; % ✗
-        cstr = '\033[31m'; % Red
+        pass_str_cpu = [char(10007), ' ']; cstr_cpu = '\033[31m';
     end
-    fprintf([cstr fmt '\033[0m'], ...
-        pass_str, results{k,2}, results{k,3}, ...
-        num2str(results{k,4}), ...
-        sprintf('%.2g', results{k,5}), ...
-        sprintf('%.2g', results{k,6}), ...
-        sprintf('%.2g', results{k,7}), ...
-        sprintf('%.1f', results{k,8}));
+    if results{k,2}
+        pass_str_gpu = [char(10003), ' ']; cstr_gpu = '\033[32m';
+    else
+        pass_str_gpu = [char(10007), ' ']; cstr_gpu = '\033[31m';
+    end
+    cpu_time = results{k,12}(1);
+    gpu_time = results{k,12}(2);
+    mex_time = results{k,12}(3);
+    speedup_cpu = results{k,12}(4);
+    speedup_gpu = results{k,12}(5);
+
+    fprintf(['%s%-9s  %s%-9s\033[0m  %-22s  %-13s  %-8s  %-17.3g  %-19.3g  %-14.3g  %-17.3g  %-19.3g  %-14.3g  [%.2fs, %.2fs, %.2fs] / [%.1f%%, %.1f%%]\n'], ...
+        cstr_cpu, pass_str_cpu, cstr_gpu, pass_str_gpu, ...
+        results{k,3}, results{k,4}, num2str(results{k,5}), ...
+        results{k,6}, results{k,7}, results{k,8}, ...
+        results{k,9}, results{k,10}, results{k,11}, ...
+        cpu_time, gpu_time, mex_time, speedup_cpu, speedup_gpu);
 end
 
 end
