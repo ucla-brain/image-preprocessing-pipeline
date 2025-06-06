@@ -95,22 +95,23 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     if (nrhs < 4)
         mexErrMsgIdAndTxt("deconFFT_mex:nrhs", "Requires at least 4 inputs: bl, otf, otf_conj, lambda");
 
-    // All inputs as mxGPUArray* (no const)
-    mxGPUArray const * bl_gpu         = mxGPUCreateFromMxArray(prhs[0]);
-    mxGPUArray const * otf_gpu        = mxGPUCreateFromMxArray(prhs[1]);
-    mxGPUArray const * otf_conj_gpu   = mxGPUCreateFromMxArray(prhs[2]);
+    // In-place modifiable input
+    mxGPUArray *bl_gpu = (mxGPUArray*)mxGPUCreateFromMxArray(prhs[0]);
+    // Read-only inputs
+    const mxGPUArray *otf_gpu = mxGPUCreateFromMxArray(prhs[1]);
+    const mxGPUArray *otf_conj_gpu = mxGPUCreateFromMxArray(prhs[2]);
     float lambda = *(float*)mxGetData(prhs[3]);
 
     const mwSize* sz = mxGPUGetDimensions(bl_gpu);
+    int nd = mxGPUGetNumberOfDimensions(bl_gpu);
+    if (nd != 3)
+        mexErrMsgIdAndTxt("deconFFT_mex:ndims", "Input must be 3D.");
     int dx = (int)sz[0], dy = (int)sz[1], dz = (int)sz[2];
     size_t nvox = size_t(dx) * dy * dz;
 
-    if (nvox > std::numeric_limits<size_t>::max())
-        mexErrMsgIdAndTxt("deconFFT_mex:size", "Array size too large for size_t.");
-
     float* d_bl = (float*)mxGPUGetData(bl_gpu); // IN-PLACE!
-    cufftComplex* d_otf = (cufftComplex*)mxGPUGetDataReadOnly(otf_gpu); // treat as read-only
-    cufftComplex* d_otf_conj = (cufftComplex*)mxGPUGetDataReadOnly(otf_conj_gpu); // treat as read-only
+    cufftComplex* d_otf = (cufftComplex*)mxGPUGetDataReadOnly(otf_gpu);
+    cufftComplex* d_otf_conj = (cufftComplex*)mxGPUGetDataReadOnly(otf_conj_gpu);
 
     cufftHandle plan_fwd, plan_inv;
     CUFFT_CHECK(cufftPlan3d(&plan_fwd, dz, dy, dx, CUFFT_R2C));
@@ -153,6 +154,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     CUFFT_CHECK(cufftDestroy(plan_fwd));
     CUFFT_CHECK(cufftDestroy(plan_inv));
 
+    // Return in-place modified input as output
     plhs[0] = mxGPUCreateMxArrayOnGPU(bl_gpu);
     mxGPUDestroyGPUArray(bl_gpu);
     mxGPUDestroyGPUArray(otf_gpu);
