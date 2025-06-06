@@ -1,104 +1,204 @@
+/**
+ * load_bl_tif.cpp
+ * ---------------------------------------------------------------------------
+ * Read a rectangular sub-region from a stack of single-channel TIFF files and
+ * return it to MATLAB with dimensions  [width  height  depth] (column-major).
+ * The code is purposely single-threaded for clarity.
+ * ---------------------------------------------------------------------------
+ *  mex -largeArrayDims CXXFLAGS="$CXXFLAGS -std=c++17" load_bl_tif.cpp -ltiff
+ */
+
 #include "mex.h"
 #include "tiffio.h"
 #include <vector>
 #include <string>
 #include <cstdint>
-#include <cstring>
+#include <cstring>  // memcpy
 
-typedef unsigned char  uint8_T;
-typedef unsigned short uint16_T;
+// Enable to see the first few rows/cols copied
+#define LOAD_BL_DEBUG 0
 
-struct LoadTask {
+/* ------------------------------------------------------------------------- */
+/*  Small aliases                                                            */
+/* ------------------------------------------------------------------------- */
+
+using uint8  = unsigned char;
+using uint16 = unsigned short;
+
+/* ------------------------------------------------------------------------- */
+/*  One “task” == one TIFF file / one Z-slice                                */
+/* ------------------------------------------------------------------------- */
+struct LoadTask
+{
     std::string filename;
-    int  y, x, height, width;   // NOTE: x,y are 1-based coming from MATLAB
-    size_t zindex;
-    void* dst;
-    size_t planeStride;         // width*height  ( because we store [W,H,Z] )
-    mxClassID type;
+
+    // user-requested rectangle in the TIFF (1-based)*:
+    int roiY;      // top-left y
+    int roiX;      // top-left x
+    int roiH;      // height
+    int roiW;      // width
+
+    std::size_t zIndex;        // this TIFF→ depth slice in output
+    void*       dstBase;       // MATLAB data pointer
+    std::size_t pixelsPerPlane; // width * height
+    mxClassID   matlabType;     // mxUINT8_CLASS or mxUINT16_CLASS
 };
 
-static void load_subregion(const LoadTask& task)
+/* ------------------------------------------------------------------------- */
+/*  Helper that fills one Z-slice                                            */
+/* ------------------------------------------------------------------------- */
+static void copySubRegion( const LoadTask& task )
 {
+    /* ---------------- Open & validate TIFF ---------------- */
     TIFF* tif = TIFFOpen(task.filename.c_str(), "r");
-    if(!tif) mexErrMsgIdAndTxt("TIFFLoad:OpenFail","Cannot open %s",task.filename.c_str());
+    if (!tif)
+        mexErrMsgIdAndTxt("load_bl_tif:OpenFail",
+                          "Cannot open file: %s", task.filename.c_str());
 
-    uint32_t imgW,imgH; uint16_t bps,spp=1;
-    TIFFGetField(tif,TIFFTAG_IMAGEWIDTH ,&imgW);
-    TIFFGetField(tif,TIFFTAG_IMAGELENGTH,&imgH);
-    TIFFGetField(tif,TIFFTAG_BITSPERSAMPLE,&bps);
-    TIFFGetFieldDefaulted(tif,TIFFTAG_SAMPLESPERPIXEL,&spp);
+    uint32_t imgW  = 0, imgH = 0;
+    uint16   bitsPerSample = 0, samplesPerPixel = 1;
+    TIFFGetField(tif, TIFFTAG_IMAGEWIDTH , &imgW);
+    TIFFGetField(tif, TIFFTAG_IMAGELENGTH, &imgH);
+    TIFFGetField(tif, TIFFTAG_BITSPERSAMPLE, &bitsPerSample);
+    TIFFGetFieldDefaulted(tif, TIFFTAG_SAMPLESPERPIXEL, &samplesPerPixel);
 
-    if(spp!=1)           mexErrMsgIdAndTxt("TIFFLoad:Grayscale","Only grayscale supported");
-    if(bps!=8&&bps!=16)  mexErrMsgIdAndTxt("TIFFLoad:BPS","Only 8/16-bit supported");
-    if(task.x+task.width -1 > (int)imgW ||
-       task.y+task.height-1 > (int)imgH)  mexErrMsgIdAndTxt("TIFFLoad:Bounds","sub-region OOB");
+    if (samplesPerPixel != 1)
+        mexErrMsgIdAndTxt("load_bl_tif:RGB",
+                          "Only single-channel TIFFs are supported: %s",
+                          task.filename.c_str());
 
-    const size_t pixelSize   = bps/8;      // 1 or 2
-    const size_t scanlineLen = imgW*pixelSize;
-    std::vector<uint8_t> row(scanlineLen);
+    if (bitsPerSample != 8 && bitsPerSample != 16)
+        mexErrMsgIdAndTxt("load_bl_tif:BitDepth",
+                          "Only 8- or 16-bit TIFFs are supported.");
 
-    for(int r=0;r<task.height;++r)
+    if (static_cast<uint32_t>(task.roiX - 1 + task.roiW) > imgW ||
+        static_cast<uint32_t>(task.roiY - 1 + task.roiH) > imgH)
+        mexErrMsgIdAndTxt("load_bl_tif:Bounds",
+                          "Requested sub-region is outside the image: %s",
+                          task.filename.c_str());
+
+    const std::size_t bytesPerPixel = bitsPerSample / 8;
+    const std::size_t scanlineBytes = static_cast<std::size_t>(imgW) * bytesPerPixel;
+
+    std::vector<uint8> scanline(scanlineBytes);
+
+    /* ---------------- Copy row-by-row into MATLAB array ---------------- */
+    for (int rowInRoi = 0; rowInRoi < task.roiH; ++rowInRoi)
     {
-        const int tifRow = task.y - 1 + r;                 // 0-based row
-        if(!TIFFReadScanline(tif,row.data(),tifRow))
-            mexErrMsgIdAndTxt("TIFFLoad:Read","scanline read failed");
+        // TIFF rows are 0-based:
+        const uint32_t tifRow = static_cast<uint32_t>(task.roiY - 1 + rowInRoi);
 
-        for(int c=0;c<task.width;++c)
+        if (!TIFFReadScanline(tif, scanline.data(), tifRow))
+            mexErrMsgIdAndTxt("load_bl_tif:ReadError",
+                              "Failed reading row %u from '%s'",
+                              tifRow, task.filename.c_str());
+
+        for (int colInRoi = 0; colInRoi < task.roiW; ++colInRoi)
         {
-            size_t srcPixel    = static_cast<size_t>(task.x - 1 + c);   // 0-based col  ★ FIXED ★
-            size_t srcIdx      = srcPixel * pixelSize;
+            /* -------- Source address inside this scanline -------- */
+            const std::size_t srcPixelIndex = static_cast<std::size_t>(task.roiX - 1 + colInRoi);
+            const std::size_t srcByteOffset = srcPixelIndex * bytesPerPixel;
 
-            size_t dstPixelOff = static_cast<size_t>(r)                 // y within block
-                               + static_cast<size_t>(c)*task.height     // x  (transposed)
-                               + task.zindex*task.planeStride;
-            size_t dstByteOff  = dstPixelOff*pixelSize;
+            /* -------- Destination address in MATLAB array --------
+             *
+             *  MATLAB is column-major: fastest index is along *columns* (our X).
+             *  Output dims = [width height depth]
+             *
+             *  linear index =  x
+             *                + y * width
+             *                + z * (width * height)
+             */
+            const std::size_t dstPixelIndex =
+                    static_cast<std::size_t>(colInRoi)                              // x
+                  + static_cast<std::size_t>(rowInRoi) * task.roiW                  // y
+                  + task.zIndex * task.pixelsPerPlane;                              // z
+            const std::size_t dstByteOffset = dstPixelIndex * bytesPerPixel;
 
-            std::memcpy(static_cast<uint8_t*>(task.dst)+dstByteOff,
-                        row.data()+srcIdx,
-                        pixelSize);
+            std::memcpy( static_cast<uint8*>(task.dstBase) + dstByteOffset,
+                         scanline.data() + srcByteOffset,
+                         bytesPerPixel );
         }
     }
+
     TIFFClose(tif);
 }
 
-void mexFunction(int nlhs,mxArray* plhs[],int nrhs,const mxArray* prhs[])
+/* ------------------------------------------------------------------------- */
+/*  mexFunction                                                              */
+/* ------------------------------------------------------------------------- */
+void mexFunction(int nlhs, mxArray* plhs[],
+                 int nrhs, const mxArray* prhs[])
 {
-    if(nrhs<5) mexErrMsgIdAndTxt("TIFFLoad:Usage",
-        "Usage: img = load_bl_tif(files, y, x, height, width)");
+    if (nrhs < 5)
+        mexErrMsgIdAndTxt("load_bl_tif:Usage",
+            "Usage: img = load_bl_tif(files, y, x, height, width)");
 
-    if(!mxIsCell(prhs[0])) mexErrMsgIdAndTxt("TIFFLoad:Input",
-        "First arg must be cell array of filenames");
+    if (!mxIsCell(prhs[0]))
+        mexErrMsgIdAndTxt("load_bl_tif:Input",
+            "First argument must be a cell array of filenames.");
 
-    /* gather file list --------------------------------------------------- */
-    const size_t nslices = mxGetNumberOfElements(prhs[0]);
-    std::vector<std::string> files(nslices);
-    for(size_t i=0;i<nslices;++i){
-        char* s = mxArrayToString(mxGetCell(prhs[0],i));
-        if(!s||!*s) mexErrMsgIdAndTxt("TIFFLoad:BadName","Empty filename");
-        files[i]=s; mxFree(s);
+    /* ---------------- Parse input file list ---------------- */
+    const std::size_t depth = mxGetNumberOfElements(prhs[0]);
+    std::vector<std::string> filenames(depth);
+
+    for (std::size_t i = 0; i < depth; ++i)
+    {
+        const mxArray* cell = mxGetCell(prhs[0], i);
+        if (!mxIsChar(cell))
+            mexErrMsgIdAndTxt("load_bl_tif:FileName",
+                              "File list cell %zu is not a string", i + 1);
+
+        char* tmp = mxArrayToString(cell);
+        filenames[i] = tmp;
+        mxFree(tmp);
     }
 
-    int y      = (int)mxGetScalar(prhs[1]);
-    int x      = (int)mxGetScalar(prhs[2]);
-    int height = (int)mxGetScalar(prhs[3]);
-    int width  = (int)mxGetScalar(prhs[4]);
+    /* ---------------- ROI parameters (1-based) ---------------- */
+    const int roiY = static_cast<int>(mxGetScalar(prhs[1]));
+    const int roiX = static_cast<int>(mxGetScalar(prhs[2]));
+    const int roiH = static_cast<int>(mxGetScalar(prhs[3]));
+    const int roiW = static_cast<int>(mxGetScalar(prhs[4]));
 
-    /* probe first slice to decide output type ---------------------------- */
-    TIFF* tif = TIFFOpen(files[0].c_str(),"r");
-    if(!tif) mexErrMsgIdAndTxt("TIFFLoad:OpenFail","Cannot open %s",files[0].c_str());
-    uint16_t bps; TIFFGetField(tif,TIFFTAG_BITSPERSAMPLE,&bps); TIFFClose(tif);
-    if(bps!=8 && bps!=16) mexErrMsgIdAndTxt("TIFFLoad:BPS","Only 8/16-bit supported");
-    mxClassID outType = (bps==8)?mxUINT8_CLASS:mxUINT16_CLASS;
+    if (roiY < 1 || roiX < 1 || roiH < 1 || roiW < 1)
+        mexErrMsgIdAndTxt("load_bl_tif:ROI",
+                          "ROI parameters must be positive integers.");
 
-    /* create MATLAB output array in [W H Z] layout ----------------------- */
-    mwSize dims[3]={(mwSize)width,(mwSize)height,(mwSize)nslices};
-    plhs[0]=mxCreateNumericArray(3,dims,outType,mxREAL);
-    void*   outData    = mxGetData(plhs[0]);
-    size_t  planeStride= (size_t)width*height;
+    /* ---------------- Inspect first image to know type ---------------- */
+    TIFF* tif0 = TIFFOpen(filenames[0].c_str(), "r");
+    if (!tif0)
+        mexErrMsgIdAndTxt("load_bl_tif:OpenFail",
+                          "Cannot open first file: %s", filenames[0].c_str());
 
-    /* sequential (single-thread) load ------------------------------------ */
-    for(size_t z=0;z<nslices;++z){
-        LoadTask t{files[z],y,x,height,width,z,outData,planeStride,outType};
-        load_subregion(t);
+    uint16 bitsPerSample = 0;  uint16 samplesPerPixel = 1;
+    TIFFGetField(tif0, TIFFTAG_BITSPERSAMPLE, &bitsPerSample);
+    TIFFGetFieldDefaulted(tif0, TIFFTAG_SAMPLESPERPIXEL, &samplesPerPixel);
+    TIFFClose(tif0);
+
+    if (samplesPerPixel != 1 || (bitsPerSample != 8 && bitsPerSample != 16))
+        mexErrMsgIdAndTxt("load_bl_tif:Type",
+                          "Only 8/16-bit single-channel TIFFs are supported.");
+
+    const mxClassID matlabType = (bitsPerSample == 8) ? mxUINT8_CLASS : mxUINT16_CLASS;
+    const std::size_t bytesPerPixel = bitsPerSample / 8;
+
+    /* ---------------- Allocate MATLAB output ---------------- */
+    mwSize dims[3] = { static_cast<mwSize>(roiW),
+                       static_cast<mwSize>(roiH),
+                       static_cast<mwSize>(depth) };
+    plhs[0] = mxCreateNumericArray(3, dims, matlabType, mxREAL);
+    void* outPtr = mxGetData(plhs[0]);
+    const std::size_t pixelsPerPlane = static_cast<std::size_t>(roiW) * roiH;
+
+    /* ---------------- Copy each slice ---------------- */
+    for (std::size_t z = 0; z < depth; ++z)
+    {
+        LoadTask task{ filenames[z], roiY, roiX, roiH, roiW,
+                       z, outPtr, pixelsPerPlane, matlabType };
+
+#if LOAD_BL_DEBUG
+        mexPrintf("[DEBUG] Copying Z=%zu from '%s'\n",
+                  z, task.filename.c_str());
+#endif
+        copySubRegion(task);
     }
 }
