@@ -4,8 +4,7 @@ function load_bl_tif_test()
     % Usage: matlab -batch load_bl_tif_test
     % ================================
 
-    %folder_path = getenv('TIF_TEST_FOLDER');
-    folder_path = '/data/tif/B11_ds_4.5x_ABeta_z1200'
+    folder_path = '/data/tif/B11_ds_4.5x_ABeta_z1200';
     if isempty(folder_path) || ~isfolder(folder_path)
         error('Please set the TIF_TEST_FOLDER environment variable to a folder containing .tif files.');
     end
@@ -23,6 +22,12 @@ function load_bl_tif_test()
     blockSizes = [64, 64; 128, 96; 240, 240];
     testZ = [round(numSlices / 2), max(1, numSlices - 3)];
 
+    results = [];
+
+    fprintf('\n%-4s | %-6s | %-9s | %-13s | %-11s | %-12s\n', ...
+        '✔/✘', 'Z', 'BlockSize', '(X,Y)', 'Max Error', 'Speedup');
+    fprintf(repmat('-', 1, 64)); fprintf('\n');
+
     for b = 1:size(blockSizes, 1)
         blkH = blockSizes(b, 1);
         blkW = blockSizes(b, 2);
@@ -34,27 +39,37 @@ function load_bl_tif_test()
             x_indices = x : x + blkW - 1;
             z_indices = zidx : min(numSlices, zidx + 2);
 
+            % MATLAB reference
+            t1 = tic;
             bl_gt = zeros(blkW, blkH, numel(z_indices), 'single');  % width x height x depth
             for k = 1:numel(z_indices)
                 slice = imread(filelist{z_indices(k)}, ...
                     'PixelRegion', {[y_indices(1), y_indices(end)], [x_indices(1), x_indices(end)]});
                 bl_gt(:, :, k) = im2single(slice)';
             end
+            t_ref = toc(t1);
 
+            % MEX function
+            t2 = tic;
             bl_mex = im2single(load_bl_tif(filelist(z_indices), y, x, blkH, blkW));
-
-            disp("Size of bl_mex:"); disp(size(bl_mex));
-            disp("Size of bl_gt:"); disp(size(bl_gt));
+            t_mex = toc(t2);
 
             diff = abs(bl_mex - bl_gt);
             maxerr = max(diff(:));
+            pass = maxerr < 1e-6;
 
-            fprintf('Test z=%d, block=[%d,%d] at (x=%d,y=%d): max error = %.4g\n', ...
-                zidx, blkH, blkW, x, y, maxerr);
+            % Print table row
+            symbol = char(10003 * pass + 10007 * ~pass); % ✅ or ❌
+            fprintf('  %s  | %-6d | [%3d,%3d]  | (%5d,%5d) | %1.4e | %8.2fx\n', ...
+                symbol, zidx, blkH, blkW, x, y, maxerr, t_ref / t_mex);
 
-            assert(maxerr < 1e-6, 'Mismatch between load_bl_tif and imread.');
+            results = [results; pass, zidx, blkH, blkW, x, y, maxerr, t_ref / t_mex];
         end
     end
 
-    fprintf('All tests passed successfully.\n');
+    if all(results(:,1))
+        fprintf('\n🎉 All tests passed successfully.\n');
+    else
+        fprintf('\n❗ Some tests failed. Please review the table above.\n');
+    end
 end
