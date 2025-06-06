@@ -23,11 +23,6 @@ static bool is_system_little_endian() {
     return *((uint8_t*)&x) == 1;
 }
 
-static bool tiff_is_little_endian(TIFF* tif) {
-    // LibTIFF 4.x has TIFFIsByteSwapped, but we can check file header if needed
-    return (TIFFIsByteSwapped(tif) == 0); // Returns nonzero if bytes need to be swapped to native order
-}
-
 static void swap_uint16_buf(void* buf, size_t count) {
     uint16_t* p = static_cast<uint16_t*>(buf);
     for (size_t i = 0; i < count; ++i) {
@@ -92,7 +87,8 @@ static void copySubRegion(const LoadTask& task)
 
                 // PATCH: If 16-bit, swap bytes if needed
                 if (bytesPerPixel == 2 && TIFFIsByteSwapped(tif)) {
-                    swap_uint16_buf(tilebuf.data(), tileWidth * tileHeight);
+                    size_t n_tile_pixels = TIFFTileSize(tif) / bytesPerPixel;
+                    swap_uint16_buf(tilebuf.data(), n_tile_pixels);
                 }
 
                 // Offset of this pixel in the tile buffer
