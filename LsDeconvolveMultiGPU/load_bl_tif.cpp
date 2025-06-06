@@ -3,12 +3,10 @@
 #include <vector>
 #include <string>
 #include <cstdint>
-#include <cstring>
+#include <cstring>  // for memcpy
 
 typedef unsigned char uint8_T;
 typedef unsigned short uint16_T;
-using uint8_ptr = uint8_T*;
-using uint16_ptr = uint16_T*;
 
 struct LoadTask {
     std::string filename;
@@ -48,14 +46,15 @@ void load_subregion(const LoadTask& task) {
 
         for (int col = 0; col < task.width; ++col) {
             size_t srcIdx = static_cast<size_t>(task.x + col) * pixelSize;
-            size_t dstIdx = (static_cast<size_t>(col) +
-                             static_cast<size_t>(row) * task.width +
-                             task.zindex * task.planeStride) * pixelSize;
+            size_t dstPixelOffset = static_cast<size_t>(col) +
+                                    static_cast<size_t>(row) * task.width +
+                                    task.zindex * task.planeStride;
+            size_t dstByteOffset = dstPixelOffset * pixelSize;
 
             if (task.type == mxUINT8_CLASS || task.type == mxUINT16_CLASS) {
-                memcpy(reinterpret_cast<uint8_t*>(task.dst) + dstIdx,
-                       rowBuffer.data() + srcIdx,
-                       pixelSize);
+                std::memcpy(static_cast<uint8_t*>(task.dst) + dstByteOffset,
+                            rowBuffer.data() + srcIdx,
+                            pixelSize);
             } else {
                 mexErrMsgIdAndTxt("TIFFLoad:UnsupportedType", "Unsupported output data type.");
             }
@@ -67,10 +66,10 @@ void load_subregion(const LoadTask& task) {
 
 void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     if (nrhs < 5)
-        mexErrMsgTxt("Usage: img = load_bl_tif(files, y, x, height, width [, num_threads])");
+        mexErrMsgIdAndTxt("TIFFLoad:Usage", "Usage: img = load_bl_tif(files, y, x, height, width [, num_threads])");
 
     if (!mxIsCell(prhs[0]))
-        mexErrMsgTxt("First argument must be a cell array of filenames.");
+        mexErrMsgIdAndTxt("TIFFLoad:InvalidInput", "First argument must be a cell array of filenames.");
 
     size_t numSlices = mxGetNumberOfElements(prhs[0]);
     std::vector<std::string> filenames(numSlices);
@@ -90,6 +89,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     int height = static_cast<int>(mxGetScalar(prhs[3]));
     int width = static_cast<int>(mxGetScalar(prhs[4]));
 
+    // Validate first image metadata
     TIFF* tif = TIFFOpen(filenames[0].c_str(), "r");
     if (!tif)
         mexErrMsgIdAndTxt("TIFFLoad:OpenFail", "Failed to open: %s", filenames[0].c_str());
@@ -110,7 +110,6 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
         mexErrMsgTxt("Requested subregion is out of bounds.");
 
     mxClassID outType = (bitsPerSample == 8) ? mxUINT8_CLASS : mxUINT16_CLASS;
-
     mwSize dims[3] = { static_cast<mwSize>(width), static_cast<mwSize>(height), static_cast<mwSize>(numSlices) };
     plhs[0] = mxCreateNumericArray(3, dims, outType, mxREAL);
     void* outData = mxGetData(plhs[0]);
