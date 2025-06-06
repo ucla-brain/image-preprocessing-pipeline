@@ -1034,7 +1034,7 @@ function postprocess_save(...
 
         disp('calculating histogram...');
         parfor i = 1:numel(blocklist)
-            S = load_bl(blocklist{i}, semkey_multi);
+            S = load_bl_lz4(blocklist{i}, semkey_multi);
             chist = chist + histcounts(S.bl, bins);
         end
         chist = cumsum(chist);
@@ -1120,7 +1120,7 @@ function postprocess_save(...
 
         % Async load all blocks in this Z slab
         for j = 1:length(block_inds)
-            async_load(j) = pool.parfeval(@load_bl, 1, blocklist{block_inds(j)}, semkey_multi);
+            async_load(j) = pool.parfeval(@load_bl_lz4, 1, blocklist{block_inds(j)}, semkey_multi);
         end
 
         % Assign each block directly using p1/p2 indices
@@ -1197,7 +1197,7 @@ function postprocess_save(...
     semaphore_destroy(semkey_multi);
 end
 
-function bl = load_bl(path, semkey)
+function bl = load_bl_lz4(path, semkey)
     semaphore('wait', semkey);
     cleanup = onCleanup(@() semaphore('post', semkey));
     max_tries = 3; tries = 0; loaded = false;

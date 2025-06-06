@@ -60,6 +60,7 @@ void load_subregion(const LoadTask& task) {
     TIFFClose(tif);
 }
 
+// MATLAB call: bl = load_bl_tif(files, y, x, height, width [, num_threads])
 void mexFunction(int nlhs, mxArray* plhs[],
                  int nrhs, const mxArray* prhs[]) {
     if (nrhs == 0)

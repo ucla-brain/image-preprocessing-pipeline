@@ -23,7 +23,7 @@ src_gauss3d   = 'gauss3d_mex.cu';
 src_conv3d    = 'conv3d_mex.cu';
 src_otf_gpu   = 'otf_gpu_mex.cu';
 src_deconFFT  = 'deconFFT_mex.cu';
-src_load_bl   = 'load_bl_mex.cpp';
+src_load_bl   = 'load_bl_tif.cpp';
 
 % LZ4 download if missing
 lz4_c_url = 'https://raw.githubusercontent.com/lz4/lz4/dev/lib/lz4.c';
