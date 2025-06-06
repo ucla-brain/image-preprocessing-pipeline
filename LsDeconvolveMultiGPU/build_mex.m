@@ -3,7 +3,8 @@
 % ===============================
 % Compile semaphore, LZ4, and GPU MEX files using Anaconda's libtiff.
 % Requires MATLAB R2018a+ (-R2018a MEX API) and Anaconda (CONDA_PREFIX).
-% On Windows or Linux, if libtiff is missing, downloads and compiles from source.
+% On all platforms, will automatically download and compile libtiff from source
+% if the required library is missing.
 
 debug = false;
 
@@ -39,7 +40,7 @@ if ~isfile('lz4.h')
     try, websave('lz4.h', lz4_h_url); catch, error('Failed to download lz4.h'); end
 end
 
-% Use Anaconda-provided libtiff for all platforms if available
+% Use Anaconda-provided libtiff for all platforms, or build if missing
 conda_prefix = getenv('CONDA_PREFIX');
 assert(~isempty(conda_prefix) && isfolder(conda_prefix), ...
     'CONDA_PREFIX is not set or does not point to a valid directory.');
@@ -47,80 +48,55 @@ assert(~isempty(conda_prefix) && isfolder(conda_prefix), ...
 tiff_include = {['-I', fullfile(conda_prefix, 'include')]} ;
 tiff_lib     = {['-L', fullfile(conda_prefix, 'lib')]} ;
 
-tiff_found = false;
-tiff_link = {};
-
+% --- Platform-specific linking and flags ---
 if ispc
-    libfile = fullfile(conda_prefix, 'lib', 'libtiff.lib');
-    if isfile(libfile)
-        tiff_link = {libfile};
-        tiff_found = true;
-    end
-else
-    libfile = fullfile(conda_prefix, 'lib', 'libtiff.so');
-    if isfile(libfile)
-        tiff_link = {'-ltiff'};
-        tiff_found = true;
-    end
-end
+    tiff_libfile = fullfile(conda_prefix, 'lib', 'libtiff.lib');
+    if ~isfile(tiff_libfile)
+        % Auto-build libtiff from source if missing
+        fprintf('libtiff.lib not found. Downloading and building libtiff from source...\n');
+        system('curl -L -o tiff.zip https://download.osgeo.org/libtiff/tiff-4.6.0.zip');
+        unzip('tiff.zip', 'tiff_src');
+        delete('tiff.zip');
+        cd(fullfile('tiff_src', 'tiff-4.6.0'));
 
-% If libtiff was not found, try building it from source
-if ~tiff_found
-    fprintf('libtiff not found, attempting to build from source ...\n');
-    tiff_url = 'http://download.osgeo.org/libtiff/tiff-4.6.0.tar.gz';
-    tiff_tar = 'tiff-4.6.0.tar.gz';
-    tiff_dir = 'tiff-4.6.0';
+        % Configure and build with Visual Studio
+        build_cmd = [
+            'cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="', conda_prefix, '" . && ', ...
+            'cmake --build build --config Release --target install'
+        ];
+        status = system(build_cmd);
+        cd ../..;
 
-    try
-        if ~isfolder(tiff_dir)
-            if ~isfile(tiff_tar)
-                fprintf('Downloading libtiff source ...\n');
-                websave(tiff_tar, tiff_url);
-            end
-            untar(tiff_tar);
+        if status ~= 0
+            error('Failed to build libtiff from source on Windows.');
         end
-
-        % Build libtiff using system compiler
-        old_dir = pwd;
-        cd(tiff_dir);
-        if ispc
-            configure_cmd = 'cmake -Bbuild -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON';
-            build_cmd = 'cmake --build build --config Release';
-        else
-            configure_cmd = './configure --prefix=install';
-            build_cmd = 'make && make install';
-        end
-        fprintf('Running: %s\n', configure_cmd);
-        assert(system(configure_cmd) == 0, 'Configuration failed.');
-        fprintf('Running: %s\n', build_cmd);
-        assert(system(build_cmd) == 0, 'Build failed.');
-        cd(old_dir);
-
-        % Update include/lib paths after build
-        if ispc
-            tiff_include = {['-I', fullfile(tiff_dir, 'build')]};
-            tiff_lib = {['-L', fullfile(tiff_dir, 'build', 'Release')]};
-            tiff_link = {fullfile(tiff_dir, 'build', 'Release', 'libtiff.lib')};
-        else
-            tiff_include = {['-I', fullfile(tiff_dir, 'install', 'include')]};
-            tiff_lib = {['-L', fullfile(tiff_dir, 'install', 'lib')]};
-            tiff_link = {'-ltiff'};
-        end
-
-        fprintf('libtiff built successfully.\n');
-    catch ME
-        error('Failed to build libtiff from source: %s', ME.message);
     end
-end
+    tiff_link = {'-ltiff'};
 
-% --- Platform-specific compiler flags ---
-if ispc
     if debug
         mex_flags_cpu = {'-R2018a', 'COMPFLAGS="$COMPFLAGS /Od /Zi /openmp"'};
     else
         mex_flags_cpu = {'-R2018a', 'COMPFLAGS="$COMPFLAGS /O2 /arch:AVX2 /openmp"'};
     end
 else
+    % On Linux/macOS
+    tiff_libfile = fullfile(conda_prefix, 'lib', 'libtiff.so');
+    if ~isfile(tiff_libfile)
+        fprintf('libtiff.so not found. Downloading and building libtiff from source...\n');
+        system('curl -L -o tiff.tar.gz https://download.osgeo.org/libtiff/tiff-4.6.0.tar.gz');
+        system('tar -xzf tiff.tar.gz');
+        delete('tiff.tar.gz');
+        cd('tiff-4.6.0');
+        configure_cmd = ['./configure --prefix=', conda_prefix, ' && make && make install'];
+        status = system(configure_cmd);
+        cd('..');
+
+        if status ~= 0
+            error('Failed to build libtiff from source on Linux.');
+        end
+    end
+    tiff_link = {'-ltiff'};
+
     if debug
         mex_flags_cpu = {'-R2018a', 'CFLAGS="$CFLAGS -O0 -g -fopenmp"', ...
                          'CXXFLAGS="$CXXFLAGS -O0 -g -fopenmp"'};
@@ -131,7 +107,7 @@ else
     end
 end
 
-fprintf('Using libtiff from: %s\n', libfile);
+fprintf('Using Anaconda libtiff from: %s\n', conda_prefix);
 
 % Build CPU MEX files
 % mex(mex_flags_cpu{:}, src_semaphore);
@@ -139,7 +115,7 @@ fprintf('Using libtiff from: %s\n', libfile);
 % mex(mex_flags_cpu{:}, src_lz4_load, src_lz4_c);
 mex(mex_flags_cpu{:}, src_load_bl, tiff_include{:}, tiff_lib{:}, tiff_link{:});
 
-% CUDA flags
+% CUDA optimization flags
 if ispc
     if debug
         nvccflags = 'NVCCFLAGS="$NVCCFLAGS -G -std=c++17 -Xcompiler ""/Od,/Zi"" "'; %#ok<NASGU>
