@@ -46,7 +46,7 @@ function load_bl_tif_test()
             disp("Size of bl_mex:"); disp(size(bl_mex));
             disp("Size of bl_gt:"); disp(size(bl_gt));
 
-            diff = abs(bl_mex - bl_gt);
+            diff = abs(single(bl_mex) - bl_gt);
             maxerr = max(diff(:));
 
             fprintf('Test z=%d, block=[%d,%d] at (x=%d,y=%d): max error = %.4g\n', ...
