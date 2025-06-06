@@ -96,9 +96,9 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
         mexErrMsgIdAndTxt("deconFFT_mex:nrhs", "Requires at least 4 inputs: bl, otf, otf_conj, lambda");
 
     // All inputs as mxGPUArray* (no const)
-    mxGPUArray* bl_gpu         = mxGPUCreateFromMxArray(prhs[0]);
-    mxGPUArray* otf_gpu        = mxGPUCreateFromMxArray(prhs[1]);
-    mxGPUArray* otf_conj_gpu   = mxGPUCreateFromMxArray(prhs[2]);
+    mxGPUArray const * bl_gpu         = mxGPUCreateFromMxArray(prhs[0]);
+    mxGPUArray const * otf_gpu        = mxGPUCreateFromMxArray(prhs[1]);
+    mxGPUArray const * otf_conj_gpu   = mxGPUCreateFromMxArray(prhs[2]);
     float lambda = *(float*)mxGetData(prhs[3]);
 
     const mwSize* sz = mxGPUGetDimensions(bl_gpu);
