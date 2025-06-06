@@ -18,7 +18,7 @@ src_lz4_c = 'lz4.c';
 src_gauss3d = 'gauss3d_mex.cu';
 src_conv3d = 'conv3d_mex.cu';
 src_otf_gpu = 'otf_gpu_mex.cu';
-src_deconFFT = 'deconFFT_mex.cu';
+src_otf_gpu = 'deconFFT_mex.cu';
 
 lz4_c_url  = 'https://raw.githubusercontent.com/lz4/lz4/dev/lib/lz4.c';
 lz4_h_url  = 'https://raw.githubusercontent.com/lz4/lz4/dev/lib/lz4.h';
@@ -58,9 +58,9 @@ end
 
 % Build semaphore/queue/lz4 MEX files (CPU)
 % mex(mex_flags_cpu{:}, src_queue);
-%mex(mex_flags_cpu{:}, src_semaphore);
-%mex(mex_flags_cpu{:}, src_lz4_save, src_lz4_c);
-%mex(mex_flags_cpu{:}, src_lz4_load, src_lz4_c);
+mex(mex_flags_cpu{:}, src_semaphore);
+mex(mex_flags_cpu{:}, src_lz4_save, src_lz4_c);
+mex(mex_flags_cpu{:}, src_lz4_load, src_lz4_c);
 
 % CUDA optimization flags (for mexcuda)
 if debug
@@ -90,9 +90,8 @@ else
 end
 
 % Build CUDA Gaussian 3D MEX file (GPU)
-%mexcuda(cuda_mex_flags{:}, mex_flags{:}, src_gauss3d, ['-I', root_dir], ['-I', include_dir], nvccflags);
-%mexcuda(cuda_mex_flags{:}, mex_flags{:}, src_conv3d , ['-I', root_dir], ['-I', include_dir], nvccflags);
-%mexcuda(cuda_mex_flags{:}, mex_flags{:}, src_otf_gpu, ['-I', root_dir], ['-I', include_dir], nvccflags, '-L/usr/local/cuda/lib64', '-lcufft');
-mexcuda(cuda_mex_flags{:}, mex_flags{:}, src_deconFFT, ['-I', root_dir], ['-I', include_dir], nvccflags, '-L/usr/local/cuda/lib64', '-lcufft');
+mexcuda(cuda_mex_flags{:}, mex_flags{:}, src_gauss3d, ['-I', root_dir], ['-I', include_dir], nvccflags);
+mexcuda(cuda_mex_flags{:}, mex_flags{:}, src_conv3d , ['-I', root_dir], ['-I', include_dir], nvccflags);
+mexcuda(cuda_mex_flags{:}, mex_flags{:}, src_otf_gpu, ['-I', root_dir], ['-I', include_dir], nvccflags, '-L/usr/local/cuda/lib64', '-lcufft');
 
 fprintf('All MEX files built successfully.\n');
