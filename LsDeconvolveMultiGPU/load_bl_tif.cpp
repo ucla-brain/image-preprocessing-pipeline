@@ -51,7 +51,10 @@ void load_subregion(const LoadTask& task) {
 
         for (int col = 0; col < task.width; ++col) {
             size_t srcIdx = static_cast<size_t>(task.x + col) * pixelSize;
-            size_t dstIdx = static_cast<size_t>(row) + static_cast<size_t>(col) * task.height + task.zindex * task.planeStride;
+            size_t dstIdx = static_cast<size_t>(col) +
+                            static_cast<size_t>(row) * task.width +
+                            task.zindex * task.planeStride;
+
             if (task.type == mxUINT8_CLASS) {
                 ((uint8_ptr)task.dst)[dstIdx] = rowBuffer[srcIdx];
             } else if (task.type == mxUINT16_CLASS) {
@@ -114,10 +117,12 @@ void mexFunction(int nlhs, mxArray* plhs[],
         mexErrMsgTxt("Requested subregion is out of bounds.");
 
     mxClassID outType = (bitsPerSample == 8) ? mxUINT8_CLASS : mxUINT16_CLASS;
-    mwSize dims[3] = { static_cast<mwSize>(height), static_cast<mwSize>(width), static_cast<mwSize>(numSlices) };
+
+    // Transposed layout: [width, height, depth]
+    mwSize dims[3] = { static_cast<mwSize>(width), static_cast<mwSize>(height), static_cast<mwSize>(numSlices) };
     plhs[0] = mxCreateNumericArray(3, dims, outType, mxREAL);
     void* outData = mxGetData(plhs[0]);
-    size_t planeStride = static_cast<size_t>(height) * width;
+    size_t planeStride = static_cast<size_t>(width) * height;
 
     std::queue<LoadTask> task_queue;
     std::mutex queue_mutex;
