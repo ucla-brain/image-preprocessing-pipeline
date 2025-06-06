@@ -17,14 +17,15 @@ struct LoadTask {
     mxClassID type;
 };
 
-void load_subregion(const LoadTask& task) {
+void load_subregion(const LoadTask& task)
+{
     TIFF* tif = TIFFOpen(task.filename.c_str(), "r");
     if (!tif)
         mexErrMsgIdAndTxt("TIFFLoad:OpenFail", "Failed to open: %s", task.filename.c_str());
 
     uint32_t imgWidth, imgHeight;
     uint16_t bitsPerSample, samplesPerPixel = 1;
-    TIFFGetField(tif, TIFFTAG_IMAGEWIDTH, &imgWidth);
+    TIFFGetField(tif, TIFFTAG_IMAGEWIDTH,  &imgWidth);
     TIFFGetField(tif, TIFFTAG_IMAGELENGTH, &imgHeight);
     TIFFGetField(tif, TIFFTAG_BITSPERSAMPLE, &bitsPerSample);
     TIFFGetFieldDefaulted(tif, TIFFTAG_SAMPLESPERPIXEL, &samplesPerPixel);
@@ -33,39 +34,34 @@ void load_subregion(const LoadTask& task) {
         mexErrMsgIdAndTxt("TIFFLoad:NotGrayscale", "Only grayscale TIFFs are supported: %s", task.filename.c_str());
     if (bitsPerSample != 8 && bitsPerSample != 16)
         mexErrMsgIdAndTxt("TIFFLoad:UnsupportedDepth", "Only 8/16-bit TIFFs are supported.");
-    if ((uint32_t)(task.x + task.width) > imgWidth || (uint32_t)(task.y + task.height) > imgHeight)
+    if ((uint32_t)(task.x + task.width)  > imgWidth ||
+        (uint32_t)(task.y + task.height) > imgHeight)
         mexErrMsgIdAndTxt("TIFFLoad:SubregionBounds", "Subregion out of bounds in: %s", task.filename.c_str());
 
-    size_t pixelSize = bitsPerSample / 8;
-    if (pixelSize != 1 && pixelSize != 2)
-        mexErrMsgIdAndTxt("TIFFLoad:InvalidPixelSize", "Unsupported pixel size: %zu", pixelSize);
-
+    size_t pixelSize = bitsPerSample / 8;      // 1 or 2
     size_t scanlineSize = imgWidth * pixelSize;
     std::vector<uint8_t> rowBuffer(scanlineSize);
 
-    for (int row = 0; row < task.height; ++row) {
+    for (int row = 0; row < task.height; ++row)
+    {
         if (!TIFFReadScanline(tif, rowBuffer.data(), task.y + row))
             mexErrMsgIdAndTxt("TIFFLoad:ReadError", "Failed to read scanline in: %s", task.filename.c_str());
 
-        for (int col = 0; col < task.width; ++col) {
+        for (int col = 0; col < task.width; ++col)
+        {
             size_t srcIdx = static_cast<size_t>(task.x + col) * pixelSize;
 
-            // Transpose row/col: write as [row, col] → [y, x] → [x, y] in memory
-            size_t dstPixelOffset = static_cast<size_t>(row) +  // Y
-                                    static_cast<size_t>(col) * task.height +  // X
+            // correct column-major offset:  row*width + col + z*planeStride
+            size_t dstPixelOffset = static_cast<size_t>(row) * task.width +
+                                    static_cast<size_t>(col) +
                                     task.zindex * task.planeStride;
-            size_t dstByteOffset = dstPixelOffset * pixelSize;
+            size_t dstByteOffset  = dstPixelOffset * pixelSize;
 
-            if (task.type == mxUINT8_CLASS || task.type == mxUINT16_CLASS) {
-                std::memcpy(static_cast<uint8_t*>(task.dst) + dstByteOffset,
-                            rowBuffer.data() + srcIdx,
-                            pixelSize);
-            } else {
-                mexErrMsgIdAndTxt("TIFFLoad:UnsupportedType", "Unsupported output data type.");
-            }
+            std::memcpy( static_cast<uint8_t*>(task.dst) + dstByteOffset,
+                         rowBuffer.data() + srcIdx,
+                         pixelSize );
         }
     }
-
     TIFFClose(tif);
 }
 
