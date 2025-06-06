@@ -52,7 +52,7 @@ function load_bl_tif_test()
             for k = 1:numel(z_indices)
                 slice = imread(filelist{z_indices(k)}, ...
                     'PixelRegion', {[y_indices(1), y_indices(end)], [x_indices(1), x_indices(end)]});
-                bl_gt(:, :, k) = slice';
+                bl_gt(:, :, k) = slice;
             end
             t_ref = toc(t1);
 
