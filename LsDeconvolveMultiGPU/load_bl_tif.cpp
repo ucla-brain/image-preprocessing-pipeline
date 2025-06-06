@@ -55,10 +55,16 @@ void load_subregion(const LoadTask& task) {
                     mexErrMsgIdAndTxt("TIFFLoad:Alignment", "rowBuffer not properly aligned for uint16_T.");
                 uint16_ptr src16 = reinterpret_cast<uint16_ptr>(rowBuffer.data());
                 ((uint16_ptr)task.dst)[dstIdx] = src16[task.x + col];
+
+                // ✅ DEBUG: Only print the first few pixels of the first row of first slice
+                if (task.zindex == 0 && row == 0 && col < 5) {
+                    mexPrintf("  [%s] src[%d] = %u → dst[%d]\n",
+                        task.filename.c_str(), task.x + col, src16[task.x + col], (int)dstIdx);
+                    mexEvalString("drawnow;");
+                }
             }
         }
     }
-
     TIFFClose(tif);
 }
 
