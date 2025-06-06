@@ -28,7 +28,7 @@ function load_bl_tif_test()
     testZ = [round(numSlices / 2), max(1, numSlices - 3)];
     totalTests = size(blockSizes, 1) * numel(testZ);
 
-    results = zeros(totalTests, 8); % columns: pass, zidx, blkH, blkW, x, y, maxerr, speedup
+    results = zeros(totalTests, 8); % [pass, z, blkH, blkW, x, y, maxerr, speedup]
     testIdx = 1;
 
     fprintf('\n%-4s | %-6s | %-9s | %-13s | %-11s | %-12s\n', ...
@@ -48,27 +48,34 @@ function load_bl_tif_test()
 
             % MATLAB reference
             t1 = tic;
-            bl_gt = zeros(blkW, blkH, numel(z_indices), 'uint16');  % [W, H, Z] order
+            bl_gt = zeros(blkW, blkH, numel(z_indices), 'uint16');  % [W, H, Z]
             for k = 1:numel(z_indices)
                 slice = imread(filelist{z_indices(k)}, ...
                     'PixelRegion', {[y_indices(1), y_indices(end)], [x_indices(1), x_indices(end)]});
-                bl_gt(:, :, k) = slice';  % transpose to match [W, H]
+                bl_gt(:, :, k) = slice';
             end
             t_ref = toc(t1);
 
-            % MEX function
+            % MEX output
             t2 = tic;
             bl_mex = load_bl_tif(filelist(z_indices), y, x, blkH, blkW);
             t_mex = toc(t2);
 
             % Comparison
-            diff = abs(bl_mex - bl_gt);
+            diff = abs(double(bl_mex) - double(bl_gt));
             maxerr = max(diff(:));
             pass = maxerr == 0;
             symbol = char(pass * 10003 + ~pass * 10007);  % ✓ or ✗
 
             fprintf('  %s  | %-6d | [%3d,%3d]  | (%5d,%5d) | %1.4e | %8.2fx\n', ...
                 symbol, zidx, blkH, blkW, x, y, maxerr, t_ref / t_mex);
+
+            if ~pass
+                [ix, iy, iz] = ind2sub(size(diff), find(diff > 0, 1, 'first'));
+                fprintf('     ↳ First mismatch at (x=%d, y=%d, z=%d): MEX=%d, GT=%d\n', ...
+                    x + ix - 1, y + iy - 1, z_indices(iz), ...
+                    bl_mex(ix, iy, iz), bl_gt(ix, iy, iz));
+            end
 
             results(testIdx, :) = [pass, zidx, blkH, blkW, x, y, maxerr, t_ref / t_mex];
             testIdx = testIdx + 1;
