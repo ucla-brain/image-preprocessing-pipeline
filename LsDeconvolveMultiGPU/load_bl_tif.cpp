@@ -45,15 +45,19 @@ void load_subregion(const LoadTask& task) {
     size_t scanlineSize = imgWidth * pixelSize;
     std::vector<uint8_t> rowBuffer(scanlineSize);
 
+    mexPrintf("Loading: %s\n", task.filename.c_str());
+    mexPrintf("  x = %d, y = %d, width = %d, height = %d\n", task.x, task.y, task.width, task.height);
+    mexEvalString("drawnow;");
+
     for (int row = 0; row < task.height; ++row) {
         if (!TIFFReadScanline(tif, rowBuffer.data(), task.y + row))
             mexErrMsgIdAndTxt("TIFFLoad:ReadError", "Failed to read scanline in: %s", task.filename.c_str());
 
         for (int col = 0; col < task.width; ++col) {
-            size_t srcIdx = static_cast<size_t>(task.x + col) * pixelSize;
             size_t dstIdx = static_cast<size_t>(col) + static_cast<size_t>(row) * task.width + task.zindex * task.planeStride;
 
             if (task.type == mxUINT8_CLASS) {
+                size_t srcIdx = static_cast<size_t>(task.x + col);
                 ((uint8_ptr)task.dst)[dstIdx] = rowBuffer[srcIdx];
             } else if (task.type == mxUINT16_CLASS) {
                 if (reinterpret_cast<std::uintptr_t>(rowBuffer.data()) % alignof(uint16_T) != 0)
@@ -63,6 +67,12 @@ void load_subregion(const LoadTask& task) {
                 if ((srcPixelIdx + 1) * sizeof(uint16_T) > rowBuffer.size())
                     mexErrMsgIdAndTxt("TIFFLoad:Bounds", "Out-of-bounds access on rowBuffer.");
                 static_cast<uint16_ptr>(task.dst)[dstIdx] = src16[srcPixelIdx];
+
+                // ✅ Diagnostic print: only a few top-left pixels for z=0
+                if (task.zindex == 0 && row < 2 && col < 5) {
+                    mexPrintf("  [z=0] src[%zu] = %u → dst[%zu]\n",
+                        srcPixelIdx, src16[srcPixelIdx], dstIdx);
+                }
             }
         }
     }
