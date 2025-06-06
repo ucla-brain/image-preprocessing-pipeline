@@ -59,9 +59,9 @@ static void copySubRegion( const LoadTask& task )
             const std::size_t srcOffset = srcPixel * bytesPerPixel;
 
             const std::size_t dstPixel =
-                    static_cast<std::size_t>(col)
-                  + static_cast<std::size_t>(row) * task.roiW
-                  + task.zIndex * task.pixelsPerPlane;
+                static_cast<std::size_t>(row)
+              + static_cast<std::size_t>(col) * task.roiH
+              + task.zIndex * task.pixelsPerPlane;
             const std::size_t dstOffset = dstPixel * bytesPerPixel;
 
             std::memcpy(static_cast<uint8*>(task.dstBase) + dstOffset,
