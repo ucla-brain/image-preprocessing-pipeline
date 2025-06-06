@@ -51,7 +51,10 @@ void load_subregion(const LoadTask& task) {
 
         for (int col = 0; col < task.width; ++col) {
             size_t srcIdx = static_cast<size_t>(task.x + col) * pixelSize;
-            size_t dstIdx = static_cast<size_t>(col) + static_cast<size_t>(row) * task.width + task.zindex * task.dst_stride;
+            size_t dstIdx = static_cast<size_t>(col) +
+                            static_cast<size_t>(row) * task.width +
+                            task.zindex * task.planeStride;
+
             if (task.type == mxUINT8_CLASS) {
                 ((uint8_ptr)task.dst)[dstIdx] = rowBuffer[srcIdx];
             } else if (task.type == mxUINT16_CLASS) {
@@ -65,13 +68,12 @@ void load_subregion(const LoadTask& task) {
 
 void mexFunction(int nlhs, mxArray* plhs[],
                  int nrhs, const mxArray* prhs[]) {
-    if (nrhs == 0)
-        mexErrMsgTxt("Usage: img = load_bl_tif(files, y, x, height, width [, num_threads])");
     if (nrhs < 5)
-        mexErrMsgTxt("Expected at least 5 input arguments.");
+        mexErrMsgTxt("Usage: img = load_bl_tif(files, y, x, height, width [, num_threads])");
 
     if (!mxIsCell(prhs[0]))
         mexErrMsgTxt("First argument must be a cell array of filenames.");
+
     size_t numSlices = mxGetNumberOfElements(prhs[0]);
     std::vector<std::string> filenames(numSlices);
     for (size_t i = 0; i < numSlices; ++i) {
@@ -85,14 +87,14 @@ void mexFunction(int nlhs, mxArray* plhs[],
         mxFree(fname);
     }
 
-    int y = (int)mxGetScalar(prhs[1]);
-    int x = (int)mxGetScalar(prhs[2]);
-    int height = (int)mxGetScalar(prhs[3]);
-    int width = (int)mxGetScalar(prhs[4]);
+    int y = static_cast<int>(mxGetScalar(prhs[1]));
+    int x = static_cast<int>(mxGetScalar(prhs[2]));
+    int height = static_cast<int>(mxGetScalar(prhs[3]));
+    int width = static_cast<int>(mxGetScalar(prhs[4]));
 
     int concurrency = std::thread::hardware_concurrency();
     if (concurrency == 0) concurrency = 4;
-    int nthreads = (nrhs >= 6) ? (int)mxGetScalar(prhs[5]) : std::min<int>(concurrency, static_cast<int>(numSlices));
+    int nthreads = (nrhs >= 6) ? static_cast<int>(mxGetScalar(prhs[5])) : std::min(concurrency, static_cast<int>(numSlices));
     if (nthreads < 1) nthreads = 1;
 
     TIFF* tif = TIFFOpen(filenames[0].c_str(), "r");
@@ -115,10 +117,10 @@ void mexFunction(int nlhs, mxArray* plhs[],
         mexErrMsgTxt("Requested subregion is out of bounds.");
 
     mxClassID outType = (bitsPerSample == 8) ? mxUINT8_CLASS : mxUINT16_CLASS;
-    mwSize dims[3] = { (mwSize)height, (mwSize)width, (mwSize)numSlices };
+    mwSize dims[3] = { static_cast<mwSize>(height), static_cast<mwSize>(width), static_cast<mwSize>(numSlices) };
     plhs[0] = mxCreateNumericArray(3, dims, outType, mxREAL);
     void* outData = mxGetData(plhs[0]);
-    const size_t planeStride = static_cast<size_t>(height) * width;
+    size_t planeStride = static_cast<size_t>(height) * width;
 
     std::queue<LoadTask> task_queue;
     std::mutex queue_mutex;
