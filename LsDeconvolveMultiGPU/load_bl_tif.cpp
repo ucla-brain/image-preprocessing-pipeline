@@ -52,9 +52,9 @@ void load_subregion(const LoadTask& task) {
             mexErrMsgIdAndTxt("TIFFLoad:ReadError", "Failed to read scanline in: %s", task.filename.c_str());
 
         for (int col = 0; col < task.width; ++col) {
-            size_t srcIdx = static_cast<size_t>(task.x - 1 + col) * pixelSize; // <-- FIXED!
-            size_t dstPixelOffset = static_cast<size_t>(row) +
-                                    static_cast<size_t>(col) * task.height +
+            size_t srcIdx = static_cast<size_t>(task.x - 1 + col) * pixelSize;
+            size_t dstPixelOffset = static_cast<size_t>(col) +
+                                    static_cast<size_t>(row) * task.width +
                                     task.zindex * task.planeStride;
             size_t dstByteOffset = dstPixelOffset * pixelSize;
 
