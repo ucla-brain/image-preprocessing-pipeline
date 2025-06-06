@@ -3,6 +3,8 @@
 % ===============================
 % Compile semaphore, LZ4, and GPU MEX files using Anaconda's libtiff.
 % Requires MATLAB R2018a+ (-R2018a MEX API) and Anaconda (CONDA_PREFIX).
+% On Windows, will automatically generate libtiff.lib from tiff.dll if needed,
+% using gendef.exe and lib.exe (from Visual Studio).
 
 debug = false;
 
@@ -43,20 +45,79 @@ conda_prefix = getenv('CONDA_PREFIX');
 assert(~isempty(conda_prefix) && isfolder(conda_prefix), ...
     'CONDA_PREFIX is not set or does not point to a valid directory.');
 
-tiff_include = {['-I', fullfile(conda_prefix, 'include')]};
-tiff_lib     = {['-L', fullfile(conda_prefix, 'lib')]};
+tiff_include = {['-I', fullfile(conda_prefix, 'include')]} ;
+tiff_lib     = {['-L', fullfile(conda_prefix, 'lib')]} ;
 
 % --- Platform-specific linking and flags ---
 if ispc
-    % On Windows, typically need libtiff.lib
-    tiff_libfile = fullfile(conda_prefix, 'lib', 'libtiff.lib');
-    if ~isfile(tiff_libfile)
-        tiff_libfile = fullfile(conda_prefix, 'lib', 'tiff.lib');
-        if ~isfile(tiff_libfile)
-            error(['Neither libtiff.lib nor tiff.lib found in: ' fullfile(conda_prefix, 'lib')]);
-        end
+    % On Windows: check for libtiff.lib or tiff.lib, generate if needed.
+    tiff_libfile  = fullfile(conda_prefix, 'lib', 'libtiff.lib');
+    tiff_libfile2 = fullfile(conda_prefix, 'lib', 'tiff.lib');
+    need_generate = false;
+
+    if isfile(tiff_libfile)
+        tiff_link = {tiff_libfile};
+    elseif isfile(tiff_libfile2)
+        tiff_link = {tiff_libfile2};
+    else
+        need_generate = true;
     end
-    tiff_link = {tiff_libfile};
+
+    if need_generate
+        % Try to auto-generate libtiff.lib from tiff.dll
+        tiff_dll = fullfile(conda_prefix, 'Library', 'bin', 'tiff.dll');
+        gendef_exe = 'gendef.exe';  % Will download if missing.
+        tiff_def = fullfile(conda_prefix, 'lib', 'tiff.def');
+        generated_lib = fullfile(conda_prefix, 'lib', 'libtiff.lib');
+
+        % Download gendef.exe if missing (uses latest 1.0.1 release for Win64)
+        gendef_url = 'https://github.com/lu-zero/gen-def/releases/download/v1.0.1/gendef-1.0.1-win64.zip';
+        gendef_zip = 'gendef-1.0.1-win64.zip';
+        if ~exist(gendef_exe, 'file')
+            gendef_exe_path = which('gendef.exe');
+            if isempty(gendef_exe_path)
+                fprintf('Downloading gendef.exe ...\n');
+                try
+                    websave(gendef_zip, gendef_url);
+                    % If gendef_exe doesn't exist, unzip to current folder.
+                    unzip_dest = pwd;
+                    unzip(gendef_zip, unzip_dest);
+                    delete(gendef_zip);
+                    % Update gendef_exe to the newly unzipped path
+                    gendef_exe = fullfile(unzip_dest, 'gendef.exe');
+                catch
+                    error('Failed to download or unzip gendef.exe');
+                end
+            else
+                gendef_exe = gendef_exe_path;
+            end
+        end
+
+        if ~isfile(tiff_dll)
+            error('tiff.dll not found (looked for %s)', tiff_dll);
+        end
+        fprintf('Attempting to generate libtiff.lib from tiff.dll ...\n');
+
+        % Generate tiff.def using gendef
+        [s1, out1] = system(sprintf('"%s" "%s"', gendef_exe, tiff_dll));
+        if s1 ~= 0 || ~isfile(tiff_def)
+            disp(out1);
+            error('Failed to generate tiff.def from tiff.dll using gendef. Please ensure gendef.exe is installed and on your PATH.');
+        end
+
+        % Generate libtiff.lib using lib.exe (Visual Studio must be in PATH)
+        [s2, out2] = system(sprintf('lib /def:"%s" /out:"%s" /machine:x64', tiff_def, generated_lib));
+        if s2 ~= 0 || ~isfile(generated_lib)
+            disp(out2);
+            error(['Failed to generate libtiff.lib using lib.exe. ' ...
+                'Make sure you are running MATLAB from a "Developer Command Prompt for VS" or that lib.exe is on your PATH.']);
+        end
+
+        fprintf('libtiff.lib successfully generated in %s\n', fullfile(conda_prefix, 'lib'));
+        if exist(tiff_def, 'file'), delete(tiff_def); end
+
+        tiff_link = {generated_lib};
+    end
 
     if debug
         mex_flags_cpu = {'-R2018a', 'COMPFLAGS="$COMPFLAGS /Od /Zi /openmp"'};
@@ -92,15 +153,15 @@ mex(mex_flags_cpu{:}, src_load_bl, tiff_include{:}, tiff_lib{:}, tiff_link{:});
 % CUDA optimization flags
 if ispc
     if debug
-        nvccflags = 'NVCCFLAGS="$NVCCFLAGS -G -std=c++17 -Xcompiler ""/Od,/Zi"" "';
+        nvccflags = 'NVCCFLAGS="$NVCCFLAGS -G -std=c++17 -Xcompiler ""/Od,/Zi"" "'; %#ok<NASGU>
     else
-        nvccflags = 'NVCCFLAGS="$NVCCFLAGS -O2 -std=c++17 -Xcompiler ""/O2,/arch:AVX2,/openmp"" "';
+        nvccflags = 'NVCCFLAGS="$NVCCFLAGS -O2 -std=c++17 -Xcompiler ""/O2,/arch:AVX2,/openmp"" "'; %#ok<NASGU>
     end
 else
     if debug
-        nvccflags = 'NVCCFLAGS="$NVCCFLAGS -G -std=c++17 -Xcompiler ''-O0,-g'' "';
+        nvccflags = 'NVCCFLAGS="$NVCCFLAGS -G -std=c++17 -Xcompiler ''-O0,-g'' "'; %#ok<NASGU>
     else
-        nvccflags = 'NVCCFLAGS="$NVCCFLAGS -O2 -std=c++17 -Xcompiler ''-O2,-march=native,-fomit-frame-pointer,-fopenmp'' "';
+        nvccflags = 'NVCCFLAGS="$NVCCFLAGS -O2 -std=c++17 -Xcompiler ''-O2,-march=native,-fomit-frame-pointer,-fopenmp'' "'; %#ok<NASGU>
     end
 end
 
