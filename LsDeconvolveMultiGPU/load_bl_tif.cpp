@@ -37,11 +37,14 @@ void load_subregion(const LoadTask& task) {
         mexErrMsgIdAndTxt("TIFFLoad:SubregionBounds", "Subregion out of bounds in: %s", task.filename.c_str());
 
     size_t pixelSize = bitsPerSample / 8;
+    if (pixelSize != 1 && pixelSize != 2)
+        mexErrMsgIdAndTxt("TIFFLoad:InvalidPixelSize", "Unsupported pixel size: %zu", pixelSize);
+
     size_t scanlineSize = imgWidth * pixelSize;
     std::vector<uint8_t> rowBuffer(scanlineSize);
 
     for (int row = 0; row < task.height; ++row) {
-        if (!TIFFReadScanline(tif, rowBuffer.data(), task.y - 1 + row))
+        if (!TIFFReadScanline(tif, rowBuffer.data(), task.y + row))
             mexErrMsgIdAndTxt("TIFFLoad:ReadError", "Failed to read scanline in: %s", task.filename.c_str());
 
         for (int col = 0; col < task.width; ++col) {
