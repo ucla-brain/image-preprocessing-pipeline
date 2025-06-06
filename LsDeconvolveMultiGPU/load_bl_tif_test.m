@@ -52,7 +52,7 @@ function load_bl_tif_test()
             fprintf('Test z=%d, block=[%d,%d] at (x=%d,y=%d): max error = %.4g\n', ...
                 zidx, blkH, blkW, x, y, maxerr);
 
-            assert(maxerr < 1e-3, 'Mismatch between load_bl_tif and imread.');
+            assert(maxerr < 1e-6, 'Mismatch between load_bl_tif and imread.');
         end
     end
 
