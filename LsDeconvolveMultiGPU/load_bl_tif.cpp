@@ -39,7 +39,7 @@ void load_subregion(const LoadTask& task) {
         mexErrMsgIdAndTxt("TIFFLoad:SubregionBounds", "Subregion out of bounds in: %s", task.filename.c_str());
 
     size_t pixelSize = bitsPerSample / 8;
-    std::vector<uint8_t> rowBuffer(imgWidth * pixelSize);
+    std::vector<uint8_t> rowBuffer(imgWidth * samplesPerPixel * pixelSize);
 
     for (int row = 0; row < task.height; ++row) {
         if (!TIFFReadScanline(tif, rowBuffer.data(), task.y + row))
