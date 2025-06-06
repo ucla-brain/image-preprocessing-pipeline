@@ -48,7 +48,7 @@ static void copySubRegion( const LoadTask& task )
     /* ---------------- copy every row in the ROI ---------------- */
     for (int row = 0; row < task.roiH; ++row)
     {
-        const uint32_t tifRow = static_cast<uint32_t>(task.roiY + row); // 0-based
+        const uint32_t tifRow = static_cast<uint32_t>(task.roiY - 1 + row); // 0-based
         if (!TIFFReadScanline(tif, scan.data(), tifRow))
             mexErrMsgIdAndTxt("load_bl_tif:Read","Read row %u",tifRow);
 
