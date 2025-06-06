@@ -4,7 +4,7 @@
 % Compile semaphore, LZ4, and GPU MEX files using Anaconda's libtiff.
 % Requires MATLAB R2018a+ (-R2018a MEX API) and Anaconda (CONDA_PREFIX).
 % On Windows, will automatically generate libtiff.lib from tiff.dll if needed,
-% using gendef.exe and lib.exe (from Visual Studio).
+% using lib.exe (from Visual Studio).
 
 debug = false;
 
@@ -60,49 +60,22 @@ if ispc
     elseif isfile(tiff_libfile2)
         tiff_link = {tiff_libfile2};
     else
-        need_generate = true;
-    end
-
-    if need_generate
-        % Try to auto-generate libtiff.lib from tiff.dll
+        % Try to auto-generate libtiff.lib from tiff.dll using lib.exe
         tiff_dll = fullfile(conda_prefix, 'Library', 'bin', 'tiff.dll');
-        gendef_exe = 'gendef.exe';  % Will download if missing.
         tiff_def = fullfile(conda_prefix, 'lib', 'tiff.def');
         generated_lib = fullfile(conda_prefix, 'lib', 'libtiff.lib');
-
-        % Download gendef.exe if missing (uses latest 1.0.1 release for Win64)
-        gendef_url = 'https://github.com/lu-zero/gen-def/releases/download/v1.0.1/gendef-1.0.1-win64.zip';
-        gendef_zip = 'gendef-1.0.1-win64.zip';
-        if ~exist(gendef_exe, 'file')
-            gendef_exe_path = which('gendef.exe');
-            if isempty(gendef_exe_path)
-                fprintf('Downloading gendef.exe ...\n');
-                try
-                    websave(gendef_zip, gendef_url);
-                    % If gendef_exe doesn't exist, unzip to current folder.
-                    unzip_dest = pwd;
-                    unzip(gendef_zip, unzip_dest);
-                    delete(gendef_zip);
-                    % Update gendef_exe to the newly unzipped path
-                    gendef_exe = fullfile(unzip_dest, 'gendef.exe');
-                catch
-                    error('Failed to download or unzip gendef.exe');
-                end
-            else
-                gendef_exe = gendef_exe_path;
-            end
-        end
 
         if ~isfile(tiff_dll)
             error('tiff.dll not found (looked for %s)', tiff_dll);
         end
+
         fprintf('Attempting to generate libtiff.lib from tiff.dll ...\n');
 
-        % Generate tiff.def using gendef
-        [s1, out1] = system(sprintf('"%s" "%s"', gendef_exe, tiff_dll));
-        if s1 ~= 0 || ~isfile(tiff_def)
+        % Use dumpbin and editbin approach if needed in future
+        [s1, out1] = system(sprintf('dumpbin /exports "%s" > "%s"', tiff_dll, tiff_def));
+        if s1 ~= 0
             disp(out1);
-            error('Failed to generate tiff.def from tiff.dll using gendef. Please ensure gendef.exe is installed and on your PATH.');
+            error('Failed to generate tiff.def. Make sure dumpbin is available.');
         end
 
         % Generate libtiff.lib using lib.exe (Visual Studio must be in PATH)
