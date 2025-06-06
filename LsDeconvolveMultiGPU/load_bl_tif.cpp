@@ -41,7 +41,7 @@ void load_subregion(const LoadTask& task) {
     std::vector<uint8_t> rowBuffer(scanlineSize);
 
     for (int row = 0; row < task.height; ++row) {
-        if (!TIFFReadScanline(tif, rowBuffer.data(), task.y + row))
+        if (!TIFFReadScanline(tif, rowBuffer.data(), task.y - 1 + row))
             mexErrMsgIdAndTxt("TIFFLoad:ReadError", "Failed to read scanline in: %s", task.filename.c_str());
 
         for (int col = 0; col < task.width; ++col) {
