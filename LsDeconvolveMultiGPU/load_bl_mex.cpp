@@ -5,6 +5,7 @@
 #include <thread>
 #include <future>
 #include <mutex>
+#include <cstdint>
 
 typedef unsigned char uint8_T;
 typedef unsigned short uint16_T;
@@ -23,8 +24,8 @@ void load_subregion(const LoadTask& task) {
     if (!tif)
         mexErrMsgIdAndTxt("TIFFLoad:OpenFail", "Failed to open: %s", task.filename.c_str());
 
-    uint32 imgWidth, imgHeight;
-    uint16 bitsPerSample, samplesPerPixel = 1;
+    uint32_t imgWidth, imgHeight;
+    uint16_t bitsPerSample, samplesPerPixel = 1;
     TIFFGetField(tif, TIFFTAG_IMAGEWIDTH, &imgWidth);
     TIFFGetField(tif, TIFFTAG_IMAGELENGTH, &imgHeight);
     TIFFGetField(tif, TIFFTAG_BITSPERSAMPLE, &bitsPerSample);
@@ -34,7 +35,6 @@ void load_subregion(const LoadTask& task) {
         mexErrMsgIdAndTxt("TIFFLoad:NotGrayscale", "Only grayscale TIFFs are supported: %s", task.filename.c_str());
     if ((bitsPerSample != 8 && bitsPerSample != 16))
         mexErrMsgIdAndTxt("TIFFLoad:UnsupportedDepth", "Only 8/16-bit TIFFs are supported.");
-
     if (task.x + task.width > imgWidth || task.y + task.height > imgHeight)
         mexErrMsgIdAndTxt("TIFFLoad:SubregionBounds", "Subregion out of bounds in: %s", task.filename.c_str());
 
@@ -62,16 +62,22 @@ void load_subregion(const LoadTask& task) {
 
 void mexFunction(int nlhs, mxArray* plhs[],
                  int nrhs, const mxArray* prhs[]) {
+    if (nrhs == 0)
+        mexErrMsgTxt("Usage: img = load_bl_mex(files, y, x, height, width [, num_threads])");
     if (nrhs < 5)
-        mexErrMsgTxt("Usage: img = read_tiff_stack_subregion(files, y, x, height, width [, num_threads])");
+        mexErrMsgTxt("Expected at least 5 input arguments.");
 
     // Parse file list
     if (!mxIsCell(prhs[0]))
         mexErrMsgTxt("First argument must be a cell array of filenames.");
     size_t numSlices = mxGetNumberOfElements(prhs[0]);
     std::vector<std::string> filenames(numSlices);
-    for (size_t i = 0; i < numSlices; ++i)
-        filenames[i] = mxArrayToString(mxGetCell(prhs[0], i));
+    for (size_t i = 0; i < numSlices; ++i) {
+        char* fname = mxArrayToString(mxGetCell(prhs[0], i));
+        if (!fname) mexErrMsgTxt("Invalid filename input.");
+        filenames[i] = fname;
+        mxFree(fname);
+    }
 
     int y = (int)mxGetScalar(prhs[1]);
     int x = (int)mxGetScalar(prhs[2]);
@@ -80,17 +86,29 @@ void mexFunction(int nlhs, mxArray* plhs[],
     int nthreads = (nrhs >= 6) ? (int)mxGetScalar(prhs[5]) : std::min<int>(std::thread::hardware_concurrency(), numSlices);
     if (nthreads < 1) nthreads = 1;
 
-    // Probe first image for type
+    // Probe first image for output type and sanity check
     TIFF* tif = TIFFOpen(filenames[0].c_str(), "r");
     if (!tif)
         mexErrMsgIdAndTxt("TIFFLoad:OpenFail", "Failed to open: %s", filenames[0].c_str());
 
-    uint16 bitsPerSample;
+    uint32_t imgWidth, imgHeight;
+    uint16_t bitsPerSample, samplesPerPixel = 1;
+    TIFFGetField(tif, TIFFTAG_IMAGEWIDTH, &imgWidth);
+    TIFFGetField(tif, TIFFTAG_IMAGELENGTH, &imgHeight);
     TIFFGetField(tif, TIFFTAG_BITSPERSAMPLE, &bitsPerSample);
+    TIFFGetFieldDefaulted(tif, TIFFTAG_SAMPLESPERPIXEL, &samplesPerPixel);
+
+    if (samplesPerPixel != 1)
+        mexErrMsgTxt("Only grayscale TIFFs are supported.");
+    if (bitsPerSample != 8 && bitsPerSample != 16)
+        mexErrMsgTxt("Only 8-bit or 16-bit grayscale TIFFs are supported.");
+    if (x + width > imgWidth || y + height > imgHeight)
+        mexErrMsgTxt("Requested subregion is out of bounds.");
+
     mxClassID outType = (bitsPerSample == 8) ? mxUINT8_CLASS : mxUINT16_CLASS;
     TIFFClose(tif);
 
-    // Create MATLAB output
+    // Allocate output
     mwSize dims[3] = { (mwSize)height, (mwSize)width, (mwSize)numSlices };
     plhs[0] = mxCreateNumericArray(3, dims, outType, mxREAL);
     void* outData = mxGetData(plhs[0]);
@@ -117,5 +135,6 @@ void mexFunction(int nlhs, mxArray* plhs[],
 
     for (int i = 0; i < nthreads; ++i)
         futures.push_back(std::async(std::launch::async, worker));
-    for (auto& f : futures) f.get(); // wait for all threads
+    for (auto& future : futures)
+        future.get(); // wait for all threads
 }
