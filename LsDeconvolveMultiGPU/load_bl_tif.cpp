@@ -3,19 +3,22 @@
 #include <vector>
 #include <string>
 #include <thread>
-#include <future>
 #include <mutex>
+#include <condition_variable>
+#include <queue>
 #include <cstdint>
 
 typedef unsigned char uint8_T;
 typedef unsigned short uint16_T;
+using uint8_ptr = uint8_T*;
+using uint16_ptr = uint16_T*;
 
 struct LoadTask {
     std::string filename;
     int y, x, height, width;
-    int zindex;
+    size_t zindex;
     void* dst;
-    int dst_stride;
+    size_t dst_stride;
     mxClassID type;
 };
 
@@ -33,14 +36,13 @@ void load_subregion(const LoadTask& task) {
 
     if (samplesPerPixel != 1)
         mexErrMsgIdAndTxt("TIFFLoad:NotGrayscale", "Only grayscale TIFFs are supported: %s", task.filename.c_str());
-    if ((bitsPerSample != 8 && bitsPerSample != 16))
+    if (bitsPerSample != 8 && bitsPerSample != 16)
         mexErrMsgIdAndTxt("TIFFLoad:UnsupportedDepth", "Only 8/16-bit TIFFs are supported.");
-
     if ((uint32_t)(task.x + task.width) > imgWidth || (uint32_t)(task.y + task.height) > imgHeight)
         mexErrMsgIdAndTxt("TIFFLoad:SubregionBounds", "Subregion out of bounds in: %s", task.filename.c_str());
 
     size_t pixelSize = bitsPerSample / 8;
-    size_t scanlineSize = imgWidth * samplesPerPixel * pixelSize;
+    size_t scanlineSize = imgWidth * pixelSize;
     std::vector<uint8_t> rowBuffer(scanlineSize);
 
     for (int row = 0; row < task.height; ++row) {
@@ -48,17 +50,20 @@ void load_subregion(const LoadTask& task) {
             mexErrMsgIdAndTxt("TIFFLoad:ReadError", "Failed to read scanline in: %s", task.filename.c_str());
 
         for (int col = 0; col < task.width; ++col) {
-            size_t srcIdx = (task.x + col) * pixelSize;
-            size_t dstIdx = col + row * task.width + task.zindex * task.dst_stride;
+            size_t srcIdx = static_cast<size_t>(task.x + col) * pixelSize;
+            size_t dstIdx = static_cast<size_t>(col) + static_cast<size_t>(row) * task.width + task.zindex * task.dst_stride;
 
             if (task.type == mxUINT8_CLASS) {
                 if (srcIdx >= rowBuffer.size())
                     mexErrMsgTxt("Read access out of scanline bounds (uint8).");
-                ((uint8_T*)task.dst)[dstIdx] = rowBuffer[srcIdx];
-            } else {
-                if ((task.x + col) >= imgWidth)
+                ((uint8_ptr)task.dst)[dstIdx] = rowBuffer[srcIdx];
+            } else if (task.type == mxUINT16_CLASS) {
+                size_t index16 = task.x + col;
+                if ((index16 + 1) * sizeof(uint16_T) > rowBuffer.size())
                     mexErrMsgTxt("Read access out of scanline bounds (uint16).");
-                ((uint16_T*)task.dst)[dstIdx] = ((uint16_T*)rowBuffer.data())[task.x + col];
+                ((uint16_ptr)task.dst)[dstIdx] = ((uint16_T*)rowBuffer.data())[index16];
+            } else {
+                mexErrMsgTxt("This function supports only uint8 and uint16.");
             }
         }
     }
@@ -78,9 +83,13 @@ void mexFunction(int nlhs, mxArray* plhs[],
     size_t numSlices = mxGetNumberOfElements(prhs[0]);
     std::vector<std::string> filenames(numSlices);
     for (size_t i = 0; i < numSlices; ++i) {
+        if (!mxIsChar(mxGetCell(prhs[0], i)))
+            mexErrMsgIdAndTxt("TIFFLoad:InvalidCell", "File list must contain string elements at index %zu", i);
         char* fname = mxArrayToString(mxGetCell(prhs[0], i));
         if (!fname) mexErrMsgTxt("Invalid filename input.");
         filenames[i] = fname;
+        if (filenames[i].empty())
+            mexErrMsgIdAndTxt("TIFFLoad:EmptyPath", "Filename at index %zu is empty.", i);
         mxFree(fname);
     }
 
@@ -88,10 +97,12 @@ void mexFunction(int nlhs, mxArray* plhs[],
     int x = (int)mxGetScalar(prhs[2]);
     int height = (int)mxGetScalar(prhs[3]);
     int width = (int)mxGetScalar(prhs[4]);
-    int nthreads = (nrhs >= 6) ? (int)mxGetScalar(prhs[5]) : std::min<int>(std::thread::hardware_concurrency(), numSlices);
+
+    int concurrency = std::thread::hardware_concurrency();
+    if (concurrency == 0) concurrency = 4;
+    int nthreads = (nrhs >= 6) ? (int)mxGetScalar(prhs[5]) : std::min<int>(concurrency, static_cast<int>(numSlices));
     if (nthreads < 1) nthreads = 1;
 
-    // Probe first image for type
     TIFF* tif = TIFFOpen(filenames[0].c_str(), "r");
     if (!tif)
         mexErrMsgIdAndTxt("TIFFLoad:OpenFail", "Failed to open: %s", filenames[0].c_str());
@@ -102,44 +113,57 @@ void mexFunction(int nlhs, mxArray* plhs[],
     TIFFGetField(tif, TIFFTAG_IMAGELENGTH, &imgHeight);
     TIFFGetField(tif, TIFFTAG_BITSPERSAMPLE, &bitsPerSample);
     TIFFGetFieldDefaulted(tif, TIFFTAG_SAMPLESPERPIXEL, &samplesPerPixel);
+    TIFFClose(tif);
 
     if (samplesPerPixel != 1)
-        mexErrMsgTxt("Only grayscale TIFFs are supported.");
+        mexErrMsgIdAndTxt("TIFFLoad:GrayscaleOnly", "Only grayscale TIFFs are supported.");
     if (bitsPerSample != 8 && bitsPerSample != 16)
         mexErrMsgTxt("Only 8-bit or 16-bit grayscale TIFFs are supported.");
     if ((uint32_t)(x + width) > imgWidth || (uint32_t)(y + height) > imgHeight)
         mexErrMsgTxt("Requested subregion is out of bounds.");
 
     mxClassID outType = (bitsPerSample == 8) ? mxUINT8_CLASS : mxUINT16_CLASS;
-    TIFFClose(tif);
-
-    // Allocate output
     mwSize dims[3] = { (mwSize)height, (mwSize)width, (mwSize)numSlices };
     plhs[0] = mxCreateNumericArray(3, dims, outType, mxREAL);
     void* outData = mxGetData(plhs[0]);
-    int stride = height * width;
+    const size_t stride = static_cast<size_t>(height) * width;
 
-    // Prepare threaded tasks
-    std::vector<std::future<void>> futures;
+    std::queue<LoadTask> task_queue;
     std::mutex queue_mutex;
-    size_t task_idx = 0;
+    std::condition_variable cv;
+    bool done = false;
+
+    for (size_t i = 0; i < filenames.size(); ++i) {
+        task_queue.push({
+            filenames[i], y, x, height, width,
+            i, outData, stride, outType
+        });
+    }
 
     auto worker = [&]() {
         while (true) {
-            size_t my_idx;
+            LoadTask task;
             {
-                std::lock_guard<std::mutex> lock(queue_mutex);
-                if (task_idx >= filenames.size()) return;
-                my_idx = task_idx++;
+                std::unique_lock<std::mutex> lock(queue_mutex);
+                cv.wait(lock, [&]() { return !task_queue.empty() || done; });
+                if (task_queue.empty()) return;
+                task = task_queue.front();
+                task_queue.pop();
             }
-            LoadTask task = { filenames[my_idx], y, x, height, width,
-                              (int)my_idx, outData, stride, outType };
             load_subregion(task);
         }
     };
 
+    std::vector<std::thread> threads;
     for (int i = 0; i < nthreads; ++i)
-        futures.push_back(std::async(std::launch::async, worker));
-    for (auto& f : futures)
-        f.get();
+        threads.emplace_back(worker);
+
+    {
+        std::lock_guard<std::mutex> lock(queue_mutex);
+        done = true;
+    }
+    cv.notify_all();
+
+    for (auto& t : threads)
+        t.join();
 }
