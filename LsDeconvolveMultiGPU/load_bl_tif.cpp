@@ -58,7 +58,16 @@ void load_subregion(const LoadTask& task) {
             if (task.type == mxUINT8_CLASS) {
                 ((uint8_ptr)task.dst)[dstIdx] = rowBuffer[srcIdx];
             } else if (task.type == mxUINT16_CLASS) {
-                ((uint16_ptr)task.dst)[dstIdx] = ((uint16_T*)rowBuffer.data())[task.x + col];
+                if (reinterpret_cast<std::uintptr_t>(rowBuffer.data()) % alignof(uint16_T) != 0)
+                    mexErrMsgIdAndTxt("TIFFLoad:Alignment", "rowBuffer not properly aligned for uint16_T.");
+
+                uint16_ptr src16 = reinterpret_cast<uint16_ptr>(rowBuffer.data());
+                size_t srcPixelIdx = task.x + col;
+
+                if ((srcPixelIdx + 1) * sizeof(uint16_T) > rowBuffer.size())
+                    mexErrMsgIdAndTxt("TIFFLoad:Bounds", "Out-of-bounds access on rowBuffer.");
+
+                static_cast<uint16_ptr>(task.dst)[dstIdx] = src16[srcPixelIdx];
             }
         }
     }
