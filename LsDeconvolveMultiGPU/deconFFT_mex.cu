@@ -95,10 +95,12 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     if (nrhs < 4)
         mexErrMsgIdAndTxt("deconFFT_mex:nrhs", "Requires at least 4 inputs: bl, otf, otf_conj, lambda");
 
-    mxGPUArray* bl_gpu = mxGPUCreateFromMxArray(prhs[0]);
-    const mxGPUArray* otf_gpu = mxGPUCreateFromMxArray(prhs[1]);
-    const mxGPUArray* otf_conj_gpu = mxGPUCreateFromMxArray(prhs[2]);
+    // Correct pointer types
+    mxGPUArray* bl_gpu = mxGPUCreateFromMxArray(prhs[0]);                   // IN-PLACE
+    const mxGPUArray* otf_gpu = mxGPUCreateFromMxArray(prhs[1]);            // read-only
+    const mxGPUArray* otf_conj_gpu = mxGPUCreateFromMxArray(prhs[2]);       // read-only
     float lambda = *(float*)mxGetData(prhs[3]);
+
     const mwSize* sz = mxGPUGetDimensions(bl_gpu);
     int dx = (int)sz[0], dy = (int)sz[1], dz = (int)sz[2];
     size_t nvox = size_t(dx) * dy * dz;
@@ -107,8 +109,8 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
         mexErrMsgIdAndTxt("deconFFT_mex:size", "Array size too large for size_t.");
 
     float* d_bl = (float*)mxGPUGetData(bl_gpu); // IN-PLACE!
-    cufftComplex* d_otf = (cufftComplex*)mxGPUGetDataReadOnly(otf_gpu);
-    cufftComplex* d_otf_conj = (cufftComplex*)mxGPUGetDataReadOnly(otf_conj_gpu);
+    const cufftComplex* d_otf = (const cufftComplex*)mxGPUGetDataReadOnly(otf_gpu);
+    const cufftComplex* d_otf_conj = (const cufftComplex*)mxGPUGetDataReadOnly(otf_conj_gpu);
 
     cufftHandle plan_fwd, plan_inv;
     CUFFT_CHECK(cufftPlan3d(&plan_fwd, dz, dy, dx, CUFFT_R2C));
