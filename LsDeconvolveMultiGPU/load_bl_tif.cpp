@@ -17,8 +17,25 @@ struct LoadTask
     std::size_t pixelsPerSlice;
     mxClassID   matlabType;
 };
-
 /* --------------------------------------------------------------------- */
+static bool is_system_little_endian() {
+    uint16_t x = 1;
+    return *((uint8_t*)&x) == 1;
+}
+
+static bool tiff_is_little_endian(TIFF* tif) {
+    // LibTIFF 4.x has TIFFIsByteSwapped, but we can check file header if needed
+    return (TIFFIsByteSwapped(tif) == 0); // Returns nonzero if bytes need to be swapped to native order
+}
+
+static void swap_uint16_buf(void* buf, size_t count) {
+    uint16_t* p = static_cast<uint16_t*>(buf);
+    for (size_t i = 0; i < count; ++i) {
+        uint16_t v = p[i];
+        p[i] = (v >> 8) | (v << 8);
+    }
+}
+
 // Helper: throws on error
 static void throw_mex(const char* id, const char* fmt, const char* s) {
     char msg[512];
@@ -73,6 +90,11 @@ static void copySubRegion(const LoadTask& task)
                 if (TIFFReadEncodedTile(tif, tileIdx, tilebuf.data(), tilebuf.size()) < 0)
                     mexErrMsgIdAndTxt("load_bl_tif:ReadTile", "Failed reading tile at x=%u y=%u", tileX, tileY);
 
+                // PATCH: If 16-bit, swap bytes if needed
+                if (bytesPerPixel == 2 && TIFFIsByteSwapped(tif)) {
+                    swap_uint16_buf(tilebuf.data(), tileWidth * tileHeight);
+                }
+
                 // Offset of this pixel in the tile buffer
                 uint32_t relY = imgY - tileY;
                 uint32_t relX = imgX - tileX;
@@ -95,6 +117,11 @@ static void copySubRegion(const LoadTask& task)
             uint32_t tifRow = static_cast<uint32_t>(task.roiY + row);
             if (!TIFFReadScanline(tif, scanline.data(), tifRow))
                 mexErrMsgIdAndTxt("load_bl_tif:Read", "Read row %u failed", tifRow);
+
+            // PATCH: If 16-bit, swap bytes if needed
+            if (bytesPerPixel == 2 && TIFFIsByteSwapped(tif)) {
+                swap_uint16_buf(scanline.data(), imgWidth);
+            }
 
             for (int col = 0; col < task.roiW; ++col) {
                 std::size_t srcPixel = static_cast<std::size_t>(task.roiX + col);
