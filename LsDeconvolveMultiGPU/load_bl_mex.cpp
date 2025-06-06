@@ -1,0 +1,121 @@
+#include "mex.h"
+#include "tiffio.h"
+#include <vector>
+#include <string>
+#include <thread>
+#include <future>
+#include <mutex>
+
+typedef unsigned char uint8_T;
+typedef unsigned short uint16_T;
+
+struct LoadTask {
+    std::string filename;
+    int y, x, height, width;
+    int zindex;
+    void* dst;
+    int dst_stride;
+    mxClassID type;
+};
+
+void load_subregion(const LoadTask& task) {
+    TIFF* tif = TIFFOpen(task.filename.c_str(), "r");
+    if (!tif)
+        mexErrMsgIdAndTxt("TIFFLoad:OpenFail", "Failed to open: %s", task.filename.c_str());
+
+    uint32 imgWidth, imgHeight;
+    uint16 bitsPerSample, samplesPerPixel = 1;
+    TIFFGetField(tif, TIFFTAG_IMAGEWIDTH, &imgWidth);
+    TIFFGetField(tif, TIFFTAG_IMAGELENGTH, &imgHeight);
+    TIFFGetField(tif, TIFFTAG_BITSPERSAMPLE, &bitsPerSample);
+    TIFFGetFieldDefaulted(tif, TIFFTAG_SAMPLESPERPIXEL, &samplesPerPixel);
+
+    if (samplesPerPixel != 1)
+        mexErrMsgIdAndTxt("TIFFLoad:NotGrayscale", "Only grayscale TIFFs are supported: %s", task.filename.c_str());
+    if ((bitsPerSample != 8 && bitsPerSample != 16))
+        mexErrMsgIdAndTxt("TIFFLoad:UnsupportedDepth", "Only 8/16-bit TIFFs are supported.");
+
+    if (task.x + task.width > imgWidth || task.y + task.height > imgHeight)
+        mexErrMsgIdAndTxt("TIFFLoad:SubregionBounds", "Subregion out of bounds in: %s", task.filename.c_str());
+
+    size_t pixelSize = bitsPerSample / 8;
+    std::vector<uint8_t> rowBuffer(imgWidth * pixelSize);
+
+    for (int row = 0; row < task.height; ++row) {
+        if (!TIFFReadScanline(tif, rowBuffer.data(), task.y + row))
+            mexErrMsgIdAndTxt("TIFFLoad:ReadError", "Failed to read scanline in: %s", task.filename.c_str());
+
+        for (int col = 0; col < task.width; ++col) {
+            size_t srcIdx = (task.x + col) * pixelSize;
+            size_t dstIdx = row + col * task.height + task.zindex * task.dst_stride;
+
+            if (task.type == mxUINT8_CLASS) {
+                ((uint8_T*)task.dst)[dstIdx] = rowBuffer[srcIdx];
+            } else {
+                ((uint16_T*)task.dst)[dstIdx] = ((uint16_T*)rowBuffer.data())[task.x + col];
+            }
+        }
+    }
+
+    TIFFClose(tif);
+}
+
+void mexFunction(int nlhs, mxArray* plhs[],
+                 int nrhs, const mxArray* prhs[]) {
+    if (nrhs < 5)
+        mexErrMsgTxt("Usage: img = read_tiff_stack_subregion(files, y, x, height, width [, num_threads])");
+
+    // Parse file list
+    if (!mxIsCell(prhs[0]))
+        mexErrMsgTxt("First argument must be a cell array of filenames.");
+    size_t numSlices = mxGetNumberOfElements(prhs[0]);
+    std::vector<std::string> filenames(numSlices);
+    for (size_t i = 0; i < numSlices; ++i)
+        filenames[i] = mxArrayToString(mxGetCell(prhs[0], i));
+
+    int y = (int)mxGetScalar(prhs[1]);
+    int x = (int)mxGetScalar(prhs[2]);
+    int height = (int)mxGetScalar(prhs[3]);
+    int width = (int)mxGetScalar(prhs[4]);
+    int nthreads = (nrhs >= 6) ? (int)mxGetScalar(prhs[5]) : std::min<int>(std::thread::hardware_concurrency(), numSlices);
+    if (nthreads < 1) nthreads = 1;
+
+    // Probe first image for type
+    TIFF* tif = TIFFOpen(filenames[0].c_str(), "r");
+    if (!tif)
+        mexErrMsgIdAndTxt("TIFFLoad:OpenFail", "Failed to open: %s", filenames[0].c_str());
+
+    uint16 bitsPerSample;
+    TIFFGetField(tif, TIFFTAG_BITSPERSAMPLE, &bitsPerSample);
+    mxClassID outType = (bitsPerSample == 8) ? mxUINT8_CLASS : mxUINT16_CLASS;
+    TIFFClose(tif);
+
+    // Create MATLAB output
+    mwSize dims[3] = { (mwSize)height, (mwSize)width, (mwSize)numSlices };
+    plhs[0] = mxCreateNumericArray(3, dims, outType, mxREAL);
+    void* outData = mxGetData(plhs[0]);
+    int stride = height * width;
+
+    // Prepare thread tasks
+    std::vector<std::future<void>> futures;
+    std::mutex queue_mutex;
+    size_t task_idx = 0;
+
+    auto worker = [&]() {
+        while (true) {
+            size_t my_idx;
+            {
+                std::lock_guard<std::mutex> lock(queue_mutex);
+                if (task_idx >= filenames.size()) return;
+                my_idx = task_idx++;
+            }
+            LoadTask task = { filenames[my_idx], y, x, height, width,
+                              (int)my_idx, outData, stride, outType };
+            load_subregion(task);
+        }
+    };
+
+    for (int i = 0; i < nthreads; ++i)
+        futures.push_back(std::async(std::launch::async, worker));
+    for (auto& f : futures) f.get(); // wait for all threads
+}
