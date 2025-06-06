@@ -1,7 +1,7 @@
 % ===============================
 % build_mex.m
 % ===============================
-% Compile semaphore, LZ4, and GPU MEX files using Anaconda's libtiff.
+% Compile semaphore, LZ4, and GPU MEX files using Anaconda's libtiff or fallback to libtiff built from source.
 % Requires MATLAB R2018a+ (-R2018a MEX API) and Anaconda (CONDA_PREFIX).
 % On all platforms, will automatically download and compile libtiff from source
 % if the required library is missing.
@@ -40,38 +40,34 @@ if ~isfile('lz4.h')
     try, websave('lz4.h', lz4_h_url); catch, error('Failed to download lz4.h'); end
 end
 
-% Use Anaconda-provided libtiff for all platforms, or build if missing
+% Use Anaconda-provided libtiff or fallback to source build
 conda_prefix = getenv('CONDA_PREFIX');
 assert(~isempty(conda_prefix) && isfolder(conda_prefix), ...
     'CONDA_PREFIX is not set or does not point to a valid directory.');
 
-tiff_include = {['-I', fullfile(conda_prefix, 'include')]} ;
-tiff_lib     = {['-L', fullfile(conda_prefix, 'lib')]} ;
+libtiff_root = fullfile(pwd, 'tiff_src', 'tiff-4.6.0');
 
 % --- Platform-specific linking and flags ---
 if ispc
-    tiff_libfile = fullfile(conda_prefix, 'lib', 'libtiff.lib');
-    if ~isfile(tiff_libfile)
+    built_lib = fullfile(conda_prefix, 'lib', 'libtiff.lib');
+    if ~isfile(built_lib)
         % Auto-build libtiff from source if missing
         fprintf('libtiff.lib not found. Downloading and building libtiff from source...\n');
         system('curl -L -o tiff.zip https://download.osgeo.org/libtiff/tiff-4.6.0.zip');
         unzip('tiff.zip', 'tiff_src');
         delete('tiff.zip');
-        cd(fullfile('tiff_src', 'tiff-4.6.0'));
-
-        % Configure and build with Visual Studio
-        build_cmd = [
-            'cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="', conda_prefix, '" . && ', ...
-            'cmake --build build --config Release --target install'
-        ];
-        status = system(build_cmd);
-        cd ../..;
-
+        cd(libtiff_root);
+        % Configure and build with CMake + Visual Studio
+        status = system(['cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="', conda_prefix, '" . && ' ...
+                         'cmake --build build --config Release --target install']);
+        cd('../../');
         if status ~= 0
             error('Failed to build libtiff from source on Windows.');
         end
     end
-    tiff_link = {'-ltiff'};
+    tiff_include = {['-I', fullfile(libtiff_root, 'libtiff')]} ;
+    tiff_lib     = {['-L', fullfile(conda_prefix, 'lib')]} ;
+    tiff_link    = {'-ltiff'};
 
     if debug
         mex_flags_cpu = {'-R2018a', 'COMPFLAGS="$COMPFLAGS /Od /Zi /openmp"'};
@@ -79,23 +75,23 @@ if ispc
         mex_flags_cpu = {'-R2018a', 'COMPFLAGS="$COMPFLAGS /O2 /arch:AVX2 /openmp"'};
     end
 else
-    % On Linux/macOS
-    tiff_libfile = fullfile(conda_prefix, 'lib', 'libtiff.so');
-    if ~isfile(tiff_libfile)
+    built_lib = fullfile(conda_prefix, 'lib', 'libtiff.so');
+    if ~isfile(built_lib)
+        % Auto-build libtiff from source if missing
         fprintf('libtiff.so not found. Downloading and building libtiff from source...\n');
         system('curl -L -o tiff.tar.gz https://download.osgeo.org/libtiff/tiff-4.6.0.tar.gz');
         system('tar -xzf tiff.tar.gz');
         delete('tiff.tar.gz');
         cd('tiff-4.6.0');
-        configure_cmd = ['./configure --prefix=', conda_prefix, ' && make && make install'];
-        status = system(configure_cmd);
+        status = system(['./configure --prefix=', conda_prefix, ' && make && make install']);
         cd('..');
-
         if status ~= 0
             error('Failed to build libtiff from source on Linux.');
         end
     end
-    tiff_link = {'-ltiff'};
+    tiff_include = {['-I', fullfile(libtiff_root, 'libtiff')]} ;
+    tiff_lib     = {['-L', fullfile(conda_prefix, 'lib')]} ;
+    tiff_link    = {'-ltiff'};
 
     if debug
         mex_flags_cpu = {'-R2018a', 'CFLAGS="$CFLAGS -O0 -g -fopenmp"', ...
@@ -107,7 +103,7 @@ else
     end
 end
 
-fprintf('Using Anaconda libtiff from: %s\n', conda_prefix);
+fprintf('Using source-built libtiff from: %s\n', libtiff_root);
 
 % Build CPU MEX files
 % mex(mex_flags_cpu{:}, src_semaphore);
