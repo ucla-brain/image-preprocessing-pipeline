@@ -86,8 +86,10 @@ static void copySubRegion(const LoadTask& task)
                     mexErrMsgIdAndTxt("load_bl_tif:ReadTile", "Failed reading tile at x=%u y=%u", tileX, tileY);
 
                 // PATCH: If 16-bit, swap bytes if needed
+                // Only swap bytes if LibTIFF indicates the data is not in native order (endianness mismatch).
                 if (bytesPerPixel == 2 && TIFFIsByteSwapped(tif)) {
-                    size_t n_tile_pixels = TIFFTileSize(tif) / bytesPerPixel;
+                    tsize_t tilesize = TIFFTileSize(tif);
+                    size_t n_tile_pixels = tilesize / bytesPerPixel;
                     swap_uint16_buf(tilebuf.data(), n_tile_pixels);
                 }
 
