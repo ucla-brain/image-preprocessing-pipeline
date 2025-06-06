@@ -5,6 +5,9 @@ function load_bl_tif_test()
     % ================================
 
     folder_path = '/data/tif/B11_ds_4.5x_ABeta_z1200';
+    if ispc
+        folder_path = 'V:/tif/B11_ds_4.5x_ABeta_z1200';
+    end
     if isempty(folder_path) || ~isfolder(folder_path)
         error('TIF test folder not found. Check that folder_path is valid.');
     end
