@@ -56,7 +56,7 @@ function load_bl_tif_test()
 
             diff = abs(bl_mex - bl_gt);
             maxerr = max(diff(:));
-            pass = maxerr == 1e-6;
+            pass = maxerr == 0;
 
             % Print table row
             symbol = char(10003 * pass + 10007 * ~pass); % ✅ or ❌
