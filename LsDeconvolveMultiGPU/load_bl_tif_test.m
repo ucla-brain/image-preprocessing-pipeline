@@ -25,7 +25,7 @@ function load_bl_tif_test()
     results = [];
 
     fprintf('\n%-4s | %-6s | %-9s | %-13s | %-11s | %-12s\n', ...
-        '✔/✘', 'Z', 'BlockSize', '(X,Y)', 'Max Error', 'Speedup');
+        'pass', 'Z', 'BlockSize', '(X,Y)', 'Max Error', 'Speedup');
     fprintf(repmat('-', 1, 64)); fprintf('\n');
 
     for b = 1:size(blockSizes, 1)
