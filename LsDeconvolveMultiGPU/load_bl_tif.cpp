@@ -3,6 +3,7 @@
 #include <vector>
 #include <string>
 #include <cstdint>
+#include <cstring>
 
 typedef unsigned char uint8_T;
 typedef unsigned short uint16_T;
