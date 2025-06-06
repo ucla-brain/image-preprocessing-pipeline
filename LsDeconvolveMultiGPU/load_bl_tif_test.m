@@ -41,22 +41,22 @@ function load_bl_tif_test()
 
             % MATLAB reference
             t1 = tic;
-            bl_gt = zeros(blkW, blkH, numel(z_indices), 'single');  % width x height x depth
+            bl_gt = zeros(blkW, blkH, numel(z_indices), 'uint16');  % width x height x depth
             for k = 1:numel(z_indices)
                 slice = imread(filelist{z_indices(k)}, ...
                     'PixelRegion', {[y_indices(1), y_indices(end)], [x_indices(1), x_indices(end)]});
-                bl_gt(:, :, k) = im2single(slice)';
+                bl_gt(:, :, k) = slice';
             end
             t_ref = toc(t1);
 
             % MEX function
             t2 = tic;
-            bl_mex = im2single(load_bl_tif(filelist(z_indices), y, x, blkH, blkW));
+            bl_mex = load_bl_tif(filelist(z_indices), y, x, blkH, blkW);
             t_mex = toc(t2);
 
             diff = abs(bl_mex - bl_gt);
             maxerr = max(diff(:));
-            pass = maxerr < 1e-6;
+            pass = maxerr == 1e-6;
 
             % Print table row
             symbol = char(10003 * pass + 10007 * ~pass); % ✅ or ❌
