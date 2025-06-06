@@ -48,11 +48,11 @@ function load_bl_tif_test()
 
             % MATLAB reference
             t1 = tic;
-            bl_gt = zeros(blkH, blkW, numel(z_indices), 'uint16');  % MATLAB expects [W, H, Z]
+            bl_gt = zeros(blkW, blkH, numel(z_indices), 'uint16');  % MATLAB expects [W, H, Z]
             for k = 1:numel(z_indices)
                 slice = imread(filelist{z_indices(k)}, ...
                     'PixelRegion', {[y_indices(1), y_indices(end)], [x_indices(1), x_indices(end)]});
-                bl_gt(:, :, k) = slice;
+                bl_gt(:, :, k) = slice';
             end
             t_ref = toc(t1);
 
