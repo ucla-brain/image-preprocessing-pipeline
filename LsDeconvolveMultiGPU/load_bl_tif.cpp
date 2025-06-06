@@ -18,7 +18,7 @@ struct LoadTask {
     int y, x, height, width;
     size_t zindex;
     void* dst;
-    size_t dst_stride;
+    size_t planeStride;
     mxClassID type;
 };
 
@@ -51,7 +51,7 @@ void load_subregion(const LoadTask& task) {
 
         for (int col = 0; col < task.width; ++col) {
             size_t srcIdx = static_cast<size_t>(task.x + col) * pixelSize;
-            size_t dstIdx = static_cast<size_t>(row) + static_cast<size_t>(col) * task.height + task.zindex * task.dst_stride;
+            size_t dstIdx = static_cast<size_t>(row) + static_cast<size_t>(col) * task.height + task.zindex * task.planeStride;
 
             if (task.type == mxUINT8_CLASS) {
                 ((uint8_ptr)task.dst)[dstIdx] = rowBuffer[srcIdx];
@@ -60,6 +60,7 @@ void load_subregion(const LoadTask& task) {
             }
         }
     }
+
     TIFFClose(tif);
 }
 
@@ -118,7 +119,7 @@ void mexFunction(int nlhs, mxArray* plhs[],
     mwSize dims[3] = { (mwSize)height, (mwSize)width, (mwSize)numSlices };
     plhs[0] = mxCreateNumericArray(3, dims, outType, mxREAL);
     void* outData = mxGetData(plhs[0]);
-    const size_t stride = static_cast<size_t>(height) * width;
+    const size_t planeStride = static_cast<size_t>(height) * width;
 
     std::queue<LoadTask> task_queue;
     std::mutex queue_mutex;
@@ -128,7 +129,7 @@ void mexFunction(int nlhs, mxArray* plhs[],
     for (size_t i = 0; i < filenames.size(); ++i) {
         task_queue.push({
             filenames[i], y, x, height, width,
-            i, outData, stride, outType
+            i, outData, planeStride, outType
         });
     }
 
