@@ -34,7 +34,7 @@ function load_bl_tif_test()
             x_indices = x : x + blkW - 1;
             z_indices = zidx : min(numSlices, zidx + 2);
 
-            bl_gt = zeros(blkH, blkW, numel(z_indices), 'single');
+            bl_gt = zeros(blkW, blkH, numel(z_indices), 'single');  % width x height x depth
             for k = 1:numel(z_indices)
                 slice = imread(filelist{z_indices(k)}, ...
                     'PixelRegion', {[y_indices(1), y_indices(end)], [x_indices(1), x_indices(end)]});
