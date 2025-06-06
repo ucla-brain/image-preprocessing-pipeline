@@ -46,8 +46,10 @@ void load_subregion(const LoadTask& task) {
 
         for (int col = 0; col < task.width; ++col) {
             size_t srcIdx = static_cast<size_t>(task.x + col) * pixelSize;
-            size_t dstPixelOffset = static_cast<size_t>(col) +
-                                    static_cast<size_t>(row) * task.width +
+
+            // Transpose row/col: write as [row, col] → [y, x] → [x, y] in memory
+            size_t dstPixelOffset = static_cast<size_t>(row) +  // Y
+                                    static_cast<size_t>(col) * task.height +  // X
                                     task.zindex * task.planeStride;
             size_t dstByteOffset = dstPixelOffset * pixelSize;
 
