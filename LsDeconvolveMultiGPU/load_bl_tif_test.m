@@ -51,7 +51,7 @@ function load_bl_tif_test()
 
             % MEX function
             t2 = tic;
-            bl_mex = im2single(load_bl_tif(filelist(z_indices), y, x, blkH, blkW))';
+            bl_mex = im2single(load_bl_tif(filelist(z_indices), x, y, blkW, blkH));
             t_mex = toc(t2);
 
             diff = abs(bl_mex - bl_gt);
