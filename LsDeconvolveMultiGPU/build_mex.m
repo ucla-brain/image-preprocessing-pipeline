@@ -47,38 +47,14 @@ assert(~isempty(conda_prefix) && isfolder(conda_prefix), ...
 libtiff_root = fullfile(pwd, 'tiff_src', 'tiff-4.6.0');
 stamp_file = fullfile(pwd, '.libtiff_installed');
 
-% Try to build optimized libtiff
-function ok = try_build_libtiff()
-    if ispc
-        archive = 'tiff.zip';
-        if ~isfolder(libtiff_root)
-            system(['curl -L -o ', archive, ' https://download.osgeo.org/libtiff/tiff-4.6.0.zip']);
-            unzip(archive, 'tiff_src'); delete(archive);
-        end
-        cd(libtiff_root);
-        status = system(['cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="', conda_prefix, '" . && ' ...
-                         'cmake --build build --config Release --target install']);
-        cd('../../');
-    else
-        archive = 'tiff.tar.gz';
-        if ~isfolder('tiff-4.6.0')
-            system(['curl -L -o ', archive, ' https://download.osgeo.org/libtiff/tiff-4.6.0.tar.gz']);
-            system(['tar -xzf ', archive]); delete(archive);
-        end
-        cd('tiff-4.6.0');
-        status = system(['./configure --prefix=', conda_prefix, ' && make -j4 && make install']);
-        cd('..');
-    end
-    ok = (status == 0);
-    if ok, fclose(fopen(stamp_file, 'w')); end
-end
-
 use_fallback = false;
 if ~isfile(stamp_file)
     fprintf('Building libtiff from source with optimized flags...\n');
-    if ~try_build_libtiff()
+    if ~try_build_libtiff(libtiff_root, conda_prefix)
         warning('Failed to build libtiff from source. Falling back to Anaconda libtiff.');
         use_fallback = true;
+    else
+        fclose(fopen(stamp_file, 'w'));
     end
 end
 
@@ -147,3 +123,30 @@ end
 % mexcuda(cuda_mex_flags{:}, '-R2018a', src_deconFFT, ['-I', root_dir], ['-I', include_dir], nvccflags, '-L/usr/local/cuda/lib64', '-lcufft');
 
 fprintf('All MEX files built successfully.\n');
+
+% ===============================
+% Function: try_build_libtiff
+% ===============================
+function ok = try_build_libtiff(libtiff_root, conda_prefix)
+    if ispc
+        archive = 'tiff.zip';
+        if ~isfolder(libtiff_root)
+            system(['curl -L -o ', archive, ' https://download.osgeo.org/libtiff/tiff-4.6.0.zip']);
+            unzip(archive, 'tiff_src'); delete(archive);
+        end
+        cd(libtiff_root);
+        status = system(['cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="', conda_prefix, '" . && ' ...
+                         'cmake --build build --config Release --target install']);
+        cd('../../');
+    else
+        archive = 'tiff.tar.gz';
+        if ~isfolder('tiff-4.6.0')
+            system(['curl -L -o ', archive, ' https://download.osgeo.org/libtiff/tiff-4.6.0.tar.gz']);
+            system(['tar -xzf ', archive]); delete(archive);
+        end
+        cd('tiff-4.6.0');
+        status = system(['./configure --prefix=', conda_prefix, ' && make -j4 && make install']);
+        cd('..');
+    end
+    ok = (status == 0);
+end
