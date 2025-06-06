@@ -40,7 +40,7 @@ for k = 1:size(tests,1)
     buf = convFFT_matlab(buf, otf_conj);
     if lambda > 0
         % Simple Tikhonov regularization: 3D Laplacian kernel
-        R = fspecial3('laplacian', 3); % 3D Laplacian (minimalist)
+        R = fspecial3('laplacian', [3 3 3]); % 3D Laplacian (minimalist)
         reg = convFFT_matlab(bl, fftn(R, sz));
         result_ref = bl .* buf .* (1-lambda) + reg .* lambda;
     else
@@ -109,6 +109,7 @@ end
 
 function h = fspecial3(type, sz, sigma)
 % Minimal 3D gaussian/laplacian generator for testing
+if isscalar(sz), sz = repmat(sz,1,3); end
 if nargin < 3, sigma = 1; end
 switch lower(type)
     case 'gaussian'
