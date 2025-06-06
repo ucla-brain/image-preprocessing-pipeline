@@ -1,37 +1,35 @@
 % ===============================
 % build_mex.m
 % ===============================
-% Compile semaphore, queue, chunked LZ4, and GPU Gaussian MEX files.
-% Downloads lz4.c/.h from GitHub if missing.
-% Requires MATLAB R2018a+ (-R2018a mxArray API).
+% Compile semaphore, LZ4, and GPU MEX files.
+% Supports libtiff via Anaconda (preferred on Windows) or system paths (Linux/macOS).
+% Requires MATLAB R2018a+ (-R2018a MEX API)
 
 debug = false;
+
 if verLessThan('matlab', '9.4')
     error('This script requires MATLAB R2018a or newer (for -R2018a MEX API)');
 end
+
 if exist('mexcuda', 'file') ~= 2
     error('mexcuda not found. Ensure CUDA is set up correctly.');
 end
-assert(exist(fullfile(matlabroot, 'extern', 'include', 'tiffio.h'), 'file') == 2 || ...
-       exist('/usr/include/tiffio.h', 'file') == 2, ...
-       'tiffio.h not found — ensure libtiff-dev is installed.');
 
-
+% Source files
 src_semaphore = 'semaphore.c';
-% src_queue = 'queue.c';
-src_lz4_save = 'save_lz4_mex.c';
-src_lz4_load = 'load_lz4_mex.c';
-src_lz4_c = 'lz4.c';
-src_gauss3d = 'gauss3d_mex.cu';
-src_conv3d = 'conv3d_mex.cu';
-src_otf_gpu = 'otf_gpu_mex.cu';
-src_deconFFT = 'deconFFT_mex.cu';
-src_load_bl = 'load_bl_mex.cpp';
+src_lz4_save  = 'save_lz4_mex.c';
+src_lz4_load  = 'load_lz4_mex.c';
+src_lz4_c     = 'lz4.c';
+src_gauss3d   = 'gauss3d_mex.cu';
+src_conv3d    = 'conv3d_mex.cu';
+src_otf_gpu   = 'otf_gpu_mex.cu';
+src_deconFFT  = 'deconFFT_mex.cu';
+src_load_bl   = 'load_bl_mex.cpp';
 
-lz4_c_url  = 'https://raw.githubusercontent.com/lz4/lz4/dev/lib/lz4.c';
-lz4_h_url  = 'https://raw.githubusercontent.com/lz4/lz4/dev/lib/lz4.h';
+% LZ4 source download if missing
+lz4_c_url = 'https://raw.githubusercontent.com/lz4/lz4/dev/lib/lz4.c';
+lz4_h_url = 'https://raw.githubusercontent.com/lz4/lz4/dev/lib/lz4.h';
 
-% Download lz4.c/.h if missing
 if ~isfile('lz4.c')
     fprintf('Downloading lz4.c ...\n');
     try, websave('lz4.c', lz4_c_url);
@@ -43,39 +41,58 @@ if ~isfile('lz4.h')
     catch, error('Failed to download lz4.h'); end
 end
 
-% MEX optimization flags (for CPU builds)
+% MEX optimization flags (CPU)
 mex_flags = {'-R2018a'};
 if debug
     if ispc && ~ismac
-        % Windows debug
         mex_flags_cpu = [mex_flags, {'COMPFLAGS="$COMPFLAGS /Od /Zi /openmp"'}];
     else
-        % POSIX debug
         mex_flags_cpu = [mex_flags, {'CFLAGS="$CFLAGS -O0 -g -fopenmp"', 'CXXFLAGS="$CXXFLAGS -O0 -g -fopenmp"'}];
     end
 else
     if ispc && ~ismac
-        % Windows release
         mex_flags_cpu = [mex_flags, {'COMPFLAGS="$COMPFLAGS /O2 /arch:AVX2 /openmp"'}];
     else
-        % POSIX release (Linux/macOS)
         mex_flags_cpu = [mex_flags, {'CFLAGS="$CFLAGS -O3 -march=native -fomit-frame-pointer -fopenmp"', ...
                                      'CXXFLAGS="$CXXFLAGS -O3 -march=native -fomit-frame-pointer -fopenmp"'}];
     end
 end
 
-% Build semaphore/queue/lz4 MEX files (CPU)
-% mex(mex_flags_cpu{:}, src_queue);
+% Build CPU MEX files
 mex(mex_flags_cpu{:}, src_semaphore);
 mex(mex_flags_cpu{:}, src_lz4_save, src_lz4_c);
 mex(mex_flags_cpu{:}, src_lz4_load, src_lz4_c);
+
+% --------------------------------------------
+% LIBTIFF cross-platform support
+% --------------------------------------------
+tiff_include = {};
+tiff_lib = {};
+tiff_link = {'-ltiff'};
+
 if ispc
-    mex(mex_flags_cpu{:}, src_load_bl, '-ltiff'); % assuming libtiff.lib in LIB path
-else
-    mex(mex_flags_cpu{:}, src_load_bl, '-ltiff');
+    conda_prefix = getenv('CONDA_PREFIX');
+    if ~isempty(conda_prefix) && isfolder(fullfile(conda_prefix, 'include'))
+        fprintf('Using Anaconda libtiff from: %s\n', conda_prefix);
+        tiff_include = {['-I', fullfile(conda_prefix, 'include')]};
+        tiff_lib     = {['-L', fullfile(conda_prefix, 'lib')]};
+    else
+        warning(['CONDA_PREFIX not set or invalid. ' ...
+                 'Assuming libtiff.lib is found via LIB environment variable.']);
+    end
+elseif isunix
+    if isfolder('/usr/include/x86_64-linux-gnu')
+        tiff_include = {'-I/usr/include/x86_64-linux-gnu'};
+    elseif isfolder('/usr/include')
+        tiff_include = {'-I/usr/include'};
+    else
+        warning('Could not auto-locate tiffio.h — consider setting include path manually.');
+    end
 end
 
-% CUDA optimization flags (for mexcuda)
+mex(mex_flags_cpu{:}, src_load_bl, tiff_include{:}, tiff_lib{:}, tiff_link{:});
+
+% CUDA optimization flags
 if debug
     if ispc && ~ismac
         nvccflags = 'NVCCFLAGS="$NVCCFLAGS -G -std=c++14 -Xcompiler ""/Od,/Zi"" "';
@@ -90,10 +107,10 @@ else
     end
 end
 
-% CUDA include dirs (if any)
+% CUDA include dirs
 root_dir = '.'; include_dir = './mex_incubator';
 
-% Patch: Use custom XML for mexcuda only on Windows
+% Windows: use custom nvcc config
 if ispc
     xmlfile = fullfile(fileparts(mfilename('fullpath')), 'nvcc_msvcpp2022.xml');
     assert(isfile(xmlfile), 'nvcc_msvcpp2022.xml not found!');
@@ -102,7 +119,7 @@ else
     cuda_mex_flags = {};
 end
 
-% Build CUDA Gaussian 3D MEX file (GPU)
+% Build CUDA MEX files
 mexcuda(cuda_mex_flags{:}, mex_flags{:}, src_gauss3d , ['-I', root_dir], ['-I', include_dir], nvccflags);
 mexcuda(cuda_mex_flags{:}, mex_flags{:}, src_conv3d  , ['-I', root_dir], ['-I', include_dir], nvccflags);
 mexcuda(cuda_mex_flags{:}, mex_flags{:}, src_otf_gpu , ['-I', root_dir], ['-I', include_dir], nvccflags, '-L/usr/local/cuda/lib64', '-lcufft');
