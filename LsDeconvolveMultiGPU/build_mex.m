@@ -3,8 +3,7 @@
 % ===============================
 % Compile semaphore, LZ4, and GPU MEX files using Anaconda's libtiff.
 % Requires MATLAB R2018a+ (-R2018a MEX API) and Anaconda (CONDA_PREFIX).
-% On Windows, will automatically generate libtiff.lib from tiff.dll if needed,
-% using lib.exe (from Visual Studio).
+% On Windows or Linux, if libtiff is missing, downloads and compiles from source.
 
 debug = false;
 
@@ -40,7 +39,7 @@ if ~isfile('lz4.h')
     try, websave('lz4.h', lz4_h_url); catch, error('Failed to download lz4.h'); end
 end
 
-% Use Anaconda-provided libtiff for all platforms
+% Use Anaconda-provided libtiff for all platforms if available
 conda_prefix = getenv('CONDA_PREFIX');
 assert(~isempty(conda_prefix) && isfolder(conda_prefix), ...
     'CONDA_PREFIX is not set or does not point to a valid directory.');
@@ -48,63 +47,80 @@ assert(~isempty(conda_prefix) && isfolder(conda_prefix), ...
 tiff_include = {['-I', fullfile(conda_prefix, 'include')]} ;
 tiff_lib     = {['-L', fullfile(conda_prefix, 'lib')]} ;
 
-% --- Platform-specific linking and flags ---
+tiff_found = false;
+tiff_link = {};
+
 if ispc
-    % On Windows: check for libtiff.lib or tiff.lib, generate if needed.
-    tiff_libfile  = fullfile(conda_prefix, 'lib', 'libtiff.lib');
-    tiff_libfile2 = fullfile(conda_prefix, 'lib', 'tiff.lib');
-    need_generate = false;
-
-    if isfile(tiff_libfile)
-        tiff_link = {tiff_libfile};
-    elseif isfile(tiff_libfile2)
-        tiff_link = {tiff_libfile2};
-    else
-        % Try to auto-generate libtiff.lib from tiff.dll using lib.exe
-        tiff_dll = fullfile(conda_prefix, 'Library', 'bin', 'tiff.dll');
-        tiff_def = fullfile(conda_prefix, 'lib', 'tiff.def');
-        generated_lib = fullfile(conda_prefix, 'lib', 'libtiff.lib');
-
-        if ~isfile(tiff_dll)
-            error('tiff.dll not found (looked for %s)', tiff_dll);
-        end
-
-        fprintf('Attempting to generate libtiff.lib from tiff.dll ...\n');
-
-        % Use dumpbin and editbin approach if needed in future
-        [s1, out1] = system(sprintf('dumpbin /exports "%s" > "%s"', tiff_dll, tiff_def));
-        if s1 ~= 0
-            disp(out1);
-            error('Failed to generate tiff.def. Make sure dumpbin is available.');
-        end
-
-        % Generate libtiff.lib using lib.exe (Visual Studio must be in PATH)
-        [s2, out2] = system(sprintf('lib /def:"%s" /out:"%s" /machine:x64', tiff_def, generated_lib));
-        if s2 ~= 0 || ~isfile(generated_lib)
-            disp(out2);
-            error(['Failed to generate libtiff.lib using lib.exe. ' ...
-                'Make sure you are running MATLAB from a "Developer Command Prompt for VS" or that lib.exe is on your PATH.']);
-        end
-
-        fprintf('libtiff.lib successfully generated in %s\n', fullfile(conda_prefix, 'lib'));
-        if exist(tiff_def, 'file'), delete(tiff_def); end
-
-        tiff_link = {generated_lib};
+    libfile = fullfile(conda_prefix, 'lib', 'libtiff.lib');
+    if isfile(libfile)
+        tiff_link = {libfile};
+        tiff_found = true;
     end
+else
+    libfile = fullfile(conda_prefix, 'lib', 'libtiff.so');
+    if isfile(libfile)
+        tiff_link = {'-ltiff'};
+        tiff_found = true;
+    end
+end
 
+% If libtiff was not found, try building it from source
+if ~tiff_found
+    fprintf('libtiff not found, attempting to build from source ...\n');
+    tiff_url = 'http://download.osgeo.org/libtiff/tiff-4.6.0.tar.gz';
+    tiff_tar = 'tiff-4.6.0.tar.gz';
+    tiff_dir = 'tiff-4.6.0';
+
+    try
+        if ~isfolder(tiff_dir)
+            if ~isfile(tiff_tar)
+                fprintf('Downloading libtiff source ...\n');
+                websave(tiff_tar, tiff_url);
+            end
+            untar(tiff_tar);
+        end
+
+        % Build libtiff using system compiler
+        old_dir = pwd;
+        cd(tiff_dir);
+        if ispc
+            configure_cmd = 'cmake -Bbuild -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON';
+            build_cmd = 'cmake --build build --config Release';
+        else
+            configure_cmd = './configure --prefix=install';
+            build_cmd = 'make && make install';
+        end
+        fprintf('Running: %s\n', configure_cmd);
+        assert(system(configure_cmd) == 0, 'Configuration failed.');
+        fprintf('Running: %s\n', build_cmd);
+        assert(system(build_cmd) == 0, 'Build failed.');
+        cd(old_dir);
+
+        % Update include/lib paths after build
+        if ispc
+            tiff_include = {['-I', fullfile(tiff_dir, 'build')]};
+            tiff_lib = {['-L', fullfile(tiff_dir, 'build', 'Release')]};
+            tiff_link = {fullfile(tiff_dir, 'build', 'Release', 'libtiff.lib')};
+        else
+            tiff_include = {['-I', fullfile(tiff_dir, 'install', 'include')]};
+            tiff_lib = {['-L', fullfile(tiff_dir, 'install', 'lib')]};
+            tiff_link = {'-ltiff'};
+        end
+
+        fprintf('libtiff built successfully.\n');
+    catch ME
+        error('Failed to build libtiff from source: %s', ME.message);
+    end
+end
+
+% --- Platform-specific compiler flags ---
+if ispc
     if debug
         mex_flags_cpu = {'-R2018a', 'COMPFLAGS="$COMPFLAGS /Od /Zi /openmp"'};
     else
         mex_flags_cpu = {'-R2018a', 'COMPFLAGS="$COMPFLAGS /O2 /arch:AVX2 /openmp"'};
     end
 else
-    % On Linux/Mac, typically need libtiff.so
-    tiff_libfile = fullfile(conda_prefix, 'lib', 'libtiff.so');
-    if ~isfile(tiff_libfile)
-        error(['libtiff.so not found in: ' fullfile(conda_prefix, 'lib')]);
-    end
-    tiff_link = {'-ltiff'};
-
     if debug
         mex_flags_cpu = {'-R2018a', 'CFLAGS="$CFLAGS -O0 -g -fopenmp"', ...
                          'CXXFLAGS="$CXXFLAGS -O0 -g -fopenmp"'};
@@ -115,7 +131,7 @@ else
     end
 end
 
-fprintf('Using Anaconda libtiff from: %s\n', conda_prefix);
+fprintf('Using libtiff from: %s\n', libfile);
 
 % Build CPU MEX files
 % mex(mex_flags_cpu{:}, src_semaphore);
@@ -123,7 +139,7 @@ fprintf('Using Anaconda libtiff from: %s\n', conda_prefix);
 % mex(mex_flags_cpu{:}, src_lz4_load, src_lz4_c);
 mex(mex_flags_cpu{:}, src_load_bl, tiff_include{:}, tiff_lib{:}, tiff_link{:});
 
-% CUDA optimization flags
+% CUDA flags
 if ispc
     if debug
         nvccflags = 'NVCCFLAGS="$NVCCFLAGS -G -std=c++17 -Xcompiler ""/Od,/Zi"" "'; %#ok<NASGU>
