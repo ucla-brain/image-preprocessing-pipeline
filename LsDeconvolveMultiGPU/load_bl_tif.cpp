@@ -48,11 +48,14 @@ void load_subregion(const LoadTask& task) {
     std::vector<uint8_t> rowBuffer(scanlineSize);
 
     for (int row = 0; row < task.height; ++row) {
+        // Corrected: convert y from 1-based to 0-based for LibTIFF
         if (!TIFFReadScanline(tif, rowBuffer.data(), task.y - 1 + row))
             mexErrMsgIdAndTxt("TIFFLoad:ReadError", "Failed to read scanline in: %s", task.filename.c_str());
 
         for (int col = 0; col < task.width; ++col) {
+            // Corrected: convert x from 1-based to 0-based for buffer indexing
             size_t srcIdx = static_cast<size_t>(task.x - 1 + col) * pixelSize;
+
             size_t dstPixelOffset = static_cast<size_t>(col) +
                                     static_cast<size_t>(row) * task.width +
                                     task.zindex * task.planeStride;
@@ -69,7 +72,6 @@ void load_subregion(const LoadTask& task) {
     }
     TIFFClose(tif);
 }
-
 // ------------------------------------------------------------
 //  MEX gateway
 // ------------------------------------------------------------
