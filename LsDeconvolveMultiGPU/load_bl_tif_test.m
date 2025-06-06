@@ -87,26 +87,12 @@ function load_bl_tif_test()
                 % Diagnostics: print boolean mask for all 6 faces
                 mask = (bl_mex == bl_gt);
 
-                edgeNames = {'x=1', 'x=end', 'y=1', 'y=end', 'z=1', 'z=end'};
-                faceSlices = {
-                    squeeze(mask(1, :, :)),        % x = 1 plane
-                    squeeze(mask(end, :, :)),      % x = end plane
-                    squeeze(mask(:, 1, :)),        % y = 1 plane
-                    squeeze(mask(:, end, :)),      % y = end plane
-                    squeeze(mask(:, :, 1)),        % z = 1 plane
-                    squeeze(mask(:, :, end))       % z = end plane
-                };
-
-                for face = 1:6
-                    sliceMask = faceSlices{face};
-                    numFalse = nnz(~sliceMask);
-                    fprintf("     ↳ Edge check [%s]: %d mismatches (of %d pixels)\n", ...
-                        edgeNames{face}, numFalse, numel(sliceMask));
-                    % Optionally, show the mask visually
-                    if numFalse > 0
-                        disp(sliceMask);
-                    end
-                end
+                squeeze(mask(1, :, :))        % x = 1 plane
+                squeeze(mask(end, :, :))      % x = end plane
+                squeeze(mask(:, 1, :))        % y = 1 plane
+                squeeze(mask(:, end, :))      % y = end plane
+                squeeze(mask(:, :, 1))        % z = 1 plane
+                squeeze(mask(:, :, end))      % z = end plane
             end
             symbol = char(pass * 10003 + ~pass * 10007);  % ✓ or ✗
 
