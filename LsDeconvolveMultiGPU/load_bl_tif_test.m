@@ -6,7 +6,7 @@ function load_bl_tif_test()
 
     folder_path = '/data/tif/B11_ds_4.5x_ABeta_z1200';
     if isempty(folder_path) || ~isfolder(folder_path)
-        error('Please set the TIF_TEST_FOLDER environment variable to a folder containing .tif files.');
+        error('TIF test folder not found. Check that folder_path is valid.');
     end
 
     files = dir(fullfile(folder_path, '*.tif'));
@@ -48,7 +48,7 @@ function load_bl_tif_test()
 
             % MATLAB reference
             t1 = tic;
-            bl_gt = zeros(blkW, blkH, numel(z_indices), 'uint16');  % [W, H, Z]
+            bl_gt = zeros(blkW, blkH, numel(z_indices), 'uint16');  % MATLAB expects [W, H, Z]
             for k = 1:numel(z_indices)
                 slice = imread(filelist{z_indices(k)}, ...
                     'PixelRegion', {[y_indices(1), y_indices(end)], [x_indices(1), x_indices(end)]});
@@ -62,23 +62,33 @@ function load_bl_tif_test()
             t_mex = toc(t2);
 
             % Comparison
-            diff = abs(double(bl_mex) - double(bl_gt));
-            maxerr = max(diff(:));
-            pass = maxerr == 0;
+            pass = isequal(bl_mex, bl_gt);
+            if pass
+                maxerr = 0;
+                linearIdx = NaN;
+            else
+                diff = abs(bl_mex - bl_gt);
+                [maxerr, linearIdx] = max(diff(:));
+            end
             symbol = char(pass * 10003 + ~pass * 10007);  % ✓ or ✗
 
             fprintf('  %s  | %-6d | [%3d,%3d]  | (%5d,%5d) | %1.4e | %8.2fx\n', ...
                 symbol, zidx, blkH, blkW, x, y, maxerr, t_ref / t_mex);
+            results(testIdx, :) = [pass, zidx, blkH, blkW, x, y, maxerr, t_ref / t_mex];
 
             if ~pass
-                [ix, iy, iz] = ind2sub(size(diff), find(diff > 0, 1, 'first'));
-                fprintf('     ↳ First mismatch at (x=%d, y=%d, z=%d): MEX=%d, GT=%d\n', ...
-                    x + ix - 1, y + iy - 1, z_indices(iz), ...
-                    bl_mex(ix, iy, iz), bl_gt(ix, iy, iz));
+                [xi, yi, zi] = ind2sub(size(diff), linearIdx);
+                val_mex = bl_mex(xi, yi, zi);
+                val_gt = bl_gt(xi, yi, zi);
+                block_x = x + xi - 1;
+                block_y = y + yi - 1;
+                position = "middle";
+                if xi == 1 || xi == blkW || yi == 1 || yi == blkH
+                    position = "edge";
+                end
+                fprintf("     ↳ First mismatch at (x=%d, y=%d, z=%d) → block [%d, %d] (%s): MEX=%d, GT=%d\n", ...
+                    block_x, block_y, zidx + zi - 1, xi, yi, position, val_mex, val_gt);
             end
-
-            results(testIdx, :) = [pass, zidx, blkH, blkW, x, y, maxerr, t_ref / t_mex];
-            testIdx = testIdx + 1;
         end
     end
 
