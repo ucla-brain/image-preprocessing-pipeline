@@ -50,22 +50,29 @@ libtiff_root = fullfile(pwd, 'tiff_src', 'tiff-4.6.0');
 % --- Platform-specific linking and flags ---
 if ispc
     built_lib = fullfile(conda_prefix, 'lib', 'libtiff.lib');
-    if ~isfile(built_lib)
-        % Auto-build libtiff from source if missing
-        fprintf('libtiff.lib not found. Downloading and building libtiff from source...\n');
-        system('curl -L -o tiff.zip https://download.osgeo.org/libtiff/tiff-4.6.0.zip');
-        unzip('tiff.zip', 'tiff_src');
-        delete('tiff.zip');
+    tiff_header = fullfile(conda_prefix, 'include', 'tiffio.h');
+    needs_build = ~(isfile(built_lib) && isfile(tiff_header));
+
+    if needs_build
+        fprintf('libtiff.lib or tiffio.h not found. Downloading and building libtiff from source...\n');
+        if ~isfolder(libtiff_root)
+            system('curl -L -o tiff.zip https://download.osgeo.org/libtiff/tiff-4.6.0.zip');
+            unzip('tiff.zip', 'tiff_src');
+            delete('tiff.zip');
+        end
         cd(libtiff_root);
-        % Configure and build with CMake + Visual Studio
         status = system(['cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="', conda_prefix, '" . && ' ...
                          'cmake --build build --config Release --target install']);
         cd('../../');
         if status ~= 0
             error('Failed to build libtiff from source on Windows.');
         end
+    else
+        fprintf('Using existing libtiff.lib and headers from conda_prefix.\n');
     end
-    tiff_include = {['-I', fullfile(libtiff_root, 'libtiff')]} ;
+
+    % Use installed include dir to find tiffconf.h
+    tiff_include = {['-I', fullfile(conda_prefix, 'include')]} ;
     tiff_lib     = {['-L', fullfile(conda_prefix, 'lib')]} ;
     tiff_link    = {'-ltiff'};
 
@@ -76,20 +83,28 @@ if ispc
     end
 else
     built_lib = fullfile(conda_prefix, 'lib', 'libtiff.so');
-    if ~isfile(built_lib)
-        % Auto-build libtiff from source if missing
-        fprintf('libtiff.so not found. Downloading and building libtiff from source...\n');
-        system('curl -L -o tiff.tar.gz https://download.osgeo.org/libtiff/tiff-4.6.0.tar.gz');
-        system('tar -xzf tiff.tar.gz');
-        delete('tiff.tar.gz');
+    tiff_header = fullfile(conda_prefix, 'include', 'tiffio.h');
+    needs_build = ~(isfile(built_lib) && isfile(tiff_header));
+
+    if needs_build
+        fprintf('libtiff.so or tiffio.h not found. Downloading and building libtiff from source...\n');
+        if ~isfolder('tiff-4.6.0')
+            system('curl -L -o tiff.tar.gz https://download.osgeo.org/libtiff/tiff-4.6.0.tar.gz');
+            system('tar -xzf tiff.tar.gz');
+            delete('tiff.tar.gz');
+        end
         cd('tiff-4.6.0');
         status = system(['./configure --prefix=', conda_prefix, ' && make && make install']);
         cd('..');
         if status ~= 0
             error('Failed to build libtiff from source on Linux.');
         end
+    else
+        fprintf('Using existing libtiff.so and headers from conda_prefix.\n');
     end
-    tiff_include = {['-I', fullfile(libtiff_root, 'libtiff')]} ;
+
+    % Use installed include dir to find tiffconf.h
+    tiff_include = {['-I', fullfile(conda_prefix, 'include')]} ;
     tiff_lib     = {['-L', fullfile(conda_prefix, 'lib')]} ;
     tiff_link    = {'-ltiff'};
 
@@ -103,7 +118,7 @@ else
     end
 end
 
-fprintf('Using source-built libtiff from: %s\n', libtiff_root);
+fprintf('Using libtiff from: %s\n', fullfile(conda_prefix, 'lib'));
 
 % Build CPU MEX files
 % mex(mex_flags_cpu{:}, src_semaphore);
