@@ -76,15 +76,15 @@ mex(mex_flags_cpu{:}, src_load_bl, tiff_include{:}, tiff_lib{:}, tiff_link{:});
 % CUDA optimization flags
 if debug
     if ispc
-        nvccflags = 'NVCCFLAGS="$NVCCFLAGS -G -std=c++14 -Xcompiler ""/Od,/Zi"" "';
+        nvccflags = 'NVCCFLAGS="$NVCCFLAGS -G -std=c++17 -Xcompiler ""/Od,/Zi"" "';
     else
-        nvccflags = 'NVCCFLAGS="$NVCCFLAGS -G -std=c++14 -Xcompiler ''-O0,-g'' "';
+        nvccflags = 'NVCCFLAGS="$NVCCFLAGS -G -std=c++17 -Xcompiler ''-O0,-g'' "';
     end
 else
     if ispc
-        nvccflags = 'NVCCFLAGS="$NVCCFLAGS -O2 -std=c++14 -Xcompiler ""/O2,/arch:AVX2,/openmp"" "';
+        nvccflags = 'NVCCFLAGS="$NVCCFLAGS -O2 -std=c++17 -Xcompiler ""/O2,/arch:AVX2,/openmp"" "';
     else
-        nvccflags = 'NVCCFLAGS="$NVCCFLAGS -O2 -std=c++14 -Xcompiler ''-O2,-march=native,-fomit-frame-pointer,-fopenmp'' "';
+        nvccflags = 'NVCCFLAGS="$NVCCFLAGS -O2 -std=c++17 -Xcompiler ''-O2,-march=native,-fomit-frame-pointer,-fopenmp'' "';
     end
 end
 
