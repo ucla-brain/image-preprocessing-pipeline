@@ -399,7 +399,9 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
 
     // --- Prepare task list (one per Z) ---
     std::vector<LoadTask> tasks;
+    tasks.reserve(numSlices);
     std::vector<TaskResult> results;
+    results.reserve(numSlices);
     std::vector<std::string> errors;
     std::mutex err_mutex;
 
@@ -431,7 +433,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
     unsigned numThreads = std::max(1u, std::thread::hardware_concurrency());
 #ifdef _WIN32
     const char* env_threads = getenv("LOAD_BL_TIF_THREADS");
-    if (env_threads) numThreads = std::max(1u, (unsigned)atoi(env_threads));
+    if (env_threads) numThreads = std::max(8u, (unsigned)atoi(env_threads));
 #endif
 
     std::vector<std::thread> workers;
