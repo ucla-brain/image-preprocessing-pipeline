@@ -88,10 +88,11 @@ static void swap_uint16_buf(void* buf, size_t count) {
 
 // The result buffer for each block
 struct TaskResult {
-    size_t block_id; // index into task/result vector
+    size_t block_id;
     std::vector<uint8_t> data;
-    int cropH, cropW;
-    TaskResult(size_t id, size_t datasz, int ch, int cw)
+    size_t cropH, cropW;
+
+    TaskResult(size_t id, size_t datasz, size_t ch, size_t cw)
         : block_id(id), data(datasz), cropH(ch), cropW(cw) {}
 };
 
@@ -150,7 +151,7 @@ static void readSubRegionToBuffer(
                 if (tileIdx != prevTile) {
                     tsize_t ret = TIFFReadEncodedTile(
                         tif,
-                        tileIdx,
+                        static_cast<ttile_t>(tileIdx),
                         tilebuf.data(),
                         static_cast<tsize_t>(uncompressedTileBytes)
                     );
@@ -162,7 +163,7 @@ static void readSubRegionToBuffer(
                     }
                     size_t validBytes = static_cast<size_t>(ret);
                     size_t validPixels = validBytes / bytesPerPixel;
-                    if (bytesPerPixel == 2 && TIFFIsByteSwapped(tif) != isLittleEndianHost())
+                    if (bytesPerPixel == 2 && (static_cast<bool>(TIFFIsByteSwapped(tif)) != isLittleEndianHost()))
                         swap_uint16_buf(tilebuf.data(), validPixels);
 
                     prevTile = tileIdx;
@@ -208,7 +209,7 @@ static void readSubRegionToBuffer(
                     throw std::runtime_error(oss.str());
                 }
 
-                if (bytesPerPixel == 2 && TIFFIsByteSwapped(tif) != isLittleEndianHost())
+                if (bytesPerPixel == 2 && (static_cast<bool>(TIFFIsByteSwapped(tif)) != isLittleEndianHost()))
                     swap_uint16_buf(stripbuf.data(), static_cast<size_t>(nbytes / 2));
 
                 currentStrip = stripIdx;
@@ -299,8 +300,10 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
 
         if (mxIsLogicalScalar(flag)) {
             transpose = mxIsLogicalScalarTrue(flag);
-        } else if ((mxIsInt32(flag) || mxIsUint32(flag)) && mxGetNumberOfElements(flag) == 1) {
-            transpose = (*static_cast<size_t*>(mxGetData(flag)) != 0);
+        } else if (mxIsInt32(flag) && mxGetNumberOfElements(flag) == 1) {
+            transpose = (*static_cast<int32_t*>(mxGetData(flag)) != 0);
+        } else if (mxIsUint32(flag) && mxGetNumberOfElements(flag) == 1) {
+            transpose = (*static_cast<uint32_t*>(mxGetData(flag)) != 0);
         } else {
             mexErrMsgIdAndTxt("load_bl_tif:Transpose",
                 "transposeFlag must be a logical or int32/uint32 scalar.");
@@ -406,8 +409,10 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         mexErrMsgIdAndTxt("load_bl_tif:TooLarge", "Requested ROI too large (>2^31 elements).");
 
     // --- Prepare task list (one per Z) ---
-    std::vector<LoadTask> tasks(numSlices);
-    std::vector<TaskResult> results(numSlices);
+    std::vector<LoadTask> tasks;
+    tasks.reserve(numSlices);
+    std::vector<TaskResult> results;
+    results.reserve(numSlices);
     std::vector<std::string> errors;
     std::mutex err_mutex;
 
