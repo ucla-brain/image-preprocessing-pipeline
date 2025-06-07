@@ -226,9 +226,9 @@ end
 for n = 1:size(neg,1)
     try
         neg{n,2}();
-        fprintf('  ❌ %-22s did NOT error\n',neg{n,1});
+        fprintf('❌ %-22s did NOT error\n',neg{n,1});
     catch ME
-        fprintf('  ✔️ %-22s raised error [%s]\n',neg{n,1}, ME.identifier);
+        fprintf('✔️ %-22s raised error [%s]\n',neg{n,1}, ME.identifier);
     end
 end
 
