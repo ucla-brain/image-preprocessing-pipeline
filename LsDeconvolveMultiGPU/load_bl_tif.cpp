@@ -438,10 +438,9 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
                 size_t dstElem = computeDstIndex(task, row, col);
                 size_t dstByte = dstElem * bytesPerPixel;
                 size_t srcByte = (static_cast<size_t>(row) * task.cropW + col) * bytesPerPixel;
-                std::memcpy(
-                    static_cast<uint8_t*>(outData) + dstIdx,
-                    res.data.data() + bufIdx,
-                    bytesPerPixel
+                std::memcpy(static_cast<uint8_t*>(outData) + dstByte,
+                            res.data.data() + srcByte,
+                            bytesPerPixel
                 );
             }
         }
