@@ -96,7 +96,6 @@ static void copySubRegion(const LoadTask& task)
                 std::size_t tileStride = tileWidth * bytesPerPixel;
                 std::size_t offset = relY * tileStride + relX * bytesPerPixel;
 
-                // CRITICAL: Use roiH for column stride!
                 std::size_t dstIndex = row + col * task.roiH + task.zIndex * task.pixelsPerSlice;
                 std::size_t dstOffset = dstIndex * bytesPerPixel;
 
@@ -117,9 +116,13 @@ static void copySubRegion(const LoadTask& task)
 
             for (int col = 0; col < task.cropW; ++col) {
                 std::size_t srcOffset = static_cast<std::size_t>(task.roiX + col) * bytesPerPixel;
-                // CRITICAL: Use roiH for column stride!
                 std::size_t dstIndex = row + col * task.roiH + task.zIndex * task.pixelsPerSlice;
                 std::size_t dstOffset = dstIndex * bytesPerPixel;
+
+                // Debug: print buffer indices for the special edge case
+                if (task.roiY == 4777 && task.roiX == 1107 && task.roiH == 12 && task.roiW == 23) {
+                    mexPrintf("[DEBUG] row=%d col=%d => dstIndex=%zu (dstOffset=%zu)\n", row, col, dstIndex, dstOffset);
+                }
 
                 std::memcpy(
                     static_cast<uint8_t*>(task.dstBase) + dstOffset,
@@ -198,11 +201,23 @@ void mexFunction(int nlhs, mxArray* plhs[],
         TIFFGetField(tifa, TIFFTAG_IMAGEWIDTH , &imgWa);
         TIFFGetField(tifa, TIFFTAG_IMAGELENGTH, &imgHa);
         TIFFClose(tifa);
-        int cropHz = roiH, cropWz = roiW;
+
+        // Robust crop logic: never exceeds block, never negative
+        int cropHz = roiH;
         if (roiY0 + roiH > (int)imgHa)
-            cropHz = std::max(0, (int)imgHa - roiY0);
+            cropHz = (int)imgHa - roiY0;
+        if (cropHz > roiH) cropHz = roiH;
+        if (cropHz < 0) cropHz = 0;
+
+        int cropWz = roiW;
         if (roiX0 + roiW > (int)imgWa)
-            cropWz = std::max(0, (int)imgWa - roiX0);
+            cropWz = (int)imgWa - roiX0;
+        if (cropWz > roiW) cropWz = roiW;
+        if (cropWz < 0) cropWz = 0;
+
+        // Print all variables for debugging
+        mexPrintf("[DEBUG] For file %s: imgHa=%d, imgWa=%d, roiY0=%d, roiX0=%d, roiH=%d, roiW=%d, cropHz=%d, cropWz=%d\n",
+            fileList[z].c_str(), imgHa, imgWa, roiY0, roiX0, roiH, roiW, cropHz, cropWz);
 
         if (cropHz <= 0 || cropWz <= 0)
             continue;
