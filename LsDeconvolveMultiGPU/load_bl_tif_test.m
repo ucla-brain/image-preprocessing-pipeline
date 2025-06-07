@@ -223,46 +223,39 @@ for th = [1 2 4 8]
 end
 setenv('LOAD_BL_TIF_THREADS','');
 
-%% 7. 500-iteration random fuzz (summary, not fail-fast)
-fprintf('\n[Suite 7] 500 random ROI fuzz tests (progress dots):\n');
+%% ----------------------------------------------------------------
+% 7. 500-iteration random ROI fuzz (print test input before call)
+% -----------------------------------------------------------------
+fprintf('\n[Suite 7] 500 random ROI fuzz tests (printing each input):\n');
 rng(42);
 numFuzz = 500;
-err_counts = struct();
-err_msgs = {};
-num_pass  = 0;
+num_pass = 0;
+fail_msgs = {};
 for k = 1:numFuzz
     h = randi([1,imageHeight]);
     w = randi([1,imageWidth ]);
     y = randi([-32,imageHeight]);
     x = randi([-32,imageWidth ]);
+    tr = rand > 0.5;
+    fprintf('Fuzz test %3d: y=%d, x=%d, h=%d, w=%d, tr=%d ... ', ...
+        k, y, x, h, w, tr);
+
     try
-        load_bl_tif(filelist,y,x,h,w,rand>0.5);
+        load_bl_tif(filelist, y, x, h, w, tr);
+        fprintf("PASS\n");
         num_pass = num_pass + 1;
-        if mod(k,10)==0, fprintf('.'); end
     catch ME
-        msg = ME.identifier;
-        if isempty(msg)
-            msg = 'NO_IDENTIFIER';
-        end
-        if isfield(err_counts,matlab.lang.makeValidName(msg))
-            err_counts.(matlab.lang.makeValidName(msg)) = err_counts.(matlab.lang.makeValidName(msg)) + 1;
-        else
-            err_counts.(matlab.lang.makeValidName(msg)) = 1;
-        end
-        err_msgs{end+1,1} = sprintf('[k=%d]: %s -- %s',k,ME.message,msg); %#ok<AGROW>
-        if mod(k,10)==0, fprintf('x'); end
+        fprintf("FAIL [%s]: %s\n", ME.identifier, ME.message);
+        fail_msgs{end+1,1} = sprintf('k=%d: y=%d, x=%d, h=%d, w=%d, tr=%d -- %s [%s]', ...
+            k, y, x, h, w, tr, ME.message, ME.identifier);
     end
 end
-fprintf('\n  %d/%d passed, %d errors\n', num_pass, numFuzz, numFuzz-num_pass);
-if numel(fieldnames(err_counts)) > 0
-    fprintf('  Error summary:\n');
-    fns = fieldnames(err_counts);
-    for i = 1:numel(fns)
-        fprintf('    %4d × %s\n',err_counts.(fns{i}),strrep(fns{i},'_','\_'));
-    end
-end
-if numel(err_msgs) > 0
-    fprintf('  Sample error(s):\n    %s\n',err_msgs{min(1,end)});
+
+fprintf('\nSuite 7 finished: %d/%d passed, %d failed.\n', num_pass, numFuzz, numFuzz-num_pass);
+
+if ~isempty(fail_msgs)
+    fprintf('\nFirst few failures:\n');
+    disp(fail_msgs(1:min(5,end)))
 end
 
 fprintf('\nAll suites finished.\n');
