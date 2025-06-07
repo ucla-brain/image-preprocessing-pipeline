@@ -247,13 +247,13 @@ void mexFunction(int nlhs, mxArray* plhs[],
     const mwSize    outW      = transpose?roiH:roiW;
     const size_t    pixPerSlc = static_cast<size_t>(outH)*outW;
 
-    mxArray* outArr = mxCreateNumericArray(3,
-                        std::array<mwSize,3>{outH,outW,
-                        static_cast<mwSize>(numSlices)}.data(),
-                        outClass,mxREAL);
-    plhs[0]=outArr;
+    // ------------------------------------------------------------------ output array
+    mwSize dims[3] = { outH, outW, static_cast<mwSize>(numSlices) };
+    mxArray* outArr = mxCreateNumericArray(3, dims, outClass, mxREAL);
+    plhs[0] = outArr;
     void* outDataRaw = mxGetData(outArr);
-    std::memset(outDataRaw,0,pixPerSlc*numSlices*bpp);
+    const size_t pixelsPerSlice = static_cast<size_t>(outH) * outW;
+    std::memset(outDataRaw, 0, pixelsPerSlice * numSlices * bytesPerPixel);
 
     // ------------- build tasks -----------
     std::vector<LoadTask> tasks;
