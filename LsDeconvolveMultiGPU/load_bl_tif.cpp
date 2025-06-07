@@ -1,16 +1,15 @@
 // ============================================================================
 //  load_bl_tif.cpp  – Fast sub-region TIFF loader for MATLAB
 //
-//  Optimized cross-platform build (2025-06-07)
+//  Optimized cross-platform build (2025-06-07, patched 2025-06-07)
 //     • tile & strip caching
-//     • row-wise memcpy blit (vs. per-pixel)
+//     • row-wise memcpy blit inside read (temporary buffer)
+//     • **column-major-safe pixel blit to MATLAB output  ✅**
 //     • TIFFSwabArrayOfShort use (+ optional AVX2 swap)
 //     • 64-bit-safe indexing
 //     • thread-local TIFF handle cache
 //     • static thread-pool guard, correct mexAtExit usage
-//     • Error accumulation
-//     • Output allocation overflow check
-//     • C++14 fallback for std::clamp  ✅
+//     • C++14 fallback for std::clamp
 // ============================================================================
 
 #include "mex.h"
@@ -140,8 +139,9 @@ static TIFF* openCached(const std::string& path)
 }
 
 // ---------------------------------------------------------------------------
-//  I/O helpers
+//  I/O helpers (unchanged)
 // ---------------------------------------------------------------------------
+
 static void readSubRegionToBuffer(const LoadTask& task,
                                   TIFF* tif,
                                   uint8_t bpp,
@@ -168,7 +168,6 @@ static void readSubRegionToBuffer(const LoadTask& task,
 
         for (int r = 0; r < task.cropH; ++r) {
             uint32_t y = static_cast<uint32_t>(task.in_row0 + r);
-            uint32_t relY, relX;
             for (int cchunk = 0; cchunk < task.cropW; ) {
                 uint32_t x = static_cast<uint32_t>(task.in_col0 + cchunk);
                 uint32_t tIdx = TIFFComputeTile(tif, x, y, 0, 0);
@@ -181,8 +180,8 @@ static void readSubRegionToBuffer(const LoadTask& task,
                                         static_cast<size_t>(tileSize / 2));
                     prev = tIdx;
                 }
-                relY = y % tileH;
-                relX = x % tileW;
+                uint32_t relY = y % tileH;
+                uint32_t relX = x % tileW;
 
                 // how many pixels can we copy contiguously from this tile?
                 uint32_t maxRun = std::min<uint32_t>(tileW - relX,
@@ -235,7 +234,7 @@ static void readSubRegionToBuffer(const LoadTask& task,
 }
 
 // ---------------------------------------------------------------------------
-//  Simple static thread pool (lifetime = MATLAB session)
+//  Simple static thread pool  (unchanged)
 // ---------------------------------------------------------------------------
 class MexThreadPool {
 public:
@@ -316,7 +315,7 @@ private:
 };
 
 // ---------------------------------------------------------------------------
-//  mexFunction – entry point
+//  mexFunction – entry point (unchanged until blit section)
 // ---------------------------------------------------------------------------
 void mexFunction(int nlhs, mxArray* plhs[],
                  int nrhs, const mxArray* prhs[])
@@ -352,7 +351,6 @@ void mexFunction(int nlhs, mxArray* plhs[],
         mexErrMsgIdAndTxt("load_bl_tif:ROI", "Bad ROI params");
 
     // ------------- probe slice 0 ---------
-    // Store and restore the previous warning handler
     auto prevWarn = TIFFSetWarningHandler(nullptr);
 
     TiffHandle tif0(TIFFOpen(fileList[0].c_str(), "rb8"));
@@ -374,9 +372,8 @@ void mexFunction(int nlhs, mxArray* plhs[],
     const mwSize    outW      = transpose ? roiH : roiW;
     const size_t    pixPerSlc = static_cast<size_t>(outH) * outW;
 
-    // Overflow check for output allocation
-    size_t totalPixels = pixPerSlc;
-    if (numSlices > 0 && totalPixels > SIZE_MAX / (numSlices * bpp))
+    // Overflow check
+    if (numSlices > 0 && pixPerSlc > SIZE_MAX / (numSlices * bpp))
         mexErrMsgIdAndTxt("load_bl_tif:OOM",
             "Requested output too large for platform.");
 
@@ -395,7 +392,6 @@ void mexFunction(int nlhs, mxArray* plhs[],
     tasks.reserve(numSlices);
     results.reserve(numSlices);
 
-    // Only open TIFF to check dimensions if the path differs from the first slice
     for (int z = 0; z < numSlices; ++z) {
         try {
             uint32_t zW = imgW, zH = imgH;
@@ -431,7 +427,6 @@ void mexFunction(int nlhs, mxArray* plhs[],
         }
     }
 
-    // Restore the previous warning handler (if any)
     TIFFSetWarningHandler(prevWarn);
 
     if (!errors.empty()) {
@@ -443,10 +438,8 @@ void mexFunction(int nlhs, mxArray* plhs[],
 
     // ------------- run worker tasks ------
     auto& pool = MexThreadPool::instance();
-    const size_t nTasks = tasks.size();
-
     try {
-        pool.parallel_for(nTasks, [&](size_t i)
+        pool.parallel_for(tasks.size(), [&](size_t i)
         {
             const LoadTask& t = tasks[i];
             TIFF* tif = openCached(t.path);
@@ -457,16 +450,25 @@ void mexFunction(int nlhs, mxArray* plhs[],
         mexErrMsgIdAndTxt("load_bl_tif:LoadError", "%s", ex.what());
     }
 
-    // ------------- blit ------------------
+    // -------------------------------------------------------------------------
+    //  Patched blit: copy pixel-by-pixel so MATLAB’s column-major layout is
+    //  respected (row-wise memcpy would overwrite memory).
+    // -------------------------------------------------------------------------
     uint8_t* outData = static_cast<uint8_t*>(outDataRaw);
     for (size_t i = 0; i < tasks.size(); ++i) {
         const LoadTask& t = tasks[i];
-        const auto& buf   = results[i];
+        const uint8_t*  buf = results[i].data();
+
         const size_t rowBytes = static_cast<size_t>(t.cropW) * bpp;
+
         for (int r = 0; r < t.cropH; ++r) {
-            const uint8_t* src = buf.data() + rowBytes * r;
-            uint8_t* dst = outData + computeDstIndex(t, r, 0) * bpp;
-            std::memcpy(dst, src, rowBytes);
+            const uint8_t* srcRow = buf + static_cast<size_t>(r) * rowBytes;
+            for (int c = 0; c < t.cropW; ++c) {
+                const uint8_t* srcPix = srcRow + static_cast<size_t>(c) * bpp;
+                uint8_t* dstPix = outData
+                                + computeDstIndex(t, r, c) * bpp;
+                std::memcpy(dstPix, srcPix, bpp);
+            }
         }
     }
 }

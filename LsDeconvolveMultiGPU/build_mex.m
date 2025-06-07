@@ -51,8 +51,8 @@ else
             'CFLAGS="$CFLAGS -O0 -g -fopenmp"',  'CXXFLAGS="$CXXFLAGS -O0 -g -fopenmp"'};
     else
         mex_flags_cpu = {'-R2018a', ...
-            'CFLAGS="$CFLAGS -O3 -march=native -fomit-frame-pointer -fopenmp -flto "', ...
-            'CXXFLAGS="$CXXFLAGS -O3 -march=native -fomit-frame-pointer -fopenmp -flto "'};
+            'CFLAGS="$CFLAGS -O2 -march=native -fomit-frame-pointer -fopenmp -flto "', ...
+            'CXXFLAGS="$CXXFLAGS -O2 -march=native -fomit-frame-pointer -fopenmp -flto "'};
     end
 end
 
