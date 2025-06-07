@@ -126,7 +126,7 @@ static void copySubRegion(const LoadTask& task, TIFF* tif, uint8_t bytesPerPixel
         }
     } else {
         std::vector<uint8_t> scanline(imgWidth * bytesPerPixel);
-        for (int row = 0; row < task.cropH; ++row) {
+        for (std::size_t row = 0; row < static_cast<std::size_t>(task.cropH); ++row) {
             uint32_t tifRow = static_cast<uint32_t>(task.in_row0 + row);
             if (!TIFFReadScanline(tif, scanline.data(), tifRow))
                 mexErrMsgIdAndTxt("load_bl_tif:Read", "Read row %u failed", tifRow);
@@ -135,7 +135,7 @@ static void copySubRegion(const LoadTask& task, TIFF* tif, uint8_t bytesPerPixel
                 swap_uint16_buf(scanline.data(), imgWidth);
             }
 
-            for (int col = 0; col < task.cropW; ++col) {
+            for (std::size_t col = 0; col < static_cast<std::size_t>(task.cropW); ++col) {
                 std::size_t srcOffset = static_cast<std::size_t>(task.in_col0 + col) * bytesPerPixel;
                 std::size_t dstIndex = (task.out_row0 + row)
                                      + (task.out_col0 + col) * task.roiH
@@ -186,7 +186,7 @@ void mexFunction(int nlhs, mxArray* plhs[],
         mexErrMsgIdAndTxt("load_bl_tif:ROI","ROI parameters invalid");
 
     // Probe first slice for data type
-    TIFFSetWarningHandler(NULL);
+    TIFFSetWarningHandler(nullptr);
     TiffHandle tif0(TIFFOpen(fileList[0].c_str(), "r"));
     if (!tif0)
         mexErrMsgIdAndTxt("load_bl_tif:OpenFail", "Cannot open file %s (slice 0)", fileList[0].c_str());
@@ -201,6 +201,7 @@ void mexFunction(int nlhs, mxArray* plhs[],
                           "Only 8/16-bit grayscale TIFFs (1 sample per pixel) are supported.");
 
     const mxClassID outType = (bitsPerSample == 8) ? mxUINT8_CLASS : mxUINT16_CLASS;
+    // Assume 1 sample per pixel: bitsPerSample is 8 or 16, so bytesPerPixel is 1 or 2
     const uint8_t bytesPerPixel = (bitsPerSample == 16) ? 2 : 1;
     mwSize dims[3] = { static_cast<mwSize>(roiH),
                        static_cast<mwSize>(roiW),
@@ -212,12 +213,13 @@ void mexFunction(int nlhs, mxArray* plhs[],
     std::fill_n(static_cast<uint8_t*>(outData), pixelsPerSlice * numSlices * bytesPerPixel, 0);
 
     // --- Slices loop with edge cropping and buffer offsets ---
+    TIFFSetWarningHandler(nullptr);
     for (std::size_t z = 0; z < numSlices; ++z)
     {
         TiffHandle tif(TIFFOpen(fileList[z].c_str(), "r"));
         if (!tif)
             mexErrMsgIdAndTxt("load_bl_tif:OpenFail", "Cannot open file %s (slice %zu)", fileList[z].c_str(), z);
-        uint32_t imgWidth = 0, imgHeight = 0;
+
         getImageSize(tif.get(), imgWidth, imgHeight);
 
         // --- Calculate overlap (intersection) between ROI and image ---
