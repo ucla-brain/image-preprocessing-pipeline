@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <stdexcept>
 #include <cstdio>
+#include <memory>
 
 // --- Struct with new offset fields ---
 constexpr uint16_t kSupportedBitDepth8  = 8;
@@ -35,7 +36,7 @@ inline void getImageSize(TIFF* tif, uint32_t& w, uint32_t& h) {
 
 // RAII wrapper for mxArrayToUTF8String()
 struct MatlabString {
-    char* ptr;
+    private char* ptr;
     explicit MatlabString(const mxArray* arr) : ptr(mxArrayToUTF8String(arr)) {
         if (!ptr) mexErrMsgIdAndTxt("load_bl_tif:BadString", "Failed to convert string from mxArray");
     }
@@ -180,13 +181,9 @@ void mexFunction(int nlhs, mxArray* plhs[],
     TIFFGetField(tif0.get(), TIFFTAG_BITSPERSAMPLE, &bitsPerSample);
     TIFFGetFieldDefaulted(tif0.get(), TIFFTAG_SAMPLESPERPIXEL, &samplesPerPixel);
 
-    if (samplesPerPixel > 1)
-        mexErrMsgIdAndTxt(
-            "load_bl_tif:Unsupported",
-            "Only grayscale TIFFs (1 sample per pixel) are supported. Got %u samples.",  samplesPerPixel);
     if (samplesPerPixel != 1 || (bitsPerSample != 8 && bitsPerSample != 16))
-        mexErrMsgIdAndTxt("load_bl_tif:Type","Only 8/16-bit grayscale TIFFs are supported");
-
+        mexErrMsgIdAndTxt("load_bl_tif:Type",
+                          "Only 8/16-bit grayscale TIFFs (1 sample per pixel) are supported.");
 
     const mxClassID outType = (bitsPerSample == 8) ? mxUINT8_CLASS : mxUINT16_CLASS;
     const uint8_t bytesPerPixel = (bitsPerSample == 16) ? 2 : 1;
@@ -229,18 +226,15 @@ void mexFunction(int nlhs, mxArray* plhs[],
                 "load_bl_tif:BoundsError",
                 "Crop region (size %dx%d at offset %d,%d) exceeds output bounds (size %dx%d).",
                 cropHz, cropWz, out_row0, out_col0, roiH, roiW);
-        LoadTask task;
-        task.in_row0        = img_y_start;
-        task.in_col0        = img_x_start;
-        task.out_row0       = out_row0;
-        task.out_col0       = out_col0;
-        task.cropH          = cropHz;
-        task.cropW          = cropWz;
-        task.roiH           = roiH;
-        task.roiW           = roiW;
-        task.zIndex         = z;
-        task.dstBase        = outData;
-        task.pixelsPerSlice = pixelsPerSlice;
+        LoadTask task {
+            img_y_start, img_x_start,
+            out_row0, out_col0,
+            cropHz, cropWz,
+            roiH, roiW,
+            z,
+            outData,
+            pixelsPerSlice
+        };
 
         copySubRegion(task, tif.get(), bytesPerPixel);
     }
