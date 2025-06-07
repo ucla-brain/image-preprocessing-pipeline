@@ -128,8 +128,10 @@ static void copySubRegion(const LoadTask& task, TIFF* tif, uint8_t bytesPerPixel
         std::vector<uint8_t> scanline(imgWidth * bytesPerPixel);
         for (std::size_t row = 0; row < static_cast<std::size_t>(task.cropH); ++row) {
             uint32_t tifRow = static_cast<uint32_t>(task.in_row0 + row);
-            if (!TIFFReadScanline(tif, scanline.data(), tifRow))
-                mexErrMsgIdAndTxt("load_bl_tif:Read", "Read row %u failed", tifRow);
+            if (TIFFReadScanline(tif, scanline.data(), tifRow) != 1)
+                mexErrMsgIdAndTxt("load_bl_tif:Read",
+                                  "TIFFReadScanline failed at row %u (slice %zu)",
+                                  tifRow, task.zIndex);
 
             if (bytesPerPixel == 2 && TIFFIsByteSwapped(tif)) {
                 swap_uint16_buf(scanline.data(), imgWidth);
