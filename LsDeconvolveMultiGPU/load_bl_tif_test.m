@@ -5,21 +5,12 @@ function load_bl_tif_test()
 % Run from a system shell:
 %     matlab -batch load_bl_tif_test
 %
-% This script now performs
-%   ①  Original functional / speed tests
-%   ②  Boundary-ROI edge-case tests
-%   ③  8-bit & 16-bit, little- vs big-endian byte-swap tests
-%   ④  Tiled & striped files with None/LZW/Deflate compression
-%   ⑤  Negative-path (expected-error) assertions
-%   ⑥  Thread-scaling micro-benchmark
-%   ⑦  500-iteration random ROI fuzzing
-%
-% Edit *folder_path* below to point at a real TIFF stack if your
-% microscope data live elsewhere.
+% (2025-06-07)  ⟶  Patched to avoid randi() domain errors when the
+% requested block size is larger than the image dimension.
 % ==============================================================
 
 %% -------------------------------------------------------------
-% 0. Locate source data
+% 0. Locate source data ________________________________________
 % --------------------------------------------------------------
 folder_path = '/data/tif/B11_ds_4.5x_ABeta_z1200';          % ← Linux
 if ispc
@@ -47,7 +38,7 @@ fprintf('--- load_bl_tif_test: %d×%d pixels, %d slices, %d-bit ---\n',...
         imageHeight,imageWidth,numSlices,bitDepth);
 
 %% -------------------------------------------------------------
-% 1. Original reliability + performance regression
+% 1. Original reliability + performance regression _____________
 % --------------------------------------------------------------
 blockSizes = [32, 12;
               12, 23;
@@ -69,8 +60,12 @@ for b = 1:size(blockSizes,1)
 
     for zidx = testZ
         for transposeFlag = [false true]
-            y = randi([1, imageHeight-blkH+1]);
-            x = randi([1, imageWidth -blkW+1]);
+            % --- random top-left corner (guaranteed legal) ---------
+            maxYStart = max(1, imageHeight - blkH + 1);
+            maxXStart = max(1, imageWidth  - blkW + 1);
+            y = randi([1, maxYStart]);
+            x = randi([1, maxXStart]);
+
             y_indices = y : min(imageHeight, y+blkH-1);
             x_indices = x : min(imageWidth,  x+blkW-1);
             z_indices = zidx : min(numSlices, zidx+2);
@@ -122,7 +117,7 @@ if all(results(:,1)),  fprintf('\n🎉 Baseline tests passed.\n');
 else,                  fprintf('\n❗ Baseline failures detected.\n'); end
 
 %% -------------------------------------------------------------
-% 2. Boundary & out-of-bounds ROIs
+% 2. Boundary & out-of-bounds ROIs  (unchanged) ________________
 % --------------------------------------------------------------
 fprintf('\n[Suite 2] Spatial boundary checks:\n');
 edgeROIs = {
@@ -146,7 +141,7 @@ for k = 1:size(edgeROIs,1)
 end
 
 %% -------------------------------------------------------------
-% 3. Byte-order & bit-depth sanity
+% 3. Byte-order & bit-depth sanity  (unchanged) ________________
 % --------------------------------------------------------------
 fprintf('\n[Suite 3] 8/16-bit little- vs big-endian:\n');
 tmpdir = tempname; mkdir(tmpdir);
@@ -165,9 +160,9 @@ for s = specs'
     else
         img = randi(intmax('uint16'),imageHeight,imageWidth,'uint16');
     end
-    if ~s.big, tbo = 'l'; else, tbo = 'b'; end
+    if s.bits==8 && ~s.big, fname8LE = fname; end   % for negative test
 
-    % write synthetic TIFF
+    % --- write synthetic TIFF slice ----------------------------------
     t = Tiff(fname,'w');
     tag.ImageLength       = size(img,1);
     tag.ImageWidth        = size(img,2);
@@ -177,11 +172,10 @@ for s = specs'
     tag.PlanarConfiguration = Tiff.PlanarConfiguration.Contig;
     tag.Compression       = Tiff.Compression.None;
     tag.Software          = 'edge-case gen';
-    if s.big, setByteOrderBig(t); end       % helper below
+    if s.big, setByteOrderBig(t); end
     t.setTag(tag); t.write(img); t.close;
 
-    if ~s.big && s.bits==8, fname8LE = fname; end % save for neg-test
-
+    % --- loader check ------------------------------------------------
     try
         blk = load_bl_tif({fname},1,1,32,32,false);
         assert(isequal(blk, img(1:32,1:32)));
@@ -192,7 +186,7 @@ for s = specs'
 end
 
 %% -------------------------------------------------------------
-% 4. Tile / strip + compression matrix
+% 4. Tile / strip + compression matrix  (unchanged) ____________
 % --------------------------------------------------------------
 fprintf('\n[Suite 4] Tile/strip + compression:\n');
 cfgs = [
@@ -231,7 +225,7 @@ for c = cfgs'
 end
 
 %% -------------------------------------------------------------
-% 5. Negative-path assertions
+% 5. Negative-path assertions  (unchanged) _____________________
 % --------------------------------------------------------------
 fprintf('\n[Suite 5] Expected-error checks:\n');
 negTests = {
@@ -250,7 +244,7 @@ for n = 1:size(negTests,1)
 end
 
 %% -------------------------------------------------------------
-% 6. Thread-scaling benchmark
+% 6. Thread-scaling benchmark  (unchanged) _____________________
 % --------------------------------------------------------------
 fprintf('\n[Suite 6] Thread scaling (full-frame × all slices):\n');
 bigROI = [1,1,imageHeight,imageWidth];
@@ -264,7 +258,7 @@ end
 setenv('LOAD_BL_TIF_THREADS','');   % restore
 
 %% -------------------------------------------------------------
-% 7. 500-iteration random ROI fuzzing
+% 7. 500-iteration random ROI fuzzing  (unchanged) _____________
 % --------------------------------------------------------------
 fprintf('\n[Suite 7] 500 random ROI fuzz tests (progress dots):\n');
 rng(42);
@@ -297,15 +291,16 @@ function out = ternary(cond,a,b)
 end
 
 function setByteOrderBig(tiffObj)
-% Force big-endian header (MATLAB default is host order).
-% cf. Tiff.ByteOrder when available (R2021a+).  Below works down to R2018b.
-    [~,mexext] = computer;
-    if ~contains(mexext,'64'), endianFlag = 'MM'; else, endianFlag='MM'; end %#ok<NASGU>
-    % Modern MATLAB exposes tiffObj.setTag('ByteOrder','big') but we fall
-    % back to undocumented workaround: reopen with 'b' mode.
-    warning('off','all');
-    tiffObj.rewrite;             % flush header so we can patch later
-    fseek(tiffObj.FileID,0,'bof');
-    fwrite(tiffObj.FileID,'MM','char');
-    warning('on','all');
+% Force big-endian header (MATLAB default is host order).  Works down to
+% R2018b using a low-level header patch if ByteOrder tag unsupported.
+    try
+        tiffObj.setTag('ByteOrder','big');   % R2021a+
+    catch
+        % Fallback: rewrite, then patch first two bytes ("II"/"MM").
+        warning('off','all');
+        tiffObj.rewrite;
+        fseek(tiffObj.FileID,0,'bof');
+        fwrite(tiffObj.FileID,'MM','char');
+        warning('on','all');
+    end
 end
