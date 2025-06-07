@@ -1,9 +1,8 @@
 % ===============================
-% build_mex.m
+% build_mex.m (Patched to always use local libtiff)
 % ===============================
-% Compile semaphore, LZ4, and GPU MEX files using compiled libtiff if possible,
-% falling back to Anaconda libtiff if build fails.
-% Requires MATLAB R2018a+ (-R2018a MEX API) and Anaconda (CONDA_PREFIX).
+% Compile semaphore, LZ4, and GPU MEX files using locally-compiled libtiff.
+% Always use the version in tiff_build/libtiff and never the system or Anaconda version.
 
 debug = false;
 
@@ -39,31 +38,28 @@ if ~isfile('lz4.h')
     try, websave('lz4.h', lz4_h_url); catch, error('Failed to download lz4.h'); end
 end
 
-% Use Anaconda-provided libtiff or compile with optimization if missing
-conda_prefix = getenv('CONDA_PREFIX');
-assert(~isempty(conda_prefix) && isfolder(conda_prefix), ...
-    'CONDA_PREFIX is not set or does not point to a valid directory.');
-
-libtiff_root = fullfile(pwd, 'tiff_src', 'tiff-4.6.0');
-stamp_file = fullfile(pwd, '.libtiff_installed');
+% Use locally-compiled libtiff, always.
+libtiff_src_version = '4.6.0'; % or whatever you are building
+libtiff_root = fullfile(pwd, 'tiff_src', ['tiff-', libtiff_src_version]);
+libtiff_install_dir = fullfile(pwd, 'tiff_build', 'libtiff');
+stamp_file = fullfile(libtiff_install_dir, '.libtiff_installed');
 
 use_fallback = false;
 if ~isfile(stamp_file)
     fprintf('Building libtiff from source with optimized flags...\n');
-    if ~try_build_libtiff(libtiff_root, conda_prefix)
-        warning('Failed to build libtiff from source. Falling back to Anaconda libtiff.');
-        use_fallback = true;
+    if ~try_build_libtiff(libtiff_root, libtiff_install_dir)
+        error('Failed to build local libtiff. Please check the build log.');
     else
+        if ~isfolder(libtiff_install_dir), error('libtiff install failed!'); end
         fclose(fopen(stamp_file, 'w'));
     end
 end
 
-% Use installed include dir to find tiffconf.h
-tiff_include = {['-I', fullfile(conda_prefix, 'include')]};
-tiff_lib     = {['-L', fullfile(conda_prefix, 'lib')]};
+tiff_include = {['-I', fullfile(libtiff_install_dir, 'include')]};
+tiff_lib     = {['-L', fullfile(libtiff_install_dir, 'lib')]};
 tiff_link    = {'-ltiff'};
 
-fprintf('Using libtiff from: %s\n', fullfile(conda_prefix, 'lib'));
+fprintf('Using libtiff from: %s\n', fullfile(libtiff_install_dir, 'lib'));
 
 % CPU compile flags
 if ispc
@@ -127,7 +123,7 @@ fprintf('All MEX files built successfully.\n');
 % ===============================
 % Function: try_build_libtiff
 % ===============================
-function ok = try_build_libtiff(libtiff_root, conda_prefix)
+function ok = try_build_libtiff(libtiff_root, libtiff_install_dir)
     if ispc
         archive = 'tiff.zip';
         if ~isfolder(libtiff_root)
@@ -135,17 +131,19 @@ function ok = try_build_libtiff(libtiff_root, conda_prefix)
             unzip(archive, 'tiff_src'); delete(archive);
         end
         cd(libtiff_root);
-        status = system(['cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="', conda_prefix, '" . && ' ...
+        % Install to local libtiff_install_dir, NOT conda_prefix
+        status = system(['cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="', libtiff_install_dir, '" . && ' ...
                          'cmake --build build --config Release --target install']);
         cd('../../');
     else
         archive = 'tiff.tar.gz';
-        if ~isfolder('tiff-4.6.0')
+        if ~isfolder(['tiff-', '4.6.0'])
             system(['curl -L -o ', archive, ' https://download.osgeo.org/libtiff/tiff-4.6.0.tar.gz']);
             system(['tar -xzf ', archive]); delete(archive);
         end
-        cd('tiff-4.6.0');
-        status = system(['./configure --prefix=', conda_prefix, ' && make -j4 && make install']);
+        cd(['tiff-', '4.6.0']);
+        % Install to local libtiff_install_dir, NOT conda_prefix
+        status = system(['./configure --prefix=', libtiff_install_dir, ' && make -j4 && make install']);
         cd('..');
     end
     ok = (status == 0);
