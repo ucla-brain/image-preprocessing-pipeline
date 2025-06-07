@@ -135,8 +135,7 @@ static void readSubRegionToBuffer(
         const size_t uncompressedTileBytes =
             static_cast<size_t>(tileW) * tileH * bytesPerPixel;
         if (uncompressedTileBytes > MAX_TIFF_BLOCK_BYTES)
-            mexErrMsgIdAndTxt("load_bl_tif:Tiled:Size",
-                "Tile buffer (>1 GiB) exceeds sane limits");
+            mexErrMsgIdAndTxt("load_bl_tif:Tiled:Size", "Tile buffer exceeds sane limit of 1 GiB (tile %u)");
 
         std::vector<uint8_t> tilebuf(uncompressedTileBytes);
         const size_t nTilePixels = uncompressedTileBytes / bytesPerPixel;
@@ -185,8 +184,8 @@ static void readSubRegionToBuffer(
         TIFFGetFieldDefaulted(tif, TIFFTAG_ROWSPERSTRIP, &rowsPerStrip);
         if (rowsPerStrip == 0) rowsPerStrip = imgHeight;
 
-        /* allocate *once* for the theoretical max, but
-           always use nbytes (actual) for swapping / bounds */
+        // Allocate once for the theoretical max,
+        // but only use actual bytes (`nbytes`) for decoding and bounds checks.
         const size_t maxStripBytes =
             static_cast<size_t>(rowsPerStrip) * imgWidth * bytesPerPixel;
         if (maxStripBytes > MAX_TIFF_BLOCK_BYTES)
@@ -295,6 +294,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
     if (!mxIsCell(prhs[0]))
         mexErrMsgIdAndTxt("load_bl_tif:Input", "First argument must be a cell array of filenames");
 
+    // MATLAB stores [row, col, z], but user may want [col, row, z] (transpose=true)
     bool transpose = false;
     if (nrhs == 6) {
         const mxArray* flag = prhs[5];
@@ -311,7 +311,6 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
 
     int numSlices = static_cast<int>(mxGetNumberOfElements(prhs[0]));
     std::vector<std::string> fileList(numSlices);
-    fileList.reserve(numSlices);
     for (int i = 0; i < numSlices; ++i)
     {
         const mxArray* cell = mxGetCell(prhs[0], i);
@@ -377,7 +376,6 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
 
     void* outData = mxGetData(plhs[0]);
     int pixelsPerSlice = static_cast<int>(static_cast<size_t>(outH) * outW);
-    std::fill_n(static_cast<uint8_t*>(outData), pixelsPerSlice * numSlices * bytesPerPixel, 0);
 
     // --- Prepare task list (one per Z) ---
     std::vector<LoadTask> tasks;
@@ -389,12 +387,12 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
     for (int z = 0; z < numSlices; ++z)
     {
         // No need to clip, ROI is within TIFF bounds
-        int img_y_start = roiY0;
-        int img_x_start = roiX0;
-        int cropHz = roiH;
-        int cropWz = roiW;
-        int out_row0 = 0;
-        int out_col0 = 0;
+        size_t img_y_start = roiY0;
+        size_t img_x_start = roiX0;
+        size_t cropHz = roiH;
+        size_t cropWz = roiW;
+        size_t out_row0 = 0;
+        size_t out_col0 = 0;
 
         tasks.emplace_back(
             img_y_start, img_x_start,
@@ -424,7 +422,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         for (unsigned t = 0; t < numThreads; ++t) {
             size_t begin = t * chunk;
             size_t end   = std::min(n_tasks, begin + chunk);
-            if (begin >= end) break;
+            if (begin >= end) break; // No more tasks for this thread
             workers.emplace_back(worker_main,
                 std::cref(tasks),
                 std::ref(results),
