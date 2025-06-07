@@ -49,13 +49,13 @@ function load_bl_tif_test()
             x_indices = x : x + blkW - 1;
             z_indices = zidx : min(numSlices, zidx + 2);
 
-            % MATLAB reference
+            % MATLAB reference (REMOVED TRANSPOSE)
             t1 = tic;
-            bl_gt = zeros(blkW, blkH, numel(z_indices), 'uint16');  % MATLAB expects [W, H, Z]
+            bl_gt = zeros(blkH, blkW, numel(z_indices), 'uint16');  % [H, W, Z]
             for k = 1:numel(z_indices)
                 slice = imread(filelist{z_indices(k)}, ...
                     'PixelRegion', {[y_indices(1), y_indices(end)], [x_indices(1), x_indices(end)]});
-                bl_gt(:, :, k) = slice';
+                bl_gt(:, :, k) = slice;  % No transpose!
             end
             t_ref = toc(t1);
 
@@ -75,14 +75,14 @@ function load_bl_tif_test()
                 [xi, yi, zi] = ind2sub(size(diff), linearIdx);
                 val_mex = bl_mex(xi, yi, zi);
                 val_gt = bl_gt(xi, yi, zi);
-                block_x = x + xi - 1;
-                block_y = y + yi - 1;
+                block_x = x + yi - 1;
+                block_y = y + xi - 1;
                 position = "middle";
-                if xi == 1 || xi == blkW || yi == 1 || yi == blkH
+                if xi == 1 || xi == blkH || yi == 1 || yi == blkW
                     position = "edge";
                 end
                 fprintf("     ↳ First mismatch at (x=%d, y=%d, z=%d) → block [%d, %d] (%s): MEX=%d, GT=%d\n", ...
-                    block_x, block_y, zidx + zi - 1, xi, yi, position, val_mex, val_gt);
+                    block_x, block_y, zidx + zi - 1, yi, xi, position, val_mex, val_gt);
 
                 disp('First 10 values in bl_mex:');
                 disp(bl_mex(1:10,1,1)');  % Just to compare

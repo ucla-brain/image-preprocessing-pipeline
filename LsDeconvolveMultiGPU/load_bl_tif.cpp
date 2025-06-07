@@ -65,7 +65,7 @@ static void copySubRegion(const LoadTask& task)
         TIFFGetField(tif, TIFFTAG_TILELENGTH, &tileHeight);
     }
 
-    // MATLAB is column-major, with explicit transpose: output is [width, height, z]
+    // MATLAB is column-major, output is [height, width, z]
     // dstIndex = row + col*roiH + zIndex*pixelsPerSlice
 
     if (isTiled) {
@@ -86,7 +86,6 @@ static void copySubRegion(const LoadTask& task)
                     mexErrMsgIdAndTxt("load_bl_tif:ReadTile", "Failed reading tile at x=%u y=%u", tileX, tileY);
 
                 // PATCH: If 16-bit, swap bytes if needed
-                // Only swap bytes if LibTIFF indicates the data is not in native order (endianness mismatch).
                 if (bytesPerPixel == 2 && TIFFIsByteSwapped(tif)) {
                     tsize_t tilesize = TIFFTileSize(tif);
                     size_t n_tile_pixels = tilesize / bytesPerPixel;
@@ -180,13 +179,13 @@ void mexFunction(int nlhs, mxArray* plhs[],
     const mxClassID outType = (bitsPerSample == 8) ? mxUINT8_CLASS : mxUINT16_CLASS;
     const std::size_t bytesPerPixel = bitsPerSample / 8;
 
-    // Create MATLAB output array [width, height, numSlices] (column-major)
-    mwSize dims[3] = { static_cast<mwSize>(roiW),
-                       static_cast<mwSize>(roiH),
+    // Create MATLAB output array [height, width, numSlices] (column-major)
+    mwSize dims[3] = { static_cast<mwSize>(roiH),
+                       static_cast<mwSize>(roiW),
                        static_cast<mwSize>(numSlices) };
     plhs[0] = mxCreateNumericArray(3, dims, outType, mxREAL);
     void* outData = mxGetData(plhs[0]);
-    std::size_t pixelsPerSlice = static_cast<std::size_t>(roiW) * roiH;
+    std::size_t pixelsPerSlice = static_cast<std::size_t>(roiH) * roiW;
 
     // Loop over all Z (all 0-based now!)
     for (std::size_t z = 0; z < numSlices; ++z)
@@ -203,6 +202,7 @@ void mexFunction(int nlhs, mxArray* plhs[],
         task.matlabType     = outType;
         copySubRegion(task);
     }
+    // For debugging: print first 10 values
     uint16_t* arr = static_cast<uint16_t*>(outData);
     printf("First 10 values: ");
     for (int i = 0; i < 10; ++i) printf("%d ", arr[i]);
