@@ -188,17 +188,19 @@ void mexFunction(int nlhs, mxArray* plhs[],
     const std::size_t bytesPerPixel = bitsPerSample / 8;
 
     // Output array: [height, width, numSlices]
-    mwSize dims[3] = { static_cast<mwSize>(cropH),
-                       static_cast<mwSize>(cropW),
+    mwSize dims[3] = { static_cast<mwSize>(roiH),
+                       static_cast<mwSize>(roiW),
                        static_cast<mwSize>(numSlices) };
     plhs[0] = mxCreateNumericArray(3, dims, outType, mxREAL);
     void* outData = mxGetData(plhs[0]);
-    std::size_t pixelsPerSlice = static_cast<std::size_t>(cropH) * cropW;
+    std::size_t pixelsPerSlice = static_cast<std::size_t>(roiH) * roiW;
+
+    // Zero the output buffer
+    memset(outData, 0, pixelsPerSlice * numSlices * bytesPerPixel);
 
     // Loop over Z
     for (std::size_t z = 0; z < numSlices; ++z)
     {
-        // Get size for current slice
         TIFF* tifa = TIFFOpen(fileList[z].c_str(), "r");
         if (!tifa)
             mexErrMsgIdAndTxt("load_bl_tif:OpenFail", "Cannot open %s", fileList[z].c_str());
@@ -212,6 +214,11 @@ void mexFunction(int nlhs, mxArray* plhs[],
         if (roiX0 + roiW > (int)imgWa)
             cropWz = std::max(0, (int)imgWa - roiX0);
 
+        // If cropHz <= 0 or cropWz <= 0, skip (output remains zero)
+        if (cropHz <= 0 || cropWz <= 0)
+            continue;
+
+        // Only copy for the valid portion
         LoadTask task;
         task.filename       = fileList[z];
         task.roiY           = roiY0;
