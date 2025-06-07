@@ -51,18 +51,24 @@ struct TiffCloser {
 };
 using TiffHandle = std::unique_ptr<TIFF, TiffCloser>;
 
-// Utility for output array indexing (portable for both shapes)
-inline int computeDstIndex(const LoadTask& task, int row, int col) noexcept {
-    if (!task.transpose) {
-        return (task.out_row0 + row)
-             + (task.out_col0 + col) * task.roiH
-             + task.zIndex * task.pixelsPerSlice;
-    } else {
-        return (task.out_col0 + col)
-             + (task.out_row0 + row) * task.roiW
-             + task.zIndex * task.pixelsPerSlice;
-    }
+// ------------------------------------------------------------------
+//  64-bit-safe destination index utility for output array indexing (portable for both shapes)
+// ------------------------------------------------------------------
+inline size_t computeDstIndex(const LoadTask& task,
+                              int row, int col) noexcept
+{
+    size_t r = static_cast<size_t>(task.out_row0 + row);
+    size_t c = static_cast<size_t>(task.out_col0 + col);
+    size_t slice = static_cast<size_t>(task.zIndex);
+
+    if (!task.transpose)
+        return r + c * static_cast<size_t>(task.roiH)
+               + slice * static_cast<size_t>(task.pixelsPerSlice);
+    else
+        return c + r * static_cast<size_t>(task.roiW)
+               + slice * static_cast<size_t>(task.pixelsPerSlice);
 }
+
 
 static void swap_uint16_buf(void* buf, int count) {
     uint16_t* p = static_cast<uint16_t*>(buf);
@@ -429,8 +435,9 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         const auto& res  = results[i];
         for (int row = 0; row < task.cropH; ++row) {
             for (int col = 0; col < task.cropW; ++col) {
-                int dstIdx = computeDstIndex(task, row, col) * bytesPerPixel;
-                size_t bufIdx = (row * task.cropW + col) * bytesPerPixel;
+                size_t dstElem = computeDstIndex(task, row, col);
+                size_t dstByte = dstElem * bytesPerPixel;
+                size_t srcByte = (static_cast<size_t>(row) * task.cropW + col) * bytesPerPixel;
                 std::memcpy(
                     static_cast<uint8_t*>(outData) + dstIdx,
                     res.data.data() + bufIdx,
