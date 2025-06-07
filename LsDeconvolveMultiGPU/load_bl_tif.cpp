@@ -172,6 +172,10 @@ static void copySubRegion(const LoadTask& task)
 void mexFunction(int nlhs, mxArray* plhs[],
                  int nrhs, const mxArray* prhs[])
 {
+    // Diagnostic prints: libtiff version and Deflate support
+    mexPrintf("LIBTIFF version: %s\n", TIFFGetVersion());
+    mexPrintf("Zlib support: %s\n", TIFFIsCODECConfigured(COMPRESSION_ADOBE_DEFLATE) ? "yes" : "no");
+
     if (nrhs < 5)
         mexErrMsgIdAndTxt("load_bl_tif:Usage",
             "Usage: img = load_bl_tif(files, y, x, height, width)");
