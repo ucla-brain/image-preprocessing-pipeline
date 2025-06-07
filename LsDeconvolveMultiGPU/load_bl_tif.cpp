@@ -1,378 +1,375 @@
+// ============================================================================
+//  load_bl_tif.cpp  – Fast sub-region TIFF loader for MATLAB
+//
+//  Patched 2025-06-07
+//     • tile & strip caching
+//     • TIFFSwabArrayOfShort use
+//     • 64-bit-safe indexing
+//     • thread-pool fixes & misc. clean-ups
+// ============================================================================
+
 #include "mex.h"
 #include "tiffio.h"
-#include <vector>
-#include <string>
+
+#include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <cstring>
-#include <algorithm>
-#include <stdexcept>
-#include <cstdio>
-#include <memory>
-#include <thread>
-#include <mutex>
-#include <condition_variable>
 #include <exception>
-#include <atomic>
+#include <memory>
+#include <mutex>
+#include <stdexcept>
+#include <string>
+#include <thread>
+#include <vector>
 
-// --- Config ---
+// ---------------------------------------------------------------------------
+//  Config & helpers
+// ---------------------------------------------------------------------------
 constexpr uint16_t kSupportedBitDepth8  = 8;
 constexpr uint16_t kSupportedBitDepth16 = 16;
 
-// RAII wrapper for mxArrayToUTF8String()
 struct MatlabString {
     char* ptr;
     explicit MatlabString(const mxArray* arr) : ptr(mxArrayToUTF8String(arr)) {
         if (!ptr)
-            mexErrMsgIdAndTxt("load_bl_tif:BadString", "Failed to convert string from mxArray");
+            mexErrMsgIdAndTxt("load_bl_tif:BadString",
+                              "Failed to convert string from mxArray");
     }
     ~MatlabString() { mxFree(ptr); }
-    const char* get() const { return ptr; }
-    operator const char*() const { return ptr; }
+    const char* get() const noexcept { return ptr; }
+    operator const char*() const noexcept { return ptr; }
 };
 
 struct LoadTask {
-    // Where to read in TIFF and where in output
-    int in_row0, in_col0, cropH, cropW;
-    int roiH, roiW, zIndex;
-    int out_row0, out_col0;
-    int pixelsPerSlice;
+    int  in_row0, in_col0;      // ROI origin inside TIFF
+    int  cropH,  cropW;         // ROI size actually inside image
+    int  roiH,   roiW;          // full requested ROI (for dst strides)
+    int  zIndex;                // slice index
+    size_t pixelsPerSlice;      // dst slice stride (roiH*roiW)
     std::string path;
     bool transpose;
-    LoadTask() = default;
-    LoadTask(
-        int inY, int inX, int outY, int outX, int h, int w, int roiH_, int roiW_,
-        int z, int pps, std::string filename, bool transpose_
-    ) : in_row0(inY), in_col0(inX), out_row0(outY), out_col0(outX),
-        cropH(h), cropW(w), roiH(roiH_), roiW(roiW_),
-        zIndex(z), pixelsPerSlice(pps), path(std::move(filename)), transpose(transpose_) {}
 };
 
 struct TiffCloser {
-    void operator()(TIFF* tif) const { if (tif) TIFFClose(tif); }
+    void operator()(TIFF* tif) const noexcept { if (tif) TIFFClose(tif); }
 };
 using TiffHandle = std::unique_ptr<TIFF, TiffCloser>;
 
-// Utility for output array indexing (portable for both shapes)
-inline int computeDstIndex(const LoadTask& task, int row, int col) noexcept {
-    if (!task.transpose) {
-        return (task.out_row0 + row)
-             + (task.out_col0 + col) * task.roiH
-             + task.zIndex * task.pixelsPerSlice;
-    } else {
-        return (task.out_col0 + col)
-             + (task.out_row0 + row) * task.roiW
-             + task.zIndex * task.pixelsPerSlice;
+// dst index helper (64-bit safe)
+inline size_t computeDstIndex(const LoadTask& t, int r, int c) noexcept {
+    if (!t.transpose) {
+        return static_cast<size_t>(t.out_row0 + r)
+             + static_cast<size_t>(t.out_col0 + c) * t.roiH
+             + static_cast<size_t>(t.zIndex) * t.pixelsPerSlice;
     }
+    return static_cast<size_t>(t.out_col0 + c)
+         + static_cast<size_t>(t.out_row0 + r) * t.roiW
+         + static_cast<size_t>(t.zIndex) * t.pixelsPerSlice;
 }
 
-static void swap_uint16_buf(void* buf, int count) {
-    uint16_t* p = static_cast<uint16_t*>(buf);
-    for (int i = 0; i < count; ++i) {
-        uint16_t v = p[i];
-        p[i] = (v >> 8) | (v << 8);
-    }
+// ---------------------------------------------------------------------------
+//  Core read helpers
+// ---------------------------------------------------------------------------
+
+// Swap a whole uint16_t buffer in-place (vectorised in libtiff)
+inline void swap_uint16_buf(void* buf, size_t count) noexcept {
+    TIFFSwabArrayOfShort(reinterpret_cast<uint16_t*>(buf),
+                         static_cast<tmsize_t>(count));
 }
 
-// The result buffer for each block
-struct TaskResult {
-    size_t block_id; // index into task/result vector
-    std::vector<uint8_t> data;
-    int cropH, cropW;
-    TaskResult(size_t id, size_t datasz, int ch, int cw)
-        : block_id(id), data(datasz), cropH(ch), cropW(cw) {}
-    // Default move constructor ok
-};
-
-// Read/copy a cropped subregion from a TIFF slice into a buffer
-static void readSubRegionToBuffer(
-    const LoadTask& task,
-    TIFF* tif,
-    uint8_t bytesPerPixel,
-    std::vector<uint8_t>& blockBuf // pre-sized: cropH * cropW * bytesPerPixel
-)
+// Read/copy a cropped sub-region from TIFF into caller-supplied buffer
+static void readSubRegionToBuffer(const LoadTask& task,
+                                  TIFF*           tif,
+                                  uint8_t         bytesPerPixel,
+                                  uint8_t*        dst /* cropH*cropW*BPP */)
 {
-    uint32_t imgWidth, imgHeight;
-    TIFFGetField(tif, TIFFTAG_IMAGEWIDTH , &imgWidth);
-    TIFFGetField(tif, TIFFTAG_IMAGELENGTH, &imgHeight);
-    uint16_t bitsPerSample = 0, samplesPerPixel = 1;
-    TIFFGetField(tif, TIFFTAG_BITSPERSAMPLE, &bitsPerSample);
-    TIFFGetFieldDefaulted(tif, TIFFTAG_SAMPLESPERPIXEL, &samplesPerPixel);
+    uint32_t imgW = 0, imgH = 0;
+    TIFFGetField(tif, TIFFTAG_IMAGEWIDTH , &imgW);
+    TIFFGetField(tif, TIFFTAG_IMAGELENGTH, &imgH);
 
-    uint32_t tileWidth = 0, tileHeight = 0;
-    int isTiled = TIFFIsTiled(tif);
-    if (isTiled) {
-        TIFFGetField(tif, TIFFTAG_TILEWIDTH, &tileWidth);
-        TIFFGetField(tif, TIFFTAG_TILELENGTH, &tileHeight);
-    }
-    if (samplesPerPixel != 1 ||
-        (bitsPerSample != kSupportedBitDepth8 && bitsPerSample != kSupportedBitDepth16))
-        throw std::runtime_error("Only 8/16-bit grayscale TIFFs are supported");
+    const bool needSwap16 =
+        (bytesPerPixel == 2) && TIFFIsByteSwapped(tif);
 
-    if (isTiled) {
-        tsize_t tileSize = TIFFTileSize(tif);
-        if (tileSize <= 0)
-            throw std::runtime_error("Invalid tile size returned");
-        if (tileWidth == 0 || tileHeight == 0)
-            throw std::runtime_error("Invalid tile dimensions in TIFF metadata");
-        std::vector<uint8_t> tilebuf(tileSize);
+    // --- Tiled ----------------------------------------------------------------
+    if (TIFFIsTiled(tif)) {
+        uint32_t tileW = 0, tileH = 0;
+        TIFFGetField(tif, TIFFTAG_TILEWIDTH , &tileW);
+        TIFFGetField(tif, TIFFTAG_TILELENGTH, &tileH);
+        if (!tileW || !tileH)
+            throw std::runtime_error("Invalid tile size in TIFF metadata");
 
-        for (int row = 0; row < task.cropH; ++row) {
-            uint32_t imgY = static_cast<uint32_t>(task.in_row0 + row);
-            for (int col = 0; col < task.cropW; ++col) {
-                uint32_t imgX = static_cast<uint32_t>(task.in_col0 + col);
+        const tmsize_t tileSize = TIFFTileSize(tif);
+        std::vector<uint8_t> tilebuf(static_cast<size_t>(tileSize));
+        uint32_t prevTile = UINT32_MAX;          // cache
 
-                uint32_t tileX = (imgX / tileWidth) * tileWidth;
-                uint32_t tileY = (imgY / tileHeight) * tileHeight;
-                uint32_t tileIdx = TIFFComputeTile(tif, imgX, imgY, 0, 0);
+        for (int r = 0; r < task.cropH; ++r) {
+            uint32_t imgY = static_cast<uint32_t>(task.in_row0 + r);
+            for (int c = 0; c < task.cropW; ++c) {
+                uint32_t imgX = static_cast<uint32_t>(task.in_col0 + c);
 
-                if (TIFFReadEncodedTile(tif, tileIdx, tilebuf.data(), tilebuf.size()) < 0)
-                    throw std::runtime_error("Failed reading tile");
+                const uint32_t tileIdx = TIFFComputeTile(tif, imgX, imgY, 0, 0);
 
-                if (bytesPerPixel == 2 && TIFFIsByteSwapped(tif)) {
-                    int n_tile_pixels = tileSize / bytesPerPixel;
-                    swap_uint16_buf(tilebuf.data(), n_tile_pixels);
+                if (tileIdx != prevTile) {       // miss ⇒ read
+                    if (TIFFReadEncodedTile(tif, tileIdx,
+                                            tilebuf.data(), tileSize) < 0)
+                        throw std::runtime_error("TIFFReadEncodedTile failed");
+                    if (needSwap16)
+                        swap_uint16_buf(tilebuf.data(),
+                                        static_cast<size_t>(tileSize / 2));
+                    prevTile = tileIdx;
                 }
-                uint32_t relY = imgY - tileY;
-                uint32_t relX = imgX - tileX;
-                int rowStride = tileWidth * bytesPerPixel;
-                int offset = relY * rowStride + relX * bytesPerPixel;
 
-                // Fill local buffer
-                size_t buf_offset = (row * task.cropW + col) * bytesPerPixel;
-                std::memcpy(blockBuf.data() + buf_offset, tilebuf.data() + offset, bytesPerPixel);
+                const uint32_t relY = imgY % tileH;
+                const uint32_t relX = imgX % tileW;
+                const size_t   srcOff =
+                    (relY * tileW + relX) * bytesPerPixel;
+                const size_t   dstOff =
+                    (static_cast<size_t>(r) * task.cropW + c) * bytesPerPixel;
+
+                std::memcpy(dst + dstOff, tilebuf.data() + srcOff, bytesPerPixel);
             }
         }
-    } else {
-        uint32_t rowsPerStrip = 0;
-        TIFFGetFieldDefaulted(tif, TIFFTAG_ROWSPERSTRIP, &rowsPerStrip);
-        if (rowsPerStrip == 0) rowsPerStrip = imgHeight;
-        int stripBufSize = static_cast<int>(rowsPerStrip) * imgWidth * bytesPerPixel;
-        if (stripBufSize <= 0 || stripBufSize > (1 << 30)) {
-            throw std::runtime_error("Invalid or too large strip buffer size");
+        return;
+    }
+
+    // --- Strips ---------------------------------------------------------------
+    uint32_t rowsPerStrip = 0;
+    TIFFGetFieldDefaulted(tif, TIFFTAG_ROWSPERSTRIP, &rowsPerStrip);
+    if (!rowsPerStrip) rowsPerStrip = imgH;
+
+    const size_t stripBytes =
+        static_cast<size_t>(rowsPerStrip) * imgW * bytesPerPixel;
+    if (stripBytes == 0 || stripBytes > (1u << 31))
+        throw std::runtime_error("Invalid strip buffer size");
+
+    std::vector<uint8_t> stripbuf(stripBytes);
+    tstrip_t prevStrip = static_cast<tstrip_t>(-1);
+
+    for (int r = 0; r < task.cropH; ++r) {
+        const uint32_t imgY = static_cast<uint32_t>(task.in_row0 + r);
+        const tstrip_t stripIdx = TIFFComputeStrip(tif, imgY, 0);
+
+        if (stripIdx != prevStrip) {
+            const tmsize_t n =
+                TIFFReadEncodedStrip(tif, stripIdx,
+                                     stripbuf.data(), stripBytes);
+            if (n < 0)
+                throw std::runtime_error("TIFFReadEncodedStrip failed");
+            if (needSwap16)
+                swap_uint16_buf(stripbuf.data(),
+                                static_cast<size_t>(n) / 2);
+            prevStrip = stripIdx;
         }
-        std::vector<uint8_t> stripbuf(stripBufSize);
-        tstrip_t currentStrip = (tstrip_t)-1;
-        for (int row = 0; row < task.cropH; ++row) {
-            uint32_t tifRow = static_cast<uint32_t>(task.in_row0 + row);
-            tstrip_t stripIdx = TIFFComputeStrip(tif, tifRow, 0);
-            if (stripIdx != currentStrip) {
-                tsize_t nbytes = TIFFReadEncodedStrip(tif, stripIdx, stripbuf.data(), stripBufSize);
-                if (nbytes < 0)
-                    throw std::runtime_error("TIFFReadEncodedStrip failed");
-                currentStrip = stripIdx;
-            }
-            uint32_t stripStartRow = stripIdx * rowsPerStrip;
-            uint32_t relRow = tifRow - stripStartRow;
-            uint8_t* scanlinePtr = stripbuf.data() + (relRow * imgWidth * bytesPerPixel);
-            if (bytesPerPixel == 2 && TIFFIsByteSwapped(tif)) {
-                swap_uint16_buf(scanlinePtr, imgWidth);
-            }
-            for (int col = 0; col < task.cropW; ++col) {
-                int srcOffset = (task.in_col0 + col) * bytesPerPixel;
-                size_t buf_offset = (row * task.cropW + col) * bytesPerPixel;
-                std::memcpy(blockBuf.data() + buf_offset, scanlinePtr + srcOffset, bytesPerPixel);
-            }
+
+        const uint32_t relRow  =
+            imgY - stripIdx * rowsPerStrip;
+        const uint8_t* scanPtr =
+            stripbuf.data() + static_cast<size_t>(relRow) * imgW * bytesPerPixel;
+
+        for (int c = 0; c < task.cropW; ++c) {
+            const size_t srcOff = static_cast<size_t>(task.in_col0 + c) * bytesPerPixel;
+            const size_t dstOff = (static_cast<size_t>(r) * task.cropW + c) * bytesPerPixel;
+            std::memcpy(dst + dstOff, scanPtr + srcOff, bytesPerPixel);
         }
     }
 }
 
-// Parallel worker: Reads each task's subregion into a local buffer
-void worker_main(
-    const std::vector<LoadTask>& tasks,
-    std::vector<TaskResult>& results,
-    uint8_t bytesPerPixel,
-    std::atomic<bool>& hasError,
-    std::mutex& err_mutex,
-    std::vector<std::string>& errors,
-    size_t begin, size_t end)
+// ---------------------------------------------------------------------------
+//  Worker thread main
+// ---------------------------------------------------------------------------
+void workerMain(const std::vector<LoadTask>& tasks,
+                std::vector<std::vector<uint8_t>>& results,
+                uint8_t                     bpp,
+                std::atomic<bool>&          abortFlag,
+                std::mutex&                 errMtx,
+                std::vector<std::string>&   errors,
+                size_t                      first,
+                size_t                      last)
 {
-    for (size_t i = begin; i < end && !hasError; ++i) {
-        const auto& task = tasks[i];
+    for (size_t i = first; i < last && !abortFlag.load(std::memory_order_acquire); ++i) {
+        const LoadTask& t = tasks[i];
         try {
-            TiffHandle tif(TIFFOpen(task.path.c_str(), "r"));
-            if (!tif) {
-                std::lock_guard<std::mutex> lck(err_mutex);
-                errors.emplace_back("Cannot open file " + task.path);
-                hasError = true;
-                return;
-            }
-            // Pre-size result buffer
-            readSubRegionToBuffer(task, tif.get(), bytesPerPixel, results[i].data);
-        } catch (const std::exception& ex) {
-            std::lock_guard<std::mutex> lck(err_mutex);
-            errors.emplace_back(task.path + ": " + ex.what());
-            hasError = true;
+            TiffHandle tif(TIFFOpen(t.path.c_str(), "rb"));
+            if (!tif)
+                throw std::runtime_error("Cannot open");
+
+            readSubRegionToBuffer(tif.get() ? t : t, // dummy – avoid warning
+                                  tif.get(),
+                                  bpp,
+                                  results[i].data());
+        }
+        catch (const std::exception& ex) {
+            std::lock_guard<std::mutex> lk(errMtx);
+            errors.emplace_back(t.path + ": " + ex.what());
+            abortFlag.store(true, std::memory_order_release);
             return;
         }
     }
 }
 
-// Entry point
-void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
+// ---------------------------------------------------------------------------
+//  mexFunction (entry point)
+// ---------------------------------------------------------------------------
+void mexFunction(int nlhs, mxArray* plhs[],
+                 int nrhs, const mxArray* prhs[])
 {
     if (nrhs < 5 || nrhs > 6)
         mexErrMsgIdAndTxt("load_bl_tif:Usage",
             "Usage: img = load_bl_tif(files, y, x, height, width[, transposeFlag])");
 
     if (!mxIsCell(prhs[0]))
-        mexErrMsgIdAndTxt("load_bl_tif:Input", "First argument must be a cell array of filenames");
+        mexErrMsgIdAndTxt("load_bl_tif:Input",
+            "First argument must be a cell array of filenames");
 
-    bool transpose = false;
-    if (nrhs == 6) {
-        if (!mxIsLogicalScalar(prhs[5]))
-            mexErrMsgIdAndTxt("load_bl_tif:Transpose", "transposeFlag must be a logical scalar.");
-        transpose = mxIsLogicalScalarTrue(prhs[5]);
-    }
+    const bool transpose =
+        (nrhs == 6) && mxIsLogicalScalarTrue(prhs[5]);
 
-    int numSlices = static_cast<int>(mxGetNumberOfElements(prhs[0]));
+    // ------------------------------------------------------------------ filenames
+    const int numSlices = static_cast<int>(mxGetNumberOfElements(prhs[0]));
     std::vector<std::string> fileList(numSlices);
-    fileList.reserve(numSlices);
-    for (int i = 0; i < numSlices; ++i)
-    {
-        const mxArray* cell = mxGetCell(prhs[0], i);
-        if (!mxIsChar(cell))
-            mexErrMsgIdAndTxt("load_bl_tif:Input", "File list must contain only strings.");
-        MatlabString mstr(cell);
-        if (!mstr.get() || !*mstr.get())
-            mexErrMsgIdAndTxt("load_bl_tif:Input", "Filename in cell %d is empty", i);
+    for (int i = 0; i < numSlices; ++i) {
+        MatlabString mstr(mxGetCell(prhs[0], i));
         fileList[i] = mstr.get();
+        if (fileList[i].empty())
+            mexErrMsgIdAndTxt("load_bl_tif:Input",
+                "Filename in cell %d is empty", i + 1);
     }
 
-    int roiY0 = static_cast<int>(mxGetScalar(prhs[1])) - 1;
-    int roiX0 = static_cast<int>(mxGetScalar(prhs[2])) - 1;
-    int roiH  = static_cast<int>(mxGetScalar(prhs[3]));
-    int roiW  = static_cast<int>(mxGetScalar(prhs[4]));
-
+    // ------------------------------------------------------------------ ROI params
+    const int roiY0 = static_cast<int>(mxGetScalar(prhs[1])) - 1;
+    const int roiX0 = static_cast<int>(mxGetScalar(prhs[2])) - 1;
+    const int roiH  = static_cast<int>(mxGetScalar(prhs[3]));
+    const int roiW  = static_cast<int>(mxGetScalar(prhs[4]));
     if (roiY0 < 0 || roiX0 < 0 || roiH < 1 || roiW < 1)
-        mexErrMsgIdAndTxt("load_bl_tif:ROI","ROI parameters invalid");
+        mexErrMsgIdAndTxt("load_bl_tif:ROI", "ROI parameters invalid");
 
-    TIFFSetWarningHandler(nullptr);
-    TiffHandle tif0(TIFFOpen(fileList[0].c_str(), "r"));
+    // ------------------------------------------------------------------ probe slice 0
+    TIFFSetWarningHandler(nullptr);          // silence libtiff warnings
+    TiffHandle tif0(TIFFOpen(fileList[0].c_str(), "rb"));
     if (!tif0)
-        mexErrMsgIdAndTxt("load_bl_tif:OpenFail", "Cannot open file %s (slice 0)", fileList[0].c_str());
-    uint32_t imgWidth = 0, imgHeight = 0;
-    uint16_t bitsPerSample = 0, samplesPerPixel = 1;
-    TIFFGetField(tif0.get(), TIFFTAG_IMAGEWIDTH , &imgWidth);
-    TIFFGetField(tif0.get(), TIFFTAG_IMAGELENGTH, &imgHeight);
-    TIFFGetField(tif0.get(), TIFFTAG_BITSPERSAMPLE, &bitsPerSample);
-    TIFFGetFieldDefaulted(tif0.get(), TIFFTAG_SAMPLESPERPIXEL, &samplesPerPixel);
+        mexErrMsgIdAndTxt("load_bl_tif:OpenFail",
+            "Cannot open file %s (slice 0)", fileList[0].c_str());
 
-    if (samplesPerPixel != 1 || (bitsPerSample != 8 && bitsPerSample != 16))
+    uint32_t imgW = 0, imgH = 0;
+    uint16_t bits = 0, spp = 1;
+    TIFFGetField(tif0.get(), TIFFTAG_IMAGEWIDTH , &imgW);
+    TIFFGetField(tif0.get(), TIFFTAG_IMAGELENGTH, &imgH);
+    TIFFGetField(tif0.get(), TIFFTAG_BITSPERSAMPLE , &bits);
+    TIFFGetFieldDefaulted(tif0.get(), TIFFTAG_SAMPLESPERPIXEL, &spp);
+
+    if (spp != 1 || (bits != 8 && bits != 16))
         mexErrMsgIdAndTxt("load_bl_tif:Type",
-                          "Only 8/16-bit grayscale TIFFs (1 sample per pixel) are supported.");
+            "Only 8/16-bit single-channel TIFFs are supported.");
 
-    const mxClassID outType = (bitsPerSample == 8) ? mxUINT8_CLASS : mxUINT16_CLASS;
-    const uint8_t bytesPerPixel = (bitsPerSample == 16) ? 2 : 1;
+    const uint8_t bytesPerPixel  = (bits == 16) ? 2 : 1;
+    const mxClassID outClass     = (bits == 16) ? mxUINT16_CLASS : mxUINT8_CLASS;
+    const mwSize outH            = transpose ? roiW : roiH;
+    const mwSize outW            = transpose ? roiH : roiW;
 
-    mwSize outH = transpose ? roiW : roiH;
-    mwSize outW = transpose ? roiH : roiW;
-    mwSize dims[3] = { outH, outW, static_cast<mwSize>(numSlices) };
-    plhs[0] = mxCreateNumericArray(3, dims, outType, mxREAL);
+    // ------------------------------------------------------------------ output array
+    const mwSize dims[3] = {outH, outW, static_cast<mwSize>(numSlices)};
+    mxArray* outArr = mxCreateNumericArray(3, dims, outClass, mxREAL);
+    plhs[0] = outArr;
+    void* outDataRaw = mxGetData(outArr);
+    const size_t pixelsPerSlice = static_cast<size_t>(outH) * outW;
+    std::memset(outDataRaw, 0, pixelsPerSlice * numSlices * bytesPerPixel);
 
-    void* outData = mxGetData(plhs[0]);
-    int pixelsPerSlice = static_cast<int>(outH) * outW;
-    std::fill_n(static_cast<uint8_t*>(outData), pixelsPerSlice * numSlices * bytesPerPixel, 0);
-
-    // --- Prepare task list (one per Z) ---
+    // ------------------------------------------------------------------ task build
     std::vector<LoadTask> tasks;
-    std::vector<TaskResult> results;
+    std::vector<std::vector<uint8_t>> results;   // buffers per task
     std::vector<std::string> errors;
-    std::mutex err_mutex;
+    std::mutex errMtx;
 
-    // Compute all the block regions up front
-    for (int z = 0; z < numSlices; ++z)
-    {
-        TiffHandle tif(TIFFOpen(fileList[z].c_str(), "r"));
+    tasks.reserve(numSlices);
+    results.reserve(numSlices);
+
+    for (int z = 0; z < numSlices; ++z) {
+        TiffHandle tif(TIFFOpen(fileList[z].c_str(), "rb"));
         if (!tif) {
             errors.emplace_back("Cannot open file " + fileList[z]);
             continue;
         }
-        TIFFGetField(tif.get(), TIFFTAG_IMAGEWIDTH , &imgWidth);
-        TIFFGetField(tif.get(), TIFFTAG_IMAGELENGTH, &imgHeight);
+        TIFFGetField(tif.get(), TIFFTAG_IMAGEWIDTH , &imgW);
+        TIFFGetField(tif.get(), TIFFTAG_IMAGELENGTH, &imgH);
 
-        int img_y_start = std::max(roiY0, 0);
-        int img_y_end   = std::min(roiY0 + roiH - 1, static_cast<int>(imgHeight) - 1);
-        int img_x_start = std::max(roiX0, 0);
-        int img_x_end   = std::min(roiX0 + roiW - 1, static_cast<int>(imgWidth) - 1);
+        const int img_y_s = std::clamp(roiY0, 0, static_cast<int>(imgH) - 1);
+        const int img_x_s = std::clamp(roiX0, 0, static_cast<int>(imgW) - 1);
+        const int img_y_e = std::clamp(roiY0 + roiH - 1, 0, static_cast<int>(imgH) - 1);
+        const int img_x_e = std::clamp(roiX0 + roiW - 1, 0, static_cast<int>(imgW) - 1);
 
-        int cropHz = img_y_end - img_y_start + 1;
-        int cropWz = img_x_end - img_x_start + 1;
-
-        if (cropHz <= 0 || cropWz <= 0) {
+        const int cropH = img_y_e - img_y_s + 1;
+        const int cropW = img_x_e - img_x_s + 1;
+        if (cropH <= 0 || cropW <= 0) {
             errors.emplace_back("Slice " + std::to_string(z) + " has no overlap with ROI");
             continue;
         }
-        int out_row0 = std::max(0, img_y_start - roiY0);
-        int out_col0 = std::max(0, img_x_start - roiX0);
-        if (out_row0 + cropHz > roiH || out_col0 + cropWz > roiW) {
-            errors.emplace_back("Crop region exceeds output bounds for slice " + std::to_string(z));
-            continue;
-        }
-        tasks.emplace_back(
-            img_y_start, img_x_start,
-            out_row0, out_col0,
-            cropHz, cropWz,
+
+        const int out_row0 = img_y_s - roiY0;   // always ≥ 0
+        const int out_col0 = img_x_s - roiX0;
+        tasks.push_back({
+            img_y_s, img_x_s,
+            cropH, cropW,
             roiH, roiW,
             z,
             pixelsPerSlice,
             fileList[z],
             transpose
-        );
-        results.emplace_back(results.size(), static_cast<size_t>(cropHz * cropWz * bytesPerPixel), cropHz, cropWz);
+        });
+        results.emplace_back(static_cast<size_t>(cropH * cropW * bytesPerPixel));
     }
 
-    // --- Parallel Read ---
-    unsigned numThreads = std::max(1u, std::thread::hardware_concurrency());
-#ifdef _WIN32
-    // Optionally limit threads on Windows (you can set via env)
-    const char* env_threads = getenv("LOAD_BL_TIF_THREADS");
-    if (env_threads) numThreads = std::max(1u, (unsigned)atoi(env_threads));
-#endif
+    // ------------------------------------------------------------------ thread pool
+    const unsigned hw = std::max(1u, std::thread::hardware_concurrency());
+    unsigned nThreads = std::min<unsigned>(hw, static_cast<unsigned>(tasks.size()));
 
-    std::atomic<bool> hasError{false};
-    std::vector<std::thread> workers;
-    size_t n_tasks = tasks.size();
+    if (const char* env = std::getenv("LOAD_BL_TIF_THREADS"))
+        nThreads = std::clamp<unsigned>(std::atoi(env), 1, tasks.size());
 
-    if (n_tasks > 0) {
-        size_t chunk = (n_tasks + numThreads - 1) / numThreads;
-        for (unsigned t = 0; t < numThreads; ++t) {
-            size_t begin = t * chunk;
-            size_t end   = std::min(n_tasks, begin + chunk);
-            if (begin >= end) break;
-            workers.emplace_back(worker_main,
-                std::cref(tasks),
-                std::ref(results),
-                bytesPerPixel,
-                std::ref(hasError),
-                std::ref(err_mutex),
-                std::ref(errors),
-                begin, end
-            );
+    std::atomic<bool> abortFlag(false);
+    std::vector<std::thread> pool;
+    pool.reserve(nThreads);
+
+    if (!tasks.empty()) {
+        const size_t chunk = (tasks.size() + nThreads - 1) / nThreads;
+        for (unsigned t = 0; t < nThreads; ++t) {
+            const size_t first = t * chunk;
+            const size_t last  = std::min(tasks.size(), first + chunk);
+            if (first >= last) break;
+            pool.emplace_back(workerMain,
+                              std::cref(tasks),
+                              std::ref(results),
+                              bytesPerPixel,
+                              std::ref(abortFlag),
+                              std::ref(errMtx),
+                              std::ref(errors),
+                              first, last);
         }
-        for (auto& w : workers) w.join();
+        for (auto& th : pool) th.join();
     }
 
-    // --- Error check ---
     if (!errors.empty()) {
-        std::string allerr = "Errors during load_bl_tif:\n";
-        for (const auto& s : errors) allerr += s + "\n";
-        mexErrMsgIdAndTxt("load_bl_tif:Threaded", "%s", allerr.c_str());
+        std::string msg("Errors during load_bl_tif:\n");
+        for (const auto& e : errors) msg += e + '\n';
+        mexErrMsgIdAndTxt("load_bl_tif:LoadError", "%s", msg.c_str());
     }
 
-    // --- Copy each buffer into output array (main thread only) ---
+    // ------------------------------------------------------------------ blit to mxArray
+    uint8_t* outData = static_cast<uint8_t*>(outDataRaw);
     for (size_t i = 0; i < tasks.size(); ++i) {
-        const auto& task = tasks[i];
-        const auto& res  = results[i];
-        for (int row = 0; row < task.cropH; ++row) {
-            for (int col = 0; col < task.cropW; ++col) {
-                int dstIdx = computeDstIndex(task, row, col) * bytesPerPixel;
-                size_t bufIdx = (row * task.cropW + col) * bytesPerPixel;
-                std::memcpy(
-                    static_cast<uint8_t*>(outData) + dstIdx,
-                    res.data.data() + bufIdx,
-                    bytesPerPixel
-                );
-            }
+        const LoadTask& t = tasks[i];
+        const auto& buf   = results[i];
+        for (int r = 0; r < t.cropH; ++r) {
+            const size_t dstRowBase =
+                computeDstIndex(t, r, 0) * bytesPerPixel;
+            const size_t srcRowBase =
+                static_cast<size_t>(r) * t.cropW * bytesPerPixel;
+            std::memcpy(outData + dstRowBase,
+                        buf.data() + srcRowBase,
+                        static_cast<size_t>(t.cropW) * bytesPerPixel);
         }
     }
 }
+// ============================================================================
+//  end of file
+// ============================================================================
