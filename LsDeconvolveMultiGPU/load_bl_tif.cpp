@@ -17,6 +17,7 @@
 // --- Config ---
 constexpr uint16_t kSupportedBitDepth8  = 8;
 constexpr uint16_t kSupportedBitDepth16 = 16;
+constexpr size_t MAX_TIFF_BLOCK_BYTES = 1ull << 30;
 
 // RAII wrapper for mxArrayToUTF8String()
 struct MatlabString {
@@ -132,7 +133,7 @@ static void readSubRegionToBuffer(
 
         const size_t uncompressedTileBytes =
             static_cast<size_t>(tileW) * tileH * bytesPerPixel;
-        if (uncompressedTileBytes > (1ull << 30))
+        if (uncompressedTileBytes > MAX_TIFF_BLOCK_BYTES)
             mexErrMsgIdAndTxt("load_bl_tif:Tiled:Size",
                 "Tile buffer (>1 GiB) exceeds sane limits");
 
@@ -187,7 +188,7 @@ static void readSubRegionToBuffer(
            always use nbytes (actual) for swapping / bounds */
         const size_t maxStripBytes =
             static_cast<size_t>(rowsPerStrip) * imgWidth * bytesPerPixel;
-        if (maxStripBytes > (1ull << 30))
+        if (maxStripBytes > MAX_TIFF_BLOCK_BYTES)
             mexErrMsgIdAndTxt("load_bl_tif:Strip:Size",
                 "Strip buffer (>1 GiB) exceeds sane limits");
 
@@ -252,32 +253,31 @@ void worker_main(
     const std::vector<LoadTask>& tasks,
     std::vector<TaskResult>& results,
     uint8_t bytesPerPixel,
-    std::atomic<bool>& hasError,
     std::mutex& err_mutex,
     std::vector<std::string>& errors,
-    size_t begin, size_t end)
+    std::atomic<size_t>& error_count,
+    size_t begin,
+    size_t end)
 {
-    for (size_t i = begin; i < end && !hasError; ++i) {
+    for (size_t i = begin; i < end; ++i) {
         const auto& task = tasks[i];
         try {
             TiffHandle tif(TIFFOpen(task.path.c_str(), "r"));
             if (!tif) {
                 std::lock_guard<std::mutex> lck(err_mutex);
-                errors.emplace_back("Cannot open file " + task.path);
-                hasError = true;
-                return;
+                errors.emplace_back("Slice " + std::to_string(task.zIndex + 1) + ": Cannot open file " + task.path);
+                error_count++;
+                continue;
             }
             readSubRegionToBuffer(task, tif.get(), bytesPerPixel, results[i].data);
         } catch (const std::exception& ex) {
             std::lock_guard<std::mutex> lck(err_mutex);
-            errors.emplace_back(task.path + ": " + ex.what());
-            hasError = true;
-            return;
+            errors.emplace_back("Slice " + std::to_string(task.zIndex + 1) + ": " + ex.what());
+            error_count++;
         } catch (...) {
             std::lock_guard<std::mutex> lck(err_mutex);
-            errors.emplace_back(task.path + ": Unknown exception in thread");
-            hasError = true;
-            return;
+            errors.emplace_back("Slice " + std::to_string(task.zIndex + 1) + ": Unknown exception in thread");
+            error_count++;
         }
     }
 }
@@ -296,9 +296,16 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
 
     bool transpose = false;
     if (nrhs == 6) {
-        if (!mxIsLogicalScalar(prhs[5]))
-            mexErrMsgIdAndTxt("load_bl_tif:Transpose", "transposeFlag must be a logical scalar.");
-        transpose = mxIsLogicalScalarTrue(prhs[5]);
+        const mxArray* flag = prhs[5];
+
+        if (mxIsLogicalScalar(flag)) {
+            transpose = mxIsLogicalScalarTrue(flag);
+        } else if ((mxIsInt32(flag) || mxIsUint32(flag)) && mxGetNumberOfElements(flag) == 1) {
+            transpose = (*static_cast<uint32_t*>(mxGetData(flag)) != 0);
+        } else {
+            mexErrMsgIdAndTxt("load_bl_tif:Transpose",
+                "transposeFlag must be a logical or int32/uint32 scalar.");
+        }
     }
 
     int numSlices = static_cast<int>(mxGetNumberOfElements(prhs[0]));
@@ -313,6 +320,11 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         if (!mstr.get() || !*mstr.get())
             mexErrMsgIdAndTxt("load_bl_tif:Input", "Filename in cell %d is empty", i+1);
         fileList[i] = mstr.get();
+    }
+    for (int i = 1; i <= 4; ++i) {
+        if (!mxIsDouble(prhs[i]) || mxIsComplex(prhs[i]) || mxGetNumberOfElements(prhs[i]) != 1)
+            mexErrMsgIdAndTxt("load_bl_tif:InputType",
+                "Input argument %d must be a real double scalar.", i+1);
     }
 
     int roiY0 = static_cast<int>(mxGetScalar(prhs[1])) - 1;
@@ -401,10 +413,9 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
     if (env_threads) numThreads = std::max(1u, (unsigned)atoi(env_threads));
 #endif
 
-    std::atomic<bool> hasError{false};
     std::vector<std::thread> workers;
     size_t n_tasks = tasks.size();
-
+    std::atomic<size_t> error_count{0};
     if (n_tasks > 0) {
         size_t chunk = (n_tasks + numThreads - 1) / numThreads;
         for (unsigned t = 0; t < numThreads; ++t) {
@@ -415,19 +426,22 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
                 std::cref(tasks),
                 std::ref(results),
                 bytesPerPixel,
-                std::ref(hasError),
                 std::ref(err_mutex),
                 std::ref(errors),
+                std::ref(error_count),
                 begin, end
             );
         }
         for (auto& w : workers) w.join();
     }
 
-    if (!errors.empty()) {
-        std::string allerr = "Errors during load_bl_tif:\n";
-        for (const auto& s : errors) allerr += s + "\n";
-        mexErrMsgIdAndTxt("load_bl_tif:Threaded", "%s", allerr.c_str());
+    if (error_count > 0) {
+        std::ostringstream allerr;
+        allerr << "Errors during load_bl_tif:\n";
+        for (const auto& s : errors) {
+            allerr << "  - " << s << "\n";  // optional bullet for readability
+        }
+        mexErrMsgIdAndTxt("load_bl_tif:Threaded", "%s", allerr.str().c_str());
     }
 
     for (size_t i = 0; i < tasks.size(); ++i) {
