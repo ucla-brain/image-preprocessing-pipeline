@@ -253,7 +253,7 @@ void mexFunction(int nlhs, mxArray* plhs[],
     plhs[0] = outArr;
     void* outDataRaw = mxGetData(outArr);
     const size_t pixelsPerSlice = static_cast<size_t>(outH) * outW;
-    std::memset(outDataRaw, 0, pixelsPerSlice * numSlices * bytesPerPixel);
+    std::memset(outDataRaw, 0, pixelsPerSlice * numSlices * bpp);
 
     // ------------- build tasks -----------
     std::vector<LoadTask> tasks;
