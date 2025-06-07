@@ -23,22 +23,6 @@ static bool is_system_little_endian() {
     return *((uint8_t*)&x) == 1;
 }
 
-static void swap_uint16_buf(void* buf, size_t count) {
-    uint16_t* p = static_cast<uint16_t*>(buf);
-    for (size_t i = 0; i < count; ++i) {
-        uint16_t v = p[i];
-        p[i] = (v >> 8) | (v << 8);
-    }
-}
-
-// Helper: throws on error
-static void throw_mex(const char* id, const char* fmt, const char* s) {
-    char msg[512];
-    snprintf(msg, sizeof(msg), fmt, s);
-    mexErrMsgIdAndTxt(id, "%s", msg);
-}
-
-// Generic subregion extraction for both tiled and scanline/strip TIFFs
 static void copySubRegion(const LoadTask& task)
 {
     TIFF* tif = TIFFOpen(task.filename.c_str(), "r");
@@ -57,67 +41,79 @@ static void copySubRegion(const LoadTask& task)
         mexErrMsgIdAndTxt("load_bl_tif:Type", "Only 8/16-bit grayscale TIFFs are supported");
     }
 
-    // Crop ROI to stay within bounds
+    // --- Tiled TIFF detection, must be before cropping logic ---
+    uint32_t tileWidth = 0, tileHeight = 0;
+    int isTiled = TIFFIsTiled(tif);
+    if (isTiled) {
+        TIFFGetField(tif, TIFFTAG_TILEWIDTH, &tileWidth);
+        TIFFGetField(tif, TIFFTAG_TILELENGTH, &tileHeight);
+    }
+
+    // --- ROI Cropping Logic (MATLAB imread-style) ---
     int roiY = task.roiY;
     int roiX = task.roiX;
-    int roiH = std::min(task.roiH, static_cast<int>(imgHeight) - roiY);
-    int roiW = std::min(task.roiW, static_cast<int>(imgWidth)  - roiX);
+    int roiH = task.roiH;
+    int roiW = task.roiW;
 
-    // If ROI is totally outside image, do nothing
-    if (roiY >= static_cast<int>(imgHeight) || roiX >= static_cast<int>(imgWidth) || roiH <= 0 || roiW <= 0) {
+    // How much of the ROI fits inside the image?
+    int roiYin = std::max(roiY, 0);
+    int roiXin = std::max(roiX, 0);
+    int roiHin = std::min(roiY + roiH, static_cast<int>(imgHeight)) - roiYin;
+    int roiWin = std::min(roiX + roiW, static_cast<int>(imgWidth))  - roiXin;
+
+    // If nothing overlaps, just return (output is already zero)
+    if (roiHin <= 0 || roiWin <= 0) {
         TIFFClose(tif);
-        // Out of bounds: leave block zero (already zero-initialized in MATLAB)
         return;
     }
 
     const std::size_t bytesPerPixel = bitsPerSample / 8;
 
-    // Tiled/scanline logic here, **use roiH/roiW instead of task.roiH/task.roiW**
-    // And offset output for partial blocks if necessary.
-
-    // The output memory for this Z is:
-    //   outBase = (uint8_t*)task.dstBase + task.zIndex * task.pixelsPerSlice * bytesPerPixel
-    // Stride is [task.roiH, task.roiW] for block (even if only part filled)
+    // Output pointer for this Z-slice
     uint8_t* outBase = static_cast<uint8_t*>(task.dstBase) + task.zIndex * task.pixelsPerSlice * bytesPerPixel;
 
-    if (isTiled) {
-        // TILED TIFF
-        std::vector<uint8_t> tilebuf(TIFFTileSize(tif));
-        for (int row = 0; row < roiH; ++row) {
-            uint32_t imgY = roiY + row;
-            for (int col = 0; col < roiW; ++col) {
-                uint32_t imgX = roiX + col;
+    // Calculate the row and col offsets in the output block (if roiY or roiX < 0)
+    int rowOffset = roiYin - roiY;
+    int colOffset = roiXin - roiX;
 
-                // [same as before ...]
+    if (isTiled) {
+        std::vector<uint8_t> tilebuf(TIFFTileSize(tif));
+        for (int row = 0; row < roiHin; ++row) {
+            uint32_t imgY = roiYin + row;
+            for (int col = 0; col < roiWin; ++col) {
+                uint32_t imgX = roiXin + col;
+
                 uint32_t tileX = (imgX / tileWidth) * tileWidth;
                 uint32_t tileY = (imgY / tileHeight) * tileHeight;
                 tsize_t tileIdx = TIFFComputeTile(tif, imgX, imgY, 0, 0);
+
                 if (TIFFReadEncodedTile(tif, tileIdx, tilebuf.data(), tilebuf.size()) < 0) {
                     TIFFClose(tif);
                     mexErrMsgIdAndTxt("load_bl_tif:ReadTile", "Failed reading tile at x=%u y=%u", tileX, tileY);
                 }
+
                 if (bytesPerPixel == 2 && TIFFIsByteSwapped(tif)) {
                     tsize_t tilesize = TIFFTileSize(tif);
                     size_t n_tile_pixels = tilesize / bytesPerPixel;
                     swap_uint16_buf(tilebuf.data(), n_tile_pixels);
                 }
+
                 uint32_t relY = imgY - tileY;
                 uint32_t relX = imgX - tileX;
                 std::size_t tileStride = tileWidth * bytesPerPixel;
                 std::size_t offset = relY * tileStride + relX * bytesPerPixel;
 
-                // Store in full output block, even if ROI < requested
-                std::size_t dstIndex = row + col * task.roiH;
+                // Write to output at the correct (row, col)
+                std::size_t dstIndex = (row + rowOffset) + (col + colOffset) * task.roiH;
                 std::size_t dstOffset = dstIndex * bytesPerPixel;
+
                 std::memcpy(outBase + dstOffset, tilebuf.data() + offset, bytesPerPixel);
             }
         }
-        // No need to clear zeros, output is zero-initialized by mxCreateNumericArray
     } else {
-        // SCANLINE TIFF
         std::vector<uint8_t> scanline(imgWidth * bytesPerPixel);
-        for (int row = 0; row < roiH; ++row) {
-            uint32_t tifRow = static_cast<uint32_t>(roiY + row);
+        for (int row = 0; row < roiHin; ++row) {
+            uint32_t tifRow = static_cast<uint32_t>(roiYin + row);
             if (!TIFFReadScanline(tif, scanline.data(), tifRow)) {
                 TIFFClose(tif);
                 mexErrMsgIdAndTxt("load_bl_tif:Read", "Read row %u failed", tifRow);
@@ -125,15 +121,18 @@ static void copySubRegion(const LoadTask& task)
             if (bytesPerPixel == 2 && TIFFIsByteSwapped(tif)) {
                 swap_uint16_buf(scanline.data(), imgWidth);
             }
-            for (int col = 0; col < roiW; ++col) {
-                std::size_t srcPixel = static_cast<std::size_t>(roiX + col);
+            for (int col = 0; col < roiWin; ++col) {
+                std::size_t srcPixel = static_cast<std::size_t>(roiXin + col);
                 std::size_t srcOffset = srcPixel * bytesPerPixel;
-                std::size_t dstIndex = row + col * task.roiH;
+
+                std::size_t dstIndex = (row + rowOffset) + (col + colOffset) * task.roiH;
                 std::size_t dstOffset = dstIndex * bytesPerPixel;
+
                 std::memcpy(outBase + dstOffset, scanline.data() + srcOffset, bytesPerPixel);
             }
         }
     }
+
     TIFFClose(tif);
 }
 
