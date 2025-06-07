@@ -20,7 +20,7 @@ constexpr uint16_t kSupportedBitDepth8  = 8;
 constexpr uint16_t kSupportedBitDepth16 = 16;
 constexpr size_t MAX_TIFF_BLOCK_BYTES = 1ull << 30;
 constexpr size_t kMaxPixelsPerSlice = static_cast<size_t>(std::numeric_limits<int>::max());// 2147483647
-constexpr size_t kInvalidTileIndex = static_cast<size_t>(UINT32_MAX);                      // 2 * kMaxPixelsPerSlice - 1
+constexpr uint32_t kInvalidTileIndex = UINT32_MAX;                                     // 2 * kMaxPixelsPerSlice - 1
 
 // RAII wrapper for mxArrayToUTF8String()
 struct MatlabString {
@@ -126,7 +126,7 @@ static void readSubRegionToBuffer(
 
     if (isTiled)
     {
-        size_t tileW = 0, tileH = 0;
+        uint32_t tileW = 0, tileH = 0;
         TIFFGetField(tif, TIFFTAG_TILEWIDTH , &tileW);
         TIFFGetField(tif, TIFFTAG_TILELENGTH, &tileH);
         if (tileW == 0 || tileH == 0)
@@ -146,12 +146,12 @@ static void readSubRegionToBuffer(
             size_t imgY = task.in_row0 + row;
             for (size_t col = 0; col < task.cropW; ++col) {
                 size_t imgX = task.in_col0 + col;
-                size_t tileIdx = static_cast<tsize_t>(TIFFComputeTile(tif, imgX, imgY, 0, 0));
+                ttile_t tileIdx = TIFFComputeTile(tif, imgX, imgY, 0, 0);
 
                 if (tileIdx != prevTile) {
                     tsize_t ret = TIFFReadEncodedTile(
                         tif,
-                        static_cast<ttile_t>(tileIdx),
+                        tileIdx,
                         tilebuf.data(),
                         static_cast<tsize_t>(uncompressedTileBytes)
                     );
@@ -171,8 +171,8 @@ static void readSubRegionToBuffer(
 
                 size_t relY = imgY % tileH;
                 size_t relX = imgX % tileW;
-                size_t   srcOff = (static_cast<size_t>(relY) * tileW + relX) * bytesPerPixel;
-                size_t   dstOff = (static_cast<size_t>(row) * task.cropW + col) * bytesPerPixel;
+                size_t srcOff = (static_cast<size_t>(relY) * tileW + relX) * bytesPerPixel;
+                size_t dstOff = (static_cast<size_t>(row) * task.cropW + col) * bytesPerPixel;
 
                 std::memcpy(blockBuf.data() + dstOff,
                             tilebuf.data() + srcOff,
@@ -182,7 +182,7 @@ static void readSubRegionToBuffer(
     }
     else
     {
-        size_t rowsPerStrip = 0;
+        uint32_t rowsPerStrip = 0;
         TIFFGetFieldDefaulted(tif, TIFFTAG_ROWSPERSTRIP, &rowsPerStrip);
         if (rowsPerStrip == 0) rowsPerStrip = imgHeight;
 
@@ -217,8 +217,8 @@ static void readSubRegionToBuffer(
 
             const size_t rowsInThisStrip =
                 static_cast<size_t>(nbytes / (imgWidth * bytesPerPixel));
-            size_t stripStartRow = stripIdx * rowsPerStrip;
-            size_t relRow        = tifRow - stripStartRow;
+            uint32_t stripStartRow = stripIdx * rowsPerStrip;
+            uint32_t relRow        = tifRow - stripStartRow;
 
             if (relRow >= rowsInThisStrip) {
                 std::ostringstream oss;
@@ -351,7 +351,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         mexErrMsgIdAndTxt("load_bl_tif:ZeroSize", "ROI dimensions must be non-zero.");
 
     // --- Robustly validate ROI for all slices BEFORE allocation ---
-    size_t imgWidth = 0, imgHeight = 0;
+    uint32_t imgWidth = 0, imgHeight = 0;
     uint16_t bitsPerSample = 0, globalBitsPerSample = 0, samplesPerPixel = 1;
     for (size_t z = 0; z < numSlices; ++z) {
         TiffHandle tif(TIFFOpen(fileList[z].c_str(), "r"));
@@ -384,7 +384,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         if (roiY0 + roiH > imgHeight ||
             roiX0 + roiW > imgWidth) {
             mexErrMsgIdAndTxt("load_bl_tif:ROI",
-                "Requested ROI [%d:%d,%d:%d] is out of bounds for slice %d (file: %s)",
+                "Requested ROI [%zu:%zu,%zu:%zu] is out of bounds for slice %zu (file: %s)",
                 roiY0+1, roiY0+roiH, roiX0+1, roiX0+roiW, z+1, fileList[z].c_str());
         }
     }
