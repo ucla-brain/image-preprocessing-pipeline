@@ -346,9 +346,11 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
     uint16_t bitsPerSample = 0, globalBitsPerSample = 0, samplesPerPixel = 1;
     for (size_t z = 0; z < numSlices; ++z) {
         TiffHandle tif(TIFFOpen(fileList[z].c_str(), "r"));
-        if (!tif)
-            mexErrMsgIdAndTxt("load_bl_tif:OpenFail", "Cannot open file %s (slice %d)", fileList[z].c_str(), z+1);
-
+        if (!tif) {
+            std::ostringstream oss;
+            oss << "Cannot open file " << fileList[z] << " (slice " << z+1 << ")";
+            mexErrMsgIdAndTxt("load_bl_tif:OpenFail", "%s", oss.str().c_str());
+        }
         TIFFGetField(tif.get(), TIFFTAG_IMAGEWIDTH , &imgWidth);
         TIFFGetField(tif.get(), TIFFTAG_IMAGELENGTH, &imgHeight);
         TIFFGetField(tif.get(), TIFFTAG_BITSPERSAMPLE, &bitsPerSample);
@@ -402,7 +404,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
     std::mutex err_mutex;
 
     // All slices are valid; populate tasks and results
-    for (int z = 0; z < numSlices; ++z)
+    for (size_t z = 0; z < numSlices; ++z)
     {
         // No need to clip, ROI is within TIFF bounds
         size_t img_y_start = roiY0;
