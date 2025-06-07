@@ -44,7 +44,7 @@ testZ      = [round(numSlices/2), max(1,numSlices-3)];
 
 fprintf('\n[Suite 1] Reference vs MEX baseline:\n');
 fprintf('%-4s | %-5s | %-9s | %-13s | %-11s | %-11s | %s\n', ...
-        '✓/✗','Z','Block','(X,Y)','MaxErr','Speed-up','Mode');
+        'pass','Z','Block','(X,Y)','MaxErr','Speed-up','Mode');
 fprintf(repmat('-',1,76)); fprintf('\n');
 
 for b = 1:size(blockSizes,1)
@@ -116,15 +116,15 @@ for k = 1:size(edge,1)
             otherwise, load_bl_tif(filelist, y,x,h,w,false); % should error
         end
         if kind=="expect_error"
-            fprintf('  ✗ %-25s did NOT error\n', label);
+            fprintf(' ❌ %-25s did NOT error\n', label);
         else
-            fprintf('  ✓ %-25s (size %s)\n', label, mat2str(size(mexP)));
+            fprintf(' ✔️ %-25s (size %s)\n', label, mat2str(size(mexP)));
         end
     catch ME
         if kind=="expect_error"
-            fprintf('  ✓ %-25s raised (%s)\n', label, ME.identifier);
+            fprintf(' ✔️ %-25s raised (%s)\n', label, ME.identifier);
         else
-            fprintf('  ✗ %-25s ERROR: %s [%s]\n', label, ME.message, ME.identifier);
+            fprintf(' ❌ %-25s ERROR: %s [%s]\n', label, ME.message, ME.identifier);
         end
     end
 end
@@ -161,9 +161,9 @@ for idx = 1:numel(specs)
     if s.bits==8 && ~s.big, fname8LE = fname; end
     try
         load_bl_tif({fname},1,1,32,32,false);
-        fprintf('  ✓ %2d-bit %s-endian\n',s.bits,ternary(s.big,'big','little'));
+        fprintf(' ✔️ %2d-bit %s-endian\n',s.bits,ternary(s.big,'big','little'));
     catch ME
-        fprintf('  ✗ %2d-bit %s-endian (%s) [%s]\n',s.bits, ...
+        fprintf(' ❌ %2d-bit %s-endian (%s) [%s]\n',s.bits, ...
                 ternary(s.big,'big','little'), ME.message, ME.identifier);
     end
 end
@@ -206,7 +206,7 @@ for c = cfgs
     try
         blk = load_bl_tif(cellstr(fname), 20,20,100,100,false);
         ok  = isequal(blk,img(20:119,20:119));
-        fprintf('  %-13s → %s\n', c.name, ternary(ok,'✓','✗'));
+        fprintf('  %-13s → %s\n', c.name, ternary(ok,'✔️','❌'));
     catch ME
         fprintf('  %-13s → ✗ (%s) [%s]\n', c.name, ME.message, ME.identifier);
     end
