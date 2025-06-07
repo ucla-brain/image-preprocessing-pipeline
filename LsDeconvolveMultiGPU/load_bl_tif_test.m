@@ -226,16 +226,16 @@ end
 for n = 1:size(neg,1)
     try
         neg{n,2}();
-        fprintf('  ✗ %-22s did NOT error\n',neg{n,1});
+        fprintf('  ❌ %-22s did NOT error\n',neg{n,1});
     catch ME
-        fprintf('  ✓ %-22s raised error [%s]\n',neg{n,1}, ME.identifier);
+        fprintf('  ✔️ %-22s raised error [%s]\n',neg{n,1}, ME.identifier);
     end
 end
 
 %% ----------------------------------------------------------------
 % 6. Thread-scaling micro-benchmark  ------------------------------
 % -----------------------------------------------------------------
-fprintf('\n[Suite 6] Thread scaling (512×512 ROI × all Z):\n');
+fprintf('\n[Suite 6] Thread scaling (255×255 ROI × all Z):\n');
 roiH = min(256,imageHeight); roiW = min(256,imageWidth);
 for th = [1 2 4 8]
     setenv('LOAD_BL_TIF_THREADS',num2str(th));
