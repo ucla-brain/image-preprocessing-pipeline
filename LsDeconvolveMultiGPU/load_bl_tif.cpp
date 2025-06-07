@@ -81,93 +81,146 @@ struct TaskResult {
         : block_id(id), data(datasz), cropH(ch), cropW(cw) {}
 };
 
-// Read/copy a cropped subregion from a TIFF slice into a buffer
+// ---------------------------------------------------------------------------
+//  Safe sub-region reader for both tiled and stripped TIFFs
+// ---------------------------------------------------------------------------
 static void readSubRegionToBuffer(
     const LoadTask& task,
     TIFF* tif,
     uint8_t bytesPerPixel,
-    std::vector<uint8_t>& blockBuf
-)
+    std::vector<uint8_t>& blockBuf)
 {
+    //-----------------------------------------------------------------------
+    //  Common metadata checks
+    //-----------------------------------------------------------------------
     uint32_t imgWidth, imgHeight;
     TIFFGetField(tif, TIFFTAG_IMAGEWIDTH , &imgWidth);
     TIFFGetField(tif, TIFFTAG_IMAGELENGTH, &imgHeight);
+
     uint16_t bitsPerSample = 0, samplesPerPixel = 1;
     TIFFGetField(tif, TIFFTAG_BITSPERSAMPLE, &bitsPerSample);
     TIFFGetFieldDefaulted(tif, TIFFTAG_SAMPLESPERPIXEL, &samplesPerPixel);
 
-    uint32_t tileWidth = 0, tileHeight = 0;
-    int isTiled = TIFFIsTiled(tif);
-    if (isTiled) {
-        TIFFGetField(tif, TIFFTAG_TILEWIDTH, &tileWidth);
-        TIFFGetField(tif, TIFFTAG_TILELENGTH, &tileHeight);
-    }
     if (samplesPerPixel != 1 ||
         (bitsPerSample != kSupportedBitDepth8 && bitsPerSample != kSupportedBitDepth16))
-        throw std::runtime_error("Only 8/16-bit grayscale TIFFs are supported");
+    {
+        mexErrMsgIdAndTxt("load_bl_tif:Type",
+            "Unsupported TIFF format: only 8/16-bit grayscale, 1 sample/pixel");
+    }
+    //-----------------------------------------------------------------------
+    //  Choose path
+    //-----------------------------------------------------------------------
+    const bool isTiled = TIFFIsTiled(tif);
 
-    if (isTiled) {
-        tsize_t tileSize = TIFFTileSize(tif);
-        if (tileSize <= 0)
-            throw std::runtime_error("Invalid tile size returned");
-        if (tileWidth == 0 || tileHeight == 0)
-            throw std::runtime_error("Invalid tile dimensions in TIFF metadata");
-        std::vector<uint8_t> tilebuf(tileSize);
+    if (isTiled)
+    {
+        //-------------------------------------------------------------------
+        //  Tiled path
+        //-------------------------------------------------------------------
+        uint32_t tileW = 0, tileH = 0;
+        TIFFGetField(tif, TIFFTAG_TILEWIDTH , &tileW);
+        TIFFGetField(tif, TIFFTAG_TILELENGTH, &tileH);
+        if (tileW == 0 || tileH == 0)
+            mexErrMsgIdAndTxt("load_bl_tif:Tiled:Meta",
+                "Invalid tile size in TIFF metadata");
 
-        for (int row = 0; row < task.cropH; ++row) {
+        const size_t uncompressedTileBytes =
+            static_cast<size_t>(tileW) * tileH * bytesPerPixel;
+        if (uncompressedTileBytes > (1ull << 30))
+            mexErrMsgIdAndTxt("load_bl_tif:Tiled:Size",
+                "Tile buffer (>1 GiB) exceeds sane limits");
+
+        std::vector<uint8_t> tilebuf(uncompressedTileBytes);
+        const size_t nTilePixels = uncompressedTileBytes / bytesPerPixel;
+
+        uint32_t prevTile = UINT32_MAX;
+
+        for (int row = 0; row < task.cropH; ++row)
+        {
             uint32_t imgY = static_cast<uint32_t>(task.in_row0 + row);
-            for (int col = 0; col < task.cropW; ++col) {
+            for (int col = 0; col < task.cropW; ++col)
+            {
                 uint32_t imgX = static_cast<uint32_t>(task.in_col0 + col);
-
-                uint32_t tileX = (imgX / tileWidth) * tileWidth;
-                uint32_t tileY = (imgY / tileHeight) * tileHeight;
                 uint32_t tileIdx = TIFFComputeTile(tif, imgX, imgY, 0, 0);
 
-                if (TIFFReadEncodedTile(tif, tileIdx, tilebuf.data(), tilebuf.size()) < 0)
-                    throw std::runtime_error("Failed reading tile");
+                if (tileIdx != prevTile)
+                {
+                    if (TIFFReadEncodedTile(tif, tileIdx,
+                                             tilebuf.data(),
+                                             static_cast<tsize_t>(uncompressedTileBytes)) < 0)
+                        mexErrMsgIdAndTxt("load_bl_tif:Tiled:ReadFail",
+                            "TIFFReadEncodedTile failed (tile %u)", tileIdx);
 
-                if (bytesPerPixel == 2 && TIFFIsByteSwapped(tif)) {
-                    int n_tile_pixels = tileSize / bytesPerPixel;
-                    swap_uint16_buf(tilebuf.data(), n_tile_pixels);
+                    if (bytesPerPixel == 2 && TIFFIsByteSwapped(tif))
+                        swap_uint16_buf(tilebuf.data(), static_cast<int>(nTilePixels));
+
+                    prevTile = tileIdx;
                 }
-                uint32_t relY = imgY - tileY;
-                uint32_t relX = imgX - tileX;
-                int rowStride = tileWidth * bytesPerPixel;
-                int offset = relY * rowStride + relX * bytesPerPixel;
 
-                size_t buf_offset = (row * task.cropW + col) * bytesPerPixel;
-                std::memcpy(blockBuf.data() + buf_offset, tilebuf.data() + offset, bytesPerPixel);
+                uint32_t relY = imgY % tileH;
+                uint32_t relX = imgX % tileW;
+                size_t   srcOff = (static_cast<size_t>(relY) * tileW + relX) * bytesPerPixel;
+                size_t   dstOff = (static_cast<size_t>(row) * task.cropW + col) * bytesPerPixel;
+
+                std::memcpy(blockBuf.data() + dstOff,
+                            tilebuf.data() + srcOff,
+                            bytesPerPixel);
             }
         }
-    } else {
+    }
+    else
+    {
+        //-------------------------------------------------------------------
+        //  Stripped path
+        //-------------------------------------------------------------------
         uint32_t rowsPerStrip = 0;
         TIFFGetFieldDefaulted(tif, TIFFTAG_ROWSPERSTRIP, &rowsPerStrip);
         if (rowsPerStrip == 0) rowsPerStrip = imgHeight;
-        int stripBufSize = static_cast<int>(rowsPerStrip) * imgWidth * bytesPerPixel;
-        if (stripBufSize <= 0 || stripBufSize > (1 << 30)) {
-            throw std::runtime_error("Invalid or too large strip buffer size");
-        }
-        std::vector<uint8_t> stripbuf(stripBufSize);
+
+        const size_t uncompressedStripBytes =
+            static_cast<size_t>(rowsPerStrip) * imgWidth * bytesPerPixel;
+        if (uncompressedStripBytes > (1ull << 30))
+            mexErrMsgIdAndTxt("load_bl_tif:Strip:Size",
+                "Strip buffer (>1 GiB) exceeds sane limits");
+
+        std::vector<uint8_t> stripbuf(uncompressedStripBytes);
+
         tstrip_t currentStrip = (tstrip_t)-1;
-        for (int row = 0; row < task.cropH; ++row) {
-            uint32_t tifRow = static_cast<uint32_t>(task.in_row0 + row);
+
+        for (int row = 0; row < task.cropH; ++row)
+        {
+            uint32_t tifRow   = static_cast<uint32_t>(task.in_row0 + row);
             tstrip_t stripIdx = TIFFComputeStrip(tif, tifRow, 0);
-            if (stripIdx != currentStrip) {
-                tsize_t nbytes = TIFFReadEncodedStrip(tif, stripIdx, stripbuf.data(), stripBufSize);
-                if (nbytes < 0)
-                    throw std::runtime_error("TIFFReadEncodedStrip failed");
+
+            // Read strip only when it changes
+            if (stripIdx != currentStrip)
+            {
+                if (TIFFReadEncodedStrip(tif, stripIdx,
+                                         stripbuf.data(),
+                                         static_cast<tsize_t>(uncompressedStripBytes)) < 0)
+                    mexErrMsgIdAndTxt("load_bl_tif:Strip:ReadFail",
+                        "TIFFReadEncodedStrip failed (strip %u)", stripIdx);
+
+                if (bytesPerPixel == 2 && TIFFIsByteSwapped(tif))
+                    swap_uint16_buf(stripbuf.data(),
+                                    static_cast<int>(uncompressedStripBytes / 2));
+
                 currentStrip = stripIdx;
             }
+
             uint32_t stripStartRow = stripIdx * rowsPerStrip;
-            uint32_t relRow = tifRow - stripStartRow;
-            uint8_t* scanlinePtr = stripbuf.data() + (relRow * imgWidth * bytesPerPixel);
-            if (bytesPerPixel == 2 && TIFFIsByteSwapped(tif)) {
-                swap_uint16_buf(scanlinePtr, imgWidth);
-            }
-            for (int col = 0; col < task.cropW; ++col) {
-                int srcOffset = (task.in_col0 + col) * bytesPerPixel;
-                size_t buf_offset = (row * task.cropW + col) * bytesPerPixel;
-                std::memcpy(blockBuf.data() + buf_offset, scanlinePtr + srcOffset, bytesPerPixel);
+            uint32_t relRow        = tifRow - stripStartRow;
+            uint8_t* scanlinePtr   = stripbuf.data() +
+                                     (static_cast<size_t>(relRow) * imgWidth * bytesPerPixel);
+
+            for (int col = 0; col < task.cropW; ++col)
+            {
+                size_t srcOff = (static_cast<size_t>(task.in_col0 + col)) * bytesPerPixel;
+                size_t dstOff = (static_cast<size_t>(row) * task.cropW + col) * bytesPerPixel;
+
+                std::memcpy(blockBuf.data() + dstOff,
+                            scanlinePtr + srcOff,
+                            bytesPerPixel);
             }
         }
     }
