@@ -17,10 +17,25 @@ struct LoadTask
     std::size_t pixelsPerSlice;
     mxClassID   matlabType;
 };
+
 /* --------------------------------------------------------------------- */
 static bool is_system_little_endian() {
     uint16_t x = 1;
     return *((uint8_t*)&x) == 1;
+}
+
+static void swap_uint16_buf(void* buf, size_t count) {
+    uint16_t* p = static_cast<uint16_t*>(buf);
+    for (size_t i = 0; i < count; ++i) {
+        uint16_t v = p[i];
+        p[i] = (v >> 8) | (v << 8);
+    }
+}
+
+static void throw_mex(const char* id, const char* fmt, const char* s) {
+    char msg[512];
+    snprintf(msg, sizeof(msg), fmt, s);
+    mexErrMsgIdAndTxt(id, "%s", msg);
 }
 
 static void copySubRegion(const LoadTask& task)
@@ -41,7 +56,6 @@ static void copySubRegion(const LoadTask& task)
         mexErrMsgIdAndTxt("load_bl_tif:Type", "Only 8/16-bit grayscale TIFFs are supported");
     }
 
-    // --- Tiled TIFF detection, must be before cropping logic ---
     uint32_t tileWidth = 0, tileHeight = 0;
     int isTiled = TIFFIsTiled(tif);
     if (isTiled) {
@@ -61,18 +75,17 @@ static void copySubRegion(const LoadTask& task)
     int roiHin = std::min(roiY + roiH, static_cast<int>(imgHeight)) - roiYin;
     int roiWin = std::min(roiX + roiW, static_cast<int>(imgWidth))  - roiXin;
 
-    // If nothing overlaps, just return (output is already zero)
     if (roiHin <= 0 || roiWin <= 0) {
         TIFFClose(tif);
         return;
     }
 
     const std::size_t bytesPerPixel = bitsPerSample / 8;
+    bool sys_little = is_system_little_endian();
 
     // Output pointer for this Z-slice
     uint8_t* outBase = static_cast<uint8_t*>(task.dstBase) + task.zIndex * task.pixelsPerSlice * bytesPerPixel;
 
-    // Calculate the row and col offsets in the output block (if roiY or roiX < 0)
     int rowOffset = roiYin - roiY;
     int colOffset = roiXin - roiX;
 
@@ -92,6 +105,7 @@ static void copySubRegion(const LoadTask& task)
                     mexErrMsgIdAndTxt("load_bl_tif:ReadTile", "Failed reading tile at x=%u y=%u", tileX, tileY);
                 }
 
+                // Byte-swap if needed (16-bit)
                 if (bytesPerPixel == 2 && TIFFIsByteSwapped(tif)) {
                     tsize_t tilesize = TIFFTileSize(tif);
                     size_t n_tile_pixels = tilesize / bytesPerPixel;
@@ -103,7 +117,6 @@ static void copySubRegion(const LoadTask& task)
                 std::size_t tileStride = tileWidth * bytesPerPixel;
                 std::size_t offset = relY * tileStride + relX * bytesPerPixel;
 
-                // Write to output at the correct (row, col)
                 std::size_t dstIndex = (row + rowOffset) + (col + colOffset) * task.roiH;
                 std::size_t dstOffset = dstIndex * bytesPerPixel;
 
@@ -132,7 +145,6 @@ static void copySubRegion(const LoadTask& task)
             }
         }
     }
-
     TIFFClose(tif);
 }
 
