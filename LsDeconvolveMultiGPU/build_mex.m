@@ -122,13 +122,28 @@ fprintf('All MEX files built successfully.\n');
 % Function: try_build_libtiff
 % ===============================
 function ok = try_build_libtiff(libtiff_root, libtiff_install_dir, mex_flags_cpu, version)
-    if nargin < 3
-        mex_flags_cpu = {};
-    end
-    if nargin < 4 || isempty(version)
-        version = '4.7.0';
+    if nargin < 3, mex_flags_cpu = {}; end
+    if nargin < 4 || isempty(version), version = '4.7.0'; end
+
+    orig_dir = pwd;
+
+    % === Parse CFLAGS and CXXFLAGS from mex_flags_cpu ===
+    CFLAGS = '';
+    CXXFLAGS = '';
+    for i = 1:numel(mex_flags_cpu)
+        token = mex_flags_cpu{i};
+        if contains(token, 'CFLAGS=')
+            pat = 'CFLAGS="\$CFLAGS ([^"]+)"';
+            m = regexp(token, pat, 'tokens');
+            if ~isempty(m), CFLAGS = strtrim(m{1}{1}); end
+        elseif contains(token, 'CXXFLAGS=')
+            pat = 'CXXFLAGS="\$CXXFLAGS ([^"]+)"';
+            m = regexp(token, pat, 'tokens');
+            if ~isempty(m), CXXFLAGS = strtrim(m{1}{1}); end
+        end
     end
 
+    % === Build LibTIFF ===
     if ispc
         archive = ['tiff-', version, '.zip'];
         src_folder = ['tiff-', version];
@@ -139,9 +154,20 @@ function ok = try_build_libtiff(libtiff_root, libtiff_install_dir, mex_flags_cpu
             delete(archive);
         end
         cd(libtiff_root);
+
+        % Pass CFLAGS/CXXFLAGS as env variables to cmake and msbuild
+        setenv('CFLAGS', CFLAGS);
+        setenv('CXXFLAGS', CXXFLAGS);
+
+        % Windows cmake and build command
         status = system(['cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="', libtiff_install_dir, '" . && ' ...
                          'cmake --build build --config Release --target install']);
-        cd('../../');
+        cd(orig_dir);
+
+        % Reset env variables
+        setenv('CFLAGS', '');
+        setenv('CXXFLAGS', '');
+
     else
         archive = ['tiff-', version, '.tar.gz'];
         src_folder = ['tiff-', version];
@@ -152,12 +178,19 @@ function ok = try_build_libtiff(libtiff_root, libtiff_install_dir, mex_flags_cpu
             delete(archive);
         end
         cd(src_folder);
-        status = system(['./configure --prefix=', libtiff_install_dir, ' && make -j4 && make install']);
-        cd('..');
+
+        % Linux: prefix configure/make with env vars if set
+        prefix = '';
+        if ~isempty(CFLAGS), prefix = [prefix, 'CFLAGS="', CFLAGS, '" ']; end
+        if ~isempty(CXXFLAGS), prefix = [prefix, 'CXXFLAGS="', CXXFLAGS, '" ']; end
+
+        cmd = [prefix, './configure --prefix=', libtiff_install_dir, ' && make -j4 && make install'];
+        status = system(cmd);
+        cd(orig_dir);
     end
     ok = (status == 0);
 
-    % Optional: post-build MEX smoketest to verify include/link works
+    % === Optional: smoketest for MEX compatibility ===
     if ok && ~isempty(mex_flags_cpu)
         test_c = 'libtiff_test_mex.c';
         fid = fopen(test_c, 'w');
@@ -175,5 +208,3 @@ function ok = try_build_libtiff(libtiff_root, libtiff_install_dir, mex_flags_cpu
         end
     end
 end
-
-
