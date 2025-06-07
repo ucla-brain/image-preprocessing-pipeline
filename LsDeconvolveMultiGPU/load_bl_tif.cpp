@@ -18,6 +18,7 @@
 // --- Config ---
 constexpr uint16_t kSupportedBitDepth8  = 8;
 constexpr uint16_t kSupportedBitDepth16 = 16;
+constexpr unsigned kMaxThreads = 32; // hard cap for safety
 
 // RAII wrapper for mxArrayToUTF8String()
 struct MatlabString {
@@ -33,14 +34,14 @@ struct MatlabString {
 
 // Task description for the queue
 struct LoadTask {
-    int in_row0, in_col0;   // where to start reading from TIFF (Y, X)
-    int out_row0, out_col0; // where to write to output (Y, X)
-    int cropH, cropW;       // how many rows/cols to copy
-    int roiH, roiW;         // full output block size
-    int zIndex;             // output slice index
-    void* dstBase;          // output pointer
+    int in_row0, in_col0;
+    int out_row0, out_col0;
+    int cropH, cropW;
+    int roiH, roiW;
+    int zIndex;
+    void* dstBase;
     int pixelsPerSlice;
-    std::string path;       // TIFF file path
+    std::string path;
     bool transpose;
     LoadTask() = default;
     LoadTask(
@@ -81,7 +82,6 @@ static void swap_uint16_buf(void* buf, int count) {
     }
 }
 
-// Read/copy a cropped subregion from a TIFF slice
 static void copySubRegion(const LoadTask& task, TIFF* tif, uint8_t bytesPerPixel)
 {
     uint32_t imgWidth, imgHeight;
@@ -123,7 +123,7 @@ static void copySubRegion(const LoadTask& task, TIFF* tif, uint8_t bytesPerPixel
                 }
                 uint32_t relY = imgY - tileY;
                 uint32_t relX = imgX - tileX;
-                int rowStride = tileWidth * bytesPerPixel; // Bytes per row in tile
+                int rowStride = tileWidth * bytesPerPixel;
                 int offset = relY * rowStride + relX * bytesPerPixel;
                 int dstOffset = computeDstIndex(task, row, col) * bytesPerPixel;
                 std::memcpy(
@@ -203,26 +203,6 @@ public:
         cv.notify_all();
     }
 };
-
-// Worker thread function
-void worker_main(TaskQueue* tq, std::vector<std::string>& errors, std::mutex& err_mutex,
-                 uint8_t bytesPerPixel) {
-    LoadTask task;
-    while (tq->pop(task)) {
-        try {
-            TiffHandle tif(TIFFOpen(task.path.c_str(), "r"));
-            if (!tif) {
-                std::lock_guard<std::mutex> lck(err_mutex);
-                errors.emplace_back("Cannot open file " + task.path);
-                continue;
-            }
-            copySubRegion(task, tif.get(), bytesPerPixel);
-        } catch (const std::exception& ex) {
-            std::lock_guard<std::mutex> lck(err_mutex);
-            errors.emplace_back(task.path + ": " + ex.what());
-        }
-    }
-}
 
 // Entry point
 void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
@@ -311,8 +291,8 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         int img_x_start = std::max(roiX0, 0);
         int img_x_end   = std::min(roiX0 + roiW - 1, static_cast<int>(imgWidth) - 1);
 
-        int cropHz = img_y_end - img_y_start + 1; // rows to copy
-        int cropWz = img_x_end - img_x_start + 1; // cols to copy
+        int cropHz = img_y_end - img_y_start + 1;
+        int cropWz = img_x_end - img_x_start + 1;
 
         if (cropHz <= 0 || cropWz <= 0) {
             std::lock_guard<std::mutex> lck(err_mutex);
@@ -341,14 +321,15 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
 
     // --- Launch thread pool ---
 #ifdef _WIN32
-    // Start with only 1 thread for safety, scale up after validating
+    // Default to 1 for safety; can override via env
     unsigned numThreads = 1;
     const char* env_threads = getenv("LOAD_BL_TIF_THREADS");
-    if (env_threads) numThreads = std::max(1u, (unsigned)atoi(env_threads));
+    if (env_threads) numThreads = std::min(kMaxThreads, std::max(1u, (unsigned)atoi(env_threads)));
+    mexPrintf("load_bl_tif: running on Windows in %u threads\n", numThreads);
 #else
-    unsigned numThreads = std::max(1u, std::thread::hardware_concurrency());
+    unsigned numThreads = std::max(1u, std::min(kMaxThreads, std::thread::hardware_concurrency()));
 #endif
-    // NUM THREADS (see above) is set in a way safe for Windows
+
     std::vector<std::thread> workers;
     std::atomic<bool> hasError{false};
 
@@ -359,18 +340,24 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
                 TiffHandle tif(TIFFOpen(task.path.c_str(), "r"));
                 if (!tif) {
                     std::lock_guard<std::mutex> lck(err_mutex);
-                    errors.emplace_back("Cannot open file " + task.path);
-                    hasError = true; break;
+                    errors.emplace_back("Cannot open file " + task.path + " (z=" + std::to_string(task.zIndex) + ")");
+                    hasError = true;
+                    queue.set_finished(); // terminate other workers
+                    break;
                 }
                 copySubRegion(task, tif.get(), bytesPerPixel);
             } catch (const std::exception& ex) {
                 std::lock_guard<std::mutex> lck(err_mutex);
-                errors.emplace_back(task.path + ": " + ex.what());
-                hasError = true; break;
+                errors.emplace_back(task.path + " (z=" + std::to_string(task.zIndex) + "): " + ex.what());
+                hasError = true;
+                queue.set_finished(); // terminate other workers
+                break;
             } catch (...) {
                 std::lock_guard<std::mutex> lck(err_mutex);
-                errors.emplace_back(task.path + ": unknown error");
-                hasError = true; break;
+                errors.emplace_back(task.path + " (z=" + std::to_string(task.zIndex) + "): unknown error");
+                hasError = true;
+                queue.set_finished(); // terminate other workers
+                break;
             }
         }
     };
@@ -384,7 +371,6 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         for (auto& t : workers) t.join();
     }
 
-    // --- Error check ---
     if (!errors.empty()) {
         std::string allerr = "Errors during load_bl_tif:\n";
         for (const auto& s : errors) allerr += s + "\n";
