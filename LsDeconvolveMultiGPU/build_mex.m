@@ -41,9 +41,9 @@ end
 % CPU compile flags
 if ispc
     if debug
-        mex_flags_cpu = {'-R2018a', 'COMPFLAGS="$COMPFLAGS /Od /Zi /openmp"'};
+        mex_flags_cpu = {'-R2018a', 'COMPFLAGS="$COMPFLAGS /std:c++17 /Od /Zi /openmp"'};
     else
-        mex_flags_cpu = {'-R2018a', 'COMPFLAGS="$COMPFLAGS /O2 /arch:AVX2 /openmp"'};
+        mex_flags_cpu = {'-R2018a', 'COMPFLAGS="$COMPFLAGS /std:c++17 /O2 /arch:AVX2 /openmp"'};
     end
 else
     if debug
