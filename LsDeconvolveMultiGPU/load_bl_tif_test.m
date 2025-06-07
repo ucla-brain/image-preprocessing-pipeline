@@ -197,7 +197,7 @@ for c = cfgs'
     t.setTag(tag); t.write(uint16(img)); close(t);
 
     try
-        blk = load_bl_tif({fname},20,20,100,100,false);
+        blk = load_bl_tif( cellstr(fname), 20,20,100,100,false );
         ok  = isequal(blk,uint16(img(20:119,20:119)));
         fprintf('  %-13s → %s\n', c.name, ternary(ok,'✓','✗'));
     catch ME
@@ -223,14 +223,15 @@ for n = 1:size(neg,1)
 end
 
 %% -----------------------------------------------------------------
-% 6. Thread-scaling benchmark (safe memory) ________________________
+% 6. Thread-scaling benchmark (memory-safe) ________________________
 % ------------------------------------------------------------------
 fprintf('\n[Suite 6] Thread scaling (512×512 ROI × all slices):\n');
-roiH = min(512,imageHeight);  roiW = min(512,imageWidth);
+roiH = min(512,imageHeight);   % → never allocates > ≈1 GB
+roiW = min(512,imageWidth );
 for th = [1 2 4 8]
     setenv('LOAD_BL_TIF_THREADS',num2str(th));
     tic;
-    load_bl_tif(filelist, 1,1, roiH, roiW, false);    % whole stack, small ROI
+    load_bl_tif(filelist, 1,1, roiH, roiW, false);
     t = toc;
     fprintf('  %2d threads → %.3f s\n', th, t);
 end
