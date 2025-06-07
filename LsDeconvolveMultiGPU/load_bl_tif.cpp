@@ -52,83 +52,85 @@ static void copySubRegion(const LoadTask& task)
     TIFFGetField(tif, TIFFTAG_BITSPERSAMPLE, &bitsPerSample);
     TIFFGetFieldDefaulted(tif, TIFFTAG_SAMPLESPERPIXEL, &samplesPerPixel);
 
-    if (samplesPerPixel != 1 || (bitsPerSample != 8 && bitsPerSample != 16))
+    if (samplesPerPixel != 1 || (bitsPerSample != 8 && bitsPerSample != 16)){
+        TIFFClose(tif);
         mexErrMsgIdAndTxt("load_bl_tif:Type", "Only 8/16-bit grayscale TIFFs are supported");
+    }
+
+    // Crop ROI to stay within bounds
+    int roiY = task.roiY;
+    int roiX = task.roiX;
+    int roiH = std::min(task.roiH, static_cast<int>(imgHeight) - roiY);
+    int roiW = std::min(task.roiW, static_cast<int>(imgWidth)  - roiX);
+
+    // If ROI is totally outside image, do nothing
+    if (roiY >= static_cast<int>(imgHeight) || roiX >= static_cast<int>(imgWidth) || roiH <= 0 || roiW <= 0) {
+        TIFFClose(tif);
+        // Out of bounds: leave block zero (already zero-initialized in MATLAB)
+        return;
+    }
 
     const std::size_t bytesPerPixel = bitsPerSample / 8;
 
-    // Detect tiled TIFF
-    uint32_t tileWidth = 0, tileHeight = 0;
-    int isTiled = TIFFIsTiled(tif);
-    if (isTiled) {
-        TIFFGetField(tif, TIFFTAG_TILEWIDTH, &tileWidth);
-        TIFFGetField(tif, TIFFTAG_TILELENGTH, &tileHeight);
-    }
+    // Tiled/scanline logic here, **use roiH/roiW instead of task.roiH/task.roiW**
+    // And offset output for partial blocks if necessary.
 
-    // MATLAB is column-major, output is [height, width, z]
-    // dstIndex = row + col*roiH + zIndex*pixelsPerSlice
+    // The output memory for this Z is:
+    //   outBase = (uint8_t*)task.dstBase + task.zIndex * task.pixelsPerSlice * bytesPerPixel
+    // Stride is [task.roiH, task.roiW] for block (even if only part filled)
+    uint8_t* outBase = static_cast<uint8_t*>(task.dstBase) + task.zIndex * task.pixelsPerSlice * bytesPerPixel;
 
     if (isTiled) {
-        // -------- TILED TIFF --------
+        // TILED TIFF
         std::vector<uint8_t> tilebuf(TIFFTileSize(tif));
-        for (int row = 0; row < task.roiH; ++row) {
-            uint32_t imgY = task.roiY + row;
-            for (int col = 0; col < task.roiW; ++col) {
-                uint32_t imgX = task.roiX + col;
+        for (int row = 0; row < roiH; ++row) {
+            uint32_t imgY = roiY + row;
+            for (int col = 0; col < roiW; ++col) {
+                uint32_t imgX = roiX + col;
 
-                // Determine which tile contains this pixel
+                // [same as before ...]
                 uint32_t tileX = (imgX / tileWidth) * tileWidth;
                 uint32_t tileY = (imgY / tileHeight) * tileHeight;
                 tsize_t tileIdx = TIFFComputeTile(tif, imgX, imgY, 0, 0);
-
-                // Read tile (cache last if you want to optimize further)
-                if (TIFFReadEncodedTile(tif, tileIdx, tilebuf.data(), tilebuf.size()) < 0)
+                if (TIFFReadEncodedTile(tif, tileIdx, tilebuf.data(), tilebuf.size()) < 0) {
+                    TIFFClose(tif);
                     mexErrMsgIdAndTxt("load_bl_tif:ReadTile", "Failed reading tile at x=%u y=%u", tileX, tileY);
-
-                // PATCH: If 16-bit, swap bytes if needed
+                }
                 if (bytesPerPixel == 2 && TIFFIsByteSwapped(tif)) {
                     tsize_t tilesize = TIFFTileSize(tif);
                     size_t n_tile_pixels = tilesize / bytesPerPixel;
                     swap_uint16_buf(tilebuf.data(), n_tile_pixels);
                 }
-
-                // Offset of this pixel in the tile buffer
                 uint32_t relY = imgY - tileY;
                 uint32_t relX = imgX - tileX;
                 std::size_t tileStride = tileWidth * bytesPerPixel;
                 std::size_t offset = relY * tileStride + relX * bytesPerPixel;
 
-                // Write pixel to output
-                std::size_t dstIndex = row + col * task.roiH + task.zIndex * task.pixelsPerSlice;
+                // Store in full output block, even if ROI < requested
+                std::size_t dstIndex = row + col * task.roiH;
                 std::size_t dstOffset = dstIndex * bytesPerPixel;
-
-                std::memcpy(static_cast<uint8_t*>(task.dstBase) + dstOffset,
-                            tilebuf.data() + offset, bytesPerPixel);
+                std::memcpy(outBase + dstOffset, tilebuf.data() + offset, bytesPerPixel);
             }
         }
+        // No need to clear zeros, output is zero-initialized by mxCreateNumericArray
     } else {
-        // -------- STRIPPED/SCANLINE TIFF --------
-        // Use TIFFReadScanline for each image row, then memcpy subregion
+        // SCANLINE TIFF
         std::vector<uint8_t> scanline(imgWidth * bytesPerPixel);
-        for (int row = 0; row < task.roiH; ++row) {
-            uint32_t tifRow = static_cast<uint32_t>(task.roiY + row);
-            if (!TIFFReadScanline(tif, scanline.data(), tifRow))
+        for (int row = 0; row < roiH; ++row) {
+            uint32_t tifRow = static_cast<uint32_t>(roiY + row);
+            if (!TIFFReadScanline(tif, scanline.data(), tifRow)) {
+                TIFFClose(tif);
                 mexErrMsgIdAndTxt("load_bl_tif:Read", "Read row %u failed", tifRow);
-
-            // Byte swap for 16-bit data if needed
+            }
             if (bytesPerPixel == 2 && TIFFIsByteSwapped(tif)) {
                 swap_uint16_buf(scanline.data(), imgWidth);
             }
-
-            for (int col = 0; col < task.roiW; ++col) {
-                std::size_t srcPixel = static_cast<std::size_t>(task.roiX + col);
+            for (int col = 0; col < roiW; ++col) {
+                std::size_t srcPixel = static_cast<std::size_t>(roiX + col);
                 std::size_t srcOffset = srcPixel * bytesPerPixel;
-
-                std::size_t dstIndex = row + col * task.roiH + task.zIndex * task.pixelsPerSlice;
+                std::size_t dstIndex = row + col * task.roiH;
                 std::size_t dstOffset = dstIndex * bytesPerPixel;
-
-                std::memcpy(static_cast<uint8_t*>(task.dstBase) + dstOffset,
-                            scanline.data() + srcOffset, bytesPerPixel);
+                std::memcpy(outBase + dstOffset, scanline.data() + srcOffset, bytesPerPixel);
             }
         }
     }

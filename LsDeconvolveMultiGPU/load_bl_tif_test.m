@@ -70,6 +70,13 @@ function load_bl_tif_test()
                 maxerr = 0;
                 linearIdx = NaN;
             else
+                fprintf('Requesting block at y=%d..%d, x=%d..%d, size=[%d,%d]\n', ...
+                y_indices(1), y_indices(end), x_indices(1), x_indices(end), blkH, blkW);
+                disp('MATLAB slice(1:5,1:5,1):');
+                disp(bl_gt(1:5,1:5,1));
+                disp('MEX slice(1:5,1:5,1):');
+                disp(bl_mex(1:5,1:5,1));
+
                 diff = abs(bl_mex - bl_gt);
                 [maxerr, linearIdx] = max(diff(:));
                 [xi, yi, zi] = ind2sub(size(diff), linearIdx);
@@ -91,13 +98,21 @@ function load_bl_tif_test()
                 disp(bl_gt(:,:,1));
 
                 % Diagnostics: print boolean mask for all 6 faces
-                % mask = (bl_mex == bl_gt);
+                mask = (bl_mex == bl_gt);
                 % squeeze(mask(1, :, :))        % x = 1 plane
                 % squeeze(mask(end, :, :))      % x = end plane
                 % squeeze(mask(:, 1, :))        % y = 1 plane
                 % squeeze(mask(:, end, :))      % y = end plane
                 % squeeze(mask(:, :, 1))        % z = 1 plane
                 % squeeze(mask(:, :, end))      % z = end plane
+                fprintf('Mask sum: %d / %d\n', sum(mask(:)), numel(mask));
+                % Show where values are nonzero
+                disp('Find(bl_gt~=0):');
+                [i,j,v] = find(bl_gt(:,:,1));
+                disp([i,j,v]);
+                disp('Find(bl_mex~=0):');
+                [i,j,v] = find(bl_mex(:,:,1));
+                disp([i,j,v]);
             end
             symbol = char(pass * 10003 + ~pass * 10007);  % ✓ or ✗
 
