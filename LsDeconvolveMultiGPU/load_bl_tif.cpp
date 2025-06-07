@@ -20,7 +20,7 @@ constexpr uint16_t kSupportedBitDepth8  = 8;
 constexpr uint16_t kSupportedBitDepth16 = 16;
 constexpr size_t MAX_TIFF_BLOCK_BYTES = 1ull << 30;
 constexpr size_t kMaxPixelsPerSlice = static_cast<size_t>(std::numeric_limits<int>::max());// 2147483647
-constexpr size_t kInvalidTileIndex = UINT32_MAX;                                         // 2 * kMaxPixelsPerSlice - 1
+constexpr uint32_t kInvalidTileIndex = UINT32_MAX;                                         // 2 * kMaxPixelsPerSlice - 1
 
 // RAII wrapper for mxArrayToUTF8String()
 struct MatlabString {
@@ -139,13 +139,13 @@ static void readSubRegionToBuffer(
         std::vector<uint8_t> tilebuf(uncompressedTileBytes);
         const size_t nTilePixels = uncompressedTileBytes / bytesPerPixel;
 
-        size_t prevTile = kInvalidTileIndex;
+        uint32_t prevTile = kInvalidTileIndex;
 
         for (int row = 0; row < task.cropH; ++row) {
-            size_t imgY = static_cast<uint32_t>(task.in_row0 + row);
+            size_t imgY = task.in_row0 + row;
             for (int col = 0; col < task.cropW; ++col) {
-                size_t imgX = static_cast<uint32_t>(task.in_col0 + col);
-                size_t tileIdx = TIFFComputeTile(tif, imgX, imgY, 0, 0);
+                size_t imgX = task.in_col0 + col;
+                uint32_t tileIdx = TIFFComputeTile(tif, imgX, imgY, 0, 0);
 
                 if (tileIdx != prevTile) {
                     tsize_t ret = TIFFReadEncodedTile(
@@ -399,13 +399,15 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         mexErrMsgIdAndTxt("load_bl_tif:Alloc", "Failed to allocate output array.");
 
     void* outData = mxGetData(plhs[0]);
+    if (outH > 0 && SIZE_MAX / outH < outW)
+        mexErrMsgIdAndTxt("load_bl_tif:Overflow", "Output size overflows size_t.");
     size_t pixelsPerSlice = outH * outW;
     if (pixelsPerSlice > kMaxPixelsPerSlice)
         mexErrMsgIdAndTxt("load_bl_tif:TooLarge", "Requested ROI too large (>2^31 elements).");
 
     // --- Prepare task list (one per Z) ---
-    std::vector<LoadTask> tasks;
-    std::vector<TaskResult> results;
+    std::vector<LoadTask> tasks(numSlices);
+    std::vector<TaskResult> results(numSlices);
     std::vector<std::string> errors;
     std::mutex err_mutex;
 
