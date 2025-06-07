@@ -308,10 +308,10 @@ end
 
 function [pass,fail] = emoji_checkmarks()
     if ispc
-        pass = char(hex2dec('2714')); % ✔ (black check mark)
-        fail = char(hex2dec('2716')); % ✖ (black X)
+        pass = '√';
+        fail = 'X';
     else
-        pass = '✔️'; % Emoji version (works on Linux/macOS)
+        pass = '✔️';
         fail = '❌';
     end
 end
