@@ -63,6 +63,7 @@ inline size_t computeDstIndex(const LoadTask& task,
     size_t c = static_cast<size_t>(task.out_col0 + col);
     size_t slice = static_cast<size_t>(task.zIndex);
 
+    // MATLAB arrays are column-major and transpose swaps [Y, X] ↔ [X, Y]
     if (!task.transpose)
         return r + c * static_cast<size_t>(task.roiH)
                + slice * static_cast<size_t>(task.pixelsPerSlice);
@@ -327,10 +328,10 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
                 "Input argument %d must be a real double scalar.", i+1);
     }
 
-    int roiY0 = static_cast<int>(mxGetScalar(prhs[1])) - 1;
-    int roiX0 = static_cast<int>(mxGetScalar(prhs[2])) - 1;
-    int roiH  = static_cast<int>(mxGetScalar(prhs[3]));
-    int roiW  = static_cast<int>(mxGetScalar(prhs[4]));
+    size_t roiY0 = static_cast<size_t>(mxGetScalar(prhs[1])) - 1;
+    size_t roiX0 = static_cast<size_t>(mxGetScalar(prhs[2])) - 1;
+    size_t roiH  = static_cast<size_t>(mxGetScalar(prhs[3]));
+    size_t roiW  = static_cast<size_t>(mxGetScalar(prhs[4]));
 
     // --- PATCH: Robustly validate ROI for all slices BEFORE allocation ---
     uint32_t imgWidth = 0, imgHeight = 0;
