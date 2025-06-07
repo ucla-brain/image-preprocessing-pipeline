@@ -203,4 +203,8 @@ void mexFunction(int nlhs, mxArray* plhs[],
         task.matlabType     = outType;
         copySubRegion(task);
     }
+    uint16_t* arr = static_cast<uint16_t*>(outData);
+    printf("First 10 values: ");
+    for (int i = 0; i < 10; ++i) printf("%d ", arr[i]);
+    printf("\n");
 }

@@ -84,15 +84,20 @@ function load_bl_tif_test()
                 fprintf("     ↳ First mismatch at (x=%d, y=%d, z=%d) → block [%d, %d] (%s): MEX=%d, GT=%d\n", ...
                     block_x, block_y, zidx + zi - 1, xi, yi, position, val_mex, val_gt);
 
-                % Diagnostics: print boolean mask for all 6 faces
-                mask = (bl_mex == bl_gt);
+                disp('First 10 values in bl_mex:');
+                disp(bl_mex(1:10,1,1)');  % Just to compare
 
-                squeeze(mask(1, :, :))        % x = 1 plane
-                squeeze(mask(end, :, :))      % x = end plane
-                squeeze(mask(:, 1, :))        % y = 1 plane
-                squeeze(mask(:, end, :))      % y = end plane
-                squeeze(mask(:, :, 1))        % z = 1 plane
-                squeeze(mask(:, :, end))      % z = end plane
+                disp(bl_mex(:,:,1));
+                disp(bl_gt(:,:,1));
+
+                % Diagnostics: print boolean mask for all 6 faces
+                % mask = (bl_mex == bl_gt);
+                % squeeze(mask(1, :, :))        % x = 1 plane
+                % squeeze(mask(end, :, :))      % x = end plane
+                % squeeze(mask(:, 1, :))        % y = 1 plane
+                % squeeze(mask(:, end, :))      % y = end plane
+                % squeeze(mask(:, :, 1))        % z = 1 plane
+                % squeeze(mask(:, :, end))      % z = end plane
             end
             symbol = char(pass * 10003 + ~pass * 10007);  % ✓ or ✗
 
