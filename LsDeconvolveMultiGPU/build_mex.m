@@ -57,14 +57,14 @@ else
 end
 
 % Use locally-compiled libtiff, always.
-libtiff_src_version = '4.6.0'; % or whatever you are building
+libtiff_src_version = '4.7.0'; % or whatever you are building
 libtiff_root = fullfile(pwd, 'tiff_src', ['tiff-', libtiff_src_version]);
 libtiff_install_dir = fullfile(pwd, 'tiff_build', 'libtiff');
 stamp_file = fullfile(libtiff_install_dir, '.libtiff_installed');
 
 if ~isfile(stamp_file)
     fprintf('Building libtiff from source with optimized flags...\n');
-    if ~try_build_libtiff(libtiff_root, libtiff_install_dir, mex_flags_cpu)
+    if ~try_build_libtiff(libtiff_root, libtiff_install_dir, mex_flags_cpu, libtiff_src_version)
         error('Failed to build local libtiff. Please check the build log.');
     else
         if ~isfolder(libtiff_install_dir), error('libtiff install failed!'); end
