@@ -9,15 +9,18 @@
 #include <cstdio>
 
 // --- Struct with new offset fields ---
+constexpr uint16_t kSupportedBitDepth8  = 8;
+constexpr uint16_t kSupportedBitDepth16 = 16;
+
 struct LoadTask
 {
-    int in_row0, in_col0;     // Where to start reading in TIFF image (Y, X)
-    int out_row0, out_col0;   // Where to write in output buffer (Y, X)
-    int cropH, cropW;         // How many rows and columns to copy
-    int roiH, roiW;           // Full output block size
-    std::size_t zIndex;       // 0-based Z index in output buffer
+    const int in_row0, in_col0;     // Where to start reading in TIFF image (Y, X)
+    const int out_row0, out_col0;   // Where to write in output buffer (Y, X)
+    const int cropH, cropW;         // How many rows and columns to copy
+    const int roiH, roiW;           // Full output block size
+    const std::size_t zIndex;       // 0-based Z index in output buffer
     void* dstBase;
-    std::size_t pixelsPerSlice;
+    const std::size_t pixelsPerSlice;
 };
 
 struct TiffCloser {
@@ -71,13 +74,14 @@ static void copySubRegion(const LoadTask& task, TIFF* tif, uint8_t bytesPerPixel
         TIFFGetField(tif, TIFFTAG_TILEWIDTH, &tileWidth);
         TIFFGetField(tif, TIFFTAG_TILELENGTH, &tileHeight);
     }
-    constexpr uint16_t kSupportedBitDepth8  = 8;
-    constexpr uint16_t kSupportedBitDepth16 = 16;
     if (samplesPerPixel != 1 || (bitsPerSample != kSupportedBitDepth8 && bitsPerSample != kSupportedBitDepth16))
         mexErrMsgIdAndTxt("load_bl_tif:Type", "Only 8/16-bit grayscale TIFFs are supported");
 
     if (isTiled) {
-        std::vector<uint8_t> tilebuf(TIFFTileSize(tif));
+        tsize_t tileSize = TIFFTileSize(tif);
+        if (tileSize <= 0)
+            mexErrMsgIdAndTxt("load_bl_tif:TileSize", "Invalid tile size");
+        std::vector<uint8_t> tilebuf(tileSize);
         for (int row = 0; row < task.cropH; ++row) {
             uint32_t imgY = static_cast<uint32_t>(task.in_row0 + row);
             for (int col = 0; col < task.cropW; ++col) {
@@ -85,7 +89,7 @@ static void copySubRegion(const LoadTask& task, TIFF* tif, uint8_t bytesPerPixel
 
                 uint32_t tileX = (imgX / tileWidth) * tileWidth;
                 uint32_t tileY = (imgY / tileHeight) * tileHeight;
-                tsize_t tileIdx = TIFFComputeTile(tif, imgX, imgY, 0, 0);
+                uint32_t tileIdx = TIFFComputeTile(tif, imgX, imgY, 0, 0);
 
                 if (TIFFReadEncodedTile(tif, tileIdx, tilebuf.data(), tilebuf.size()) < 0)
                     mexErrMsgIdAndTxt("load_bl_tif:ReadTile", "Failed reading tile at x=%u y=%u", tileX, tileY);
@@ -175,8 +179,8 @@ void mexFunction(int nlhs, mxArray* plhs[],
     if (!tif0)
         throw_mex("load_bl_tif:OpenFail", "Cannot open file %s (slice 0)", fileList[0].c_str());
     uint32_t imgWidth = 0, imgHeight = 0;
-    getImageSize(tif0.get(), imgWidth, imgHeight);
     uint16_t bitsPerSample = 0, samplesPerPixel = 1;
+    getImageSize(tif0.get(), imgWidth, imgHeight);
     TIFFGetField(tif0.get(), TIFFTAG_BITSPERSAMPLE, &bitsPerSample);
     TIFFGetFieldDefaulted(tif0.get(), TIFFTAG_SAMPLESPERPIXEL, &samplesPerPixel);
 
@@ -192,7 +196,7 @@ void mexFunction(int nlhs, mxArray* plhs[],
     void* outData = mxGetData(plhs[0]);
     std::size_t pixelsPerSlice = static_cast<std::size_t>(roiH) * roiW;
 
-    memset(outData, 0, pixelsPerSlice * numSlices * bytesPerPixel);
+    std::fill_n(static_cast<uint8_t*>(outData), pixelsPerSlice * numSlices * bytesPerPixel, 0);
 
     // --- Slices loop with edge cropping and buffer offsets ---
     for (std::size_t z = 0; z < numSlices; ++z)
@@ -200,14 +204,14 @@ void mexFunction(int nlhs, mxArray* plhs[],
         TiffHandle tif(TIFFOpen(fileList[z].c_str(), "r"));
         if (!tif)
             throw_mex("load_bl_tif:OpenFail", "Cannot open file %s (slice %zu)", fileList[z].c_str(), z);
-        uint32_t imgWa = 0, imgHa = 0;
-        getImageSize(tif.get(), imgWa, imgHa);
+        uint32_t imgWidth = 0, imgHeight = 0;
+        getImageSize(tif.get(), imgWidth, imgHeight);
 
         // --- Calculate overlap (intersection) between ROI and image ---
         int img_y_start = std::max(roiY0, 0);
-        int img_y_end   = std::min(roiY0 + roiH - 1, static_cast<int>(imgHa) - 1);
+        int img_y_end   = std::min(roiY0 + roiH - 1, static_cast<int>(imgHeight) - 1);
         int img_x_start = std::max(roiX0, 0);
-        int img_x_end   = std::min(roiX0 + roiW - 1, static_cast<int>(imgWa) - 1);
+        int img_x_end   = std::min(roiX0 + roiW - 1, static_cast<int>(imgWidth) - 1);
 
         int cropHz = img_y_end - img_y_start + 1; // How many rows to copy
         int cropWz = img_x_end - img_x_start + 1; // How many cols to copy
@@ -237,6 +241,6 @@ void mexFunction(int nlhs, mxArray* plhs[],
         task.dstBase        = outData;
         task.pixelsPerSlice = pixelsPerSlice;
 
-        copySubRegion(task, tif.get(), static_cast<uint8_t>(bytesPerPixel));
+        copySubRegion(task, tif.get(), bytesPerPixel);
     }
 }
