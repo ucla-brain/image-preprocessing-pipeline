@@ -41,13 +41,13 @@ end
 % CPU compile flags
 if ispc
     if debug
-        mex_flags_cpu = {'-R2018a', '-largeArrayDims', 'COMPFLAGS="$COMPFLAGS /std:c++17 /Od /Zi /openmp"'};
+        mex_flags_cpu = {'-largeArrayDims', 'COMPFLAGS="$COMPFLAGS /std:c++17 /Od /Zi /openmp"'};
     else
-        mex_flags_cpu = {'-R2018a', '-largeArrayDims', 'COMPFLAGS="$COMPFLAGS /std:c++17 /O2 /arch:AVX2 /openmp"'};
+        mex_flags_cpu = {'-largeArrayDims', 'COMPFLAGS="$COMPFLAGS /std:c++17 /O2 /arch:AVX2 /openmp"'};
     end
 else
     if debug
-        mex_flags_cpu = {'-R2018a', '-largeArrayDims', ...
+        mex_flags_cpu = {'-largeArrayDims', ...
             'CFLAGS="$CFLAGS -O0 -g -fopenmp"',  'CXXFLAGS="$CXXFLAGS -O0 -g -fopenmp"'};
     else
         mex_flags_cpu = {'-R2018a', '-largeArrayDims', ...
