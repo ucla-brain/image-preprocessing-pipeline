@@ -236,7 +236,7 @@ end
 % 6. Thread-scaling micro-benchmark  ------------------------------
 % -----------------------------------------------------------------
 fprintf('\n[Suite 6] Thread scaling (512×512 ROI × all Z):\n');
-roiH = min(512,imageHeight); roiW = min(512,imageWidth);
+roiH = min(256,imageHeight); roiW = min(256,imageWidth);
 for th = [1 2 4 8]
     setenv('LOAD_BL_TIF_THREADS',num2str(th));
     tic; load_bl_tif(filelist,1,1,roiH,roiW,false); t=toc;
