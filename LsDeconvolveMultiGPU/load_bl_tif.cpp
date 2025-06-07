@@ -63,61 +63,39 @@ static void copySubRegion(const LoadTask& task)
         TIFFGetField(tif, TIFFTAG_TILELENGTH, &tileHeight);
     }
 
-    // --- ROI Cropping Logic (MATLAB imread-style) ---
-    int roiY = task.roiY;
-    int roiX = task.roiX;
-    int roiH = task.roiH;
-    int roiW = task.roiW;
-
-    // How much of the ROI fits inside the image?
-    int roiYin = std::max(roiY, 0);
-    int roiXin = std::max(roiX, 0);
-    int roiHin = std::min(roiY + roiH, static_cast<int>(imgHeight)) - roiYin;
-    int roiWin = std::min(roiX + roiW, static_cast<int>(imgWidth))  - roiXin;
-
-    if (roiHin <= 0 || roiWin <= 0) {
-        TIFFClose(tif);
-        return;
-    }
-
     const std::size_t bytesPerPixel = bitsPerSample / 8;
-    bool sys_little = is_system_little_endian();
-
-    // Output pointer for this Z-slice
     uint8_t* outBase = static_cast<uint8_t*>(task.dstBase) + task.zIndex * task.pixelsPerSlice * bytesPerPixel;
-
-    int rowOffset = roiYin - roiY;
-    int colOffset = roiXin - roiX;
 
     if (isTiled) {
         std::vector<uint8_t> tilebuf(TIFFTileSize(tif));
-        for (int row = 0; row < roiHin; ++row) {
-            uint32_t imgY = roiYin + row;
-            for (int col = 0; col < roiWin; ++col) {
-                uint32_t imgX = roiXin + col;
+        for (int outCol = 0; outCol < task.roiW; ++outCol) {
+            int imgCol = task.roiX + outCol;
+            if (imgCol < 0 || imgCol >= static_cast<int>(imgWidth)) continue;
+            for (int outRow = 0; outRow < task.roiH; ++outRow) {
+                int imgRow = task.roiY + outRow;
+                if (imgRow < 0 || imgRow >= static_cast<int>(imgHeight)) continue;
 
-                uint32_t tileX = (imgX / tileWidth) * tileWidth;
-                uint32_t tileY = (imgY / tileHeight) * tileHeight;
-                tsize_t tileIdx = TIFFComputeTile(tif, imgX, imgY, 0, 0);
+                uint32_t tileX = (imgCol / tileWidth) * tileWidth;
+                uint32_t tileY = (imgRow / tileHeight) * tileHeight;
+                tsize_t tileIdx = TIFFComputeTile(tif, imgCol, imgRow, 0, 0);
 
                 if (TIFFReadEncodedTile(tif, tileIdx, tilebuf.data(), tilebuf.size()) < 0) {
                     TIFFClose(tif);
                     mexErrMsgIdAndTxt("load_bl_tif:ReadTile", "Failed reading tile at x=%u y=%u", tileX, tileY);
                 }
 
-                // Byte-swap if needed (16-bit)
                 if (bytesPerPixel == 2 && TIFFIsByteSwapped(tif)) {
                     tsize_t tilesize = TIFFTileSize(tif);
                     size_t n_tile_pixels = tilesize / bytesPerPixel;
                     swap_uint16_buf(tilebuf.data(), n_tile_pixels);
                 }
 
-                uint32_t relY = imgY - tileY;
-                uint32_t relX = imgX - tileX;
+                uint32_t relY = imgRow - tileY;
+                uint32_t relX = imgCol - tileX;
                 std::size_t tileStride = tileWidth * bytesPerPixel;
                 std::size_t offset = relY * tileStride + relX * bytesPerPixel;
 
-                std::size_t dstIndex = (row + rowOffset) + (col + colOffset) * task.roiH;
+                std::size_t dstIndex = outRow + outCol * task.roiH;
                 std::size_t dstOffset = dstIndex * bytesPerPixel;
 
                 std::memcpy(outBase + dstOffset, tilebuf.data() + offset, bytesPerPixel);
@@ -125,22 +103,28 @@ static void copySubRegion(const LoadTask& task)
         }
     } else {
         std::vector<uint8_t> scanline(imgWidth * bytesPerPixel);
-        for (int row = 0; row < roiHin; ++row) {
-            uint32_t tifRow = static_cast<uint32_t>(roiYin + row);
-            if (!TIFFReadScanline(tif, scanline.data(), tifRow)) {
-                TIFFClose(tif);
-                mexErrMsgIdAndTxt("load_bl_tif:Read", "Read row %u failed", tifRow);
-            }
-            if (bytesPerPixel == 2 && TIFFIsByteSwapped(tif)) {
-                swap_uint16_buf(scanline.data(), imgWidth);
-            }
-            for (int col = 0; col < roiWin; ++col) {
-                std::size_t srcPixel = static_cast<std::size_t>(roiXin + col);
-                std::size_t srcOffset = srcPixel * bytesPerPixel;
+        int lastScanlineRead = -1;
+        for (int outCol = 0; outCol < task.roiW; ++outCol) {
+            int imgCol = task.roiX + outCol;
+            if (imgCol < 0 || imgCol >= static_cast<int>(imgWidth)) continue;
+            for (int outRow = 0; outRow < task.roiH; ++outRow) {
+                int imgRow = task.roiY + outRow;
+                if (imgRow < 0 || imgRow >= static_cast<int>(imgHeight)) continue;
 
-                std::size_t dstIndex = (row + rowOffset) + (col + colOffset) * task.roiH;
+                if (lastScanlineRead != imgRow) {
+                    if (!TIFFReadScanline(tif, scanline.data(), imgRow)) {
+                        TIFFClose(tif);
+                        mexErrMsgIdAndTxt("load_bl_tif:Read", "Read row %d failed", imgRow);
+                    }
+                    if (bytesPerPixel == 2 && TIFFIsByteSwapped(tif)) {
+                        swap_uint16_buf(scanline.data(), imgWidth);
+                    }
+                    lastScanlineRead = imgRow;
+                }
+
+                std::size_t srcOffset = imgCol * bytesPerPixel;
+                std::size_t dstIndex = outRow + outCol * task.roiH;
                 std::size_t dstOffset = dstIndex * bytesPerPixel;
-
                 std::memcpy(outBase + dstOffset, scanline.data() + srcOffset, bytesPerPixel);
             }
         }
