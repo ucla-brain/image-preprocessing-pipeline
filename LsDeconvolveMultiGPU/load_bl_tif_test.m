@@ -1,6 +1,6 @@
 function load_bl_tif_test()
 % ==============================================================
-% load_bl_tif_test.m  (2025-06-07  •  patch-6)
+% load_bl_tif_test.m  (2025-06-07  •  patch-6, emoji pass/fail)
 %
 % Comprehensive reliability & performance test-suite for the
 % load_bl_tif MEX.  Works on MATLAB R2018b + with stock libtiff.
@@ -8,6 +8,7 @@ function load_bl_tif_test()
 % Updated: Handles automatic bit-depth detection (uint8/uint16),
 % adds temp cleanup, clarifies error reporting, and minor polish.
 % Suite 3: Loop fixed for struct array ('ternary' error resolved).
+% Emoji patch: All pass/fail check marks are now ✔️ and ❌ everywhere.
 % ==============================================================
 
 clearvars; clc;
@@ -86,8 +87,9 @@ for b = 1:size(blockSizes,1)
                     maxerr = NaN;
                 end
             end
-            fprintf('  %c  | %-5d | [%3d,%3d] | (%5d,%5d) | %1.4e | %9.2fx | %s\n', ...
-                char(pass*10003+~pass*10007), zidx, blkH,blkW, x,y, maxerr, tref/tmex, ...
+            % PATCH: use emoji checkmarks (✔️/❌) instead of char(10003)/char(10007)
+            fprintf('  %s  | %-5d | [%3d,%3d] | (%5d,%5d) | %1.4e | %9.2fx | %s\n', ...
+                ternary(pass,'✔️','❌'), zidx, blkH,blkW, x,y, maxerr, tref/tmex, ...
                 ternary(tr,'T','N'));
         end
     end
@@ -208,7 +210,7 @@ for c = cfgs
         ok  = isequal(blk,img(20:119,20:119));
         fprintf('  %-13s → %s\n', c.name, ternary(ok,'✔️','❌'));
     catch ME
-        fprintf('  %-13s → ✗ (%s) [%s]\n', c.name, ME.message, ME.identifier);
+        fprintf('  %-13s → ❌ (%s) [%s]\n', c.name, ME.message, ME.identifier);
     end
 end
 
@@ -259,7 +261,7 @@ for k = 1:numFuzz
         load_bl_tif(filelist,y,x,h,w,rand>0.5);
         if mod(k,10)==0, fprintf('.'); end
     catch ME
-        fprintf('\n ✗ fuzz crash (k=%d): %s [%s]\n',k,ME.message, ME.identifier); break
+        fprintf('\n ❌ fuzz crash (k=%d): %s [%s]\n',k,ME.message, ME.identifier); break
     end
 end
 fprintf('\nAll suites finished.\n');

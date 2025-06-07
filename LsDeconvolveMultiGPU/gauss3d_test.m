@@ -107,11 +107,8 @@ function test_gauss3d_mex_features()
                             speed_str = 'N/A';
                         end
 
-                        % Pass/Fail
-                        p = (strcmp(type_str,'single') && gather(err) < SINGLE_THRESH);
-
-                        % Print single-line result (left-aligned)
-                        if p
+                        % Pass/Fail (now always emoji, never fallback)
+                        if strcmp(type_str,'single') && gather(err) < SINGLE_THRESH
                             pf = col('green', '✔️');
                             pass = pass+1;
                         else
@@ -171,7 +168,7 @@ function sz = odd_kernel_size(sigma)
 end
 
 function print_fail(str, col)
-    fprintf('%s %s\n', col('red', '  ❌'), str);
+    fprintf('%s %s\n', col('red', '❌'), str); % always emoji
 end
 
 function out = colored_str(color, str, hasCprintf)
