@@ -23,29 +23,27 @@ public:
         if (!ptr)
             mexErrMsgIdAndTxt("load_bl_tif:BadString", "Failed to convert string from mxArray");
     }
-
     ~MatlabString() { mxFree(ptr); }
-
     const char* get() const { return ptr; }
     operator const char*() const { return ptr; }
 };
 
 struct LoadTask
 {
-    const std::size_t in_row0, in_col0;     // Where to start reading in TIFF image (Y, X)
-    const std::size_t out_row0, out_col0;   // Where to write in output buffer (Y, X)
-    const std::size_t cropH, cropW;         // How many rows and columns to copy
-    const std::size_t roiH, roiW;           // Full output block size
-    const std::size_t zIndex;       // 0-based Z index in output buffer
+    const int in_row0, in_col0;     // Where to start reading in TIFF image (Y, X)
+    const int out_row0, out_col0;   // Where to write in output buffer (Y, X)
+    const int cropH, cropW;         // How many rows and columns to copy
+    const int roiH, roiW;           // Full output block size
+    const int zIndex;               // 0-based Z index in output buffer
     void* dstBase;
-    const std::size_t pixelsPerSlice;
+    const int pixelsPerSlice;
     const std::string path;
     const bool transpose;
 
     LoadTask(
-        std::size_t inY, std::size_t inX, std::size_t outY, std::size_t outX,
-        std::size_t h, std::size_t w, std::size_t roiH_, std::size_t roiW_,
-        std::size_t z, void* dst, std::size_t pps, std::string filename, bool transpose_
+        int inY, int inX, int outY, int outX,
+        int h, int w, int roiH_, int roiW_,
+        int z, void* dst, int pps, std::string filename, bool transpose_
     ) :
         in_row0(inY), in_col0(inX), out_row0(outY), out_col0(outX),
         cropH(h), cropW(w), roiH(roiH_), roiW(roiW_),
@@ -62,7 +60,7 @@ inline void getImageSize(TIFF* tif, uint32_t& w, uint32_t& h) {
     TIFFGetField(tif, TIFFTAG_IMAGELENGTH, &h);
 }
 
-inline std::size_t computeDstIndex(const LoadTask& task, int row, int col) noexcept {
+inline int computeDstIndex(const LoadTask& task, int row, int col) noexcept {
     if (!task.transpose) {
         return (task.out_row0 + row)
              + (task.out_col0 + col) * task.roiH
@@ -74,11 +72,10 @@ inline std::size_t computeDstIndex(const LoadTask& task, int row, int col) noexc
     }
 }
 
-
 // --- Byte swap helper ---
-static void swap_uint16_buf(void* buf, size_t count) {
+static void swap_uint16_buf(void* buf, int count) {
     uint16_t* p = static_cast<uint16_t*>(buf);
-    for (size_t i = 0; i < count; ++i) {
+    for (int i = 0; i < count; ++i) {
         uint16_t v = p[i];
         p[i] = (v >> 8) | (v << 8);
     }
@@ -122,17 +119,16 @@ static void copySubRegion(const LoadTask& task, TIFF* tif, uint8_t bytesPerPixel
                     mexErrMsgIdAndTxt("load_bl_tif:ReadTile", "Failed reading tile at x=%u y=%u", tileX, tileY);
 
                 if (bytesPerPixel == 2 && TIFFIsByteSwapped(tif)) {
-                    size_t n_tile_pixels = tileSize / bytesPerPixel;
+                    int n_tile_pixels = tileSize / bytesPerPixel;
                     swap_uint16_buf(tilebuf.data(), n_tile_pixels);
                 }
 
                 uint32_t relY = imgY - tileY;
                 uint32_t relX = imgX - tileX;
-                std::size_t rowStride = tileWidth * bytesPerPixel; // Bytes per row in tile
-                std::size_t offset = relY * rowStride + relX * bytesPerPixel;
+                int rowStride = tileWidth * bytesPerPixel; // Bytes per row in tile
+                int offset = relY * rowStride + relX * bytesPerPixel;
 
-                // MATLAB column-major index: row + col * roiH + z * roiH * roiW
-                std::size_t dstOffset = computeDstIndex(task, row, col) * bytesPerPixel;
+                int dstOffset = computeDstIndex(task, row, col) * bytesPerPixel;
                 std::memcpy(
                     static_cast<uint8_t*>(task.dstBase) + dstOffset,
                     tilebuf.data() + offset,
@@ -145,15 +141,14 @@ static void copySubRegion(const LoadTask& task, TIFF* tif, uint8_t bytesPerPixel
         TIFFGetFieldDefaulted(tif, TIFFTAG_ROWSPERSTRIP, &rowsPerStrip);
         if (rowsPerStrip == 0) rowsPerStrip = imgHeight;  // Default is whole image
 
-        // Validate stripBufSize won't overflow
-        size_t stripBufSize = static_cast<size_t>(rowsPerStrip) * imgWidth * bytesPerPixel;
-        if (stripBufSize == 0 || stripBufSize > static_cast<size_t>(1) << 30) {
-            mexErrMsgIdAndTxt("load_bl_tif:Memory", "Invalid or too large strip buffer size: %zu", stripBufSize);
+        int stripBufSize = static_cast<int>(rowsPerStrip) * imgWidth * bytesPerPixel;
+        if (stripBufSize <= 0 || stripBufSize > (1 << 30)) {
+            mexErrMsgIdAndTxt("load_bl_tif:Memory", "Invalid or too large strip buffer size: %d", stripBufSize);
         }
         std::vector<uint8_t> stripbuf(stripBufSize);
         tstrip_t currentStrip = (tstrip_t)-1;
 
-        for (std::size_t row = 0; row < task.cropH; ++row) {
+        for (int row = 0; row < task.cropH; ++row) {
             uint32_t tifRow = static_cast<uint32_t>(task.in_row0 + row);
             tstrip_t stripIdx = TIFFComputeStrip(tif, tifRow, 0);
 
@@ -179,9 +174,9 @@ static void copySubRegion(const LoadTask& task, TIFF* tif, uint8_t bytesPerPixel
             }
 
             // Copy desired columns
-            for (std::size_t col = 0; col < task.cropW; ++col) {
-                std::size_t srcOffset = static_cast<std::size_t>(task.in_col0 + col) * bytesPerPixel;
-                std::size_t dstOffset = computeDstIndex(task, row, col) * bytesPerPixel;
+            for (int col = 0; col < task.cropW; ++col) {
+                int srcOffset = (task.in_col0 + col) * bytesPerPixel;
+                int dstOffset = computeDstIndex(task, row, col) * bytesPerPixel;
                 std::memcpy(
                     static_cast<uint8_t*>(task.dstBase) + dstOffset,
                     scanlinePtr + srcOffset,
@@ -212,17 +207,17 @@ void mexFunction(int nlhs, mxArray* plhs[],
         transpose = mxIsLogicalScalarTrue(prhs[5]);
     }
 
-    const std::size_t numSlices = mxGetNumberOfElements(prhs[0]);
+    int numSlices = static_cast<int>(mxGetNumberOfElements(prhs[0]));
     std::vector<std::string> fileList(numSlices);
     fileList.reserve(numSlices);
-    for (std::size_t i = 0; i < numSlices; ++i)
+    for (int i = 0; i < numSlices; ++i)
     {
         const mxArray* cell = mxGetCell(prhs[0], i);
         if (!mxIsChar(cell))
             mexErrMsgIdAndTxt("load_bl_tif:Input", "File list must contain only strings.");
         MatlabString mstr(cell);
         if (!mstr.get() || !*mstr.get())
-            mexErrMsgIdAndTxt("load_bl_tif:Input", "Filename in cell %zu is empty", i);
+            mexErrMsgIdAndTxt("load_bl_tif:Input", "Filename in cell %d is empty", i);
         fileList[i] = mstr.get();
     }
 
@@ -259,35 +254,35 @@ void mexFunction(int nlhs, mxArray* plhs[],
     plhs[0] = mxCreateNumericArray(3, dims, outType, mxREAL);
 
     void* outData = mxGetData(plhs[0]);
-    std::size_t pixelsPerSlice = static_cast<std::size_t>(outH) * outW;
+    int pixelsPerSlice = static_cast<int>(outH) * outW;
 
     std::fill_n(static_cast<uint8_t*>(outData), pixelsPerSlice * numSlices * bytesPerPixel, 0);
 
     // --- Slices loop with edge cropping and buffer offsets ---
-    for (std::size_t z = 0; z < numSlices; ++z)
+    for (int z = 0; z < numSlices; ++z)
     {
         TiffHandle tif(TIFFOpen(fileList[z].c_str(), "r"));
         if (!tif)
-            mexErrMsgIdAndTxt("load_bl_tif:OpenFail", "Cannot open file %s (slice %zu)", fileList[z].c_str(), z);
+            mexErrMsgIdAndTxt("load_bl_tif:OpenFail", "Cannot open file %s (slice %d)", fileList[z].c_str(), z);
 
         getImageSize(tif.get(), imgWidth, imgHeight);
 
         // --- Calculate overlap (intersection) between ROI and image ---
-        std::size_t img_y_start = std::max(roiY0, 0);
-        std::size_t img_y_end   = std::min(roiY0 + roiH - 1, static_cast<int>(imgHeight) - 1);
-        std::size_t img_x_start = std::max(roiX0, 0);
-        std::size_t img_x_end   = std::min(roiX0 + roiW - 1, static_cast<int>(imgWidth) - 1);
+        int img_y_start = std::max(roiY0, 0);
+        int img_y_end   = std::min(roiY0 + roiH - 1, static_cast<int>(imgHeight) - 1);
+        int img_x_start = std::max(roiX0, 0);
+        int img_x_end   = std::min(roiX0 + roiW - 1, static_cast<int>(imgWidth) - 1);
 
-        std::size_t cropHz = img_y_end - img_y_start + 1; // How many rows to copy
-        std::size_t cropWz = img_x_end - img_x_start + 1; // How many cols to copy
+        int cropHz = img_y_end - img_y_start + 1; // How many rows to copy
+        int cropWz = img_x_end - img_x_start + 1; // How many cols to copy
 
         if (cropHz <= 0 || cropWz <= 0) {
-            mexErrMsgIdAndTxt("load_bl_tif:EmptyCrop", "Slice %zu has no overlap with ROI (%d,%d,%d,%d)",
+            mexErrMsgIdAndTxt("load_bl_tif:EmptyCrop", "Slice %d has no overlap with ROI (%d,%d,%d,%d)",
                                 z, roiX0+1, roiY0+1, roiW, roiH);
         }
 
-        std::size_t out_row0 = std::max(0, img_y_start - roiY0);
-        std::size_t out_col0 = std::max(0, img_x_start - roiX0);
+        int out_row0 = std::max(0, img_y_start - roiY0);
+        int out_col0 = std::max(0, img_x_start - roiX0);
         if (out_row0 + cropHz > roiH || out_col0 + cropWz > roiW)
             mexErrMsgIdAndTxt(
                 "load_bl_tif:BoundsError",
