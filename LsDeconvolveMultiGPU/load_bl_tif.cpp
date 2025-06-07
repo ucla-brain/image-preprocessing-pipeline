@@ -13,6 +13,7 @@
 #include <condition_variable>
 #include <exception>
 #include <atomic>
+#include <sstream>
 
 // --- Config ---
 constexpr uint16_t kSupportedBitDepth8  = 8;
@@ -371,9 +372,11 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
     mwSize outW = transpose ? roiH : roiW;
     mwSize dims[3] = { outH, outW, static_cast<mwSize>(numSlices) };
     plhs[0] = mxCreateNumericArray(3, dims, outType, mxREAL);
+    if (!plhs[0])
+        mexErrMsgIdAndTxt("load_bl_tif:Alloc", "Failed to allocate output array.");
 
     void* outData = mxGetData(plhs[0]);
-    int pixelsPerSlice = static_cast<int>(outH) * outW;
+    int pixelsPerSlice = static_cast<int>(static_cast<size_t>(outH) * outW);
     std::fill_n(static_cast<uint8_t*>(outData), pixelsPerSlice * numSlices * bytesPerPixel, 0);
 
     // --- Prepare task list (one per Z) ---
@@ -447,11 +450,11 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
     for (size_t i = 0; i < tasks.size(); ++i) {
         const auto& task = tasks[i];
         const auto& res  = results[i];
-        for (int row = 0; row < task.cropH; ++row) {
-            for (int col = 0; col < task.cropW; ++col) {
+        for (size_t row = 0; row < task.cropH; ++row) {
+            for (size_t  col = 0; col < task.cropW; ++col) {
                 size_t dstElem = computeDstIndex(task, row, col);
                 size_t dstByte = dstElem * bytesPerPixel;
-                size_t srcByte = (static_cast<size_t>(row) * task.cropW + col) * bytesPerPixel;
+                size_t srcByte = (row * task.cropW + col) * bytesPerPixel;
                 std::memcpy(static_cast<uint8_t*>(outData) + dstByte,
                             res.data.data() + srcByte,
                             bytesPerPixel
