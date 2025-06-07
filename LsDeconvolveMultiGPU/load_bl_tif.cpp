@@ -142,9 +142,9 @@ static void readSubRegionToBuffer(
 
         size_t prevTile = kInvalidTileIndex;
 
-        for (int row = 0; row < task.cropH; ++row) {
+        for (size_t row = 0; row < task.cropH; ++row) {
             size_t imgY = task.in_row0 + row;
-            for (int col = 0; col < task.cropW; ++col) {
+            for (size_t col = 0; col < task.cropW; ++col) {
                 size_t imgX = task.in_col0 + col;
                 size_t tileIdx = static_cast<tsize_t>(TIFFComputeTile(tif, imgX, imgY, 0, 0));
 
@@ -195,7 +195,7 @@ static void readSubRegionToBuffer(
         tstrip_t currentStrip = (tstrip_t)-1;
         tsize_t  nbytes = 0;
 
-        for (int row = 0; row < task.cropH; ++row)
+        for (size_t row = 0; row < task.cropH; ++row)
         {
             size_t tifRow   = static_cast<size_t>(task.in_row0 + row);
             tstrip_t stripIdx = TIFFComputeStrip(tif, tifRow, 0);
@@ -229,7 +229,7 @@ static void readSubRegionToBuffer(
             uint8_t* scanlinePtr = stripbuf.data() +
                 (static_cast<size_t>(relRow) * imgWidth * bytesPerPixel);
 
-            for (int col = 0; col < task.cropW; ++col)
+            for (size_t col = 0; col < task.cropW; ++col)
             {
                 size_t srcOff = (static_cast<size_t>(task.in_col0 + col)) * bytesPerPixel;
                 size_t dstOff = (static_cast<size_t>(row) * task.cropW + col) * bytesPerPixel;
@@ -312,7 +312,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
 
     size_t numSlices = static_cast<size_t>(mxGetNumberOfElements(prhs[0]));
     std::vector<std::string> fileList(numSlices);
-    for (int i = 0; i < numSlices; ++i)
+    for (size_t i = 0; i < numSlices; ++i)
     {
         const mxArray* cell = mxGetCell(prhs[0], i);
         if (!mxIsChar(cell))
@@ -322,7 +322,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
             mexErrMsgIdAndTxt("load_bl_tif:Input", "Filename in cell %d is empty", i+1);
         fileList[i] = mstr.get();
     }
-    for (int i = 1; i <= 4; ++i) {
+    for (size_t i = 1; i <= 4; ++i) {
         if (!mxIsDouble(prhs[i]) || mxIsComplex(prhs[i]) || mxGetNumberOfElements(prhs[i]) != 1)
             mexErrMsgIdAndTxt("load_bl_tif:InputType",
                 "Input argument %d must be a real double scalar.", i+1);
