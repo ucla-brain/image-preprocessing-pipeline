@@ -22,15 +22,16 @@ struct LoadTask
     const std::size_t zIndex;       // 0-based Z index in output buffer
     void* dstBase;
     const std::size_t pixelsPerSlice;
+    const std::string path;
 
     LoadTask(
         int inY, int inX, int outY, int outX,
         int h, int w, int roiH_, int roiW_,
-        std::size_t z, void* dst, std::size_t pps
+        std::size_t z, void* dst, std::size_t pps, std::string filename
     ) :
         in_row0(inY), in_col0(inX), out_row0(outY), out_col0(outX),
         cropH(h), cropW(w), roiH(roiH_), roiW(roiW_),
-        zIndex(z), dstBase(dst), pixelsPerSlice(pps) {}
+        zIndex(z), dstBase(dst), pixelsPerSlice(pps), path(filename){}
 };
 
 struct TiffCloser {
@@ -129,9 +130,9 @@ static void copySubRegion(const LoadTask& task, TIFF* tif, uint8_t bytesPerPixel
         for (std::size_t row = 0; row < static_cast<std::size_t>(task.cropH); ++row) {
             uint32_t tifRow = static_cast<uint32_t>(task.in_row0 + row);
             if (TIFFReadScanline(tif, scanline.data(), tifRow) != 1)
-                mexErrMsgIdAndTxt("load_bl_tif:Read",
-                                  "TIFFReadScanline failed at row %u (slice %zu)",
-                                  tifRow, task.zIndex);
+                mexErrMsgIdAndTxt("load_bl_tif:copySubRegion:Read",
+                                  "TIFFReadScanline failed at row %u (slice %zu: file: %s)",
+                                  tifRow, task.zIndex, task.path.c_str());
 
             if (bytesPerPixel == 2 && TIFFIsByteSwapped(tif)) {
                 swap_uint16_buf(scanline.data(), imgWidth);
@@ -215,7 +216,6 @@ void mexFunction(int nlhs, mxArray* plhs[],
     std::fill_n(static_cast<uint8_t*>(outData), pixelsPerSlice * numSlices * bytesPerPixel, 0);
 
     // --- Slices loop with edge cropping and buffer offsets ---
-    TIFFSetWarningHandler(nullptr);
     for (std::size_t z = 0; z < numSlices; ++z)
     {
         TiffHandle tif(TIFFOpen(fileList[z].c_str(), "r"));
@@ -252,7 +252,8 @@ void mexFunction(int nlhs, mxArray* plhs[],
             roiH, roiW,
             z,
             outData,
-            pixelsPerSlice
+            pixelsPerSlice,
+            fileList[z]
         };
 
         copySubRegion(task, tif.get(), bytesPerPixel);
