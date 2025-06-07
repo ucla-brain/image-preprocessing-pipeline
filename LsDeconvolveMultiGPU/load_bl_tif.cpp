@@ -11,7 +11,6 @@
 // --- Struct with new offset fields ---
 struct LoadTask
 {
-    std::string filename;
     int in_row0, in_col0;     // Where to start reading in TIFF image (Y, X)
     int out_row0, out_col0;   // Where to write in output buffer (Y, X)
     int cropH, cropW;         // How many rows and columns to copy
@@ -19,8 +18,27 @@ struct LoadTask
     std::size_t zIndex;       // 0-based Z index in output buffer
     void* dstBase;
     std::size_t pixelsPerSlice;
-    mxClassID matlabType;
-    int imgW, imgH;           // Full TIFF image size
+};
+
+struct TiffCloser {
+    void operator()(TIFF* tif) const { if (tif) TIFFClose(tif); }
+};
+using TiffHandle = std::unique_ptr<TIFF, TiffCloser>;
+
+inline void getImageSize(TIFF* tif, uint32_t& w, uint32_t& h) {
+    TIFFGetField(tif, TIFFTAG_IMAGEWIDTH , &w);
+    TIFFGetField(tif, TIFFTAG_IMAGELENGTH, &h);
+}
+
+// RAII wrapper for mxArrayToUTF8String()
+struct MatlabString {
+    char* ptr;
+    explicit MatlabString(const mxArray* arr) : ptr(mxArrayToUTF8String(arr)) {
+        if (!ptr) mexErrMsgIdAndTxt("load_bl_tif:BadString", "Failed to convert string from mxArray");
+    }
+    ~MatlabString() { mxFree(ptr); }
+    const char* get() const { return ptr; }
+    operator const char*() const { return ptr; }
 };
 
 // --- Byte swap helper ---
@@ -39,20 +57,13 @@ static void throw_mex(const char* id, const char* fmt, const char* s) {
 }
 
 // --- Read and copy a cropped subregion from a TIFF slice ---
-static void copySubRegion(const LoadTask& task)
+static void copySubRegion(const LoadTask& task, TIFF* tif, uint8_t bytesPerPixel)
 {
-    TIFF* tif = TIFFOpen(task.filename.c_str(), "r");
-    if (!tif)
-        throw_mex("load_bl_tif:OpenFail", "Cannot open %s", task.filename.c_str());
-
-    uint32_t imgWidth = 0, imgHeight = 0;
+    uint32_t imgWidth, imgHeight;
+    getImageSize(tif, imgWidth, imgHeight);
     uint16_t bitsPerSample = 0, samplesPerPixel = 1;
-    TIFFGetField(tif, TIFFTAG_IMAGEWIDTH , &imgWidth);
-    TIFFGetField(tif, TIFFTAG_IMAGELENGTH, &imgHeight);
     TIFFGetField(tif, TIFFTAG_BITSPERSAMPLE, &bitsPerSample);
     TIFFGetFieldDefaulted(tif, TIFFTAG_SAMPLESPERPIXEL, &samplesPerPixel);
-
-    const std::size_t bytesPerPixel = bitsPerSample / 8;
 
     uint32_t tileWidth = 0, tileHeight = 0;
     int isTiled = TIFFIsTiled(tif);
@@ -60,8 +71,9 @@ static void copySubRegion(const LoadTask& task)
         TIFFGetField(tif, TIFFTAG_TILEWIDTH, &tileWidth);
         TIFFGetField(tif, TIFFTAG_TILELENGTH, &tileHeight);
     }
-
-    if (samplesPerPixel != 1 || (bitsPerSample != 8 && bitsPerSample != 16))
+    constexpr uint16_t kSupportedBitDepth8  = 8;
+    constexpr uint16_t kSupportedBitDepth16 = 16;
+    if (samplesPerPixel != 1 || (bitsPerSample != kSupportedBitDepth8 && bitsPerSample != kSupportedBitDepth16))
         mexErrMsgIdAndTxt("load_bl_tif:Type", "Only 8/16-bit grayscale TIFFs are supported");
 
     if (isTiled) {
@@ -89,7 +101,7 @@ static void copySubRegion(const LoadTask& task)
                 std::size_t tileStride = tileWidth * bytesPerPixel;
                 std::size_t offset = relY * tileStride + relX * bytesPerPixel;
 
-                // Corrected output buffer offset
+                // Compute linear index into [H, W, Z] buffer (column-major order)
                 std::size_t dstIndex = (task.out_row0 + row)
                                      + (task.out_col0 + col) * task.roiH
                                      + task.zIndex * task.pixelsPerSlice;
@@ -125,7 +137,6 @@ static void copySubRegion(const LoadTask& task)
             }
         }
     }
-    TIFFClose(tif);
 }
 
 // --- Main Entry Point ---
@@ -144,9 +155,11 @@ void mexFunction(int nlhs, mxArray* plhs[],
     std::vector<std::string> fileList(numSlices);
     for (std::size_t i = 0; i < numSlices; ++i)
     {
-        char* s = mxArrayToString(mxGetCell(prhs[0], i));
-        fileList[i] = s;
-        mxFree(s);
+        const mxArray* cell = mxGetCell(prhs[0], i);
+        if (!mxIsChar(cell))
+            mexErrMsgIdAndTxt("load_bl_tif:Input", "File list must contain only strings.");
+        MatlabString mstr(cell);
+        fileList[i] = mstr.get();
     }
 
     int roiY0 = static_cast<int>(mxGetScalar(prhs[1])) - 1;
@@ -158,22 +171,20 @@ void mexFunction(int nlhs, mxArray* plhs[],
         mexErrMsgIdAndTxt("load_bl_tif:ROI","ROI parameters invalid");
 
     // Probe first slice for data type
-    TIFF* tif0 = TIFFOpen(fileList[0].c_str(), "r");
+    TiffHandle tif0(TIFFOpen(fileList[0].c_str(), "r"));
     if (!tif0)
-        mexErrMsgIdAndTxt("load_bl_tif:OpenFail", "Cannot open %s", fileList[0].c_str());
+        throw_mex("load_bl_tif:OpenFail", "Cannot open file %s (slice 0)", fileList[0].c_str());
     uint32_t imgWidth = 0, imgHeight = 0;
+    getImageSize(tif0.get(), imgWidth, imgHeight);
     uint16_t bitsPerSample = 0, samplesPerPixel = 1;
-    TIFFGetField(tif0, TIFFTAG_IMAGEWIDTH , &imgWidth);
-    TIFFGetField(tif0, TIFFTAG_IMAGELENGTH, &imgHeight);
-    TIFFGetField(tif0, TIFFTAG_BITSPERSAMPLE, &bitsPerSample);
-    TIFFGetFieldDefaulted(tif0, TIFFTAG_SAMPLESPERPIXEL, &samplesPerPixel);
-    TIFFClose(tif0);
+    TIFFGetField(tif0.get(), TIFFTAG_BITSPERSAMPLE, &bitsPerSample);
+    TIFFGetFieldDefaulted(tif0.get(), TIFFTAG_SAMPLESPERPIXEL, &samplesPerPixel);
 
     if (samplesPerPixel != 1 || (bitsPerSample != 8 && bitsPerSample != 16))
         mexErrMsgIdAndTxt("load_bl_tif:Type","Only 8/16-bit grayscale TIFFs are supported");
 
     const mxClassID outType = (bitsPerSample == 8) ? mxUINT8_CLASS : mxUINT16_CLASS;
-    const std::size_t bytesPerPixel = bitsPerSample / 8;
+    const uint8_t bytesPerPixel = (bitsPerSample == 16) ? 2 : 1;
     mwSize dims[3] = { static_cast<mwSize>(roiH),
                        static_cast<mwSize>(roiW),
                        static_cast<mwSize>(numSlices) };
@@ -186,13 +197,11 @@ void mexFunction(int nlhs, mxArray* plhs[],
     // --- Slices loop with edge cropping and buffer offsets ---
     for (std::size_t z = 0; z < numSlices; ++z)
     {
-        TIFF* tifa = TIFFOpen(fileList[z].c_str(), "r");
-        if (!tifa)
-            mexErrMsgIdAndTxt("load_bl_tif:OpenFail", "Cannot open %s", fileList[z].c_str());
+        TiffHandle tif(TIFFOpen(fileList[z].c_str(), "r"));
+        if (!tif)
+            throw_mex("load_bl_tif:OpenFail", "Cannot open file %s (slice %zu)", fileList[z].c_str(), z);
         uint32_t imgWa = 0, imgHa = 0;
-        TIFFGetField(tifa, TIFFTAG_IMAGEWIDTH , &imgWa);
-        TIFFGetField(tifa, TIFFTAG_IMAGELENGTH, &imgHa);
-        TIFFClose(tifa);
+        getImageSize(tif.get(), imgWa, imgHa);
 
         // --- Calculate overlap (intersection) between ROI and image ---
         int img_y_start = std::max(roiY0, 0);
@@ -203,14 +212,19 @@ void mexFunction(int nlhs, mxArray* plhs[],
         int cropHz = img_y_end - img_y_start + 1; // How many rows to copy
         int cropWz = img_x_end - img_x_start + 1; // How many cols to copy
 
-        if (cropHz <= 0 || cropWz <= 0)
-            continue; // nothing to copy for this slice
+        if (cropHz <= 0 || cropWz <= 0) {
+            mexErrMsgIdAndTxt("load_bl_tif:EmptyCrop", "Slice %zu has no overlap with ROI (%d,%d,%d,%d)",
+                                z, roiX0+1, roiY0+1, roiW, roiH);
+        }
 
-        int out_row0 = img_y_start - roiY0; // output row offset
-        int out_col0 = img_x_start - roiX0; // output col offset
-
+        int out_row0 = std::max(0, img_y_start - roiY0);
+        int out_col0 = std::max(0, img_x_start - roiX0);
+        if (out_row0 + cropHz > roiH || out_col0 + cropWz > roiW)
+            mexErrMsgIdAndTxt(
+                "load_bl_tif:BoundsError",
+                "Crop region (size %dx%d at offset %d,%d) exceeds output bounds (size %dx%d).",
+                cropHz, cropWz, out_row0, out_col0, roiH, roiW);
         LoadTask task;
-        task.filename       = fileList[z];
         task.in_row0        = img_y_start;
         task.in_col0        = img_x_start;
         task.out_row0       = out_row0;
@@ -219,13 +233,10 @@ void mexFunction(int nlhs, mxArray* plhs[],
         task.cropW          = cropWz;
         task.roiH           = roiH;
         task.roiW           = roiW;
-        task.imgH           = imgHa;
-        task.imgW           = imgWa;
         task.zIndex         = z;
         task.dstBase        = outData;
         task.pixelsPerSlice = pixelsPerSlice;
-        task.matlabType     = outType;
 
-        copySubRegion(task);
+        copySubRegion(task, tif.get(), static_cast<uint8_t>(bytesPerPixel));
     }
 }
