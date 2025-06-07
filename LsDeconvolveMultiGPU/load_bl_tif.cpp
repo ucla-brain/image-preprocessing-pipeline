@@ -20,7 +20,7 @@ constexpr uint16_t kSupportedBitDepth8  = 8;
 constexpr uint16_t kSupportedBitDepth16 = 16;
 constexpr size_t MAX_TIFF_BLOCK_BYTES = 1ull << 30;
 constexpr size_t kMaxPixelsPerSlice = static_cast<size_t>(std::numeric_limits<int>::max());// 2147483647
-constexpr uint32_t kInvalidTileIndex = UINT32_MAX;                                     // 2 * kMaxPixelsPerSlice - 1
+constexpr size_t kInvalidTileIndex = static_cast<size_t>(UINT32_MAX);                      // 2 * kMaxPixelsPerSlice - 1
 
 // RAII wrapper for mxArrayToUTF8String()
 struct MatlabString {
@@ -90,8 +90,7 @@ static void swap_uint16_buf(void* buf, size_t count) {
 struct TaskResult {
     size_t block_id;
     std::vector<uint8_t> data;
-    size_t cropH, cropW;
-
+    size_t cropH, cropW; // instead of int
     TaskResult(size_t id, size_t datasz, size_t ch, size_t cw)
         : block_id(id), data(datasz), cropH(ch), cropW(cw) {}
 };
@@ -126,7 +125,7 @@ static void readSubRegionToBuffer(
 
     if (isTiled)
     {
-        uint32_t tileW = 0, tileH = 0;
+        size_t tileW = 0, tileH = 0;
         TIFFGetField(tif, TIFFTAG_TILEWIDTH , &tileW);
         TIFFGetField(tif, TIFFTAG_TILELENGTH, &tileH);
         if (tileW == 0 || tileH == 0)
@@ -142,11 +141,11 @@ static void readSubRegionToBuffer(
 
         size_t prevTile = kInvalidTileIndex;
 
-        for (size_t row = 0; row < task.cropH; ++row) {
+        for (int row = 0; row < task.cropH; ++row) {
             size_t imgY = task.in_row0 + row;
-            for (size_t col = 0; col < task.cropW; ++col) {
+            for (int col = 0; col < task.cropW; ++col) {
                 size_t imgX = task.in_col0 + col;
-                ttile_t tileIdx = TIFFComputeTile(tif, imgX, imgY, 0, 0);
+                size_t tileIdx = static_cast<tsize_t>(TIFFComputeTile(tif, imgX, imgY, 0, 0));
 
                 if (tileIdx != prevTile) {
                     tsize_t ret = TIFFReadEncodedTile(
@@ -163,7 +162,7 @@ static void readSubRegionToBuffer(
                     }
                     size_t validBytes = static_cast<size_t>(ret);
                     size_t validPixels = validBytes / bytesPerPixel;
-                    if (bytesPerPixel == 2 && (static_cast<bool>(TIFFIsByteSwapped(tif)) != isLittleEndianHost()))
+                    if (bytesPerPixel == 2 && TIFFIsByteSwapped(tif) != isLittleEndianHost())
                         swap_uint16_buf(tilebuf.data(), validPixels);
 
                     prevTile = tileIdx;
@@ -171,8 +170,8 @@ static void readSubRegionToBuffer(
 
                 size_t relY = imgY % tileH;
                 size_t relX = imgX % tileW;
-                size_t srcOff = (static_cast<size_t>(relY) * tileW + relX) * bytesPerPixel;
-                size_t dstOff = (static_cast<size_t>(row) * task.cropW + col) * bytesPerPixel;
+                size_t   srcOff = (static_cast<size_t>(relY) * tileW + relX) * bytesPerPixel;
+                size_t   dstOff = (static_cast<size_t>(row) * task.cropW + col) * bytesPerPixel;
 
                 std::memcpy(blockBuf.data() + dstOff,
                             tilebuf.data() + srcOff,
@@ -182,7 +181,7 @@ static void readSubRegionToBuffer(
     }
     else
     {
-        uint32_t rowsPerStrip = 0;
+        size_t rowsPerStrip = 0;
         TIFFGetFieldDefaulted(tif, TIFFTAG_ROWSPERSTRIP, &rowsPerStrip);
         if (rowsPerStrip == 0) rowsPerStrip = imgHeight;
 
@@ -195,7 +194,7 @@ static void readSubRegionToBuffer(
         tstrip_t currentStrip = (tstrip_t)-1;
         tsize_t  nbytes = 0;
 
-        for (size_t row = 0; row < task.cropH; ++row)
+        for (int row = 0; row < task.cropH; ++row)
         {
             size_t tifRow   = static_cast<size_t>(task.in_row0 + row);
             tstrip_t stripIdx = TIFFComputeStrip(tif, tifRow, 0);
@@ -209,7 +208,7 @@ static void readSubRegionToBuffer(
                     throw std::runtime_error(oss.str());
                 }
 
-                if (bytesPerPixel == 2 && (static_cast<bool>(TIFFIsByteSwapped(tif)) != isLittleEndianHost()))
+                if (bytesPerPixel == 2 && TIFFIsByteSwapped(tif) != isLittleEndianHost())
                     swap_uint16_buf(stripbuf.data(), static_cast<size_t>(nbytes / 2));
 
                 currentStrip = stripIdx;
@@ -217,8 +216,8 @@ static void readSubRegionToBuffer(
 
             const size_t rowsInThisStrip =
                 static_cast<size_t>(nbytes / (imgWidth * bytesPerPixel));
-            uint32_t stripStartRow = stripIdx * rowsPerStrip;
-            uint32_t relRow        = tifRow - stripStartRow;
+            size_t stripStartRow = stripIdx * rowsPerStrip;
+            size_t relRow        = tifRow - stripStartRow;
 
             if (relRow >= rowsInThisStrip) {
                 std::ostringstream oss;
@@ -229,7 +228,7 @@ static void readSubRegionToBuffer(
             uint8_t* scanlinePtr = stripbuf.data() +
                 (static_cast<size_t>(relRow) * imgWidth * bytesPerPixel);
 
-            for (size_t col = 0; col < task.cropW; ++col)
+            for (int col = 0; col < task.cropW; ++col)
             {
                 size_t srcOff = (static_cast<size_t>(task.in_col0 + col)) * bytesPerPixel;
                 size_t dstOff = (static_cast<size_t>(row) * task.cropW + col) * bytesPerPixel;
@@ -300,10 +299,8 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
 
         if (mxIsLogicalScalar(flag)) {
             transpose = mxIsLogicalScalarTrue(flag);
-        } else if (mxIsInt32(flag) && mxGetNumberOfElements(flag) == 1) {
-            transpose = (*static_cast<int32_t*>(mxGetData(flag)) != 0);
-        } else if (mxIsUint32(flag) && mxGetNumberOfElements(flag) == 1) {
-            transpose = (*static_cast<uint32_t*>(mxGetData(flag)) != 0);
+        } else if ((mxIsInt32(flag) || mxIsUint32(flag)) && mxGetNumberOfElements(flag) == 1) {
+            transpose = (*static_cast<size_t*>(mxGetData(flag)) != 0);
         } else {
             mexErrMsgIdAndTxt("load_bl_tif:Transpose",
                 "transposeFlag must be a logical or int32/uint32 scalar.");
@@ -312,7 +309,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
 
     size_t numSlices = static_cast<size_t>(mxGetNumberOfElements(prhs[0]));
     std::vector<std::string> fileList(numSlices);
-    for (size_t i = 0; i < numSlices; ++i)
+    for (int i = 0; i < numSlices; ++i)
     {
         const mxArray* cell = mxGetCell(prhs[0], i);
         if (!mxIsChar(cell))
@@ -322,7 +319,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
             mexErrMsgIdAndTxt("load_bl_tif:Input", "Filename in cell %d is empty", i+1);
         fileList[i] = mstr.get();
     }
-    for (size_t i = 1; i <= 4; ++i) {
+    for (int i = 1; i <= 4; ++i) {
         if (!mxIsDouble(prhs[i]) || mxIsComplex(prhs[i]) || mxGetNumberOfElements(prhs[i]) != 1)
             mexErrMsgIdAndTxt("load_bl_tif:InputType",
                 "Input argument %d must be a real double scalar.", i+1);
@@ -351,7 +348,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         mexErrMsgIdAndTxt("load_bl_tif:ZeroSize", "ROI dimensions must be non-zero.");
 
     // --- Robustly validate ROI for all slices BEFORE allocation ---
-    uint32_t imgWidth = 0, imgHeight = 0;
+    size_t imgWidth = 0, imgHeight = 0;
     uint16_t bitsPerSample = 0, globalBitsPerSample = 0, samplesPerPixel = 1;
     for (size_t z = 0; z < numSlices; ++z) {
         TiffHandle tif(TIFFOpen(fileList[z].c_str(), "r"));
@@ -384,7 +381,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         if (roiY0 + roiH > imgHeight ||
             roiX0 + roiW > imgWidth) {
             mexErrMsgIdAndTxt("load_bl_tif:ROI",
-                "Requested ROI [%zu:%zu,%zu:%zu] is out of bounds for slice %zu (file: %s)",
+                "Requested ROI [%d:%d,%d:%d] is out of bounds for slice %d (file: %s)",
                 roiY0+1, roiY0+roiH, roiX0+1, roiX0+roiW, z+1, fileList[z].c_str());
         }
     }
