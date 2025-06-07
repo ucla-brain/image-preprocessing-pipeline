@@ -500,9 +500,11 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         size_t end   = std::min(n_tasks, begin + chunk);
         if (begin >= end) break;
         workers.emplace_back(worker_main,
-            std::cref(tasks), std::ref(results),
+            std::cref(tasks),
             bytesPerPixel,
-            std::ref(err_mutex), std::ref(errors),
+            outData,
+            std::ref(err_mutex),
+            std::ref(errors),
             std::ref(error_count),
             begin, end);
     }
