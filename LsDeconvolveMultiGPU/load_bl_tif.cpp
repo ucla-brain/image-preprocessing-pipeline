@@ -170,53 +170,69 @@ static void readSubRegionToBuffer(
     }
     else
     {
-        //-------------------------------------------------------------------
-        //  Stripped path
-        //-------------------------------------------------------------------
+        // -------------------------------------------------------------------
+        //  Stripped path (safe)
+        // -------------------------------------------------------------------
         uint32_t rowsPerStrip = 0;
         TIFFGetFieldDefaulted(tif, TIFFTAG_ROWSPERSTRIP, &rowsPerStrip);
         if (rowsPerStrip == 0) rowsPerStrip = imgHeight;
 
-        const size_t uncompressedStripBytes =
+        /* allocate *once* for the theoretical max, but
+           always use nbytes (actual) for swapping / bounds */
+        const size_t maxStripBytes =
             static_cast<size_t>(rowsPerStrip) * imgWidth * bytesPerPixel;
-        if (uncompressedStripBytes > (1ull << 30))
+        if (maxStripBytes > (1ull << 30))
             mexErrMsgIdAndTxt("load_bl_tif:Strip:Size",
                 "Strip buffer (>1 GiB) exceeds sane limits");
 
-        std::vector<uint8_t> stripbuf(uncompressedStripBytes);
-
+        std::vector<uint8_t> stripbuf(maxStripBytes);
         tstrip_t currentStrip = (tstrip_t)-1;
+        tsize_t  nbytes       = 0;        // byte count of *current* strip
 
         for (int row = 0; row < task.cropH; ++row)
         {
             uint32_t tifRow   = static_cast<uint32_t>(task.in_row0 + row);
             tstrip_t stripIdx = TIFFComputeStrip(tif, tifRow, 0);
 
-            // Read strip only when it changes
+            // (Re)load strip only when it changes
             if (stripIdx != currentStrip)
             {
-                if (TIFFReadEncodedStrip(tif, stripIdx,
-                                         stripbuf.data(),
-                                         static_cast<tsize_t>(uncompressedStripBytes)) < 0)
+                nbytes = TIFFReadEncodedStrip(tif, stripIdx,
+                                              stripbuf.data(),
+                                              static_cast<tsize_t>(maxStripBytes));
+                if (nbytes < 0)
                     mexErrMsgIdAndTxt("load_bl_tif:Strip:ReadFail",
                         "TIFFReadEncodedStrip failed (strip %u)", stripIdx);
 
                 if (bytesPerPixel == 2 && TIFFIsByteSwapped(tif))
                     swap_uint16_buf(stripbuf.data(),
-                                    static_cast<int>(uncompressedStripBytes / 2));
+                                    static_cast<int>(nbytes / 2));
 
                 currentStrip = stripIdx;
             }
 
+            /* How many *fully decoded* rows does this strip hold?            */
+            const uint32_t rowsInThisStrip =
+                static_cast<uint32_t>(nbytes / (imgWidth * bytesPerPixel));
+
             uint32_t stripStartRow = stripIdx * rowsPerStrip;
             uint32_t relRow        = tifRow - stripStartRow;
-            uint8_t* scanlinePtr   = stripbuf.data() +
-                                     (static_cast<size_t>(relRow) * imgWidth * bytesPerPixel);
+
+            if (relRow >= rowsInThisStrip)   // corrupt or truncated strip
+                mexErrMsgIdAndTxt("load_bl_tif:Strip:Bounds",
+                    "Row %u exceeds decoded strip size (strip %u)", tifRow+1, stripIdx);
+
+            uint8_t* scanlinePtr = stripbuf.data() +
+                (static_cast<size_t>(relRow) * imgWidth * bytesPerPixel);
 
             for (int col = 0; col < task.cropW; ++col)
             {
                 size_t srcOff = (static_cast<size_t>(task.in_col0 + col)) * bytesPerPixel;
                 size_t dstOff = (static_cast<size_t>(row) * task.cropW + col) * bytesPerPixel;
+
+                if (srcOff + bytesPerPixel > static_cast<size_t>(nbytes))
+                    mexErrMsgIdAndTxt("load_bl_tif:Strip:Bounds",
+                        "Column %u exceeds decoded strip size (strip %u)", col+1, stripIdx);
 
                 std::memcpy(blockBuf.data() + dstOff,
                             scanlinePtr + srcOff,
