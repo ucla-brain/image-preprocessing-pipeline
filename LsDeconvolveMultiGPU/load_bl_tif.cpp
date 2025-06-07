@@ -11,16 +11,15 @@
 struct LoadTask
 {
     std::string filename;
-    int roiY, roiX, roiH, roiW;    // All 0-based
+    int roiY, roiX, roiH, roiW;    // All 0-based, full block
     std::size_t zIndex;            // 0-based
     void* dstBase;
     std::size_t pixelsPerSlice;
     mxClassID matlabType;
-    int cropH, cropW;              // cropped (actual) block size
+    int cropH, cropW;              // cropped (actual) block size for this image
     int imgW, imgH;                // full image size
 };
 
-/* Detect endianness */
 static bool is_system_little_endian() {
     uint16_t x = 1;
     return *((uint8_t*)&x) == 1;
@@ -40,7 +39,6 @@ static void throw_mex(const char* id, const char* fmt, const char* s) {
     mexErrMsgIdAndTxt(id, "%s", msg);
 }
 
-/* -------- Generic subregion extraction for both tiled and scanline TIFFs -------- */
 static void copySubRegion(const LoadTask& task)
 {
     TIFF* tif = TIFFOpen(task.filename.c_str(), "r");
@@ -63,7 +61,6 @@ static void copySubRegion(const LoadTask& task)
         TIFFGetField(tif, TIFFTAG_TILELENGTH, &tileHeight);
     }
 
-    // For debug: print ROI
     mexPrintf("  [MEX] File: %s | ImageSize: [%u,%u] | ROI: y=%d..%d, x=%d..%d | BlockSize: [%d,%d] | Crop: [%d,%d] | Z=%zu\n",
         task.filename.c_str(), imgHeight, imgWidth,
         task.roiY + 1, task.roiY + task.cropH,
@@ -73,8 +70,7 @@ static void copySubRegion(const LoadTask& task)
     if (samplesPerPixel != 1 || (bitsPerSample != 8 && bitsPerSample != 16))
         mexErrMsgIdAndTxt("load_bl_tif:Type", "Only 8/16-bit grayscale TIFFs are supported");
 
-    // Output is [height, width, z] (column-major): dstIndex = row + col*cropH + z*pixelsPerSlice
-
+    // Output is [roiH, roiW, numSlices], so use roiH/roiW for strides (not cropH/cropW!)
     if (isTiled) {
         std::vector<uint8_t> tilebuf(TIFFTileSize(tif));
         for (int row = 0; row < task.cropH; ++row) {
@@ -100,7 +96,8 @@ static void copySubRegion(const LoadTask& task)
                 std::size_t tileStride = tileWidth * bytesPerPixel;
                 std::size_t offset = relY * tileStride + relX * bytesPerPixel;
 
-                std::size_t dstIndex = row + col * task.cropH + task.zIndex * task.pixelsPerSlice;
+                // CRITICAL: Use roiH for column stride!
+                std::size_t dstIndex = row + col * task.roiH + task.zIndex * task.pixelsPerSlice;
                 std::size_t dstOffset = dstIndex * bytesPerPixel;
 
                 std::memcpy(static_cast<uint8_t*>(task.dstBase) + dstOffset,
@@ -120,6 +117,7 @@ static void copySubRegion(const LoadTask& task)
 
             for (int col = 0; col < task.cropW; ++col) {
                 std::size_t srcOffset = static_cast<std::size_t>(task.roiX + col) * bytesPerPixel;
+                // CRITICAL: Use roiH for column stride!
                 std::size_t dstIndex = row + col * task.roiH + task.zIndex * task.pixelsPerSlice;
                 std::size_t dstOffset = dstIndex * bytesPerPixel;
 
@@ -162,7 +160,7 @@ void mexFunction(int nlhs, mxArray* plhs[],
     if (roiY0 < 0 || roiX0 < 0 || roiH < 1 || roiW < 1)
         mexErrMsgIdAndTxt("load_bl_tif:ROI","ROI parameters invalid");
 
-    // Get image size from first file for crop logic
+    // Get bit depth and image size from first file
     TIFF* tif0 = TIFFOpen(fileList[0].c_str(), "r");
     if (!tif0)
         mexErrMsgIdAndTxt("load_bl_tif:OpenFail", "Cannot open %s", fileList[0].c_str());
@@ -177,18 +175,9 @@ void mexFunction(int nlhs, mxArray* plhs[],
     if (samplesPerPixel != 1 || (bitsPerSample != 8 && bitsPerSample != 16))
         mexErrMsgIdAndTxt("load_bl_tif:Type","Only 8/16-bit grayscale TIFFs are supported");
 
-    // Crop at edge if needed
-    int cropH = roiH;
-    int cropW = roiW;
-    if (roiY0 + roiH > (int)imgHeight)
-        cropH = std::max(0, (int)imgHeight - roiY0);
-    if (roiX0 + roiW > (int)imgWidth)
-        cropW = std::max(0, (int)imgWidth - roiX0);
-
+    // Output array: always [roiH, roiW, numSlices]
     const mxClassID outType = (bitsPerSample == 8) ? mxUINT8_CLASS : mxUINT16_CLASS;
     const std::size_t bytesPerPixel = bitsPerSample / 8;
-
-    // Output array: [height, width, numSlices]
     mwSize dims[3] = { static_cast<mwSize>(roiH),
                        static_cast<mwSize>(roiW),
                        static_cast<mwSize>(numSlices) };
@@ -196,7 +185,7 @@ void mexFunction(int nlhs, mxArray* plhs[],
     void* outData = mxGetData(plhs[0]);
     std::size_t pixelsPerSlice = static_cast<std::size_t>(roiH) * roiW;
 
-    // Zero the output buffer
+    // Zero the output buffer so any out-of-bounds region remains zero
     memset(outData, 0, pixelsPerSlice * numSlices * bytesPerPixel);
 
     // Loop over Z
@@ -215,11 +204,9 @@ void mexFunction(int nlhs, mxArray* plhs[],
         if (roiX0 + roiW > (int)imgWa)
             cropWz = std::max(0, (int)imgWa - roiX0);
 
-        // If cropHz <= 0 or cropWz <= 0, skip (output remains zero)
         if (cropHz <= 0 || cropWz <= 0)
             continue;
 
-        // Only copy for the valid portion
         LoadTask task;
         task.filename       = fileList[z];
         task.roiY           = roiY0;
