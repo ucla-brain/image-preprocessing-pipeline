@@ -118,16 +118,18 @@ static void copySubRegion(const LoadTask& task)
                 swap_uint16_buf(scanline.data(), imgWidth);
             }
 
-            for (int col = 0; col < task.cropW; ++col) {
-                std::size_t srcPixel = static_cast<std::size_t>(task.roiX + col);
-                std::size_t srcOffset = srcPixel * bytesPerPixel;
+            // Copy the entire subregion for this row as a single block.
+            std::size_t srcOffset = static_cast<std::size_t>(task.roiX) * bytesPerPixel;
+            std::size_t dstIndex = row + 0 * task.cropH + task.zIndex * task.pixelsPerSlice;
+            std::size_t dstOffset = dstIndex * bytesPerPixel;
 
-                std::size_t dstIndex = row + col * task.cropH + task.zIndex * task.pixelsPerSlice;
-                std::size_t dstOffset = dstIndex * bytesPerPixel;
-
-                std::memcpy(static_cast<uint8_t*>(task.dstBase) + dstOffset,
-                            scanline.data() + srcOffset, bytesPerPixel);
-            }
+            // Since MATLAB is [height, width, z], for row, col, z,
+            // the *row* runs fastest in memory, so copy one row at a time for all columns.
+            std::memcpy(
+                static_cast<uint8_t*>(task.dstBase) + dstOffset,
+                scanline.data() + srcOffset,
+                task.cropW * bytesPerPixel
+            );
         }
     }
     TIFFClose(tif);
