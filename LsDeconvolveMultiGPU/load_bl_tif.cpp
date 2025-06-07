@@ -286,8 +286,8 @@ void mexFunction(int nlhs, mxArray* plhs[],
                                 z, roiX0+1, roiY0+1, roiW, roiH);
         }
 
-        int out_row0 = std::max(0, img_y_start - roiY0);
-        int out_col0 = std::max(0, img_x_start - roiX0);
+        std::size_t out_row0 = std::max(0, img_y_start - roiY0);
+        std::size_t out_col0 = std::max(0, img_x_start - roiX0);
         if (out_row0 + cropHz > roiH || out_col0 + cropWz > roiW)
             mexErrMsgIdAndTxt(
                 "load_bl_tif:BoundsError",
