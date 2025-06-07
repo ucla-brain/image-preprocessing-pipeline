@@ -44,7 +44,6 @@ libtiff_root = fullfile(pwd, 'tiff_src', ['tiff-', libtiff_src_version]);
 libtiff_install_dir = fullfile(pwd, 'tiff_build', 'libtiff');
 stamp_file = fullfile(libtiff_install_dir, '.libtiff_installed');
 
-use_fallback = false;
 if ~isfile(stamp_file)
     fprintf('Building libtiff from source with optimized flags...\n');
     if ~try_build_libtiff(libtiff_root, libtiff_install_dir)
@@ -123,12 +122,20 @@ fprintf('All MEX files built successfully.\n');
 % ===============================
 % Function: try_build_libtiff
 % ===============================
-function ok = try_build_libtiff(libtiff_root, libtiff_install_dir)
+function ok = try_build_libtiff(libtiff_root, libtiff_install_dir, version)
+    % version: string, e.g. '4.7.0'
+    if nargin < 3 || isempty(version)
+        version = '4.7.0';
+    end
+
     if ispc
-        archive = 'tiff.zip';
+        archive = ['tiff-', version, '.zip'];
+        src_folder = ['tiff-', version];
         if ~isfolder(libtiff_root)
-            system(['curl -L -o ', archive, ' https://download.osgeo.org/libtiff/tiff-4.7.0.zip']);
-            unzip(archive, 'tiff_src'); delete(archive);
+            url = ['https://download.osgeo.org/libtiff/tiff-', version, '.zip'];
+            system(['curl -L -o ', archive, ' ', url]);
+            unzip(archive, 'tiff_src');
+            delete(archive);
         end
         cd(libtiff_root);
         % Install to local libtiff_install_dir, NOT conda_prefix
@@ -136,15 +143,19 @@ function ok = try_build_libtiff(libtiff_root, libtiff_install_dir)
                          'cmake --build build --config Release --target install']);
         cd('../../');
     else
-        archive = 'tiff.tar.gz';
-        if ~isfolder(['tiff-', '4.6.0'])
-            system(['curl -L -o ', archive, ' https://download.osgeo.org/libtiff/tiff-4.7.0.tar.gz']);
-            system(['tar -xzf ', archive]); delete(archive);
+        archive = ['tiff-', version, '.tar.gz'];
+        src_folder = ['tiff-', version];
+        if ~isfolder(src_folder)
+            url = ['https://download.osgeo.org/libtiff/tiff-', version, '.tar.gz'];
+            system(['curl -L -o ', archive, ' ', url]);
+            system(['tar -xzf ', archive]);
+            delete(archive);
         end
-        cd(['tiff-', '4.6.0']);
+        cd(src_folder);
         % Install to local libtiff_install_dir, NOT conda_prefix
         status = system(['./configure --prefix=', libtiff_install_dir, ' && make -j4 && make install']);
         cd('..');
     end
     ok = (status == 0);
 end
+
