@@ -181,7 +181,8 @@ cfgs = [
    struct("tiled",true, "comp",'Deflate',"name","tile-deflate" );
 ];
 for c = cfgs'
-    fname = char(fullfile(tmpdir, ['tile_',c.name,'.tif']));  % ⇦ char!
+    % --- inside the “for c = cfgs'” loop -----------------
+    fname = fullfile(tmpdir, ['tile_' c.name '.tif']);    % ⇦ char!
     img   = magic(257);
     t     = Tiff(fname,'w');
     tag.ImageLength       = size(img,1);
