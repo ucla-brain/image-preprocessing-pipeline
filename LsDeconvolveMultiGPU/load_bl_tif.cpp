@@ -126,18 +126,40 @@ static void copySubRegion(const LoadTask& task, TIFF* tif, uint8_t bytesPerPixel
             }
         }
     } else {
-        std::vector<uint8_t> scanline(imgWidth * bytesPerPixel);
+        uint32_t rowsPerStrip = 0;
+        TIFFGetFieldDefaulted(tif, TIFFTAG_ROWSPERSTRIP, &rowsPerStrip);
+        if (rowsPerStrip == 0) rowsPerStrip = imgHeight; // Default is whole image as one strip
+
+        tsize_t stripBufSize = rowsPerStrip * imgWidth * bytesPerPixel;
+        std::vector<uint8_t> stripbuf(stripBufSize);
+        tstrip_t currentStrip = (tstrip_t)-1;
+
         for (std::size_t row = 0; row < static_cast<std::size_t>(task.cropH); ++row) {
             uint32_t tifRow = static_cast<uint32_t>(task.in_row0 + row);
-            if (TIFFReadScanline(tif, scanline.data(), tifRow) != 1)
-                mexErrMsgIdAndTxt("load_bl_tif:copySubRegion:Read",
-                                  "TIFFReadScanline failed at row %u (slice %zu: file: %s)",
-                                  tifRow, task.zIndex, task.path.c_str());
+            tstrip_t stripIdx = TIFFComputeStrip(tif, tifRow, 0);
 
-            if (bytesPerPixel == 2 && TIFFIsByteSwapped(tif)) {
-                swap_uint16_buf(scanline.data(), imgWidth);
+            // Read strip if not already loaded
+            if (stripIdx != currentStrip) {
+                tsize_t nbytes = TIFFReadEncodedStrip(tif, stripIdx, stripbuf.data(), stripBufSize);
+                if (nbytes < 0)
+                    mexErrMsgIdAndTxt("load_bl_tif:copySubRegion:ReadStrip",
+                                      "TIFFReadEncodedStrip failed at strip %d (row %u, file: %s)",
+                                      stripIdx, tifRow, task.path.c_str());
+                currentStrip = stripIdx;
             }
 
+            // Row offset within strip
+            uint32_t stripStartRow = stripIdx * rowsPerStrip;
+            uint32_t relRow = tifRow - stripStartRow;
+
+            uint8_t* scanlinePtr = stripbuf.data() + (relRow * imgWidth * bytesPerPixel);
+
+            // Endianness fix for 16-bit
+            if (bytesPerPixel == 2 && TIFFIsByteSwapped(tif)) {
+                swap_uint16_buf(scanlinePtr, imgWidth);
+            }
+
+            // Copy desired columns
             for (std::size_t col = 0; col < static_cast<std::size_t>(task.cropW); ++col) {
                 std::size_t srcOffset = static_cast<std::size_t>(task.in_col0 + col) * bytesPerPixel;
                 std::size_t dstIndex = (task.out_row0 + row)
@@ -147,7 +169,7 @@ static void copySubRegion(const LoadTask& task, TIFF* tif, uint8_t bytesPerPixel
 
                 std::memcpy(
                     static_cast<uint8_t*>(task.dstBase) + dstOffset,
-                    scanline.data() + srcOffset,
+                    scanlinePtr + srcOffset,
                     bytesPerPixel
                 );
             }
