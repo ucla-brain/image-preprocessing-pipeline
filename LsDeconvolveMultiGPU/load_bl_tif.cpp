@@ -340,13 +340,45 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
     }
 
     // --- Launch thread pool ---
+#ifdef _WIN32
+    // Start with only 1 thread for safety, scale up after validating
+    unsigned numThreads = 1;
+    const char* env_threads = getenv("LOAD_BL_TIF_THREADS");
+    if (env_threads) numThreads = std::max(1u, (unsigned)atoi(env_threads));
+#else
     unsigned numThreads = std::max(1u, std::thread::hardware_concurrency());
+#endif
+    // NUM THREADS (see above) is set in a way safe for Windows
     std::vector<std::thread> workers;
-    for (unsigned i = 0; i < numThreads; ++i) {
-        workers.emplace_back(worker_main, &queue, std::ref(errors), std::ref(err_mutex), bytesPerPixel);
+    std::atomic<bool> hasError{false};
+
+    auto do_tasks = [&](int tid) {
+        LoadTask task;
+        while (!hasError && queue.pop(task)) {
+            try {
+                TiffHandle tif(TIFFOpen(task.path.c_str(), "r"));
+                if (!tif) {
+                    std::lock_guard<std::mutex> lck(err_mutex);
+                    errors.emplace_back("Cannot open file " + task.path);
+                    hasError = true; break;
+                }
+                copySubRegion(task, tif.get(), bytesPerPixel);
+            } catch (const std::exception& ex) {
+                std::lock_guard<std::mutex> lck(err_mutex);
+                errors.emplace_back(task.path + ": " + ex.what());
+                hasError = true; break;
+            }
+        }
+    };
+
+    if (numThreads == 1) {
+        do_tasks(0);
+    } else {
+        for (unsigned i = 0; i < numThreads; ++i)
+            workers.emplace_back(do_tasks, i);
+        queue.set_finished();
+        for (auto& t : workers) t.join();
     }
-    queue.set_finished();
-    for (auto& t : workers) t.join();
 
     // --- Error check ---
     if (!errors.empty()) {
