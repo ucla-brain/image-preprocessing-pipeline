@@ -20,7 +20,7 @@ constexpr uint16_t kSupportedBitDepth8  = 8;
 constexpr uint16_t kSupportedBitDepth16 = 16;
 constexpr size_t MAX_TIFF_BLOCK_BYTES = 1ull << 30;
 constexpr size_t kMaxPixelsPerSlice = static_cast<size_t>(std::numeric_limits<int>::max());// 2147483647
-constexpr uint32_t kInvalidTileIndex = UINT32_MAX;                                         // 2 * kMaxPixelsPerSlice - 1
+constexpr size_t kInvalidTileIndex = static_cast<size_t>(UINT32_MAX);                      // 2 * kMaxPixelsPerSlice - 1
 
 // RAII wrapper for mxArrayToUTF8String()
 struct MatlabString {
@@ -139,13 +139,13 @@ static void readSubRegionToBuffer(
         std::vector<uint8_t> tilebuf(uncompressedTileBytes);
         const size_t nTilePixels = uncompressedTileBytes / bytesPerPixel;
 
-        uint32_t prevTile = kInvalidTileIndex;
+        size_t prevTile = kInvalidTileIndex;
 
         for (int row = 0; row < task.cropH; ++row) {
             size_t imgY = task.in_row0 + row;
             for (int col = 0; col < task.cropW; ++col) {
                 size_t imgX = task.in_col0 + col;
-                uint32_t tileIdx = TIFFComputeTile(tif, imgX, imgY, 0, 0);
+                size_t tileIdx = static_cast<tsize_t>(TIFFComputeTile(tif, imgX, imgY, 0, 0));
 
                 if (tileIdx != prevTile) {
                     tsize_t ret = TIFFReadEncodedTile(
@@ -196,7 +196,7 @@ static void readSubRegionToBuffer(
 
         for (int row = 0; row < task.cropH; ++row)
         {
-            size_t tifRow   = static_cast<uint32_t>(task.in_row0 + row);
+            size_t tifRow   = static_cast<size_t>(task.in_row0 + row);
             tstrip_t stripIdx = TIFFComputeStrip(tif, tifRow, 0);
 
             if (stripIdx != currentStrip) {
@@ -215,7 +215,7 @@ static void readSubRegionToBuffer(
             }
 
             const size_t rowsInThisStrip =
-                static_cast<uint32_t>(nbytes / (imgWidth * bytesPerPixel));
+                static_cast<size_t>(nbytes / (imgWidth * bytesPerPixel));
             size_t stripStartRow = stripIdx * rowsPerStrip;
             size_t relRow        = tifRow - stripStartRow;
 
@@ -300,7 +300,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         if (mxIsLogicalScalar(flag)) {
             transpose = mxIsLogicalScalarTrue(flag);
         } else if ((mxIsInt32(flag) || mxIsUint32(flag)) && mxGetNumberOfElements(flag) == 1) {
-            transpose = (*static_cast<uint32_t*>(mxGetData(flag)) != 0);
+            transpose = (*static_cast<size_t*>(mxGetData(flag)) != 0);
         } else {
             mexErrMsgIdAndTxt("load_bl_tif:Transpose",
                 "transposeFlag must be a logical or int32/uint32 scalar.");
