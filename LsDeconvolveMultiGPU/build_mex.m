@@ -43,7 +43,7 @@ if ispc
     if debug
         mex_flags_cpu = {'-R2018a', 'COMPFLAGS="$COMPFLAGS /std:c++17 /Od /Zi /openmp"'};
     else
-        mex_flags_cpu = {'-R2018a', 'COMPFLAGS="$COMPFLAGS /std:c++17 /O2 /arch:AVX2 /Ot /GL /openmp- /fp:fast "'};
+        mex_flags_cpu = {'-R2018a', 'COMPFLAGS="$COMPFLAGS /std:c++17 /O2 /arch:AVX2 /Ot /GL /openmp "'};
     end
 else
     if debug
@@ -51,8 +51,8 @@ else
             'CFLAGS="$CFLAGS -O0 -g -fopenmp"',  'CXXFLAGS="$CXXFLAGS -O0 -g -fopenmp"'};
     else
         mex_flags_cpu = {'-R2018a', ...
-            'CFLAGS="$CFLAGS -O3 -march=native -fomit-frame-pointer -fopenmp -flto -ffast-math "', ...
-            'CXXFLAGS="$CXXFLAGS -O3 -march=native -fomit-frame-pointer -fopenmp -flto -ffast-math "'};
+            'CFLAGS="$CFLAGS -O3 -march=native -fomit-frame-pointer -fopenmp -flto "', ...
+            'CXXFLAGS="$CXXFLAGS -O3 -march=native -fomit-frame-pointer -fopenmp -flto "'};
     end
 end
 
