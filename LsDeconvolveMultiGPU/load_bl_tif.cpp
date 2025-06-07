@@ -178,7 +178,7 @@ static void readSubRegionToBuffer(
     }
     else
     {
-        uint32_t rowsPerStrip = 0;
+        size_t rowsPerStrip = 0;
         TIFFGetFieldDefaulted(tif, TIFFTAG_ROWSPERSTRIP, &rowsPerStrip);
         if (rowsPerStrip == 0) rowsPerStrip = imgHeight;
 
@@ -468,8 +468,8 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
     for (size_t i = 0; i < tasks.size(); ++i) {
         const auto& task = tasks[i];
         const auto& res  = results[i];
-        for (const size_t row = 0; row < task.cropH; ++row) {
-            for (const size_t col = 0; col < task.cropW; ++col) {
+        for (size_t row = 0; row < task.cropH; ++row) {
+            for (size_t col = 0; col < task.cropW; ++col) {
                 size_t dstElem = computeDstIndex(task, row, col);
                 size_t dstByte = dstElem * bytesPerPixel;
                 size_t srcByte = (row * task.cropW + col) * bytesPerPixel;
