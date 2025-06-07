@@ -1,13 +1,15 @@
 // ============================================================================
 //  load_bl_tif.cpp  – Fast sub-region TIFF loader for MATLAB
 //
-//  Patched cross-platform build (2025-06-07)
+//  Optimized cross-platform build (2025-06-07)
 //     • tile & strip caching
 //     • row-wise memcpy blit (vs. per-pixel)
 //     • TIFFSwabArrayOfShort use (+ optional AVX2 swap)
 //     • 64-bit-safe indexing
 //     • thread-local TIFF handle cache
-//     • static thread-pool guard
+//     • static thread-pool guard, correct mexAtExit usage
+//     • Error accumulation
+//     • Output allocation overflow check
 //     • C++14 fallback for std::clamp  ✅
 // ============================================================================
 
@@ -26,6 +28,7 @@
 #include <thread>
 #include <vector>
 #include <cstdlib>   // getenv / atoi
+#include <sstream>
 
 // ----------------------------- C++14 clamp back-port ------------------------
 #if !defined(__cpp_lib_clamp) &&                                                   \
@@ -38,6 +41,7 @@ constexpr const T& clamp(const T& v, const T& lo, const T& hi)
 }
 } // namespace std
 #endif
+
 // ---------------------------------------------------------------------------
 //  Config & helpers
 // ---------------------------------------------------------------------------
@@ -86,7 +90,7 @@ inline size_t computeDstIndex(const LoadTask& t, int r, int c) noexcept
 }
 
 // ----------------------------- optional AVX2 swap ---------------------------
-#if defined(__AVX2__) || (defined(_M_AMD64) && defined(__AVX2__))
+#if defined(__AVX2__)
 #include <immintrin.h>
 static inline void swap_uint16_avx(void* buf, size_t n) noexcept
 {
@@ -108,7 +112,7 @@ static inline void swap_uint16_avx(void* buf, size_t n) noexcept
 
 inline void swap_uint16_buf(void* buf, size_t n) noexcept
 {
-#if defined(__AVX2__) || (defined(_M_AMD64) && defined(__AVX2__))
+#if defined(__AVX2__)
     if (n >= 32) return swap_uint16_avx(buf, n);
 #endif
     TIFFSwabArrayOfShort(reinterpret_cast<uint16_t*>(buf),
@@ -273,6 +277,11 @@ public:
 
     unsigned size() const noexcept { return nThreads_; }
 
+    // Called at MATLAB exit to unlock the MEX file and release threads
+    static void cleanup()
+    {
+        instance().doCleanup();
+    }
 private:
     MexThreadPool()
     {
@@ -281,15 +290,29 @@ private:
             nThreads_ = std::clamp<unsigned>(std::atoi(e), 1u, nThreads_);
         threads_.resize(nThreads_);
         mexLock();                       // keep MEX locked for life of pool
-        mexAtExit(+[](void*) { MexThreadPool::instance().~MexThreadPool(); });
+        mexAtExit(MexThreadPool::mexAtExitHelper);
     }
     ~MexThreadPool()
     {
-        mexUnlock();
+        doCleanup();
+    }
+
+    void doCleanup()
+    {
+        if (locked_) {
+            locked_ = false;
+            mexUnlock();
+        }
+        threads_.clear();
+    }
+
+    static void mexAtExitHelper() {
+        cleanup();
     }
 
     unsigned nThreads_;
     std::vector<std::thread> threads_;
+    bool locked_ = true;
 };
 
 // ---------------------------------------------------------------------------
@@ -329,7 +352,9 @@ void mexFunction(int nlhs, mxArray* plhs[],
         mexErrMsgIdAndTxt("load_bl_tif:ROI", "Bad ROI params");
 
     // ------------- probe slice 0 ---------
-    TIFFSetWarningHandler(nullptr);      // silence libtiff chatter
+    // Store and restore the previous warning handler
+    auto prevWarn = TIFFSetWarningHandler(nullptr);
+
     TiffHandle tif0(TIFFOpen(fileList[0].c_str(), "rb8"));
     if (!tif0)
         mexErrMsgIdAndTxt("load_bl_tif:OpenFail",
@@ -349,6 +374,12 @@ void mexFunction(int nlhs, mxArray* plhs[],
     const mwSize    outW      = transpose ? roiH : roiW;
     const size_t    pixPerSlc = static_cast<size_t>(outH) * outW;
 
+    // Overflow check for output allocation
+    size_t totalPixels = pixPerSlc;
+    if (numSlices > 0 && totalPixels > SIZE_MAX / (numSlices * bpp))
+        mexErrMsgIdAndTxt("load_bl_tif:OOM",
+            "Requested output too large for platform.");
+
     // ------------------------------------------------------------------ output array
     mwSize dims[3] = { outH, outW, static_cast<mwSize>(numSlices) };
     mxArray* outArr = mxCreateNumericArray(3, dims, outClass, mxREAL);
@@ -360,25 +391,28 @@ void mexFunction(int nlhs, mxArray* plhs[],
     std::vector<LoadTask> tasks;
     std::vector<std::vector<uint8_t>> results;
     std::vector<std::string> errors;
-    std::mutex errMtx;
 
     tasks.reserve(numSlices);
     results.reserve(numSlices);
 
+    // Only open TIFF to check dimensions if the path differs from the first slice
     for (int z = 0; z < numSlices; ++z) {
         try {
-            TiffHandle tif(TIFFOpen(fileList[z].c_str(), "rb8"));
-            if (!tif)
-                throw std::runtime_error("Cannot open");
+            uint32_t zW = imgW, zH = imgH;
+            if (z != 0) {
+                TiffHandle tif(TIFFOpen(fileList[z].c_str(), "rb8"));
+                if (!tif)
+                    throw std::runtime_error("Cannot open");
 
-            TIFFGetField(tif.get(), TIFFTAG_IMAGEWIDTH , &imgW);
-            TIFFGetField(tif.get(), TIFFTAG_IMAGELENGTH, &imgH);
-            const int ys = std::clamp(roiY0, 0, static_cast<int>(imgH) - 1);
-            const int xs = std::clamp(roiX0, 0, static_cast<int>(imgW) - 1);
+                TIFFGetField(tif.get(), TIFFTAG_IMAGEWIDTH , &zW);
+                TIFFGetField(tif.get(), TIFFTAG_IMAGELENGTH, &zH);
+            }
+            const int ys = std::clamp(roiY0, 0, static_cast<int>(zH) - 1);
+            const int xs = std::clamp(roiX0, 0, static_cast<int>(zW) - 1);
             const int ye = std::clamp(roiY0 + roiH - 1,
-                                      0, static_cast<int>(imgH) - 1);
+                                      0, static_cast<int>(zH) - 1);
             const int xe = std::clamp(roiX0 + roiW - 1,
-                                      0, static_cast<int>(imgW) - 1);
+                                      0, static_cast<int>(zW) - 1);
             const int cH = ye - ys + 1, cW = xe - xs + 1;
             if (cH <= 0 || cW <= 0)
                 throw std::runtime_error("ROI has no overlap");
@@ -391,18 +425,25 @@ void mexFunction(int nlhs, mxArray* plhs[],
             results.emplace_back(static_cast<size_t>(cH) * cW * bpp);
         }
         catch (const std::exception& ex) {
-            errors.emplace_back(fileList[z] + ": " + ex.what());
+            std::ostringstream oss;
+            oss << "Slice " << z << " (" << fileList[z] << "): " << ex.what();
+            errors.emplace_back(oss.str());
         }
     }
 
-    if (!errors.empty())
-        mexErrMsgIdAndTxt("load_bl_tif:Init",
-            "Errors preparing tasks:\n%s", errors[0].c_str());
+    // Restore the previous warning handler (if any)
+    TIFFSetWarningHandler(prevWarn);
+
+    if (!errors.empty()) {
+        std::ostringstream oss;
+        oss << "Errors preparing tasks:\n";
+        for (const auto& s : errors) oss << s << '\n';
+        mexErrMsgIdAndTxt("load_bl_tif:Init", "%s", oss.str().c_str());
+    }
 
     // ------------- run worker tasks ------
     auto& pool = MexThreadPool::instance();
     const size_t nTasks = tasks.size();
-    std::atomic<bool> abort(false);
 
     try {
         pool.parallel_for(nTasks, [&](size_t i)
