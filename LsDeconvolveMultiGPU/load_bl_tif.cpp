@@ -34,16 +34,17 @@ struct MatlabString {
 };
 
 struct LoadTask {
-    int in_row0, in_col0, cropH, cropW;
-    int roiH, roiW, zIndex;
-    int out_row0, out_col0;
-    int pixelsPerSlice;
+    size_t in_row0, in_col0, cropH, cropW;
+    size_t roiH, roiW, zIndex;
+    size_t out_row0, out_col0;
+    size_t pixelsPerSlice;
     std::string path;
     bool transpose;
     LoadTask() = default;
     LoadTask(
-        int inY, int inX, int outY, int outX, int h, int w, int roiH_, int roiW_,
-        int z, int pps, std::string filename, bool transpose_
+        size_t inY, size_t inX, size_t outY, size_t outX,
+        size_t h, size_t w, size_t roiH_, size_t roiW_,
+        size_t z, size_t pps, std::string filename, bool transpose_
     ) : in_row0(inY), in_col0(inX), out_row0(outY), out_col0(outX),
         cropH(h), cropW(w), roiH(roiH_), roiW(roiW_),
         zIndex(z), pixelsPerSlice(pps), path(std::move(filename)), transpose(transpose_) {}
@@ -58,19 +59,17 @@ using TiffHandle = std::unique_ptr<TIFF, TiffCloser>;
 //  64-bit-safe destination index utility for output array indexing (portable for both shapes)
 // ------------------------------------------------------------------
 inline size_t computeDstIndex(const LoadTask& task,
-                              int row, int col) noexcept
+                              size_t row, size_t col) noexcept
 {
-    size_t r = static_cast<size_t>(task.out_row0 + row);
-    size_t c = static_cast<size_t>(task.out_col0 + col);
-    size_t slice = static_cast<size_t>(task.zIndex);
+    size_t r = task.out_row0 + row;
+    size_t c = task.out_col0 + col;
+    size_t slice = task.zIndex;
 
     // MATLAB arrays are column-major and transpose swaps [Y, X] ↔ [X, Y]
     if (!task.transpose)
-        return r + c * static_cast<size_t>(task.roiH)
-               + slice * static_cast<size_t>(task.pixelsPerSlice);
+        return r + c * task.roiH + slice * task.pixelsPerSlice;
     else
-        return c + r * static_cast<size_t>(task.roiW)
-               + slice * static_cast<size_t>(task.pixelsPerSlice);
+        return c + r * task.roiW + slice * task.pixelsPerSlice;
 }
 
 
@@ -207,7 +206,7 @@ static void readSubRegionToBuffer(
                 }
 
                 if (bytesPerPixel == 2 && TIFFIsByteSwapped(tif))
-                    swap_uint16_buf(stripbuf.data(), static_cast<int>(nbytes / 2));
+                    swap_uint16_buf(stripbuf.data(), static_cast<size_t>(nbytes / 2));
 
                 currentStrip = stripIdx;
             }
@@ -345,7 +344,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
     // --- Robustly validate ROI for all slices BEFORE allocation ---
     uint32_t imgWidth = 0, imgHeight = 0;
     uint16_t bitsPerSample = 0, globalBitsPerSample = 0, samplesPerPixel = 1;
-    for (int z = 0; z < numSlices; ++z) {
+    for (size_t z = 0; z < numSlices; ++z) {
         TiffHandle tif(TIFFOpen(fileList[z].c_str(), "r"));
         if (!tif)
             mexErrMsgIdAndTxt("load_bl_tif:OpenFail", "Cannot open file %s (slice %d)", fileList[z].c_str(), z+1);
@@ -371,8 +370,8 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         }
 
         // PATCH: Require requested ROI to be fully inside TIFF bounds for all slices
-        if (roiY0 + roiH > (int)imgHeight ||
-            roiX0 + roiW > (int)imgWidth) {
+        if (roiY0 + roiH > imgHeight ||
+            roiX0 + roiW > imgWidth) {
             mexErrMsgIdAndTxt("load_bl_tif:ROI",
                 "Requested ROI [%d:%d,%d:%d] is out of bounds for slice %d (file: %s)",
                 roiY0+1, roiY0+roiH, roiX0+1, roiX0+roiW, z+1, fileList[z].c_str());
