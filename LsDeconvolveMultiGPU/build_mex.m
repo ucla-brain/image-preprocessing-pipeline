@@ -150,7 +150,7 @@ function ok = try_build_libtiff(libtiff_root, libtiff_install_dir, mex_flags_cpu
         if ~isfolder(libtiff_root)
             url = ['https://download.osgeo.org/libtiff/tiff-', version, '.zip'];
             system(['curl -L -o ', archive, ' ', url]);
-            unzip(archive);
+            unzip(archive, 'tiff_src');
             delete(archive);
         end
         cd(libtiff_root);
