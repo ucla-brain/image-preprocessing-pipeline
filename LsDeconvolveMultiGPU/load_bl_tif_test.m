@@ -1,12 +1,13 @@
 function load_bl_tif_test()
 % ==============================================================
-% load_bl_tif_test.m  (2025-06-07  •  patch-5)
+% load_bl_tif_test.m  (2025-06-07  •  patch-6)
 %
 % Comprehensive reliability & performance test-suite for the
 % load_bl_tif MEX.  Works on MATLAB R2018b + with stock libtiff.
 %
 % Updated: Handles automatic bit-depth detection (uint8/uint16),
 % adds temp cleanup, clarifies error reporting, and minor polish.
+% Suite 3: Loop fixed for struct array ('ternary' error resolved).
 % ==============================================================
 
 clearvars; clc;
@@ -140,7 +141,8 @@ specs  = [ ...
    struct("bits",16,"big",false)
    struct("bits",16,"big",true )];
 fname8LE = '';
-for s = specs
+for idx = 1:numel(specs)
+    s = specs(idx);
     fname = fullfile(tmpdir, sprintf('end_%db_%s.tif',s.bits,ternary(s.big,'BE','LE')));
     img   = randi(intmax(sprintf('uint%d',s.bits)), 512,512, sprintf('uint%d',s.bits));
     t     = Tiff(fname,'w');
