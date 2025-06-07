@@ -367,6 +367,10 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
                 std::lock_guard<std::mutex> lck(err_mutex);
                 errors.emplace_back(task.path + ": " + ex.what());
                 hasError = true; break;
+            } catch (...) {
+                std::lock_guard<std::mutex> lck(err_mutex);
+                errors.emplace_back(task.path + ": unknown error");
+                hasError = true; break;
             }
         }
     };
