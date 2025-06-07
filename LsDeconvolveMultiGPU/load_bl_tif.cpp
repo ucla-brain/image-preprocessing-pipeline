@@ -19,6 +19,7 @@
 constexpr uint16_t kSupportedBitDepth8  = 8;
 constexpr uint16_t kSupportedBitDepth16 = 16;
 constexpr size_t MAX_TIFF_BLOCK_BYTES = 1ull << 30;
+constexpr size_t kMaxPixelsPerSlice = static_cast<size_t>(std::numeric_limits<int>::max());
 
 // RAII wrapper for mxArrayToUTF8String()
 struct MatlabString {
@@ -73,9 +74,9 @@ inline size_t computeDstIndex(const LoadTask& task,
 }
 
 
-static void swap_uint16_buf(void* buf, int count) {
+static void swap_uint16_buf(void* buf, size_t count) {
     uint16_t* p = static_cast<uint16_t*>(buf);
-    for (int i = 0; i < count; ++i) {
+    for (size_t i = 0; i < count; ++i) {
         uint16_t v = p[i];
         p[i] = (v >> 8) | (v << 8);
     }
@@ -99,12 +100,12 @@ static void readSubRegionToBuffer(
     uint8_t bytesPerPixel,
     std::vector<uint8_t>& blockBuf)
 {
-    //-----------------------------------------------------------------------
-    //  Common metadata checks
-    //-----------------------------------------------------------------------
-    uint32_t imgWidth, imgHeight;
-    TIFFGetField(tif, TIFFTAG_IMAGEWIDTH , &imgWidth);
-    TIFFGetField(tif, TIFFTAG_IMAGELENGTH, &imgHeight);
+    size_t imgWidth, imgHeight;
+    if (!TIFFGetField(tif, TIFFTAG_IMAGEWIDTH , &imgWidth) ||
+        !TIFFGetField(tif, TIFFTAG_IMAGELENGTH, &imgHeight))
+    {
+        throw std::runtime_error("Missing TIFFTAG_IMAGEWIDTH or IMAGELENGTH in file: " + task.path);
+    }
 
     uint16_t bitsPerSample = 0, samplesPerPixel = 1;
     TIFFGetField(tif, TIFFTAG_BITSPERSAMPLE, &bitsPerSample);
@@ -113,54 +114,54 @@ static void readSubRegionToBuffer(
     if (samplesPerPixel != 1 ||
         (bitsPerSample != kSupportedBitDepth8 && bitsPerSample != kSupportedBitDepth16))
     {
-        mexErrMsgIdAndTxt("load_bl_tif:Type",
-            "Unsupported TIFF format: only 8/16-bit grayscale, 1 sample/pixel");
+        throw std::runtime_error("Unsupported TIFF format: only 8/16-bit grayscale, 1 sample/pixel in file: " + task.path);
     }
-    //-----------------------------------------------------------------------
-    //  Choose path
-    //-----------------------------------------------------------------------
+
     const bool isTiled = TIFFIsTiled(tif);
 
     if (isTiled)
     {
-        //-------------------------------------------------------------------
-        //  Tiled path
-        //-------------------------------------------------------------------
         uint32_t tileW = 0, tileH = 0;
         TIFFGetField(tif, TIFFTAG_TILEWIDTH , &tileW);
         TIFFGetField(tif, TIFFTAG_TILELENGTH, &tileH);
         if (tileW == 0 || tileH == 0)
-            mexErrMsgIdAndTxt("load_bl_tif:Tiled:Meta",
-                "Invalid tile size in TIFF metadata");
+            throw std::runtime_error("Invalid tile size in TIFF metadata in file: " + task.path);
 
         const size_t uncompressedTileBytes =
             static_cast<size_t>(tileW) * tileH * bytesPerPixel;
         if (uncompressedTileBytes > MAX_TIFF_BLOCK_BYTES)
-            mexErrMsgIdAndTxt("load_bl_tif:Tiled:Size", "Tile buffer exceeds sane limit of 1 GiB (tile %u)");
+            throw std::runtime_error("Tile buffer exceeds sane limit of 1 GiB in file: " + task.path);
 
         std::vector<uint8_t> tilebuf(uncompressedTileBytes);
         const size_t nTilePixels = uncompressedTileBytes / bytesPerPixel;
 
         uint32_t prevTile = UINT32_MAX;
 
-        for (int row = 0; row < task.cropH; ++row)
-        {
+        for (int row = 0; row < task.cropH; ++row) {
             uint32_t imgY = static_cast<uint32_t>(task.in_row0 + row);
-            for (int col = 0; col < task.cropW; ++col)
-            {
+            for (int col = 0; col < task.cropW; ++col) {
                 uint32_t imgX = static_cast<uint32_t>(task.in_col0 + col);
                 uint32_t tileIdx = TIFFComputeTile(tif, imgX, imgY, 0, 0);
 
-                if (tileIdx != prevTile)
-                {
-                    if (TIFFReadEncodedTile(tif, tileIdx,
-                                             tilebuf.data(),
-                                             static_cast<tsize_t>(uncompressedTileBytes)) < 0)
-                        mexErrMsgIdAndTxt("load_bl_tif:Tiled:ReadFail",
-                            "TIFFReadEncodedTile failed (tile %u)", tileIdx);
 
-                    if (bytesPerPixel == 2 && TIFFIsByteSwapped(tif))
-                        swap_uint16_buf(tilebuf.data(), static_cast<int>(nTilePixels));
+
+                if (tileIdx != prevTile) {
+                    tsize_t ret = TIFFReadEncodedTile(
+                        tif,
+                        tileIdx,
+                        tilebuf.data(),
+                        static_cast<tsize_t>(uncompressedTileBytes)
+                    );
+                    if (ret < 0)
+                    {
+                        std::ostringstream oss;
+                        oss << "TIFFReadEncodedTile failed (tile " << tileIdx << ") in file: " << task.path;
+                        throw std::runtime_error(oss.str());
+                    }
+                    size_t validBytes = static_cast<size_t>(ret);
+                    size_t validPixels = validBytes / bytesPerPixel;
+                    if (bytesPerPixel == 2 && !TIFFIsByteSwapped(tif))
+                        swap_uint16_buf(tilebuf.data(), validPixels);
 
                     prevTile = tileIdx;
                 }
@@ -178,57 +179,49 @@ static void readSubRegionToBuffer(
     }
     else
     {
-        // -------------------------------------------------------------------
-        //  Stripped path (safe)
-        // -------------------------------------------------------------------
         uint32_t rowsPerStrip = 0;
         TIFFGetFieldDefaulted(tif, TIFFTAG_ROWSPERSTRIP, &rowsPerStrip);
         if (rowsPerStrip == 0) rowsPerStrip = imgHeight;
 
-        // Allocate once for the theoretical max,
-        // but only use actual bytes (`nbytes`) for decoding and bounds checks.
         const size_t maxStripBytes =
             static_cast<size_t>(rowsPerStrip) * imgWidth * bytesPerPixel;
         if (maxStripBytes > MAX_TIFF_BLOCK_BYTES)
-            mexErrMsgIdAndTxt("load_bl_tif:Strip:Size",
-                "Strip buffer (>1 GiB) exceeds sane limits");
+            throw std::runtime_error("Strip buffer exceeds sane limits (>1 GiB) in file: " + task.path);
 
         std::vector<uint8_t> stripbuf(maxStripBytes);
         tstrip_t currentStrip = (tstrip_t)-1;
-        tsize_t  nbytes       = 0;        // byte count of *current* strip
+        tsize_t  nbytes = 0;
 
         for (int row = 0; row < task.cropH; ++row)
         {
             uint32_t tifRow   = static_cast<uint32_t>(task.in_row0 + row);
             tstrip_t stripIdx = TIFFComputeStrip(tif, tifRow, 0);
 
-            // (Re)load strip only when it changes
-            if (stripIdx != currentStrip)
-            {
-                nbytes = TIFFReadEncodedStrip(tif, stripIdx,
-                                              stripbuf.data(),
+            if (stripIdx != currentStrip) {
+                nbytes = TIFFReadEncodedStrip(tif, stripIdx, stripbuf.data(),
                                               static_cast<tsize_t>(maxStripBytes));
-                if (nbytes < 0)
-                    mexErrMsgIdAndTxt("load_bl_tif:Strip:ReadFail",
-                        "TIFFReadEncodedStrip failed (strip %u)", stripIdx);
+                if (nbytes < 0) {
+                    std::ostringstream oss;
+                    oss << "TIFFReadEncodedStrip failed (strip " << stripIdx << ") in file: " << task.path;
+                    throw std::runtime_error(oss.str());
+                }
 
                 if (bytesPerPixel == 2 && TIFFIsByteSwapped(tif))
-                    swap_uint16_buf(stripbuf.data(),
-                                    static_cast<int>(nbytes / 2));
+                    swap_uint16_buf(stripbuf.data(), static_cast<int>(nbytes / 2));
 
                 currentStrip = stripIdx;
             }
 
-            /* How many *fully decoded* rows does this strip hold?            */
             const uint32_t rowsInThisStrip =
                 static_cast<uint32_t>(nbytes / (imgWidth * bytesPerPixel));
-
             uint32_t stripStartRow = stripIdx * rowsPerStrip;
             uint32_t relRow        = tifRow - stripStartRow;
 
-            if (relRow >= rowsInThisStrip)   // corrupt or truncated strip
-                mexErrMsgIdAndTxt("load_bl_tif:Strip:Bounds",
-                    "Row %u exceeds decoded strip size (strip %u)", tifRow+1, stripIdx);
+            if (relRow >= rowsInThisStrip) {
+                std::ostringstream oss;
+                oss << "Row " << tifRow+1 << " exceeds decoded strip size (strip " << stripIdx << ") in file: " << task.path;
+                throw std::runtime_error(oss.str());
+            }
 
             uint8_t* scanlinePtr = stripbuf.data() +
                 (static_cast<size_t>(relRow) * imgWidth * bytesPerPixel);
@@ -238,9 +231,11 @@ static void readSubRegionToBuffer(
                 size_t srcOff = (static_cast<size_t>(task.in_col0 + col)) * bytesPerPixel;
                 size_t dstOff = (static_cast<size_t>(row) * task.cropW + col) * bytesPerPixel;
 
-                if (srcOff + bytesPerPixel > static_cast<size_t>(nbytes))
-                    mexErrMsgIdAndTxt("load_bl_tif:Strip:Bounds",
-                        "Column %u exceeds decoded strip size (strip %u)", col+1, stripIdx);
+                if (srcOff + bytesPerPixel > static_cast<size_t>(nbytes)) {
+                    std::ostringstream oss;
+                    oss << "Column " << col+1 << " exceeds decoded strip size (strip " << stripIdx << ") in file: " << task.path;
+                    throw std::runtime_error(oss.str());
+                }
 
                 std::memcpy(blockBuf.data() + dstOff,
                             scanlinePtr + srcOff,
@@ -310,7 +305,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         }
     }
 
-    int numSlices = static_cast<int>(mxGetNumberOfElements(prhs[0]));
+    size_t numSlices = static_cast<size_t>(mxGetNumberOfElements(prhs[0]));
     std::vector<std::string> fileList(numSlices);
     for (int i = 0; i < numSlices; ++i)
     {
@@ -349,7 +344,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
 
     // --- Robustly validate ROI for all slices BEFORE allocation ---
     uint32_t imgWidth = 0, imgHeight = 0;
-    uint16_t bitsPerSample = 0, samplesPerPixel = 1;
+    uint16_t bitsPerSample = 0, globalBitsPerSample = 0, samplesPerPixel = 1;
     for (int z = 0; z < numSlices; ++z) {
         TiffHandle tif(TIFFOpen(fileList[z].c_str(), "r"));
         if (!tif)
@@ -360,16 +355,23 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         TIFFGetField(tif.get(), TIFFTAG_BITSPERSAMPLE, &bitsPerSample);
         TIFFGetFieldDefaulted(tif.get(), TIFFTAG_SAMPLESPERPIXEL, &samplesPerPixel);
 
+        if (z == 0) {
+            globalBitsPerSample = bitsPerSample;
+        } else if (bitsPerSample != globalBitsPerSample) {
+            mexErrMsgIdAndTxt("load_bl_tif:BitDepthMismatch",
+                "Inconsistent bitsPerSample across slices. Expected %u, got %u in slice %d (%s)",
+                globalBitsPerSample, bitsPerSample, z+1, fileList[z].c_str());
+        }
+
         if (samplesPerPixel != 1 ||
-            (bitsPerSample != kSupportedBitDepth8 && bitsPerSample != kSupportedBitDepth16)) {
+            (globalBitsPerSample != kSupportedBitDepth8 && globalBitsPerSample != kSupportedBitDepth16)) {
             mexErrMsgIdAndTxt("load_bl_tif:Type",
                 "Only 8/16-bit grayscale TIFFs (1 sample per pixel) are supported. Slice %d (%s)",
                 z+1, fileList[z].c_str());
         }
 
         // PATCH: Require requested ROI to be fully inside TIFF bounds for all slices
-        if (roiY0 < 0 || roiX0 < 0 ||
-            roiY0 + roiH > (int)imgHeight ||
+        if (roiY0 + roiH > (int)imgHeight ||
             roiX0 + roiW > (int)imgWidth) {
             mexErrMsgIdAndTxt("load_bl_tif:ROI",
                 "Requested ROI [%d:%d,%d:%d] is out of bounds for slice %d (file: %s)",
@@ -379,18 +381,20 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
 
     // --- After validation, all slices are good ---
 
-    const mxClassID outType = (bitsPerSample == 8) ? mxUINT8_CLASS : mxUINT16_CLASS;
-    const uint8_t bytesPerPixel = (bitsPerSample == 16) ? 2 : 1;
+    const mxClassID outType = (globalBitsPerSample == 8) ? mxUINT8_CLASS : mxUINT16_CLASS;
+    const uint8_t bytesPerPixel = (globalBitsPerSample == 16) ? 2 : 1;
 
-    mwSize outH = transpose ? roiW : roiH;
-    mwSize outW = transpose ? roiH : roiW;
-    mwSize dims[3] = { outH, outW, static_cast<mwSize>(numSlices) };
+    size_t outH = transpose ? roiW : roiH;
+    size_t outW = transpose ? roiH : roiW;
+    size_t dims[3] = { outH, outW, numSlices };
     plhs[0] = mxCreateNumericArray(3, dims, outType, mxREAL);
     if (!plhs[0])
         mexErrMsgIdAndTxt("load_bl_tif:Alloc", "Failed to allocate output array.");
 
     void* outData = mxGetData(plhs[0]);
-    int pixelsPerSlice = static_cast<int>(static_cast<size_t>(outH) * outW);
+    size_t pixelsPerSlice = outH * outW;
+    if (pixelsPerSlice > kMaxPixelsPerSlice)
+        mexErrMsgIdAndTxt("load_bl_tif:TooLarge", "Requested ROI too large (>2^31 elements).");
 
     // --- Prepare task list (one per Z) ---
     std::vector<LoadTask> tasks;
@@ -463,8 +467,8 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
     for (size_t i = 0; i < tasks.size(); ++i) {
         const auto& task = tasks[i];
         const auto& res  = results[i];
-        for (size_t row = 0; row < task.cropH; ++row) {
-            for (size_t  col = 0; col < task.cropW; ++col) {
+        for (const size_t row = 0; row < task.cropH; ++row) {
+            for (const size_t col = 0; col < task.cropW; ++col) {
                 size_t dstElem = computeDstIndex(task, row, col);
                 size_t dstByte = dstElem * bytesPerPixel;
                 size_t srcByte = (row * task.cropW + col) * bytesPerPixel;
