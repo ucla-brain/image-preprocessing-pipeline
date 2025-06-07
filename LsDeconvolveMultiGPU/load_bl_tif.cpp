@@ -22,6 +22,15 @@ struct LoadTask
     const std::size_t zIndex;       // 0-based Z index in output buffer
     void* dstBase;
     const std::size_t pixelsPerSlice;
+
+    LoadTask(
+        int inY, int inX, int outY, int outX,
+        int h, int w, int roiH_, int roiW_,
+        std::size_t z, void* dst, std::size_t pps
+    ) :
+        in_row0(inY), in_col0(inX), out_row0(outY), out_col0(outX),
+        cropH(h), cropW(w), roiH(roiH_), roiW(roiW_),
+        zIndex(z), dstBase(dst), pixelsPerSlice(pps) {}
 };
 
 struct TiffCloser {
@@ -36,11 +45,17 @@ inline void getImageSize(TIFF* tif, uint32_t& w, uint32_t& h) {
 
 // RAII wrapper for mxArrayToUTF8String()
 struct MatlabString {
-    private char* ptr;
+private:
+    char* ptr;
+
+public:
     explicit MatlabString(const mxArray* arr) : ptr(mxArrayToUTF8String(arr)) {
-        if (!ptr) mexErrMsgIdAndTxt("load_bl_tif:BadString", "Failed to convert string from mxArray");
+        if (!ptr)
+            mexErrMsgIdAndTxt("load_bl_tif:BadString", "Failed to convert string from mxArray");
     }
+
     ~MatlabString() { mxFree(ptr); }
+
     const char* get() const { return ptr; }
     operator const char*() const { return ptr; }
 };
@@ -99,7 +114,7 @@ static void copySubRegion(const LoadTask& task, TIFF* tif, uint8_t bytesPerPixel
                 std::size_t tileStride = tileWidth * bytesPerPixel;
                 std::size_t offset = relY * tileStride + relX * bytesPerPixel;
 
-                // Compute linear index into [H, W, Z] buffer (column-major order)
+                // MATLAB column-major index: row + col * roiH + z * roiH * roiW
                 std::size_t dstIndex = (task.out_row0 + row)
                                      + (task.out_col0 + col) * task.roiH
                                      + task.zIndex * task.pixelsPerSlice;
