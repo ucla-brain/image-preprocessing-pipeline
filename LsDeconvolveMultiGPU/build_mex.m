@@ -127,7 +127,7 @@ function ok = try_build_libtiff(libtiff_root, libtiff_install_dir)
     if ispc
         archive = 'tiff.zip';
         if ~isfolder(libtiff_root)
-            system(['curl -L -o ', archive, ' https://download.osgeo.org/libtiff/tiff-4.6.0.zip']);
+            system(['curl -L -o ', archive, ' https://download.osgeo.org/libtiff/tiff-4.7.0.zip']);
             unzip(archive, 'tiff_src'); delete(archive);
         end
         cd(libtiff_root);
@@ -138,7 +138,7 @@ function ok = try_build_libtiff(libtiff_root, libtiff_install_dir)
     else
         archive = 'tiff.tar.gz';
         if ~isfolder(['tiff-', '4.6.0'])
-            system(['curl -L -o ', archive, ' https://download.osgeo.org/libtiff/tiff-4.6.0.tar.gz']);
+            system(['curl -L -o ', archive, ' https://download.osgeo.org/libtiff/tiff-4.7.0.tar.gz']);
             system(['tar -xzf ', archive]); delete(archive);
         end
         cd(['tiff-', '4.6.0']);
