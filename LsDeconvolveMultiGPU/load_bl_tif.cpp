@@ -53,12 +53,6 @@ static void swap_uint16_buf(void* buf, size_t count) {
     }
 }
 
-static void throw_mex(const char* id, const char* fmt, const char* s) {
-    char msg[512];
-    snprintf(msg, sizeof(msg), fmt, s);
-    mexErrMsgIdAndTxt(id, "%s", msg);
-}
-
 // --- Read and copy a cropped subregion from a TIFF slice ---
 static void copySubRegion(const LoadTask& task, TIFF* tif, uint8_t bytesPerPixel)
 {
@@ -95,8 +89,7 @@ static void copySubRegion(const LoadTask& task, TIFF* tif, uint8_t bytesPerPixel
                     mexErrMsgIdAndTxt("load_bl_tif:ReadTile", "Failed reading tile at x=%u y=%u", tileX, tileY);
 
                 if (bytesPerPixel == 2 && TIFFIsByteSwapped(tif)) {
-                    tsize_t tilesize = TIFFTileSize(tif);
-                    size_t n_tile_pixels = tilesize / bytesPerPixel;
+                    size_t n_tile_pixels = tileSize / bytesPerPixel;
                     swap_uint16_buf(tilebuf.data(), n_tile_pixels);
                 }
 
@@ -163,6 +156,8 @@ void mexFunction(int nlhs, mxArray* plhs[],
         if (!mxIsChar(cell))
             mexErrMsgIdAndTxt("load_bl_tif:Input", "File list must contain only strings.");
         MatlabString mstr(cell);
+        if (!mstr.get() || !*mstr.get())
+            mexErrMsgIdAndTxt("load_bl_tif:Input", "Filename in cell %zu is empty", i);
         fileList[i] = mstr.get();
     }
 
@@ -175,17 +170,23 @@ void mexFunction(int nlhs, mxArray* plhs[],
         mexErrMsgIdAndTxt("load_bl_tif:ROI","ROI parameters invalid");
 
     // Probe first slice for data type
+    TIFFSetWarningHandler(NULL);
     TiffHandle tif0(TIFFOpen(fileList[0].c_str(), "r"));
     if (!tif0)
-        throw_mex("load_bl_tif:OpenFail", "Cannot open file %s (slice 0)", fileList[0].c_str());
+        mexErrMsgIdAndTxt("load_bl_tif:OpenFail", "Cannot open file %s (slice 0)", fileList[0].c_str());
     uint32_t imgWidth = 0, imgHeight = 0;
     uint16_t bitsPerSample = 0, samplesPerPixel = 1;
     getImageSize(tif0.get(), imgWidth, imgHeight);
     TIFFGetField(tif0.get(), TIFFTAG_BITSPERSAMPLE, &bitsPerSample);
     TIFFGetFieldDefaulted(tif0.get(), TIFFTAG_SAMPLESPERPIXEL, &samplesPerPixel);
 
+    if (samplesPerPixel > 1)
+        mexErrMsgIdAndTxt(
+            "load_bl_tif:Unsupported",
+            "Only grayscale TIFFs (1 sample per pixel) are supported. Got %u samples.",  samplesPerPixel);
     if (samplesPerPixel != 1 || (bitsPerSample != 8 && bitsPerSample != 16))
         mexErrMsgIdAndTxt("load_bl_tif:Type","Only 8/16-bit grayscale TIFFs are supported");
+
 
     const mxClassID outType = (bitsPerSample == 8) ? mxUINT8_CLASS : mxUINT16_CLASS;
     const uint8_t bytesPerPixel = (bitsPerSample == 16) ? 2 : 1;
@@ -203,7 +204,7 @@ void mexFunction(int nlhs, mxArray* plhs[],
     {
         TiffHandle tif(TIFFOpen(fileList[z].c_str(), "r"));
         if (!tif)
-            throw_mex("load_bl_tif:OpenFail", "Cannot open file %s (slice %zu)", fileList[z].c_str(), z);
+            mexErrMsgIdAndTxt("load_bl_tif:OpenFail", "Cannot open file %s (slice %zu)", fileList[z].c_str(), z);
         uint32_t imgWidth = 0, imgHeight = 0;
         getImageSize(tif.get(), imgWidth, imgHeight);
 
