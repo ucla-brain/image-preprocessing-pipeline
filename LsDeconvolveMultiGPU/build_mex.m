@@ -38,28 +38,6 @@ if ~isfile('lz4.h')
     try, websave('lz4.h', lz4_h_url); catch, error('Failed to download lz4.h'); end
 end
 
-% Use locally-compiled libtiff, always.
-libtiff_src_version = '4.6.0'; % or whatever you are building
-libtiff_root = fullfile(pwd, 'tiff_src', ['tiff-', libtiff_src_version]);
-libtiff_install_dir = fullfile(pwd, 'tiff_build', 'libtiff');
-stamp_file = fullfile(libtiff_install_dir, '.libtiff_installed');
-
-if ~isfile(stamp_file)
-    fprintf('Building libtiff from source with optimized flags...\n');
-    if ~try_build_libtiff(libtiff_root, libtiff_install_dir)
-        error('Failed to build local libtiff. Please check the build log.');
-    else
-        if ~isfolder(libtiff_install_dir), error('libtiff install failed!'); end
-        fclose(fopen(stamp_file, 'w'));
-    end
-end
-
-tiff_include = {['-I', fullfile(libtiff_install_dir, 'include')]};
-tiff_lib     = {['-L', fullfile(libtiff_install_dir, 'lib')]};
-tiff_link    = {'-ltiff'};
-
-fprintf('Using libtiff from: %s\n', fullfile(libtiff_install_dir, 'lib'));
-
 % CPU compile flags
 if ispc
     if debug
@@ -77,6 +55,27 @@ else
             'CXXFLAGS="$CXXFLAGS -O3 -march=native -fomit-frame-pointer -fopenmp"'};
     end
 end
+
+% Use locally-compiled libtiff, always.
+libtiff_src_version = '4.6.0'; % or whatever you are building
+libtiff_root = fullfile(pwd, 'tiff_src', ['tiff-', libtiff_src_version]);
+libtiff_install_dir = fullfile(pwd, 'tiff_build', 'libtiff');
+stamp_file = fullfile(libtiff_install_dir, '.libtiff_installed');
+
+if ~isfile(stamp_file)
+    fprintf('Building libtiff from source with optimized flags...\n');
+    if ~try_build_libtiff(libtiff_root, libtiff_install_dir, mex_flags_cpu)
+        error('Failed to build local libtiff. Please check the build log.');
+    else
+        if ~isfolder(libtiff_install_dir), error('libtiff install failed!'); end
+        fclose(fopen(stamp_file, 'w'));
+    end
+end
+
+tiff_include = {['-I', fullfile(libtiff_install_dir, 'include')]};
+tiff_lib     = {['-L', fullfile(libtiff_install_dir, 'lib')]};
+tiff_link    = {'-ltiff'};
+fprintf('Using libtiff from: %s\n', fullfile(libtiff_install_dir, 'lib'));
 
 % Build CPU MEX files
 % mex(mex_flags_cpu{:}, src_semaphore);
@@ -122,9 +121,11 @@ fprintf('All MEX files built successfully.\n');
 % ===============================
 % Function: try_build_libtiff
 % ===============================
-function ok = try_build_libtiff(libtiff_root, libtiff_install_dir, version)
-    % version: string, e.g. '4.7.0'
-    if nargin < 3 || isempty(version)
+function ok = try_build_libtiff(libtiff_root, libtiff_install_dir, mex_flags_cpu, version)
+    if nargin < 3
+        mex_flags_cpu = {};
+    end
+    if nargin < 4 || isempty(version)
         version = '4.7.0';
     end
 
@@ -138,7 +139,6 @@ function ok = try_build_libtiff(libtiff_root, libtiff_install_dir, version)
             delete(archive);
         end
         cd(libtiff_root);
-        % Install to local libtiff_install_dir, NOT conda_prefix
         status = system(['cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="', libtiff_install_dir, '" . && ' ...
                          'cmake --build build --config Release --target install']);
         cd('../../');
@@ -152,10 +152,28 @@ function ok = try_build_libtiff(libtiff_root, libtiff_install_dir, version)
             delete(archive);
         end
         cd(src_folder);
-        % Install to local libtiff_install_dir, NOT conda_prefix
         status = system(['./configure --prefix=', libtiff_install_dir, ' && make -j4 && make install']);
         cd('..');
     end
     ok = (status == 0);
+
+    % Optional: post-build MEX smoketest to verify include/link works
+    if ok && ~isempty(mex_flags_cpu)
+        test_c = 'libtiff_test_mex.c';
+        fid = fopen(test_c, 'w');
+        fprintf(fid, '#include "mex.h"\n#include "tiffio.h"\nvoid mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {\nprintf("LIBTIFF version: %%s\\n", TIFFGetVersion());\n}');
+        fclose(fid);
+        include_flag = ['-I', fullfile(libtiff_install_dir, 'include')];
+        lib_flag     = ['-L', fullfile(libtiff_install_dir, 'lib')];
+        link_flag    = {'-ltiff'};
+        try
+            mex(mex_flags_cpu{:}, test_c, include_flag, lib_flag, link_flag{:});
+            delete(test_c);
+        catch ME
+            warning('Post-build MEX libtiff test failed: %s', ME.message);
+            ok = false;
+        end
+    end
 end
+
 
