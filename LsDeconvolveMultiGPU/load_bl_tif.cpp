@@ -120,7 +120,7 @@ static void copySubRegion(const LoadTask& task)
 
             for (int col = 0; col < task.cropW; ++col) {
                 std::size_t srcOffset = static_cast<std::size_t>(task.roiX + col) * bytesPerPixel;
-                std::size_t dstIndex = row + col * task.cropH + task.zIndex * task.pixelsPerSlice;
+                std::size_t dstIndex = row + col * task.roiH + task.zIndex * task.pixelsPerSlice;
                 std::size_t dstOffset = dstIndex * bytesPerPixel;
 
                 std::memcpy(
