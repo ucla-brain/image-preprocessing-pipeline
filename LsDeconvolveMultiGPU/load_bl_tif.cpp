@@ -111,7 +111,7 @@ static void copySubRegion(const LoadTask& task)
         // -------- STRIPPED/SCANLINE TIFF --------
         // Use TIFFReadScanline for each image row, then memcpy subregion
         std::vector<uint8_t> scanline(imgWidth * bytesPerPixel);
-        for (int row = 0; row < task.roiH; ++row) {
+        for (int col = 0; col < task.roiW; ++col) {
             uint32_t tifRow = static_cast<uint32_t>(task.roiY + row);
             if (!TIFFReadScanline(tif, scanline.data(), tifRow))
                 mexErrMsgIdAndTxt("load_bl_tif:Read", "Read row %u failed", tifRow);
@@ -121,7 +121,7 @@ static void copySubRegion(const LoadTask& task)
                 swap_uint16_buf(scanline.data(), imgWidth);
             }
 
-            for (int col = 0; col < task.roiW; ++col) {
+            for (int row = 0; row < task.roiH; ++row) {
                 std::size_t srcPixel = static_cast<std::size_t>(task.roiX + col);
                 std::size_t srcOffset = srcPixel * bytesPerPixel;
 
