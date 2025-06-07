@@ -1,64 +1,50 @@
 function load_bl_tif_test()
-% ==============================================================
-% load_bl_tif_test.m  • Reliability + performance test-suite
+% =================================================================
+% load_bl_tif_test.m  (2025-06-07)
 %
-% 2025-06-07  –  Patched:
-%   • Suite-2 full-frame is memory-safe (single-slice only)
-%   • Overflow ROI now counted as pass when it errors
-%   • Robust to MATLAB versions lacking Tiff.* enumerations
-% ==============================================================
+%   • Reliability & performance test-suite for load_bl_tif MEX
+%   • Safe on older MATLAB versions without Tiff.ByteOrder / rewrite
+%
+% Run:
+%   matlab -batch load_bl_tif_test
+% =================================================================
 
-%% -------------------------------------------------------------
-% 0. Locate source data ________________________________________
-% --------------------------------------------------------------
+%% -----------------------------------------------------------------
+% 0. Locate source data _____________________________________________
+% ------------------------------------------------------------------
 folder_path = '/data/tif/B11_ds_4.5x_ABeta_z1200';          % ← Linux
-if ispc
-    folder_path = 'V:/tif/B11_ds_4.5x_ABeta_z1200';         % ← Windows
-end
-if isempty(folder_path) || ~isfolder(folder_path)
-    error('TIF test folder not found. Check that folder_path is valid.');
-end
+if ispc, folder_path = 'V:/tif/B11_ds_4.5x_ABeta_z1200'; end
+assert(isfolder(folder_path), ...
+    'TIF test folder not found.  Edit folder_path in load_bl_tif_test.m');
 
-files     = dir(fullfile(folder_path,'*.tif'));
+files = dir(fullfile(folder_path,'*.tif'));
 assert(~isempty(files),'No TIF files found in the folder.');
 
 filelist  = fullfile({files.folder},{files.name});
 numSlices = numel(filelist);
 
-info          = imfinfo(filelist{1});
-imageHeight   = info.Height;
-imageWidth    = info.Width;
-bitDepth      = info.BitDepth;
-if ~ismember(bitDepth,[8 16])
-    error('Expected 8- or 16-bit grayscale TIFF images in source folder.');
-end
-
-fprintf('--- load_bl_tif_test: %d×%d pixels, %d slices, %d-bit ---\n',...
+info        = imfinfo(filelist{1});
+imageHeight = info.Height;
+imageWidth  = info.Width;
+bitDepth    = info.BitDepth;
+fprintf('--- Dataset: %d×%d  |  %d slices  |  %d-bit ---\n', ...
         imageHeight,imageWidth,numSlices,bitDepth);
 
-%% -------------------------------------------------------------
-% 1. Baseline regression _______________________________________
-% --------------------------------------------------------------
-blockSizes = [32, 12;
-              12, 23;
-              23, 12;
-             512,1024];
+%% -----------------------------------------------------------------
+% 1. Baseline regression ___________________________________________
+% ------------------------------------------------------------------
+blockSizes = [32,12; 12,23; 23,12; 512,1024];
 testZ      = [round(numSlices/2), max(1,numSlices-3)];
-totalTests = size(blockSizes,1) * numel(testZ) * 2;
-results    = zeros(totalTests,9);           % [pass z h w x y maxerr speedup transpose]
-testIdx    = 1;
 
 fprintf('\n[Suite 1] Reference vs MEX baseline:\n');
 fprintf('%-4s | %-6s | %-9s | %-13s | %-11s | %-12s | %s\n', ...
-    'pass','Z','BlockSize','(X,Y)','Max Error','Speedup','Mode');
+        'pass','Z','BlockSize','(X,Y)','Max Error','Speedup','Mode');
 fprintf(repmat('-',1,74)); fprintf('\n');
 
 for b = 1:size(blockSizes,1)
-    blkH = blockSizes(b,1); blkW = blockSizes(b,2);
-
+    blkH = blockSizes(b,1);  blkW = blockSizes(b,2);
     for zidx = testZ
         for transposeFlag = [false true]
-            % --- random top-left corner (always valid) --------------
             maxYStart = max(1, imageHeight - blkH + 1);
             maxXStart = max(1, imageWidth  - blkW + 1);
             y = randi([1, maxYStart]);
@@ -68,7 +54,7 @@ for b = 1:size(blockSizes,1)
             x_idx = x : min(imageWidth , x+blkW-1);
             z_idx = zidx : min(numSlices, zidx+2);
 
-            % MATLAB reference
+            % ── MATLAB reference ──────────────────────────────
             if transposeFlag
                 bl_gt = zeros(numel(x_idx),numel(y_idx),numel(z_idx),'uint16');
             else
@@ -83,127 +69,124 @@ for b = 1:size(blockSizes,1)
             end
             tref = toc(t1);
 
-            % MEX call
+            % ── MEX call ──────────────────────────────────────
             t2     = tic;
-            bl_mex = load_bl_tif(filelist(z_idx),y,x,blkH,blkW,transposeFlag);
+            bl_mex = load_bl_tif(filelist(z_idx), y, x, blkH, blkW, transposeFlag);
             tmex   = toc(t2);
 
-            % Compare
-            minH = min(size(bl_gt,1),size(bl_mex,1));
-            minW = min(size(bl_gt,2),size(bl_mex,2));
-            minZ = min(size(bl_gt,3),size(bl_mex,3));
-            pass = isequal(bl_gt(1:minH,1:minW,1:minZ), ...
-                           bl_mex(1:minH,1:minW,1:minZ));
-
-            if pass, maxerr = 0;
-            else
+            % ── Compare ───────────────────────────────────────
+            pass   = isequaln(bl_gt, bl_mex);
+            maxerr = 0;
+            if ~pass
                 diff   = abs(double(bl_mex) - double(bl_gt));
                 maxerr = max(diff(:));
             end
-            symbol = char(pass*10003 + ~pass*10007);  % ✓ / ✗
-            modeStr= ternary(transposeFlag,'T','N');
-            fprintf('  %s  | %-6d | [%3d,%3d]  | (%5d,%5d) | %1.4e | %8.2fx |   %s\n',...
-                    symbol,zidx,blkH,blkW,x,y,maxerr,tref/tmex,modeStr);
-
-            results(testIdx,:) = [pass,zidx,blkH,blkW,x,y,maxerr,tref/tmex,transposeFlag];
-            testIdx = testIdx+1;
+            symbol = char(pass*10003 + ~pass*10007);           % ✓ / ✗
+            mode   = ternary(transposeFlag,'T','N');
+            fprintf('  %s  | %-6d | [%3d,%3d]  | (%5d,%5d) | %1.4e | %8.2fx |   %s\n', ...
+                    symbol,zidx,blkH,blkW,x,y,maxerr,tref/tmex,mode);
         end
     end
 end
-if all(results(:,1)), fprintf('\n🎉 Baseline tests passed.\n');
-else,                 fprintf('\n❗ Baseline failures detected.\n'); end
 
-%% -------------------------------------------------------------
-% 2. Boundary & out-of-bounds ROIs _____________________________
-% --------------------------------------------------------------
+%% -----------------------------------------------------------------
+% 2. Spatial boundary checks _______________________________________
+% ------------------------------------------------------------------
 fprintf('\n[Suite 2] Spatial boundary checks:\n');
-
 edgeROIs = {
-   1,               1,                1,                1,   "top-left 1×1",       "ok";
-   1,               1,                1,             512,   "top row stripe",     "ok";
-   1,               1,              512,                1,   "left col stripe",    "ok";
-   imageHeight-0,   1,                1,             512,   "bottom row stripe",  "ok";
-   1,          imageWidth-0,         512,                1,   "right col stripe",   "ok";
-   1,               1,       imageHeight,      imageWidth,   "full-frame (1 Z)",   "ok_singleZ";
-  -20,             -20,             128,              128,   "upper-left overflow","expect_error";
-   imageHeight-50,  imageWidth-50,  100,              100,   "bottom-right overflow","ok"
+   1,               1,                1,                1,   "top-left 1×1",          "ok";
+   1,               1,                1,             512,   "top row stripe",        "ok";
+   1,               1,              512,                1,   "left col stripe",       "ok";
+   imageHeight,     1,                1,             512,   "bottom row stripe",     "ok";
+   1,          imageWidth,         512,                1,   "right col stripe",      "ok";
+   1,               1,       imageHeight,      imageWidth,   "full-frame (1 Z)",      "ok_singleZ";
+  -20,             -20,             128,              128,   "upper-left overflow",   "expect_error";
+   imageHeight-50,  imageWidth-50,  100,              100,   "bottom-right overflow", "ok";
 };
-
 for k = 1:size(edgeROIs,1)
     [y,x,h,w,label,kind] = edgeROIs{k,:};
     try
         switch kind
             case "ok"
-                blk = load_bl_tif(filelist,y,x,h,w,false); %#ok<NASGU>
+                blk = load_bl_tif(filelist, y,x,h,w,false); %#ok<NASGU>
             case "ok_singleZ"
-                blk = load_bl_tif(filelist(1),y,x,h,w,false); %#ok<NASGU>
+                blk = load_bl_tif(filelist(1), y,x,h,w,false); %#ok<NASGU>
             otherwise
-                % expected to throw
-                load_bl_tif(filelist,y,x,h,w,false);
+                load_bl_tif(filelist, y,x,h,w,false);         % should error
         end
         if kind=="expect_error"
-            fprintf('  ✗ %-25s  did NOT error\n',label);
+            fprintf('  ✗ %-25s did NOT error\n', label);
         else
-            fprintf('  ✓ %-25s  (size %s)\n',label,mat2str(size(blk)));
+            fprintf('  ✓ %-25s (size %s)\n', label, mat2str(size(blk)));
         end
     catch ME
         if kind=="expect_error"
-            fprintf('  ✓ %-25s  raised error (%s)\n',label,ME.identifier);
+            fprintf('  ✓ %-25s raised (%s)\n', label, ME.identifier);
         else
-            fprintf('  ✗ %-25s  ERROR: %s\n',label,ME.message);
+            fprintf('  ✗ %-25s ERROR: %s\n', label, ME.message);
         end
     end
 end
 
-%% -------------------------------------------------------------
-% 3. Byte-order & bit-depth sanity _____________________________
-% --------------------------------------------------------------
+%% -----------------------------------------------------------------
+% 3. 8/16-bit little- vs big-endian ________________________________
+% ------------------------------------------------------------------
 fprintf('\n[Suite 3] 8/16-bit little- vs big-endian:\n');
-tmpdir = tempname; mkdir(tmpdir);
-
-specs = [
+tmpdir  = tempname; mkdir(tmpdir);
+specs   = [
     struct("bits",8 ,"big",false);
     struct("bits",8 ,"big",true );
     struct("bits",16,"big",false);
     struct("bits",16,"big",true )
 ];
-fname8LE = '';
+fname8LE = '';                                  % for negative test later
 
 for s = specs'
+    tagOK = true; skipped = false;
     fname = fullfile(tmpdir, sprintf("test_%dbit_%s.tif", ...
                      s.bits, ternary(s.big,'BE','LE')));
-    if s.bits==8
-        img = randi(intmax('uint8' ),imageHeight,imageWidth,'uint8' );
-    else
-        img = randi(intmax('uint16'),imageHeight,imageWidth,'uint16');
+    if s.bits==8,  img = randi(intmax('uint8' ),imageHeight,imageWidth,'uint8' );
+    else           img = randi(intmax('uint16'),imageHeight,imageWidth,'uint16');
     end
-    if s.bits==8 && ~s.big, fname8LE = fname; end
 
-    % --- write synthetic TIFF slice ------------------------------
     t = Tiff(fname,'w');
     tag.ImageLength       = size(img,1);
     tag.ImageWidth        = size(img,2);
     tag.Photometric       = tryEnum('Tiff.Photometric.MinIsBlack',1);
     tag.BitsPerSample     = s.bits;
     tag.SamplesPerPixel   = 1;
-    tag.PlanarConfiguration = tryEnum('Tiff.PlanarConfiguration.Contig',1);
+    tag.PlanarConfiguration=tryEnum('Tiff.PlanarConfiguration.Contig',1);
     tag.Compression       = tryEnum('Tiff.Compression.None',1);
-    if s.big, setByteOrderBig(t); end
-    t.setTag(tag); t.write(img); t.close;
+    t.setTag(tag);
 
-    % --- loader check -------------------------------------------
+    if s.big
+        if ~setByteOrderBig(t)
+            skipped = true;
+        end
+    end
+
+    if skipped
+        close(t);
+        fprintf('  - skipped %2d-bit big-endian (ByteOrder unsupported)\n', s.bits);
+        continue
+    end
+
+    t.write(img); close(t);
+
+    if s.bits==8 && ~s.big, fname8LE = fname; end
+
     try
         blk = load_bl_tif({fname},1,1,32,32,false);
         assert(isequal(blk, img(1:32,1:32)));
-        fprintf('  ✓ %2d-bit %s-endian\n',s.bits, ternary(s.big,'big','little'));
+        fprintf('  ✓ %2d-bit %s-endian\n', s.bits, ternary(s.big,'big','little'));
     catch ME
-        fprintf('  ✗ %2d-bit %s-endian : %s\n',s.bits, ternary(s.big,'big','little'), ME.message);
+        fprintf('  ✗ %2d-bit %s-endian : %s\n', s.bits, ternary(s.big,'big','little'), ME.message);
     end
 end
 
-%% -------------------------------------------------------------
-% 4. Tile / strip + compression matrix _________________________
-% --------------------------------------------------------------
+%% -----------------------------------------------------------------
+% 4. Tile/strip + compression matrix _______________________________
+% ------------------------------------------------------------------
 fprintf('\n[Suite 4] Tile/strip + compression:\n');
 cfgs = [
    struct("tiled",false,"comp",'None'   ,"name","strip-none");
@@ -215,67 +198,65 @@ cfgs = [
 ];
 for c = cfgs'
     fname = fullfile(tmpdir,"tile_"+c.name+".tif");
-    img   = magic(257);                       % non-power-of-two
+    img   = magic(257);
     t     = Tiff(fname,'w');
-    tag.ImageLength     = size(img,1);
-    tag.ImageWidth      = size(img,2);
-    tag.BitsPerSample   = 16;
-    tag.SamplesPerPixel = 1;
-    tag.Photometric     = tryEnum('Tiff.Photometric.MinIsBlack',1);
-    tag.PlanarConfiguration = tryEnum('Tiff.PlanarConfiguration.Contig',1);
-    tag.Compression     = tryEnum("Tiff.Compression."+c.comp, ...
-                                  compressionNumericFallback(c.comp));
-    if c.tiled
-        tag.TileLength  = 64; tag.TileWidth = 64;
-    else
-        tag.RowsPerStrip= 33;
-    end
-    t.setTag(tag); t.write(uint16(img)); t.close;
+    tag.ImageLength       = size(img,1);
+    tag.ImageWidth        = size(img,2);
+    tag.BitsPerSample     = 16;
+    tag.SamplesPerPixel   = 1;
+    tag.Photometric       = tryEnum('Tiff.Photometric.MinIsBlack',1);
+    tag.PlanarConfiguration=tryEnum('Tiff.PlanarConfiguration.Contig',1);
+    tag.Compression       = tryEnum("Tiff.Compression."+c.comp, ...
+                                    compressionNumericFallback(c.comp));
+    if c.tiled, tag.TileLength = 64; tag.TileWidth = 64;
+    else,       tag.RowsPerStrip = 33;        end
+    t.setTag(tag); t.write(uint16(img)); close(t);
 
     try
         blk = load_bl_tif({fname},20,20,100,100,false);
-        ok  = isequal(blk,uint16(img(20:119,20:119)));
-        fprintf('  %s  →  %s\n',c.name, ternary(ok,'✓','✗'));
+        ok  = isequal(blk, uint16(img(20:119,20:119)));
+        fprintf('  %s  →  %s\n', c.name, ternary(ok,'✓','✗'));
     catch ME
-        fprintf('  %s  →  ✗ (%s)\n',c.name, ME.message);
+        fprintf('  %s  →  ✗ (%s)\n', c.name, ME.message);
     end
 end
 
-%% -------------------------------------------------------------
-% 5. Negative-path assertions __________________________________
-% --------------------------------------------------------------
+%% -----------------------------------------------------------------
+% 5. Negative-path assertions ______________________________________
+% ------------------------------------------------------------------
 fprintf('\n[Suite 5] Expected-error checks:\n');
 negTests = {
     "Non-overlapping ROI",    @() load_bl_tif(filelist(1), -5000,-5000, 10,10,false);
-    "Mismatched bit-depth",   @() load_bl_tif({fname8LE},   1,1,10,10,false);
-    "File list empty string", @() load_bl_tif({''},          1,1,10,10,false);
+    "File list empty str",    @() load_bl_tif({''},          1,1,10,10,false);
 };
+if ~isempty(fname8LE)
+    negTests(end+1,:) = {"Mismatched bit-depth", ...
+                         @() load_bl_tif({fname8LE}, 1,1,10,10,false)};
+end
 for n = 1:size(negTests,1)
     desc = negTests{n,1}; fn = negTests{n,2};
     try
-        fn(); fprintf('  ✗  %-30s did NOT error\n',desc);
+        fn(); fprintf('  ✗ %-25s did NOT error\n', desc);
     catch
-        fprintf('  ✓  %-30s raised error\n',desc);
+        fprintf('  ✓ %-25s raised error\n', desc);
     end
 end
 
-%% -------------------------------------------------------------
-% 6. Thread-scaling benchmark _________________________________
-% --------------------------------------------------------------
+%% -----------------------------------------------------------------
+% 6. Thread-scaling benchmark ______________________________________
+% ------------------------------------------------------------------
 fprintf('\n[Suite 6] Thread scaling (full-frame × all slices):\n');
 bigROI = [1,1,imageHeight,imageWidth];
 for nThreads = [1 2 4 8]
     setenv('LOAD_BL_TIF_THREADS',num2str(nThreads));
-    tic;
-    load_bl_tif(filelist, bigROI(1),bigROI(2),bigROI(3),bigROI(4),false);
-    t = toc;
+    tic; load_bl_tif(filelist, bigROI(1),bigROI(2),bigROI(3),bigROI(4),false); t=toc;
     fprintf('  %2d threads → %.3f s\n', nThreads, t);
 end
-setenv('LOAD_BL_TIF_THREADS','');   % restore
+setenv('LOAD_BL_TIF_THREADS','');
 
-%% -------------------------------------------------------------
-% 7. 500-iteration random ROI fuzzing __________________________
-% --------------------------------------------------------------
+%% -----------------------------------------------------------------
+% 7. Random ROI fuzzing ____________________________________________
+% ------------------------------------------------------------------
 fprintf('\n[Suite 7] 500 random ROI fuzz tests (progress dots):\n');
 rng(42);
 for k = 1:500
@@ -287,33 +268,24 @@ for k = 1:500
         load_bl_tif(filelist,y,x,h,w, rand>0.5);
         if mod(k,20)==0, fprintf('.'); end
     catch ME
-        fprintf('\n ✗ crash at iter %d (y=%d,x=%d,h=%d,w=%d): %s\n',...
+        fprintf('\n ✗ crash at iter %d (y=%d,x=%d,h=%d,w=%d): %s\n', ...
                 k,y,x,h,w, ME.message);
         break
     end
 end
 fprintf('\nAll suites finished.\n');
-
-end % main function
-% ==============================================================
-% Helper sub-functions
-% ==============================================================
-
-function out = ternary(cond,a,b)
-    if cond, out = a; else, out = b; end
-end
+end  % main
+% =================================================================
+% Helper functions
+% =================================================================
+function out = ternary(c,a,b), out = a; if ~c, out = b; end, end
 
 function val = tryEnum(enumStr, fallback)
-% Return the enum constant if it exists, otherwise the numeric fallback.
-    try
-        val = eval(enumStr);
-    catch
-        val = fallback;
-    end
+    try,   val = eval(enumStr);
+    catch, val = fallback; end
 end
 
 function n = compressionNumericFallback(name)
-% Hard-coded numeric codes used by libtiff for common compressions
     switch upper(name)
         case 'NONE',    n = 1;
         case 'LZW',     n = 5;
@@ -322,16 +294,20 @@ function n = compressionNumericFallback(name)
     end
 end
 
-function setByteOrderBig(tiffObj)
-% Force big-endian header even on little-endian hosts.
+function success = setByteOrderBig(tiffObj)
+% Attempt to force big-endian header. Returns false if unsupported.
+    success = false;
     try
-        tiffObj.setTag('ByteOrder','big');   % R2021a+
+        tiffObj.setTag('ByteOrder','big');     % R2021a+
+        success = true;
     catch
-        % Older MATLAB: tiny patch of the header
-        warning('off','all');
-        tiffObj.rewrite;                     % flush current header
-        fseek(tiffObj.FileID,0,'bof');
-        fwrite(tiffObj.FileID,'MM','char');  % "MM" = big-endian magic
-        warning('on','all');
+        if ismethod(tiffObj,'rewrite')
+            try
+                tiffObj.rewrite;               % flush header
+                fseek(tiffObj.FileID,0,'bof');
+                fwrite(tiffObj.FileID,'MM','char'); % "MM" = big-endian
+                success = true;
+            catch, success = false; end
+        end
     end
 end
