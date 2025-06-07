@@ -314,12 +314,11 @@ function cleanupTempDir(tmpdir)
 end
 
 function [pass,fail] = emoji_checkmarks()
-% Return cross-platform pass/fail emoji for MATLAB/Windows
     if ispc
-        pass = char([10004 65039 8205 11088]); % ✔️✨
-        fail = char([10060 65039]);            % ❌
+        pass = char(hex2dec('2714')); % ✔ (black check mark)
+        fail = char(hex2dec('2716')); % ✖ (black X)
     else
-        pass = '✔️';
+        pass = '✔️'; % Emoji version (works on Linux/macOS)
         fail = '❌';
     end
 end
