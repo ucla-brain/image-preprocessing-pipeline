@@ -66,14 +66,24 @@ static void copySubRegion(const LoadTask& task)
     const std::size_t bytesPerPixel = bitsPerSample / 8;
     uint8_t* outBase = static_cast<uint8_t*>(task.dstBase) + task.zIndex * task.pixelsPerSlice * bytesPerPixel;
 
+    // Compute overlap region between ROI and image
+    int rowStart = std::max(0, -task.roiY);
+    int rowEnd   = std::min(task.roiH, static_cast<int>(imgHeight) - task.roiY);
+    int colStart = std::max(0, -task.roiX);
+    int colEnd   = std::min(task.roiW, static_cast<int>(imgWidth)  - task.roiX);
+
+    if (rowStart >= rowEnd || colStart >= colEnd) {
+        TIFFClose(tif);
+        // Nothing to copy, output is already zero-padded
+        return;
+    }
+
     if (isTiled) {
         std::vector<uint8_t> tilebuf(TIFFTileSize(tif));
-        for (int outCol = 0; outCol < task.roiW; ++outCol) {
+        for (int outCol = colStart; outCol < colEnd; ++outCol) {
             int imgCol = task.roiX + outCol;
-            if (imgCol < 0 || imgCol >= static_cast<int>(imgWidth)) continue;
-            for (int outRow = 0; outRow < task.roiH; ++outRow) {
+            for (int outRow = rowStart; outRow < rowEnd; ++outRow) {
                 int imgRow = task.roiY + outRow;
-                if (imgRow < 0 || imgRow >= static_cast<int>(imgHeight)) continue;
 
                 uint32_t tileX = (imgCol / tileWidth) * tileWidth;
                 uint32_t tileY = (imgRow / tileHeight) * tileHeight;
@@ -104,13 +114,12 @@ static void copySubRegion(const LoadTask& task)
     } else {
         std::vector<uint8_t> scanline(imgWidth * bytesPerPixel);
         int lastScanlineRead = -1;
-        for (int outCol = 0; outCol < task.roiW; ++outCol) {
+        for (int outCol = colStart; outCol < colEnd; ++outCol) {
             int imgCol = task.roiX + outCol;
-            if (imgCol < 0 || imgCol >= static_cast<int>(imgWidth)) continue;
-            for (int outRow = 0; outRow < task.roiH; ++outRow) {
+            for (int outRow = rowStart; outRow < rowEnd; ++outRow) {
                 int imgRow = task.roiY + outRow;
-                if (imgRow < 0 || imgRow >= static_cast<int>(imgHeight)) continue;
 
+                // Only read each scanline once
                 if (lastScanlineRead != imgRow) {
                     if (!TIFFReadScanline(tif, scanline.data(), imgRow)) {
                         TIFFClose(tif);
