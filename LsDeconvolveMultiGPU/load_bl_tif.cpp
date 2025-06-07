@@ -96,6 +96,7 @@ static void copySubRegion(const LoadTask& task)
                 std::size_t tileStride = tileWidth * bytesPerPixel;
                 std::size_t offset = relY * tileStride + relX * bytesPerPixel;
 
+                // CRITICAL: Use roiH for column stride!
                 std::size_t dstIndex = row + col * task.roiH + task.zIndex * task.pixelsPerSlice;
                 std::size_t dstOffset = dstIndex * bytesPerPixel;
 
@@ -114,15 +115,34 @@ static void copySubRegion(const LoadTask& task)
                 swap_uint16_buf(scanline.data(), imgWidth);
             }
 
+            // --- Debug: Print full scanline and ROI region for first row of first slice
+            if (row == 0 && task.zIndex == 0) {
+                mexPrintf("[DEBUG] scanline row %u (full): ", tifRow);
+                for (int j = 0; j < imgWidth; ++j) {
+                    if (bytesPerPixel == 1)
+                        mexPrintf("%d ", scanline[j]);
+                    else
+                        mexPrintf("%d ", ((uint16_t*)scanline.data())[j]);
+                }
+                mexPrintf("\n");
+
+                mexPrintf("[DEBUG] scanline roi region (%d..%d): ", task.roiX, task.roiX + task.cropW - 1);
+                for (int j = task.roiX; j < task.roiX + task.cropW; ++j) {
+                    if (j < imgWidth) {
+                        if (bytesPerPixel == 1)
+                            mexPrintf("%d ", scanline[j]);
+                        else
+                            mexPrintf("%d ", ((uint16_t*)scanline.data())[j]);
+                    }
+                }
+                mexPrintf("\n");
+            }
+            // --- End debug
+
             for (int col = 0; col < task.cropW; ++col) {
                 std::size_t srcOffset = static_cast<std::size_t>(task.roiX + col) * bytesPerPixel;
                 std::size_t dstIndex = row + col * task.roiH + task.zIndex * task.pixelsPerSlice;
                 std::size_t dstOffset = dstIndex * bytesPerPixel;
-
-                // Debug: print buffer indices for the special edge case
-                if (task.roiY == 4777 && task.roiX == 1107 && task.roiH == 12 && task.roiW == 23) {
-                    mexPrintf("[DEBUG] row=%d col=%d => dstIndex=%zu (dstOffset=%zu)\n", row, col, dstIndex, dstOffset);
-                }
 
                 std::memcpy(
                     static_cast<uint8_t*>(task.dstBase) + dstOffset,
@@ -130,6 +150,20 @@ static void copySubRegion(const LoadTask& task)
                     bytesPerPixel
                 );
             }
+
+            // --- Debug: After filling first row of first slice, print output buffer's first 10 values
+            if (row == 0 && task.zIndex == 0) {
+                mexPrintf("[DEBUG] output buffer first 10 values after row 0 copy: ");
+                if (bytesPerPixel == 1) {
+                    uint8_t* arr = static_cast<uint8_t*>(task.dstBase);
+                    for (int i = 0; i < 10; ++i) mexPrintf("%d ", arr[i]);
+                } else {
+                    uint16_t* arr = static_cast<uint16_t*>(task.dstBase);
+                    for (int i = 0; i < 10; ++i) mexPrintf("%d ", arr[i]);
+                }
+                mexPrintf("\n");
+            }
+            // --- End debug
         }
     }
     TIFFClose(tif);
