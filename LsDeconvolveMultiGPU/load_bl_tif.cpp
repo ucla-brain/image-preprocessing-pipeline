@@ -6,6 +6,7 @@
 //     • TIFFSwabArrayOfShort use
 //     • 64-bit-safe indexing
 //     • thread-pool fixes & misc. clean-ups
+//     • error messages improved, robustness checks added
 // ============================================================================
 
 #include "mex.h"
@@ -43,6 +44,7 @@ struct MatlabString {
 
 struct LoadTask {
     int  in_row0, in_col0;      // ROI origin inside TIFF
+    int  out_row0, out_col0;    // output start in output array
     int  cropH,  cropW;         // ROI size actually inside image
     int  roiH,   roiW;          // full requested ROI (for dst strides)
     int  zIndex;                // slice index
@@ -100,8 +102,11 @@ static void readSubRegionToBuffer(const LoadTask& task,
             throw std::runtime_error("Invalid tile size in TIFF metadata");
 
         const tmsize_t tileSize = TIFFTileSize(tif);
+        if (tileSize <= 0)
+            throw std::runtime_error("Invalid TIFFTileSize()");
+
         std::vector<uint8_t> tilebuf(static_cast<size_t>(tileSize));
-        uint32_t prevTile = UINT32_MAX;          // cache
+        uint32_t prevTile = UINT32_MAX;
 
         for (int r = 0; r < task.cropH; ++r) {
             uint32_t imgY = static_cast<uint32_t>(task.in_row0 + r);
@@ -110,7 +115,7 @@ static void readSubRegionToBuffer(const LoadTask& task,
 
                 const uint32_t tileIdx = TIFFComputeTile(tif, imgX, imgY, 0, 0);
 
-                if (tileIdx != prevTile) {       // miss ⇒ read
+                if (tileIdx != prevTile) {
                     if (TIFFReadEncodedTile(tif, tileIdx,
                                             tilebuf.data(), tileSize) < 0)
                         throw std::runtime_error("TIFFReadEncodedTile failed");
@@ -162,10 +167,9 @@ static void readSubRegionToBuffer(const LoadTask& task,
             prevStrip = stripIdx;
         }
 
-        const uint32_t relRow  =
-            imgY - stripIdx * rowsPerStrip;
-        const uint8_t* scanPtr =
-            stripbuf.data() + static_cast<size_t>(relRow) * imgW * bytesPerPixel;
+        const uint32_t relRow  = imgY - stripIdx * rowsPerStrip;
+        const uint8_t* scanPtr = stripbuf.data() +
+            static_cast<size_t>(relRow) * imgW * bytesPerPixel;
 
         for (int c = 0; c < task.cropW; ++c) {
             const size_t srcOff = static_cast<size_t>(task.in_col0 + c) * bytesPerPixel;
@@ -192,12 +196,9 @@ void workerMain(const std::vector<LoadTask>& tasks,
         try {
             TiffHandle tif(TIFFOpen(t.path.c_str(), "rb"));
             if (!tif)
-                throw std::runtime_error("Cannot open");
+                throw std::runtime_error("Cannot open file: " + t.path);
 
-            readSubRegionToBuffer(tif.get() ? t : t, // dummy – avoid warning
-                                  tif.get(),
-                                  bpp,
-                                  results[i].data());
+            readSubRegionToBuffer(t, tif.get(), bpp, results[i].data());
         }
         catch (const std::exception& ex) {
             std::lock_guard<std::mutex> lk(errMtx);
@@ -245,7 +246,7 @@ void mexFunction(int nlhs, mxArray* plhs[],
         mexErrMsgIdAndTxt("load_bl_tif:ROI", "ROI parameters invalid");
 
     // ------------------------------------------------------------------ probe slice 0
-    TIFFSetWarningHandler(nullptr);          // silence libtiff warnings
+    TIFFSetWarningHandler(nullptr);
     TiffHandle tif0(TIFFOpen(fileList[0].c_str(), "rb"));
     if (!tif0)
         mexErrMsgIdAndTxt("load_bl_tif:OpenFail",
@@ -277,7 +278,7 @@ void mexFunction(int nlhs, mxArray* plhs[],
 
     // ------------------------------------------------------------------ task build
     std::vector<LoadTask> tasks;
-    std::vector<std::vector<uint8_t>> results;   // buffers per task
+    std::vector<std::vector<uint8_t>> results;
     std::vector<std::string> errors;
     std::mutex errMtx;
 
@@ -305,10 +306,11 @@ void mexFunction(int nlhs, mxArray* plhs[],
             continue;
         }
 
-        const int out_row0 = img_y_s - roiY0;   // always ≥ 0
+        const int out_row0 = img_y_s - roiY0;
         const int out_col0 = img_x_s - roiX0;
         tasks.push_back({
             img_y_s, img_x_s,
+            out_row0, out_col0,
             cropH, cropW,
             roiH, roiW,
             z,
@@ -356,6 +358,7 @@ void mexFunction(int nlhs, mxArray* plhs[],
 
     // ------------------------------------------------------------------ blit to mxArray
     uint8_t* outData = static_cast<uint8_t*>(outDataRaw);
+    // Copy each result into final output with transpose handling
     for (size_t i = 0; i < tasks.size(); ++i) {
         const LoadTask& t = tasks[i];
         const auto& buf   = results[i];
