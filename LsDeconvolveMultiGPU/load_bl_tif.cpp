@@ -19,7 +19,8 @@
 constexpr uint16_t kSupportedBitDepth8  = 8;
 constexpr uint16_t kSupportedBitDepth16 = 16;
 constexpr size_t MAX_TIFF_BLOCK_BYTES = 1ull << 30;
-constexpr size_t kMaxPixelsPerSlice = static_cast<size_t>(std::numeric_limits<int>::max());
+constexpr size_t kMaxPixelsPerSlice = static_cast<size_t>(std::numeric_limits<int>::max());// 2147483647
+constexpr size_t kInvalidTileIndex = UINT32_MAX;                                         // 2 * kMaxPixelsPerSlice - 1
 
 // RAII wrapper for mxArrayToUTF8String()
 struct MatlabString {
@@ -72,6 +73,10 @@ inline size_t computeDstIndex(const LoadTask& task,
         return c + r * task.roiW + slice * task.pixelsPerSlice;
 }
 
+inline bool isLittleEndianHost() noexcept {
+    uint16_t x = 1;
+    return *reinterpret_cast<uint8_t*>(&x) == 1;
+}
 
 static void swap_uint16_buf(void* buf, size_t count) {
     uint16_t* p = static_cast<uint16_t*>(buf);
@@ -120,7 +125,7 @@ static void readSubRegionToBuffer(
 
     if (isTiled)
     {
-        uint32_t tileW = 0, tileH = 0;
+        size_t tileW = 0, tileH = 0;
         TIFFGetField(tif, TIFFTAG_TILEWIDTH , &tileW);
         TIFFGetField(tif, TIFFTAG_TILELENGTH, &tileH);
         if (tileW == 0 || tileH == 0)
@@ -134,15 +139,13 @@ static void readSubRegionToBuffer(
         std::vector<uint8_t> tilebuf(uncompressedTileBytes);
         const size_t nTilePixels = uncompressedTileBytes / bytesPerPixel;
 
-        uint32_t prevTile = UINT32_MAX;
+        size_t prevTile = kInvalidTileIndex;
 
         for (int row = 0; row < task.cropH; ++row) {
-            uint32_t imgY = static_cast<uint32_t>(task.in_row0 + row);
+            size_t imgY = static_cast<uint32_t>(task.in_row0 + row);
             for (int col = 0; col < task.cropW; ++col) {
-                uint32_t imgX = static_cast<uint32_t>(task.in_col0 + col);
-                uint32_t tileIdx = TIFFComputeTile(tif, imgX, imgY, 0, 0);
-
-
+                size_t imgX = static_cast<uint32_t>(task.in_col0 + col);
+                size_t tileIdx = TIFFComputeTile(tif, imgX, imgY, 0, 0);
 
                 if (tileIdx != prevTile) {
                     tsize_t ret = TIFFReadEncodedTile(
@@ -165,8 +168,8 @@ static void readSubRegionToBuffer(
                     prevTile = tileIdx;
                 }
 
-                uint32_t relY = imgY % tileH;
-                uint32_t relX = imgX % tileW;
+                size_t relY = imgY % tileH;
+                size_t relX = imgX % tileW;
                 size_t   srcOff = (static_cast<size_t>(relY) * tileW + relX) * bytesPerPixel;
                 size_t   dstOff = (static_cast<size_t>(row) * task.cropW + col) * bytesPerPixel;
 
@@ -193,7 +196,7 @@ static void readSubRegionToBuffer(
 
         for (int row = 0; row < task.cropH; ++row)
         {
-            uint32_t tifRow   = static_cast<uint32_t>(task.in_row0 + row);
+            size_t tifRow   = static_cast<uint32_t>(task.in_row0 + row);
             tstrip_t stripIdx = TIFFComputeStrip(tif, tifRow, 0);
 
             if (stripIdx != currentStrip) {
@@ -211,10 +214,10 @@ static void readSubRegionToBuffer(
                 currentStrip = stripIdx;
             }
 
-            const uint32_t rowsInThisStrip =
+            const size_t rowsInThisStrip =
                 static_cast<uint32_t>(nbytes / (imgWidth * bytesPerPixel));
-            uint32_t stripStartRow = stripIdx * rowsPerStrip;
-            uint32_t relRow        = tifRow - stripStartRow;
+            size_t stripStartRow = stripIdx * rowsPerStrip;
+            size_t relRow        = tifRow - stripStartRow;
 
             if (relRow >= rowsInThisStrip) {
                 std::ostringstream oss;
@@ -345,7 +348,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         mexErrMsgIdAndTxt("load_bl_tif:ZeroSize", "ROI dimensions must be non-zero.");
 
     // --- Robustly validate ROI for all slices BEFORE allocation ---
-    uint32_t imgWidth = 0, imgHeight = 0;
+    size_t imgWidth = 0, imgHeight = 0;
     uint16_t bitsPerSample = 0, globalBitsPerSample = 0, samplesPerPixel = 1;
     for (size_t z = 0; z < numSlices; ++z) {
         TiffHandle tif(TIFFOpen(fileList[z].c_str(), "r"));
