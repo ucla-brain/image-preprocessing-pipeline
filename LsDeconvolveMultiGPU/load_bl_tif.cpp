@@ -159,7 +159,7 @@ static void readSubRegionToBuffer(
                     }
                     size_t validBytes = static_cast<size_t>(ret);
                     size_t validPixels = validBytes / bytesPerPixel;
-                    if (bytesPerPixel == 2 && !TIFFIsByteSwapped(tif))
+                    if (bytesPerPixel == 2 && TIFFIsByteSwapped(tif) != isLittleEndianHost())
                         swap_uint16_buf(tilebuf.data(), validPixels);
 
                     prevTile = tileIdx;
@@ -205,7 +205,7 @@ static void readSubRegionToBuffer(
                     throw std::runtime_error(oss.str());
                 }
 
-                if (bytesPerPixel == 2 && TIFFIsByteSwapped(tif))
+                if (bytesPerPixel == 2 && TIFFIsByteSwapped(tif) != isLittleEndianHost())
                     swap_uint16_buf(stripbuf.data(), static_cast<size_t>(nbytes / 2));
 
                 currentStrip = stripIdx;
@@ -340,6 +340,9 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
     auto roiX0 = static_cast<size_t>(x_in - 1);
     auto roiH  = static_cast<size_t>(h_in);
     auto roiW  = static_cast<size_t>(w_in);
+
+    if (roiH == 0 || roiW == 0)
+        mexErrMsgIdAndTxt("load_bl_tif:ZeroSize", "ROI dimensions must be non-zero.");
 
     // --- Robustly validate ROI for all slices BEFORE allocation ---
     uint32_t imgWidth = 0, imgHeight = 0;
