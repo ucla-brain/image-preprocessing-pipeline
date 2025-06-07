@@ -308,8 +308,8 @@ end
 
 function [pass,fail] = emoji_checkmarks()
     if ispc
-        pass = '√';
-        fail = 'X';
+        pass = '[ok]';
+        fail = '[ X]';
     else
         pass = '✔️';
         fail = '❌';
