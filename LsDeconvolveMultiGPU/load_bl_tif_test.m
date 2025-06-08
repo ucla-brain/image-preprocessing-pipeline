@@ -130,7 +130,7 @@ run_external_endian_tests();
 %% 4. Tile/strip + compression (using external tools if available)
 [EMOJI_PASS, EMOJI_FAIL] = emoji_checkmarks();
 fprintf('\n[Suite 4] Tile/strip + compression (using external tools if available):\n');
-tmpdir4 = tempname; mkdir(tmpdir4);  % Now local to Suite 4
+tmpdir4 = 'test4'; mkdir(tmpdir4);  % Now local to Suite 4
 cleanupObj4 = onCleanup(@() cleanupTempDir(tmpdir4));
 cfgs = [ ...
   struct("tiled",false,"comp",'None'   ,"name","strip-none"   )
