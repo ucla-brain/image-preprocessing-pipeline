@@ -139,9 +139,9 @@ for idx = 1:numel(specs)
         tag.ImageLength = size(img,1);
         tag.BitsPerSample = s.bits;
         tag.SamplesPerPixel = 1;
-        tag.Photometric = Tiff.Photometric.MinIsBlack;
-        tag.PlanarConfiguration = Tiff.PlanarConfiguration.Contig;
-        tag.Compression = Tiff.Compression.None;
+        tag.Photometric = 1;
+        tag.PlanarConfiguration = 1;
+        tag.Compression = 1;
         t.setTag(tag);
 
         if s.big
