@@ -155,7 +155,7 @@ function ok = try_build_library(lib, src_dir, install_dir, mex_flags_cpu)
     orig_dir = pwd;
     ok = false;
 
-    % === Parse CFLAGS, CXXFLAGS, LDFLAGS from mex_flags_cpu ===
+    % === Parse compiler flags ===
     CFLAGS = ''; CXXFLAGS = ''; LDFLAGS = '';
     for i = 1:numel(mex_flags_cpu)
         token = mex_flags_cpu{i};
@@ -168,18 +168,23 @@ function ok = try_build_library(lib, src_dir, install_dir, mex_flags_cpu)
         end
     end
 
-    % === Get library metadata from helper ===
+    % === Get library info ===
     [archive, folder_name, url, version] = get_library_info(lib);
-    src_dir = fullfile(pwd, 'tiff_src', folder_name);
+    cd(fileparts(mfilename('fullpath')));
 
     % === Download and extract ===
     if ~isfolder(folder_name)
-        fprintf('Downloading %s...\n', archive);
         if ~isfile(archive)
+            fprintf('Downloading %s...\n', archive);
             system(sprintf('curl -L -o "%s" "%s"', archive, url));
         end
+
         if endsWith(archive, '.tar.gz')
             system(sprintf('tar -xzf "%s"', archive));
+            actual_folder = get_top_level_folder(archive);
+            if ~strcmp(actual_folder, folder_name)
+                movefile(actual_folder, folder_name);
+            end
         elseif endsWith(archive, '.zip')
             unzip(archive);
         else
@@ -192,7 +197,6 @@ function ok = try_build_library(lib, src_dir, install_dir, mex_flags_cpu)
 
     % === Build ===
     if ispc
-        % CMake on Windows
         setenv('CFLAGS', CFLAGS); setenv('CXXFLAGS', CXXFLAGS); setenv('LDFLAGS', LDFLAGS);
         cmake_flags = [
             '-DCMAKE_BUILD_TYPE=Release ', ...
@@ -206,40 +210,32 @@ function ok = try_build_library(lib, src_dir, install_dir, mex_flags_cpu)
         status = system(['cmake -B build ', cmake_flags, ' . && cmake --build build --config Release --target install']);
         setenv('CFLAGS', ''); setenv('CXXFLAGS', ''); setenv('LDFLAGS', '');
     else
-        % Autotools on Unix
         prefix = '';
         if ~isempty(CFLAGS), prefix = [prefix, 'CFLAGS="', CFLAGS, '" ']; end
         if ~isempty(CXXFLAGS), prefix = [prefix, 'CXXFLAGS="', CXXFLAGS, '" ']; end
         if ~isempty(LDFLAGS), prefix = [prefix, 'LDFLAGS="', LDFLAGS, '" ']; end
 
-        switch lib
-            case 'zlib'
-                cmd = ['./configure --prefix=', install_dir, ...
-                       ' && make -j4 && make install && rm -f ', fullfile(install_dir, 'lib', 'libz.so*')];
-            case 'libjbig'
-                cmd = ['make -j4 CFLAGS="', CFLAGS, '" lib && make install PREFIX=', install_dir];
-            case 'libdeflate'
-                cmd = ['make -j4 CFLAGS="', CFLAGS, '" && make install PREFIX=', install_dir];
-            otherwise
-                cmd = [prefix, './configure --disable-shared --enable-static --prefix=', install_dir, ...
-                       ' && make -j4 && make install'];
+        if strcmp(lib, 'libdeflate')
+            cmd = ['make -j4 CFLAGS="', CFLAGS, '" && make install PREFIX=', install_dir];
+        elseif strcmp(lib, 'libjbig')
+            cmd = ['make -j4 CFLAGS="', CFLAGS, '" lib && make install PREFIX=', install_dir];
+        else
+            cmd = [prefix, './configure --disable-shared --enable-static --prefix=', install_dir, ...
+                   ' && make -j4 && make install'];
         end
         status = system(cmd);
+    end
+
+    % Remove shared libs
+    if exist(fullfile(install_dir, 'lib'), 'dir')
+        delete(fullfile(install_dir, 'lib', '*.so*'));
+        delete(fullfile(install_dir, 'lib', '*.dylib'));
     end
 
     cd(orig_dir);
     ok = (status == 0);
 
-    % === Manual .so/.dylib deletion to enforce static linking ===
-    if ok && ~ispc
-        libdir = fullfile(install_dir, 'lib');
-        if isfolder(libdir)
-            delete(fullfile(libdir, '*.so*'));     % Linux
-            delete(fullfile(libdir, '*.dylib'));   % macOS
-        end
-    end
-
-    % === Optional: libtiff test MEX build ===
+    % === Optional test for libtiff ===
     if ok && strcmp(lib, 'libtiff')
         test_c = 'libtiff_test_mex.c';
         fid = fopen(test_c, 'w');
@@ -288,7 +284,7 @@ function [archive, folder_name, url, version] = get_library_info(lib)
             version = '2.1';
             archive = ['jbigkit-', version, '.tar.gz'];
             folder_name = ['jbigkit-', version];
-            url = [' https://www.cl.cam.ac.uk/~mgk25/jbigkit/download/', archive];
+            url = ['https://www.cl.cam.ac.uk/~mgk25/jbigkit/download/', archive];
 
         case 'libdeflate'
             version = '1.19';
@@ -301,3 +297,15 @@ function [archive, folder_name, url, version] = get_library_info(lib)
     end
 end
 
+function folder = get_top_level_folder(archive)
+    [~, output] = system(sprintf('tar -tzf "%s"', archive));
+    lines = strsplit(output, '\n');
+    tokens = regexp(lines, '^([^/]+)/', 'tokens');
+    tokens = tokens(~cellfun('isempty', tokens));
+    top_dirs = unique(cellfun(@(x) x{1}, tokens, 'UniformOutput', false));
+    if numel(top_dirs) == 1
+        folder = top_dirs{1};
+    else
+        error('Unable to determine top-level folder from archive: %s', archive);
+    end
+end
