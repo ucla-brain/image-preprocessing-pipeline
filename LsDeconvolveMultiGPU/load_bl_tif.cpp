@@ -178,14 +178,6 @@ inline size_t computeDstIndex(const LoadTask& task,
         return c + r * task.roiW + slice * task.pixelsPerSlice;
 }
 
-static void swap_uint16_buf(void* buf, size_t count) {
-    uint16_t* p = static_cast<uint16_t*>(buf);
-    for (size_t i = 0; i < count; ++i) {
-        uint16_t v = p[i];
-        p[i] = (v >> 8) | (v << 8);
-    }
-}
-
 // The result buffer for each block
 struct TaskResult {
     size_t block_id; // index into task/result vector
@@ -361,15 +353,9 @@ void worker_main(
                 error_count++;
                 continue;
             }
-            // PATCH: detect if byte swapping is needed
-            bool need_swap = false; //(bytesPerPixel == 2) && TIFFIsByteSwapped(tif.get());
 
             readSubRegionToBuffer(task, tif.get(), bytesPerPixel, results[i].data, tempBuf);
 
-            // PATCH: swap after filling blockBuf, only if needed
-            if (need_swap) {
-                swap_uint16_buf(results[i].data.data(), (results[i].data.size() / 2));
-            }
         } catch (const std::exception& ex) {
             std::lock_guard<std::mutex> lck(err_mutex);
             errors.emplace_back("Slice " + std::to_string(task.zIndex + 1) + ": " + ex.what());
