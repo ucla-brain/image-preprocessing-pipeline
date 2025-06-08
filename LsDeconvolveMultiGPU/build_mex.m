@@ -5,6 +5,7 @@
 % Always use the version in tiff_build/libtiff and never the system or Anaconda version.
 
 debug = false;
+force_rebuild = ~isempty(getenv('FORCE_REBUILD'));
 
 if verLessThan('matlab', '9.4')
     error('This script requires MATLAB R2018a or newer (for -R2018a MEX API)');
@@ -22,7 +23,6 @@ src_lz4_c     = 'lz4.c';
 src_gauss3d   = 'gauss3d_mex.cu';
 src_conv3d    = 'conv3d_mex.cu';
 src_otf_gpu   = 'otf_gpu_mex.cu';
-src_deconFFT  = 'deconFFT_mex.cu';
 src_load_bl   = 'load_bl_tif.cpp';
 
 % LZ4 download if missing
@@ -71,37 +71,19 @@ else
     end
 end
 
-% Dependency versions and install dirs
-libtiff_src_version = '4.7.0';
-libtiff_root = fullfile(pwd, 'tiff_src', ['tiff-', libtiff_src_version]);
-libtiff_install_dir = fullfile(pwd, 'tiff_build', 'libtiff');
-
-deps = {'libjpeg', 'zlib', 'liblzma', 'libjbig', 'libdeflate'};
-for i = 1:numel(deps)
-    eval([deps{i}, '_install_dir = fullfile(pwd, ''tiff_build'', ''deps'', ''', deps{i}, ''');']);
-end
-
-% Build all dependencies
-stamp_file = fullfile(libtiff_install_dir, '.libtiff_installed');
-if ~isfile(stamp_file)
-    fprintf('Building libtiff from source with optimized flags...\n');
-    if ~try_build_libtiff(libtiff_root, libtiff_install_dir, mex_flags_cpu, libtiff_src_version)
-        error('Failed to build local libtiff. Please check the build log.');
-    else
-        if ~isfolder(libtiff_install_dir), error('libtiff install failed!'); end
-        fclose(fopen(stamp_file, 'w'));
-    end
-end
-
-for i = 1:numel(deps)
-    dep = deps{i};
-    dep_stamp = fullfile(eval([dep, '_install_dir']), ['.', dep, '_installed']);
-    if ~isfile(dep_stamp)
-        fprintf('Building %s from source with optimized flags...\n', dep);
-        if ~try_build_dep(dep, eval([dep, '_install_dir']), mex_flags_cpu)
-            error(['Failed to build ', dep]);
+% Build all third-party libraries using unified try_build_library
+libs = {'libtiff', 'libjpeg', 'zlib', 'liblzma', 'libjbig', 'libdeflate'};
+for i = 1:numel(libs)
+    lib = libs{i};
+    install_dir = fullfile(pwd, 'tiff_build', lib);
+    stamp_file = fullfile(install_dir, ['.', lib, '_installed']);
+    src_dir = fullfile(pwd, 'tiff_src', lib);
+    if force_rebuild || ~isfile(stamp_file)
+        fprintf('Building %s from source with optimized flags...\n', lib);
+        if ~try_build_library(lib, src_dir, install_dir, mex_flags_cpu)
+            error('Failed to build %s', lib);
         else
-            fclose(fopen(dep_stamp, 'w'));
+            fid = fopen(stamp_file, 'w'); if fid > 0, fclose(fid); end
         end
     end
 end
@@ -110,11 +92,11 @@ end
 libtiff_include = {['-I', fullfile(libtiff_install_dir, 'include')]};
 libtiff_lib     = {['-L', fullfile(libtiff_install_dir, 'lib')]};
 dep_includes = {}; dep_libs = {};
-for i = 1:numel(deps)
-    inc = ['-I', fullfile(eval([deps{i}, '_install_dir']), 'include')];
-    lib = ['-L', fullfile(eval([deps{i}, '_install_dir']), 'lib')];
-    dep_includes{end+1} = inc; %#ok<AGROW>
-    dep_libs{end+1} = lib; %#ok<AGROW>
+for i = 1:numel(libs)
+    inc = ['-I', fullfile(pwd, 'tiff_build', libs{i}, 'include')];
+    lib = ['-L', fullfile(pwd, 'tiff_build', libs{i}, 'lib')];
+    dep_includes{end+1} = inc;
+    dep_libs{end+1} = lib;
 end
 
 % Combined link flags
@@ -167,96 +149,125 @@ mexcuda(cuda_mex_flags{:}, '-R2018a', src_otf_gpu , ['-I', root_dir], ['-I', inc
 fprintf('All MEX files built successfully.\n');
 
 % ===============================
-% Function: try_build_dep (for libjpeg, zlib, etc.)
+% Function: try_build_library (generic for libtiff + deps)
 % ===============================
-function ok = try_build_dep(dep_name, install_dir, mex_flags_cpu)
+function ok = try_build_library(lib, src_dir, install_dir, mex_flags_cpu)
     orig_dir = pwd;
-    src_url_base = 'https://github.com/';
-    archive = [dep_name, '.zip'];
-    src_folder = fullfile('tiff_src', dep_name);
+    ok = false;
 
-    % === Parse CFLAGS and CXXFLAGS from mex_flags_cpu ===
-    CFLAGS = ''; CXXFLAGS = '';
+    % === Parse CFLAGS, CXXFLAGS, LDFLAGS from mex_flags_cpu ===
+    CFLAGS = ''; CXXFLAGS = ''; LDFLAGS = '';
     for i = 1:numel(mex_flags_cpu)
         token = mex_flags_cpu{i};
         if contains(token, 'CFLAGS=')
-            m = regexp(token, 'CFLAGS="\$CFLAGS ([^"]+)"', 'tokens');
-            if ~isempty(m), CFLAGS = strtrim(m{1}{1}); end
+            m = regexp(token, 'CFLAGS="\$CFLAGS ([^"]+)"', 'tokens'); if ~isempty(m), CFLAGS = strtrim(m{1}{1}); end
         elseif contains(token, 'CXXFLAGS=')
-            m = regexp(token, 'CXXFLAGS="\$CXXFLAGS ([^"]+)"', 'tokens');
-            if ~isempty(m), CXXFLAGS = strtrim(m{1}{1}); end
+            m = regexp(token, 'CXXFLAGS="\$CXXFLAGS ([^"]+)"', 'tokens'); if ~isempty(m), CXXFLAGS = strtrim(m{1}{1}); end
+        elseif contains(token, 'LDFLAGS=')
+            m = regexp(token, 'LDFLAGS="\$LDFLAGS ([^"]+)"', 'tokens'); if ~isempty(m), LDFLAGS = strtrim(m{1}{1}); end
         end
+    end
+
+    % === Source download settings ===
+    archive = ''; folder_name = ''; url = '';
+    switch lib
+        case 'libtiff'
+            archive = 'tiff-4.7.0.tar.gz';
+            folder_name = 'tiff-4.7.0';
+            url = 'https://download.osgeo.org/libtiff/tiff-4.7.0.tar.gz';
+        case 'libjpeg'
+            archive = 'jpegsrc.v9e.tar.gz';
+            folder_name = 'jpeg-9e';
+            url = 'https://ijg.org/files/jpegsrc.v9e.tar.gz';
+        case 'zlib'
+            archive = 'zlib-1.3.tar.gz';
+            folder_name = 'zlib-1.3';
+            url = 'https://zlib.net/zlib-1.3.tar.gz';
+        case 'liblzma'
+            archive = 'xz-5.4.2.tar.gz';
+            folder_name = 'xz-5.4.2';
+            url = 'https://tukaani.org/xz/xz-5.4.2.tar.gz';
+        case 'libjbig'
+            archive = 'jbigkit-2.1.tar.gz';
+            folder_name = 'jbigkit-2.1';
+            url = 'https://www.cl.cam.ac.uk/~mgk25/jbigkit/jbigkit-2.1.tar.gz';
+        case 'libdeflate'
+            archive = 'libdeflate-1.19.zip';
+            folder_name = 'libdeflate-1.19';
+            url = 'https://github.com/ebiggers/libdeflate/archive/refs/tags/v1.19.zip';
+        otherwise
+            error('Unknown library: %s', lib);
     end
 
     % === Download and extract ===
-    if ~isfolder(src_folder)
-        url = '';  % fallback default
-        switch dep_name
-            case 'libjpeg'
-                url = 'https://ijg.org/files/jpegsrc.v9e.tar.gz';
-                archive = 'jpegsrc.v9e.tar.gz';
-                src_folder = 'jpeg-9e';
-            case 'zlib'
-                url = 'https://zlib.net/zlib-1.3.tar.gz';
-                archive = 'zlib-1.3.tar.gz';
-                src_folder = 'zlib-1.3';
-            case 'liblzma'
-                url = 'https://tukaani.org/xz/xz-5.4.2.tar.gz';
-                archive = 'xz-5.4.2.tar.gz';
-                src_folder = 'xz-5.4.2';
-            case 'libjbig'
-                url = 'https://www.cl.cam.ac.uk/~mgk25/jbigkit/jbigkit-2.1.tar.gz';
-                archive = 'jbigkit-2.1.tar.gz';
-                src_folder = 'jbigkit-2.1';
-            case 'libdeflate'
-                url = 'https://github.com/ebiggers/libdeflate/archive/refs/tags/v1.19.zip';
-                archive = 'libdeflate-1.19.zip';
-                src_folder = fullfile('libdeflate-1.19');
+    if ~isfolder(folder_name)
+        fprintf('Downloading %s...\n', lib);
+        if ~isfile(archive)
+            system(sprintf('curl -L -o "%s" "%s"', archive, url));
         end
-
-        fprintf('Downloading %s...\n', dep_name);
         if endsWith(archive, '.tar.gz')
-            system(['curl -L -o ', archive, ' ', url]);
-            system(['tar -xzf ', archive]);
+            untar(archive);
+        elseif endsWith(archive, '.zip')
+            unzip(archive);
         else
-            system(['curl -L -o ', archive, ' ', url]);
-            unzip(archive, 'tiff_src');
+            error('Unsupported archive format: %s', archive);
         end
         delete(archive);
     end
-    cd(src_folder);
 
-    % === Build ===
+    cd(folder_name);
+
+    % === Build on Windows using CMake ===
     if ispc
-        setenv('CFLAGS', CFLAGS);
-        setenv('CXXFLAGS', CXXFLAGS);
-        cmd = [
-            'cmake -B build -DCMAKE_BUILD_TYPE=Release ' ...
-            '-DBUILD_SHARED_LIBS=OFF ' ...
-            '-DCMAKE_C_FLAGS_RELEASE="/O2 /GL" ' ...
-            '-DCMAKE_CXX_FLAGS_RELEASE="/O2 /GL" ' ...
-            '-DCMAKE_INSTALL_PREFIX="', install_dir, '" . && ' ...
-            'cmake --build build --config Release --target install'
+        setenv('CFLAGS', CFLAGS); setenv('CXXFLAGS', CXXFLAGS); setenv('LDFLAGS', LDFLAGS);
+        cmake_flags = [
+            '-DCMAKE_BUILD_TYPE=Release ', ...
+            '-DCMAKE_INSTALL_PREFIX="', install_dir, '" ', ...
+            '-DBUILD_SHARED_LIBS=OFF ', ...
+            '-DCMAKE_C_FLAGS_RELEASE="/O2 /GL" ', ...
+            '-DCMAKE_CXX_FLAGS_RELEASE="/O2 /GL" ', ...
+            '-DCMAKE_SHARED_LINKER_FLAGS_RELEASE="/LTCG" ', ...
+            '-DCMAKE_EXE_LINKER_FLAGS_RELEASE="/LTCG" '
         ];
-        status = system(cmd);
-        setenv('CFLAGS', '');
-        setenv('CXXFLAGS', '');
+        status = system(['cmake -B build ', cmake_flags, ' . && cmake --build build --config Release --target install']);
+        setenv('CFLAGS', ''); setenv('CXXFLAGS', ''); setenv('LDFLAGS', '');
     else
+        % === Build on Linux using ./configure or Make ===
         prefix = '';
         if ~isempty(CFLAGS), prefix = [prefix, 'CFLAGS="', CFLAGS, '" ']; end
         if ~isempty(CXXFLAGS), prefix = [prefix, 'CXXFLAGS="', CXXFLAGS, '" ']; end
-        conf = './configure';
-        if strcmp(dep_name, 'liblzma'), conf = './configure --disable-shared'; end
-        if strcmp(dep_name, 'libdeflate'), conf = ''; end  % uses Makefile directly
-        if ~isempty(conf)
-            cmd = [prefix, conf, ' --prefix=', install_dir, ...
-                   ' && make -j4 && make install'];
-        else
+        if ~isempty(LDFLAGS), prefix = [prefix, 'LDFLAGS="', LDFLAGS, '" ']; end
+
+        if strcmp(lib, 'libdeflate')
             cmd = ['make -j4 CFLAGS="', CFLAGS, '" && make install PREFIX=', install_dir];
+        elseif strcmp(lib, 'libjbig')
+            cmd = ['make -j4 CFLAGS="', CFLAGS, '" lib && make install PREFIX=', install_dir];
+        else
+            cmd = [prefix, './configure --disable-shared --enable-static --prefix=', install_dir, ...
+                   ' && make -j4 && make install'];
         end
+
         status = system(cmd);
     end
 
     cd(orig_dir);
     ok = (status == 0);
+
+    % === Optional: libtiff MEX test ===
+    if ok && strcmp(lib, 'libtiff')
+        test_c = 'libtiff_test_mex.c';
+        fid = fopen(test_c, 'w');
+        fprintf(fid, '#include "mex.h"\n#include "tiffio.h"\nvoid mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {\nprintf("LIBTIFF version: %%s\\n", TIFFGetVersion());\n}');
+        fclose(fid);
+        include_flag = ['-I', fullfile(install_dir, 'include')];
+        lib_flag     = ['-L', fullfile(install_dir, 'lib')];
+        link_flag    = {'-ltiff'};
+        try
+            mex(mex_flags_cpu{:}, test_c, include_flag, lib_flag, link_flag{:});
+            delete(test_c);
+        catch ME
+            warning('Post-build MEX libtiff test failed: %s', ME.message);
+            ok = false;
+        end
+    end
 end
