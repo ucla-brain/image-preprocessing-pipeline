@@ -291,7 +291,7 @@ static void readSubRegionToBuffer(
         if (maxStripBytes > static_cast<size_t>(std::numeric_limits<tsize_t>::max()))
             throw std::runtime_error("Tile buffer too large (overflow risk)");
         if (maxStripBytes > tempBuf.size())
-            tempBuf.resize(safeStripBytes);
+            tempBuf.resize(maxStripBytes);
         tstrip_t currentStrip = (tstrip_t)-1;
         tsize_t  nbytes = 0;
 
