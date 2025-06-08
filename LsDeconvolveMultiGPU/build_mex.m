@@ -226,7 +226,23 @@ function ok = try_build_library(lib, src_dir, install_dir, mex_flags_cpu)
         if ~isempty(LDFLAGS), prefix = [prefix, 'LDFLAGS="', LDFLAGS, '" ']; end
 
         if strcmp(lib, 'libdeflate')
-            cmd = ['make -j4 CFLAGS="', CFLAGS, '" && make install PREFIX=', install_dir];
+            fprintf('Building libdeflate using CMake...\n');
+
+            cmake_flags = [
+                '-DCMAKE_BUILD_TYPE=Release ', ...
+                '-DCMAKE_INSTALL_PREFIX="', install_dir, '" ', ...
+                '-DBUILD_SHARED_LIBS=OFF '
+            ];
+
+            if ispc
+                setenv('CFLAGS', CFLAGS); setenv('CXXFLAGS', CXXFLAGS); setenv('LDFLAGS', LDFLAGS);
+                cmd = ['cmake -B build ', cmake_flags, ' . && cmake --build build --config Release --target install'];
+                status = system(cmd);
+                setenv('CFLAGS', ''); setenv('CXXFLAGS', ''); setenv('LDFLAGS', '');
+            else
+                cmd = sprintf('cmake -B build %s . && cmake --build build --target install -- -j4', cmake_flags);
+                status = system(cmd);
+            end
         elseif strcmp(lib, 'libjbig')
             fprintf('Building libjbig using make -C libjbig...\n');
             cmd = ['make -j4 -C libjbig CFLAGS="', CFLAGS, '"'];
