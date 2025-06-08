@@ -221,3 +221,14 @@ end
 
 fprintf('\nAll suites finished.\n');
 end
+
+function [pass,fail] = emoji_checkmarks()
+% emoji_checkmarks: cross-platform pass/fail symbols
+    if ispc
+        pass = '[ok]';
+        fail = '[ X]';
+    else
+        pass = '✔️';
+        fail = '❌';
+    end
+end
