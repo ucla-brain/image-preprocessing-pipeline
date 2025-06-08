@@ -1,110 +1,3 @@
-/*==============================================================================
-  load_bl_tif.cpp
-  ---------------------------------------------------------------------------
-  High-throughput sub-region loader for 3-D TIFF stacks (one TIFF per Z-slice)
-
-  Written by:   Keivan Moradi
-  Code review:  ChatGPT 4-o, o3, and 4-1
-  License:      GNU General Public License v3.0 (see <https://www.gnu.org/licenses/>)
-
-  ──────────────────────────────────────────────────────────────────────────────
-  OVERVIEW
-  --------
-  • Purpose
-      Efficiently extract an X-Y rectangular ROI from a series of 2-D grayscale
-      TIFF images and return it as a single 3-D MATLAB array.  The implementation
-      is in modern C++ and makes heavy use of multi-threading to achieve
-      near-linear scaling on machines with many CPU cores (tested to 256 threads).
-
-  • Key Features
-      – Supports 8-bit or 16-bit, single-channel TIFFs (tiled or stripped,
-        compressed or uncompressed).
-      – Cross-platform: Windows / Linux / macOS; requires only libtiff ≥ 4.0.
-      – Robust 64-bit-safe indexing (handles images > 2 GB).
-      – Thread-safe: every worker thread opens / decodes its own slice.
-      – Automatic byte-swapping when libtiff delivers native-endian data.
-      – Strict ROI validation for *every* slice before any memory is allocated.
-      – Optional “transpose” flag to return data in MATLAB’s [X Y Z] order.
-      – Hard guards against pathological tile/strip sizes (> 1 GiB) and
-        ROIs that would overflow `int32` in MATLAB.
-      – Parallelism is user-tunable via the environment variable
-        `LOAD_BL_TIF_THREADS` (default: all logical CPU cores. Minimum: 8).
-
-  ──────────────────────────────────────────────────────────────────────────────
-  MATLAB USAGE
-  ------------
-      img = load_bl_tif(files, y, x, height, width [, transposeFlag]);
-
-      • files          – 1×N cell array of strings, each the full path to a TIFF
-                         slice (slice k corresponds to Z index k).
-      • y, x           – 1-based upper-left ROI coordinate inside each TIFF
-                         (double scalars).
-      • height, width  – ROI size in pixels (double scalars).
-      • transposeFlag  – logical or uint32 scalar (optional, default = false).
-                         When true, the output is permuted so that the first two
-                         dimensions are [X Y] instead of MATLAB’s default [Y X].
-
-      returns
-      • img            – height×width×N (or width×height×N if transposed) array
-                         of class uint8 or uint16, matching TIFF bit-depth.
-
-      Example
-      -------
-          tiffs = dir('/path/to/tif/folder/*.tif');
-          filelist = fullfile({tiffs.folder}, {tiffs.name});
-          roi = load_bl_tif(filelist,  201, 101, 512, 512);        % standard
-          roiT = load_bl_tif(filelist,  201, 101, 512, 512, true); % transposed
-
-  ──────────────────────────────────────────────────────────────────────────────
-  COMPILATION
-  -----------
-      MATLAB R2018a or newer is recommended (for C++14/17 support).
-
-          mex -R2018a -largeArrayDims CXXFLAGS="\$(CXXFLAGS) -std=c++17" \
-              LDFLAGS="\$(LDFLAGS) -ltiff" load_bl_tif.cpp
-
-      • Ensure `libtiff` headers and library are discoverable by your
-        compiler/linker.
-      • On Windows for MSVC, link against pre-built `tiff.lib` and add it to
-        `LDFLAGS`.
-      • The code falls back to C++14 if the compiler does not recognise
-        `-std=c++17`; a C++11-capable compiler is the hard minimum.
-
-  ──────────────────────────────────────────────────────────────────────────────
-  CONSTRAINTS & LIMITS
-  --------------------
-      • We do not sort the files. Natural sorting burden is on the user.
-      • All slices must share identical dimensions, bit-depth, and a single
-        sample per pixel.
-      • The requested ROI must lie fully inside *every* slice; otherwise the
-        function aborts before allocating output memory.
-      • Total elements per Z-slice must not exceed 2 147 483 647
-        (`kMaxPixelsPerSlice`, MATLAB’s 32-bit limit).
-      • Individual tiles/strips decoded during reading are limited to 1 GiB to
-        safeguard against corrupted metadata.
-      • Only grayscale data (SAMPLES = 1) is supported; RGB/planar TIFFs will
-        raise an error.
-
-  ──────────────────────────────────────────────────────────────────────────────
-  PERFORMANCE TIPS
-  ----------------
-      • Place TIFFs on a high-bandwidth SSD or NVMe drive for best scaling.
-      • If your storage cannot sustain the aggregate IO of 32 threads, set
-          setenv('LOAD_BL_TIF_THREADS','8')
-        or similar before calling the MEX to cap concurrency.
-      • For heavily compressed files, CPU time may dominate; scaling is then
-        nearly linear up to the number of physical cores.
-
-  -----------------------------------------------------------------------------
-  (c) 2025 Keivan Moradi.  This program is free software: you can redistribute
-  it and/or modify it under the terms of the GNU General Public License as
-  published by the Free Software Foundation, either version 3 of the License,
-  or (at your option) any later version.
-
-==============================================================================
-*/
-
-
 #include "mex.h"
 #include "tiffio.h"
 #include <vector>
@@ -140,17 +33,17 @@ struct MatlabString {
 };
 
 struct LoadTask {
-    size_t in_row0, in_col0, cropH, cropW;
-    size_t roiH, roiW, zIndex;
+    uint32_t in_row0, in_col0, cropH, cropW;   // PATCH: Now uint32_t
+    uint32_t roiH, roiW, zIndex;
     size_t out_row0, out_col0;
     size_t pixelsPerSlice;
     std::string path;
     bool transpose;
     LoadTask() = default;
     LoadTask(
-        size_t inY, size_t inX, size_t outY, size_t outX,
-        size_t h, size_t w, size_t roiH_, size_t roiW_,
-        size_t z, size_t pps, std::string filename, bool transpose_
+        uint32_t inY, uint32_t inX, size_t outY, size_t outX, // PATCH
+        uint32_t h, uint32_t w, uint32_t roiH_, uint32_t roiW_,
+        uint32_t z, size_t pps, std::string filename, bool transpose_
     ) : in_row0(inY), in_col0(inX), out_row0(outY), out_col0(outX),
         cropH(h), cropW(w), roiH(roiH_), roiW(roiW_),
         zIndex(z), pixelsPerSlice(pps), path(std::move(filename)), transpose(transpose_) {}
@@ -165,7 +58,7 @@ using TiffHandle = std::unique_ptr<TIFF, TiffCloser>;
 //  64-bit-safe destination index utility for output array indexing (portable for both shapes)
 // ------------------------------------------------------------------
 inline size_t computeDstIndex(const LoadTask& task,
-                              size_t row, size_t col) noexcept
+                              uint32_t row, uint32_t col) noexcept  // PATCH
 {
     size_t r = task.out_row0 + row;
     size_t c = task.out_col0 + col;
@@ -177,7 +70,6 @@ inline size_t computeDstIndex(const LoadTask& task,
     else
         return c + r * task.roiW + slice * task.pixelsPerSlice;
 }
-
 
 static void swap_uint16_buf(void* buf, size_t count) {
     uint16_t* p = static_cast<uint16_t*>(buf);
@@ -191,8 +83,8 @@ static void swap_uint16_buf(void* buf, size_t count) {
 struct TaskResult {
     size_t block_id; // index into task/result vector
     std::vector<uint8_t> data;
-    int cropH, cropW;
-    TaskResult(size_t id, size_t datasz, int ch, int cw)
+    uint32_t cropH, cropW; // PATCH: uint32_t for consistency with task
+    TaskResult(size_t id, size_t datasz, uint32_t ch, uint32_t cw)
         : block_id(id), data(datasz), cropH(ch), cropW(cw) {}
 };
 
@@ -207,7 +99,8 @@ static void readSubRegionToBuffer(
     std::vector<uint8_t>& tempBuf
 )
 {
-    size_t imgWidth, imgHeight;
+    // PATCH: Use uint32_t for TIFF dimension variables
+    uint32_t imgWidth = 0, imgHeight = 0;
     if (!TIFFGetField(tif, TIFFTAG_IMAGEWIDTH , &imgWidth) ||
         !TIFFGetField(tif, TIFFTAG_IMAGELENGTH, &imgHeight))
     {
@@ -228,7 +121,7 @@ static void readSubRegionToBuffer(
 
     if (isTiled)
     {
-        uint32_t tileW = 0, tileH = 0;
+        uint32_t tileW = 0, tileH = 0; // PATCH
         TIFFGetField(tif, TIFFTAG_TILEWIDTH , &tileW);
         TIFFGetField(tif, TIFFTAG_TILELENGTH, &tileH);
         if (tileW == 0 || tileH == 0)
@@ -243,10 +136,10 @@ static void readSubRegionToBuffer(
 
         uint32_t prevTile = UINT32_MAX;
 
-        for (int row = 0; row < task.cropH; ++row) {
-            uint32_t imgY = static_cast<uint32_t>(task.in_row0 + row);
-            for (int col = 0; col < task.cropW; ++col) {
-                uint32_t imgX = static_cast<uint32_t>(task.in_col0 + col);
+        for (uint32_t row = 0; row < task.cropH; ++row) {  // PATCH
+            uint32_t imgY = task.in_row0 + row;
+            for (uint32_t col = 0; col < task.cropW; ++col) {
+                uint32_t imgX = task.in_col0 + col;
                 uint32_t tileIdx = TIFFComputeTile(tif, imgX, imgY, 0, 0);
 
                 if (tileIdx != prevTile) {
@@ -283,7 +176,7 @@ static void readSubRegionToBuffer(
     }
     else
     {
-        size_t rowsPerStrip = 0;
+        uint32_t rowsPerStrip = 0; // PATCH
         TIFFGetFieldDefaulted(tif, TIFFTAG_ROWSPERSTRIP, &rowsPerStrip);
         if (rowsPerStrip == 0) rowsPerStrip = imgHeight;
 
@@ -295,9 +188,9 @@ static void readSubRegionToBuffer(
         tstrip_t currentStrip = (tstrip_t)-1;
         tsize_t  nbytes = 0;
 
-        for (int row = 0; row < task.cropH; ++row)
+        for (uint32_t row = 0; row < task.cropH; ++row) // PATCH
         {
-            uint32_t tifRow   = static_cast<uint32_t>(task.in_row0 + row);
+            uint32_t tifRow   = task.in_row0 + row;
             tstrip_t stripIdx = TIFFComputeStrip(tif, tifRow, 0);
 
             if (stripIdx != currentStrip) {
@@ -328,7 +221,7 @@ static void readSubRegionToBuffer(
             uint8_t* scanlinePtr = tempBuf.data() +
                 (static_cast<size_t>(relRow) * imgWidth * bytesPerPixel);
 
-            for (int col = 0; col < task.cropW; ++col)
+            for (uint32_t col = 0; col < task.cropW; ++col) // PATCH
             {
                 size_t srcOff = (static_cast<size_t>(task.in_col0 + col)) * bytesPerPixel;
                 size_t dstOff = (static_cast<size_t>(row) * task.cropW + col) * bytesPerPixel;
@@ -440,10 +333,11 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         mexErrMsgIdAndTxt("load_bl_tif:Negative",
             "y, x, height, width must be positive (1-based).");
 
-    auto roiY0 = static_cast<size_t>(y_in - 1);
-    auto roiX0 = static_cast<size_t>(x_in - 1);
-    auto roiH  = static_cast<size_t>(h_in);
-    auto roiW  = static_cast<size_t>(w_in);
+    // PATCH: Use uint32_t for image/block dimensions
+    uint32_t roiY0 = static_cast<uint32_t>(y_in - 1);
+    uint32_t roiX0 = static_cast<uint32_t>(x_in - 1);
+    uint32_t roiH  = static_cast<uint32_t>(h_in);
+    uint32_t roiW  = static_cast<uint32_t>(w_in);
 
     // --- Robustly validate ROI for all slices BEFORE allocation ---
     uint32_t imgWidth = 0, imgHeight = 0;
@@ -513,10 +407,10 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
     for (size_t z = 0; z < numSlices; ++z)
     {
         // No need to clip, ROI is within TIFF bounds
-        size_t img_y_start = roiY0;
-        size_t img_x_start = roiX0;
-        size_t cropHz = roiH;
-        size_t cropWz = roiW;
+        uint32_t img_y_start = roiY0;
+        uint32_t img_x_start = roiX0;
+        uint32_t cropHz = roiH;
+        uint32_t cropWz = roiW;
         size_t out_row0 = 0;
         size_t out_col0 = 0;
 
@@ -525,7 +419,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
             out_row0, out_col0,
             cropHz, cropWz,
             roiH, roiW,
-            z,
+            static_cast<uint32_t>(z), // PATCH
             pixelsPerSlice,
             fileList[z],
             transpose
@@ -570,8 +464,8 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
     for (size_t i = 0; i < tasks.size(); ++i) {
         const auto& task = tasks[i];
         const auto& res  = results[i];
-        for (size_t row = 0; row < task.cropH; ++row) {
-            for (size_t col = 0; col < task.cropW; ++col) {
+        for (uint32_t row = 0; row < task.cropH; ++row) { // PATCH
+            for (uint32_t col = 0; col < task.cropW; ++col) { // PATCH
                 size_t dstElem = computeDstIndex(task, row, col);
                 size_t dstByte = dstElem * bytesPerPixel;
                 size_t srcByte = (row * task.cropW + col) * bytesPerPixel;
