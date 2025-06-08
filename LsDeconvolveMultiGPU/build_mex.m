@@ -168,45 +168,18 @@ function ok = try_build_library(lib, src_dir, install_dir, mex_flags_cpu)
         end
     end
 
-    % === Source download settings ===
-    archive = ''; folder_name = ''; url = '';
-    switch lib
-        case 'libtiff'
-            archive = 'tiff-4.7.0.tar.gz';
-            folder_name = 'tiff-4.7.0';
-            url = 'https://download.osgeo.org/libtiff/tiff-4.7.0.tar.gz';
-        case 'libjpeg'
-            archive = 'jpegsrc.v9e.tar.gz';
-            folder_name = 'jpeg-9e';
-            url = 'https://ijg.org/files/jpegsrc.v9e.tar.gz';
-        case 'zlib'
-            archive = 'zlib-1.3.1.tar.gz';
-            folder_name = 'zlib-1.3.1';
-            url = 'https://zlib.net/zlib-1.3.1.tar.gz';
-        case 'liblzma'
-            archive = 'xz-5.4.2.tar.gz';
-            folder_name = 'xz-5.4.2';
-            url = 'https://tukaani.org/xz/xz-5.4.2.tar.gz';
-        case 'libjbig'
-            archive = 'jbigkit-2.1.tar.gz';
-            folder_name = 'jbigkit-2.1';
-            url = 'https://www.cl.cam.ac.uk/~mgk25/jbigkit/jbigkit-2.1.tar.gz';
-        case 'libdeflate'
-            archive = 'libdeflate-1.19.zip';
-            folder_name = 'libdeflate-1.19';
-            url = 'https://github.com/ebiggers/libdeflate/archive/refs/tags/v1.19.zip';
-        otherwise
-            error('Unknown library: %s', lib);
-    end
+    % === Get library metadata from helper ===
+    [archive, folder_name, url, version] = get_library_info(lib);
+    src_dir = fullfile(pwd, 'tiff_src', folder_name);
 
     % === Download and extract ===
     if ~isfolder(folder_name)
-        fprintf('Downloading %s...\n', lib);
+        fprintf('Downloading %s...\n', archive);
         if ~isfile(archive)
             system(sprintf('curl -L -o "%s" "%s"', archive, url));
         end
         if endsWith(archive, '.tar.gz')
-            untar(archive);
+            system(sprintf('tar -xzf "%s"', archive));
         elseif endsWith(archive, '.zip')
             unzip(archive);
         else
@@ -217,8 +190,9 @@ function ok = try_build_library(lib, src_dir, install_dir, mex_flags_cpu)
 
     cd(folder_name);
 
-    % === Build on Windows using CMake ===
+    % === Build ===
     if ispc
+        % CMake on Windows
         setenv('CFLAGS', CFLAGS); setenv('CXXFLAGS', CXXFLAGS); setenv('LDFLAGS', LDFLAGS);
         cmake_flags = [
             '-DCMAKE_BUILD_TYPE=Release ', ...
@@ -232,28 +206,40 @@ function ok = try_build_library(lib, src_dir, install_dir, mex_flags_cpu)
         status = system(['cmake -B build ', cmake_flags, ' . && cmake --build build --config Release --target install']);
         setenv('CFLAGS', ''); setenv('CXXFLAGS', ''); setenv('LDFLAGS', '');
     else
-        % === Build on Linux using ./configure or Make ===
+        % Autotools on Unix
         prefix = '';
         if ~isempty(CFLAGS), prefix = [prefix, 'CFLAGS="', CFLAGS, '" ']; end
         if ~isempty(CXXFLAGS), prefix = [prefix, 'CXXFLAGS="', CXXFLAGS, '" ']; end
         if ~isempty(LDFLAGS), prefix = [prefix, 'LDFLAGS="', LDFLAGS, '" ']; end
 
-        if strcmp(lib, 'libdeflate')
-            cmd = ['make -j4 CFLAGS="', CFLAGS, '" && make install PREFIX=', install_dir];
-        elseif strcmp(lib, 'libjbig')
-            cmd = ['make -j4 CFLAGS="', CFLAGS, '" lib && make install PREFIX=', install_dir];
-        else
-            cmd = [prefix, './configure --disable-shared --enable-static --prefix=', install_dir, ...
-                   ' && make -j4 && make install'];
+        switch lib
+            case 'zlib'
+                cmd = ['./configure --prefix=', install_dir, ...
+                       ' && make -j4 && make install && rm -f ', fullfile(install_dir, 'lib', 'libz.so*')];
+            case 'libjbig'
+                cmd = ['make -j4 CFLAGS="', CFLAGS, '" lib && make install PREFIX=', install_dir];
+            case 'libdeflate'
+                cmd = ['make -j4 CFLAGS="', CFLAGS, '" && make install PREFIX=', install_dir];
+            otherwise
+                cmd = [prefix, './configure --disable-shared --enable-static --prefix=', install_dir, ...
+                       ' && make -j4 && make install'];
         end
-
         status = system(cmd);
     end
 
     cd(orig_dir);
     ok = (status == 0);
 
-    % === Optional: libtiff MEX test ===
+    % === Manual .so/.dylib deletion to enforce static linking ===
+    if ok && ~ispc
+        libdir = fullfile(install_dir, 'lib');
+        if isfolder(libdir)
+            delete(fullfile(libdir, '*.so*'));     % Linux
+            delete(fullfile(libdir, '*.dylib'));   % macOS
+        end
+    end
+
+    % === Optional: libtiff test MEX build ===
     if ok && strcmp(lib, 'libtiff')
         test_c = 'libtiff_test_mex.c';
         fid = fopen(test_c, 'w');
@@ -271,3 +257,47 @@ function ok = try_build_library(lib, src_dir, install_dir, mex_flags_cpu)
         end
     end
 end
+
+function [archive, folder_name, url, version] = get_library_info(lib)
+    switch lib
+        case 'libtiff'
+            version = '4.7.0';
+            archive = ['tiff-', version, '.tar.gz'];
+            folder_name = ['tiff-', version];
+            url = ['https://download.osgeo.org/libtiff/', archive];
+
+        case 'libjpeg'
+            version = '9e';
+            archive = ['jpegsrc.v', version, '.tar.gz'];
+            folder_name = ['jpeg-', version];
+            url = ['https://ijg.org/files/', archive];
+
+        case 'zlib'
+            version = '1.3.1';
+            archive = ['zlib-', version, '.tar.gz'];
+            folder_name = ['zlib-', version];
+            url = ['https://zlib.net/', archive];
+
+        case 'liblzma'
+            version = '5.4.2';
+            archive = ['xz-', version, '.tar.gz'];
+            folder_name = ['xz-', version];
+            url = ['https://tukaani.org/xz/', archive];
+
+        case 'libjbig'
+            version = '2.1';
+            archive = ['jbigkit-', version, '.tar.gz'];
+            folder_name = ['jbigkit-', version];
+            url = ['https://www.cl.cam.ac.uk/~mgk25/jbigkit/', archive];
+
+        case 'libdeflate'
+            version = '1.19';
+            archive = ['libdeflate-', version, '.zip'];
+            folder_name = ['libdeflate-', version];
+            url = ['https://github.com/ebiggers/libdeflate/archive/refs/tags/v', version, '.zip'];
+
+        otherwise
+            error('Unknown library: %s', lib);
+    end
+end
+
