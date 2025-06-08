@@ -304,11 +304,11 @@ dst_tif = fullfile(tmpdir, sprintf('test_%s.tif', label));
 t = Tiff(src_tif, 'w');
 t.setTag('ImageWidth', size(img,2));
 t.setTag('ImageLength', size(img,1));
+t.setTag('Photometric', 1);          % ✅ FIRST
 t.setTag('BitsPerSample', 16);
 t.setTag('SamplesPerPixel', 1);
-t.setTag('Photometric', 1);          % MinIsBlack
-t.setTag('PlanarConfiguration', 1);  % Contig
-t.setTag('Compression', 1);          % None
+t.setTag('PlanarConfiguration', 1);
+t.setTag('Compression', 1);
 t.write(img); close(t);
 
 % Convert with external tool
