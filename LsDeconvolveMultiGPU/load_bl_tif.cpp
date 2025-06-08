@@ -126,7 +126,6 @@
 constexpr uint16_t kSupportedBitDepth8  = 8;
 constexpr uint16_t kSupportedBitDepth16 = 16;
 constexpr size_t kMaxPixelsPerSlice = static_cast<size_t>(std::numeric_limits<int>::max());
-constexpr tsize_t kMaxSafeBufferBytes = 100ull << 20; // 100 MiB
 
 // RAII wrapper for mxArrayToUTF8String()
 struct MatlabString {
@@ -238,9 +237,8 @@ static void readSubRegionToBuffer(
         size_t uncompressedTileBytes = static_cast<size_t>(tileW) * tileH * bytesPerPixel;
         if (uncompressedTileBytes > static_cast<size_t>(std::numeric_limits<tsize_t>::max()))
             throw std::runtime_error("Tile buffer too large (overflow risk)");
-        const tsize_t safeTileBytes = std::min(static_cast<tsize_t>(uncompressedTileBytes), kMaxSafeBufferBytes);
-        if (safeTileBytes > tempBuf.size())
-            tempBuf.resize(safeTileBytes);
+        if (uncompressedTileBytes > tempBuf.size())
+            tempBuf.resize(uncompressedTileBytes);
         const size_t nTilePixels = uncompressedTileBytes / bytesPerPixel;
 
         uint32_t prevTile = UINT32_MAX;
@@ -256,7 +254,7 @@ static void readSubRegionToBuffer(
                         tif,
                         tileIdx,
                         tempBuf.data(),
-                        safeTileBytes
+                        uncompressedTileBytes
                     );
                     if (ret < 0)
                     {
@@ -292,8 +290,7 @@ static void readSubRegionToBuffer(
         const size_t maxStripBytes = static_cast<size_t>(rowsPerStrip) * imgWidth * bytesPerPixel;
         if (maxStripBytes > static_cast<size_t>(std::numeric_limits<tsize_t>::max()))
             throw std::runtime_error("Tile buffer too large (overflow risk)");
-        const tsize_t safeStripBytes = std::min(static_cast<tsize_t>(maxStripBytes), kMaxSafeBufferBytes);
-        if (safeStripBytes > tempBuf.size())
+        if (maxStripBytes > tempBuf.size())
             tempBuf.resize(safeStripBytes);
         tstrip_t currentStrip = (tstrip_t)-1;
         tsize_t  nbytes = 0;
@@ -304,7 +301,7 @@ static void readSubRegionToBuffer(
             tstrip_t stripIdx = TIFFComputeStrip(tif, tifRow, 0);
 
             if (stripIdx != currentStrip) {
-                nbytes = TIFFReadEncodedStrip(tif, stripIdx, tempBuf.data(), safeStripBytes);
+                nbytes = TIFFReadEncodedStrip(tif, stripIdx, tempBuf.data(), maxStripBytes);
                 if (nbytes < 0) {
                     std::ostringstream oss;
                     oss << "TIFFReadEncodedStrip failed (strip " << stripIdx << ") in file: " << task.path;
@@ -537,11 +534,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
     }
 
     // --- Parallel Read ---
-    unsigned numThreads = std::max(1u, std::thread::hardware_concurrency());
-#ifdef _WIN32
-    const char* env_threads = getenv("LOAD_BL_TIF_THREADS");
-    if (env_threads) numThreads = std::max(8u, (unsigned)atoi(env_threads));
-#endif
+    unsigned numThreads = std::min(2u, std::thread::hardware_concurrency());
 
     std::vector<std::thread> workers;
     size_t n_tasks = tasks.size();
