@@ -205,7 +205,9 @@ static void readSubRegionToBuffer(
     const LoadTask& task,
     TIFF* tif,
     uint8_t bytesPerPixel,
-    std::vector<uint8_t>& blockBuf)
+    std::vector<uint8_t>& blockBuf,
+    std::vector<uint8_t>& tempBuf
+)
 {
     size_t imgWidth, imgHeight;
     if (!TIFFGetField(tif, TIFFTAG_IMAGEWIDTH , &imgWidth) ||
@@ -240,7 +242,8 @@ static void readSubRegionToBuffer(
         //     throw std::runtime_error("Tile buffer exceeds sane limit of " + MAX_TIFF_BLOCK_BYTES_STR +
         //                              " in file: " + task.path);
 
-        std::vector<uint8_t> tilebuf(uncompressedTileBytes);
+        if (uncompressedTileBytes > tempBuf.size())
+            tempBuf.resize(uncompressedTileBytes);
         const size_t nTilePixels = uncompressedTileBytes / bytesPerPixel;
 
         uint32_t prevTile = UINT32_MAX;
@@ -257,7 +260,7 @@ static void readSubRegionToBuffer(
                     tsize_t ret = TIFFReadEncodedTile(
                         tif,
                         tileIdx,
-                        tilebuf.data(),
+                        tempBuf.data(),
                         static_cast<tsize_t>(uncompressedTileBytes)
                     );
                     if (ret < 0)
@@ -269,7 +272,7 @@ static void readSubRegionToBuffer(
                     size_t validBytes = static_cast<size_t>(ret);
                     size_t validPixels = validBytes / bytesPerPixel;
                     if (bytesPerPixel == 2 && !TIFFIsByteSwapped(tif))
-                        swap_uint16_buf(tilebuf.data(), validPixels);
+                        swap_uint16_buf(tempBuf.data(), validPixels);
 
                     prevTile = tileIdx;
                 }
@@ -280,7 +283,7 @@ static void readSubRegionToBuffer(
                 size_t   dstOff = (static_cast<size_t>(row) * task.cropW + col) * bytesPerPixel;
 
                 std::memcpy(blockBuf.data() + dstOff,
-                            tilebuf.data() + srcOff,
+                            tempBuf.data() + srcOff,
                             bytesPerPixel);
             }
         }
@@ -297,7 +300,8 @@ static void readSubRegionToBuffer(
         //     throw std::runtime_error("Tile buffer exceeds sane limit of " + MAX_TIFF_BLOCK_BYTES_STR +
         //                              " in file: " + task.path);
 
-        std::vector<uint8_t> stripbuf(maxStripBytes);
+        if (maxStripBytes > tempBuf.size())
+            tempBuf.resize(maxStripBytes);
         tstrip_t currentStrip = (tstrip_t)-1;
         tsize_t  nbytes = 0;
 
@@ -307,7 +311,7 @@ static void readSubRegionToBuffer(
             tstrip_t stripIdx = TIFFComputeStrip(tif, tifRow, 0);
 
             if (stripIdx != currentStrip) {
-                nbytes = TIFFReadEncodedStrip(tif, stripIdx, stripbuf.data(),
+                nbytes = TIFFReadEncodedStrip(tif, stripIdx, tempBuf.data(),
                                               static_cast<tsize_t>(maxStripBytes));
                 if (nbytes < 0) {
                     std::ostringstream oss;
@@ -316,7 +320,7 @@ static void readSubRegionToBuffer(
                 }
 
                 if (bytesPerPixel == 2 && TIFFIsByteSwapped(tif))
-                    swap_uint16_buf(stripbuf.data(), static_cast<size_t>(nbytes / 2));
+                    swap_uint16_buf(tempBuf.data(), static_cast<size_t>(nbytes / 2));
 
                 currentStrip = stripIdx;
             }
@@ -332,7 +336,7 @@ static void readSubRegionToBuffer(
                 throw std::runtime_error(oss.str());
             }
 
-            uint8_t* scanlinePtr = stripbuf.data() +
+            uint8_t* scanlinePtr = tempBuf.data() +
                 (static_cast<size_t>(relRow) * imgWidth * bytesPerPixel);
 
             for (int col = 0; col < task.cropW; ++col)
@@ -364,6 +368,7 @@ void worker_main(
     size_t begin,
     size_t end)
 {
+    std::vector<uint8_t> tempBuf;  // Per-thread scratch buffer
     for (size_t i = begin; i < end; ++i) {
         const auto& task = tasks[i];
         try {
@@ -374,7 +379,7 @@ void worker_main(
                 error_count++;
                 continue;
             }
-            readSubRegionToBuffer(task, tif.get(), bytesPerPixel, results[i].data);
+            readSubRegionToBuffer(task, tif.get(), bytesPerPixel, results[i].data, tempBuf);
         } catch (const std::exception& ex) {
             std::lock_guard<std::mutex> lck(err_mutex);
             errors.emplace_back("Slice " + std::to_string(task.zIndex + 1) + ": " + ex.what());
