@@ -264,9 +264,6 @@ static void readSubRegionToBuffer(
                     }
                     size_t validBytes = static_cast<size_t>(ret);
                     size_t validPixels = validBytes / bytesPerPixel;
-                    if (bytesPerPixel == 2 && !TIFFIsByteSwapped(tif))
-                        swap_uint16_buf(tempBuf.data(), validPixels);
-
                     prevTile = tileIdx;
                 }
 
@@ -307,10 +304,6 @@ static void readSubRegionToBuffer(
                     oss << "TIFFReadEncodedStrip failed (strip " << stripIdx << ") in file: " << task.path;
                     throw std::runtime_error(oss.str());
                 }
-
-                if (bytesPerPixel == 2 && TIFFIsByteSwapped(tif))
-                    swap_uint16_buf(tempBuf.data(), static_cast<size_t>(nbytes / 2));
-
                 currentStrip = stripIdx;
             }
 
@@ -368,7 +361,15 @@ void worker_main(
                 error_count++;
                 continue;
             }
+            // PATCH: detect if byte swapping is needed
+            bool need_swap = (bytesPerPixel == 2) && TIFFIsByteSwapped(tif.get());
+
             readSubRegionToBuffer(task, tif.get(), bytesPerPixel, results[i].data, tempBuf);
+
+            // PATCH: swap after filling blockBuf, only if needed
+            if (need_swap) {
+                swap_uint16_buf(results[i].data.data(), (results[i].data.size() / 2));
+            }
         } catch (const std::exception& ex) {
             std::lock_guard<std::mutex> lck(err_mutex);
             errors.emplace_back("Slice " + std::to_string(task.zIndex + 1) + ": " + ex.what());
