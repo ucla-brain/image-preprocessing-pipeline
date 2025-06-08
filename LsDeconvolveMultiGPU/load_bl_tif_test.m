@@ -127,8 +127,8 @@ end
 %% 3. Little- vs big-endian, 8-/16-bit
 run_external_endian_tests();
 
-%% 4. Tile/strip + compression
-fprintf('\n[Suite 4] Tile/strip + compression:\n');
+%% 4. Tile/strip + compression (updated to use external tools if possible)
+fprintf('\n[Suite 4] Tile/strip + compression (using external tools if available):\n');
 tmpdir4 = tempname; mkdir(tmpdir4);  % ← Now local to Suite 4
 cleanupObj4 = onCleanup(@() cleanupTempDir(tmpdir4));
 cfgs = [ ...
@@ -138,34 +138,123 @@ cfgs = [ ...
   struct("tiled",true ,"comp",'None'   ,"name","tile-none"    )
   struct("tiled",true ,"comp",'LZW'    ,"name","tile-lzw"     )
   struct("tiled",true ,"comp",'Deflate',"name","tile-deflate")];
+
+% Find external tools (if any)
+tools = struct( ...
+    'tiffcp', findExe('tiffcp'), ...
+    'convert', findExe('convert'));
+
 for c = cfgs
     fname = fullfile(tmpdir4, ['tile_' c.name '.tif']);
     img   = cast(magic(257), dtype);
+    % First, try to create TIFF with MATLAB (if supported)
+    created = false;
+    errstr = '';
+    % MATLAB can’t write tiled with compression, but let’s try
     try
         t = Tiff(fname,'w');
+        tag.ImageWidth         = size(img,2);
+        tag.ImageLength        = size(img,1);
+        tag.BitsPerSample      = bitDepth;
+        tag.SamplesPerPixel    = 1;
+        tag.Photometric        = tryEnum('Tiff.Photometric.MinIsBlack',1);
+        tag.PlanarConfiguration= tryEnum('Tiff.PlanarConfiguration.Contig',1);
+        [tag.Compression,supported] = compressionTag(c.comp);
+        if ~supported
+            fprintf('  %-13s → skipped (compression unsupported)\n', c.name);
+            close(t); delete(fname); continue
+        end
+        if c.tiled
+            tag.TileWidth  = 64;
+            tag.TileLength = 64;
+        else
+            tag.RowsPerStrip = 33;
+        end
+        t.setTag(tag); t.write(img); close(t);
+        created = true;
     catch ME
-        fprintf('  %-13s → skipped (cannot create file: %s) [%s]\n', c.name, ME.message, ME.identifier);
+        errstr = ME.message;
+        if exist('t','var'), try close(t); catch; end, end
+        if exist(fname,'file'), delete(fname); end
+    end
+
+    % If failed, try to use external tools to convert
+    if ~created && (c.tiled || ~strcmpi(c.comp,'none'))
+        % Write base TIFF (uncompressed, untiled) with MATLAB first
+        src_tif = fullfile(tmpdir4, ['tile_' c.name '_src.tif']);
+        try
+            t = Tiff(src_tif,'w');
+            t.setTag('ImageWidth', size(img,2));
+            t.setTag('ImageLength', size(img,1));
+            t.setTag('BitsPerSample', bitDepth);
+            t.setTag('SamplesPerPixel', 1);
+            t.setTag('Photometric', 1);
+            t.setTag('PlanarConfiguration', 1);
+            t.setTag('Compression', 1); % none
+            t.setTag('RowsPerStrip', 33); % default
+            t.write(img); close(t);
+            created = false;
+            % External conversion
+            if ~isempty(tools.tiffcp)
+                % Compose tiffcp command
+                args = {};
+                if c.tiled
+                    args = [args {'-t', '-w', '64', '-l', '64'}];
+                end
+                switch lower(c.comp)
+                    case 'lzw'
+                        args = [args {'-c', 'lzw'}];
+                    case 'deflate'
+                        args = [args {'-c', 'zip'}];
+                    otherwise
+                        args = [args {'-c', 'none'}];
+                end
+                cmd = sprintf('"%s" %s "%s" "%s"', ...
+                    tools.tiffcp, strjoin(args, ' '), src_tif, fname);
+                [status, out] = system(cmd);
+                if status == 0 && exist(fname,'file')
+                    created = true;
+                else
+                    fprintf('  %-13s → skipped (tiffcp failed: %s)\n', c.name, strtrim(out));
+                end
+            elseif ~isempty(tools.convert)
+                % Try using ImageMagick convert
+                args = {};
+                if c.tiled
+                    args = [args {'-define', 'tiff:tile-geometry=64x64'}];
+                end
+                switch lower(c.comp)
+                    case 'lzw'
+                        args = [args {'-compress', 'lzw'}];
+                    case 'deflate'
+                        args = [args {'-compress', 'zip'}];
+                    otherwise
+                        args = [args {'-compress', 'none'}];
+                end
+                cmd = sprintf('"%s" "%s" %s "%s"', ...
+                    tools.convert, src_tif, strjoin(args, ' '), fname);
+                [status, out] = system(cmd);
+                if status == 0 && exist(fname,'file')
+                    created = true;
+                else
+                    fprintf('  %-13s → skipped (convert failed: %s)\n', c.name, strtrim(out));
+                end
+            else
+                fprintf('  %-13s → skipped (no TIFF tools found)\n', c.name);
+            end
+            % Cleanup temp src
+            if exist(src_tif,'file'), delete(src_tif); end
+        catch ME2
+            fprintf('  %-13s → skipped (external tool error: %s)\n', c.name, ME2.message);
+        end
+    end
+
+    if ~created
+        fprintf('  %-13s → skipped (could not create test TIFF: %s)\n', c.name, errstr);
         continue
     end
-    tag.ImageWidth         = size(img,2);
-    tag.ImageLength        = size(img,1);
-    tag.BitsPerSample      = bitDepth;
-    tag.SamplesPerPixel    = 1;
-    tag.Photometric        = tryEnum('Tiff.Photometric.MinIsBlack',1);
-    tag.PlanarConfiguration= tryEnum('Tiff.PlanarConfiguration.Contig',1);
-    [tag.Compression,supported] = compressionTag(c.comp);
-    if ~supported
-        fprintf('  %-13s → skipped (compression unsupported)\n', c.name);
-        close(t); delete(fname); continue
-    end
-    if c.tiled
-        tag.TileWidth  = 64;
-        tag.TileLength = 64;
-    else
-        tag.RowsPerStrip = 33;
-    end
-    t.setTag(tag); t.write(img); close(t);
 
+    % Now run the test!
     try
         blk = load_bl_tif(cellstr(fname), 20,20,100,100,false);
         ok  = isequal(blk,img(20:119,20:119));
