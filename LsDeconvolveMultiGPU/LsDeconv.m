@@ -142,8 +142,6 @@ function [] = LsDeconv(varargin)
         p_log(log_file, ['   image size (voxels): ' num2str(stack_info.x)  'x * ' num2str(stack_info.y) 'y * ' num2str(stack_info.z) 'z = ' num2str(stack_info.x * stack_info.y * stack_info.z)]);
         p_log(log_file, ['   voxel size (nm^3): ' num2str(dxy)  'x * ' num2str(dxy) 'y * ' num2str(dz) 'z = ' num2str(dxy^2*dz)]);
         p_log(log_file, ['   image bit depth: ' num2str(stack_info.bit_depth)]);
-        p_log(log_file, ['   convert to 8bit: ' num2str(stack_info.convert_to_8bit)]);
-        p_log(log_file, ['   convert to 16bit: ' num2str(stack_info.convert_to_16bit)]);
         p_log(log_file, ' ');
 
         disp("Logging imaging system parameters");
