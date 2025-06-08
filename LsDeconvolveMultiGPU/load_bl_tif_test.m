@@ -149,14 +149,18 @@ y0 = 20; x0 = 20; h = 100; w = 100;
 for idx = 1:numel(cfgs)
     c = cfgs(idx);
 
-    % Always build filename from directory and simple filename only!
-    simple_name      = ['tile_' c.name '.tif'];
-    simple_src_name  = ['tile_' c.name '_src.tif'];
-    fname    = fullfile(tmpdir4, simple_name);
-    src_tif  = fullfile(tmpdir4, simple_src_name);
+    % Always sanitize config name!
+    safe_name = regexprep(c.name, '[\/\\]', '_');
+    fname    = fullfile(tmpdir4, ['tile_' safe_name '.tif']);
+    src_tif  = fullfile(tmpdir4, ['tile_' safe_name '_src.tif']);
+
     img      = cast(magic(257), dtype);
     created  = false;
     errstr   = '';
+
+    % DEBUG print to confirm no path errors
+    % fprintf('    DEBUG: fname = "%s"\n', fname);
+    % fprintf('    DEBUG: src_tif = "%s"\n', src_tif);
 
     % MATLAB attempt
     try
