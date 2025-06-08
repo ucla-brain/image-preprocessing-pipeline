@@ -288,7 +288,7 @@ function [archive, folder_name, url, version] = get_library_info(lib)
             version = '2.1';
             archive = ['jbigkit-', version, '.tar.gz'];
             folder_name = ['jbigkit-', version];
-            url = ['https://www.cl.cam.ac.uk/~mgk25/jbigkit/', archive];
+            url = [' https://www.cl.cam.ac.uk/~mgk25/jbigkit/download/', archive];
 
         case 'libdeflate'
             version = '1.19';
