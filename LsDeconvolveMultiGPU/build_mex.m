@@ -300,12 +300,21 @@ end
 function folder = get_top_level_folder(archive)
     [~, output] = system(sprintf('tar -tzf "%s"', archive));
     lines = strsplit(output, '\n');
+
+    % Extract top-level folder names using regex
     tokens = regexp(lines, '^([^/]+)/', 'tokens');
-    tokens = tokens(~cellfun('isempty', tokens));
-    top_dirs = unique(cellfun(@(x) x{1}, tokens, 'UniformOutput', false));
+    tokens = tokens(~cellfun(@isempty, tokens)); % remove empty matches
+
+    % Only keep valid string tokens
+    try
+        top_dirs = unique(cellfun(@(x) x{1}, tokens, 'UniformOutput', false));
+    catch
+        error('Could not determine top-level folder from archive: %s', archive);
+    end
+
     if numel(top_dirs) == 1
         folder = top_dirs{1};
     else
-        error('Unable to determine top-level folder from archive: %s', archive);
+        error('Ambiguous or missing top-level folder in archive: %s', archive);
     end
 end
