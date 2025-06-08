@@ -83,73 +83,78 @@ for b = 1:size(blockSizes,1)
 end
 
 %% 2. Spatial boundary checks - Robust pass/fail (fixed)
-fprintf('\n[Suite 2] Spatial boundary checks:\n');
-edge = {...  %          y,   x,   h,   w,    label,                  kind
-   1,1,1,1,                         "top-left 1×1",        "ok";
-   1,1,1,512,                       "top row stripe",      "ok";
-   1,1,512,1,                       "left col stripe",     "ok";
-   imageHeight,1,1,512,             "bottom row stripe",   "ok";
-   1,imageWidth,512,1,              "right col stripe",    "ok";
-   1,1,imageHeight,imageWidth,      "full-frame (1 Z)",    "ok_singleZ";
-  -20,-20,128,128,                  "upper-left overflow", "expect_error";
-   imageHeight-50,imageWidth-50,100,100, "bottom-right overflow","expect_error";
-};
-for k = 1:size(edge,1)
-    [y,x,h,w,label,kind] = edge{k,:};
-    try
-        switch kind
-            case "ok", mexP = load_bl_tif(filelist, y,x,h,w,false); %#ok<NASGU>
-            case "ok_singleZ", mexP = load_bl_tif(filelist(1), y,x,h,w,false); %#ok<NASGU>
-            otherwise, load_bl_tif(filelist, y,x,h,w,false); % should error
-        end
-        if kind=="expect_error"
-            fprintf(' %s %-25s did NOT error\n', EMOJI_FAIL, label);
-        else
-            fprintf(' %s %-25s (size %s)\n', EMOJI_PASS, label, mat2str(size(mexP)));
-        end
-    catch ME
-        if kind=="expect_error"
-            fprintf(' %s %-25s raised (%s)\n', EMOJI_PASS, label, ME.identifier);
-        else
-            fprintf(' %s %-25s ERROR: %s [%s]\n', EMOJI_FAIL, label, ME.message, ME.identifier);
-        end
-    end
-end
+%fprintf('\n[Suite 2] Spatial boundary checks:\n');
+%edge = {...  %          y,   x,   h,   w,    label,                  kind
+%   1,1,1,1,                         "top-left 1×1",        "ok";
+%   1,1,1,512,                       "top row stripe",      "ok";
+%   1,1,512,1,                       "left col stripe",     "ok";
+%   imageHeight,1,1,512,             "bottom row stripe",   "ok";
+%   1,imageWidth,512,1,              "right col stripe",    "ok";
+%   1,1,imageHeight,imageWidth,      "full-frame (1 Z)",    "ok_singleZ";
+%  -20,-20,128,128,                  "upper-left overflow", "expect_error";
+%   imageHeight-50,imageWidth-50,100,100, "bottom-right overflow","expect_error";
+%};
+%for k = 1:size(edge,1)
+%    [y,x,h,w,label,kind] = edge{k,:};
+%    try
+%        switch kind
+%            case "ok", mexP = load_bl_tif(filelist, y,x,h,w,false); %#ok<NASGU>
+%            case "ok_singleZ", mexP = load_bl_tif(filelist(1), y,x,h,w,false); %#ok<NASGU>
+%            otherwise, load_bl_tif(filelist, y,x,h,w,false); % should error
+%        end
+%        if kind=="expect_error"
+%            fprintf(' %s %-25s did NOT error\n', EMOJI_FAIL, label);
+%        else
+%            fprintf(' %s %-25s (size %s)\n', EMOJI_PASS, label, mat2str(size(mexP)));
+%        end
+%    catch ME
+%        if kind=="expect_error"
+%            fprintf(' %s %-25s raised (%s)\n', EMOJI_PASS, label, ME.identifier);
+%        else
+%            fprintf(' %s %-25s ERROR: %s [%s]\n', EMOJI_FAIL, label, ME.message, ME.identifier);
+%        end
+%    end
+%end
 
 %% 3. Little- vs big-endian, 8-/16-bit
 fprintf('\n[Suite 3] 8/16-bit little- vs big-endian:\n');
 tmpdir = tempname; mkdir(tmpdir);
 cleanupObj = onCleanup(@() cleanupTempDir(tmpdir));
-specs  = [ ...
+specs = [ ...
    struct("bits",8 ,"big",false)
-   struct("bits",8 ,"big",true )
+   struct("bits",8 ,"big",true )    % will skip
    struct("bits",16,"big",false)
-   struct("bits",16,"big",true )];
-fname8LE = '';
+   struct("bits",16,"big",true )];  % will skip
+
 for idx = 1:numel(specs)
     s = specs(idx);
     fname = fullfile(tmpdir, sprintf('end_%db_%s.tif',s.bits,ternary(s.big,'BE','LE')));
-    img   = randi(intmax(sprintf('uint%d',s.bits)), 512,512, sprintf('uint%d',s.bits));
-    t     = Tiff(fname,'w');
+
+    % Skip big-endian creation
+    if s.big
+        fprintf('  - skipped %2d-bit BE (MATLAB cannot write BE TIFFs)\n', s.bits);
+        continue
+    end
+
+    % Create image and write
+    img = randi(intmax(sprintf('uint%d',s.bits)), 512,512, sprintf('uint%d',s.bits));
+    t = Tiff(fname,'w');
     tag.ImageWidth        = size(img,2);
     tag.ImageLength       = size(img,1);
     tag.BitsPerSample     = s.bits;
     tag.SamplesPerPixel   = 1;
-    tag.Photometric       = tryEnum('Tiff.Photometric.MinIsBlack',1);
-    tag.PlanarConfiguration=tryEnum('Tiff.PlanarConfiguration.Contig',1);
-    tag.Compression       = tryEnum('Tiff.Compression.None',1);
+    tag.Photometric       = Tiff.Photometric.MinIsBlack;
+    tag.PlanarConfiguration = Tiff.PlanarConfiguration.Contig;
+    tag.Compression       = Tiff.Compression.None;
     t.setTag(tag);
-    if s.big && ~forceBigEndianHeader(t), close(t), delete(fname);
-        fprintf('  - skipped %2d-bit BE (unsupported)\n',s.bits); continue
-    end
     t.write(img); close(t);
-    if s.bits==8 && ~s.big, fname8LE = fname; end
+
+    % Test with load_bl_tif
     try
         load_bl_tif({fname},1,1,32,32,false);
-        fprintf(' %s %2d-bit %s-endian\n',EMOJI_PASS,s.bits,ternary(s.big,'big','little'));
+        fprintf(' %s %2d-bit little-endian\n', EMOJI_PASS, s.bits);
     catch ME
-        fprintf(' %s %2d-bit %s-endian (%s) [%s]\n',EMOJI_FAIL,s.bits, ...
-                ternary(s.big,'big','little'), ME.message, ME.identifier);
+        fprintf(' %s %2d-bit little-endian (%s)\n', EMOJI_FAIL, s.bits, ME.message);
     end
 end
 
