@@ -233,7 +233,7 @@ for idx = 1:numel(cfgs)
                     otherwise
                         args = [args {'-compress', 'none'}];
                 end
-                cmd = sprintf('"%s" \"%s\" %s \"%s\"", ...
+                cmd = sprintf('"%s" "%s" %s "%s"', ...
                     tools.convert, src_tif, strjoin(args, ' '), fname);
                 [status, out] = system(cmd);
                 if status == 0 && exist(fname,'file')
