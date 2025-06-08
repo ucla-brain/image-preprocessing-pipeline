@@ -362,7 +362,7 @@ void worker_main(
                 continue;
             }
             // PATCH: detect if byte swapping is needed
-            bool need_swap = (bytesPerPixel == 2); //&& TIFFIsByteSwapped(tif.get());
+            bool need_swap = false; //(bytesPerPixel == 2) && TIFFIsByteSwapped(tif.get());
 
             readSubRegionToBuffer(task, tif.get(), bytesPerPixel, results[i].data, tempBuf);
 
