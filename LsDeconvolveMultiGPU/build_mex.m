@@ -336,38 +336,52 @@ function [archive, folder_name, url, version] = get_library_info(lib)
 end
 
 function top = get_top_level_folder(archive_file)
-    [~, tmp_dir] = fileparts(tempname);
-    tmp_dir = fullfile(tempdir, tmp_dir);
+    % Extracts the top-level folder name from a tar.gz or zip archive
+    [~, tmp_name] = fileparts(tempname);
+    tmp_dir = fullfile(tempdir, tmp_name);
     mkdir(tmp_dir);
 
+    list_path = fullfile(tmp_dir, 'list.txt');
+
     if endsWith(archive_file, '.tar.gz')
-        [status, ~] = system(sprintf('tar -tzf "%s" > "%s/list.txt"', archive_file, tmp_dir));
+        cmd = sprintf('tar -tzf "%s" > "%s"', archive_file, list_path);
     elseif endsWith(archive_file, '.zip')
-        [status, ~] = system(sprintf('unzip -l "%s" > "%s/list.txt"', archive_file, tmp_dir));
+        cmd = sprintf('unzip -l "%s" > "%s"', archive_file, list_path);
     else
         error('Unsupported archive format: %s', archive_file);
     end
 
-    if status ~= 0
-        error('Failed to read archive contents: %s', archive_file);
+    status = system(cmd);
+    if status ~= 0 || ~isfile(list_path)
+        error('Failed to list contents of archive: %s', archive_file);
     end
 
-    list_file = fullfile(tmp_dir, 'list.txt');
-    txt = fileread(list_file);
-    delete(list_file); rmdir(tmp_dir);
+    lines = strsplit(fileread(list_path), '\n');
 
-    % Extract all paths (tar -tzf lists one per line)
-    lines = strsplit(txt, '\n');
-    tokens = regexp(lines, '^([^/]+)/', 'tokens');
-    top_dirs = unique(cellfun(@(x) x{1}, tokens(~cellfun('isempty', tokens)), 'UniformOutput', false));
+    % Extract top-level folders from paths
+    folders = {};
+    for i = 1:numel(lines)
+        line = strtrim(lines{i});
+        if isempty(line) || startsWith(line, 'Length') || startsWith(line, 'Archive')
+            continue;
+        end
+        % Match something like "foldername/file" or "folder/"
+        match = regexp(line, '^([^/\\]+)[/\\]', 'tokens', 'once');
+        if ~isempty(match)
+            folders{end+1} = match{1}; %#ok<AGROW>
+        end
+    end
 
-    if numel(top_dirs) == 1
-        top = top_dirs{1};
-    elseif isempty(top_dirs)
-        % Fallback: no top-level folder
+    folders = unique(folders);
+    delete(list_path); rmdir(tmp_dir);
+
+    if isempty(folders)
+        % Fallback: use archive name (no top-level folder found)
         [~, top, ~] = fileparts(archive_file);
-        fprintf('No top-level folder in archive; falling back to: %s\n', top);
+        fprintf('No top-level folder found. Using fallback: %s\n', top);
+    elseif numel(folders) == 1
+        top = folders{1};
     else
-        error('Archive contains multiple top-level folders: %s', archive_file);
+        error('Archive contains multiple top-level folders: %s', strjoin(folders, ', '));
     end
 end
