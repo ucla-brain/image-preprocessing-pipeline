@@ -163,6 +163,8 @@ end
 
 %% 5. Expected-error paths
 fprintf('\n[Suite 5] Expected-error checks:\n');
+tmpdir = tempname; mkdir(tmpdir);
+cleanupObj = onCleanup(@() cleanupTempDir(tmpdir));
 neg = {
   "Non-overlap ROI", @() load_bl_tif(filelist(1),-5000,-5000,10,10,false);
   "Empty file cell", @() load_bl_tif({''},1,1,10,10,false);
@@ -314,8 +316,8 @@ t.write(img); close(t);
 % Convert with external tool
 cmd = '';
 if ~isempty(tools.tiffcp)
-    flag = ternary(bigEndian, 'msb', 'lsb');
-    cmd = sprintf('"%s" -c none -e %s "%s" "%s"', ...
+    flag = ternary(bigEndian, '-B', '-L');
+    cmd = sprintf('"%s" -c none %s "%s" "%s"', ...
         tools.tiffcp, flag, src_tif, dst_tif);
 elseif ~isempty(tools.convert)
     flag = ternary(bigEndian, 'MSB', 'LSB');
