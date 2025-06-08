@@ -13,21 +13,20 @@
   • Purpose
       Efficiently extracts an X-Y subregion (ROI) from a series of grayscale
       TIFF slices (1 TIFF per Z) and assembles them into a 3D MATLAB array.
-      The implementation is highly optimized for speed, correctness, and
-      robustness in large-scale, multi-core environments.
+      Optimized for speed, reliability, and robustness in high-throughput,
+      multi-core environments.
 
   • Highlights
       – Supports 8-bit and 16-bit grayscale TIFFs (single-channel).
-      – Handles tiled and stripped formats (compressed or uncompressed).
+      – Handles both tiled and stripped formats, including compression (e.g., Deflate, LZW).
       – Fully cross-platform: Windows, Linux, macOS (requires libtiff ≥ 4.0).
-      – Uses modern C++14/17 with multi-threading and 64-bit-safe indexing.
-      – ROI coordinates and dimensions are `uint32_t` throughout for clarity.
-      – Internally validates ROI coverage *across all slices* before allocating.
-      – Automatically detects endian mismatch and applies byte swapping.
-      – Optional transpose flag to return output in [X Y Z] instead of MATLAB default [Y X Z].
-      – Strong bounds checking and hard caps on per-tile/strip decode size.
-      – Thread-safe parallel I/O with per-thread TIFF handles and buffers.
-      – Aggregates all thread errors into a single message at the end.
+      – Uses modern C++14/17 and multi-threading with a dynamic work queue.
+      – ROI coordinates and dimensions use `uint32_t` for clarity and safety.
+      – Each thread independently opens its own TIFF and manages its own decode buffers.
+      – Endianness correction (byte-swapping) is automatically handled by libtiff.
+      – Output shape is [Y X Z] by default; optional transpose to [X Y Z].
+      – ROI bounds are strictly validated across all slices before memory allocation.
+      – All thread-level errors are aggregated and reported as a single message.
 
   ──────────────────────────────────────────────────────────────────────────────
   MATLAB USAGE
@@ -35,13 +34,13 @@
       img = load_bl_tif(files, y, x, height, width [, transposeFlag]);
 
       • files          – 1×N cell array of full path strings (one per Z slice)
-      • y, x           – 1-based ROI upper-left pixel (double scalars)
-      • height, width  – ROI size in pixels (double scalars)
+      • y, x           – 1-based upper-left ROI coordinate (double scalars)
+      • height, width  – ROI dimensions in pixels (double scalars)
       • transposeFlag  – (optional) logical or uint32 scalar, default = false
-                         If true, output is permuted to [X Y Z] order
+                         If true, output is returned in [X Y Z] format
 
       • returns
-        – img          – MATLAB array of type uint8 or uint16:
+        – img          – MATLAB array of class uint8 or uint16:
                           [height width Z] or [width height Z] if transposed
 
       Example:
@@ -53,39 +52,39 @@
   ──────────────────────────────────────────────────────────────────────────────
   COMPILATION
   -----------
-      • Recommended: MATLAB R2018a+ with C++14/17-capable compiler
+      • Recommended: MATLAB R2018a+ with a C++14/17-capable compiler.
 
-      • Run `build_mex.m` (provided) for automatic compilation, or use:
+      • Use the provided `build_mex.m` script, or compile manually:
 
           mex -R2018a -largeArrayDims CXXFLAGS="\$(CXXFLAGS) -std=c++17" \
               LDFLAGS="\$(LDFLAGS) -ltiff" load_bl_tif.cpp
 
-      • Ensure `libtiff` is available in include/linker paths.
-      • On Windows/MSVC: link against a prebuilt `tiff.lib`.
+      • Ensure libtiff headers and libraries are available to the compiler.
+      • On Windows, link against a precompiled `tiff.lib`.
 
   ──────────────────────────────────────────────────────────────────────────────
   CONSTRAINTS & SAFEGUARDS
   -------------------------
-      • Files must be sorted by Z; no internal sorting is performed.
-      • All slices must have the same image size, bit depth, and be grayscale.
-      • The requested ROI must lie fully within all TIFFs.
-      • Per-slice output must not exceed 2,147,483,647 pixels (MATLAB's limit).
-      • Tiles or strips larger than 1 GiB are rejected to prevent overflows.
-      • RGB or planar images (samplesPerPixel ≠ 1) are not supported.
-      • Thread-safe I/O and error handling across all slices.
+      • Files must be sorted by Z; no sorting is performed internally.
+      • All slices must share identical size, bit depth, and be grayscale (1 sample/pixel).
+      • The ROI must lie fully inside each slice. Validation is strict and occurs before allocation.
+      • The output array must not exceed 2,147,483,647 pixels per slice (MATLAB limit).
+      • RGB or multi-channel TIFFs are not supported.
 
   ──────────────────────────────────────────────────────────────────────────────
-  PERFORMANCE TIPS
-  ----------------
-      • Place TIFFs on a high-throughput SSD or NVMe disk for maximum speed.
-      • For compressed TIFFs, CPU decoding often dominates runtime.
-      • Environment variable `LOAD_BL_TIF_THREADS` can cap thread count:
-            setenv('LOAD_BL_TIF_THREADS','8');  % MATLAB
+  PARALLELISM & PERFORMANCE
+  --------------------------
+      • Uses a dynamic work queue to assign TIFF slices to threads.
+      • Each thread uses independent TIFF handles and decode buffers.
+      • Byte-swapping is delegated to libtiff, which transparently returns native-endian data.
+      • Aggregates all error messages after the parallel phase finishes.
+      • For best performance, store TIFFs on SSD/NVMe and avoid over-threading.
 
   ---------------------------------------------------------------------------
   © 2025 Keivan Moradi — Released under GPLv3. See LICENSE or visit:
                          https://www.gnu.org/licenses/gpl-3.0.html
 ==============================================================================*/
+
 
 #include "mex.h"
 #include "tiffio.h"
