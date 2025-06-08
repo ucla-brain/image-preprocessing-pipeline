@@ -130,9 +130,11 @@ run_external_endian_tests();
 %% 4. Tile/strip + compression (using external tools if available)
 [EMOJI_PASS, EMOJI_FAIL] = emoji_checkmarks();
 fprintf('\n[Suite 4] Tile/strip + compression (using external tools if available):\n');
-tmpdir4 = 'test4'; % or tempname; mkdir(tmpdir4); for real test
+
+tmpdir4 = 'test4'; % or use tempname() in future
 if ~isfolder(tmpdir4), mkdir(tmpdir4); end
 cleanupObj4 = onCleanup(@() cleanupTempDir(tmpdir4));
+
 cfgs = [ ...
   struct("tiled",false,"comp",'None'   ,"name","strip-none"   )
   struct("tiled",false,"comp",'LZW'    ,"name","strip-lzw"    )
@@ -150,13 +152,15 @@ y0 = 20; x0 = 20; h = 100; w = 100;
 for idx = 1:numel(cfgs)
     c = cfgs(idx);
 
-    % FORCE name to be clean
-    assert(isempty(strfind(c.name, filesep)), 'c.name must not contain path separators!');
-    fname   = fullfile(tmpdir4, ['tile_' c.name '.tif']);
-    src_tif = fullfile(tmpdir4, ['tile_' c.name '_src.tif']);
+    % Sanitize name to prevent malformed paths
+    cname = matlab.lang.makeValidName(strtrim(string(c.name)));
+    assert(isempty(strfind(cname, filesep)), 'c.name must not contain path separators!');
+
+    fname   = fullfile(tmpdir4, sprintf('tile_%s.tif', cname));
+    src_tif = fullfile(tmpdir4, sprintf('tile_%s_src.tif', cname));
 
     % DEBUG: show constructed file names
-    % disp(['DEBUG: fname = "' fname '"']);
+    % fprintf('  [%s] fname: %s\n', cname, fname);
 
     img      = cast(magic(257), dtype);
     created  = false;
@@ -173,7 +177,7 @@ for idx = 1:numel(cfgs)
         tag.PlanarConfiguration= tryEnum('Tiff.PlanarConfiguration.Contig',1);
         [tag.Compression,supported] = compressionTag(c.comp);
         if ~supported
-            fprintf('  %-13s → skipped (compression unsupported)\n', c.name);
+            fprintf('  %-13s → skipped (compression unsupported)\n', cname);
             close(t); if exist(char(fname),'file'), delete(char(fname)); end; continue
         end
         if c.tiled
@@ -204,6 +208,7 @@ for idx = 1:numel(cfgs)
             t.setTag('RowsPerStrip', 33); % default
             t.write(img); close(t);
             created = false;
+
             % Try tiffcp first
             if ~isempty(tools.tiffcp)
                 args = {};
@@ -224,7 +229,7 @@ for idx = 1:numel(cfgs)
                 if status == 0 && exist(char(fname),'file')
                     created = true;
                 else
-                    fprintf('  %-13s → %s (tiffcp failed: %s)\n', c.name, EMOJI_FAIL, strtrim(out));
+                    fprintf('  %-13s → %s (tiffcp failed: %s)\n', cname, EMOJI_FAIL, strtrim(out));
                 end
             elseif ~isempty(tools.convert)
                 args = {};
@@ -245,19 +250,19 @@ for idx = 1:numel(cfgs)
                 if status == 0 && exist(char(fname),'file')
                     created = true;
                 else
-                    fprintf('  %-13s → %s (convert failed: %s)\n', c.name, EMOJI_FAIL, strtrim(out));
+                    fprintf('  %-13s → %s (convert failed: %s)\n', cname, EMOJI_FAIL, strtrim(out));
                 end
             else
-                fprintf('  %-13s → skipped (no TIFF tools found)\n', c.name);
+                fprintf('  %-13s → skipped (no TIFF tools found)\n', cname);
             end
             if exist(char(src_tif),'file'), delete(char(src_tif)); end
         catch ME2
-            fprintf('  %-13s → %s (external tool error: %s)\n', c.name, EMOJI_FAIL, ME2.message);
+            fprintf('  %-13s → %s (external tool error: %s)\n', cname, EMOJI_FAIL, ME2.message);
         end
     end
 
     if ~created
-        fprintf('  %-13s → skipped (could not create test TIFF: %s)\n', c.name, errstr);
+        fprintf('  %-13s → skipped (could not create test TIFF: %s)\n', cname, errstr);
         continue
     end
 
@@ -266,13 +271,13 @@ for idx = 1:numel(cfgs)
         blk = load_bl_tif({char(fname)}, y0, x0, h, w, false);
         reference = img(y0:(y0+h-1), x0:(x0+w-1));
         if isequaln(blk, reference)
-            fprintf('  %-13s → %s\n', c.name, EMOJI_PASS);
+            fprintf('  %-13s → %s\n', cname, EMOJI_PASS);
         else
             maxerr = max(abs(double(blk(:)) - double(reference(:))));
-            fprintf('  %-13s → %s (max abs diff = %g)\n', c.name, EMOJI_FAIL, maxerr);
+            fprintf('  %-13s → %s (max abs diff = %g)\n', cname, EMOJI_FAIL, maxerr);
         end
     catch ME
-        fprintf('  %-13s → %s (%s) [%s]\n', c.name, EMOJI_FAIL, ME.message, ME.identifier);
+        fprintf('  %-13s → %s (%s) [%s]\n', cname, EMOJI_FAIL, ME.message, ME.identifier);
     end
 end
 
