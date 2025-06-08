@@ -125,7 +125,7 @@
 // --- Config ---
 constexpr uint16_t kSupportedBitDepth8  = 8;
 constexpr uint16_t kSupportedBitDepth16 = 16;
-constexpr size_t MAX_TIFF_BLOCK_BYTES = 1ull << 30;
+constexpr size_t MAX_TIFF_BLOCK_BYTES = 8ull << 30;
 constexpr size_t kMaxPixelsPerSlice = static_cast<size_t>(std::numeric_limits<int>::max());
 
 // RAII wrapper for mxArrayToUTF8String()
