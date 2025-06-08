@@ -374,9 +374,9 @@ end
 
 function pad = decon_pad_size(psf_sz, use_fft)
     if use_fft
-        pad = ceil(psf_sz(:).' * 2);
+        pad = ceil(psf_sz(:).' * 1);
     else
-        pad = ceil(psf_sz(:).' * 3); % 4 works withou edgetaper_3d
+        pad = ceil(psf_sz(:).' * 2); % 4 works withou edgetaper_3d; 3 works with edgetaper_3d
     end
 end
 
@@ -873,14 +873,46 @@ function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
     % Only allocate space for what we read from disk
     bl = zeros(numel(x_indices), numel(y_indices), numel(z_indices), 'single');
 
-    % Read the valid slices
-    for k = 1:numel(z_indices)
-        slice_idx = z_indices(k);
-        slice = imread(filelist{slice_idx}, ...
-            'PixelRegion', {[y_indices(1), y_indices(end)], [x_indices(1), x_indices(end)]});
-        bl(:, :, k) = im2single(slice)';
+    % -----------------------------
+    % Use `load_bl_tif` if available
+    % -----------------------------
+    use_fast_loader = exist('load_bl_tif', 'file') == 3;  % MEX-file available?
+
+    if use_fast_loader
+        try
+            % Extract subregion using fast multithreaded native MEX
+            subfilelist = filelist(z_indices);
+            y0 = y_indices(1);
+            x0 = x_indices(1);
+            H  = numel(y_indices);
+            W  = numel(x_indices);
+
+            % Note: transpose = true to match MATLAB behavior (imread' = X,Y)
+            bl = load_bl_tif(subfilelist, y0, x0, H, W, true);
+            bl = im2single(bl);  % Ensure consistent type
+
+        catch ME
+            warning('[load_block] load_bl_tif failed (%s), falling back to imread.', ME.message);
+            use_fast_loader = false;
+        end
     end
 
+    % --------------------------------------
+    % Fallback: use slow MATLAB imread loop
+    % --------------------------------------
+    if ~use_fast_loader
+        bl = zeros(numel(x_indices), numel(y_indices), numel(z_indices), 'single');
+        for k = 1:numel(z_indices)
+            slice_idx = z_indices(k);
+            slice = imread(filelist{slice_idx}, ...
+                'PixelRegion', {[y_indices(1), y_indices(end)], [x_indices(1), x_indices(end)]});
+            bl(:, :, k) = im2single(slice)';  % Transpose to [X,Y]
+        end
+    end
+
+    % ------------------------
+    % Symmetric edge padding
+    % ------------------------
     % How much to pad before and after in each axis
     pad_before = read_start - requested_start;
     pad_after  = requested_end - read_end;
@@ -897,7 +929,9 @@ function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
         bl = padarray(bl, pad_after, 'symmetric', 'post');
     end
 
-    % Final check
+    % ------------------------
+    % Final consistency check
+    % ------------------------
     assert(isequal(size(bl), block_target_size), ...
         sprintf('[load_block] Output size mismatch! Got [%s], expected [%s]', ...
         num2str(size(bl)), num2str(block_target_size)));
