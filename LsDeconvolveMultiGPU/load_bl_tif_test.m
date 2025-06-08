@@ -145,7 +145,8 @@ tools = struct( ...
     'tiffcp', findExe('tiffcp'), ...
     'convert', findExe('convert'));
 
-for c = cfgs
+for idx = 1:numel(cfgs)
+    c = cfgs(idx);
     fname = fullfile(tmpdir4, ['tile_' c.name '.tif']);
     img   = cast(magic(257), dtype);
     created = false;
