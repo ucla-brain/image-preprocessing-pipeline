@@ -317,10 +317,10 @@ function [archive, folder_name, url, version] = get_library_info(lib)
             url = ['https://www.cl.cam.ac.uk/~mgk25/jbigkit/download/', archive];
 
         case 'libdeflate'
-            version = '1.19';
+            version = '1.24';
             archive = ['libdeflate-', version, '.zip'];
             folder_name = ['libdeflate-', version];
-            url = ['https://github.com/ebiggers/libdeflate/archive/refs/tags/v', version, '.zip'];
+            url = ['https://github.com/ebiggers/libdeflate/releases/download/' version '/libdeflate-' version '.tar.gz'];
 
         otherwise
             error('Unknown library: %s', lib);
