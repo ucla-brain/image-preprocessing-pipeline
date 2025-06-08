@@ -73,7 +73,7 @@
   ──────────────────────────────────────────────────────────────────────────────
   CONSTRAINTS & LIMITS
   --------------------
-      • We do not sort the files. Natual sorting burden is on the user.
+      • We do not sort the files. Natural sorting burden is on the user.
       • All slices must share identical dimensions, bit-depth, and a single
         sample per pixel.
       • The requested ROI must lie fully inside *every* slice; otherwise the
@@ -235,8 +235,10 @@ static void readSubRegionToBuffer(
         if (tileW == 0 || tileH == 0)
             throw std::runtime_error("Invalid tile size in TIFF metadata in file: " + task.path);
 
-        const tsize_t uncompressedTileBytes = static_cast<tsize_t>(tileW) * static_cast<tsize_t>(tileH) * static_cast<tsize_t>(bytesPerPixel);
-        const tsize_t safeTileBytes = std::min(uncompressedTileBytes, kMaxSafeBufferBytes);
+        size_t uncompressedTileBytes = static_cast<size_t>(tileW) * tileH * bytesPerPixel;
+        if (uncompressedTileBytes > static_cast<size_t>(std::numeric_limits<tsize_t>::max()))
+            throw std::runtime_error("Tile buffer too large (overflow risk)");
+        const tsize_t safeTileBytes = std::min(static_cast<tsize_t>(uncompressedTileBytes), kMaxSafeBufferBytes);
         if (safeTileBytes > tempBuf.size())
             tempBuf.resize(safeTileBytes);
         const size_t nTilePixels = uncompressedTileBytes / bytesPerPixel;
@@ -248,8 +250,6 @@ static void readSubRegionToBuffer(
             for (int col = 0; col < task.cropW; ++col) {
                 uint32_t imgX = static_cast<uint32_t>(task.in_col0 + col);
                 uint32_t tileIdx = TIFFComputeTile(tif, imgX, imgY, 0, 0);
-
-
 
                 if (tileIdx != prevTile) {
                     tsize_t ret = TIFFReadEncodedTile(
@@ -289,8 +289,10 @@ static void readSubRegionToBuffer(
         TIFFGetFieldDefaulted(tif, TIFFTAG_ROWSPERSTRIP, &rowsPerStrip);
         if (rowsPerStrip == 0) rowsPerStrip = imgHeight;
 
-        const tsize_t maxStripBytes = static_cast<tsize_t>(rowsPerStrip) * static_cast<tsize_t>(imgWidth) * static_cast<tsize_t>(bytesPerPixel);
-        const tsize_t safeStripBytes = std::min(maxStripBytes, kMaxSafeBufferBytes);
+        const size_t maxStripBytes = static_cast<size_t>(rowsPerStrip) * imgWidth * bytesPerPixel;
+        if (maxStripBytes > static_cast<size_t>(std::numeric_limits<tsize_t>::max()))
+            throw std::runtime_error("Tile buffer too large (overflow risk)");
+        const tsize_t safeStripBytes = std::min(static_cast<tsize_t>(maxStripBytes), kMaxSafeBufferBytes);
         if (safeStripBytes > tempBuf.size())
             tempBuf.resize(safeStripBytes);
         tstrip_t currentStrip = (tstrip_t)-1;
