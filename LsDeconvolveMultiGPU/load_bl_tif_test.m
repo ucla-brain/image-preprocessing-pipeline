@@ -232,3 +232,12 @@ function [pass,fail] = emoji_checkmarks()
         fail = '❌';
     end
 end
+
+function out = ternary(condition, true_val, false_val)
+% ternary: Inline conditional operator (like a ? b : c)
+    if condition
+        out = true_val;
+    else
+        out = false_val;
+    end
+end
