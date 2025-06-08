@@ -158,7 +158,7 @@ for idx = 1:numel(cfgs)
 
     % MATLAB attempt
     try
-        t = Tiff(fname,'w');  % fname as char, never a path in file part
+        t = Tiff(char(fname),'w');
         tag.ImageWidth         = size(img,2);
         tag.ImageLength        = size(img,1);
         tag.BitsPerSample      = bitDepth;
@@ -168,7 +168,7 @@ for idx = 1:numel(cfgs)
         [tag.Compression,supported] = compressionTag(c.comp);
         if ~supported
             fprintf('  %-13s → skipped (compression unsupported)\n', c.name);
-            close(t); if exist(fname,'file'), delete(fname); end; continue
+            close(t); if exist(char(fname),'file'), delete(char(fname)); end; continue
         end
         if c.tiled
             tag.TileWidth  = 64;
@@ -181,13 +181,13 @@ for idx = 1:numel(cfgs)
     catch ME
         errstr = ME.message;
         if exist('t','var'), try close(t); catch; end, end
-        if exist(fname,'file'), delete(fname); end
+        if exist(char(fname),'file'), delete(char(fname)); end
     end
 
     % Use external tools if MATLAB attempt fails
     if ~created && (c.tiled || ~strcmpi(c.comp,'none'))
         try
-            t = Tiff(src_tif,'w');
+            t = Tiff(char(src_tif),'w');
             t.setTag('ImageWidth', size(img,2));
             t.setTag('ImageLength', size(img,1));
             t.setTag('BitsPerSample', bitDepth);
@@ -213,9 +213,9 @@ for idx = 1:numel(cfgs)
                         args = [args {'-c', 'none'}];
                 end
                 cmd = sprintf('"%s" %s "%s" "%s"', ...
-                    tools.tiffcp, strjoin(args, ' '), src_tif, fname);
+                    tools.tiffcp, strjoin(args, ' '), char(src_tif), char(fname));
                 [status, out] = system(cmd);
-                if status == 0 && exist(fname,'file')
+                if status == 0 && exist(char(fname),'file')
                     created = true;
                 else
                     fprintf('  %-13s → %s (tiffcp failed: %s)\n', c.name, EMOJI_FAIL, strtrim(out));
@@ -234,9 +234,9 @@ for idx = 1:numel(cfgs)
                         args = [args {'-compress', 'none'}];
                 end
                 cmd = sprintf('"%s" "%s" %s "%s"', ...
-                    tools.convert, src_tif, strjoin(args, ' '), fname);
+                    tools.convert, char(src_tif), strjoin(args, ' '), char(fname));
                 [status, out] = system(cmd);
-                if status == 0 && exist(fname,'file')
+                if status == 0 && exist(char(fname),'file')
                     created = true;
                 else
                     fprintf('  %-13s → %s (convert failed: %s)\n', c.name, EMOJI_FAIL, strtrim(out));
@@ -244,7 +244,7 @@ for idx = 1:numel(cfgs)
             else
                 fprintf('  %-13s → skipped (no TIFF tools found)\n', c.name);
             end
-            if exist(src_tif,'file'), delete(src_tif); end
+            if exist(char(src_tif),'file'), delete(char(src_tif)); end
         catch ME2
             fprintf('  %-13s → %s (external tool error: %s)\n', c.name, EMOJI_FAIL, ME2.message);
         end
@@ -257,7 +257,7 @@ for idx = 1:numel(cfgs)
 
     % Now run the test!
     try
-        blk = load_bl_tif({fname}, y0, x0, h, w, false);
+        blk = load_bl_tif({char(fname)}, y0, x0, h, w, false);
         reference = img(y0:(y0+h-1), x0:(x0+w-1));
         if isequaln(blk, reference)
             fprintf('  %-13s → %s\n', c.name, EMOJI_PASS);
