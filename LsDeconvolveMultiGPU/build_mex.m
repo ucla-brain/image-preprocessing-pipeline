@@ -346,8 +346,6 @@ function [include_flags, lib_flags, link_flags] = get_link_flags(libs, base_dir)
         lib_flags{end+1}     = ['-L', fullfile(install_dir, 'lib')];     %#ok<AGROW>
     end
 
-    link_flags = {
-        '-ltiff', '-ljpeg', '-lz', '-llzma', '-ljbig', '-ldeflate'
-    };
+    link_flags = {'-ltiff', '-ljpeg', '-lz', '-llzma', '-ljbig', '-ldeflate'};
 end
 
