@@ -534,7 +534,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
     }
 
     // --- Parallel Read ---
-    unsigned numThreads = std::min(2u, std::thread::hardware_concurrency());
+    unsigned numThreads = std::min(1u, std::thread::hardware_concurrency());
 
     std::vector<std::thread> workers;
     size_t n_tasks = tasks.size();
