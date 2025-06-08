@@ -150,11 +150,13 @@ for idx = 1:numel(cfgs)
     c = cfgs(idx);
 
     % Always build filename from directory and simple filename only!
-    fname = fullfile(tmpdir4, ['tile_' c.name '.tif']);
-    src_tif = fullfile(tmpdir4, ['tile_' c.name '_src.tif']);
-    img   = cast(magic(257), dtype);
-    created = false;
-    errstr = '';
+    simple_name      = ['tile_' c.name '.tif'];
+    simple_src_name  = ['tile_' c.name '_src.tif'];
+    fname    = fullfile(tmpdir4, simple_name);
+    src_tif  = fullfile(tmpdir4, simple_src_name);
+    img      = cast(magic(257), dtype);
+    created  = false;
+    errstr   = '';
 
     % MATLAB attempt
     try
