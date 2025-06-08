@@ -130,7 +130,8 @@ run_external_endian_tests();
 %% 4. Tile/strip + compression (using external tools if available)
 [EMOJI_PASS, EMOJI_FAIL] = emoji_checkmarks();
 fprintf('\n[Suite 4] Tile/strip + compression (using external tools if available):\n');
-tmpdir4 = 'test4'; mkdir(tmpdir4);  % Now local to Suite 4
+tmpdir4 = 'test4'; % or tempname; mkdir(tmpdir4); for real test
+if ~isfolder(tmpdir4), mkdir(tmpdir4); end
 cleanupObj4 = onCleanup(@() cleanupTempDir(tmpdir4));
 cfgs = [ ...
   struct("tiled",false,"comp",'None'   ,"name","strip-none"   )
@@ -149,18 +150,17 @@ y0 = 20; x0 = 20; h = 100; w = 100;
 for idx = 1:numel(cfgs)
     c = cfgs(idx);
 
-    % Always sanitize config name!
-    safe_name = regexprep(c.name, '[\/\\]', '_');
-    fname    = fullfile(tmpdir4, ['tile_' safe_name '.tif']);
-    src_tif  = fullfile(tmpdir4, ['tile_' safe_name '_src.tif']);
+    % FORCE name to be clean
+    assert(isempty(strfind(c.name, filesep)), 'c.name must not contain path separators!');
+    fname   = fullfile(tmpdir4, ['tile_' c.name '.tif']);
+    src_tif = fullfile(tmpdir4, ['tile_' c.name '_src.tif']);
+
+    % DEBUG: show constructed file names
+    % disp(['DEBUG: fname = "' fname '"']);
 
     img      = cast(magic(257), dtype);
     created  = false;
     errstr   = '';
-
-    % DEBUG print to confirm no path errors
-    % fprintf('    DEBUG: fname = "%s"\n', fname);
-    % fprintf('    DEBUG: src_tif = "%s"\n', src_tif);
 
     % MATLAB attempt
     try
