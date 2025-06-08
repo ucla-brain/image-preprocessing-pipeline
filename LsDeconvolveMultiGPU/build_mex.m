@@ -1,5 +1,5 @@
 % ===============================
-% build_mex.m (Patched to always use local libtiff + LTO)
+% build_mex.m (Patched to always use local libtiff)
 % ===============================
 % Compile semaphore, LZ4, and GPU MEX files using locally-compiled libtiff.
 % Always use the version in tiff_build/libtiff and never the system or Anaconda version.
@@ -49,7 +49,7 @@ if ispc
     else
         mex_flags_cpu = {
             '-R2018a', ...
-            'COMPFLAGS="$COMPFLAGS /std:c++17 /O2 /arch:AVX2 /Ot /GL /openmp"', ...
+            'COMPFLAGS="$COMPFLAGS /std:c++17 /O2 /arch:AVX2"', ...
             'LINKFLAGS="$LINKFLAGS"'
         };
     end
@@ -199,8 +199,8 @@ function ok = try_build_libtiff(libtiff_root, libtiff_install_dir, mex_flags_cpu
         if ~isempty(CFLAGS), prefix = [prefix, 'CFLAGS="', CFLAGS, '" ']; end
         if ~isempty(CXXFLAGS), prefix = [prefix, 'CXXFLAGS="', CXXFLAGS, '" ']; end
 
-        cmd = [prefix, './configure --disable-shared --enable-static --prefix=', libtiff_install_dir, ...
-               ' && make -j4 && make install'];
+        cmd = [prefix, './configure --enable-shared --disable-static --with-pic --prefix=', libtiff_install_dir, ...
+               ' && make -j18 && make install'];
         status = system(cmd);
         cd(orig_dir);
     end
