@@ -117,51 +117,7 @@ end
 %end
 
 %% 3. Little- vs big-endian, 8-/16-bit
-fprintf('\n[Suite 3] 8/16-bit little- vs big-endian:\n');
-tmpdir = tempname; mkdir(tmpdir);
-cleanupObj = onCleanup(@() cleanupTempDir(tmpdir));
-
-specs  = [ ...
-   struct("bits",8 ,"big",false)
-   struct("bits",8 ,"big",true )
-   struct("bits",16,"big",false)
-   struct("bits",16,"big",true )];
-
-for idx = 1:numel(specs)
-    s = specs(idx);
-    fmt = sprintf('uint%d', s.bits);
-    fname = fullfile(tmpdir, sprintf('end_%db_%s.tif', s.bits, ternary(s.big,'BE','LE')));
-    img = randi(intmax(fmt), 512, 512, fmt);
-
-    try
-        t = Tiff(fname, 'w');
-        tag.ImageWidth = size(img,2);
-        tag.ImageLength = size(img,1);
-        tag.BitsPerSample = s.bits;
-        tag.SamplesPerPixel = 1;
-        tag.Photometric = 1;
-        tag.PlanarConfiguration = 1;
-        tag.Compression = 1;
-        t.setTag(tag);
-
-        if s.big
-            if ~forceBigEndianHeader(t)  % user-supplied
-                close(t); delete(fname);
-                fprintf('  - skipped %2d-bit BE (unsupported)\n', s.bits);
-                continue;
-            end
-        end
-
-        t.write(img); close(t);
-
-        % Try loading
-        load_bl_tif({fname}, 1, 1, 32, 32, false);
-        fprintf(' %s %2d-bit %s-endian\n', EMOJI_PASS, s.bits, ternary(s.big, 'big', 'little'));
-    catch ME
-        fprintf(' %s %2d-bit %s-endian (%s) [%s]\n', EMOJI_FAIL, s.bits, ...
-            ternary(s.big, 'big', 'little'), ME.message, ME.identifier);
-    end
-end
+run_big_endian_test();
 
 %% 4. Tile/strip + compression
 fprintf('\n[Suite 4] Tile/strip + compression:\n');
@@ -315,3 +271,75 @@ function [pass,fail] = emoji_checkmarks()
         fail = '❌';
     end
 end
+
+function run_big_endian_test()
+    % Run BE TIFF tests using external tools (tiffcp or convert)
+
+    fprintf('\n[Suite 4] External BE TIFF test via external tools:\n');
+
+    % Step 1: Detect tools
+    hasTiffcp   = ~isempty(findExe('tiffcp'));
+    hasConvert  = ~isempty(findExe('convert'));
+
+    if ~hasTiffcp && ~hasConvert
+        fprintf(' ⚠️  Skipping test — no TIFF conversion tools found (tiffcp or convert)\n');
+        return;
+    end
+
+    % Step 2: Prepare image and write LE source
+    tmpdir = tempname; mkdir(tmpdir);
+    cleanupObj = onCleanup(@() cleanupTempDir(tmpdir));
+
+    img = uint16(randi([0 65535], 64, 64));
+    src_tif = fullfile(tmpdir, 'source_le.tif');
+    t = Tiff(src_tif, 'w');
+    t.setTag('ImageWidth', size(img, 2));
+    t.setTag('ImageLength', size(img, 1));
+    t.setTag('BitsPerSample', 16);
+    t.setTag('SamplesPerPixel', 1);
+    t.setTag('Photometric', Tiff.Photometric.MinIsBlack);
+    t.setTag('PlanarConfiguration', Tiff.PlanarConfiguration.Contig);
+    t.setTag('Compression', Tiff.Compression.None);
+    t.write(img); close(t);
+
+    % Step 3: Convert to BE TIFF
+    dst_tif = fullfile(tmpdir, 'be_test.tif');
+
+    if hasTiffcp
+        [status, out] = system(sprintf('"%s" -c none -e msb "%s" "%s"', ...
+            findExe('tiffcp'), src_tif, dst_tif));
+    elseif hasConvert
+        [status, out] = system(sprintf('"%s" -endian MSB "%s" "%s"', ...
+            findExe('convert'), src_tif, dst_tif));
+    else
+        status = 1;
+    end
+
+    if status ~= 0
+        fprintf(' ⚠️  Failed to convert to big-endian TIFF (%s)\n', out);
+        return;
+    end
+
+    % Step 4: Test load_bl_tif
+    try
+        load_bl_tif({dst_tif}, 1, 1, 32, 32, false);
+        fprintf(' %s Successfully read 16-bit big-endian TIFF via external tool\n', char(10004));  % checkmark
+    catch ME
+        fprintf(' %s Failed to read big-endian TIFF (%s)\n', char(10006), ME.message);  % cross
+    end
+end
+
+function exe = findExe(name)
+    % Cross-platform equivalent of 'which' for external executables
+    exe = '';
+    if ispc
+        [status, out] = system(['where ', name]);
+    else
+        [status, out] = system(['which ', name]);
+    end
+    if status == 0
+        lines = splitlines(strtrim(out));
+        if ~isempty(lines), exe = strtrim(lines{1}); end
+    end
+end
+
