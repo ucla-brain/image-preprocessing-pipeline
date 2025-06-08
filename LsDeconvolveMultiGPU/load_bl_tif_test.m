@@ -169,3 +169,131 @@ function run_fuzz_tests(filelist, imageHeight, imageWidth)
         disp(fail_msgs(1:min(5,end)))
     end
 end
+
+function [pass, fail] = emoji_checkmarks()
+% emoji_checkmarks: Cross-platform emoji-safe pass/fail symbols
+    if ispc
+        pass = '[ok]';
+        fail = '[ X]';
+    else
+        pass = '✔️';
+        fail = '❌';
+    end
+end
+
+function out = ternary(condition, true_val, false_val)
+% ternary: Inline conditional operator (like a ? b : c)
+    if condition
+        out = true_val;
+    else
+        out = false_val;
+    end
+end
+
+function run_external_endian_test(tools, label, bigEndian, EMOJI_PASS, EMOJI_FAIL)
+% run_external_endian_test: Creates a 16-bit TIFF (LE or BE), then verifies readout
+
+    img = uint16(randi([0 65535], 64, 64));
+    tmpdir = tempname; mkdir(tmpdir);
+    cleanupObj = onCleanup(@() cleanupTempDir(tmpdir));
+
+    src_tif = fullfile(tmpdir, 'source.tif');
+    dst_tif = fullfile(tmpdir, sprintf('test_%s.tif', label));
+
+    % Write original TIFF in MATLAB
+    t = Tiff(src_tif, 'w');
+    t.setTag('ImageWidth', size(img,2));
+    t.setTag('ImageLength', size(img,1));
+    t.setTag('Photometric', 1);
+    t.setTag('BitsPerSample', 16);
+    t.setTag('SamplesPerPixel', 1);
+    t.setTag('PlanarConfiguration', 1);
+    t.setTag('Compression', 1); % None
+    t.write(img); close(t);
+
+    % Construct conversion command
+    if ~isempty(tools.tiffcp)
+        flag = ternary(bigEndian, '-B', '-L');
+        cmd = sprintf('"%s" -c none %s "%s" "%s"', ...
+            tools.tiffcp, flag, src_tif, dst_tif);
+    elseif ~isempty(tools.convert)
+        flag = ternary(bigEndian, 'MSB', 'LSB');
+        cmd = sprintf('"%s" -endian %s "%s" "%s"', ...
+            tools.convert, flag, src_tif, dst_tif);
+    else
+        fprintf(' ⚠️ No conversion tool available for %s-endian TIFF\n', label);
+        return;
+    end
+
+    [status, out] = system(cmd);
+    if status ~= 0
+        fprintf(' ⚠️  Failed to create %s-endian TIFF (%s)\n', label, strtrim(out));
+        return;
+    end
+
+    try
+        loaded = load_bl_tif({dst_tif}, 1, 1, 32, 32, false);
+        expected = img(1:32, 1:32);
+        if isequaln(loaded, expected)
+            fprintf(' %s Successfully read and verified 16-bit %s-endian TIFF\n', EMOJI_PASS, label);
+        else
+            maxerr = max(abs(double(loaded(:)) - double(expected(:))));
+            fprintf(' %s Data mismatch for 16-bit %s-endian TIFF (max diff = %g)\n', ...
+                EMOJI_FAIL, label, maxerr);
+        end
+    catch ME
+        fprintf(' %s Failed to read 16-bit %s-endian TIFF (%s)\n', EMOJI_FAIL, label, ME.message);
+    end
+end
+
+function exe = findExe(name)
+% findExe: Return full path to executable on system
+    exe = '';
+    if ispc
+        [status, out] = system(['where ', name]);
+    else
+        [status, out] = system(['which ', name]);
+    end
+    if status == 0
+        lines = splitlines(strtrim(out));
+        if ~isempty(lines)
+            exe = strtrim(lines{1});
+        end
+    end
+end
+
+function cleanupTempDir(tmpdir)
+% cleanupTempDir: Safely delete a temporary directory
+    if isfolder(tmpdir)
+        try
+            delete(fullfile(tmpdir, '*'));
+            rmdir(tmpdir);
+        catch
+            % Ignore errors (file locks, etc.)
+        end
+    end
+end
+
+function [tagVal, ok] = tryEnum(enumstr, defaultVal)
+% tryEnum: Try to evaluate Tiff enum, fallback to default if fails
+    try
+        tagVal = eval(enumstr); ok = true;
+    catch
+        tagVal = defaultVal; ok = false;
+    end
+end
+
+function [tagval, supported] = compressionTag(method)
+% compressionTag: Return Tiff compression tag value and support flag
+    switch lower(method)
+        case 'none'
+            tagval = Tiff.Compression.None;
+        case 'lzw'
+            tagval = Tiff.Compression.LZW;
+        case 'deflate'
+            tagval = 8;  % Adobe Deflate
+        otherwise
+            tagval = -1;
+    end
+    supported = tagval > 0;
+end
