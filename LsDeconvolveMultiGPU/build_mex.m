@@ -78,9 +78,9 @@ tiff_link    = {'-ltiff'};
 fprintf('Using libtiff from: %s\n', fullfile(libtiff_install_dir, 'lib'));
 
 % Build CPU MEX files
-mex(mex_flags_cpu{:}, src_semaphore);
-mex(mex_flags_cpu{:}, src_lz4_save, src_lz4_c);
-mex(mex_flags_cpu{:}, src_lz4_load, src_lz4_c);
+%mex(mex_flags_cpu{:}, src_semaphore);
+%mex(mex_flags_cpu{:}, src_lz4_save, src_lz4_c);
+%mex(mex_flags_cpu{:}, src_lz4_load, src_lz4_c);
 mex(mex_flags_cpu{:}, src_load_bl, tiff_include{:}, tiff_lib{:}, tiff_link{:});
 
 % CUDA optimization flags
@@ -111,10 +111,10 @@ else
 end
 
 % Build CUDA MEX files
-mexcuda(cuda_mex_flags{:}, '-R2018a', src_gauss3d , ['-I', root_dir], ['-I', include_dir], nvccflags);
-mexcuda(cuda_mex_flags{:}, '-R2018a', src_conv3d  , ['-I', root_dir], ['-I', include_dir], nvccflags);
-mexcuda(cuda_mex_flags{:}, '-R2018a', src_otf_gpu , ['-I', root_dir], ['-I', include_dir], nvccflags, '-L/usr/local/cuda/lib64', '-lcufft');
-mexcuda(cuda_mex_flags{:}, '-R2018a', src_deconFFT, ['-I', root_dir], ['-I', include_dir], nvccflags, '-L/usr/local/cuda/lib64', '-lcufft');
+%mexcuda(cuda_mex_flags{:}, '-R2018a', src_gauss3d , ['-I', root_dir], ['-I', include_dir], nvccflags);
+%mexcuda(cuda_mex_flags{:}, '-R2018a', src_conv3d  , ['-I', root_dir], ['-I', include_dir], nvccflags);
+%mexcuda(cuda_mex_flags{:}, '-R2018a', src_otf_gpu , ['-I', root_dir], ['-I', include_dir], nvccflags, '-L/usr/local/cuda/lib64', '-lcufft');
+%mexcuda(cuda_mex_flags{:}, '-R2018a', src_deconFFT, ['-I', root_dir], ['-I', include_dir], nvccflags, '-L/usr/local/cuda/lib64', '-lcufft');
 
 fprintf('All MEX files built successfully.\n');
 
