@@ -91,38 +91,38 @@ for b = 1:size(blockSizes,1)
 end
 
 %% 2. [SKIPPED] Spatial boundary checks — revise to enable later
-% fprintf('\n[Suite 2] Spatial boundary checks:\n');
-% edge = { ...
-%   1,1,1,1,                         "top-left 1×1",        "ok";
-%   1,1,1,512,                       "top row stripe",      "ok";
-%   1,1,512,1,                       "left col stripe",     "ok";
-%   imageHeight,1,1,512,             "bottom row stripe",   "ok";
-%   1,imageWidth,512,1,              "right col stripe",    "ok";
-%   1,1,imageHeight,imageWidth,      "full-frame (1 Z)",    "ok_singleZ";
-%  -20,-20,128,128,                  "upper-left overflow", "expect_error";
-%   imageHeight-50,imageWidth-50,100,100, "bottom-right overflow","expect_error";
-% };
-% for k = 1:size(edge,1)
-%     [y,x,h,w,label,kind] = edge{k,:};
-%     try
-%         switch kind
-%             case "ok", mexP = load_bl_tif(filelist, y,x,h,w,false); %#ok<NASGU>
-%             case "ok_singleZ", mexP = load_bl_tif(filelist(1), y,x,h,w,false); %#ok<NASGU>
-%             otherwise, load_bl_tif(filelist, y,x,h,w,false);
-%         end
-%         if kind=="expect_error"
-%             fprintf(' %s %-25s did NOT error\n', EMOJI_FAIL, label);
-%         else
-%             fprintf(' %s %-25s (size %s)\n', EMOJI_PASS, label, mat2str(size(mexP)));
-%         end
-%     catch ME
-%         if kind=="expect_error"
-%             fprintf(' %s %-25s raised (%s)\n', EMOJI_PASS, label, ME.identifier);
-%         else
-%             fprintf(' %s %-25s ERROR: %s [%s]\n', EMOJI_FAIL, label, ME.message, ME.identifier);
-%         end
-%     end
-% end
+fprintf('\n[Suite 2] Spatial boundary checks:\n');
+edge = { ...
+  1,1,1,1,                         "top-left 1×1",        "ok";
+  1,1,1,512,                       "top row stripe",      "ok";
+  1,1,512,1,                       "left col stripe",     "ok";
+  imageHeight,1,1,512,             "bottom row stripe",   "ok";
+  1,imageWidth,512,1,              "right col stripe",    "ok";
+  1,1,imageHeight,imageWidth,      "full-frame (1 Z)",    "ok_singleZ";
+ -20,-20,128,128,                  "upper-left overflow", "expect_error";
+  imageHeight-50,imageWidth-50,100,100, "bottom-right overflow","expect_error";
+};
+for k = 1:size(edge,1)
+    [y,x,h,w,label,kind] = edge{k,:};
+    try
+        switch kind
+            case "ok", mexP = load_bl_tif(filelist, y,x,h,w,false); %#ok<NASGU>
+            case "ok_singleZ", mexP = load_bl_tif(filelist(1), y,x,h,w,false); %#ok<NASGU>
+            otherwise, load_bl_tif(filelist, y,x,h,w,false);
+        end
+        if kind=="expect_error"
+            fprintf(' %s %-25s did NOT error\n', EMOJI_FAIL, label);
+        else
+            fprintf(' %s %-25s (size %s)\n', EMOJI_PASS, label, mat2str(size(mexP)));
+        end
+    catch ME
+        if kind=="expect_error"
+            fprintf(' %s %-25s raised (%s)\n', EMOJI_PASS, label, ME.identifier);
+        else
+            fprintf(' %s %-25s ERROR: %s [%s]\n', EMOJI_FAIL, label, ME.message, ME.identifier);
+        end
+    end
+end
 
 %% 3. Little- vs big-endian, 8-/16-bit
 run_external_endian_tests();
