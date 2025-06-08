@@ -140,7 +140,6 @@ cfgs = [ ...
   struct("tiled",true ,"comp",'LZW'    ,"name","tile-lzw"     )
   struct("tiled",true ,"comp",'Deflate',"name","tile-deflate")];
 
-% Find external tools (if any)
 tools = struct( ...
     'tiffcp', findExe('tiffcp'), ...
     'convert', findExe('convert'));
@@ -151,9 +150,9 @@ for idx = 1:numel(cfgs)
     img   = cast(magic(257), dtype);
     created = false;
     errstr = '';
-    % MATLAB attempt (works for strips, but not for all tiles/compression)
+    % MATLAB attempt
     try
-        t = Tiff(fname,'w');
+        t = Tiff(fname,'w');  % fname is char
         tag.ImageWidth         = size(img,2);
         tag.ImageLength        = size(img,1);
         tag.BitsPerSample      = bitDepth;
@@ -163,7 +162,7 @@ for idx = 1:numel(cfgs)
         [tag.Compression,supported] = compressionTag(c.comp);
         if ~supported
             fprintf('  %-13s → skipped (compression unsupported)\n', c.name);
-            close(t); if exist(char(fname),'file'), delete(char(fname)); end; continue
+            close(t); if exist(fname,'file'), delete(fname); end; continue
         end
         if c.tiled
             tag.TileWidth  = 64;
@@ -176,10 +175,10 @@ for idx = 1:numel(cfgs)
     catch ME
         errstr = ME.message;
         if exist('t','var'), try close(t); catch; end, end
-        if exist(char(fname),'file'), delete(char(fname)); end
+        if exist(fname,'file'), delete(fname); end
     end
 
-    % If failed, try to use external tools to convert
+    % Use external tools if MATLAB attempt fails
     if ~created && (c.tiled || ~strcmpi(c.comp,'none'))
         src_tif = fullfile(tmpdir4, ['tile_' c.name '_src.tif']);
         try
@@ -194,7 +193,7 @@ for idx = 1:numel(cfgs)
             t.setTag('RowsPerStrip', 33); % default
             t.write(img); close(t);
             created = false;
-            % Try tiffcp first (best for tiles)
+            % Try tiffcp first
             if ~isempty(tools.tiffcp)
                 args = {};
                 if c.tiled
@@ -211,13 +210,12 @@ for idx = 1:numel(cfgs)
                 cmd = sprintf('"%s" %s "%s" "%s"', ...
                     tools.tiffcp, strjoin(args, ' '), src_tif, fname);
                 [status, out] = system(cmd);
-                if status == 0 && exist(char(fname),'file')
+                if status == 0 && exist(fname,'file')
                     created = true;
                 else
                     fprintf('  %-13s → %s (tiffcp failed: %s)\n', c.name, EMOJI_FAIL, strtrim(out));
                 end
             elseif ~isempty(tools.convert)
-                % ImageMagick convert fallback
                 args = {};
                 if c.tiled
                     args = [args {'-define', 'tiff:tile-geometry=64x64'}];
@@ -233,7 +231,7 @@ for idx = 1:numel(cfgs)
                 cmd = sprintf('"%s" "%s" %s "%s"', ...
                     tools.convert, src_tif, strjoin(args, ' '), fname);
                 [status, out] = system(cmd);
-                if status == 0 && exist(char(fname),'file')
+                if status == 0 && exist(fname,'file')
                     created = true;
                 else
                     fprintf('  %-13s → %s (convert failed: %s)\n', c.name, EMOJI_FAIL, strtrim(out));
@@ -242,7 +240,7 @@ for idx = 1:numel(cfgs)
                 fprintf('  %-13s → skipped (no TIFF tools found)\n', c.name);
             end
             % Cleanup temp src
-            if exist(char(src_tif),'file'), delete(char(src_tif)); end
+            if exist(src_tif,'file'), delete(src_tif); end
         catch ME2
             fprintf('  %-13s → %s (external tool error: %s)\n', c.name, EMOJI_FAIL, ME2.message);
         end
@@ -255,7 +253,7 @@ for idx = 1:numel(cfgs)
 
     % Now run the test!
     try
-        blk = load_bl_tif({fname}, 20,20,100,100,false);
+        blk = load_bl_tif({fname}, 20,20,100,100,false); % Only here, fname is cell!
         ok  = isequal(blk,img(20:119,20:119));
         fprintf('  %-13s → %s\n', c.name, ternary(ok,EMOJI_PASS,EMOJI_FAIL));
     catch ME
