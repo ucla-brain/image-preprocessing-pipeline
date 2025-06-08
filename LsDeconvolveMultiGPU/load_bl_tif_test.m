@@ -329,3 +329,15 @@ function exe = findExe(name)
         end
     end
 end
+
+function cleanupTempDir(tmpdir)
+% cleanupTempDir: Safely delete temporary folder and contents
+    if isfolder(tmpdir)
+        try
+            delete(fullfile(tmpdir, '*'));
+            rmdir(tmpdir);
+        catch
+            % Ignore errors if files are locked or already removed
+        end
+    end
+end
