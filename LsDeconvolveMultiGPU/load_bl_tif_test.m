@@ -272,74 +272,84 @@ function [pass,fail] = emoji_checkmarks()
     end
 end
 
-function run_big_endian_test()
-    % Run BE TIFF tests using external tools (tiffcp or convert)
+function run_external_endian_tests()
+% Suite 4: Validate load_bl_tif on little- and big-endian TIFFs via external tools
 
-    fprintf('\n[Suite 4] External BE TIFF test via external tools:\n');
+[EMOJI_PASS, EMOJI_FAIL] = emoji_checkmarks();
+fprintf('\n[Suite 4] External TIFF endian tests (LE and BE):\n');
 
-    % Step 1: Detect tools
-    hasTiffcp   = ~isempty(findExe('tiffcp'));
-    hasConvert  = ~isempty(findExe('convert'));
+tools = struct( ...
+    'tiffcp', findExe('tiffcp'), ...
+    'convert', findExe('convert'));
 
-    if ~hasTiffcp && ~hasConvert
-        fprintf(' ⚠️  Skipping test — no TIFF conversion tools found (tiffcp or convert)\n');
-        return;
-    end
+if all(structfun(@isempty, tools))
+    fprintf(' ⚠️  Skipped — no TIFF tools (tiffcp or convert) found.\n');
+    return;
+end
 
-    % Step 2: Prepare image and write LE source
-    tmpdir = tempname; mkdir(tmpdir);
-    cleanupObj = onCleanup(@() cleanupTempDir(tmpdir));
+% Run both LE and BE tests
+run_external_endian_test(tools, 'little', false, EMOJI_PASS, EMOJI_FAIL);
+run_external_endian_test(tools, 'big',    true,  EMOJI_PASS, EMOJI_FAIL);
+end
 
-    img = uint16(randi([0 65535], 64, 64));
-    src_tif = fullfile(tmpdir, 'source_le.tif');
-    t = Tiff(src_tif, 'w');
-    t.setTag('ImageWidth', size(img, 2));
-    t.setTag('ImageLength', size(img, 1));
-    t.setTag('BitsPerSample', 16);
-    t.setTag('SamplesPerPixel', 1);
-    t.setTag('Photometric', Tiff.Photometric.MinIsBlack);
-    t.setTag('PlanarConfiguration', Tiff.PlanarConfiguration.Contig);
-    t.setTag('Compression', Tiff.Compression.None);
-    t.write(img); close(t);
+function run_external_endian_test(tools, label, bigEndian, EMOJI_PASS, EMOJI_FAIL)
+img = uint16(randi([0 65535], 64, 64));
+tmpdir = tempname; mkdir(tmpdir);
+cleanupObj = onCleanup(@() cleanupTempDir(tmpdir));
 
-    % Step 3: Convert to BE TIFF
-    dst_tif = fullfile(tmpdir, 'be_test.tif');
+src_tif = fullfile(tmpdir, 'source.tif');
+dst_tif = fullfile(tmpdir, sprintf('test_%s.tif', label));
 
-    if hasTiffcp
-        [status, out] = system(sprintf('"%s" -c none -e msb "%s" "%s"', ...
-            findExe('tiffcp'), src_tif, dst_tif));
-    elseif hasConvert
-        [status, out] = system(sprintf('"%s" -endian MSB "%s" "%s"', ...
-            findExe('convert'), src_tif, dst_tif));
-    else
-        status = 1;
-    end
+% Write original LE TIFF using MATLAB
+t = Tiff(src_tif, 'w');
+t.setTag('ImageWidth', size(img,2));
+t.setTag('ImageLength', size(img,1));
+t.setTag('BitsPerSample', 16);
+t.setTag('SamplesPerPixel', 1);
+t.setTag('Photometric', 1);          % MinIsBlack
+t.setTag('PlanarConfiguration', 1);  % Contig
+t.setTag('Compression', 1);          % None
+t.write(img); close(t);
 
-    if status ~= 0
-        fprintf(' ⚠️  Failed to convert to big-endian TIFF (%s)\n', out);
-        return;
-    end
+% Convert with external tool
+cmd = '';
+if ~isempty(tools.tiffcp)
+    flag = ternary(bigEndian, 'msb', 'lsb');
+    cmd = sprintf('"%s" -c none -e %s "%s" "%s"', ...
+        tools.tiffcp, flag, src_tif, dst_tif);
+elseif ~isempty(tools.convert)
+    flag = ternary(bigEndian, 'MSB', 'LSB');
+    cmd = sprintf('"%s" -endian %s "%s" "%s"', ...
+        tools.convert, flag, src_tif, dst_tif);
+end
 
-    % Step 4: Test load_bl_tif
-    try
-        load_bl_tif({dst_tif}, 1, 1, 32, 32, false);
-        fprintf(' %s Successfully read 16-bit big-endian TIFF via external tool\n', char(10004));  % checkmark
-    catch ME
-        fprintf(' %s Failed to read big-endian TIFF (%s)\n', char(10006), ME.message);  % cross
-    end
+[status, out] = system(cmd);
+if status ~= 0
+    fprintf(' ⚠️  Failed to create %s-endian TIFF (%s)\n', label, strtrim(out));
+    return;
+end
+
+% Validate with load_bl_tif
+try
+    load_bl_tif({dst_tif}, 1, 1, 32, 32, false);
+    fprintf(' %s Successfully read 16-bit %s-endian TIFF\n', EMOJI_PASS, label);
+catch ME
+    fprintf(' %s Failed to read 16-bit %s-endian TIFF (%s)\n', EMOJI_FAIL, label, ME.message);
+end
 end
 
 function exe = findExe(name)
-    % Cross-platform equivalent of 'which' for external executables
-    exe = '';
-    if ispc
-        [status, out] = system(['where ', name]);
-    else
-        [status, out] = system(['which ', name]);
-    end
-    if status == 0
-        lines = splitlines(strtrim(out));
-        if ~isempty(lines), exe = strtrim(lines{1}); end
+% Cross-platform command resolver
+exe = '';
+if ispc
+    [status, out] = system(['where ', name]);
+else
+    [status, out] = system(['which ', name]);
+end
+if status == 0
+    lines = splitlines(strtrim(out));
+    if ~isempty(lines)
+        exe = strtrim(lines{1});
     end
 end
-
+end
