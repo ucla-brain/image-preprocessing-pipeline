@@ -125,7 +125,8 @@
 // --- Config ---
 constexpr uint16_t kSupportedBitDepth8  = 8;
 constexpr uint16_t kSupportedBitDepth16 = 16;
-constexpr size_t MAX_TIFF_BLOCK_BYTES = 8ull << 30;
+constexpr size_t MAX_TIFF_BLOCK_BYTES = 16ull << 30;
+constexpr stf::string MAX_TIFF_BLOCK_BYTES_STR = "16 GiB";
 constexpr size_t kMaxPixelsPerSlice = static_cast<size_t>(std::numeric_limits<int>::max());
 
 // RAII wrapper for mxArrayToUTF8String()
@@ -236,7 +237,8 @@ static void readSubRegionToBuffer(
         const size_t uncompressedTileBytes =
             static_cast<size_t>(tileW) * tileH * bytesPerPixel;
         if (uncompressedTileBytes > MAX_TIFF_BLOCK_BYTES)
-            throw std::runtime_error("Tile buffer exceeds sane limit of 1 GiB in file: " + task.path);
+            throw std::runtime_error("Tile buffer exceeds sane limit of " + MAX_TIFF_BLOCK_BYTES_STR +
+                                     " in file: " + task.path);
 
         std::vector<uint8_t> tilebuf(uncompressedTileBytes);
         const size_t nTilePixels = uncompressedTileBytes / bytesPerPixel;
@@ -292,7 +294,8 @@ static void readSubRegionToBuffer(
         const size_t maxStripBytes =
             static_cast<size_t>(rowsPerStrip) * imgWidth * bytesPerPixel;
         if (maxStripBytes > MAX_TIFF_BLOCK_BYTES)
-            throw std::runtime_error("Strip buffer exceeds sane limits (>1 GiB) in file: " + task.path);
+            throw std::runtime_error("Tile buffer exceeds sane limit of " + MAX_TIFF_BLOCK_BYTES_STR +
+                                     " in file: " + task.path);
 
         std::vector<uint8_t> stripbuf(maxStripBytes);
         tstrip_t currentStrip = (tstrip_t)-1;
