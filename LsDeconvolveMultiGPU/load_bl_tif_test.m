@@ -120,41 +120,46 @@ end
 fprintf('\n[Suite 3] 8/16-bit little- vs big-endian:\n');
 tmpdir = tempname; mkdir(tmpdir);
 cleanupObj = onCleanup(@() cleanupTempDir(tmpdir));
-specs = [ ...
+
+specs  = [ ...
    struct("bits",8 ,"big",false)
-   struct("bits",8 ,"big",true )    % will skip
+   struct("bits",8 ,"big",true )
    struct("bits",16,"big",false)
-   struct("bits",16,"big",true )];  % will skip
+   struct("bits",16,"big",true )];
 
 for idx = 1:numel(specs)
     s = specs(idx);
-    fname = fullfile(tmpdir, sprintf('end_%db_%s.tif',s.bits,ternary(s.big,'BE','LE')));
+    fmt = sprintf('uint%d', s.bits);
+    fname = fullfile(tmpdir, sprintf('end_%db_%s.tif', s.bits, ternary(s.big,'BE','LE')));
+    img = randi(intmax(fmt), 512, 512, fmt);
 
-    % Skip big-endian creation
-    if s.big
-        fprintf('  - skipped %2d-bit BE (MATLAB cannot write BE TIFFs)\n', s.bits);
-        continue
-    end
-
-    % Create image and write
-    img = randi(intmax(sprintf('uint%d',s.bits)), 512,512, sprintf('uint%d',s.bits));
-    t = Tiff(fname,'w');
-    tag.ImageWidth        = size(img,2);
-    tag.ImageLength       = size(img,1);
-    tag.BitsPerSample     = s.bits;
-    tag.SamplesPerPixel   = 1;
-    tag.Photometric       = Tiff.Photometric.MinIsBlack;
-    tag.PlanarConfiguration = Tiff.PlanarConfiguration.Contig;
-    tag.Compression       = Tiff.Compression.None;
-    t.setTag(tag);
-    t.write(img); close(t);
-
-    % Test with load_bl_tif
     try
-        load_bl_tif({fname},1,1,32,32,false);
-        fprintf(' %s %2d-bit little-endian\n', EMOJI_PASS, s.bits);
+        t = Tiff(fname, 'w');
+        tag.ImageWidth = size(img,2);
+        tag.ImageLength = size(img,1);
+        tag.BitsPerSample = s.bits;
+        tag.SamplesPerPixel = 1;
+        tag.Photometric = Tiff.Photometric.MinIsBlack;
+        tag.PlanarConfiguration = Tiff.PlanarConfiguration.Contig;
+        tag.Compression = Tiff.Compression.None;
+        t.setTag(tag);
+
+        if s.big
+            if ~forceBigEndianHeader(t)  % user-supplied
+                close(t); delete(fname);
+                fprintf('  - skipped %2d-bit BE (unsupported)\n', s.bits);
+                continue;
+            end
+        end
+
+        t.write(img); close(t);
+
+        % Try loading
+        load_bl_tif({fname}, 1, 1, 32, 32, false);
+        fprintf(' %s %2d-bit %s-endian\n', EMOJI_PASS, s.bits, ternary(s.big, 'big', 'little'));
     catch ME
-        fprintf(' %s %2d-bit little-endian (%s)\n', EMOJI_FAIL, s.bits, ME.message);
+        fprintf(' %s %2d-bit %s-endian (%s) [%s]\n', EMOJI_FAIL, s.bits, ...
+            ternary(s.big, 'big', 'little'), ME.message, ME.identifier);
     end
 end
 
