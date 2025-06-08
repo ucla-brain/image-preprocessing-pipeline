@@ -133,7 +133,6 @@ fprintf('\n[Suite 4] Tile/strip + compression (using external tools if available
 
 tmpdir4 = 'test4'; % or use tempname() in future
 if ~isfolder(tmpdir4), mkdir(tmpdir4); end
-cleanupObj4 = onCleanup(@() cleanupTempDir(tmpdir4));
 
 cfgs = [ ...
   struct("tiled",false,"comp",'None'   ,"name","strip-none"   )
@@ -279,6 +278,7 @@ for idx = 1:numel(cfgs)
     catch ME
         fprintf('  %-13s → %s (%s) [%s]\n', cname, EMOJI_FAIL, ME.message, ME.identifier);
     end
+    cleanupTempDir(tmpdir4);
 end
 
 %% 5. Expected-error paths
