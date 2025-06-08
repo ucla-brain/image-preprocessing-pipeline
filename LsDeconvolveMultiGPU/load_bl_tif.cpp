@@ -126,7 +126,7 @@
 constexpr uint16_t kSupportedBitDepth8  = 8;
 constexpr uint16_t kSupportedBitDepth16 = 16;
 constexpr size_t kMaxPixelsPerSlice = static_cast<size_t>(std::numeric_limits<int>::max());
-constexpr size_t kMaxSafeBufferBytes = 512ull << 20; // 512 MiB
+constexpr size_t kMaxSafeBufferBytes = 256ull << 20; // 512 MiB
 
 // RAII wrapper for mxArrayToUTF8String()
 struct MatlabString {
@@ -235,7 +235,7 @@ static void readSubRegionToBuffer(
         if (tileW == 0 || tileH == 0)
             throw std::runtime_error("Invalid tile size in TIFF metadata in file: " + task.path);
 
-        const size_t uncompressedTileBytes = static_cast<size_t>(tileW) * tileH * bytesPerPixel;
+        const size_t uncompressedTileBytes = static_cast<size_t>(tileW) * static_cast<size_t>(tileH) * static_cast<size_t>(bytesPerPixel);
         const size_t safeTileBytes = std::min(uncompressedTileBytes, kMaxSafeBufferBytes);
         if (safeTileBytes > tempBuf.size())
             tempBuf.resize(safeTileBytes);
@@ -289,7 +289,7 @@ static void readSubRegionToBuffer(
         TIFFGetFieldDefaulted(tif, TIFFTAG_ROWSPERSTRIP, &rowsPerStrip);
         if (rowsPerStrip == 0) rowsPerStrip = imgHeight;
 
-        const size_t maxStripBytes = static_cast<size_t>(rowsPerStrip) * imgWidth * bytesPerPixel;
+        const size_t maxStripBytes = static_cast<size_t>(rowsPerStrip) * static_cast<size_t>(imgWidth) * static_cast<size_t>(bytesPerPixel);
         const size_t safeStripBytes = std::min(maxStripBytes, kMaxSafeBufferBytes);
         if (safeStripBytes > tempBuf.size())
             tempBuf.resize(safeStripBytes);
