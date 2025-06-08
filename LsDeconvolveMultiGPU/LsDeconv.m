@@ -738,7 +738,7 @@ function deconvolve(filelist, psf, numit, damping, ...
         y1     = startp(y);           y2 = endp(y);
         z1     = startp(z);           z2 = endp(z);
 
-        decon_step_is_slower_than_loading = numit > 20; % then load slower to prevent RAM overload
+        decon_step_is_slower_than_loading = numit > 1; % then load slower to prevent RAM overload
         if decon_step_is_slower_than_loading, semaphore('wait', semkey_loading); end
         send(dQueue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' is loading ...']);
         loading_start = tic;
