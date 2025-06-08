@@ -182,7 +182,7 @@ function ok = try_build_library(lib, src_dir, install_dir, mex_flags_cpu)
         case 'zlib'
             archive = 'zlib-1.3.1.tar.gz';
             folder_name = 'zlib-1.3.1';
-            url = 'https://zlib.net/zlib-1.3.tar.gz';
+            url = 'https://zlib.net/zlib-1.3.1.tar.gz';
         case 'liblzma'
             archive = 'xz-5.4.2.tar.gz';
             folder_name = 'xz-5.4.2';
