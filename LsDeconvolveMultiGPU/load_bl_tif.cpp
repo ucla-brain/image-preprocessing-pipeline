@@ -126,7 +126,7 @@
 constexpr uint16_t kSupportedBitDepth8  = 8;
 constexpr uint16_t kSupportedBitDepth16 = 16;
 constexpr size_t kMaxPixelsPerSlice = static_cast<size_t>(std::numeric_limits<int>::max());
-constexpr tsize_t kMaxSafeBufferBytes = 1ull << 30; // 1 GiB
+constexpr tsize_t kMaxSafeBufferBytes = 100ull << 20; // 100 MiB
 
 // RAII wrapper for mxArrayToUTF8String()
 struct MatlabString {
