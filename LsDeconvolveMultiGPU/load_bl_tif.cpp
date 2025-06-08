@@ -3,107 +3,89 @@
   ---------------------------------------------------------------------------
   High-throughput sub-region loader for 3-D TIFF stacks (one TIFF per Z-slice)
 
-  Written by:   Keivan Moradi
-  Code review:  ChatGPT 4-o, o3, and 4-1
-  License:      GNU General Public License v3.0 (see <https://www.gnu.org/licenses/>)
+  Author:       Keivan Moradi
+  Code review:  ChatGPT (4-o, o3, 4-1)
+  License:      GNU General Public License v3.0 (https://www.gnu.org/licenses/)
 
   ──────────────────────────────────────────────────────────────────────────────
   OVERVIEW
   --------
   • Purpose
-      Efficiently extract an X-Y rectangular ROI from a series of 2-D grayscale
-      TIFF images and return it as a single 3-D MATLAB array.  The implementation
-      is in modern C++ and makes heavy use of multi-threading to achieve
-      near-linear scaling on machines with many CPU cores (tested to 256 threads).
+      Efficiently extracts an X-Y subregion (ROI) from a series of grayscale
+      TIFF slices (1 TIFF per Z) and assembles them into a 3D MATLAB array.
+      The implementation is highly optimized for speed, correctness, and
+      robustness in large-scale, multi-core environments.
 
-  • Key Features
-      – Supports 8-bit or 16-bit, single-channel TIFFs (tiled or stripped,
-        compressed or uncompressed).
-      – Cross-platform: Windows / Linux / macOS; requires only libtiff ≥ 4.0.
-      – Robust 64-bit-safe indexing (handles images > 2 GB).
-      – Thread-safe: every worker thread opens / decodes its own slice.
-      – Automatic byte-swapping when libtiff delivers native-endian data.
-      – Strict ROI validation for *every* slice before any memory is allocated.
-      – Optional “transpose” flag to return data in MATLAB’s [X Y Z] order.
-      – Hard guards against pathological tile/strip sizes (> 1 GiB) and
-        ROIs that would overflow `int32` in MATLAB.
-      – Parallelism is user-tunable via the environment variable
-        `LOAD_BL_TIF_THREADS` (default: all logical CPU cores. Minimum: 8).
+  • Highlights
+      – Supports 8-bit and 16-bit grayscale TIFFs (single-channel).
+      – Handles tiled and stripped formats (compressed or uncompressed).
+      – Fully cross-platform: Windows, Linux, macOS (requires libtiff ≥ 4.0).
+      – Uses modern C++14/17 with multi-threading and 64-bit-safe indexing.
+      – ROI coordinates and dimensions are `uint32_t` throughout for clarity.
+      – Internally validates ROI coverage *across all slices* before allocating.
+      – Automatically detects endian mismatch and applies byte swapping.
+      – Optional transpose flag to return output in [X Y Z] instead of MATLAB default [Y X Z].
+      – Strong bounds checking and hard caps on per-tile/strip decode size.
+      – Thread-safe parallel I/O with per-thread TIFF handles and buffers.
+      – Aggregates all thread errors into a single message at the end.
 
   ──────────────────────────────────────────────────────────────────────────────
   MATLAB USAGE
   ------------
       img = load_bl_tif(files, y, x, height, width [, transposeFlag]);
 
-      • files          – 1×N cell array of strings, each the full path to a TIFF
-                         slice (slice k corresponds to Z index k).
-      • y, x           – 1-based upper-left ROI coordinate inside each TIFF
-                         (double scalars).
-      • height, width  – ROI size in pixels (double scalars).
-      • transposeFlag  – logical or uint32 scalar (optional, default = false).
-                         When true, the output is permuted so that the first two
-                         dimensions are [X Y] instead of MATLAB’s default [Y X].
+      • files          – 1×N cell array of full path strings (one per Z slice)
+      • y, x           – 1-based ROI upper-left pixel (double scalars)
+      • height, width  – ROI size in pixels (double scalars)
+      • transposeFlag  – (optional) logical or uint32 scalar, default = false
+                         If true, output is permuted to [X Y Z] order
 
-      returns
-      • img            – height×width×N (or width×height×N if transposed) array
-                         of class uint8 or uint16, matching TIFF bit-depth.
+      • returns
+        – img          – MATLAB array of type uint8 or uint16:
+                          [height width Z] or [width height Z] if transposed
 
-      Example
-      -------
-          tiffs = dir('/path/to/tif/folder/*.tif');
-          filelist = fullfile({tiffs.folder}, {tiffs.name});
-          roi = load_bl_tif(filelist,  201, 101, 512, 512);        % standard
-          roiT = load_bl_tif(filelist,  201, 101, 512, 512, true); % transposed
+      Example:
+          files = dir('/some/folder/*.tif');
+          paths = fullfile({files.folder}, {files.name});
+          blk   = load_bl_tif(paths, 101, 201, 512, 512);         % Standard
+          blkT  = load_bl_tif(paths, 101, 201, 512, 512, true);   % Transposed
 
   ──────────────────────────────────────────────────────────────────────────────
   COMPILATION
   -----------
-      MATLAB R2018a or newer is recommended (for C++14/17 support).
+      • Recommended: MATLAB R2018a+ with C++14/17-capable compiler
+
+      • Run `build_mex.m` (provided) for automatic compilation, or use:
 
           mex -R2018a -largeArrayDims CXXFLAGS="\$(CXXFLAGS) -std=c++17" \
               LDFLAGS="\$(LDFLAGS) -ltiff" load_bl_tif.cpp
 
-      • Ensure `libtiff` headers and library are discoverable by your
-        compiler/linker.
-      • On Windows for MSVC, link against pre-built `tiff.lib` and add it to
-        `LDFLAGS`.
-      • The code falls back to C++14 if the compiler does not recognise
-        `-std=c++17`; a C++11-capable compiler is the hard minimum.
+      • Ensure `libtiff` is available in include/linker paths.
+      • On Windows/MSVC: link against a prebuilt `tiff.lib`.
 
   ──────────────────────────────────────────────────────────────────────────────
-  CONSTRAINTS & LIMITS
-  --------------------
-      • We do not sort the files. Natural sorting burden is on the user.
-      • All slices must share identical dimensions, bit-depth, and a single
-        sample per pixel.
-      • The requested ROI must lie fully inside *every* slice; otherwise the
-        function aborts before allocating output memory.
-      • Total elements per Z-slice must not exceed 2 147 483 647
-        (`kMaxPixelsPerSlice`, MATLAB’s 32-bit limit).
-      • Individual tiles/strips decoded during reading are limited to 1 GiB to
-        safeguard against corrupted metadata.
-      • Only grayscale data (SAMPLES = 1) is supported; RGB/planar TIFFs will
-        raise an error.
+  CONSTRAINTS & SAFEGUARDS
+  -------------------------
+      • Files must be sorted by Z; no internal sorting is performed.
+      • All slices must have the same image size, bit depth, and be grayscale.
+      • The requested ROI must lie fully within all TIFFs.
+      • Per-slice output must not exceed 2,147,483,647 pixels (MATLAB's limit).
+      • Tiles or strips larger than 1 GiB are rejected to prevent overflows.
+      • RGB or planar images (samplesPerPixel ≠ 1) are not supported.
+      • Thread-safe I/O and error handling across all slices.
 
   ──────────────────────────────────────────────────────────────────────────────
   PERFORMANCE TIPS
   ----------------
-      • Place TIFFs on a high-bandwidth SSD or NVMe drive for best scaling.
-      • If your storage cannot sustain the aggregate IO of 32 threads, set
-          setenv('LOAD_BL_TIF_THREADS','8')
-        or similar before calling the MEX to cap concurrency.
-      • For heavily compressed files, CPU time may dominate; scaling is then
-        nearly linear up to the number of physical cores.
+      • Place TIFFs on a high-throughput SSD or NVMe disk for maximum speed.
+      • For compressed TIFFs, CPU decoding often dominates runtime.
+      • Environment variable `LOAD_BL_TIF_THREADS` can cap thread count:
+            setenv('LOAD_BL_TIF_THREADS','8');  % MATLAB
 
-  -----------------------------------------------------------------------------
-  (c) 2025 Keivan Moradi.  This program is free software: you can redistribute
-  it and/or modify it under the terms of the GNU General Public License as
-  published by the Free Software Foundation, either version 3 of the License,
-  or (at your option) any later version.
-
-==============================================================================
-*/
-
+  ---------------------------------------------------------------------------
+  © 2025 Keivan Moradi — Released under GPLv3. See LICENSE or visit:
+                         https://www.gnu.org/licenses/gpl-3.0.html
+==============================================================================*/
 
 #include "mex.h"
 #include "tiffio.h"
