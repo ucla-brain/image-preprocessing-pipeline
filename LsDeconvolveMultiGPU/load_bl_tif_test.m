@@ -465,12 +465,16 @@ function [tagVal,ok] = tryEnum(enumstr,defaultVal)
     end
 end
 
-function [compVal,supported] = compressionTag(name)
-% Map compression string to TIFF tag value, test if supported on this platform
-    switch lower(name)
-        case {'none','raw'},   compVal = 1; supported = true;
-        case 'lzw',            compVal = 5; supported = true;
-        case 'deflate',        compVal = 32946; supported = true;
-        otherwise,             compVal = 1; supported = false;
+function [tagval, supported] = compressionTag(method)
+    switch lower(method)
+        case 'none'
+            tagval = Tiff.Compression.None;
+        case 'lzw'
+            tagval = Tiff.Compression.LZW;
+        case 'deflate'
+            tagval = 8;  % Adobe-style Deflate (widely supported)
+        otherwise
+            tagval = -1;
     end
+    supported = tagval > 0;
 end
