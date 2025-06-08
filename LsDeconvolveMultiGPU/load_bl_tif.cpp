@@ -362,9 +362,7 @@ void worker_main(
                 continue;
             }
             // PATCH: detect if byte swapping is needed
-            bool swapped = TIFFIsByteSwapped(tif.get());
-            printf("DEBUG: slice=%d path=%s swapped=%d\n", (int)task.zIndex, task.path.c_str(), swapped);
-            bool need_swap = (bytesPerPixel == 2) && TIFFIsByteSwapped(tif.get());
+            bool need_swap = (bytesPerPixel == 2); //&& TIFFIsByteSwapped(tif.get());
 
             readSubRegionToBuffer(task, tif.get(), bytesPerPixel, results[i].data, tempBuf);
 
