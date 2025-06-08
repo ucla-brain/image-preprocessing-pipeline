@@ -82,9 +82,9 @@ for b = 1:size(blockSizes,1)
     end
 end
 
-%% 2. Spatial boundary checks - Robust pass/fail (fixed)
-%fprintf('\n[Suite 2] Spatial boundary checks:\n');
-%edge = {...  %          y,   x,   h,   w,    label,                  kind
+%% 2. [SKIPPED] Spatial boundary checks — revise to enable later
+% fprintf('\n[Suite 2] Spatial boundary checks:\n');
+% edge = { ...
 %   1,1,1,1,                         "top-left 1×1",        "ok";
 %   1,1,1,512,                       "top row stripe",      "ok";
 %   1,1,512,1,                       "left col stripe",     "ok";
@@ -93,34 +93,36 @@ end
 %   1,1,imageHeight,imageWidth,      "full-frame (1 Z)",    "ok_singleZ";
 %  -20,-20,128,128,                  "upper-left overflow", "expect_error";
 %   imageHeight-50,imageWidth-50,100,100, "bottom-right overflow","expect_error";
-%};
-%for k = 1:size(edge,1)
-%    [y,x,h,w,label,kind] = edge{k,:};
-%    try
-%        switch kind
-%            case "ok", mexP = load_bl_tif(filelist, y,x,h,w,false); %#ok<NASGU>
-%            case "ok_singleZ", mexP = load_bl_tif(filelist(1), y,x,h,w,false); %#ok<NASGU>
-%            otherwise, load_bl_tif(filelist, y,x,h,w,false); % should error
-%        end
-%        if kind=="expect_error"
-%            fprintf(' %s %-25s did NOT error\n', EMOJI_FAIL, label);
-%        else
-%            fprintf(' %s %-25s (size %s)\n', EMOJI_PASS, label, mat2str(size(mexP)));
-%        end
-%    catch ME
-%        if kind=="expect_error"
-%            fprintf(' %s %-25s raised (%s)\n', EMOJI_PASS, label, ME.identifier);
-%        else
-%            fprintf(' %s %-25s ERROR: %s [%s]\n', EMOJI_FAIL, label, ME.message, ME.identifier);
-%        end
-%    end
-%end
+% };
+% for k = 1:size(edge,1)
+%     [y,x,h,w,label,kind] = edge{k,:};
+%     try
+%         switch kind
+%             case "ok", mexP = load_bl_tif(filelist, y,x,h,w,false); %#ok<NASGU>
+%             case "ok_singleZ", mexP = load_bl_tif(filelist(1), y,x,h,w,false); %#ok<NASGU>
+%             otherwise, load_bl_tif(filelist, y,x,h,w,false);
+%         end
+%         if kind=="expect_error"
+%             fprintf(' %s %-25s did NOT error\n', EMOJI_FAIL, label);
+%         else
+%             fprintf(' %s %-25s (size %s)\n', EMOJI_PASS, label, mat2str(size(mexP)));
+%         end
+%     catch ME
+%         if kind=="expect_error"
+%             fprintf(' %s %-25s raised (%s)\n', EMOJI_PASS, label, ME.identifier);
+%         else
+%             fprintf(' %s %-25s ERROR: %s [%s]\n', EMOJI_FAIL, label, ME.message, ME.identifier);
+%         end
+%     end
+% end
 
 %% 3. Little- vs big-endian, 8-/16-bit
 run_external_endian_tests();
 
 %% 4. Tile/strip + compression
 fprintf('\n[Suite 4] Tile/strip + compression:\n');
+tmpdir = tempname; mkdir(tmpdir);  % ← Now local to Suite 4
+cleanupObj = onCleanup(@() cleanupTempDir(tmpdir));
 cfgs = [ ...
   struct("tiled",false,"comp",'None'   ,"name","strip-none"   )
   struct("tiled",false,"comp",'LZW'    ,"name","strip-lzw"    )
@@ -130,26 +132,30 @@ cfgs = [ ...
   struct("tiled",true ,"comp",'Deflate',"name","tile-deflate")];
 for c = cfgs
     fname = fullfile(tmpdir, ['tile_' c.name '.tif']);
-    img   = cast(magic(257), dtype); % Use detected dtype
+    img   = cast(magic(257), dtype);
     try
         t = Tiff(fname,'w');
     catch ME
         fprintf('  %-13s → skipped (cannot create file: %s) [%s]\n', c.name, ME.message, ME.identifier);
         continue
     end
-    tag.ImageWidth        = size(img,2);
-    tag.ImageLength       = size(img,1);
-    tag.BitsPerSample     = bitDepth;
-    tag.SamplesPerPixel   = 1;
-    tag.Photometric       = tryEnum('Tiff.Photometric.MinIsBlack',1);
-    tag.PlanarConfiguration=tryEnum('Tiff.PlanarConfiguration.Contig',1);
+    tag.ImageWidth         = size(img,2);
+    tag.ImageLength        = size(img,1);
+    tag.BitsPerSample      = bitDepth;
+    tag.SamplesPerPixel    = 1;
+    tag.Photometric        = tryEnum('Tiff.Photometric.MinIsBlack',1);
+    tag.PlanarConfiguration= tryEnum('Tiff.PlanarConfiguration.Contig',1);
     [tag.Compression,supported] = compressionTag(c.comp);
     if ~supported
         fprintf('  %-13s → skipped (compression unsupported)\n', c.name);
         close(t); delete(fname); continue
     end
-    if c.tiled, tag.TileWidth = 64; tag.TileLength = 64;
-    else,       tag.RowsPerStrip = 33;       end
+    if c.tiled
+        tag.TileWidth  = 64;
+        tag.TileLength = 64;
+    else
+        tag.RowsPerStrip = 33;
+    end
     t.setTag(tag); t.write(img); close(t);
 
     try
@@ -169,7 +175,7 @@ neg = {
   "Non-overlap ROI", @() load_bl_tif(filelist(1),-5000,-5000,10,10,false);
   "Empty file cell", @() load_bl_tif({''},1,1,10,10,false);
 };
-if ~isempty(fname8LE)
+if exist('fname8LE','var') && ~isempty(fname8LE)
     neg(end+1,:) = {"Mismatched bit-depth",@() load_bl_tif({fname8LE},1,1,10,10,false)};
 end
 for n = 1:size(neg,1)
@@ -181,9 +187,7 @@ for n = 1:size(neg,1)
     end
 end
 
-%% ----------------------------------------------------------------
-% 6. 500-iteration random ROI fuzz (print test input before call)
-% -----------------------------------------------------------------
+%% 6. 500 random ROI fuzz tests
 fprintf('\n[Suite 6] 500 random ROI fuzz tests (printing each input):\n');
 rng(42);
 numFuzz = 500;
@@ -209,149 +213,11 @@ for k = 1:numFuzz
     end
 end
 
-fprintf('\nSuite 7 finished: %d/%d passed, %d failed.\n', num_pass, numFuzz, numFuzz-num_pass);
-
+fprintf('\nSuite 6 finished: %d/%d passed, %d failed.\n', num_pass, numFuzz, numFuzz-num_pass);
 if ~isempty(fail_msgs)
     fprintf('\nFirst few failures:\n');
     disp(fail_msgs(1:min(5,end)))
 end
 
 fprintf('\nAll suites finished.\n');
-end  % main
-% ==============================================================
-
-% -------------- Helper utilities ---------------
-function o = ternary(c,a,b), if c, o = a; else, o = b; end, end
-
-function val = tryEnum(e,fallback)
-    try, val = eval(e); catch, val = fallback; end
-end
-
-function [tagVal,supported] = compressionTag(name)
-    switch upper(name)
-        case 'NONE',    tagVal = tryEnum('Tiff.Compression.None',1);    supported=true;
-        case 'LZW',     tagVal = tryEnum('Tiff.Compression.LZW',5);     supported=hasCodec(5);
-        case 'DEFLATE', tagVal = tryEnum('Tiff.Compression.Deflate',32946); supported=hasCodec(32946);
-        otherwise,      tagVal = 1; supported=false;
-    end
-end
-function tf = hasCodec(id)
-    try, matlab.internal.imagesci.tifflib('getCodecName',id); tf=true;
-    catch, tf=false; end
-end
-
-function ok = forceBigEndianHeader(t)
-    ok = false;
-    try
-        t.setTag('ByteOrder','big'); ok=true; return; end %#ok<TRYNC>
-    if ismethod(t,'rewrite')
-        try
-            t.rewrite; fseek(t.FileID,0,'bof'); fwrite(t.FileID,'MM','char'); ok=true;
-        catch
-            ok=false;
-        end
-    end
-end
-
-function cleanupTempDir(tmpdir)
-    if isfolder(tmpdir)
-        try
-            delete(fullfile(tmpdir, '*'));
-            rmdir(tmpdir);
-        catch
-            % If any files still locked, ignore cleanup error
-        end
-    end
-end
-
-function [pass,fail] = emoji_checkmarks()
-    if ispc
-        pass = '[ok]';
-        fail = '[ X]';
-    else
-        pass = '✔️';
-        fail = '❌';
-    end
-end
-
-function run_external_endian_tests()
-% Suite 4: Validate load_bl_tif on little- and big-endian TIFFs via external tools
-
-[EMOJI_PASS, EMOJI_FAIL] = emoji_checkmarks();
-fprintf('\n[Suite 4] External TIFF endian tests (LE and BE):\n');
-
-tools = struct( ...
-    'tiffcp', findExe('tiffcp'), ...
-    'convert', findExe('convert'));
-
-if all(structfun(@isempty, tools))
-    fprintf(' ⚠️  Skipped — no TIFF tools (tiffcp or convert) found.\n');
-    return;
-end
-
-% Run both LE and BE tests
-run_external_endian_test(tools, 'little', false, EMOJI_PASS, EMOJI_FAIL);
-run_external_endian_test(tools, 'big',    true,  EMOJI_PASS, EMOJI_FAIL);
-end
-
-function run_external_endian_test(tools, label, bigEndian, EMOJI_PASS, EMOJI_FAIL)
-img = uint16(randi([0 65535], 64, 64));
-tmpdir = tempname; mkdir(tmpdir);
-cleanupObj = onCleanup(@() cleanupTempDir(tmpdir));
-
-src_tif = fullfile(tmpdir, 'source.tif');
-dst_tif = fullfile(tmpdir, sprintf('test_%s.tif', label));
-
-% Write original LE TIFF using MATLAB
-t = Tiff(src_tif, 'w');
-t.setTag('ImageWidth', size(img,2));
-t.setTag('ImageLength', size(img,1));
-t.setTag('Photometric', 1);          % ✅ FIRST
-t.setTag('BitsPerSample', 16);
-t.setTag('SamplesPerPixel', 1);
-t.setTag('PlanarConfiguration', 1);
-t.setTag('Compression', 1);
-t.write(img); close(t);
-
-% Convert with external tool
-cmd = '';
-if ~isempty(tools.tiffcp)
-    flag = ternary(bigEndian, '-B', '-L');
-    cmd = sprintf('"%s" -c none %s "%s" "%s"', ...
-        tools.tiffcp, flag, src_tif, dst_tif);
-elseif ~isempty(tools.convert)
-    flag = ternary(bigEndian, 'MSB', 'LSB');
-    cmd = sprintf('"%s" -endian %s "%s" "%s"', ...
-        tools.convert, flag, src_tif, dst_tif);
-end
-
-[status, out] = system(cmd);
-if status ~= 0
-    fprintf(' ⚠️  Failed to create %s-endian TIFF (%s)\n', label, strtrim(out));
-    return;
-end
-
-% Validate with load_bl_tif
-try
-    load_bl_tif({dst_tif}, 1, 1, 32, 32, false);
-    fprintf(' %s Successfully read 16-bit %s-endian TIFF\n', EMOJI_PASS, label);
-catch ME
-    fprintf(' %s Failed to read 16-bit %s-endian TIFF (%s)\n', EMOJI_FAIL, label, ME.message);
-end
-end
-
-function exe = findExe(name)
-% Cross-platform command resolver
-exe = '';
-if ispc
-    [status, out] = system(['where ', name]);
-else
-    [status, out] = system(['which ', name]);
-end
-if status == 0
-    lines = splitlines(strtrim(out));
-    if ~isempty(lines)
-        exe = strtrim(lines{1});
-    end
-end
 end
