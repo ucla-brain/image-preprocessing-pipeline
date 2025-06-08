@@ -236,9 +236,9 @@ static void readSubRegionToBuffer(
 
         const size_t uncompressedTileBytes =
             static_cast<size_t>(tileW) * tileH * bytesPerPixel;
-        if (uncompressedTileBytes > MAX_TIFF_BLOCK_BYTES)
-            throw std::runtime_error("Tile buffer exceeds sane limit of " + MAX_TIFF_BLOCK_BYTES_STR +
-                                     " in file: " + task.path);
+        // if (uncompressedTileBytes > MAX_TIFF_BLOCK_BYTES)
+        //     throw std::runtime_error("Tile buffer exceeds sane limit of " + MAX_TIFF_BLOCK_BYTES_STR +
+        //                              " in file: " + task.path);
 
         std::vector<uint8_t> tilebuf(uncompressedTileBytes);
         const size_t nTilePixels = uncompressedTileBytes / bytesPerPixel;
@@ -293,9 +293,9 @@ static void readSubRegionToBuffer(
 
         const size_t maxStripBytes =
             static_cast<size_t>(rowsPerStrip) * imgWidth * bytesPerPixel;
-        if (maxStripBytes > MAX_TIFF_BLOCK_BYTES)
-            throw std::runtime_error("Tile buffer exceeds sane limit of " + MAX_TIFF_BLOCK_BYTES_STR +
-                                     " in file: " + task.path);
+        // if (maxStripBytes > MAX_TIFF_BLOCK_BYTES)
+        //     throw std::runtime_error("Tile buffer exceeds sane limit of " + MAX_TIFF_BLOCK_BYTES_STR +
+        //                              " in file: " + task.path);
 
         std::vector<uint8_t> stripbuf(maxStripBytes);
         tstrip_t currentStrip = (tstrip_t)-1;
