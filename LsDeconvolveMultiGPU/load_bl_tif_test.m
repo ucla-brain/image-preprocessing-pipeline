@@ -26,8 +26,13 @@ numSlices = numel(filelist);
 info        = imfinfo(filelist{1});
 imageHeight = info.Height;
 imageWidth  = info.Width;
-bitDepth    = info.BitDepth;
-if isfield(info,'BitDepth') && info.BitDepth == 8
+% Robust dtype selection (MATLAB's imfinfo doesn't always set BitDepth for 8-bit)
+if isfield(info,'BitDepth')
+    bitDepth = info.BitDepth;
+else
+    bitDepth = info.BitsPerSample;
+end
+if bitDepth <= 8
     dtype = 'uint8';
 else
     dtype = 'uint16';
@@ -55,8 +60,11 @@ for b = 1:size(blockSizes,1)
             x_idx = x : min(imageWidth , x+blkW-1);
             z_idx = zidx : min(numSlices, zidx+2);
 
-            sz = tr* [numel(x_idx) numel(y_idx)] + ~tr*[numel(y_idx) numel(x_idx)];
+            % Correct dims for transpose flag
+            sz = [numel(y_idx), numel(x_idx)];
+            if tr, sz = fliplr(sz); end
             ref = zeros([sz, numel(z_idx)], dtype); % Correct dtype
+
             tref = tic;
             for k = 1:numel(z_idx)
                 slice = imread(filelist{z_idx(k)}, ...
@@ -121,8 +129,8 @@ run_external_endian_tests();
 
 %% 4. Tile/strip + compression
 fprintf('\n[Suite 4] Tile/strip + compression:\n');
-tmpdir = tempname; mkdir(tmpdir);  % ← Now local to Suite 4
-cleanupObj = onCleanup(@() cleanupTempDir(tmpdir));
+tmpdir4 = tempname; mkdir(tmpdir4);  % ← Now local to Suite 4
+cleanupObj4 = onCleanup(@() cleanupTempDir(tmpdir4));
 cfgs = [ ...
   struct("tiled",false,"comp",'None'   ,"name","strip-none"   )
   struct("tiled",false,"comp",'LZW'    ,"name","strip-lzw"    )
@@ -131,7 +139,7 @@ cfgs = [ ...
   struct("tiled",true ,"comp",'LZW'    ,"name","tile-lzw"     )
   struct("tiled",true ,"comp",'Deflate',"name","tile-deflate")];
 for c = cfgs
-    fname = fullfile(tmpdir, ['tile_' c.name '.tif']);
+    fname = fullfile(tmpdir4, ['tile_' c.name '.tif']);
     img   = cast(magic(257), dtype);
     try
         t = Tiff(fname,'w');
@@ -169,8 +177,8 @@ end
 
 %% 5. Expected-error paths
 fprintf('\n[Suite 5] Expected-error checks:\n');
-tmpdir = tempname; mkdir(tmpdir);
-cleanupObj = onCleanup(@() cleanupTempDir(tmpdir));
+tmpdir5 = tempname; mkdir(tmpdir5);
+cleanupObj5 = onCleanup(@() cleanupTempDir(tmpdir5));
 neg = {
   "Non-overlap ROI", @() load_bl_tif(filelist(1),-5000,-5000,10,10,false);
   "Empty file cell", @() load_bl_tif({''},1,1,10,10,false);
@@ -243,10 +251,10 @@ function out = ternary(condition, true_val, false_val)
 end
 
 function run_external_endian_tests()
-% Suite 4: Validate load_bl_tif on little- and big-endian TIFFs via external tools
+% Suite 3: Validate load_bl_tif on little- and big-endian TIFFs via external tools
 
     [EMOJI_PASS, EMOJI_FAIL] = emoji_checkmarks();
-    fprintf('\n[Suite 4] External TIFF endian tests (LE and BE):\n');
+    fprintf('\n[Suite 3] External TIFF endian tests (LE and BE):\n');
 
     tools = struct( ...
         'tiffcp', findExe('tiffcp'), ...
@@ -339,5 +347,24 @@ function cleanupTempDir(tmpdir)
         catch
             % Ignore errors if files are locked or already removed
         end
+    end
+end
+
+function [tagVal,ok] = tryEnum(enumstr,defaultVal)
+% Safely resolve enum, fallback to value if class missing (for deploy/old MATLAB)
+    try
+        tagVal = eval(enumstr); ok = true;
+    catch
+        tagVal = defaultVal; ok = false;
+    end
+end
+
+function [compVal,supported] = compressionTag(name)
+% Map compression string to TIFF tag value, test if supported on this platform
+    switch lower(name)
+        case {'none','raw'},   compVal = 1; supported = true;
+        case 'lzw',            compVal = 5; supported = true;
+        case 'deflate',        compVal = 32946; supported = true;
+        otherwise,             compVal = 1; supported = false;
     end
 end
