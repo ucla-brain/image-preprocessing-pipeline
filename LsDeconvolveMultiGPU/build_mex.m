@@ -181,21 +181,23 @@ function ok = try_build_library(lib, src_dir, install_dir, mex_flags_cpu)
 
         if endsWith(archive, '.tar.gz')
             system(sprintf('tar -xzf "%s"', archive));
-            actual_folder = get_top_level_folder(archive);
-            if ~strcmp(actual_folder, folder_name)
-                movefile(actual_folder, folder_name);
-            end
         elseif endsWith(archive, '.zip')
             unzip(archive);
         else
             error('Unsupported archive format: %s', archive);
         end
+
+        actual_folder = get_top_level_folder(archive);
+        if ~strcmp(actual_folder, folder_name)
+            movefile(actual_folder, folder_name);
+        end
+
         delete(archive);
     end
 
     cd(folder_name);
 
-    % === Build ===
+    % === Build phase ===
     if ispc
         setenv('CFLAGS', CFLAGS); setenv('CXXFLAGS', CXXFLAGS); setenv('LDFLAGS', LDFLAGS);
         cmake_flags = [
@@ -218,52 +220,52 @@ function ok = try_build_library(lib, src_dir, install_dir, mex_flags_cpu)
         if strcmp(lib, 'libdeflate')
             cmd = ['make -j4 CFLAGS="', CFLAGS, '" && make install PREFIX=', install_dir];
         elseif strcmp(lib, 'libjbig')
+            fprintf('Building libjbig using make -C libjbig...\n');
             cmd = ['make -j4 -C libjbig CFLAGS="', CFLAGS, '"'];
         else
             cmd = [prefix, './configure --disable-shared --enable-static --prefix=', install_dir, ...
                    ' && make -j4 && make install'];
         end
 
-        status = system(cmd);
-        ok = (status == 0);
-
-        % === Post-build manual install for non-installable libs ===
-        if ok && ~isfolder(fullfile(install_dir, 'lib'))
-            fprintf('Manual install fallback for %s...\n', lib);
-
-            try
-                mkdir(fullfile(install_dir, 'lib'));
-                mkdir(fullfile(install_dir, 'include'));
-
-                % Find all headers and static libraries in current and subdirs
-                headers = dir(fullfile(pwd, '**', '*.h'));
-                static_libs = dir(fullfile(pwd, '**', '*.a'));
-
-                for k = 1:numel(headers)
-                    dst = fullfile(install_dir, 'include', headers(k).name);
-                    copyfile(fullfile(headers(k).folder, headers(k).name), dst);
-                end
-                for k = 1:numel(static_libs)
-                    dst = fullfile(install_dir, 'lib', static_libs(k).name);
-                    copyfile(fullfile(static_libs(k).folder, static_libs(k).name), dst);
-                end
-            catch ME
-                warning('Manual install of %s failed: %s', lib, ME.message);
-                ok = false;
-            end
+        [status, output] = system(cmd);
+        if status ~= 0
+            warning('%s build failed:\n%s', lib, output);
         end
     end
 
-    % Remove shared libs
+    ok = (status == 0);
+
+    % === Manual install fallback ===
+    if ok && ~isfolder(fullfile(install_dir, 'lib'))
+        fprintf('Manual install fallback for %s...\n', lib);
+        try
+            mkdir(fullfile(install_dir, 'lib'));
+            mkdir(fullfile(install_dir, 'include'));
+            headers = dir(fullfile(pwd, '**', '*.h'));
+            static_libs = dir(fullfile(pwd, '**', '*.a'));
+            for k = 1:numel(headers)
+                dst = fullfile(install_dir, 'include', headers(k).name);
+                copyfile(fullfile(headers(k).folder, headers(k).name), dst);
+            end
+            for k = 1:numel(static_libs)
+                dst = fullfile(install_dir, 'lib', static_libs(k).name);
+                copyfile(fullfile(static_libs(k).folder, static_libs(k).name), dst);
+            end
+        catch ME
+            warning('Manual install of %s failed: %s', lib, ME.message);
+            ok = false;
+        end
+    end
+
+    % === Clean shared libs ===
     if exist(fullfile(install_dir, 'lib'), 'dir')
         delete(fullfile(install_dir, 'lib', '*.so*'));
         delete(fullfile(install_dir, 'lib', '*.dylib'));
     end
 
     cd(orig_dir);
-    ok = (status == 0);
 
-    % === Optional test for libtiff ===
+    % === Optional libtiff validation test ===
     if ok && strcmp(lib, 'libtiff')
         test_c = 'libtiff_test_mex.c';
         fid = fopen(test_c, 'w');
