@@ -113,8 +113,84 @@ end
 
 % ==================== Compression and Tile Tests ========================
 function run_compression_tests(imageHeight, imageWidth, bitDepth, dtype, EMOJI_PASS, EMOJI_FAIL)
-    % Content omitted in summary (keep as in original)
-    % You already have the full implementation and naming
+% run_compression_tests: Validate MEX against TIFFs with compression and tiling
+
+    fprintf('\n[Suite 4] Compression & Tiling Checks:\n');
+    compressions = {'none', 'lzw', 'deflate'};
+    tiling_opts = [false true];
+
+    % Generate test image
+    img = randi([0, 2^bitDepth - 1], imageHeight, imageWidth, dtype);
+
+    for tiled = tiling_opts
+        for c = 1:numel(compressions)
+            method = compressions{c};
+            [tagval, supported] = compressionTag(method);
+            if ~supported
+                fprintf(' ⚠️  Skipping unsupported compression: %s\n', method);
+                continue;
+            end
+
+            tmpdir = tempname; mkdir(tmpdir);
+            cleanupObj = onCleanup(@() cleanupTempDir(tmpdir));
+
+            tif_path = fullfile(tmpdir, sprintf('test_%s_%s.tif', method, ternary(tiled,'tile','strip')));
+
+            t = Tiff(tif_path, 'w');
+            t.setTag('ImageWidth',  imageWidth);
+            t.setTag('ImageLength', imageHeight);
+            t.setTag('BitsPerSample', bitDepth);
+            t.setTag('SamplesPerPixel', 1);
+            t.setTag('Photometric', Tiff.Photometric.MinIsBlack);
+            t.setTag('PlanarConfiguration', Tiff.PlanarConfiguration.Chunky);
+            t.setTag('Compression', tagval);
+
+            if tiled
+                tileSize = [64, 64];
+                t.setTag('TileWidth',  tileSize(2));
+                t.setTag('TileLength', tileSize(1));
+                writeTiles(t, img, tileSize);
+            else
+                t.write(img);
+            end
+            t.close();
+
+            try
+                out = load_bl_tif({tif_path}, 1, 1, size(img,1), size(img,2), false);
+                if isequaln(out, img)
+                    fprintf(' %s %s-compressed %s TIFF verified OK\n', EMOJI_PASS, method, ternary(tiled,'tiled','striped'));
+                else
+                    maxerr = max(abs(double(out(:)) - double(img(:))));
+                    fprintf(' %s Data mismatch in %s %s TIFF (max err = %g)\n', ...
+                            EMOJI_FAIL, method, ternary(tiled,'tiled','striped'), maxerr);
+                end
+            catch ME
+                fprintf(' %s Failed to read %s %s TIFF (%s)\n', ...
+                        EMOJI_FAIL, method, ternary(tiled,'tiled','striped'), ME.message);
+            end
+        end
+    end
+end
+
+function writeTiles(t, img, tileSize)
+% writeTiles: Write a 2D image to TIFF file using tiled layout
+    [H, W] = size(img);
+    tileH = tileSize(1);
+    tileW = tileSize(2);
+
+    for row = 1:tileH:H
+        for col = 1:tileW:W
+            r_end = min(row + tileH - 1, H);
+            c_end = min(col + tileW - 1, W);
+            tileBlock = img(row:r_end, col:c_end);
+
+            % Pad if necessary
+            padded = zeros(tileH, tileW, class(img));
+            padded(1:size(tileBlock,1), 1:size(tileBlock,2)) = tileBlock;
+
+            t.writeEncodedTile(padded, Tiff.computeTile(t, col, row));
+        end
+    end
 end
 
 % ====================== Error Condition Tests ===========================
@@ -169,6 +245,8 @@ function run_fuzz_tests(filelist, imageHeight, imageWidth)
         disp(fail_msgs(1:min(5,end)))
     end
 end
+
+% ========================== Helper Functions ============================
 
 function [pass, fail] = emoji_checkmarks()
 % emoji_checkmarks: Cross-platform emoji-safe pass/fail symbols
