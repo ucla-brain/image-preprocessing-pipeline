@@ -318,9 +318,9 @@ function [archive, folder_name, url, version] = get_library_info(lib)
 
         case 'libdeflate'
             version = '1.24';
-            archive = ['libdeflate-', version, '.zip'];
+            archive = ['libdeflate-', version, '.tar.gz'];
             folder_name = ['libdeflate-', version];
-            url = ['https://github.com/ebiggers/libdeflate/releases/download/' version '/libdeflate-' version '.tar.gz'];
+            url = ['https://github.com/ebiggers/libdeflate/releases/download/v', version, '/', archive];
 
         otherwise
             error('Unknown library: %s', lib);
