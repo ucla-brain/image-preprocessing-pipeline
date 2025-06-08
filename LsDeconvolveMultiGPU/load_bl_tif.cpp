@@ -256,7 +256,7 @@ static void readSubRegionToBuffer(
                         tif,
                         tileIdx,
                         tempBuf.data(),
-                        uncompressedTileBytes
+                        safeTileBytes
                     );
                     if (ret < 0)
                     {
@@ -302,7 +302,7 @@ static void readSubRegionToBuffer(
             tstrip_t stripIdx = TIFFComputeStrip(tif, tifRow, 0);
 
             if (stripIdx != currentStrip) {
-                nbytes = TIFFReadEncodedStrip(tif, stripIdx, tempBuf.data(), maxStripBytes);
+                nbytes = TIFFReadEncodedStrip(tif, stripIdx, tempBuf.data(), safeStripBytes);
                 if (nbytes < 0) {
                     std::ostringstream oss;
                     oss << "TIFFReadEncodedStrip failed (strip " << stripIdx << ") in file: " << task.path;
