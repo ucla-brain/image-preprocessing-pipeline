@@ -218,12 +218,40 @@ function ok = try_build_library(lib, src_dir, install_dir, mex_flags_cpu)
         if strcmp(lib, 'libdeflate')
             cmd = ['make -j4 CFLAGS="', CFLAGS, '" && make install PREFIX=', install_dir];
         elseif strcmp(lib, 'libjbig')
-            cmd = ['make -j4 CFLAGS="', CFLAGS, '" lib && make install PREFIX=', install_dir];
+            cmd = ['make -j4 -C libjbig CFLAGS="', CFLAGS, '"'];
         else
             cmd = [prefix, './configure --disable-shared --enable-static --prefix=', install_dir, ...
                    ' && make -j4 && make install'];
         end
+
         status = system(cmd);
+        ok = (status == 0);
+
+        % === Post-build manual install for non-installable libs ===
+        if ok && ~isfolder(fullfile(install_dir, 'lib'))
+            fprintf('Manual install fallback for %s...\n', lib);
+
+            try
+                mkdir(fullfile(install_dir, 'lib'));
+                mkdir(fullfile(install_dir, 'include'));
+
+                % Find all headers and static libraries in current and subdirs
+                headers = dir(fullfile(pwd, '**', '*.h'));
+                static_libs = dir(fullfile(pwd, '**', '*.a'));
+
+                for k = 1:numel(headers)
+                    dst = fullfile(install_dir, 'include', headers(k).name);
+                    copyfile(fullfile(headers(k).folder, headers(k).name), dst);
+                end
+                for k = 1:numel(static_libs)
+                    dst = fullfile(install_dir, 'lib', static_libs(k).name);
+                    copyfile(fullfile(static_libs(k).folder, static_libs(k).name), dst);
+                end
+            catch ME
+                warning('Manual install of %s failed: %s', lib, ME.message);
+                ok = false;
+            end
+        end
     end
 
     % Remove shared libs
