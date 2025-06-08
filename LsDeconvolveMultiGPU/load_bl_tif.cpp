@@ -321,17 +321,19 @@ void worker_main(
     std::mutex& err_mutex,
     std::vector<std::string>& errors,
     std::atomic<size_t>& error_count,
-    size_t begin,
-    size_t end)
-{
-    std::vector<uint8_t> tempBuf;  // Per-thread scratch buffer
-    for (size_t i = begin; i < end; ++i) {
+    std::atomic<size_t>& nextTask
+) {
+    std::vector<uint8_t> tempBuf;
+
+    size_t i;
+    while ((i = nextTask.fetch_add(1)) < tasks.size()) {
         const auto& task = tasks[i];
         try {
             TiffHandle tif(TIFFOpen(task.path.c_str(), "r"));
             if (!tif) {
                 std::lock_guard<std::mutex> lck(err_mutex);
-                errors.emplace_back("Slice " + std::to_string(task.zIndex + 1) + ": Cannot open file " + task.path);
+                errors.emplace_back("Slice " + std::to_string(task.zIndex + 1) +
+                                    ": Cannot open file " + task.path);
                 error_count++;
                 continue;
             }
@@ -344,11 +346,12 @@ void worker_main(
             error_count++;
         } catch (...) {
             std::lock_guard<std::mutex> lck(err_mutex);
-            errors.emplace_back("Slice " + std::to_string(task.zIndex + 1) + ": Unknown exception in thread");
+            errors.emplace_back("Slice " + std::to_string(task.zIndex + 1) + ": Unknown exception");
             error_count++;
         }
     }
 }
+
 
 // ==============================
 //       ENTRY POINT
@@ -509,25 +512,21 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         static_cast<unsigned>(std::min<size_t>(numSlices, std::numeric_limits<unsigned>::max()))
     );
     std::vector<std::thread> workers;
-    size_t n_tasks = tasks.size();
+    std::atomic<size_t> nextTask{0};
     std::atomic<size_t> error_count{0};
-    if (n_tasks > 0) {
-        size_t chunk = (n_tasks + numThreads - 1) / numThreads;
-        for (unsigned t = 0; t < numThreads; ++t) {
-            size_t begin = t * chunk;
-            size_t end   = std::min(n_tasks, begin + chunk);
-            if (begin >= end) break; // No more tasks for this thread
-            workers.emplace_back(worker_main,
-                std::cref(tasks),
-                std::ref(results),
-                bytesPerPixel,
-                std::ref(err_mutex),
-                std::ref(errors),
-                std::ref(error_count),
-                begin, end
-            );
-        }
-        for (auto& w : workers) w.join();
+
+    for (unsigned t = 0; t < numThreads; ++t) {
+        workers.emplace_back(worker_main,
+            std::cref(tasks),
+            std::ref(results),
+            bytesPerPixel,
+            std::ref(err_mutex),
+            std::ref(errors),
+            std::ref(error_count),
+            std::ref(nextTask));
+    }
+    for (auto& w : workers) {
+        w.join();
     }
 
     if (error_count > 0) {
