@@ -1,152 +1,105 @@
-% ===============================
-% build_mex.m (Patched to always use local libtiff + LTO + dependencies)
-% ===============================
-% Compile semaphore, LZ4, and GPU MEX files using locally-compiled libtiff and dependencies.
-% Always use the version in tiff_build/libtiff and never the system or Anaconda version.
+function build_mex()
+    % ===============================
+    % build_mex.m — Modular MEX builder for local libtiff and dependencies
+    % ===============================
+    % Builds:
+    %   - libtiff and all its dependencies (libjpeg, zlib, etc.)
+    %   - Various MEX files (LZ4, semaphore, load_bl_tif, CUDA modules)
+    % ===============================
 
-debug = false;
-force_rebuild = ~isempty(getenv('FORCE_REBUILD'));
+    % Debug mode toggle
+    debug = false;
 
-if verLessThan('matlab', '9.4')
-    error('This script requires MATLAB R2018a or newer (for -R2018a MEX API)');
-end
+    % === Compiler flags (CPU) ===
+    mex_flags_cpu = get_mex_flags_cpu(debug);
 
-if exist('mexcuda', 'file') ~= 2
-    error('mexcuda not found. Ensure CUDA is set up correctly.');
-end
+    % === List of required libraries ===
+    libs = {'libtiff', 'libjpeg', 'zlib', 'liblzma', 'libjbig', 'libdeflate'};
+    lib_dirs = struct();
 
-% Source files
-src_semaphore = 'semaphore.c';
-src_lz4_save  = 'save_lz4_mex.c';
-src_lz4_load  = 'load_lz4_mex.c';
-src_lz4_c     = 'lz4.c';
-src_gauss3d   = 'gauss3d_mex.cu';
-src_conv3d    = 'conv3d_mex.cu';
-src_otf_gpu   = 'otf_gpu_mex.cu';
-src_load_bl   = 'load_bl_tif.cpp';
+    % === Build third-party libraries ===
+    for i = 1:numel(libs)
+        lib = libs{i};
+        install_dir = fullfile(pwd, 'tiff_build', lib);
+        src_dir = fullfile(pwd, 'tiff_src', lib);
+        stamp_file = fullfile(install_dir, ['.', lib, '_installed']);
 
-% LZ4 download if missing
-lz4_c_url = 'https://raw.githubusercontent.com/lz4/lz4/dev/lib/lz4.c';
-lz4_h_url = 'https://raw.githubusercontent.com/lz4/lz4/dev/lib/lz4.h';
-
-if ~isfile('lz4.c')
-    fprintf('Downloading lz4.c ...\n');
-    try, websave('lz4.c', lz4_c_url); catch, error('Failed to download lz4.c'); end
-end
-if ~isfile('lz4.h')
-    fprintf('Downloading lz4.h ...\n');
-    try, websave('lz4.h', lz4_h_url); catch, error('Failed to download lz4.h'); end
-end
-
-% CPU compile flags
-if ispc
-    if debug
-        mex_flags_cpu = {
-            '-R2018a', ...
-            'COMPFLAGS="$COMPFLAGS /std:c++17 /Od /Zi /openmp"', ...
-            'LINKFLAGS="$LINKFLAGS /DEBUG"'
-        };
-    else
-        mex_flags_cpu = {
-            '-R2018a', ...
-            'COMPFLAGS="$COMPFLAGS /std:c++17 /O2 /arch:AVX2 /Ot /GL /openmp"', ...
-            'LINKFLAGS="$LINKFLAGS /LTCG"'
-        };
-    end
-else
-    if debug
-        mex_flags_cpu = {
-            '-R2018a', ...
-            'CFLAGS="$CFLAGS -O0 -g -fopenmp"', ...
-            'CXXFLAGS="$CXXFLAGS -O0 -g -fopenmp"', ...
-            'LDFLAGS="$LDFLAGS -g -fopenmp"'
-        };
-    else
-        mex_flags_cpu = {
-            '-R2018a', ...
-            'CFLAGS="$CFLAGS -O2 -march=native -fomit-frame-pointer -fopenmp -flto"', ...
-            'CXXFLAGS="$CXXFLAGS -O2 -march=native -fomit-frame-pointer -fopenmp -flto"', ...
-            'LDFLAGS="$LDFLAGS -flto -fopenmp"'
-        };
-    end
-end
-
-% Build all third-party libraries using unified try_build_library
-libs = {'libtiff', 'libjpeg', 'zlib', 'liblzma', 'libjbig', 'libdeflate'};
-for i = 1:numel(libs)
-    lib = libs{i};
-    install_dir = fullfile(pwd, 'tiff_build', lib);
-    stamp_file = fullfile(install_dir, ['.', lib, '_installed']);
-    src_dir = fullfile(pwd, 'tiff_src', lib);
-    if force_rebuild || ~isfile(stamp_file)
-        fprintf('Building %s from source with optimized flags...\n', lib);
-        if ~try_build_library(lib, src_dir, install_dir, mex_flags_cpu)
-            error('Failed to build %s', lib);
-        else
-            fid = fopen(stamp_file, 'w'); if fid > 0, fclose(fid); end
+        if ~isfile(stamp_file)
+            fprintf('\nBuilding %s from source...\n', lib);
+            ok = try_build_library(lib, src_dir, install_dir, mex_flags_cpu);
+            if ~ok
+                error('❌ Failed to build %s', lib);
+            else
+                fclose(fopen(stamp_file, 'w'));
+            end
         end
+        lib_dirs.(lib) = install_dir;
     end
+
+    % === Set link/include flags ===
+    [include_flags, lib_flags, link_flags] = get_link_flags(lib_dirs);
+
+    % === Build MEX files ===
+    build_all_mex_files(mex_flags_cpu, include_flags, lib_flags, link_flags);
+
+    fprintf('\n✅ All MEX files built successfully.\n');
 end
 
-% Set include and lib paths
-libtiff_include = {['-I', fullfile(libtiff_install_dir, 'include')]};
-libtiff_lib     = {['-L', fullfile(libtiff_install_dir, 'lib')]};
-dep_includes = {}; dep_libs = {};
-for i = 1:numel(libs)
-    inc = ['-I', fullfile(pwd, 'tiff_build', libs{i}, 'include')];
-    lib = ['-L', fullfile(pwd, 'tiff_build', libs{i}, 'lib')];
-    dep_includes{end+1} = inc;
-    dep_libs{end+1} = lib;
-end
+function build_all_mex_files(mex_flags_cpu, ...
+                              libtiff_install_dir, dep_install_dirs, ...
+                              src_files, nvccflags, cuda_mex_flags)
 
-% Combined link flags
-tiff_link = {
-    '-ltiff', '-ljpeg', '-lz', '-llzma', '-ljbig', '-ldeflate'
-};
+    % === MEX Sources ===
+    src_semaphore = src_files.semaphore;
+    src_lz4_save  = src_files.lz4_save;
+    src_lz4_load  = src_files.lz4_load;
+    src_lz4_c     = src_files.lz4_c;
+    src_load_bl   = src_files.load_bl;
+    src_gauss3d   = src_files.gauss3d;
+    src_conv3d    = src_files.conv3d;
+    src_otf_gpu   = src_files.otf_gpu;
+    src_deconFFT  = src_files.deconFFT;
 
-fprintf('Using libtiff from: %s\n', fullfile(libtiff_install_dir, 'lib'));
+    % === Include & Link Paths ===
+    libtiff_include = {['-I', fullfile(libtiff_install_dir, 'include')]};
+    libtiff_lib     = {['-L', fullfile(libtiff_install_dir, 'lib')]};
 
-% Build CPU MEX files
-mex(mex_flags_cpu{:}, src_semaphore);
-mex(mex_flags_cpu{:}, src_lz4_save, src_lz4_c);
-mex(mex_flags_cpu{:}, src_lz4_load, src_lz4_c);
-mex(mex_flags_cpu{:}, src_load_bl, ...
-    libtiff_include{:}, dep_includes{:}, ...
-    libtiff_lib{:}, dep_libs{:}, ...
-    tiff_link{:});
-% CUDA optimization flags
-if ispc
-    if debug
-        nvccflags = 'NVCCFLAGS="$NVCCFLAGS -G -std:c++17 -Xcompiler ""/Od,/Zi"" "'; %#ok<NASGU>
-    else
-        nvccflags = 'NVCCFLAGS="$NVCCFLAGS -O2 -std:c++17 -Xcompiler ""/O2,/arch:AVX2,/openmp"" "'; %#ok<NASGU>
+    dep_includes = {};
+    dep_libs     = {};
+    for i = 1:numel(dep_install_dirs)
+        dep_includes{end+1} = ['-I', fullfile(dep_install_dirs{i}, 'include')]; %#ok<AGROW>
+        dep_libs{end+1}     = ['-L', fullfile(dep_install_dirs{i}, 'lib')];     %#ok<AGROW>
     end
-else
-    if debug
-        nvccflags = 'NVCCFLAGS="$NVCCFLAGS -G -std:c++17 -Xcompiler ''-O0,-g'' "'; %#ok<NASGU>
-    else
-        nvccflags = 'NVCCFLAGS="$NVCCFLAGS -O2 -std=c++17 -Xcompiler ''-O2,-march=native,-fomit-frame-pointer,-fopenmp'' "'; %#ok<NASGU>
-    end
+
+    link_flags = {
+        '-ltiff', '-ljpeg', '-lz', '-llzma', '-ljbig', '-ldeflate'
+    };
+
+    % === Build CPU MEX files ===
+    mex(mex_flags_cpu{:}, src_semaphore);
+    mex(mex_flags_cpu{:}, src_lz4_save, src_lz4_c);
+    mex(mex_flags_cpu{:}, src_lz4_load, src_lz4_c);
+    mex(mex_flags_cpu{:}, src_load_bl, ...
+        libtiff_include{:}, dep_includes{:}, ...
+        libtiff_lib{:}, dep_libs{:}, ...
+        link_flags{:});
+
+    % === CUDA MEX Files ===
+    root_dir    = '.';
+    include_dir = './mex_incubator';
+
+    mexcuda(cuda_mex_flags{:}, '-R2018a', src_gauss3d , ...
+        ['-I', root_dir], ['-I', include_dir], nvccflags);
+
+    mexcuda(cuda_mex_flags{:}, '-R2018a', src_conv3d  , ...
+        ['-I', root_dir], ['-I', include_dir], nvccflags);
+
+    mexcuda(cuda_mex_flags{:}, '-R2018a', src_otf_gpu , ...
+        ['-I', root_dir], ['-I', include_dir], nvccflags, ...
+        '-L/usr/local/cuda/lib64', '-lcufft');
+
+    fprintf('✅ All MEX files built successfully.\n');
 end
-
-% CUDA include dirs
-root_dir = '.'; include_dir = './mex_incubator';
-
-% Windows: use custom nvcc config
-if ispc
-    xmlfile = fullfile(fileparts(mfilename('fullpath')), 'nvcc_msvcpp2022.xml');
-    assert(isfile(xmlfile), 'nvcc_msvcpp2022.xml not found!');
-    cuda_mex_flags = {'-f', xmlfile};
-else
-    cuda_mex_flags = {};
-end
-
-% Build CUDA MEX files
-mexcuda(cuda_mex_flags{:}, '-R2018a', src_gauss3d , ['-I', root_dir], ['-I', include_dir], nvccflags);
-mexcuda(cuda_mex_flags{:}, '-R2018a', src_conv3d  , ['-I', root_dir], ['-I', include_dir], nvccflags);
-mexcuda(cuda_mex_flags{:}, '-R2018a', src_otf_gpu , ['-I', root_dir], ['-I', include_dir], nvccflags, '-L/usr/local/cuda/lib64', '-lcufft');
-
-fprintf('All MEX files built successfully.\n');
 
 % ===============================
 % Function: try_build_library (generic for libtiff + deps)
@@ -156,17 +109,7 @@ function ok = try_build_library(lib, src_dir, install_dir, mex_flags_cpu)
     ok = false;
 
     % === Parse compiler flags ===
-    CFLAGS = ''; CXXFLAGS = ''; LDFLAGS = '';
-    for i = 1:numel(mex_flags_cpu)
-        token = mex_flags_cpu{i};
-        if contains(token, 'CFLAGS=')
-            m = regexp(token, 'CFLAGS="\$CFLAGS ([^"]+)"', 'tokens'); if ~isempty(m), CFLAGS = strtrim(m{1}{1}); end
-        elseif contains(token, 'CXXFLAGS=')
-            m = regexp(token, 'CXXFLAGS="\$CXXFLAGS ([^"]+)"', 'tokens'); if ~isempty(m), CXXFLAGS = strtrim(m{1}{1}); end
-        elseif contains(token, 'LDFLAGS=')
-            m = regexp(token, 'LDFLAGS="\$LDFLAGS ([^"]+)"', 'tokens'); if ~isempty(m), LDFLAGS = strtrim(m{1}{1}); end
-        end
-    end
+    [CFLAGS, CXXFLAGS, LDFLAGS] = parse_mex_flags(mex_flags_cpu);
 
     % === Get library info ===
     [archive, folder_name, url, version] = get_library_info(lib);
@@ -176,21 +119,14 @@ function ok = try_build_library(lib, src_dir, install_dir, mex_flags_cpu)
     if ~isfolder(folder_name)
         if ~isfile(archive)
             fprintf('Downloading %s...\n', archive);
-            system(sprintf('curl -L -o "%s" "%s"', archive, url));
+            status = system(sprintf('curl -L -o "%s" "%s"', archive, url));
+            if status ~= 0, error('Download failed for %s', archive); end
         end
 
         if endsWith(archive, '.tar.gz')
             system(sprintf('tar -xzf "%s"', archive));
-            actual_folder = get_top_level_folder(archive);
-            if ~strcmp(actual_folder, folder_name)
-                movefile(actual_folder, folder_name);
-            end
         elseif endsWith(archive, '.zip')
             unzip(archive);
-            actual_folder = get_top_level_folder(archive);
-            if ~strcmp(actual_folder, folder_name)
-                movefile(actual_folder, folder_name);
-            end
         else
             error('Unsupported archive format: %s', archive);
         end
@@ -205,7 +141,7 @@ function ok = try_build_library(lib, src_dir, install_dir, mex_flags_cpu)
 
     cd(folder_name);
 
-    % === Build phase ===
+    % === Build ===
     if ispc
         setenv('CFLAGS', CFLAGS); setenv('CXXFLAGS', CXXFLAGS); setenv('LDFLAGS', LDFLAGS);
         cmake_flags = [
@@ -226,23 +162,7 @@ function ok = try_build_library(lib, src_dir, install_dir, mex_flags_cpu)
         if ~isempty(LDFLAGS), prefix = [prefix, 'LDFLAGS="', LDFLAGS, '" ']; end
 
         if strcmp(lib, 'libdeflate')
-            fprintf('Building libdeflate using CMake...\n');
-
-            cmake_flags = [
-                '-DCMAKE_BUILD_TYPE=Release ', ...
-                '-DCMAKE_INSTALL_PREFIX="', install_dir, '" ', ...
-                '-DBUILD_SHARED_LIBS=OFF '
-            ];
-
-            if ispc
-                setenv('CFLAGS', CFLAGS); setenv('CXXFLAGS', CXXFLAGS); setenv('LDFLAGS', LDFLAGS);
-                cmd = ['cmake -B build ', cmake_flags, ' . && cmake --build build --config Release --target install'];
-                status = system(cmd);
-                setenv('CFLAGS', ''); setenv('CXXFLAGS', ''); setenv('LDFLAGS', '');
-            else
-                cmd = sprintf('cmake -B build %s . && cmake --build build --target install -- -j4', cmake_flags);
-                status = system(cmd);
-            end
+            cmd = ['cmake -DCMAKE_INSTALL_PREFIX=', install_dir, ' -DBUILD_SHARED_LIBS=OFF . && make -j4 && make install'];
         elseif strcmp(lib, 'libjbig')
             fprintf('Building libjbig using make -C libjbig...\n');
             cmd = ['make -j4 -C libjbig CFLAGS="', CFLAGS, '"'];
@@ -250,23 +170,21 @@ function ok = try_build_library(lib, src_dir, install_dir, mex_flags_cpu)
             cmd = [prefix, './configure --disable-shared --enable-static --prefix=', install_dir, ...
                    ' && make -j4 && make install'];
         end
-
-        [status, output] = system(cmd);
-        if status ~= 0
-            warning('%s build failed:\n%s', lib, output);
-        end
+        status = system(cmd);
     end
 
     ok = (status == 0);
 
-    % === Manual install fallback ===
+    % === Fallback: Manual install for headers and static libs ===
     if ok && ~isfolder(fullfile(install_dir, 'lib'))
         fprintf('Manual install fallback for %s...\n', lib);
         try
             mkdir(fullfile(install_dir, 'lib'));
             mkdir(fullfile(install_dir, 'include'));
+
             headers = dir(fullfile(pwd, '**', '*.h'));
             static_libs = dir(fullfile(pwd, '**', '*.a'));
+
             for k = 1:numel(headers)
                 dst = fullfile(install_dir, 'include', headers(k).name);
                 copyfile(fullfile(headers(k).folder, headers(k).name), dst);
@@ -281,7 +199,7 @@ function ok = try_build_library(lib, src_dir, install_dir, mex_flags_cpu)
         end
     end
 
-    % === Clean shared libs ===
+    % === Remove shared libraries ===
     if exist(fullfile(install_dir, 'lib'), 'dir')
         delete(fullfile(install_dir, 'lib', '*.so*'));
         delete(fullfile(install_dir, 'lib', '*.dylib'));
@@ -289,7 +207,7 @@ function ok = try_build_library(lib, src_dir, install_dir, mex_flags_cpu)
 
     cd(orig_dir);
 
-    % === Optional libtiff validation test ===
+    % === Optional test for libtiff ===
     if ok && strcmp(lib, 'libtiff')
         test_c = 'libtiff_test_mex.c';
         fid = fopen(test_c, 'w');
@@ -351,53 +269,85 @@ function [archive, folder_name, url, version] = get_library_info(lib)
     end
 end
 
-function top = get_top_level_folder(archive_file)
-    % Extracts the top-level folder name from a tar.gz or zip archive
-    [~, tmp_name] = fileparts(tempname);
-    tmp_dir = fullfile(tempdir, tmp_name);
-    mkdir(tmp_dir);
+function top_folder = get_top_level_folder(archive)
+    % Attempt to determine the top-level folder of an archive
+    [~, ~, ext] = fileparts(archive);
 
-    list_path = fullfile(tmp_dir, 'list.txt');
-
-    if endsWith(archive_file, '.tar.gz')
-        cmd = sprintf('tar -tzf "%s" > "%s"', archive_file, list_path);
-    elseif endsWith(archive_file, '.zip')
-        cmd = sprintf('unzip -l "%s" > "%s"', archive_file, list_path);
-    else
-        error('Unsupported archive format: %s', archive_file);
-    end
-
-    status = system(cmd);
-    if status ~= 0 || ~isfile(list_path)
-        error('Failed to list contents of archive: %s', archive_file);
-    end
-
-    lines = strsplit(fileread(list_path), '\n');
-
-    % Extract top-level folders from paths
-    folders = {};
-    for i = 1:numel(lines)
-        line = strtrim(lines{i});
-        if isempty(line) || startsWith(line, 'Length') || startsWith(line, 'Archive')
-            continue;
+    if endsWith(archive, '.tar.gz')
+        [~, output] = system(sprintf('tar -tzf "%s"', archive));
+    elseif endsWith(archive, '.zip')
+        zipInfo = unzip(archive, tempname); % dry-run unzip to inspect
+        % Detect top-level folder from file paths
+        top_dirs = cellfun(@(x) regexp(x, '^[^/\\]+', 'match', 'once'), zipInfo, 'UniformOutput', false);
+        top_dirs = unique(top_dirs(~cellfun('isempty', top_dirs)));
+        if numel(top_dirs) ~= 1
+            error('Unable to determine top-level folder from zip: %s', archive);
         end
-        % Match something like "foldername/file" or "folder/"
-        match = regexp(line, '^([^/\\]+)[/\\]', 'tokens', 'once');
-        if ~isempty(match)
-            folders{end+1} = match{1}; %#ok<AGROW>
-        end
+        top_folder = top_dirs{1};
+        return;
+    else
+        error('Unsupported archive format: %s', archive);
     end
 
-    folders = unique(folders);
-    delete(list_path); rmdir(tmp_dir);
+    lines = strsplit(strtrim(output), newline);
+    tokens = regexp(lines, '^([^/\\]+)/', 'tokens');
+    top_dirs = unique(cellfun(@(x) x{1}, tokens(~cellfun('isempty', tokens)), 'UniformOutput', false));
 
-    if isempty(folders)
-        % Fallback: use archive name (no top-level folder found)
-        [~, top, ~] = fileparts(archive_file);
-        fprintf('No top-level folder found. Using fallback: %s\n', top);
-    elseif numel(folders) == 1
-        top = folders{1};
+    if numel(top_dirs) ~= 1
+        error('Could not determine top-level folder from archive: %s', archive);
+    end
+
+    top_folder = top_dirs{1};
+end
+
+function flags = get_mex_flags_cpu(debug)
+    if ispc
+        if debug
+            flags = {
+                '-R2018a', ...
+                'COMPFLAGS="$COMPFLAGS /std:c++17 /Od /Zi /openmp"', ...
+                'LINKFLAGS="$LINKFLAGS /DEBUG"'
+            };
+        else
+            flags = {
+                '-R2018a', ...
+                'COMPFLAGS="$COMPFLAGS /std:c++17 /O2 /arch:AVX2 /Ot /GL /openmp"', ...
+                'LINKFLAGS="$LINKFLAGS /LTCG"'
+            };
+        end
     else
-        error('Archive contains multiple top-level folders: %s', strjoin(folders, ', '));
+        if debug
+            flags = {
+                '-R2018a', ...
+                'CFLAGS="$CFLAGS -O0 -g -fopenmp"', ...
+                'CXXFLAGS="$CXXFLAGS -O0 -g -fopenmp"', ...
+                'LDFLAGS="$LDFLAGS -g -fopenmp"'
+            };
+        else
+            flags = {
+                '-R2018a', ...
+                'CFLAGS="$CFLAGS -O2 -march=native -fomit-frame-pointer -fopenmp -flto"', ...
+                'CXXFLAGS="$CXXFLAGS -O2 -march=native -fomit-frame-pointer -fopenmp -flto"', ...
+                'LDFLAGS="$LDFLAGS -flto -fopenmp"'
+            };
+        end
     end
 end
+
+function [include_flags, lib_flags, link_flags] = get_link_flags(libs, base_dir)
+    include_flags = {};
+    lib_flags     = {};
+    link_flags    = {};
+
+    for i = 1:numel(libs)
+        lib = libs{i};
+        install_dir = fullfile(base_dir, lib);
+        include_flags{end+1} = ['-I', fullfile(install_dir, 'include')]; %#ok<AGROW>
+        lib_flags{end+1}     = ['-L', fullfile(install_dir, 'lib')];     %#ok<AGROW>
+    end
+
+    link_flags = {
+        '-ltiff', '-ljpeg', '-lz', '-llzma', '-ljbig', '-ldeflate'
+    };
+end
+
