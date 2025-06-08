@@ -880,8 +880,6 @@ function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
         try
             % Extract subregion using fast multithreaded native MEX
             subfilelist = filelist(z_indices);
-            class(subfilelist)
-            subfilelist = cellstr(subfilelist);
             y0 = y_indices(1);
             x0 = x_indices(1);
             H  = numel(y_indices);

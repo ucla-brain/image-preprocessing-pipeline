@@ -322,7 +322,7 @@ def main():
     tmp_script_path.write_text(
         f"addpath('{deconvolve_dir}');\n"
         f"LsDeconv( ...\n"
-        f"    convertCharsToStrings('{args.input.as_posix()}'), ...\n"
+        f"    char('{args.input.as_posix()}'), ...\n"
         f"    {args.dxy * 1000}, ...\n"
         f"    {args.dz * 1000}, ...\n"
         f"    {args.numit}, ...\n"
@@ -349,7 +349,7 @@ def main():
         f"    {'true' if args.convert_to_8bit else 'false'}, ...\n"
         f"    {'true' if args.convert_to_16bit else 'false'}, ...\n"
         f"    {'true' if args.use_fft else 'false'}, ...\n"
-        f"    convertCharsToStrings('{cache_drive_folder.as_posix()}') ...\n"
+        f"    char('{cache_drive_folder.as_posix()}') ...\n"
         f");\n"
     )
     # === Insert Linux-specific optimizations ===
