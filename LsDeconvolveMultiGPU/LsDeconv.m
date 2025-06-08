@@ -593,7 +593,7 @@ function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
         filelist = dir(fullfile(inpath, '*.tiff'));
     end
     filelist = natsortfiles(filelist);
-    filelist = fullfile(inpath, {filelist.name});
+    filelist = cellstr(fullfile(inpath, {filelist.name}));
 
     % flatten the gpus array
     gpus = gpus(:)';
