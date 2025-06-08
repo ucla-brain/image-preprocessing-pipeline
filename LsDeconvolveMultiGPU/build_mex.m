@@ -37,7 +37,7 @@ function build_mex()
     end
 
     % === Set link/include flags ===
-    [include_flags, lib_flags, link_flags] = get_link_flags(lib_dirs);
+    [include_flags, lib_flags, link_flags] = get_link_flags(libs, fullfile(pwd, 'tiff_build'));
 
     % === Build MEX files ===
     build_all_mex_files(mex_flags_cpu, include_flags, lib_flags, link_flags);
