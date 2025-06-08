@@ -1,5 +1,5 @@
 % ===============================
-% build_mex.m (Patched to always use local libtiff)
+% build_mex.m (Patched to always use local libtiff + LTO)
 % ===============================
 % Compile semaphore, LZ4, and GPU MEX files using locally-compiled libtiff.
 % Always use the version in tiff_build/libtiff and never the system or Anaconda version.
@@ -41,18 +41,33 @@ end
 % CPU compile flags
 if ispc
     if debug
-        mex_flags_cpu = {'-R2018a', 'COMPFLAGS="$COMPFLAGS /std:c++17 /Od /Zi /openmp"'};
+        mex_flags_cpu = {
+            '-R2018a', ...
+            'COMPFLAGS="$COMPFLAGS /std:c++17 /Od /Zi /openmp"', ...
+            'LINKFLAGS="$LINKFLAGS /DEBUG"'
+        };
     else
-        mex_flags_cpu = {'-R2018a', 'COMPFLAGS="$COMPFLAGS /std:c++17 /O2 /arch:AVX2 /Ot /GL /openmp "'};
+        mex_flags_cpu = {
+            '-R2018a', ...
+            'COMPFLAGS="$COMPFLAGS /std:c++17 /O2 /arch:AVX2 /Ot /GL /openmp"', ...
+            'LINKFLAGS="$LINKFLAGS /LTCG"'
+        };
     end
 else
     if debug
-        mex_flags_cpu = {'-R2018a', ...
-            'CFLAGS="$CFLAGS -O0 -g -fopenmp"',  'CXXFLAGS="$CXXFLAGS -O0 -g -fopenmp"'};
+        mex_flags_cpu = {
+            '-R2018a', ...
+            'CFLAGS="$CFLAGS -O0 -g -fopenmp"', ...
+            'CXXFLAGS="$CXXFLAGS -O0 -g -fopenmp"', ...
+            'LDFLAGS="$LDFLAGS -g -fopenmp"'
+        };
     else
-        mex_flags_cpu = {'-R2018a', ...
-            'CFLAGS="$CFLAGS -O2 -march=native -fomit-frame-pointer -fopenmp -flto "', ...
-            'CXXFLAGS="$CXXFLAGS -O2 -march=native -fomit-frame-pointer -fopenmp -flto "'};
+        mex_flags_cpu = {
+            '-R2018a', ...
+            'CFLAGS="$CFLAGS -O2 -march=native -fomit-frame-pointer -fopenmp -flto"', ...
+            'CXXFLAGS="$CXXFLAGS -O2 -march=native -fomit-frame-pointer -fopenmp -flto"', ...
+            'LDFLAGS="$LDFLAGS -flto -fopenmp"'
+        };
     end
 end
 
@@ -145,7 +160,6 @@ function ok = try_build_libtiff(libtiff_root, libtiff_install_dir, mex_flags_cpu
     % === Build LibTIFF ===
     if ispc
         archive = ['tiff-', version, '.zip'];
-        % src_folder = ['tiff-', version];
         if ~isfolder(libtiff_root)
             url = ['https://download.osgeo.org/libtiff/tiff-', version, '.zip'];
             system(['curl -L -o ', archive, ' ', url]);
@@ -159,8 +173,15 @@ function ok = try_build_libtiff(libtiff_root, libtiff_install_dir, mex_flags_cpu
         setenv('CXXFLAGS', CXXFLAGS);
 
         % Windows cmake and build command
-        status = system(['cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="', libtiff_install_dir, '" . && ' ...
-                         'cmake --build build --config Release --target install']);
+        status = system([
+            'cmake -B build -DCMAKE_BUILD_TYPE=Release ' ...
+            '-DCMAKE_C_FLAGS_RELEASE="/O2 /GL" ' ...
+            '-DCMAKE_CXX_FLAGS_RELEASE="/O2 /GL" ' ...
+            '-DCMAKE_SHARED_LINKER_FLAGS_RELEASE="/LTCG" ' ...
+            '-DCMAKE_EXE_LINKER_FLAGS_RELEASE="/LTCG" ' ...
+            '-DCMAKE_INSTALL_PREFIX="', libtiff_install_dir, '" . && ' ...
+            'cmake --build build --config Release --target install'
+        ]);
         cd(orig_dir);
 
         % Reset env variables
@@ -178,12 +199,12 @@ function ok = try_build_libtiff(libtiff_root, libtiff_install_dir, mex_flags_cpu
         end
         cd(src_folder);
 
-        % Linux: prefix configure/make with env vars if set
         prefix = '';
         if ~isempty(CFLAGS), prefix = [prefix, 'CFLAGS="', CFLAGS, '" ']; end
         if ~isempty(CXXFLAGS), prefix = [prefix, 'CXXFLAGS="', CXXFLAGS, '" ']; end
 
-        cmd = [prefix, './configure --prefix=', libtiff_install_dir, ' && make -j4 && make install'];
+        cmd = [prefix, './configure --disable-shared --enable-static --prefix=', libtiff_install_dir, ...
+               ' && make -j4 && make install'];
         status = system(cmd);
         cd(orig_dir);
     end
