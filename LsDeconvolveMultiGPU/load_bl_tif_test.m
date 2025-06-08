@@ -117,7 +117,7 @@ end
 %end
 
 %% 3. Little- vs big-endian, 8-/16-bit
-run_big_endian_test();
+run_external_endian_tests();
 
 %% 4. Tile/strip + compression
 fprintf('\n[Suite 4] Tile/strip + compression:\n');
