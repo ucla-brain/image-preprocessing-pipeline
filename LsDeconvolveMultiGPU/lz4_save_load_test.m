@@ -1,5 +1,5 @@
 % ===============================
-% save_load_test.m (with diagnostics for save_lz4_mex write/flush issues)
+% lz4_save_load_test.m (with diagnostics for save_lz4_mex write/flush issues)
 % ===============================
 
 disp('Running save/load LZ4 test and benchmark with integrity and worker MEX checks ...');
@@ -74,11 +74,12 @@ if usejava('desktop')
         return
     end
 else
-    prompt = 'Enter a folder for temp/cache test files (choose a fast drive if possible):\n> ';
-    cache_dir = input(prompt, 's');
+    % Try using env var or fallback
+    cache_dir = getenv('LZ4_TEST_DIR');
     if isempty(cache_dir) || ~isfolder(cache_dir)
-        disp('No valid folder specified; aborting test.');
-        return
+        warning('No valid interactive input possible. Using tempdir() as fallback.');
+        cache_dir = fullfile(tempdir, 'lz4_test_tmp');
+        if ~isfolder(cache_dir), mkdir(cache_dir); end
     end
 end
 fprintf('Using folder for cache/test files: %s\n', cache_dir);
