@@ -209,7 +209,7 @@ def main():
                         help='Max number of elements per GPU block (estimated from GPU memory)')
     parser.add_argument('--gpu-indices', type=int, nargs='+', default=default_gpu_indices,
                         help='List of GPU device indices to use (e.g., 1 2). Default: all detected GPUs.')
-    parser.add_argument('--gpu-workers-per-gpu', type=int, default=3,  # default_workers_per_gpu
+    parser.add_argument('--gpu-workers-per-gpu', type=int, default=default_workers_per_gpu,  # default_workers_per_gpu
                         help='Number of parallel workers per selected GPU')
     parser.add_argument('--cpu-workers', type=int, default=0,
                         help='Number of CPU workers to use (0 disables CPU deconvolution)')
