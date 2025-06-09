@@ -170,6 +170,54 @@ try
         print_fail('Some tests failed.');
     end
 
+%% Benchmark: CPU vs GPU edgetaper_3d over increasing sizes
+try
+    fprintf('\n--- edgetaper_3d Benchmark: CPU vs GPU Performance ---\n');
+    sizes = [64, 128, 256, 384, 512];
+    num_trials = 3;
+    cpu_times = zeros(size(sizes));
+    gpu_times = zeros(size(sizes));
+
+    for i = 1:numel(sizes)
+        sz = [sizes(i), sizes(i), sizes(i)];
+        psf_sz = [7, 7, 15];
+
+        rng(0);  % For reproducibility
+        img = rand(sz, 'single');
+        psf = rand(psf_sz, 'single'); psf = psf / sum(psf(:));
+
+        % CPU timing
+        t_cpu = 0;
+        for t = 1:num_trials
+            tic;
+            edgetaper_3d(img, psf);
+            t_cpu = t_cpu + toc;
+        end
+        cpu_times(i) = t_cpu / num_trials;
+
+        % GPU timing
+        img_gpu = gpuArray(img);
+        psf_gpu = gpuArray(psf);
+        wait(gpuDevice);
+        t_gpu = 0;
+        for t = 1:num_trials
+            tic;
+            edgetaper_3d(img_gpu, psf_gpu);
+            wait(gpuDevice);
+            t_gpu = t_gpu + toc;
+        end
+        gpu_times(i) = t_gpu / num_trials;
+
+        fprintf('Size %4d³ → CPU: %.3fs, GPU: %.3fs, Speedup: %.2fx\n', ...
+            sizes(i), cpu_times(i), gpu_times(i), cpu_times(i)/gpu_times(i));
+    end
+
+    fprintf('Benchmark complete ✅\n');
+catch ME
+    print_fail(['Benchmark section failed: ' ME.message]);
+    all_ok = false;
+end
+
 catch ME
     print_fail(['Test script crashed: ' ME.message]);
 end
