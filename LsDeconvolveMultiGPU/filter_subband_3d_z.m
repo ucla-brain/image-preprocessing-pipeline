@@ -31,7 +31,12 @@ function bl = filter_subband_3d_z(bl, sigma, levels, wavelet)
 
     % Restore original data type
     % Restore original data type (remains on GPU if started as gpuArray)
-    if ~strcmp(classUnderlying(bl), original_class)
+    if isgpuarray(bl)
+        bl_class = classUnderlying(bl);
+    else
+        bl_class = class(bl);
+    end
+    if ~strcmp(bl_class, original_class)
         bl = cast(bl, original_class);
     end
     fprintf("%s: destripe ΔT: %.1f s\n", device, toc(start_time));
