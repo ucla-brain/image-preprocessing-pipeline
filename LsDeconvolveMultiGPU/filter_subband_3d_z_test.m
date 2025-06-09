@@ -6,7 +6,7 @@ function benchmark_filter_subband_3d()
 % filter_subband_3d_z() over various 3D single-precision volumes.
 % ==============================================================
 
-sizes = [32, 64, 128, 256];  % cube sizes (i.e., 32x32x32 to 256³)
+sizes = [32, 64, 128, 256, 512];  % cube sizes (i.e., 32x32x32 to 256³)
 sigma = 1000;
 levels = 0;
 wavelet = 'db9';
