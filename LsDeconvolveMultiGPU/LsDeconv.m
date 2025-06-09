@@ -615,13 +615,13 @@ function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
     % initiate locks and semaphors
     % semkeys are arbitrary non-zero values
     semkey_single = 1e3;
-    semkey_loading_base = 1e4;
+    % semkey_loading_base = 1e4;
     semaphore_create(semkey_single, 1);
     semkey_gpu_base = 1e5;
     % queue('create', semkey_gpu_base, unique_gpus);
     for gpu = unique_gpus
         semaphore_create(semkey_gpu_base + gpu, 1);
-        semaphore_create(gpu + semkey_loading_base, 3);
+        % semaphore_create(gpu + semkey_loading_base, 3);
     end
 
     % start deconvolution
@@ -668,7 +668,7 @@ function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
     semaphore_destroy(semkey_single);
     for gpu = unique_gpus
         semaphore_destroy(semkey_gpu_base + gpu);
-        semaphore_destroy(gpu + semkey_loading_base);
+        % semaphore_destroy(gpu + semkey_loading_base);
     end
     % queue('destroy', semkey_gpu_base);
 
@@ -703,8 +703,8 @@ function deconvolve(filelist, psf, numit, damping, ...
     filter, starting_block, dQueue)
     
     semkey_single = 1e3;
-    semkey_loading_base = 1e4;
-    semkey_loading = semkey_loading_base + gpu;
+    % semkey_loading_base = 1e4;
+    % semkey_loading = semkey_loading_base + gpu;
 
     if stack_info.bit_depth == 8
         rawmax = 255;
@@ -738,13 +738,13 @@ function deconvolve(filelist, psf, numit, damping, ...
         y1     = startp(y);           y2 = endp(y);
         z1     = startp(z);           z2 = endp(z);
 
-        decon_step_is_slower_than_loading = numit > 1; % then load slower to prevent RAM overload
-        if decon_step_is_slower_than_loading, semaphore('wait', semkey_loading); end
+        % decon_step_is_slower_than_loading = numit > 1; % then load slower to prevent RAM overload
+        % if decon_step_is_slower_than_loading, semaphore('wait', semkey_loading); end
         send(dQueue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' is loading ...']);
         loading_start = tic;
         bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info);
         send(dQueue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' is loaded in ' num2str(round(toc(loading_start), 1))]);
-        if decon_step_is_slower_than_loading, semaphore('post', semkey_loading); end
+        % if decon_step_is_slower_than_loading, semaphore('post', semkey_loading); end
 
         % get min-max of raw data stack
         if ~ismember(stack_info.bit_depth, [8, 16])
