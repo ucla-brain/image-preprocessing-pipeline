@@ -374,7 +374,7 @@ function pad = decon_pad_size(psf_sz, use_fft)
     if use_fft
         pad = ceil(psf_sz(:).' * 1);
     else
-        pad = ceil(psf_sz(:).' * 4); % 4 works withou edgetaper_3d; 3 works with edgetaper_3d
+        pad = ceil(psf_sz(:).' * 1); % 4 works withou edgetaper_3d; 3 works with edgetaper_3d
     end
 end
 
