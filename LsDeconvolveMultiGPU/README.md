@@ -8,7 +8,7 @@
 
 ## Overview
 
-This project provides a powerful, multi-GPU-capable implementation of light sheet deconvolution for microscopy image stacks. Originally developed at TU Wien in MATLAB 2018b, it has been significantly extended and maintained by Keivan Moradi at UCLA B.R.A.I.N (Dong Lab) using MATLAB 2023a.
+This project provides a powerful, multi-GPU-capable implementation of light sheet deconvolution for microscopy image stacks. Originally developed at TU Wien in MATLAB 2018b, it has been significantly extended and maintained by Keivan Moradi at UCLA B.R.A.I.N (Dong Lab) using MATLAB 2025a.
 
 It supports large-scale image data processing using GPU acceleration, automatic resuming of incomplete runs, destriping filters, and custom 3D Gaussian pre-filtering.
 
@@ -21,7 +21,23 @@ It supports large-scale image data processing using GPU acceleration, automatic 
 - ✅ 3D Gaussian pre-filtering  
 - ✅ Z-axis destriping  
 - ✅ Fully scriptable with Python CLI wrapper  
-- ✅ Parallel processing and speed optimizations  
+- ✅ Parallel processing and speed optimizations
+
+---
+## Optimizations
+| Module Name         | Module Function            | Language     | Optimization Method                             | Speedup vs MATLAB               |
+|---------------------|----------------------------|--------------|-------------------------------------------------|---------------------------------|
+| load_bl_tif         | 2D tiff to 3D block loader | C++17        | Queue–Based Multithreading                      | 2.5x to 5x                      |
+| save_lz4            | Caching: 3D block save     | C            | Lz4 compression                                 | >50x                            |
+| load_lz4            | Caching: 3D block load     | C            | Lz4 decompression                               | >4x                             |
+| semaphore           | Semaphore                  | C            | Multi-GPU processing                            | #GPUx → 2x–8x in our lab        |
+| gauss3d             | 3D Gaussian filter         | C/CUDA       | GPU acceleration / no extra padding             | 1.5x – 50x                      |
+| edgetaper_3d        | Edge taper                 | C/CUDA       | GPU acceleration                                | 3x – 4x \| fixes edge artifacts |
+| otf_gpu_mex         | OTF calculator             | C/CUDA       | GPU acceleration / bug fix                      | 2x MATLAB GPU                   |
+| deconFFT            | FFT based deconvolution    | MATLAB       | GPU acceleration                                | 2x – 3x Spatial Method          |
+| filter_subband_3d_z | Destriping                 | MATLAB       | GPU acceleration                                | 8x                              |
+| decwrap             | Python Wrapper             | Python       | Optimal block size calculation                  | Processes larger blocks         |
+| postproceses_save   | 8bit ↔16bit conversion     | MATLAB       | 8bit → Float32 → Decon → 16bit                  | High Quality 16bit              |
 
 ---
 
@@ -40,10 +56,10 @@ Key scripts check file paths, validate image data, and provide meaningful error 
 
 ## Requirements
 
-- MATLAB 2023a (tested)
+- MATLAB 2025a (tested)
 - CUDA-compatible NVIDIA GPUs (with at least 12 GB vRAM recommended)
 - `nvidia-smi` available in system path (for Python wrapper)
-- MATLAB Parallel Computing Toolbox
+- MATLAB Parallel Computing, Image Processing, and Wavelet Toolboxe
 
 ---
 
@@ -61,16 +77,14 @@ Key scripts check file paths, validate image data, and provide meaningful error 
    ```matlab
    run('build_mex.m')
    ```
-   
+   This will compile the MEX files needed for interprocess communication.
+
 3. Install numactl:
 
     From command line:
    ```bash
    sudo apt install numactl
    ```
-
-   This will compile the MEX files needed for interprocess communication.
-
 ---
 
 ## ⚠️ Windows CUDA/Visual Studio Compatibility
@@ -256,25 +270,20 @@ These settings will help prevent memory allocation failures during GPU-intensive
 
 LsDeconvMultiGPU supports both **FFT-based** and **spatial domain** deconvolution. Each method has advantages and tradeoffs:
 
-- **FFT-based deconvolution** is significantly faster, but it requires **approximately 5× more VRAM**. This limits the maximum block size that can be processed at once.
+- **FFT-based deconvolution** is significantly faster, but it requires **approximately 4× more VRAM**. This limits the maximum block size that can be processed at once.
 - **Spatial domain deconvolution**, while more memory-efficient, is slower and computationally more expensive when calculating convolutions directly.
+
 
 
 ## ⚙️ Performance Comparison: FFT vs Spatial Deconvolution
 
 Deconvolution of a 3D volume with **8266 × 12778 × 7912 = 835,688,764,576 voxels**
 
-| GPU                | Method    | Num. Blocks | Effective Block Size (X×Y×Z) | Voxels/Block     | Time/Iteration | Throughput (vox/s) | Notes                              |
-|--------------------|-----------|-------------|------------------------------|------------------|----------------|--------------------|------------------------------------|
-| **RTX 2080 TI**    | FFT-based | 5984        | 759×791×248                  | 148,891,512      | 1.1 s          | ~1.35 × 10⁹        | Memory-limited, fast per block     |
-|                    | Spatial   | 1728        | 1527×1591×248                | 602,505,336      | 1.3 s          | ~4.63 × 10⁸        | 28% faster in practice than FFT    |
-| **A100 80 GB** | FFT-based | 600         | 855×855×2516                 | 1,839,258,900    | 6.0 s          | ~3.07 × 10⁸        | Higher VRAM allows large FFT blocks|
-|                    | Spatial   | 560         | 891×951×2422                 | 2,052,259,902    | 12.7 s         | ~1.62 × 10⁸        | Significantly slower than FFT      |
 
-🧠 **Key Insights**:
-- On low-VRAM GPUs (e.g., RTX 2080), spatial deconvolution can outperform FFT due to memory pressure and block fragmentation.
-- On high-VRAM GPUs (e.g., A100 80 GB), FFT-based deconvolution shows ~2x speed advantage by processing large blocks in fewer iterations.
-
+| GPUs | vRAM  | Deconvolution Method   | Destriping | Elapsed Time | Speedup |
+|------|-------|------------------------|------------|--------------|---------|
+| 2    | 11 GB | Spatial Domain         | No         | 13h:32m      |         |
+| 2    | 11 GB | Frequency Domain (FFT) | No         | 05h:53m      | 2.3x    |
 
 ## Licensing and Attribution
 
