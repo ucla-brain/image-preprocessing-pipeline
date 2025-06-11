@@ -1152,7 +1152,7 @@ function postprocess_save(...
 
         % Async load all blocks in this Z slab
         for j = 1:length(block_inds)
-            async_load(j) = pool.parfeval(@load_bl_lz4, 1, blocklist{block_inds(j)}, semkey_multi);
+            async_load(j) = pool.parfeval(@load_bl_lz4, 1, blocklist{block_inds(j)}, semkey_multi, j);
         end
 
         % Assign each block directly using p1/p2 indices
@@ -1229,7 +1229,8 @@ function postprocess_save(...
     semaphore_destroy(semkey_multi);
 end
 
-function bl = load_bl_lz4(path, semkey)
+function bl = load_bl_lz4(path, semkey, j)
+    pause(min(0.1 + 0.05 * j, 1));
     semaphore('wait', semkey);
     cleanup = onCleanup(@() semaphore('post', semkey));
     max_tries = 3; tries = 0; loaded = false;
@@ -1244,7 +1245,7 @@ function bl = load_bl_lz4(path, semkey)
     end
     if ~loaded
         delete(path);
-        error('Deleting corrupted file: %s after %d tries\n', path, max_tries);
+        error('load_bl_lz4:CorruptFile', 'Deleting corrupted file %s after %d tries.', path, max_tries);
     end
 end
 
