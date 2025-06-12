@@ -1230,7 +1230,7 @@ function postprocess_save(...
 end
 
 function bl = load_bl_lz4(path, semkey, j)
-    pause(min(0.1 * (j - 1), 1));
+    pause(min(0.1 * max(0, j - 1), 1));
     semaphore('wait', semkey);
     cleanup = onCleanup(@() semaphore('post', semkey));
     max_tries = 3; tries = 0; loaded = false;
