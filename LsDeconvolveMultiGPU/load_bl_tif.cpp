@@ -113,7 +113,21 @@ struct MatlabString {
     char* ptr;
     explicit MatlabString(const mxArray* arr) : ptr(mxArrayToUTF8String(arr)) {
         if (!ptr)
-            mexErrMsgIdAndTxt("load_bl_tif:BadString", "Failed to convert string from mxArray");
+            mexErrMsgIdAndTxt("load_bl_tif:BadString",
+                              "Failed to convert string from mxArray");
+    }
+    // Prevent accidental copies (which would double-free)
+    MatlabString(const MatlabString&)            = delete;
+    MatlabString& operator=(const MatlabString&) = delete;
+    // Allow moves
+    MatlabString(MatlabString&& other) noexcept : ptr(other.ptr) { other.ptr = nullptr; }
+    MatlabString& operator=(MatlabString&& other) noexcept {
+        if (this != &other) {
+            mxFree(ptr);
+            ptr = other.ptr;
+            other.ptr = nullptr;
+        }
+        return *this;
     }
     ~MatlabString() { mxFree(ptr); }
     const char* get() const { return ptr; }
