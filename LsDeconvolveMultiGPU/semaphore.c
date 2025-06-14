@@ -73,10 +73,10 @@ typedef struct {
 } semaphore_map_result_t;
 
 static void close_handles(semaphore_map_result_t* mapped) {
-    if (mapped->sem) UnmapViewOfFile(mapped->sem);
-    if (mapped->hMutex) CloseHandle(mapped->hMutex);
-    if (mapped->hEvent) CloseHandle(mapped->hEvent);
-    if (mapped->hMap)   CloseHandle(mapped->hMap);
+    if (mapped->sem)    { UnmapViewOfFile(mapped->sem);   mapped->sem   = NULL; }
+    if (mapped->hMutex) { CloseHandle(mapped->hMutex);    mapped->hMutex = NULL;}
+    if (mapped->hEvent) { CloseHandle(mapped->hEvent);    mapped->hEvent = NULL;}
+    if (mapped->hMap)   { CloseHandle(mapped->hMap);      mapped->hMap  = NULL; }
 }
 
 static semaphore_map_result_t map_shared_semaphore(int key, BOOL create) {
@@ -119,7 +119,7 @@ static semaphore_map_result_t map_shared_semaphore(int key, BOOL create) {
     return result;
 }
 
-shared_semaphore_t* create_semaphore(int key, int initval, int* out_count) {
+semaphore_map_result_t create_semaphore(int key, int initval, int* out_count) {
     semaphore_map_result_t mapped = map_shared_semaphore(key, TRUE);
 
     //if (!mapped.sem->initialized || mapped.is_new) {
@@ -149,7 +149,14 @@ shared_semaphore_t* create_semaphore(int key, int initval, int* out_count) {
 
     if (out_count) *out_count = mapped.sem->count;
     ReleaseMutex(mapped.hMutex);
-    return mapped.sem;
+
+    /* Detach: prevent the callee’s copy from leaking duplicate handles */
+    mapped.hMap   = NULL;
+    mapped.hMutex = NULL;
+    mapped.hEvent = NULL;
+    mapped.sem    = NULL;
+
+    return mapped;
 }
 
 semaphore_map_result_t get_semaphore(int key) {
@@ -397,8 +404,15 @@ static void destroy_semaphore(int key) {
     name_for_key(shm_name, sizeof(shm_name), SHM_NAME_FMT, key);
 
     sem_t* sem = sem_open(sem_name, 0);
-    int shm_fd = shm_open(shm_name, O_RDWR, 0666);
-    if (sem == SEM_FAILED || shm_fd == -1) return;
+    int    shm_fd = shm_open(shm_name, O_RDWR, 0666);
+    if (sem == SEM_FAILED) {
+        if (shm_fd != -1) close(shm_fd);
+        return;
+    }
+    if (shm_fd == -1) {
+        sem_close(sem);
+        return;
+    }
 
     semaphore_meta_t* meta = mmap(NULL, sizeof(semaphore_meta_t), PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
     if (meta != MAP_FAILED) {
@@ -432,7 +446,10 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
             int initval = 1;
             if (nrhs > 2)
                 initval = (int)(mxGetScalar(prhs[2]) + 0.5);
-            create_semaphore(key, initval, &count);
+            {
+                semaphore_map_result_t mapped = create_semaphore(key, initval, &count);
+                close_handles(&mapped);
+            }
             break;
         }
         case 'w':
