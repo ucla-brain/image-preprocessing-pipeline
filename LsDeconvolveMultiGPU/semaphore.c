@@ -18,7 +18,32 @@
  * - Shared memory stores the semaphore state: `count`, `max`, and a `terminate` flag.
  * - Synchronization is implemented using platform-native primitives:
  *     - Windows: Named file mappings, mutexes, and manual-reset events.
- *     - POSIX: POSIX named semaphores (`sem_t`) and `shm_open` for metadata.
+ *     - POSIX : POSIX named semaphores (`sem_t`) and `shm_open` for metadata.
+ *
+ * Why Not Use Windows Native Semaphore API:
+ * -----------------------------------------
+ * This implementation avoids using `CreateSemaphore` on Windows because its behavior
+ * does not fully match POSIX semaphores. Specific differences include:
+ *
+ * 1. No access to current count:
+ *    - POSIX provides `sem_getvalue()` to read the semaphore count.
+ *    - Windows semaphores provide no such visibility.
+ *
+ * 2. Over-release is possible:
+ *    - `ReleaseSemaphore` may increment the count beyond the intended max.
+ *    - POSIX semaphores enforce the maximum count strictly.
+ *
+ * 3. No destroy/wake mechanism:
+ *    - POSIX code uses a shared `terminate` flag and wakes waiters explicitly.
+ *    - Windows semaphores block unconditionally and cannot be interrupted.
+ *
+ * 4. No manual signaling:
+ *    - POSIX uses `sem_post` and memory signaling.
+ *    - Windows semaphores cannot be manually reset or woken like `Event` objects.
+ *
+ * As a result, the Windows implementation uses a named shared memory region
+ * plus a mutex and event to accurately mirror POSIX behavior, including
+ * precise count tracking and cooperative termination.
  *
  * Supported Operations:
  * ---------------------
@@ -42,9 +67,7 @@
  * ------------------------
  * - Windows: Uses `CreateFileMapping`, `CreateMutex`, and `CreateEvent`.
  * - POSIX  : Uses `sem_open`, `shm_open`, `mmap`, and `munmap`.
- *
  */
-
 
 #include <errno.h>
 #include <stdio.h>
@@ -58,363 +81,370 @@
 
 #if defined(_WIN32)
 
-#include <windows.h>
-#include <strsafe.h>
+#   include <windows.h>
+#   include <strsafe.h>
 
-#define MUTEX_NAME_PREFIX "Local\\"
-#define EVENT_NAME_PREFIX "Local\\"
-#define SHM_NAME_PREFIX   "Local\\"
+#   define MUTEX_NAME_PREFIX "Local\\"
+#   define EVENT_NAME_PREFIX "Local\\"
+#   define SHM_NAME_PREFIX   "Local\\"
 
-// Shared structure for semaphore state in memory
-typedef struct {
-    int initialized;
-    int count;
-    int max;
-    volatile int terminate;
-} shared_semaphore_t;
+    // Shared structure used across processes
+    typedef struct {
+        int initialized;
+        int count;
+        int max;
+        volatile int terminate;
+    } shared_semaphore_t;
 
-// Handles and pointer for mapped semaphore
-typedef struct {
-    shared_semaphore_t* sem;
-    HANDLE hMap;
-    HANDLE hMutex;
-    HANDLE hEvent;
-    BOOL is_new;
-} semaphore_map_result_t;
+    // Wrapper for Windows handle and pointer state
+    typedef struct {
+        shared_semaphore_t* sem;
+        HANDLE hMap;
+        HANDLE hMutex;
+        HANDLE hEvent;
+        BOOL is_new;
+    } semaphore_map_result_t;
 
-// Safely close all handles
-static void close_handles(semaphore_map_result_t* mapped) {
-    if (mapped->sem)   UnmapViewOfFile(mapped->sem);
-    if (mapped->hMutex) CloseHandle(mapped->hMutex);
-    if (mapped->hEvent) CloseHandle(mapped->hEvent);
-    if (mapped->hMap)   CloseHandle(mapped->hMap);
-}
-
-// Platform-specific shared memory and synchronization object creation
-static semaphore_map_result_t map_shared_semaphore(int key, BOOL create) {
-    semaphore_map_result_t result = {0};
-    size_t size = sizeof(shared_semaphore_t);
-    char basename[64], shmname[128], mname[128], ename[128];
-
-    snprintf(basename, sizeof(basename), SEMAPHORE_KEY_NAME_FMT, key);
-    StringCchPrintfA(shmname, 128, "%s%s", SHM_NAME_PREFIX, basename);
-    StringCchPrintfA(mname, 128, "%s%s_MUTEX", MUTEX_NAME_PREFIX, basename);
-    StringCchPrintfA(ename, 128, "%s%s_EVENT", EVENT_NAME_PREFIX, basename);
-
-    if (create) {
-        result.hMap = CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, (DWORD)size, shmname);
-        if (!result.hMap) mexErrMsgIdAndTxt("semaphore:create", "Failed to create file mapping");
-        result.is_new = (GetLastError() != ERROR_ALREADY_EXISTS);
-    } else {
-        result.hMap = OpenFileMappingA(FILE_MAP_ALL_ACCESS, FALSE, shmname);
-        if (!result.hMap) mexErrMsgIdAndTxt("semaphore:notfound", "Semaphore %d not found. Use 'create' first.", key);
-        result.is_new = FALSE;
+    // Close all Windows handles associated with a semaphore
+    static void close_handles(semaphore_map_result_t* mapped) {
+        if (mapped->sem)   UnmapViewOfFile(mapped->sem);
+        if (mapped->hMutex) CloseHandle(mapped->hMutex);
+        if (mapped->hEvent) CloseHandle(mapped->hEvent);
+        if (mapped->hMap)   CloseHandle(mapped->hMap);
     }
 
-    result.sem = (shared_semaphore_t*)MapViewOfFile(result.hMap, FILE_MAP_ALL_ACCESS, 0, 0, size);
-    if (!result.sem) {
-        CloseHandle(result.hMap);
-        mexErrMsgIdAndTxt("semaphore:map", "Failed to map shared memory for key %d", key);
+    // Map the shared memory and synchronization objects (create or open)
+    static semaphore_map_result_t map_shared_semaphore(int key, BOOL create) {
+        semaphore_map_result_t result = {0};
+        size_t size = sizeof(shared_semaphore_t);
+        char basename[64], shmname[128], mname[128], ename[128];
+
+        snprintf(basename, sizeof(basename), SEMAPHORE_KEY_NAME_FMT, key);
+        StringCchPrintfA(shmname, 128, "%s%s", SHM_NAME_PREFIX, basename);
+        StringCchPrintfA(mname, 128, "%s%s_MUTEX", MUTEX_NAME_PREFIX, basename);
+        StringCchPrintfA(ename, 128, "%s%s_EVENT", EVENT_NAME_PREFIX, basename);
+
+        if (create) {
+            result.hMap = CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, (DWORD)size, shmname);
+            if (!result.hMap) mexErrMsgIdAndTxt("semaphore:create", "Failed to create file mapping");
+            result.is_new = (GetLastError() != ERROR_ALREADY_EXISTS);
+        } else {
+            result.hMap = OpenFileMappingA(FILE_MAP_ALL_ACCESS, FALSE, shmname);
+            if (!result.hMap) mexErrMsgIdAndTxt("semaphore:notfound", "Semaphore %d not found. Use 'create' first.", key);
+            result.is_new = FALSE;
+        }
+
+        result.sem = (shared_semaphore_t*)MapViewOfFile(result.hMap, FILE_MAP_ALL_ACCESS, 0, 0, size);
+        if (!result.sem) {
+            CloseHandle(result.hMap);
+            mexErrMsgIdAndTxt("semaphore:map", "Failed to map shared memory for key %d", key);
+        }
+
+        result.hMutex = CreateMutexA(NULL, FALSE, mname);
+        if (!result.hMutex) {
+            UnmapViewOfFile(result.sem);
+            CloseHandle(result.hMap);
+            mexErrMsgIdAndTxt("semaphore:mutex", "Failed to create/open named mutex");
+        }
+
+        result.hEvent = CreateEventA(NULL, TRUE, FALSE, ename);
+        if (!result.hEvent) {
+            CloseHandle(result.hMutex);
+            UnmapViewOfFile(result.sem);
+            CloseHandle(result.hMap);
+            mexErrMsgIdAndTxt("semaphore:event", "Failed to create/open named event");
+        }
+
+        WaitForSingleObject(result.hMutex, INFINITE);
+        return result;
     }
 
-    result.hMutex = CreateMutexA(NULL, FALSE, mname);
-    if (!result.hMutex) {
-        UnmapViewOfFile(result.sem);
-        CloseHandle(result.hMap);
-        mexErrMsgIdAndTxt("semaphore:mutex", "Failed to create/open named mutex");
+    // Create or reinitialize a semaphore (idempotent)
+    static int create_semaphore(int key, int initval, int* out_count) {
+        semaphore_map_result_t mapped = map_shared_semaphore(key, TRUE);
+
+        if (mapped.is_new) {
+            ZeroMemory(mapped.sem, sizeof(shared_semaphore_t));
+            mapped.sem->count = initval;
+            mapped.sem->max = initval;
+            mapped.sem->initialized = 1;
+        } else {
+            if (!mapped.sem->initialized) {
+                ReleaseMutex(mapped.hMutex);
+                close_handles(&mapped);
+                mexErrMsgIdAndTxt("semaphore:uninitialized", "Semaphore %d is in inconsistent state.", key);
+            }
+        }
+
+        if (out_count) *out_count = mapped.sem->count;
+
+        ReleaseMutex(mapped.hMutex);
+        close_handles(&mapped);
+        return 0;
     }
 
-    result.hEvent = CreateEventA(NULL, TRUE, FALSE, ename);
-    if (!result.hEvent) {
-        CloseHandle(result.hMutex);
-        UnmapViewOfFile(result.sem);
-        CloseHandle(result.hMap);
-        mexErrMsgIdAndTxt("semaphore:event", "Failed to create/open named event");
-    }
-
-    WaitForSingleObject(result.hMutex, INFINITE);
-    return result;
-}
-
-// Create or reinitialize a semaphore
-static int create_semaphore(int key, int initval, int* out_count) {
-    semaphore_map_result_t mapped = map_shared_semaphore(key, TRUE);
-
-    if (mapped.is_new) {
-        ZeroMemory(mapped.sem, sizeof(shared_semaphore_t));
-        mapped.sem->count = initval;
-        mapped.sem->max = initval;
-        mapped.sem->initialized = 1;
-    } else {
+    // Open existing semaphore (must already exist and be initialized)
+    static semaphore_map_result_t get_semaphore(int key) {
+        semaphore_map_result_t mapped = map_shared_semaphore(key, FALSE);
         if (!mapped.sem->initialized) {
             ReleaseMutex(mapped.hMutex);
             close_handles(&mapped);
-            mexErrMsgIdAndTxt("semaphore:uninitialized", "Semaphore %d is in inconsistent state.", key);
+            mexErrMsgIdAndTxt("semaphore:uninitialized", "Semaphore %d exists but not initialized.", key);
+        }
+        return mapped;
+    }
+
+    // Wait operation with blocking loop and terminate check
+    static int wait_semaphore(int key) {
+        semaphore_map_result_t mapped = get_semaphore(key);
+
+        while (1) {
+            if (mapped.sem->terminate) {
+                ReleaseMutex(mapped.hMutex);
+                close_handles(&mapped);
+                mexErrMsgIdAndTxt("semaphore:terminated", "Semaphore %d has been destroyed.", key);
+            }
+
+            if (mapped.sem->count > 0) {
+                mapped.sem->count--;
+                int current_count = mapped.sem->count;
+                if (current_count == 0) ResetEvent(mapped.hEvent);
+                ReleaseMutex(mapped.hMutex);
+                close_handles(&mapped);
+                return current_count;
+            }
+
+            ReleaseMutex(mapped.hMutex);
+            WaitForSingleObject(mapped.hEvent, INFINITE);
+            WaitForSingleObject(mapped.hMutex, INFINITE);
         }
     }
 
-    if (out_count) *out_count = mapped.sem->count;
+    // Post operation with max check
+    static int post_semaphore(int key) {
+        semaphore_map_result_t mapped = get_semaphore(key);
 
-    ReleaseMutex(mapped.hMutex);
-    close_handles(&mapped);
-    return 0;
-}
-
-// Open an existing semaphore
-static semaphore_map_result_t get_semaphore(int key) {
-    semaphore_map_result_t mapped = map_shared_semaphore(key, FALSE);
-    if (!mapped.sem->initialized) {
-        ReleaseMutex(mapped.hMutex);
-        close_handles(&mapped);
-        mexErrMsgIdAndTxt("semaphore:uninitialized", "Semaphore %d exists but not initialized.", key);
-    }
-    return mapped;
-}
-
-// Wait operation
-static int wait_semaphore(int key) {
-    semaphore_map_result_t mapped = get_semaphore(key);
-
-    while (1) {
         if (mapped.sem->terminate) {
             ReleaseMutex(mapped.hMutex);
             close_handles(&mapped);
             mexErrMsgIdAndTxt("semaphore:terminated", "Semaphore %d has been destroyed.", key);
         }
 
-        if (mapped.sem->count > 0) {
-            mapped.sem->count--;
-            int current_count = mapped.sem->count;
-            if (current_count == 0) ResetEvent(mapped.hEvent);
-            ReleaseMutex(mapped.hMutex);
-            close_handles(&mapped);
-            return current_count;
+        if (mapped.sem->count >= mapped.sem->max) {
+            mexWarnMsgIdAndTxt("semaphore:post", "Semaphore %d already at max count (%d).", key, mapped.sem->max);
+        } else {
+            mapped.sem->count++;
         }
 
+        int current_count = mapped.sem->count;
+        SetEvent(mapped.hEvent);
         ReleaseMutex(mapped.hMutex);
-        WaitForSingleObject(mapped.hEvent, INFINITE);
+        close_handles(&mapped);
+        return current_count;
+    }
+
+    // Mark the semaphore as terminated and wake all waiters
+    static void destroy_semaphore(int key) {
+        semaphore_map_result_t mapped = {0};
+        __try {
+            mapped = map_shared_semaphore(key, FALSE);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return; // Ignore if mapping fails
+        }
+
+        if (!mapped.sem) {
+            close_handles(&mapped);
+            return;
+        }
+
         WaitForSingleObject(mapped.hMutex, INFINITE);
-    }
-}
-
-// Post operation
-static int post_semaphore(int key) {
-    semaphore_map_result_t mapped = get_semaphore(key);
-
-    if (mapped.sem->terminate) {
+        mapped.sem->terminate = 1;
+        SetEvent(mapped.hEvent);
         ReleaseMutex(mapped.hMutex);
         close_handles(&mapped);
-        mexErrMsgIdAndTxt("semaphore:terminated", "Semaphore %d has been destroyed.", key);
     }
-
-    if (mapped.sem->count >= mapped.sem->max) {
-        mexWarnMsgIdAndTxt("semaphore:post", "Semaphore %d already at max count (%d).", key, mapped.sem->max);
-    } else {
-        mapped.sem->count++;
-    }
-
-    int current_count = mapped.sem->count;
-    SetEvent(mapped.hEvent);
-    ReleaseMutex(mapped.hMutex);
-    close_handles(&mapped);
-    return current_count;
-}
-
-// Destroy operation
-static void destroy_semaphore(int key) {
-    semaphore_map_result_t mapped = {0};
-    __try {
-        mapped = map_shared_semaphore(key, FALSE);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return; // silently ignore if not found
-    }
-
-    if (!mapped.sem) {
-        close_handles(&mapped);
-        return;
-    }
-
-    WaitForSingleObject(mapped.hMutex, INFINITE);
-    mapped.sem->terminate = 1;
-    SetEvent(mapped.hEvent);
-    ReleaseMutex(mapped.hMutex);
-    close_handles(&mapped);
-}
 
 #else  // POSIX
 
-#include <fcntl.h>
-#include <sys/mman.h>
-#include <sys/stat.h>
-#include <unistd.h>
-#include <semaphore.h>
+#   include <fcntl.h>
+#   include <sys/mman.h>
+#   include <sys/stat.h>
+#   include <unistd.h>
+#   include <semaphore.h>
 
-#define SEM_NAME_FMT "/matlab_mex_sem_%d"
-#define SHM_NAME_FMT "/matlab_mex_meta_%d"
+#   define SEM_NAME_FMT "/matlab_mex_sem_%d"
+#   define SHM_NAME_FMT "/matlab_mex_meta_%d"
 
-typedef struct {
-    int initialized;
-    int max;
-    volatile int terminate;
-} semaphore_meta_t;
+    // Structure stored in shared memory for additional metadata
+    typedef struct {
+        int initialized;
+        int max;
+        volatile int terminate;
+    } semaphore_meta_t;
 
-static void name_for_key(char* out, size_t outlen, const char* fmt, int key) {
-    snprintf(out, outlen, fmt, key);
-}
-
-static int create_semaphore(int key, int initval, int* out_count) {
-    char sem_name[64], shm_name[64];
-    name_for_key(sem_name, sizeof(sem_name), SEM_NAME_FMT, key);
-    name_for_key(shm_name, sizeof(shm_name), SHM_NAME_FMT, key);
-
-    sem_t* sem = sem_open(sem_name, O_CREAT | O_EXCL, 0666, initval);
-    if (sem == SEM_FAILED && errno == EEXIST)
-        sem = sem_open(sem_name, 0);
-    if (sem == SEM_FAILED)
-        mexErrMsgIdAndTxt("semaphore:create", "sem_open failed: %s", strerror(errno));
-
-    int shm_fd = shm_open(shm_name, O_CREAT | O_RDWR, 0666);
-    if (shm_fd == -1) {
-        sem_close(sem);
-        sem_unlink(sem_name);
-        mexErrMsgIdAndTxt("semaphore:shm_open", "Failed to open shared memory: %s", strerror(errno));
+    // Construct a named resource string based on a key
+    static void name_for_key(char* out, size_t outlen, const char* fmt, int key) {
+        snprintf(out, outlen, fmt, key);
     }
 
-    if (ftruncate(shm_fd, sizeof(semaphore_meta_t)) == -1) {
-        close(shm_fd);
-        sem_close(sem);
-        sem_unlink(sem_name);
-        shm_unlink(shm_name);
-        mexErrMsgIdAndTxt("semaphore:truncate", "Failed to resize shared memory: %s", strerror(errno));
-    }
+    // Create or attach to a named semaphore and shared metadata
+    static int create_semaphore(int key, int initval, int* out_count) {
+        char sem_name[64], shm_name[64];
+        name_for_key(sem_name, sizeof(sem_name), SEM_NAME_FMT, key);
+        name_for_key(shm_name, sizeof(shm_name), SHM_NAME_FMT, key);
 
-    semaphore_meta_t* meta = mmap(NULL, sizeof(semaphore_meta_t), PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
-    if (meta == MAP_FAILED) {
-        close(shm_fd);
-        sem_close(sem);
-        sem_unlink(sem_name);
-        shm_unlink(shm_name);
-        mexErrMsgIdAndTxt("semaphore:mmap", "Failed to map shared memory.");
-    }
+        sem_t* sem = sem_open(sem_name, O_CREAT | O_EXCL, 0666, initval);
+        if (sem == SEM_FAILED && errno == EEXIST)
+            sem = sem_open(sem_name, 0);
+        if (sem == SEM_FAILED)
+            mexErrMsgIdAndTxt("semaphore:create", "sem_open failed: %s", strerror(errno));
 
-    if (!meta->initialized) {
-        meta->max = initval;
-        meta->terminate = 0;
-        meta->initialized = 1;
-    }
+        int shm_fd = shm_open(shm_name, O_CREAT | O_RDWR, 0666);
+        if (shm_fd == -1) {
+            sem_close(sem);
+            sem_unlink(sem_name);
+            mexErrMsgIdAndTxt("semaphore:shm_open", "Failed to open shared memory: %s", strerror(errno));
+        }
 
-    if (out_count) {
-        int val;
-        if (sem_getvalue(sem, &val) == 0)
-            *out_count = val;
-    }
+        if (ftruncate(shm_fd, sizeof(semaphore_meta_t)) == -1) {
+            close(shm_fd);
+            sem_close(sem);
+            sem_unlink(sem_name);
+            shm_unlink(shm_name);
+            mexErrMsgIdAndTxt("semaphore:truncate", "Failed to resize shared memory: %s", strerror(errno));
+        }
 
-    munmap(meta, sizeof(semaphore_meta_t));
-    close(shm_fd);
-    sem_close(sem);
-    return 0;
-}
+        semaphore_meta_t* meta = mmap(NULL, sizeof(semaphore_meta_t), PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+        if (meta == MAP_FAILED) {
+            close(shm_fd);
+            sem_close(sem);
+            sem_unlink(sem_name);
+            shm_unlink(shm_name);
+            mexErrMsgIdAndTxt("semaphore:mmap", "Failed to map shared memory.");
+        }
 
-static int wait_semaphore(int key) {
-    char sem_name[64], shm_name[64];
-    name_for_key(sem_name, sizeof(sem_name), SEM_NAME_FMT, key);
-    name_for_key(shm_name, sizeof(shm_name), SHM_NAME_FMT, key);
+        if (!meta->initialized) {
+            meta->max = initval;
+            meta->terminate = 0;
+            meta->initialized = 1;
+        }
 
-    sem_t* sem = sem_open(sem_name, 0);
-    if (sem == SEM_FAILED)
-        mexErrMsgIdAndTxt("semaphore:wait", "Semaphore %d not found.", key);
+        if (out_count) {
+            int val;
+            if (sem_getvalue(sem, &val) == 0)
+                *out_count = val;
+        }
 
-    int shm_fd = shm_open(shm_name, O_RDWR, 0666);
-    if (shm_fd == -1) {
-        sem_close(sem);
-        mexErrMsgIdAndTxt("semaphore:shm_open", "Shared memory for key %d not found.", key);
-    }
-
-    semaphore_meta_t* meta = mmap(NULL, sizeof(semaphore_meta_t), PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
-    if (meta == MAP_FAILED) {
-        close(shm_fd);
-        sem_close(sem);
-        mexErrMsgIdAndTxt("semaphore:mmap", "Failed to map metadata for key %d", key);
-    }
-
-    if (meta->terminate) {
         munmap(meta, sizeof(semaphore_meta_t));
         close(shm_fd);
         sem_close(sem);
-        mexErrMsgIdAndTxt("semaphore:terminated", "Semaphore %d has been destroyed.", key);
+        return 0;
     }
 
-    sem_wait(sem);
-    int val = -1;
-    sem_getvalue(sem, &val);
+    // Wait for the semaphore to become available (blocking)
+    static int wait_semaphore(int key) {
+        char sem_name[64], shm_name[64];
+        name_for_key(sem_name, sizeof(sem_name), SEM_NAME_FMT, key);
+        name_for_key(shm_name, sizeof(shm_name), SHM_NAME_FMT, key);
 
-    munmap(meta, sizeof(semaphore_meta_t));
-    close(shm_fd);
-    sem_close(sem);
-    return val;
-}
+        sem_t* sem = sem_open(sem_name, 0);
+        if (sem == SEM_FAILED)
+            mexErrMsgIdAndTxt("semaphore:wait", "Semaphore %d not found.", key);
 
-static int post_semaphore(int key) {
-    char sem_name[64], shm_name[64];
-    name_for_key(sem_name, sizeof(sem_name), SEM_NAME_FMT, key);
-    name_for_key(shm_name, sizeof(shm_name), SHM_NAME_FMT, key);
+        int shm_fd = shm_open(shm_name, O_RDWR, 0666);
+        if (shm_fd == -1) {
+            sem_close(sem);
+            mexErrMsgIdAndTxt("semaphore:shm_open", "Shared memory for key %d not found.", key);
+        }
 
-    sem_t* sem = sem_open(sem_name, 0);
-    if (sem == SEM_FAILED)
-        mexErrMsgIdAndTxt("semaphore:post", "Semaphore %d not found.", key);
+        semaphore_meta_t* meta = mmap(NULL, sizeof(semaphore_meta_t), PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+        if (meta == MAP_FAILED) {
+            close(shm_fd);
+            sem_close(sem);
+            mexErrMsgIdAndTxt("semaphore:mmap", "Failed to map metadata for key %d", key);
+        }
 
-    int shm_fd = shm_open(shm_name, O_RDWR, 0666);
-    if (shm_fd == -1) {
-        sem_close(sem);
-        mexErrMsgIdAndTxt("semaphore:shm_open", "Shared memory for key %d not found.", key);
-    }
+        if (meta->terminate) {
+            munmap(meta, sizeof(semaphore_meta_t));
+            close(shm_fd);
+            sem_close(sem);
+            mexErrMsgIdAndTxt("semaphore:terminated", "Semaphore %d has been destroyed.", key);
+        }
 
-    semaphore_meta_t* meta = mmap(NULL, sizeof(semaphore_meta_t), PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
-    if (meta == MAP_FAILED) {
-        close(shm_fd);
-        sem_close(sem);
-        mexErrMsgIdAndTxt("semaphore:mmap", "Failed to map metadata for key %d", key);
-    }
-
-    int val;
-    sem_getvalue(sem, &val);
-    if (val >= meta->max) {
-        mexWarnMsgIdAndTxt("semaphore:post", "Cannot post: semaphore %d already at max count (%d).", key, meta->max);
-    } else {
-        sem_post(sem);
+        sem_wait(sem);
+        int val = -1;
         sem_getvalue(sem, &val);
-    }
 
-    munmap(meta, sizeof(semaphore_meta_t));
-    close(shm_fd);
-    sem_close(sem);
-    return val;
-}
-
-static void destroy_semaphore(int key) {
-    char sem_name[64], shm_name[64];
-    name_for_key(sem_name, sizeof(sem_name), SEM_NAME_FMT, key);
-    name_for_key(shm_name, sizeof(shm_name), SHM_NAME_FMT, key);
-
-    sem_t* sem = sem_open(sem_name, 0);
-    int shm_fd = shm_open(shm_name, O_RDWR, 0666);
-    if (sem == SEM_FAILED || shm_fd == -1) return;
-
-    semaphore_meta_t* meta = mmap(NULL, sizeof(semaphore_meta_t), PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
-    if (meta != MAP_FAILED) {
-        meta->terminate = 1;
         munmap(meta, sizeof(semaphore_meta_t));
+        close(shm_fd);
+        sem_close(sem);
+        return val;
     }
 
-    sem_close(sem);
-    sem_unlink(sem_name);
-    close(shm_fd);
-    shm_unlink(shm_name);
-}
+    // Post to the semaphore (increment), respecting max limit
+    static int post_semaphore(int key) {
+        char sem_name[64], shm_name[64];
+        name_for_key(sem_name, sizeof(sem_name), SEM_NAME_FMT, key);
+        name_for_key(shm_name, sizeof(shm_name), SHM_NAME_FMT, key);
 
-#endif  // End of POSIX section
+        sem_t* sem = sem_open(sem_name, 0);
+        if (sem == SEM_FAILED)
+            mexErrMsgIdAndTxt("semaphore:post", "Semaphore %d not found.", key);
 
-// MEX entry point
+        int shm_fd = shm_open(shm_name, O_RDWR, 0666);
+        if (shm_fd == -1) {
+            sem_close(sem);
+            mexErrMsgIdAndTxt("semaphore:shm_open", "Shared memory for key %d not found.", key);
+        }
+
+        semaphore_meta_t* meta = mmap(NULL, sizeof(semaphore_meta_t), PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+        if (meta == MAP_FAILED) {
+            close(shm_fd);
+            sem_close(sem);
+            mexErrMsgIdAndTxt("semaphore:mmap", "Failed to map metadata for key %d", key);
+        }
+
+        int val;
+        sem_getvalue(sem, &val);
+        if (val >= meta->max) {
+            mexWarnMsgIdAndTxt("semaphore:post", "Cannot post: semaphore %d already at max count (%d).", key, meta->max);
+        } else {
+            sem_post(sem);
+            sem_getvalue(sem, &val);
+        }
+
+        munmap(meta, sizeof(semaphore_meta_t));
+        close(shm_fd);
+        sem_close(sem);
+        return val;
+    }
+
+    // Destroy the semaphore and release all waiters
+    static void destroy_semaphore(int key) {
+        char sem_name[64], shm_name[64];
+        name_for_key(sem_name, sizeof(sem_name), SEM_NAME_FMT, key);
+        name_for_key(shm_name, sizeof(shm_name), SHM_NAME_FMT, key);
+
+        sem_t* sem = sem_open(sem_name, 0);
+        int shm_fd = shm_open(shm_name, O_RDWR, 0666);
+        if (sem == SEM_FAILED || shm_fd == -1)
+            return;
+
+        semaphore_meta_t* meta = mmap(NULL, sizeof(semaphore_meta_t), PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+        if (meta != MAP_FAILED) {
+            meta->terminate = 1;
+            munmap(meta, sizeof(semaphore_meta_t));
+        }
+
+        sem_close(sem);
+        sem_unlink(sem_name);
+        close(shm_fd);
+        shm_unlink(shm_name);
+    }
+
+#endif  // End of POSIX
+
+// MATLAB MEX entry point: parses command and dispatches to correct operation
 void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
     if (nrhs < 2)
         mexErrMsgTxt("Requires at least 2 inputs: directive and key.");
