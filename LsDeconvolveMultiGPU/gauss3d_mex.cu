@@ -253,62 +253,55 @@ extern "C" void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* 
                 ksize[i] = 2 * (int)ceil(3.0 * sigma_double[i]) + 1;
         }
 
-        // --------- OOM-aware cudaMalloc with retry -----------
+        // --------- Now that all validation is done, allocate GPU buffer --------
         int max_retries = 2;
         int retries = 0;
         cudaError_t alloc_err;
         while (retries < max_retries) {
             alloc_err = cudaMalloc(&buffer, N * sizeof(float));
-            if (alloc_err == cudaSuccess && buffer != nullptr) {
+            if (alloc_err == cudaSuccess && buffer != nullptr)
                 break;
-            } else {
-                size_t free_bytes = 0, total_bytes = 0;
-                cudaMemGetInfo(&free_bytes, &total_bytes);
-                mexWarnMsgIdAndTxt("gauss3d:cuda",
-                    "CUDA OOM: Tried to allocate %.2f MB (Free: %.2f MB). Attempt %d/%d.",
-                    N * sizeof(float) / 1024.0 / 1024.0,
-                    free_bytes / 1024.0 / 1024.0,
-                    retries+1, max_retries);
-                cudaDeviceSynchronize();
-                cudaFree(0);
-                std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-                retries++;
-                buffer = nullptr;
-            }
+            size_t free_bytes = 0, total_bytes = 0;
+            cudaMemGetInfo(&free_bytes, &total_bytes);
+            mexWarnMsgIdAndTxt("gauss3d:cuda",
+                "CUDA OOM: Tried to allocate %.2f MB (Free: %.2f MB). Attempt %d/%d.",
+                N * sizeof(float) / 1024.0 / 1024.0,
+                free_bytes / 1024.0 / 1024.0,
+                retries + 1, max_retries);
+            cudaDeviceSynchronize();
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+            retries++;
         }
         if (alloc_err != cudaSuccess || !buffer) {
-            mexWarnMsgIdAndTxt("gauss3d:cuda",
-                "CUDA OOM: Could not allocate workspace buffer (%.2f MB) after %d attempts. Try reducing input size or call reset(gpuDevice).",
+            mexErrMsgIdAndTxt("gauss3d:cuda",
+                "CUDA OOM: Could not allocate workspace buffer (%.2f MB) after %d attempts.",
                 N * sizeof(float) / 1024.0 / 1024.0, max_retries);
-            error_flag = true;
-            goto cleanup;
         }
 
-        float sigma[3] = { (float)sigma_double[0], (float)sigma_double[1], (float)sigma_double[2] };
-        gauss3d_separable_float((float*)ptr, buffer, nx, ny, nz, sigma, ksize, &error_flag);
+        // --------- Allocate a fresh output gpuArray (in-place copy is unsafe) ---------
+        out_gpu = mxGPUCreateGPUArray(3, sz, mxSINGLE_CLASS, mxREAL, MX_GPU_DO_NOT_INITIALIZE);
+        float* dst_ptr = static_cast<float*>(mxGPUGetData(out_gpu));
+        CUDA_CHECK(cudaMemcpy(dst_ptr, ptr, N * sizeof(float), cudaMemcpyDeviceToDevice));
 
-        // Synchronize before returning to MATLAB to catch any lingering errors
+        float sigma[3] = { (float)sigma_double[0], (float)sigma_double[1], (float)sigma_double[2] };
+        gauss3d_separable_float(dst_ptr, buffer, nx, ny, nz, sigma, ksize, &error_flag);
+
+        // Final sync before returning
         CUDA_CHECK(cudaDeviceSynchronize());
 
-        // Output result (returns the same array, modifies in-place)
-        out_gpu = img_gpu;
+        // Return as mxArray
         plhs[0] = mxGPUCreateMxArrayOnGPU(out_gpu);
 
     } catch (...) {
         mexPrintf("Unknown error in gauss3d_mex.cu. Possible OOM or kernel failure.\n");
         error_flag = true;
-        goto cleanup;
     }
 
-cleanup:
-    if (buffer) {
+    // ----------- CLEANUP (always reached) --------------
+    if (buffer)
         cudaFree(buffer);
-        cudaDeviceSynchronize();  // Make sure all memory is actually freed
-        cudaFree(0);
-        buffer = nullptr;
-    }
-    // Do not destroy img_gpu if returned to MATLAB
-    if (error_flag) {
-        // Additional error logging can go here
-    }
+    if (img_gpu)
+        mxGPUDestroyGPUArray(img_gpu);
+    if (out_gpu)
+        mxGPUDestroyGPUArray(out_gpu);
 }
