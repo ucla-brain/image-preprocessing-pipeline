@@ -299,6 +299,54 @@
         return current_count;
     }
 
+    // Destroy semaphore: sets terminate flag and signals all waiters
+    static void destroy_semaphore(int key)
+    {
+        char basename[64], shmname[128], mname[128], ename[128];
+        snprintf(basename, sizeof(basename), SEMAPHORE_KEY_NAME_FMT, key);
+        StringCchPrintfA(shmname, 128, "%s%s", SHM_NAME_PREFIX, basename);
+        StringCchPrintfA(mname, 128, "%s%s_MUTEX", MUTEX_NAME_PREFIX, basename);
+        StringCchPrintfA(ename, 128, "%s%s_EVENT", EVENT_NAME_PREFIX, basename);
+
+        HANDLE hMap = OpenFileMappingA(FILE_MAP_ALL_ACCESS, FALSE, shmname);
+        if (!hMap) {
+            // If file mapping not found, assume already destroyed
+            return;
+        }
+
+        shared_semaphore_t* sem = (shared_semaphore_t*)MapViewOfFile(hMap, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(shared_semaphore_t));
+        if (!sem) {
+            CloseHandle(hMap);
+            return;
+        }
+
+        HANDLE hMutex = CreateMutexA(NULL, FALSE, mname);
+        if (!hMutex) {
+            UnmapViewOfFile(sem);
+            CloseHandle(hMap);
+            return;
+        }
+
+        HANDLE hEvent = CreateEventA(NULL, TRUE, FALSE, ename);
+        if (!hEvent) {
+            CloseHandle(hMutex);
+            UnmapViewOfFile(sem);
+            CloseHandle(hMap);
+            return;
+        }
+
+        WaitForSingleObject(hMutex, INFINITE);
+        sem->terminate = 1;
+        SetEvent(hEvent);  // Wake up all waiting threads
+        ReleaseMutex(hMutex);
+
+        // Cleanup
+        CloseHandle(hEvent);
+        CloseHandle(hMutex);
+        UnmapViewOfFile(sem);
+        CloseHandle(hMap);
+    }
+
 #else  // POSIX
 
 #   include <fcntl.h>
