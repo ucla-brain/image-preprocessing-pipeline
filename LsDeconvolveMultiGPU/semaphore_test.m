@@ -1,64 +1,116 @@
 function semaphore_test()
-    key = 12345;
+%SEMAPHORE_TEST  Exhaustive unit test for semaphore MEX
+%
+%   - Verifies create / wait / post / destroy semantics.
+%   - Checks max-count saturation + warning.
+%   - Confirms idempotency of create and destroy.
+%   - Tests that destroy() cleanly wakes blocked workers.
+%   - Runs under both serial and parallel contexts.
 
-    fprintf('--- Testing semaphore MEX interface ---\n');
+    key = 12345;                            % test key (unique per host)
+    maxCount = 2;                           % initial count
+    cleanup = onCleanup(@() semaphore('d', key));  %#ok<NASGU>
 
-    % Ensure semaphore is fully cleaned before test
-    try
-        semaphore('d', key);
-    catch
-        disp('[Info] Semaphore did not exist initially (as expected).');
-    end
+    fprintf('\n===== semaphore_test =====\n');
 
-    % Create
-    semaphore('c', key, 2);
-    disp('Creating semaphore with count = 2...');
+    %% 0. ensure pristine start
+    silentDestroy(key);
 
-    % Wait twice (non-blocking)
-    val1 = semaphore('w', key);
-    val2 = semaphore('w', key);
-    fprintf('First wait: value = %d\n', val1);
-    fprintf('Second wait: value = %d\n', val2);
+    %% 1. CREATE (idempotent)
+    fprintf('[1] create ... ');
+    count = semaphore('c', key, maxCount);
+    assert(count == maxCount, 'Create should return initial count');
+    % recreate should be silently accepted
+    semaphore('c', key, maxCount);
+    disp('OK');
 
-    % Background wait (should block)
-    disp('Spawning a wait() in background (should block until post)...');
-    f = parfeval(@semaphore, 1, 'w', key);
+    %% 2. SERIAL wait / post
+    fprintf('[2] wait / post non-blocking ... ');
+    assert(semaphore('w', key) == maxCount-1, 'Count incorrect after 1st wait');
+    assert(semaphore('w', key) == maxCount-2, 'Count incorrect after 2nd wait');
+    % now at zero → next wait must block, so test in background
+    disp('OK');
 
-    % Give it a moment to reach blocking state
-    pause(1.0);
+    %% 3. BLOCKING wait  (parfeval)
+    pool = ensurePool;
+    fWait = parfeval(@semaphore, 1, 'w', key);   % will block
+    pause(1);                                    % give it time to hit sem_wait
 
-    % Post once to release
-    disp('Posting to unblock wait...');
-    val_post = semaphore('p', key);
-    fprintf('Posted: new value = %d\n', val_post);
+    %% 4. POST should unblock the waiter
+    fprintf('[3] post to unblock ... ');
+    assert(semaphore('p', key) == 1, 'Post did not set count to 1');
+    val = fetchOutputs(fWait);
+    assert(val == 0, 'Background wait should observe count==0');
+    disp('OK');
 
-    % Wait for background to finish
-    val_wait = fetchOutputs(f);
-    fprintf('Background wait completed: value = %d\n', val_wait);
+    %% 5. SATURATION WARNING
+    fprintf('[4] saturation warning ... ');
+    lastwarn(''); %#ok<LASTW>
+    semaphore('p', key);      % count==1 → reaches max (2)
+    [warnStr, warnId] = lastwarn;
+    assert(isempty(warnStr), 'Unexpected warning at max count');
 
-    % Try posting beyond max
-    disp('Posting once more...');
-    semaphore('p', key);  % This brings count to max
-    disp('Trying to post beyond max (should warn)...');
-    semaphore('p', key);  % Should warn
+    semaphore('p', key);      % one over max → should warn
+    [warnStr, warnId] = lastwarn;
+    assert(~isempty(warnStr) && strcmpi(warnId, 'semaphore:post'), ...
+        'Expected warning not raised when posting past max');
+    disp('OK');
 
-    % Idempotent destroy test
-    disp('Destroying semaphore...');
-    semaphore('d', key);
+    %% 6. DESTROY must wake blockers
+    fprintf('[5] destroy wakes waiters ... ');
+    fBlock = parfeval(@blocker,1,key);   % starts wait → will block
+    pause(0.5);
+    semaphore('d', key);                 % should wake & terminate
+    res = fetchOutputs(fBlock);
+    assert(strcmp(res,'TERMINATED'), 'Destroy did not wake blocked waiters');
+    disp('OK');
 
-    disp('Calling destroy again (should silently succeed)...');
-    semaphore('d', key);  % Now silently ignored
+    %% 7. DESTROY idempotent + post/wait failure modes
+    fprintf('[6] destroy idempotent ... ');
+    silentDestroy(key);          % second destroy – no error
+    silentDestroy(99999);        % on never-created key – no error
+    disp('OK');
 
-    % Call destroy before create (should silently pass)
-    disp('Calling destroy before create (should silently pass)...');
-    semaphore('d', 99999);  % never created
-
-    % Confirm wait throws error
+    fprintf('[7] wait after destroy throws ... ');
     try
         semaphore('w', key);
+        error('wait did not throw after destroy');
     catch ME
-        fprintf('Caught expected error: %s\n', ME.message);
+        assert(contains(ME.identifier,'semaphore:terminated') || ...
+               contains(ME.message,'destroyed'), ...
+               'Unexpected error after destroy');
     end
+    disp('OK');
 
-    disp('All tests passed.');
+    fprintf('\nALL semaphore tests passed ✅\n');
+end
+
+%% ------------------------------------------------------------------------
+function silentDestroy(k)
+% destroy without error if absent
+    try, semaphore('d',k); catch, end
+end
+
+%% ------------------------------------------------------------------------
+function out = blocker(k)
+% Helper for section 6 – waits until destroy wakes it
+    try
+        semaphore('w',k);
+        out = 'UNBLOCKED';
+    catch
+        out = 'TERMINATED';
+    end
+end
+
+%% ------------------------------------------------------------------------
+function pool = ensurePool
+% start or reuse a local parpool (processes or threads)
+    pool = gcp('nocreate');
+    if isempty(pool)
+        try
+            pool = parpool('threads');   % newer MATLAB
+        catch
+            pool = parpool;              % fallback to default profile
+        end
+    end
 end
