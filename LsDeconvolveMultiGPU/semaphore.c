@@ -420,26 +420,36 @@
     }
 
     // Destroy the semaphore and release all waiters
-    static void destroy_semaphore(int key) {
+    static void destroy_semaphore(int key)
+    {
         char sem_name[64], shm_name[64];
         name_for_key(sem_name, sizeof(sem_name), SEM_NAME_FMT, key);
         name_for_key(shm_name, sizeof(shm_name), SHM_NAME_FMT, key);
 
-        sem_t* sem = sem_open(sem_name, 0);
-        int shm_fd = shm_open(shm_name, O_RDWR, 0666);
+        sem_t* sem   = sem_open(sem_name, 0);
+        int    shm_fd = shm_open(shm_name, O_RDWR, 0666);
         if (sem == SEM_FAILED || shm_fd == -1)
-            return;
+            return;                         /* nothing to destroy */
 
-        semaphore_meta_t* meta = mmap(NULL, sizeof(semaphore_meta_t), PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+        semaphore_meta_t* meta = mmap(NULL, sizeof(semaphore_meta_t),
+                                      PROT_READ | PROT_WRITE,
+                                      MAP_SHARED, shm_fd, 0);
         if (meta != MAP_FAILED) {
+            /* Mark for termination *first* so waiters exit their loops */
             meta->terminate = 1;
+
+            /* Wake (up to) max waiters to make sure everyone sees the flag */
+            for (int i = 0; i < meta->max; ++i)
+                sem_post(sem);
+
             munmap(meta, sizeof(semaphore_meta_t));
         }
 
-        sem_close(sem);
-        sem_unlink(sem_name);
+        /* Normal cleanup */
+        sem_close(sem);          /* the handle we opened */
+        sem_unlink(sem_name);    /* remove the name */
         close(shm_fd);
-        shm_unlink(shm_name);
+        shm_unlink(shm_name);    /* remove shared-mem metadata */
     }
 
 #endif  // End of POSIX
