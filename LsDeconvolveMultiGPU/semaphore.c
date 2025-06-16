@@ -472,30 +472,36 @@
         return ret;                             /* ★ safe, no dangling ptr */
     }
 
-    static void destroy_semaphore(int key) {
+    static void destroy_semaphore(int key)
+    {
         char sem_name[64], shm_name[64];
         name_for_key(sem_name, sizeof(sem_name), SEM_NAME_FMT, key);
         name_for_key(shm_name, sizeof(shm_name), SHM_NAME_FMT, key);
 
+        /* Open existing semaphore / SHM — if they’re already gone, nothing to do */
         sem_t* sem = sem_open(sem_name, 0);
         int shm_fd = shm_open(shm_name, O_RDWR, 0666);
         if (sem == SEM_FAILED || shm_fd == -1)
-            return;
+            return;                     /* silently ignore */
 
-        semaphore_meta_t* meta = mmap(NULL, sizeof(semaphore_meta_t), PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+        semaphore_meta_t* meta = mmap(NULL, sizeof(semaphore_meta_t),
+                                      PROT_READ | PROT_WRITE, MAP_SHARED,
+                                      shm_fd, 0);
         if (meta != MAP_FAILED) {
+            CHECK_META_ABI(meta);
+            /* --- mark destroyed and wake all potential waiters --- */
             meta->terminate = 1;
-            // post up to max count to wake up waiters
             for (int i = 0; i < meta->max; ++i) {
-                sem_post(sem);
+                sem_post(sem);          /* wake (up to) max blocked waiters   */
             }
             munmap(meta, sizeof(semaphore_meta_t));
         }
 
+        /* Close our handles only – DO NOT unlink names.
+           Leaving the names allows other processes to open the
+           semaphore, see terminate=1, and handle it gracefully. */
         sem_close(sem);
-        sem_unlink(sem_name);
         close(shm_fd);
-        shm_unlink(shm_name);
     }
 
 #endif  // End of POSIX
