@@ -86,7 +86,9 @@
 ==============================================================================*/
 
 
-#include "mex.hpp"
+#define NOMINMAX  // prevents Windows min/max macro pollution
+#include "mex.h"
+#include "matrix.h"
 #include "tiffio.h"
 #include <vector>
 #include <string>
