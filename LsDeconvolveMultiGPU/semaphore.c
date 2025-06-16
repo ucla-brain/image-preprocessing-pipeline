@@ -147,7 +147,12 @@
         StringCchPrintfA(ename, 128, "%s%s_EVENT", EVENT_NAME_PREFIX, basename);
 
         if (create) {
-            /* … unchanged … */
+            result.hMap = CreateFileMappingA(INVALID_HANDLE_VALUE, NULL,
+                PAGE_READWRITE, 0, (DWORD)size, shmname);
+            if (!result.hMap)
+                mexErrMsgIdAndTxt("semaphore:create", "CreateFileMapping failed: %d", GetLastError());
+
+            result.is_new = (GetLastError() != ERROR_ALREADY_EXISTS);
         } else {
             /* ── OPEN EXISTING ────────────────────────────────────────────── */
             result.hMap = OpenFileMappingA(FILE_MAP_ALL_ACCESS, FALSE, shmname);
