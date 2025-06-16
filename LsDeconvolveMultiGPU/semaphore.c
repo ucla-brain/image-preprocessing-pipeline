@@ -220,23 +220,40 @@
         semaphore_map_result_t mapped = get_semaphore(key);
 
         while (1) {
+            // Check if destroy() was called before entering wait
             if (mapped.sem->terminate) {
                 ReleaseMutex(mapped.hMutex);
                 close_handles(&mapped);
-                mexErrMsgIdAndTxt("semaphore:terminated", "Semaphore %d has been destroyed.", key);
+                mexErrMsgIdAndTxt("semaphore:terminated",
+                    "Semaphore %d has been destroyed.", key);
             }
 
             if (mapped.sem->count > 0) {
                 mapped.sem->count--;
+
+                // 🔸 Re-check after decrementing
+                if (mapped.sem->terminate) {
+                    ReleaseMutex(mapped.hMutex);
+                    close_handles(&mapped);
+                    mexErrMsgIdAndTxt("semaphore:terminated",
+                        "Semaphore %d has been destroyed.", key);
+                }
+
                 int current_count = mapped.sem->count;
-                if (current_count == 0) ResetEvent(mapped.hEvent);
+                if (current_count == 0)
+                    ResetEvent(mapped.hEvent);
+
                 ReleaseMutex(mapped.hMutex);
                 close_handles(&mapped);
                 return current_count;
             }
 
             ReleaseMutex(mapped.hMutex);
+
+            // Block until post() or destroy() signals the event
             WaitForSingleObject(mapped.hEvent, INFINITE);
+
+            // Re-acquire the mutex before retrying
             WaitForSingleObject(mapped.hMutex, INFINITE);
         }
     }
@@ -361,24 +378,40 @@
         int shm_fd = shm_open(shm_name, O_RDWR, 0666);
         if (shm_fd == -1) {
             sem_close(sem);
-            mexErrMsgIdAndTxt("semaphore:shm_open", "Shared memory for key %d not found.", key);
+            mexErrMsgIdAndTxt("semaphore:shm_open",
+                "Shared memory for key %d not found.", key);
         }
 
-        semaphore_meta_t* meta = mmap(NULL, sizeof(semaphore_meta_t), PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+        semaphore_meta_t* meta = mmap(NULL, sizeof(semaphore_meta_t),
+                                       PROT_READ | PROT_WRITE, MAP_SHARED,
+                                       shm_fd, 0);
         if (meta == MAP_FAILED) {
             close(shm_fd);
             sem_close(sem);
-            mexErrMsgIdAndTxt("semaphore:mmap", "Failed to map metadata for key %d", key);
+            mexErrMsgIdAndTxt("semaphore:mmap",
+                "Failed to map metadata for key %d", key);
         }
 
+        // 🔸 Check before blocking
         if (meta->terminate) {
             munmap(meta, sizeof(semaphore_meta_t));
             close(shm_fd);
             sem_close(sem);
-            mexErrMsgIdAndTxt("semaphore:terminated", "Semaphore %d has been destroyed.", key);
+            mexErrMsgIdAndTxt("semaphore:terminated",
+                "Semaphore %d has been destroyed.", key);
         }
 
-        sem_wait(sem);
+        sem_wait(sem);  // May be woken by destroy()
+
+        // 🔸 Check again after wake
+        if (meta->terminate) {
+            munmap(meta, sizeof(semaphore_meta_t));
+            close(shm_fd);
+            sem_close(sem);
+            mexErrMsgIdAndTxt("semaphore:terminated",
+                "Semaphore %d has been destroyed.", key);
+        }
+
         int new_val = __sync_fetch_and_sub(&meta->count, 1) - 1;
 
         munmap(meta, sizeof(semaphore_meta_t));
