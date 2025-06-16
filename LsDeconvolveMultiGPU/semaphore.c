@@ -1,42 +1,50 @@
-/* semaphore.c - Cross-platform shared memory semaphore for MATLAB MEX
-
-   Author: Keivan Moradi (2025) @ B.R.A.I.N. Lab, UCLA
-   License: GPLv3
-
- * This file implements a named semaphore mechanism that works on both
- * Windows and POSIX (Linux/macOS) platforms using shared memory and
- * synchronization primitives. It is designed for use in parallel and
- * multi-process MATLAB environments where native semaphores are either
- * unavailable or incompatible.
+/*
+ * semaphore.c - Cross-platform shared memory semaphore for MATLAB MEX
+ *
+ * Author: Keivan Moradi (2025) @ B.R.A.I.N. Lab, UCLA
+ * License: GPLv3
+ *
+ * Overview:
+ * ---------
+ * This file implements a named, multi-process semaphore mechanism for MATLAB,
+ * portable across Windows and POSIX (Linux/macOS) systems.
+ *
+ * Designed for use in parallel and multi-process MATLAB environments where
+ * native inter-process semaphores are unavailable or incompatible.
  *
  * Core Concepts:
+ * --------------
  * - Each semaphore is identified by a unique integer key.
- * - A shared memory region holds the semaphore structure (count, max, flags).
- * - Mutual exclusion is achieved using a cross-platform mutex.
- * - Notification of waiting threads/processes is done using platform-specific events:
- *     - Windows: Event objects + Mutex + memory mapping
- *     - POSIX: pthread mutex + condition variable in shared memory
+ * - Shared memory stores the semaphore state: `count`, `max`, and a `terminate` flag.
+ * - Synchronization is implemented using platform-native primitives:
+ *     - Windows: Named file mappings, mutexes, and manual-reset events.
+ *     - POSIX: POSIX named semaphores (`sem_t`) and `shm_open` for metadata.
  *
  * Supported Operations:
- * 1. create: Initializes (or recreates) the semaphore. If it already exists,
- *    it is reset and any waiting threads are released. Safe to call multiple times.
+ * ---------------------
+ * 1. create  : Initializes or re-attaches to a semaphore. If it already exists,
+ *              the count is preserved (strictly idempotent). Safe to call multiple times.
  *
- * 2. post: Increments the semaphore count. If already at maximum, a warning is issued
- *    but the operation is still successful. Waiting threads are signaled.
+ * 2. wait    : Decrements the semaphore count. Blocks if count is zero.
+ *              Returns when `post()` is called or if `destroy()` is invoked.
  *
- * 3. wait: Decrements the semaphore count, blocking the caller if count is zero.
- *    Wakes up when post() occurs or if the semaphore is destroyed.
+ * 3. post    : Increments the semaphore count. If already at maximum, emits a warning.
  *
- * 4. destroy: Marks the semaphore as terminated and releases all waiting threads.
- *    Also cleans up shared memory and synchronization primitives.
+ * 4. destroy : Marks the semaphore as terminated, wakes all waiters, and unlinks
+ *              shared memory and semaphore objects for safe cleanup.
+ *
+ * Synchronization Guarantees:
+ * ----------------------------
+ * - All operations are safe under concurrent access.
+ * - State cleanup is guaranteed on both success and error paths.
  *
  * Platform Compatibility:
- * - Windows implementation uses named file mappings, mutexes, and events.
- * - POSIX implementation uses shm_open, mmap, pthread_mutex, and pthread_cond.
+ * ------------------------
+ * - Windows: Uses `CreateFileMapping`, `CreateMutex`, and `CreateEvent`.
+ * - POSIX  : Uses `sem_open`, `shm_open`, `mmap`, and `munmap`.
  *
- * All behaviors are carefully matched across platforms to ensure identical
- * semantics and reliability under concurrent access.
  */
+
 
 #include <errno.h>
 #include <stdio.h>
