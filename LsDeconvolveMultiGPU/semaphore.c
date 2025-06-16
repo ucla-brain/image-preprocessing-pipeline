@@ -388,47 +388,55 @@
     }
 
     // Post to the semaphore (increment), enforcing atomic max limit
-    static int post_semaphore(int key) {
+    static int post_semaphore(int key)
+    {
         char sem_name[64], shm_name[64];
         name_for_key(sem_name, sizeof(sem_name), SEM_NAME_FMT, key);
         name_for_key(shm_name, sizeof(shm_name), SHM_NAME_FMT, key);
 
-        // Open POSIX named semaphore
+        /* Open resources ---------------------------------------------------- */
         sem_t* sem = sem_open(sem_name, 0);
         if (sem == SEM_FAILED)
             mexErrMsgIdAndTxt("semaphore:post", "Semaphore %d not found.", key);
 
-        // Open shared memory for metadata
         int shm_fd = shm_open(shm_name, O_RDWR, 0666);
         if (shm_fd == -1) {
             sem_close(sem);
             mexErrMsgIdAndTxt("semaphore:shm_open", "Shared memory for key %d not found.", key);
         }
 
-        // Map shared metadata structure
-        semaphore_meta_t* meta = mmap(NULL, sizeof(semaphore_meta_t), PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+        semaphore_meta_t* meta =
+            mmap(NULL, sizeof(semaphore_meta_t), PROT_READ | PROT_WRITE,
+                 MAP_SHARED, shm_fd, 0);
         if (meta == MAP_FAILED) {
             close(shm_fd);
             sem_close(sem);
             mexErrMsgIdAndTxt("semaphore:mmap", "Failed to map metadata for key %d", key);
         }
 
-        // Atomically increment count and check against max
-        int prev = __sync_fetch_and_add(&meta->count, 1);
+        /* Atomic increment -------------------------------------------------- */
+        int prev   = __sync_fetch_and_add(&meta->count, 1);
         int newval = prev + 1;
-        if (newval > meta->max) {
-            // Roll back and issue warning
+        int ret;                                /* ★ value to return */
+        int maxval = meta->max;                 /* ★ cache before munmap */
+
+        if (newval > maxval) {
+            /* Roll back and warn */
             __sync_fetch_and_sub(&meta->count, 1);
-            mexWarnMsgIdAndTxt("semaphore:post", "Cannot post: semaphore %d already at max count (%d).", key, meta->max);
+            mexWarnMsgIdAndTxt("semaphore:post",
+                "Cannot post: semaphore %d already at max count (%d).",
+                key, maxval);
+            ret = maxval;                       /* ★ stay at max */
         } else {
-            sem_post(sem);  // Only post if within bounds
+            sem_post(sem);                      /* within bounds */
+            ret = newval;                       /* ★ updated count */
         }
 
-        // Clean up
+        /* Clean-up ---------------------------------------------------------- */
         munmap(meta, sizeof(semaphore_meta_t));
         close(shm_fd);
         sem_close(sem);
-        return (newval > meta->max) ? meta->max : newval;
+        return ret;                             /* ★ safe, no dangling ptr */
     }
 
     static void destroy_semaphore(int key) {
