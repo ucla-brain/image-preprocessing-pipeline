@@ -33,7 +33,9 @@
     ------
         - This function is typically paired with `load_lz4_mex` for reading.
         - Chunk size is fixed at 1 GiB for compatibility and performance.
-        - Header is 33 KiB and written twice (once before and once after chunking).
+        - Header is 33 KiB and written twice:
+              once as a placeholder before compression,
+              and again at the end with final chunk sizes.
         - All errors trigger full cleanup to avoid leaks or corrupt files.
 */
 
@@ -47,124 +49,137 @@
 // --- CONSTANTS ---
 #define MAX_DIMS 16
 #define MAX_CHUNKS 2048
-#define HEADER_SIZE 33280  // >= 4+1+1+8*16+8+8+4+8*2048*2 = 32922, rounded up
-#define DEFAULT_CHUNK_SIZE ((uint64_t)1 << 30)  // 1GB
+#define HEADER_SIZE 33280  // 33 KiB, enough for large arrays
+#define DEFAULT_CHUNK_SIZE ((uint64_t)1 << 30)  // 1 GiB
 
-#define MAGIC_NUMBER 0x4C5A4331  // 'LZ4C' (chunked)
+#define MAGIC_NUMBER 0x4C5A4331  // 'LZ4C'
 
 enum dtype_enum { DT_DOUBLE = 1, DT_SINGLE = 2, DT_UINT16 = 3 };
 
 typedef struct {
     uint32_t magic;
-    uint8_t dtype;
-    uint8_t ndims;
+    uint8_t  dtype;
+    uint8_t  ndims;
     uint64_t dims[MAX_DIMS];
     uint64_t total_uncompressed;
     uint64_t chunk_size;
     uint32_t num_chunks;
     uint64_t chunk_uncomp[MAX_CHUNKS];
     uint64_t chunk_comp[MAX_CHUNKS];
-    uint8_t padding[HEADER_SIZE - (4 + 1 + 1 + 8 * MAX_DIMS + 8 + 8 + 4 + 8 * MAX_CHUNKS * 2)];
+    uint8_t  padding[HEADER_SIZE - (4 + 1 + 1 + 8 * MAX_DIMS + 8 + 8 + 4 + 8 * MAX_CHUNKS * 2)];
 } file_header_t;
 
-static int write_header(FILE* f, file_header_t* hdr) {
-    size_t n = fwrite(hdr, 1, HEADER_SIZE, f);
-    return (n == HEADER_SIZE) ? 0 : -1;
+// --- Safe write of header block ---
+static int write_header(FILE* file, const file_header_t* header) {
+    return (fwrite(header, 1, HEADER_SIZE, file) == HEADER_SIZE) ? 0 : -1;
 }
 
-#define FAIL(fmt, ...)                        \
-    do {                                      \
-        if (f) fclose(f);                     \
-        if (fname) mxFree(fname);             \
-        mexErrMsgIdAndTxt(fmt, __VA_ARGS__);  \
+// --- Cleanup-and-error macro ---
+#define FAIL(id, ...)                        \
+    do {                                     \
+        if (file) fclose(file);              \
+        if (filename) mxFree(filename);      \
+        mexErrMsgIdAndTxt(id, __VA_ARGS__);  \
     } while (0)
 
 void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
 {
+    (void)nlhs; (void)plhs;  // unused
+
     if (nrhs != 2)
         mexErrMsgIdAndTxt("save_lz4_mex:NumArgs", "Usage: save_lz4_mex(filename, array)");
 
-    char* fname = mxArrayToString(prhs[0]);
-    if (!fname || strlen(fname) == 0)
-        FAIL("save_lz4_mex:BadFilename", "Could not extract a valid filename.");
+    char* filename = mxArrayToString(prhs[0]);
+    FILE* file = NULL;
 
-    FILE* f = fopen(fname, "wb");
-    if (!f)
-        FAIL("save_lz4_mex:OpenFailed", "Failed to open file '%s': %s", fname, strerror(errno));
+    if (!filename || strlen(filename) == 0)
+        FAIL("save_lz4_mex:BadFilename", "Filename must be a non-empty string or char array.");
 
-    const mxArray* arr = prhs[1];
-    mwSize ndims = mxGetNumberOfDimensions(arr);
-    const mwSize* dims = mxGetDimensions(arr);
+    file = fopen(filename, "wb");
+    if (!file)
+        FAIL("save_lz4_mex:OpenFailed", "Failed to open file '%s': %s", filename, strerror(errno));
 
-    // --- Prepare header ---
-    file_header_t hdr;
-    memset(&hdr, 0, sizeof(file_header_t));
-    hdr.magic = MAGIC_NUMBER;
-    hdr.ndims = (uint8_t)ndims;
+    const mxArray* input_array = prhs[1];
+    mwSize num_dims = mxGetNumberOfDimensions(input_array);
+    const mwSize* dims = mxGetDimensions(input_array);
 
-    if (mxIsDouble(arr)) hdr.dtype = DT_DOUBLE;
-    else if (mxIsSingle(arr)) hdr.dtype = DT_SINGLE;
-    else if (mxIsUint16(arr)) hdr.dtype = DT_UINT16;
+    // --- Validate supported types ---
+    file_header_t header;
+    memset(&header, 0, sizeof(header));
+    header.magic = MAGIC_NUMBER;
+    header.ndims = (uint8_t)num_dims;
+
+    if (mxIsDouble(input_array))       header.dtype = DT_DOUBLE;
+    else if (mxIsSingle(input_array))  header.dtype = DT_SINGLE;
+    else if (mxIsUint16(input_array))  header.dtype = DT_UINT16;
     else
-        FAIL("save_lz4_mex:BadType", "Only double, single, uint16 are supported.");
+        FAIL("save_lz4_mex:BadType", "Only double, single, and uint16 arrays are supported.");
 
-    size_t el_sz = mxGetElementSize(arr);
-    uint64_t numel = (uint64_t)mxGetNumberOfElements(arr);
-    hdr.total_uncompressed = el_sz * numel;
+    uint64_t element_size = (uint64_t)mxGetElementSize(input_array);
+    uint64_t total_elements = (uint64_t)mxGetNumberOfElements(input_array);
+    header.total_uncompressed = element_size * total_elements;
 
-    for (mwSize i = 0; i < ndims && i < MAX_DIMS; ++i)
-        hdr.dims[i] = (uint64_t)dims[i];
+    for (mwSize i = 0; i < num_dims && i < MAX_DIMS; ++i)
+        header.dims[i] = (uint64_t)dims[i];
 
-    hdr.chunk_size = DEFAULT_CHUNK_SIZE;
-    uint32_t n_chunks = (uint32_t)((hdr.total_uncompressed + hdr.chunk_size - 1) / hdr.chunk_size);
-    if (n_chunks > MAX_CHUNKS)
+    // --- Chunk planning ---
+    header.chunk_size = DEFAULT_CHUNK_SIZE;
+    uint32_t num_chunks = (uint32_t)((header.total_uncompressed + header.chunk_size - 1) / header.chunk_size);
+    if (num_chunks > MAX_CHUNKS)
         FAIL("save_lz4_mex:TooManyChunks", "Too many chunks. Increase MAX_CHUNKS or chunk size.");
 
-    hdr.num_chunks = n_chunks;
+    header.num_chunks = num_chunks;
 
-    if (fseek(f, 0, SEEK_SET) != 0 || write_header(f, &hdr) != 0)
-        FAIL("save_lz4_mex:HeaderWriteFailed", "Failed to write placeholder header.");
+    // --- Write placeholder header ---
+    if (fseek(file, 0, SEEK_SET) != 0 || write_header(file, &header) != 0)
+        FAIL("save_lz4_mex:HeaderWriteFailed", "Could not write header.");
 
-    const char* src = (const char*)mxGetData(arr);
-    uint64_t offset = 0;
+    // --- Compress and write each chunk ---
+    const char* src_data = (const char*)mxGetData(input_array);
+    if (!src_data)
+        FAIL("save_lz4_mex:NoData", "Input array has no data.");
 
-    for (uint32_t i = 0; i < n_chunks; ++i)
+    uint64_t offset_bytes = 0;
+
+    for (uint32_t chunk_idx = 0; chunk_idx < num_chunks; ++chunk_idx)
     {
-        uint64_t this_uncomp = hdr.chunk_size;
-        if (offset + this_uncomp > hdr.total_uncompressed)
-            this_uncomp = hdr.total_uncompressed - offset;
-        hdr.chunk_uncomp[i] = this_uncomp;
+        uint64_t this_chunk_bytes = header.chunk_size;
+        if (offset_bytes + this_chunk_bytes > header.total_uncompressed)
+            this_chunk_bytes = header.total_uncompressed - offset_bytes;
 
-        int uncomp_size = (int)this_uncomp;
-        int max_dst = LZ4_compressBound(uncomp_size);
-        if (max_dst <= 0)
-            FAIL("save_lz4_mex:LZ4BoundError", "LZ4_compressBound returned invalid size.");
+        header.chunk_uncomp[chunk_idx] = this_chunk_bytes;
 
-        char* cbuf = (char*)mxMalloc(max_dst);
-        if (!cbuf)
+        int uncomp_size = (int)this_chunk_bytes;
+        int max_compressed_size = LZ4_compressBound(uncomp_size);
+        if (max_compressed_size <= 0)
+            FAIL("save_lz4_mex:LZ4BoundError", "LZ4_compressBound failed.");
+
+        char* compressed_buf = (char*)mxMalloc(max_compressed_size);
+        if (!compressed_buf)
             FAIL("save_lz4_mex:AllocFailed", "Out of memory.");
 
-        int comp_bytes = LZ4_compress_default(src + offset, cbuf, uncomp_size, max_dst);
-        if (comp_bytes <= 0) {
-            mxFree(cbuf);
-            FAIL("save_lz4_mex:LZ4CompressFail", "LZ4 compression failed.");
+        int compressed_bytes = LZ4_compress_default(src_data + offset_bytes, compressed_buf, uncomp_size, max_compressed_size);
+        if (compressed_bytes <= 0) {
+            mxFree(compressed_buf);
+            FAIL("save_lz4_mex:CompressFail", "LZ4 compression failed.");
         }
 
-        hdr.chunk_comp[i] = (uint64_t)comp_bytes;
+        header.chunk_comp[chunk_idx] = (uint64_t)compressed_bytes;
 
-        size_t written = fwrite(cbuf, 1, comp_bytes, f);
-        mxFree(cbuf);
-        if (written != (size_t)comp_bytes)
-            FAIL("save_lz4_mex:WriteFail", "Failed to write compressed chunk.");
+        size_t bytes_written = fwrite(compressed_buf, 1, compressed_bytes, file);
+        mxFree(compressed_buf);
+        if (bytes_written != (size_t)compressed_bytes)
+            FAIL("save_lz4_mex:WriteFail", "Failed to write compressed data.");
 
-        offset += this_uncomp;
+        offset_bytes += this_chunk_bytes;
     }
 
-    if (fflush(f) != 0 || fseek(f, 0, SEEK_SET) != 0 || write_header(f, &hdr) != 0)
-        FAIL("save_lz4_mex:FinalHeaderWriteFail", "Failed to write final header.");
+    // --- Rewrite final header with actual chunk sizes ---
+    if (fflush(file) != 0 || fseek(file, 0, SEEK_SET) != 0 || write_header(file, &header) != 0)
+        FAIL("save_lz4_mex:FinalHeaderWriteFail", "Could not update header.");
 
-    if (fflush(f) != 0 || fclose(f) != 0)
-        FAIL("save_lz4_mex:FileCloseFail", "Could not close file properly.");
+    if (fflush(file) != 0 || fclose(file) != 0)
+        FAIL("save_lz4_mex:CloseFailed", "Could not close file.");
 
-    mxFree(fname);
+    mxFree(filename);
 }
