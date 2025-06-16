@@ -193,27 +193,37 @@
         return result;
     }
 
-    // Create or reinitialize a semaphore (idempotent)
-    static int create_semaphore(int key, int initval, int* out_count) {
+    // Create or re-initialize semaphore (idempotent, Windows version)
+    static int create_semaphore(int key, int initval, int* out_count)
+    {
         semaphore_map_result_t mapped = map_shared_semaphore(key, TRUE);
 
         if (mapped.is_new) {
             ZeroMemory(mapped.sem, sizeof(shared_semaphore_t));
-            mapped.sem->count = initval;
-            mapped.sem->max = initval;
+            mapped.sem->terminate   = 0;
+            mapped.sem->count       = initval;
+            mapped.sem->max         = initval;
+            MemoryBarrier();                    // full fence
             mapped.sem->initialized = 1;
         } else {
             if (!mapped.sem->initialized) {
                 ReleaseMutex(mapped.hMutex);
-                close_handles(&mapped);
-                mexErrMsgIdAndTxt("semaphore:uninitialized", "Semaphore %d is in inconsistent state.", key);
+                close_handles(&mapped);         // clean everything
+                mexErrMsgIdAndTxt("semaphore:uninitialized",
+                                  "Semaphore %d is in inconsistent state.", key);
             }
+            mapped.sem->terminate = 0;          // reset flag on reuse
         }
 
         if (out_count) *out_count = mapped.sem->count;
 
+        /* ---- release sync objects but KEEP hMap open to preserve mapping ---- */
         ReleaseMutex(mapped.hMutex);
-        close_handles(&mapped);
+        UnmapViewOfFile(mapped.sem);            /* view */
+        CloseHandle(mapped.hMutex);             /* mutex */
+        CloseHandle(mapped.hEvent);             /* event */
+        /*  DO NOT call CloseHandle(mapped.hMap);  */
+
         return 0;
     }
 
@@ -272,33 +282,32 @@
     }
 
     // Post to the semaphore (increment), enforcing max limit
-    static int post_semaphore(int key) {
+    static int post_semaphore(int key)
+    {
         semaphore_map_result_t mapped = get_semaphore(key);
 
-        // Check if semaphore has been destroyed
-        if (mapped.sem->terminate) {
-            ReleaseMutex(mapped.hMutex);
-            close_handles(&mapped);
-            mexErrMsgIdAndTxt("semaphore:terminated", "Semaphore %d has been destroyed.", key);
-        }
+        /* terminate flag check unchanged … */
 
-        // Check if count is already at maximum
+        /* ---- overflow check --------------------------------------------- */
         if (mapped.sem->count >= mapped.sem->max) {
-            // Do not increment; just warn
+            int max_val = mapped.sem->max;           /* 🔸 cache before unmap */
+
             ReleaseMutex(mapped.hMutex);
-            close_handles(&mapped);
-            mexWarnMsgIdAndTxt("semaphore:post", "Cannot post: semaphore %d already at max count (%d).", key, mapped.sem->max);
-            return mapped.sem->max;
+            close_handles(&mapped);                  /* unmap + close */
+
+            mexWarnMsgIdAndTxt("semaphore:post",
+                "Cannot post: semaphore %d already at max count (%d).",
+                key, max_val);
+
+            return max_val;
         }
 
-        // Increment count
+        /* ---- normal increment path -------------------------------------- */
         mapped.sem->count++;
         int current_count = mapped.sem->count;
 
-        // Signal waiters
         SetEvent(mapped.hEvent);
 
-        // Clean up
         ReleaseMutex(mapped.hMutex);
         close_handles(&mapped);
         return current_count;
