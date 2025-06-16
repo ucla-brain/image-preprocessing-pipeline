@@ -43,16 +43,25 @@ inline void gpuAssert(cudaError_t code, const char *file, int line) {
 // RAII wrapper for mxGPUArray*
 struct GpuHandle {
     mxGPUArray* ptr = nullptr;
+
     GpuHandle() = default;
+
+    // Accept non-const
     explicit GpuHandle(mxGPUArray* p) : ptr(p) {}
-    ~GpuHandle() { if (ptr) mxGPUDestroyGPUArray(ptr); }
-    // allow assignment like: handle = mxGPUCreate...
+
+    // Accept const (casted safely)
+    explicit GpuHandle(const mxGPUArray* p) : ptr(const_cast<mxGPUArray*>(p)) {}
+
+    ~GpuHandle() {
+        if (ptr) mxGPUDestroyGPUArray(ptr);
+    }
+
     GpuHandle& operator=(mxGPUArray* p) {
         if (ptr) mxGPUDestroyGPUArray(ptr);
         ptr = p;
         return *this;
     }
-    // implicit conversion to mxGPUArray*
+
     operator mxGPUArray*() const { return ptr; }
 };
 
