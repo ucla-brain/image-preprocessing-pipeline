@@ -9,65 +9,86 @@
  * This file implements a named, multi-process semaphore mechanism for MATLAB,
  * portable across Windows and POSIX (Linux/macOS) systems.
  *
- * Designed for use in parallel and multi-process MATLAB environments where
- * native inter-process semaphores are unavailable or incompatible.
+ * It enables robust parallel execution in environments where MATLAB lacks
+ * built-in inter-process synchronization, particularly for workflows that use
+ * `parfeval`, `batch`, or `parpool('Processes')`.
  *
  * Core Concepts:
  * --------------
  * - Each semaphore is identified by a unique integer key.
- * - Shared memory stores the semaphore state: `count`, `max`, and a `terminate` flag.
- * - Synchronization is implemented using platform-native primitives:
- *     - Windows: Named file mappings, mutexes, and manual-reset events.
- *     - POSIX : POSIX named semaphores (`sem_t`) and `shm_open` for metadata.
+ * - Shared memory stores the semaphore state:
+ *     - `count`: current semaphore value (updated atomically)
+ *     - `max`  : maximum allowed count
+ *     - `terminate`: flag to force wakeups during `destroy()`
+ * - Synchronization is platform-specific:
+ *     - Windows: Named file mappings + Mutex + Manual-reset Event
+ *     - POSIX : POSIX named semaphores (`sem_open`) + `shm_open` for metadata
+ *
+ * POSIX Atomic Count:
+ * -------------------
+ * On POSIX, `sem_getvalue()` is **not reliable** for synchronization:
+ *   - It is non-atomic and may return stale values under concurrent access.
+ *   - Cannot be used to enforce maximum count limits safely.
+ *
+ * To ensure correctness:
+ *   - A separate shared memory field `meta->count` is maintained.
+ *   - It is updated using `__sync_fetch_and_add()` and `__sync_fetch_and_sub()`
+ *     to guarantee atomicity across processes.
+ *   - This mirrors the Windows implementation, where shared memory is already
+ *     explicitly tracked.
  *
  * Why Not Use Windows Native Semaphore API:
  * -----------------------------------------
- * This implementation avoids using `CreateSemaphore` on Windows because its behavior
- * does not fully match POSIX semaphores. Specific differences include:
+ * Windows `CreateSemaphore` is avoided because its behavior does not match
+ * POSIX semantics:
+ *   1. No way to read current count (`sem_getvalue()` equivalent)
+ *   2. `ReleaseSemaphore()` allows over-release without error
+ *   3. Cannot interrupt blocked `WaitForSingleObject()` on destroy
+ *   4. No shared state or visibility across cooperating processes
  *
- * 1. No access to current count:
- *    - POSIX provides `sem_getvalue()` to read the semaphore count.
- *    - Windows semaphores provide no such visibility.
- *
- * 2. Over-release is possible:
- *    - `ReleaseSemaphore` may increment the count beyond the intended max.
- *    - POSIX semaphores enforce the maximum count strictly.
- *
- * 3. No destroy/wake mechanism:
- *    - POSIX code uses a shared `terminate` flag and wakes waiters explicitly.
- *    - Windows semaphores block unconditionally and cannot be interrupted.
- *
- * 4. No manual signaling:
- *    - POSIX uses `sem_post` and memory signaling.
- *    - Windows semaphores cannot be manually reset or woken like `Event` objects.
- *
- * As a result, the Windows implementation uses a named shared memory region
- * plus a mutex and event to accurately mirror POSIX behavior, including
- * precise count tracking and cooperative termination.
+ * Instead, the Windows implementation uses:
+ *   - Named `CreateFileMapping` for shared state
+ *   - Named `CreateMutex` for exclusive access
+ *   - Named `CreateEvent` to signal wakeups on `post` or `destroy`
  *
  * Supported Operations:
  * ---------------------
- * 1. create  : Initializes or re-attaches to a semaphore. If it already exists,
- *              the count is preserved (strictly idempotent). Safe to call multiple times.
+ * 1. create(key, initval):
+ *      - Initializes or re-attaches to a semaphore.
+ *      - If it exists, reuses it safely. Count = initval, max = initval.
  *
- * 2. wait    : Decrements the semaphore count. Blocks if count is zero.
- *              Returns when `post()` is called or if `destroy()` is invoked.
+ * 2. wait(key):
+ *      - Blocks until count > 0, then decrements.
+ *      - Returns new count or error if destroyed.
  *
- * 3. post    : Increments the semaphore count. If already at maximum, emits a warning.
+ * 3. post(key):
+ *      - Increments count unless at max. If at max, raises warning.
+ *      - Wakes one or more waiters via event/semaphore.
  *
- * 4. destroy : Marks the semaphore as terminated, wakes all waiters, and unlinks
- *              shared memory and semaphore objects for safe cleanup.
+ * 4. destroy(key):
+ *      - Sets `terminate = 1` and wakes all waiting threads.
+ *      - On POSIX, also posts `max` times to ensure all waiters are released.
+ *      - Unlinks shared memory and semaphore handles.
  *
  * Synchronization Guarantees:
- * ----------------------------
- * - All operations are safe under concurrent access.
- * - State cleanup is guaranteed on both success and error paths.
+ * ---------------------------
+ * - All operations are safe under concurrent access from multiple processes.
+ * - All updates to count are atomic.
+ * - All error paths and cleanup are robust.
  *
- * Platform Compatibility:
- * ------------------------
- * - Windows: Uses `CreateFileMapping`, `CreateMutex`, and `CreateEvent`.
- * - POSIX  : Uses `sem_open`, `shm_open`, `mmap`, and `munmap`.
+ * Platform APIs Used:
+ * -------------------
+ * Windows:
+ *   - CreateFileMappingA, MapViewOfFile
+ *   - CreateMutexA, WaitForSingleObject, ReleaseMutex
+ *   - CreateEventA, SetEvent, ResetEvent
+ *
+ * POSIX:
+ *   - shm_open, ftruncate, mmap, munmap, shm_unlink
+ *   - sem_open, sem_post, sem_wait, sem_unlink
+ *   - __sync_fetch_and_add / __sync_fetch_and_sub for atomic count
  */
+
 
 #include <errno.h>
 #include <stdio.h>
