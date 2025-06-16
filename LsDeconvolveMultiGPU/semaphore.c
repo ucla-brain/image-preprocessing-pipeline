@@ -275,19 +275,18 @@
 #   define SEM_NAME_FMT "/matlab_mex_sem_%d"
 #   define SHM_NAME_FMT "/matlab_mex_meta_%d"
 
-    // Structure stored in shared memory for additional metadata
+    // Shared metadata structure (mapped into shared memory)
     typedef struct {
         int initialized;
         int max;
+        volatile int count;        // 🔸 now tracked atomically
         volatile int terminate;
     } semaphore_meta_t;
 
-    // Construct a named resource string based on a key
     static void name_for_key(char* out, size_t outlen, const char* fmt, int key) {
         snprintf(out, outlen, fmt, key);
     }
 
-    // Create or attach to a named semaphore and shared metadata
     static int create_semaphore(int key, int initval, int* out_count) {
         char sem_name[64], shm_name[64];
         name_for_key(sem_name, sizeof(sem_name), SEM_NAME_FMT, key);
@@ -325,14 +324,13 @@
 
         if (!meta->initialized) {
             meta->max = initval;
+            meta->count = initval;
             meta->terminate = 0;
             meta->initialized = 1;
         }
 
         if (out_count) {
-            int val;
-            if (sem_getvalue(sem, &val) == 0)
-                *out_count = val;
+            *out_count = meta->count;
         }
 
         munmap(meta, sizeof(semaphore_meta_t));
@@ -341,7 +339,6 @@
         return 0;
     }
 
-    // Wait for the semaphore to become available (blocking)
     static int wait_semaphore(int key) {
         char sem_name[64], shm_name[64];
         name_for_key(sem_name, sizeof(sem_name), SEM_NAME_FMT, key);
@@ -372,16 +369,14 @@
         }
 
         sem_wait(sem);
-        int val = -1;
-        sem_getvalue(sem, &val);
+        int new_val = __sync_fetch_and_sub(&meta->count, 1) - 1;
 
         munmap(meta, sizeof(semaphore_meta_t));
         close(shm_fd);
         sem_close(sem);
-        return val;
+        return new_val;
     }
 
-    // Post to the semaphore (increment), respecting max limit
     static int post_semaphore(int key) {
         char sem_name[64], shm_name[64];
         name_for_key(sem_name, sizeof(sem_name), SEM_NAME_FMT, key);
@@ -404,52 +399,46 @@
             mexErrMsgIdAndTxt("semaphore:mmap", "Failed to map metadata for key %d", key);
         }
 
-        int val;
-        sem_getvalue(sem, &val);
-        if (val >= meta->max) {
+        int old_val = __sync_fetch_and_add(&meta->count, 1);
+        if (old_val >= meta->max) {
+            __sync_fetch_and_sub(&meta->count, 1);  // rollback
             mexWarnMsgIdAndTxt("semaphore:post", "Cannot post: semaphore %d already at max count (%d).", key, meta->max);
         } else {
             sem_post(sem);
-            sem_getvalue(sem, &val);
         }
+
+        int current = meta->count;
 
         munmap(meta, sizeof(semaphore_meta_t));
         close(shm_fd);
         sem_close(sem);
-        return val;
+        return current;
     }
 
-    // Destroy the semaphore and release all waiters
-    static void destroy_semaphore(int key)
-    {
+    static void destroy_semaphore(int key) {
         char sem_name[64], shm_name[64];
         name_for_key(sem_name, sizeof(sem_name), SEM_NAME_FMT, key);
         name_for_key(shm_name, sizeof(shm_name), SHM_NAME_FMT, key);
 
-        sem_t* sem   = sem_open(sem_name, 0);
-        int    shm_fd = shm_open(shm_name, O_RDWR, 0666);
+        sem_t* sem = sem_open(sem_name, 0);
+        int shm_fd = shm_open(shm_name, O_RDWR, 0666);
         if (sem == SEM_FAILED || shm_fd == -1)
-            return;                         /* nothing to destroy */
+            return;
 
-        semaphore_meta_t* meta = mmap(NULL, sizeof(semaphore_meta_t),
-                                      PROT_READ | PROT_WRITE,
-                                      MAP_SHARED, shm_fd, 0);
+        semaphore_meta_t* meta = mmap(NULL, sizeof(semaphore_meta_t), PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
         if (meta != MAP_FAILED) {
-            /* Mark for termination *first* so waiters exit their loops */
             meta->terminate = 1;
-
-            /* Wake (up to) max waiters to make sure everyone sees the flag */
-            for (int i = 0; i < meta->max; ++i)
+            // post up to max count to wake up waiters
+            for (int i = 0; i < meta->max; ++i) {
                 sem_post(sem);
-
+            }
             munmap(meta, sizeof(semaphore_meta_t));
         }
 
-        /* Normal cleanup */
-        sem_close(sem);          /* the handle we opened */
-        sem_unlink(sem_name);    /* remove the name */
+        sem_close(sem);
+        sem_unlink(sem_name);
         close(shm_fd);
-        shm_unlink(shm_name);    /* remove shared-mem metadata */
+        shm_unlink(shm_name);
     }
 
 #endif  // End of POSIX
