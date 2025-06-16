@@ -1,8 +1,8 @@
-// semaphore.c - Cross-platform shared memory semaphore for MATLAB MEX
-//
-// Author: Keivan Moradi (2025) @ B.R.A.I.N. Lab, UCLA
-// License: GPLv3
-/*
+/* semaphore.c - Cross-platform shared memory semaphore for MATLAB MEX
+
+   Author: Keivan Moradi (2025) @ B.R.A.I.N. Lab, UCLA
+   License: GPLv3
+
  * This file implements a named semaphore mechanism that works on both
  * Windows and POSIX (Linux/macOS) platforms using shared memory and
  * synchronization primitives. It is designed for use in parallel and
