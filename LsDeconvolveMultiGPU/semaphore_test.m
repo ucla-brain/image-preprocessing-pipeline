@@ -45,12 +45,18 @@ function semaphore_test()
 
     %% 5. SATURATION WARNING
     fprintf('[4] saturation warning ... ');
-    lastwarn(''); %#ok<LASTW>
-    semaphore('p', key);      % count==1 → reaches max (2)
-    [warnStr, warnId] = lastwarn;
-    assert(isempty(warnStr), 'Unexpected warning at max count');
+    lastwarn('');                           % clear any prior warning
 
-    semaphore('p', key);      % one over max → should warn
+    % ❶ first post: count goes 0 → 1  (no warning expected)
+    semaphore('p', key);
+    assert(isempty(lastwarn), 'Unexpected warning before max reached');
+
+    % ❷ second post: count goes 1 → 2 (now at max, still no warning)
+    semaphore('p', key);
+    assert(isempty(lastwarn), 'Unexpected warning at exact max');
+
+    % ❸ third post: attempt to exceed max → should warn
+    semaphore('p', key);
     [warnStr, warnId] = lastwarn;
     assert(~isempty(warnStr) && strcmpi(warnId, 'semaphore:post'), ...
         'Expected warning not raised when posting past max');
