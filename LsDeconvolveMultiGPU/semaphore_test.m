@@ -63,12 +63,28 @@ function semaphore_test()
     disp('OK');
 
     %% 6. DESTROY must wake blockers
+    %% 5. DESTROY must wake blockers
     fprintf('[5] destroy wakes waiters ... ');
-    fBlock = parfeval(@blocker,1,key);   % starts wait → will block
-    pause(0.5);
-    semaphore('d', key);                 % should wake & terminate
+
+    % --- make sure count == 0 so the next wait will block ---
+    while true
+        try
+            c = semaphore('w', key);
+            if c == 0                  % last permit consumed
+                break;
+            end
+        catch                          % already at zero
+            break;
+        end
+    end
+    % --------------------------------------------------------
+
+    fBlock = parfeval(@blocker, 1, key);   % will now block in semaphore('w')
+    pause(0.5);                            % let it reach sem_wait
+
+    semaphore('d', key);                  % destroy should wake & terminate
     res = fetchOutputs(fBlock);
-    assert(strcmp(res,'TERMINATED'), 'Destroy did not wake blocked waiters');
+    assert(strcmp(res, 'TERMINATED'), 'Destroy did not wake blocked waiters');
     disp('OK');
 
     %% 7. DESTROY idempotent + post/wait failure modes
