@@ -104,13 +104,8 @@ end
 
 %% ------------------------------------------------------------------------
 function pool = ensurePool
-% start or reuse a local parpool (processes or threads)
     pool = gcp('nocreate');
     if isempty(pool)
-        try
-            pool = parpool('threads');   % newer MATLAB
-        catch
-            pool = parpool;              % fallback to default profile
-        end
+        pool = parpool('Processes');  % ✅ REQUIRED: process-based workers
     end
 end
