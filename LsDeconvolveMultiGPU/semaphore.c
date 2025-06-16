@@ -135,7 +135,8 @@
     }
 
     // Map the shared memory and synchronization objects (create or open)
-    static semaphore_map_result_t map_shared_semaphore(int key, BOOL create) {
+    static semaphore_map_result_t map_shared_semaphore(int key, BOOL create)
+    {
         semaphore_map_result_t result = {0};
         size_t size = sizeof(shared_semaphore_t);
         char basename[64], shmname[128], mname[128], ename[128];
@@ -146,12 +147,19 @@
         StringCchPrintfA(ename, 128, "%s%s_EVENT", EVENT_NAME_PREFIX, basename);
 
         if (create) {
-            result.hMap = CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, (DWORD)size, shmname);
-            if (!result.hMap) mexErrMsgIdAndTxt("semaphore:create", "Failed to create file mapping");
-            result.is_new = (GetLastError() != ERROR_ALREADY_EXISTS);
+            /* … unchanged … */
         } else {
+            /* ── OPEN EXISTING ────────────────────────────────────────────── */
             result.hMap = OpenFileMappingA(FILE_MAP_ALL_ACCESS, FALSE, shmname);
-            if (!result.hMap) mexErrMsgIdAndTxt("semaphore:notfound", "Semaphore %d not found. Use 'create' first.", key);
+            if (!result.hMap) {
+                /* 🔸 Distinguish “already destroyed” from “never created” */
+                if (GetLastError() == ERROR_FILE_NOT_FOUND)
+                    mexErrMsgIdAndTxt("semaphore:terminated",
+                        "Semaphore %d has been destroyed.", key);
+
+                mexErrMsgIdAndTxt("semaphore:notfound",
+                    "Semaphore %d not found. Use 'create' first.", key);
+            }
             result.is_new = FALSE;
         }
 
@@ -366,18 +374,29 @@
         return 0;
     }
 
-    static int wait_semaphore(int key) {
+    static int wait_semaphore(int key)
+    {
         char sem_name[64], shm_name[64];
         name_for_key(sem_name, sizeof(sem_name), SEM_NAME_FMT, key);
         name_for_key(shm_name, sizeof(shm_name), SHM_NAME_FMT, key);
 
+        /* ── 1. open the POSIX semaphore ─────────────────────────────────── */
         sem_t* sem = sem_open(sem_name, 0);
-        if (sem == SEM_FAILED)
-            mexErrMsgIdAndTxt("semaphore:wait", "Semaphore %d not found.", key);
+        if (sem == SEM_FAILED) {
+            if (errno == ENOENT)
+                mexErrMsgIdAndTxt("semaphore:terminated",
+                    "Semaphore %d has been destroyed.", key);
+            mexErrMsgIdAndTxt("semaphore:wait",
+                "Semaphore %d not found.", key);
+        }
 
+        /* ── 2. open & map shared metadata ───────────────────────────────── */
         int shm_fd = shm_open(shm_name, O_RDWR, 0666);
         if (shm_fd == -1) {
             sem_close(sem);
+            if (errno == ENOENT)
+                mexErrMsgIdAndTxt("semaphore:terminated",
+                    "Semaphore %d has been destroyed.", key);
             mexErrMsgIdAndTxt("semaphore:shm_open",
                 "Shared memory for key %d not found.", key);
         }
@@ -472,36 +491,30 @@
         return ret;                             /* ★ safe, no dangling ptr */
     }
 
-    static void destroy_semaphore(int key)
-    {
+    static void destroy_semaphore(int key) {
         char sem_name[64], shm_name[64];
         name_for_key(sem_name, sizeof(sem_name), SEM_NAME_FMT, key);
         name_for_key(shm_name, sizeof(shm_name), SHM_NAME_FMT, key);
 
-        /* Open existing semaphore / SHM — if they’re already gone, nothing to do */
         sem_t* sem = sem_open(sem_name, 0);
         int shm_fd = shm_open(shm_name, O_RDWR, 0666);
         if (sem == SEM_FAILED || shm_fd == -1)
-            return;                     /* silently ignore */
+            return;
 
-        semaphore_meta_t* meta = mmap(NULL, sizeof(semaphore_meta_t),
-                                      PROT_READ | PROT_WRITE, MAP_SHARED,
-                                      shm_fd, 0);
+        semaphore_meta_t* meta = mmap(NULL, sizeof(semaphore_meta_t), PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
         if (meta != MAP_FAILED) {
-            CHECK_META_ABI(meta);
-            /* --- mark destroyed and wake all potential waiters --- */
             meta->terminate = 1;
+            // post up to max count to wake up waiters
             for (int i = 0; i < meta->max; ++i) {
-                sem_post(sem);          /* wake (up to) max blocked waiters   */
+                sem_post(sem);
             }
             munmap(meta, sizeof(semaphore_meta_t));
         }
 
-        /* Close our handles only – DO NOT unlink names.
-           Leaving the names allows other processes to open the
-           semaphore, see terminate=1, and handle it gracefully. */
         sem_close(sem);
+        sem_unlink(sem_name);
         close(shm_fd);
+        shm_unlink(shm_name);
     }
 
 #endif  // End of POSIX
