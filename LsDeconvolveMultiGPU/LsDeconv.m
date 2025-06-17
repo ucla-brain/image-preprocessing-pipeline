@@ -1200,21 +1200,21 @@ function postprocess_save(...
 
         %write images to output path
         disp(['layer ' num2str(nz) ' from ' num2str(block.nz) ': saving ' num2str(size(R, 3)) ' images ...']);
-        parfor k = 1 : size(R, 3)
-            save_time = tic;
-            % file path
-            s = num2str(slab_z1 + k - 1);
-            while length(s) < 6
-                s = strcat('0', s);
-            end
-            save_path = fullfile(outpath, ['img_' s '.tif']);
-            if exist(save_path, "file")
-                continue
-            end
-
-            message = save_image_2d(R(:,:,k), save_path, s, rawmax, save_time);
-            disp(message);
-        end
+        % parfor k = 1 : size(R, 3)
+        %     save_time = tic;
+        %     % file path
+        %     s = num2str(slab_z1 + k - 1);
+        %     while length(s) < 6
+        %         s = strcat('0', s);
+        %     end
+        %     save_path = fullfile(outpath, ['img_' s '.tif']);
+        %     if exist(save_path, "file")
+        %         continue
+        %     end
+        %     message = save_image_2d(R(:,:,k), save_path, s, rawmax, save_time);
+        %     disp(message);
+        % end
+        save_slices_with_bl_tif(R, outpath, slab_z1);
 
         imagenr = imagenr + size(R, 3);
         % delete(gcp('nocreate'));
@@ -1417,4 +1417,38 @@ function message = save_image_2d(im, path, s, rawmax, save_time)
         end
     end
     message = ['   saved img_' s ' in ' num2str(round(toc(save_time), 1)) ' seconds and after ' num2str(num_retries) ' attempts.'];
+end
+
+function save_slices_with_bl_tif(R, outpath, slab_z1)
+%SAVE_SLICES_WITH_BL_TIF Save 3D image block using save_bl_tif with file skipping
+%   R        : 3D block (X x Y x Z or Y x X x Z)
+%   outpath  : directory to save TIFF slices
+%   slab_z1  : base z-index (integer offset for naming)
+
+    assert(ndims(R) == 3, 'R must be a 3D array');
+    Z = size(R, 3);
+    indices = slab_z1 + (0:Z-1);
+    fileNames = compose("img_%06d.tif", indices);
+    fileList = cellstr(fullfile(outpath, fileNames));  % Ensure char cell array
+    existing = cellfun(@(f) exist(f, 'file'), fileList);
+
+    % Skip slices that already exist
+    if all(existing)
+        fprintf('✅ All %d slices already exist in %s\n', Z, outpath);
+        return;
+    end
+
+    % Slice only non-existing files
+    slicesToSave = find(~existing);
+    R = R(:, :, slicesToSave);
+    fileList = fileList(~existing);
+
+    % Determine array class and orientation flag
+    orderFlag = true;  % R is in [X Y Z] format
+    compression = "deflate";
+
+    % Save using compiled multithreaded MEX
+    save_bl_tif(R, fileList, orderFlag, compression);
+
+    fprintf('✅ Saved %d slices to %s\n', numel(fileList), outpath);
 end

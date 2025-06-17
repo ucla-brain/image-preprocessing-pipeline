@@ -22,8 +22,8 @@ src_lz4_c     = 'lz4.c';
 src_gauss3d   = 'gauss3d_mex.cu';
 src_conv3d    = 'conv3d_mex.cu';
 src_otf_gpu   = 'otf_gpu_mex.cu';
-src_deconFFT  = 'deconFFT_mex.cu';
 src_load_bl   = 'load_bl_tif.cpp';
+src_save_bl   = 'save_bl_tif.cpp';
 
 % LZ4 download if missing
 lz4_c_url = 'https://raw.githubusercontent.com/lz4/lz4/dev/lib/lz4.c';
@@ -93,6 +93,8 @@ tiff_link    = {'-ltiff'};
 fprintf('Using libtiff from: %s\n', fullfile(libtiff_install_dir, 'lib'));
 
 % Build CPU MEX files
+mex(mex_flags_cpu{:}, src_save_bl, tiff_include{:}, tiff_lib{:}, tiff_link{:});
+return
 mex(mex_flags_cpu{:}, src_semaphore);
 mex(mex_flags_cpu{:}, src_lz4_save, src_lz4_c);
 mex(mex_flags_cpu{:}, src_lz4_load, src_lz4_c);
