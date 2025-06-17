@@ -1061,8 +1061,8 @@ function postprocess_save(...
 
     p_log(log_file, 'image stats ...');
     p_log(log_file, sprintf('   target data type max value: %g',     scal));
-    p_log(log_file, sprintf('   99.99%% max before deconv : %g',   rawmax));
-    p_log(log_file, sprintf('   99.99%% max after  deconv : %g',   deconvmax));
+    p_log(log_file, sprintf('   99.99%% max before deconv  : %g',   rawmax));
+    p_log(log_file, sprintf('   99.99%% max after  deconv  : %g',   deconvmax));
     p_log(log_file, sprintf('   global min after  deconv  : %g\n', deconvmin));
 
     % -------------------------------------------------------------------------
