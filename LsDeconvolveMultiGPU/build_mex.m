@@ -93,12 +93,11 @@ tiff_link    = {'-ltiff'};
 fprintf('Using libtiff from: %s\n', fullfile(libtiff_install_dir, 'lib'));
 
 % Build CPU MEX files
-mex(mex_flags_cpu{:}, src_save_bl, tiff_include{:}, tiff_lib{:}, tiff_link{:});
-return
 mex(mex_flags_cpu{:}, src_semaphore);
 mex(mex_flags_cpu{:}, src_lz4_save, src_lz4_c);
 mex(mex_flags_cpu{:}, src_lz4_load, src_lz4_c);
 mex(mex_flags_cpu{:}, src_load_bl, tiff_include{:}, tiff_lib{:}, tiff_link{:});
+mex(mex_flags_cpu{:}, src_save_bl, tiff_include{:}, tiff_lib{:}, tiff_link{:});
 
 % CUDA optimization flags
 if ispc
