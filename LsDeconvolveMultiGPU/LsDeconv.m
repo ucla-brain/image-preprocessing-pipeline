@@ -1422,7 +1422,7 @@ function save_slices_with_bl_tif(R, outpath, slab_z1)
     fileList = fileList(~existing);
 
     % Determine array class and orientation flag
-    orderFlag = false;  % R is in [X Y Z] format
+    orderFlag = true;  % R is in [X Y Z] format
     compression = 'deflate';
 
     % Save using compiled multithreaded MEX
