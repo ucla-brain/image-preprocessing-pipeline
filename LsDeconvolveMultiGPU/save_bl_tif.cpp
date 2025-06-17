@@ -110,19 +110,12 @@ void save_slice(const SaveTask& t) {
     std::vector<uint8_t> scan(width * elemSize);      // small buffer
 
     for (mwSize y = 0; y < height; ++y) {
-        // Fill scanline from source data
-        if (t.isXYZ) {
-            // input stored as permute(X,Y,Z) → [Y X Z] in memory
-            for (mwSize x = 0; x < width; ++x) {
-                size_t srcIdx = y + x * t.dim0 + sliceOffset;
-                std::memcpy(&scan[x * elemSize],
-                            t.basePtr + srcIdx * elemSize, elemSize);
-            }
-        } else {
-            // MATLAB native [Y X Z]
-            const uint8_t* rowPtr =
-                t.basePtr + (y + sliceOffset) * elemSize;
-            std::memcpy(scan.data(), rowPtr, width * elemSize);
+        for (mwSize x = 0; x < width; ++x) {
+            mwSize srcIdx = isXYZ
+                ?  y + x * dim0 + sliceOffset    // permuted [X Y Z] in memory
+                :  y + x * dim0 + sliceOffset;   // native [Y X Z]
+            std::memcpy(&scan[(x * elemSize)],
+                        basePtr + srcIdx * elemSize, elemSize);
         }
         if (TIFFWriteScanline(tif, scan.data(), y, 0) < 0) {
             TIFFClose(tif);
