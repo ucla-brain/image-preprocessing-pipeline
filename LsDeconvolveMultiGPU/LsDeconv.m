@@ -1054,9 +1054,9 @@ function postprocess_save(...
 
     p_log(log_file, 'image stats ...');
     p_log(log_file, sprintf('   target data type max value: %g',     scal));
-    p_log(log_file, sprintf('   99.99%% max before deconv    : %g',   rawmax));
-    p_log(log_file, sprintf('   99.99%% max after  deconv    : %g',   deconvmax));
-    p_log(log_file, sprintf('   global min after  deconv    : %g\n', deconvmin));
+    p_log(log_file, sprintf('   99.99%% max before deconv : %g',   rawmax));
+    p_log(log_file, sprintf('   99.99%% max after  deconv : %g',   deconvmax));
+    p_log(log_file, sprintf('   global min after  deconv  : %g\n', deconvmin));
 
     % -------------------------------------------------------------------------
     % 3.  Optional global histogram (for symmetric clipping)
@@ -1144,16 +1144,19 @@ function postprocess_save(...
         end
 
         % Gather & insert as each block arrives -------------------------------
-        for j = 1:blocksPerSlab
-            [completedIdx, bloc] = fetchNext(async_load);
-            blnr = block_inds(completedIdx);   % real block number
+        for blkDone = 1:blocksPerSlab
+            tStart          = tic;
+            [idx, slabData] = fetchNext(async_load);   % idx = position in async_load
+            blnr            = block_inds(idx);         % real block number
 
             R(block.p1(blnr,x):block.p2(blnr,x), ...
               block.p1(blnr,y):block.p2(blnr,y), ...
-              block.p1(blnr,z)-slab_z1+1 : block.p2(blnr,z)-slab_z1+1) = bloc;
-        end
+              block.p1(blnr,z)-slab_z1+1 : block.p2(blnr,z)-slab_z1+1) = slabData;
 
-        cancel(async_load);   % free worker RAM for next launch
+            fprintf('   block %d/%d (%s) loaded+assigned in %.1fs\n', ...
+                    blkDone, blocksPerSlab, sprintf('bl_%d.lz4', blnr), toc(tStart));
+        end
+        cancel(async_load);
 
         % ---------------------------------------------------------------------
         % 6a.  Rescale / clip / flip
