@@ -995,7 +995,7 @@ function postprocess_save(...
     semkey_single = 1e3;
     semkey_multi = 1e4;
     semaphore_create(semkey_single, 1);
-    semaphore_create(semkey_multi, 8);
+    semaphore_create(semkey_multi, 2);
 
     % Use cell array for blocklist for compatibility with file functions
     blocklist = cell(size(block.p1, 1), 1);
