@@ -42,180 +42,190 @@
 #include "mex.h"
 #include "matrix.h"
 #include "tiffio.h"
-#include <string>
-#include <vector>
-#include <thread>
-#include <mutex>
 #include <atomic>
-#include <stdexcept>
+#include <cstdint>
 #include <cstring>
-#include <sstream>
-#include <chrono>     // ← for std::chrono::seconds
-#include <thread>     // ← for std::this_thread::sleep_for
+#include <mutex>
+#include <stdexcept>
+#include <string>
+#include <thread>
+#include <vector>
 
+// -----------------------------------------------------------------------------
+// RAII char converter
+// -----------------------------------------------------------------------------
 struct MatlabString {
     char* ptr;
     explicit MatlabString(const mxArray* arr) : ptr(mxArrayToUTF8String(arr)) {
-        if (!ptr)
-            mexErrMsgIdAndTxt("save_bl_tif:BadString", "Failed to convert string from mxArray");
-    }
-    MatlabString(const MatlabString&) = delete;
-    MatlabString& operator=(const MatlabString&) = delete;
-    MatlabString(MatlabString&& other) noexcept : ptr(other.ptr) { other.ptr = nullptr; }
-    MatlabString& operator=(MatlabString&& other) noexcept {
-        if (this != &other) {
-            mxFree(ptr);
-            ptr = other.ptr;
-            other.ptr = nullptr;
-        }
-        return *this;
+        if (!ptr) mexErrMsgIdAndTxt("save_bl_tif:BadString",
+                                    "Failed to convert string from mxArray");
     }
     ~MatlabString() { mxFree(ptr); }
     const char* get() const { return ptr; }
     operator const char*() const { return ptr; }
+    MatlabString(const MatlabString&) = delete;
+    MatlabString& operator=(const MatlabString&) = delete;
 };
 
+// -----------------------------------------------------------------------------
+// Task descriptor (no big buffers)
+// -----------------------------------------------------------------------------
 struct SaveTask {
-    std::vector<uint8_t> buffer;
+    const uint8_t* basePtr;   // pointer to full MATLAB array
+    mwSize dim0;              // rows (Y)
+    mwSize dim1;              // cols (X)
+    mwSize z;                 // slice index
     std::string path;
-    mwSize width;
-    mwSize height;
+    bool isXYZ;               // true → input was [X Y Z]
     mxClassID classId;
     std::string compression;
 };
 
-void save_slice(const SaveTask& task) {
-    TIFF* tif = TIFFOpen(task.path.c_str(), "w");
-    if (!tif)
-        throw std::runtime_error("Failed to open file for writing: " + task.path);
+// -----------------------------------------------------------------------------
+// Write one slice
+// -----------------------------------------------------------------------------
+void save_slice(const SaveTask& t) {
+    const size_t elemSize = (t.classId == mxUINT16_CLASS) ? 2 : 1;
+    const mwSize width   = t.dim1;  // X
+    const mwSize height  = t.dim0;  // Y
 
-    TIFFSetField(tif, TIFFTAG_IMAGEWIDTH, task.width);
-    TIFFSetField(tif, TIFFTAG_IMAGELENGTH, task.height);
+    TIFF* tif = TIFFOpen(t.path.c_str(), "w");
+    if (!tif) throw std::runtime_error("Cannot open " + t.path);
+
+    TIFFSetField(tif, TIFFTAG_IMAGEWIDTH,  width);
+    TIFFSetField(tif, TIFFTAG_IMAGELENGTH, height);
     TIFFSetField(tif, TIFFTAG_SAMPLESPERPIXEL, 1);
-    TIFFSetField(tif, TIFFTAG_BITSPERSAMPLE, (task.classId == mxUINT16_CLASS ? 16 : 8));
-    TIFFSetField(tif, TIFFTAG_COMPRESSION,
-                 (task.compression == "lzw" ? COMPRESSION_LZW :
-                  task.compression == "deflate" ? COMPRESSION_DEFLATE : COMPRESSION_NONE));
+    TIFFSetField(tif, TIFFTAG_BITSPERSAMPLE, (elemSize == 2 ? 16 : 8));
+
+    uint16_t comp = COMPRESSION_NONE;
+    if (t.compression == "lzw")      comp = COMPRESSION_LZW;
+    else if (t.compression == "deflate") comp = COMPRESSION_DEFLATE;
+    TIFFSetField(tif, TIFFTAG_COMPRESSION, comp);
+
     TIFFSetField(tif, TIFFTAG_PHOTOMETRIC, PHOTOMETRIC_MINISBLACK);
     TIFFSetField(tif, TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG);
-    TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP, task.height);
+    TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP, height);  // one strip
 
-    size_t rowSize = task.width * (task.classId == mxUINT16_CLASS ? 2 : 1);
-    for (mwSize row = 0; row < task.height; ++row) {
-        const uint8_t* buf = task.buffer.data() + row * rowSize;
-        if (TIFFWriteScanline(tif, (void*)buf, row, 0) < 0) {
+    const size_t sliceOffset = static_cast<size_t>(t.z) * t.dim0 * t.dim1;
+    std::vector<uint8_t> scan(width * elemSize);      // small buffer
+
+    for (mwSize y = 0; y < height; ++y) {
+        // Fill scanline from source data
+        if (t.isXYZ) {
+            // input stored as permute(X,Y,Z) → [Y X Z] in memory
+            for (mwSize x = 0; x < width; ++x) {
+                size_t srcIdx = y + x * t.dim0 + sliceOffset;
+                std::memcpy(&scan[x * elemSize],
+                            t.basePtr + srcIdx * elemSize, elemSize);
+            }
+        } else {
+            // MATLAB native [Y X Z]
+            const uint8_t* rowPtr =
+                t.basePtr + (y + sliceOffset) * elemSize;
+            std::memcpy(scan.data(), rowPtr, width * elemSize);
+        }
+        if (TIFFWriteScanline(tif, scan.data(), y, 0) < 0) {
             TIFFClose(tif);
-            throw std::runtime_error("TIFFWriteScanline failed: " + task.path);
+            throw std::runtime_error("TIFFWriteScanline failed on " + t.path);
         }
     }
     TIFFClose(tif);
 }
 
-void worker_main(const std::vector<SaveTask>& tasks, std::atomic<size_t>& next,
-                 std::vector<std::string>& errors, std::mutex& err_mutex) {
+// -----------------------------------------------------------------------------
+// Worker thread
+// -----------------------------------------------------------------------------
+void worker(const std::vector<SaveTask>& tasks,
+            std::atomic_size_t& next,
+            std::vector<std::string>& errors,
+            std::mutex& err_mtx) {
     size_t i;
     while ((i = next.fetch_add(1)) < tasks.size()) {
-        const SaveTask& task = tasks[i];
-        const int max_retries = 40;
-        bool success = false;
-        for (int attempt = 1; attempt <= max_retries; ++attempt) {
-            try {
-                save_slice(task);
-                success = true;
-                break;
-            } catch (const std::exception& e) {
-                std::this_thread::sleep_for(std::chrono::seconds(1));
-            }
-        }
-        if (!success) {
-            std::lock_guard<std::mutex> lock(err_mutex);
-            errors.emplace_back("Exceeded max retries: " + task.path);
+        try { save_slice(tasks[i]); }
+        catch (const std::exception& e) {
+            std::lock_guard<std::mutex> lk(err_mtx);
+            errors.emplace_back(e.what());
         }
     }
 }
 
-void mexFunction(int nlhs, mxArray*[], int nrhs, const mxArray* prhs[]) {
+// -----------------------------------------------------------------------------
+// mexFunction
+// -----------------------------------------------------------------------------
+void mexFunction(int, mxArray*[], int nrhs, const mxArray* prhs[]) {
     try {
         if (nrhs != 4)
-            mexErrMsgIdAndTxt("save_bl_tif:Input", "Usage: save_bl_tif(array3d, fileList, orderFlag, compression)");
+            mexErrMsgIdAndTxt("save_bl_tif:Input",
+                              "Usage: save_bl_tif(vol3d, fileList, orderFlag, compression)");
 
-        const mxArray* array = prhs[0];
-        if (!mxIsUint8(array) && !mxIsUint16(array))
-            mexErrMsgIdAndTxt("save_bl_tif:Input", "Input array must be uint8 or uint16");
+        const mxArray* vol = prhs[0];
+        if (!mxIsUint8(vol) && !mxIsUint16(vol))
+            mexErrMsgIdAndTxt("save_bl_tif:Input",
+                              "Input must be uint8 or uint16");
 
-        const mwSize* dims = mxGetDimensions(array);
-        if (mxGetNumberOfDimensions(array) != 3)
-            mexErrMsgIdAndTxt("save_bl_tif:Input", "Input must be a 3D array");
+        if (mxGetNumberOfDimensions(vol) != 3)
+            mexErrMsgIdAndTxt("save_bl_tif:Input",
+                              "Input must be 3-D");
 
-        mwSize dim0 = dims[0], dim1 = dims[1], dim2 = dims[2];
+        mwSize dim0 = mxGetDimensions(vol)[0];   // rows(Y)
+        mwSize dim1 = mxGetDimensions(vol)[1];   // cols(X)
+        mwSize dim2 = mxGetDimensions(vol)[2];   // slices(Z)
 
-        if (!mxIsCell(prhs[1]) || mxGetNumberOfElements(prhs[1]) != dim2)
-            mexErrMsgIdAndTxt("save_bl_tif:Input", "fileList must be a 1xZ cell array matching 3rd dim of input");
+        if (!mxIsCell(prhs[1]) ||
+            mxGetNumberOfElements(prhs[1]) != dim2)
+            mexErrMsgIdAndTxt("save_bl_tif:Input",
+                              "fileList must be 1xZ cell array");
 
         bool isXYZ = false;
         const mxArray* flag = prhs[2];
-        if (mxIsLogicalScalar(flag))
-            isXYZ = mxIsLogicalScalarTrue(flag);
-        else if ((mxIsInt32(flag) || mxIsUint32(flag)) && mxGetNumberOfElements(flag) == 1)
+        if (mxIsLogicalScalar(flag)) isXYZ = mxIsLogicalScalarTrue(flag);
+        else if (mxIsUint32(flag) || mxIsInt32(flag))
             isXYZ = (*static_cast<uint32_t*>(mxGetData(flag)) != 0);
         else
-            mexErrMsgIdAndTxt("save_bl_tif:Input", "orderFlag must be logical or int32/uint32 scalar");
+            mexErrMsgIdAndTxt("save_bl_tif:Input",
+                              "orderFlag must be logical or int32/uint32 scalar");
 
         MatlabString compStr(prhs[3]);
-        std::string compression(compStr);
+        std::string compression(compStr.get());
         if (compression != "none" && compression != "lzw" && compression != "deflate")
-            mexErrMsgIdAndTxt("save_bl_tif:Input", "compression must be 'none', 'lzw', or 'deflate'");
+            mexErrMsgIdAndTxt("save_bl_tif:Input",
+                              "compression must be 'none', 'lzw', or 'deflate'");
 
+        // Build tasks
+        const uint8_t* basePtr = static_cast<const uint8_t*>(mxGetData(vol));
         std::vector<SaveTask> tasks;
         tasks.reserve(dim2);
-
-        mxClassID classId = mxGetClassID(array);
-        size_t elemSize = (classId == mxUINT16_CLASS) ? 2 : 1;
 
         for (mwSize z = 0; z < dim2; ++z) {
             const mxArray* cell = mxGetCell(prhs[1], z);
             if (!mxIsChar(cell))
-                mexErrMsgIdAndTxt("save_bl_tif:Input", "Each file path must be a string");
-            MatlabString path(cell);
-
-            mwSize width  = dim1;  // X dimension
-            mwSize height = dim0; // Y dimension
-            std::vector<uint8_t> buf(width * height * elemSize);
-
-            const uint8_t* data = static_cast<const uint8_t*>(mxGetData(array));
-
-            for (mwSize y = 0; y < height; ++y) {
-                for (mwSize x = 0; x < width; ++x) {
-                    size_t dst_idx = (y * width + x) * elemSize;
-                    mwSize src_idx;
-                    if (isXYZ)
-                        src_idx = y + x * dim0 + z * dim0 * dim1;
-                    else
-                        src_idx = y + x * dim0 + z * dim0 * dim1;
-                    std::memcpy(&buf[dst_idx], &data[src_idx * elemSize], elemSize);
-                }
-            }
-
-            tasks.push_back({std::move(buf), path.get(), width, height, classId, compression});
+                mexErrMsgIdAndTxt("save_bl_tif:Input",
+                                  "fileList entries must be char");
+            MatlabString p(cell);
+            tasks.push_back({basePtr, dim0, dim1, z, p.get(), isXYZ,
+                             mxGetClassID(vol), compression});
         }
 
-        std::atomic<size_t> next(0);
+        // Multithread
+        std::atomic_size_t next(0);
         std::vector<std::string> errors;
-        std::mutex err_mutex;
-
-        unsigned numThreads = std::max(1u, std::min<unsigned>(std::thread::hardware_concurrency(), dim2));
-        std::vector<std::thread> threads;
-        for (unsigned t = 0; t < numThreads; ++t)
-            threads.emplace_back(worker_main, std::cref(tasks), std::ref(next), std::ref(errors), std::ref(err_mutex));
-        for (auto& th : threads) th.join();
+        std::mutex err_mtx;
+        unsigned nThreads = std::max(1u,
+            std::min<unsigned>(std::thread::hardware_concurrency(), dim2));
+        std::vector<std::thread> pool;
+        for (unsigned t = 0; t < nThreads; ++t)
+            pool.emplace_back(worker, std::cref(tasks),
+                              std::ref(next), std::ref(errors),
+                              std::ref(err_mtx));
+        for (auto& th : pool) th.join();
 
         if (!errors.empty()) {
-            std::ostringstream oss;
-            oss << "save_bl_tif failed:\n";
-            for (const auto& e : errors) oss << "  - " << e << "\n";
-            mexErrMsgIdAndTxt("save_bl_tif:Error", "%s", oss.str().c_str());
+            std::string msg = "save_bl_tif errors:\n";
+            for (auto& e : errors) msg += "  - " + e + "\n";
+            mexErrMsgIdAndTxt("save_bl_tif:Runtime", "%s", msg.c_str());
         }
-    } catch (const std::exception& e) {
+    }
+    catch (const std::exception& e) {
         mexErrMsgIdAndTxt("save_bl_tif:Exception", "%s", e.what());
     }
 }
