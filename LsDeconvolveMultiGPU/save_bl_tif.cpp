@@ -75,39 +75,36 @@ struct SaveTask {
 //--------------------------------------------------------------
 void save_slice(const SaveTask& t)
 {
-    const size_t es  = (t.classId == mxUINT16_CLASS ? 2 : 1);
-    const mwSize W   = t.dim1;   // X
-    const mwSize H   = t.dim0;   // Y
+    const size_t es = (t.classId == mxUINT16_CLASS ? 2 : 1);
+
+    /* choose width/height based on layout */
+    const mwSize width  = t.isXYZ ? t.dim0 : t.dim1;   // X dimension
+    const mwSize height = t.isXYZ ? t.dim1 : t.dim0;   // Y dimension
     const size_t sliceOff = static_cast<size_t>(t.z) * t.dim0 * t.dim1;
 
     TIFF* tif = TIFFOpen(t.path.c_str(), "w");
     if (!tif) throw std::runtime_error("Cannot open " + t.path);
 
-    TIFFSetField(tif, TIFFTAG_IMAGEWIDTH,  W);
-    TIFFSetField(tif, TIFFTAG_IMAGELENGTH, H);
+    TIFFSetField(tif, TIFFTAG_IMAGEWIDTH,  width);
+    TIFFSetField(tif, TIFFTAG_IMAGELENGTH, height);
     TIFFSetField(tif, TIFFTAG_SAMPLESPERPIXEL, 1);
     TIFFSetField(tif, TIFFTAG_BITSPERSAMPLE, (es == 2 ? 16 : 8));
-    uint16_t c = (t.comp == "lzw") ? COMPRESSION_LZW :
-                 (t.comp == "deflate") ? COMPRESSION_DEFLATE :
-                 COMPRESSION_NONE;
-    TIFFSetField(tif, TIFFTAG_COMPRESSION, c);
-    TIFFSetField(tif, TIFFTAG_PHOTOMETRIC, PHOTOMETRIC_MINISBLACK);
+
+    uint16_t compTag = (t.comp == "lzw")      ? COMPRESSION_LZW
+                     : (t.comp == "deflate")  ? COMPRESSION_DEFLATE
+                     :                          COMPRESSION_NONE;
+    TIFFSetField(tif, TIFFTAG_COMPRESSION,  compTag);
+    TIFFSetField(tif, TIFFTAG_PHOTOMETRIC,  PHOTOMETRIC_MINISBLACK);
     TIFFSetField(tif, TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG);
-    TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP, H);
+    TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP, height);
 
-    std::vector<uint8_t> scan(W * es);
+    std::vector<uint8_t> scan(width * es);  // one scan-line buffer
 
-    // --- choose width/height per layout ---------------------------------
-    const mwSize width  = t.isXYZ ? t.dim0 : t.dim1;   // X
-    const mwSize height = t.isXYZ ? t.dim1 : t.dim0;   // Y
-    std::vector<uint8_t> scan(width * es);
-
-    // --- copy pixel-by-pixel, swapping indices only for XYZ -------------
     for (mwSize y = 0; y < height; ++y) {
         for (mwSize x = 0; x < width; ++x) {
 
-            mwSize srcRow = t.isXYZ ? x : y;   // swap
-            mwSize srcCol = t.isXYZ ? y : x;   // swap
+            mwSize srcRow = t.isXYZ ? x : y;   // swap for XYZ
+            mwSize srcCol = t.isXYZ ? y : x;
             size_t srcIdx = srcRow + srcCol * t.dim0 + sliceOff;
 
             std::memcpy(&scan[x * es], t.base + srcIdx * es, es);
