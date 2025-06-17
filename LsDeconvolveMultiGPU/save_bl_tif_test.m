@@ -33,7 +33,12 @@ function save_bl_tif_test()
 
                     for k = 1:sz(3)
                         B = imread(fileList{k});
-                        if ~isequal(B, A(:,:,k))
+                        if orders{o,2}   % XYZ layout → MEX transposes
+                            ok = isequal(B, A(:,:,k).');    % compare to transposed slice
+                        else             % YXZ layout → no transpose
+                            ok = isequal(B, A(:,:,k));
+                        end
+                        if ~ok
                             error("Mismatch in slice %d", k);
                         end
                     end
