@@ -992,17 +992,24 @@ function postprocess_save(...
     outpath, cache_drive, min_max_path, log_file, clipval, ...
     stack_info, resume, block, amplification)
 
-    % postprocess_save
+    % postprocess_save.m
     % -------------------------------------------------------------------------
-    % Assembles deconvolved blocks, rescales / clips intensities and writes each
-    % Z-slice as  img_######.tif  in *outpath*.  Supports robust “resume” of an
-    % interrupted run by detecting the highest existing TIFF index.
+    % Mounts each reconstructed block slab, rescales / clips, and writes TIFFs.
+    %
+    % INPUTS
+    %   outpath        – destination folder for img_######.tif files
+    %   cache_drive    – folder that contains the *.lz4 block cache
+    %   min_max_path   – path to min_max.mat (optional)
+    %   log_file       – file handle or path for p_log
+    %   clipval        – histogram clip (%), 0 → disabled
+    %   stack_info     – struct with   x, y, z, convert_to_8bit, convert_to_16bit, flip_upside_down
+    %   resume         – logical; continue an interrupted run
+    %   block          – struct with   p1, p2, nx, ny, nz   (block metadata)
+    %   amplification  – display-like gain factor
     % -------------------------------------------------------------------------
 
     % -- Semaphore setup ------------------------------------------------------
-    SEM_SINGLE = 1000;       % (unused now, but keep for future single-file ops)
     SEM_MULTI  = 10000;      % for concurrent LZ4 loads
-    semaphore_create(SEM_SINGLE, 1);
     semaphore_create(SEM_MULTI,  2);
 
     % -------------------------------------------------------------------------
@@ -1195,7 +1202,6 @@ function postprocess_save(...
     % -------------------------------------------------------------------------
     % 7.  Cleanup
     % -------------------------------------------------------------------------
-    semaphore_destroy(SEM_SINGLE);
     semaphore_destroy(SEM_MULTI);
     fprintf('postprocess_save completed successfully.\n');
 end
