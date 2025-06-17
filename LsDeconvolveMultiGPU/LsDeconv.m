@@ -1144,17 +1144,17 @@ function postprocess_save(...
         end
 
         % Gather & insert as each block arrives -------------------------------
-        for blkDone = 1:blocksPerSlab
-            tStart          = tic;
-            [idx, slabData] = fetchNext(async_load);   % idx = position in async_load
-            blnr            = block_inds(idx);         % real block number
+        for j = 1:blocksPerSlab
+            tStart = tic;
+            blnr   = block_inds(j);
 
-            R(block.p1(blnr,x):block.p2(blnr,x), ...
-              block.p1(blnr,y):block.p2(blnr,y), ...
-              block.p1(blnr,z)-slab_z1+1 : block.p2(blnr,z)-slab_z1+1) = slabData;
+            % fetchOutputs waits for this specific future
+            R(block.p1(blnr,x)           : block.p2(blnr,x), ...
+              block.p1(blnr,y)           : block.p2(blnr,y), ...
+              block.p1(blnr,z)-slab_z1+1 : block.p2(blnr,z)-slab_z1+1) = async_load(j).fetchOutputs;
 
             fprintf('   block %d/%d (%s) loaded+assigned in %.1fs\n', ...
-                    blkDone, blocksPerSlab, sprintf('bl_%d.lz4', blnr), toc(tStart));
+                    j, blocksPerSlab, sprintf('bl_%d.lz4', blnr), toc(tStart));
         end
         cancel(async_load);
 
