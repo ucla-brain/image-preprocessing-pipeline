@@ -99,9 +99,12 @@ void save_slice(const SaveTask& t)
 
     for (mwSize y = 0; y < H; ++y) {
         for (mwSize x = 0; x < W; ++x) {
-            size_t srcIdx = t.isXYZ
-                ?  y + x * t.dim0 + sliceOff         // permuted [X Y Z]
-                :  y + x * t.dim0 + sliceOff;        // native [Y X Z]
+            size_t srcIdx;
+            if (t.isXYZ)                    // array was permuted to [X Y Z]
+                srcIdx = x + y * t.dim0 + sliceOff;
+            else                            // native MATLAB [Y X Z]
+                srcIdx = y + x * t.dim0 + sliceOff;
+
             std::memcpy(&scan[x * es],
                         t.base + srcIdx * es, es);
         }
