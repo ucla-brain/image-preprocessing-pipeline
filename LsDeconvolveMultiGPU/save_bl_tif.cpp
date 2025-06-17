@@ -97,16 +97,20 @@ void save_slice(const SaveTask& t)
 
     std::vector<uint8_t> scan(W * es);
 
-    for (mwSize y = 0; y < H; ++y) {
-        for (mwSize x = 0; x < W; ++x) {
-            size_t srcIdx;
-            if (t.isXYZ)                    // array was permuted to [X Y Z]
-                srcIdx = x + y * t.dim0 + sliceOff;
-            else                            // native MATLAB [Y X Z]
-                srcIdx = y + x * t.dim0 + sliceOff;
+    // --- choose width/height per layout ---------------------------------
+    const mwSize width  = t.isXYZ ? t.dim0 : t.dim1;   // X
+    const mwSize height = t.isXYZ ? t.dim1 : t.dim0;   // Y
+    std::vector<uint8_t> scan(width * es);
 
-            std::memcpy(&scan[x * es],
-                        t.base + srcIdx * es, es);
+    // --- copy pixel-by-pixel, swapping indices only for XYZ -------------
+    for (mwSize y = 0; y < height; ++y) {
+        for (mwSize x = 0; x < width; ++x) {
+
+            mwSize srcRow = t.isXYZ ? x : y;   // swap
+            mwSize srcCol = t.isXYZ ? y : x;   // swap
+            size_t srcIdx = srcRow + srcCol * t.dim0 + sliceOff;
+
+            std::memcpy(&scan[x * es], t.base + srcIdx * es, es);
         }
         if (TIFFWriteScanline(tif, scan.data(), y, 0) < 0) {
             TIFFClose(tif);
