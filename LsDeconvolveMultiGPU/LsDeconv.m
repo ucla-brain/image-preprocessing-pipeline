@@ -311,7 +311,7 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(...
 
     d_pad = [0 0 0];
     if filter.destripe_sigma > 0, d_pad = max(d_pad, [1 1 1]); end
-    if numit > 0, d_pad = max(d_pad, decon_pad_size(psf_size, filter.use_fft)); end
+    if numit > 0, d_pad = max(d_pad, decon_pad_size(psf_size)); end
     % Use coarse step for initial sweep (square xy blocks)
     for z = max_block(3):-1:min_block(3)
         for xy = max_block(1):-1:min_block(1)
@@ -370,12 +370,8 @@ function pad_size = gaussian_pad_size(image_size, sigma, kernel)
     pad_size = ceil(max(pad_size(:).', kernel(:).'));
 end
 
-function pad = decon_pad_size(psf_sz, use_fft)
-    if use_fft
-        pad = ceil(psf_sz(:).' * 1);
-    else
-        pad = ceil(psf_sz(:).' * 1); % 4 works withou edgetaper_3d; 3 works with edgetaper_3d
-    end
+function pad = decon_pad_size(psf_sz)
+    pad = ceil(psf_sz(:).' * 1);
 end
 
 function n_vec = next_fast_len(n_vec)
