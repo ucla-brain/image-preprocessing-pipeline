@@ -1003,7 +1003,7 @@ function postprocess_save(...
     SEM_SINGLE = 1000;       % (unused now, but keep for future single-file ops)
     SEM_MULTI  = 10000;      % for concurrent LZ4 loads
     semaphore_create(SEM_SINGLE, 1);
-    semaphore_create(SEM_MULTI,  3);
+    semaphore_create(SEM_MULTI,  2);
 
     % -------------------------------------------------------------------------
     % 1.  Build block-file list and verify that every *.lz4 cache file exists
