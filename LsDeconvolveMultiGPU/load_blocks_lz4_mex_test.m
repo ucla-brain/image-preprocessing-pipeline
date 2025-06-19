@@ -68,7 +68,7 @@ function load_blocks_lz4_mex_test(varargin)
     fprintf('MEX reconstruction time: %.2f s\n', t_mex);
 
     % -------------------------------------------------------------------------
-    % MATLAB parfeval reference reconstruction
+    % MATLAB parfeval reference reconstruction (optional)
     % -------------------------------------------------------------------------
     fprintf('Building MATLAB parfeval reference...\n');
     pool = gcp('nocreate');
@@ -80,30 +80,40 @@ function load_blocks_lz4_mex_test(varargin)
             pool = [];
         end
     end
-    asyncs = parallel.FevalFuture.empty(nBlks,0);
-    V_ref  = zeros(size(V), 'single');
 
-    tic;
-    for k = 1:nBlks
-        asyncs(k) = parfeval(@load_lz4_mex, 1, fileNames{k});
-    end
+    if ~isempty(pool)
+        asyncs = parallel.FevalFuture.empty(nBlks,0);
+        V_ref  = zeros(size(V), 'single');
 
-    cancelFutures = onCleanup(@() cancel(asyncs(isvalid(asyncs))));
-    for done = 1:nBlks
-        [idx_blk, blk] = fetchNext(asyncs);
-        V_ref(p1(idx_blk,1):p2(idx_blk,1), ...
-              p1(idx_blk,2):p2(idx_blk,2), ...
-              p1(idx_blk,3):p2(idx_blk,3)) = blk;
+        tic;
+        for k = 1:nBlks
+            asyncs(k) = parfeval(@load_lz4_mex, 1, fileNames{k});
+        end
+
+        cancelFutures = onCleanup(@() cancel(asyncs(isvalid(asyncs))));
+        for done = 1:nBlks
+            [idx_blk, blk] = fetchNext(asyncs);
+            V_ref(p1(idx_blk,1):p2(idx_blk,1), ...
+                  p1(idx_blk,2):p2(idx_blk,2), ...
+                  p1(idx_blk,3):p2(idx_blk,3)) = blk;
+        end
+        t_matlab = toc;
+        fprintf('MATLAB reference time: %.2f s\n', t_matlab);
+    else
+        V_ref = [];
+        t_matlab = NaN;
     end
-    t_matlab = toc;
-    fprintf('MATLAB reference time: %.2f s\n', t_matlab);
 
     % -------------------------------------------------------------------------
     % Verification
     % -------------------------------------------------------------------------
     assert(isequaln(V, V_mex), 'Mismatch between original and MEX reconstruction.');
-    % assert(isequaln(V, V_ref), 'Mismatch between original and MATLAB reference reconstruction.');
+    if ~isempty(V_ref)
+        assert(isequaln(V, V_ref), 'Mismatch between original and MATLAB reference reconstruction.');
+    end
 
     fprintf('\nSUCCESS: all reconstructions are identical.\n');
-    fprintf('Speed-up vs. parfeval: %.1f×\n', t_matlab / t_mex);
+    if ~isnan(t_matlab)
+        fprintf('Speed-up vs. parfeval: %.1f×\n', t_matlab / t_mex);
+    end
 end
