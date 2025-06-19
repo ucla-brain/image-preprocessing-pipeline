@@ -71,22 +71,22 @@ function load_blocks_lz4_mex_test(varargin)
     % MATLAB parfeval reference reconstruction
     % -------------------------------------------------------------------------
     fprintf('Building MATLAB parfeval reference...\n');
-    %pool = gcp('nocreate'); if isempty(pool), pool = parpool; end
-    %asyncs = parallel.FevalFuture.empty(nBlks,0);
-    %V_ref  = zeros(size(V), 'single');
+    pool = gcp('nocreate'); if isempty(pool), pool = parpool; end
+    asyncs = parallel.FevalFuture.empty(nBlks,0);
+    V_ref  = zeros(size(V), 'single');
 
     tic;
-    %for k = 1:nBlks
-    %    asyncs(k) = parfeval(@load_lz4_mex, 1, fileNames{k});
-    %end
-%
-    %cancelFutures = onCleanup(@() cancel(asyncs(isvalid(asyncs))));
-    %for done = 1:nBlks
-    %    [idx_blk, blk] = fetchNext(asyncs);
-    %    V_ref(p1(idx_blk,1):p2(idx_blk,1), ...
-    %          p1(idx_blk,2):p2(idx_blk,2), ...
-    %          p1(idx_blk,3):p2(idx_blk,3)) = blk;
-    %end
+    for k = 1:nBlks
+        asyncs(k) = parfeval(@load_lz4_mex, 1, fileNames{k});
+    end
+
+    cancelFutures = onCleanup(@() cancel(asyncs(isvalid(asyncs))));
+    for done = 1:nBlks
+        [idx_blk, blk] = fetchNext(asyncs);
+        V_ref(p1(idx_blk,1):p2(idx_blk,1), ...
+              p1(idx_blk,2):p2(idx_blk,2), ...
+              p1(idx_blk,3):p2(idx_blk,3)) = blk;
+    end
     t_matlab = toc;
     fprintf('MATLAB reference time: %.2f s\n', t_matlab);
 
