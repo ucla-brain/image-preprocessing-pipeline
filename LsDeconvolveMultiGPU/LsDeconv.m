@@ -387,34 +387,6 @@ function n_vec = next_fast_len(n_vec)
     end
 end
 
-%provides coordinates of sub-blocks after splitting
-function [p1, p2] = split(stack_info, block)
-    % bounding box coordinate points
-    p1 = zeros(block.nx * block.ny * block.nz, 3);
-    p2 = zeros(block.nx * block.ny * block.nz, 3);
-
-    blnr = 0;
-    for nz = 0 : block.nz-1
-        zs = nz * block.z + 1;
-        for ny = 0 : block.ny-1
-            ys = ny * block.y + 1;
-            for nx = 0 : block.nx-1
-                xs = nx * block.x + 1;
-
-                blnr = blnr + 1;
-                p1(blnr, 1) = xs;
-                p2(blnr, 1) = min([xs + block.x - 1, stack_info.x]);
-
-                p1(blnr, 2) = ys;
-                p2(blnr, 2) = min([ys + block.y - 1, stack_info.y]);
-
-                p1(blnr, 3) = zs;
-                p2(blnr, 3) = min([zs + block.z - 1, stack_info.z]);
-            end
-        end
-    end
-end
-
 function check_block_coverage_planes(stack_info, block)
     % disp('Checking block coverage for errors ...');
 
@@ -985,85 +957,97 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
     assert(all(size(bl) == bl_size), '[process_block]: block size mismatch!');
 end
 
-function postprocess_save(...
+function postprocess_save( ...
     outpath, cache_drive, min_max_path, log_file, clipval, ...
     stack_info, resume, block, amplification)
 
-    % postprocess_save.m
-    % -------------------------------------------------------------------------
-    % Mounts each reconstructed block slab, rescales / clips, and writes TIFFs.
+    %POSTPROCESS_SAVE   Final stage: re-assembles cached LZ4 blocks into TIFFs.
     %
-    % INPUTS
-    %   outpath        – destination folder for img_######.tif files
-    %   cache_drive    – folder that contains the *.lz4 block cache
-    %   min_max_path   – path to min_max.mat (optional)
-    %   log_file       – file handle or path for p_log
-    %   clipval        – histogram clip (%), 0 → disabled
-    %   stack_info     – struct with   x, y, z, convert_to_8bit, convert_to_16bit, flip_upside_down
-    %   resume         – logical; continue an interrupted run
-    %   block          – struct with   p1, p2, nx, ny, nz   (block metadata)
-    %   amplification  – display-like gain factor
+    %   • For each Z-slab (one full X-Y plane stack), all bricks are loaded and
+    %     decompressed **in C++ threads** via load_blocks_lz4_mex (zero MATLAB-side
+    %     parallel plumbing).  Only one slab lives in RAM at a time.
+    %
+    %   • Optional global histogram determines symmetric clip limits.
+    %
+    %   • The slab is rescaled / optionally histogram-clipped, optionally flipped,
+    %     cast to uint8 / uint16, and written as img_000001.tif … img_NNNNNN.tif.
+    %
+    %   INPUT ARGUMENTS
+    %     outpath        – destination folder for img_######.tif files
+    %     cache_drive    – folder containing the *.lz4 brick cache
+    %     min_max_path   – path to min_max.mat produced earlier (optional)
+    %     log_file       – file handle or path for p_log()
+    %     clipval        – symmetric clip %, 0 disables
+    %     stack_info     – struct with fields:
+    %                         x,y,z, convert_to_8bit, convert_to_16bit,
+    %                         flip_upside_down   (see caller)
+    %     resume         – logical, continue an interrupted run
+    %     block          – struct with p1, p2, nx, ny, nz describing bricks
+    %     amplification  – display-style gain factor applied after clipping
+    %
+    %   The function assumes *save_lz4_mex* (for writing bricks) and
+    %   *load_blocks_lz4_mex* (parallel reader) are on the MATLAB path.
     % -------------------------------------------------------------------------
 
-    % -- Semaphore setup ------------------------------------------------------
-    SEM_MULTI  = 10000;      % for concurrent LZ4 loads
-    semaphore_create(SEM_MULTI,  2);
+    % == Semaphore guarding low-level load_bl_lz4 in histogram step ===========
+    SEM_MULTI = 10000;
+    semaphore_create(SEM_MULTI, 2);
 
     % -------------------------------------------------------------------------
-    % 1.  Build block-file list and verify that every *.lz4 cache file exists
+    % 1.  Build & sanity-check brick file list
     % -------------------------------------------------------------------------
-    numBlocks   = size(block.p1, 1);
-    blocklist = cellstr(fullfile(cache_drive, compose("bl_%d.lz4", (1:numBlocks).')));
+    numBlocks  = size(block.p1, 1);
+    blocklist  = cellstr(fullfile(cache_drive, compose("bl_%d.lz4", (1:numBlocks).')));
     missingMask = ~cellfun(@isfile, blocklist);
 
     if any(missingMask)
-        fprintf(2, 'ERROR: %d block files are missing – aborting.\n', nnz(missingMask));
+        fprintf(2,'ERROR: %d block files are missing – aborting.\n', nnz(missingMask));
         disp(find(missingMask));
-        error('postprocess_save:MissingBlocks', 'Block cache incomplete.');
+        error('postprocess_save:MissingBlocks','Block cache incomplete.');
     end
 
-    % Axis shorthand
+    % Axis shorthand for readability
     x = 1; y = 2; z = 3;
 
     % -------------------------------------------------------------------------
-    % 2.  Load min/max statistics (for rescaling)
+    % 2.  Load min / max statistics for rescaling
     % -------------------------------------------------------------------------
     if isfile(min_max_path)
-        S          = load(min_max_path);
-        deconvmin  = S.deconvmin;
-        deconvmax  = S.deconvmax;
-        rawmax     = S.rawmax;
+        S         = load(min_max_path);
+        deconvmin = S.deconvmin;
+        deconvmax = S.deconvmax;
+        rawmax    = S.rawmax;
     else
         warning("min_max.mat not found – using defaults.");
-        deconvmin  = 0;
-        deconvmax  = 5.3374;
-        rawmax     = 65535;
+        deconvmin = 0;
+        deconvmax = 5.3374;
+        rawmax    = 65535;
     end
 
-    % Override with requested output type -------------------------------------
+    % Override for final datatype
     if stack_info.convert_to_8bit
         rawmax = 255;
     elseif stack_info.convert_to_16bit
         rawmax = 65535;
     end
 
-    % Scale target ------------------------------------------------------------
-    if      stack_info.convert_to_8bit || rawmax <= 255
+    % Target scale
+    if stack_info.convert_to_8bit || rawmax <= 255
         scal = 255;
-    elseif  stack_info.convert_to_16bit || rawmax <= 65535
+    elseif stack_info.convert_to_16bit || rawmax <= 65535
         scal = 65535;
     else
-        scal = rawmax;   % fall back to full range
+        scal = rawmax;
     end
 
-    p_log(log_file, 'image stats ...');
-    p_log(log_file, sprintf('   target data type max value: %g',     scal));
-    p_log(log_file, sprintf('   99.99%% max before deconv  : %g',   rawmax));
-    p_log(log_file, sprintf('   99.99%% max after  deconv  : %g',   deconvmax));
-    p_log(log_file, sprintf('   global min after  deconv  : %g\n', deconvmin));
+    p_log(log_file,'image stats …');
+    p_log(log_file,sprintf('   target data type max value: %g', scal));
+    p_log(log_file,sprintf('   99.99%% max before deconv  : %g', rawmax));
+    p_log(log_file,sprintf('   99.99%% max after  deconv  : %g', deconvmax));
+    p_log(log_file,sprintf('   global min after  deconv  : %g\n', deconvmin));
 
     % -------------------------------------------------------------------------
-    % 3.  Optional global histogram (for symmetric clipping)
+    % 3.  Global histogram for symmetric clip (optional)
     % -------------------------------------------------------------------------
     if clipval > 0
         nbins    = 1e6;
@@ -1073,33 +1057,31 @@ function postprocess_save(...
 
         disp('Calculating global histogram …');
         parfor i = 1:numBlocks
-            tmpHist = histcounts(load_bl_lz4(blocklist{i}, SEM_MULTI).bl, bins);
-            chist   = chist + tmpHist;   %#ok<PFBNS>  (reduction variable)
+            tmp = histcounts(load_bl_lz4(blocklist{i}, SEM_MULTI).bl, bins);
+            chist = chist + tmp;   %#ok<PFBNS> (reduction)
         end
         chist     = cumsum(chist) / max(chist) * 100;
-        low_clip  = findClosest(chist,             clipval)        * binwidth;
+        low_clip  = findClosest(chist,       clipval) * binwidth;
         high_clip = findClosest(chist, 100 - clipval) * binwidth;
     end
 
     % -------------------------------------------------------------------------
-    % 4.  Detect existing TIFFs → nextFileIdx & first slab to process
+    % 4.  Detect already-written TIFFs (resume mode)
     % -------------------------------------------------------------------------
     blocksPerSlab = block.nx * block.ny;
     if resume
-        files = dir(fullfile(outpath, 'img_*.tif'));
+        files = dir(fullfile(outpath,'img_*.tif'));
     else
         files = [];
     end
 
     if ~isempty(files)
-        % Extract 6-digit indices (img_000123.tif → 123)
-        nums = cellfun(@(s) sscanf(s, 'img_%6d.tif'), {files.name});
-        lastDone     = max(nums);
-        nextFileIdx  = lastDone + 1;
+        nums          = cellfun(@(s) sscanf(s,'img_%6d.tif'), {files.name});
+        lastDone      = max(nums);
+        nextFileIdx   = lastDone + 1;
 
-        % Locate the first slab whose end-Z is ≥ nextFileIdx
-        starting_z_block = find(block.p2(1:blocksPerSlab:end, z) >= nextFileIdx, ...
-                                1, 'first');
+        % first slab whose end-Z ≥ nextFileIdx
+        starting_z_block = find(block.p2(1:blocksPerSlab:end, z) >= nextFileIdx, 1);
         fprintf('Resuming: last slice = %d ➜ continue at %d (slab %d)\n', ...
                 lastDone, nextFileIdx, starting_z_block);
     else
@@ -1108,59 +1090,50 @@ function postprocess_save(...
     end
 
     % -------------------------------------------------------------------------
-    % 5.  Parallel pool & async-load future container
+    % 5.  Parallel pool  (needed only for the earlier parfor histogram)
     % -------------------------------------------------------------------------
     num_workers = feature('numcores');
     if isempty(gcp('nocreate'))
-        pool = parpool('local', num_workers, 'IdleTimeout', Inf);
-    else
-        pool = gcp();
+        parpool('local', num_workers, 'IdleTimeout', Inf);
     end
-    async_load = parallel.FevalFuture.empty(blocksPerSlab, 0);
 
     % -------------------------------------------------------------------------
-    % 6.  Process each Z-slab --------------------------------------------------
+    % 6.  Process each slab – all bricks loaded in one MEX call
     % -------------------------------------------------------------------------
     for nz = starting_z_block : block.nz
         fprintf('Slab %d / %d – mounting blocks …\n', nz, block.nz);
 
-        % Block indices for this slab
         block_inds = ((nz-1)*blocksPerSlab + 1) : (nz*blocksPerSlab);
 
-        % Sanity: every cache file still exists
         if ~all(cellfun(@isfile, blocklist(block_inds)))
             error('postprocess_save:MissingDuringResume', ...
                   'Block files vanished during run (slab %d).', nz);
         end
 
-        % Z-range for this slab
+        % Z-range and slab depth
         slab_z1    = block.p1(block_inds(1), z);
         slab_z2    = block.p2(block_inds(1), z);
         slab_depth = slab_z2 - slab_z1 + 1;
 
-        % Pre-allocate result array
-        R = zeros(stack_info.x, stack_info.y, slab_depth, 'single');
+        % 1-based brick coordinates **inside the slab**
+        p1_slab = uint64([ ...
+            block.p1(block_inds,x), ...
+            block.p1(block_inds,y), ...
+            block.p1(block_inds,z) - uint64(slab_z1) + 1 ]);
 
-        % Launch async loads ---------------------------------------------------
-        for j = 1:blocksPerSlab
-            async_load(j) = parfeval(pool, @load_bl_lz4, 1, ...
-                                     blocklist{block_inds(j)}, SEM_MULTI);
-        end
+        p2_slab = uint64([ ...
+            block.p2(block_inds,x), ...
+            block.p2(block_inds,y), ...
+            block.p2(block_inds,z) - uint64(slab_z1) + 1 ]);
 
-        % Gather & insert as each block arrives -------------------------------
-        for blkDone = 1:blocksPerSlab
-            tStart          = tic;
-            [idx, slabData] = fetchNext(async_load);   % idx = position in async_load
-            blnr            = block_inds(idx);         % real block number
+        slabSize = uint64([ stack_info.x, stack_info.y, slab_depth ]);
 
-            R(block.p1(blnr,x):block.p2(blnr,x), ...
-              block.p1(blnr,y):block.p2(blnr,y), ...
-              block.p1(blnr,z)-slab_z1+1 : block.p2(blnr,z)-slab_z1+1) = slabData;
-
-            fprintf('   block %d/%d (%s) loaded+assigned in %.1fs\n', ...
-                    blkDone, blocksPerSlab, sprintf('bl_%d.lz4', blnr), toc(tStart));
-        end
-        cancel(async_load);
+        % ---- Parallel load + assemble (inside C++) -------------------------
+        tStart = tic;
+        R = load_blocks_lz4_mex( blocklist(block_inds), ...
+                                 p1_slab, p2_slab, slabSize );
+        fprintf('   slab assembled (%d blocks) in %.1fs\n', ...
+                blocksPerSlab, toc(tStart));
 
         % ---------------------------------------------------------------------
         % 6a.  Rescale / clip / flip
@@ -1177,17 +1150,21 @@ function postprocess_save(...
             end
         end
         R = round(R - amplification);
-        R = min(max(R,0), scal);                 % clamp
-        if stack_info.flip_upside_down, R = flip(R,2);  end
+        R = min(max(R, 0), scal);          % clamp
+        if stack_info.flip_upside_down
+            R = flip(R, 2);
+        end
 
-        if scal <= 255,     R = uint8(R);
-        elseif scal <= 65535, R = uint16(R);
+        if scal <= 255
+            R = uint8(R);
+        elseif scal <= 65535
+            R = uint16(R);
         end
 
         % ---------------------------------------------------------------------
-        % 6b.  Write TIFFs
+        % 6b.  Write slab slices as TIFFs
         % ---------------------------------------------------------------------
-        file_z1 = nextFileIdx;      % always use running counter
+        file_z1 = nextFileIdx;
         fprintf('Slab %d – saving %d slices starting at %06d …\n', ...
                 nz, size(R,3), file_z1);
 
@@ -1200,7 +1177,7 @@ function postprocess_save(...
     % 7.  Cleanup
     % -------------------------------------------------------------------------
     semaphore_destroy(SEM_MULTI);
-    fprintf('postprocess_save completed successfully.\n');
+    fprintf('postprocess_save completed successfully.\\n');
 end
 
 function bl = load_bl_lz4(path, semkey)
