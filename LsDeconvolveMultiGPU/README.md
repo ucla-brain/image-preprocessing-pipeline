@@ -283,7 +283,7 @@ Deconvolution of a 3D volume with **8266 × 12778 × 7912 = 835,688,764,576 voxe
 | GPUs | vRAM  | Deconvolution Method   | Destriping | Elapsed Time | Speedup |
 |------|-------|------------------------|------------|--------------|---------|
 | 2    | 11 GB | Spatial Domain         | No         | 13h:32m      |         |
-| 2    | 11 GB | Frequency Domain (FFT) | No         | 05h:53m      | 2.3x    |
+| 2    | 11 GB | Frequency Domain (FFT) | No         | 05h:05m      | 2.3x    |
 
 ## Licensing and Attribution
 
