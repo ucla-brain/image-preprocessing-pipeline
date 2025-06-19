@@ -24,7 +24,7 @@ src_conv3d    = 'conv3d_mex.cu';
 src_otf_gpu   = 'otf_gpu_mex.cu';
 src_load_bl   = 'load_bl_tif.cpp';
 src_save_bl   = 'save_bl_tif.cpp';
-src_load_bls_lz4 = 'load_blocks_lz4_mex.cpp'
+src_load_bls_lz4 = 'load_blocks_lz4_mex.cpp';
 
 % LZ4 download if missing
 lz4_c_url = 'https://raw.githubusercontent.com/lz4/lz4/dev/lib/lz4.c';
