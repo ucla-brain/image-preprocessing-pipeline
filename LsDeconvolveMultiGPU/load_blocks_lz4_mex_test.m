@@ -71,17 +71,12 @@ function load_blocks_lz4_mex_test(varargin)
     % MATLAB parfeval reference reconstruction (optional)
     % -------------------------------------------------------------------------
     fprintf('Building MATLAB parfeval reference...\n');
-    pool = gcp('nocreate');
-    if isempty(pool)
-        try
-            pool = parpool('local');
-        catch ME
-            warning('Could not start parallel pool. Falling back to serial execution.\n%s', ME.message);
-            pool = [];
-        end
+    num_workers = feature('numcores');
+    if isempty(gcp('nocreate'))
+        parpool('local', num_workers, 'IdleTimeout', Inf);
     end
 
-    if ~isempty(pool)
+    if ~isempty(gcp('nocreate'))
         asyncs = parallel.FevalFuture.empty(nBlks,0);
         V_ref  = zeros(size(V), 'single');
 
