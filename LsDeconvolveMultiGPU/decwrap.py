@@ -92,7 +92,7 @@ def get_all_gpu_indices():
 
 
 def estimate_block_size_max(gpu_indices, workers_per_gpu,
-                            bytes_per_element=4, base_reserve_gb=1.0, per_worker_mib=1000, num_blocks_on_gpu=2):
+                            bytes_per_element=4, base_reserve_gb=1.0, per_worker_mib=800, num_blocks_on_gpu=2):
     max_allowed = 2 ** 31 - 1
     try:
         result = subprocess.run(
