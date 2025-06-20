@@ -633,12 +633,9 @@ function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
     semaphore_destroy(semkey_single);
     for gpu = unique_gpus
         semaphore_destroy(semkey_gpu_base + gpu);
-        % semaphore_destroy(gpu + semkey_loading_base);
     end
-    % queue('destroy', semkey_gpu_base);
 
     % postprocess and write tif files
-    % delete(gcp('nocreate'));
     if need_post_processing
         postprocess_save(...
             outpath, cache_drive, min_max_path, log_file, clipval, ...
@@ -1070,6 +1067,7 @@ function postprocess_save( ...
         high_clip = findClosest(chist, 100 - clipval) * binwidth;
 
         semaphore_destroy(SEM_MULTI);
+        delete(gcp('nocreate'));
     end
 
     % -------------------------------------------------------------------------
