@@ -989,10 +989,6 @@ function postprocess_save( ...
     %   *load_blocks_lz4_mex* (parallel reader) are on the MATLAB path.
     % -------------------------------------------------------------------------
 
-    % == Semaphore guarding low-level load_bl_lz4 in histogram step ===========
-    SEM_MULTI = 10000;
-    semaphore_create(SEM_MULTI, 2);
-
     % -------------------------------------------------------------------------
     % 1.  Build & sanity-check brick file list
     % -------------------------------------------------------------------------
@@ -1050,6 +1046,10 @@ function postprocess_save( ...
     % 3.  Global histogram for symmetric clip (optional)
     % -------------------------------------------------------------------------
     if clipval > 0
+        % == Semaphore guarding low-level load_bl_lz4 in histogram step ===========
+        SEM_MULTI = 10000;
+        semaphore_create(SEM_MULTI, 2);
+
         num_workers = feature('numcores');
         if isempty(gcp('nocreate'))
             parpool('local', num_workers, 'IdleTimeout', Inf);
@@ -1062,12 +1062,14 @@ function postprocess_save( ...
 
         disp('Calculating global histogram …');
         parfor i = 1:numBlocks
-            tmp = histcounts(load_bl_lz4(blocklist{i}, SEM_MULTI).bl, bins);
+            tmp = histcounts(load_bl_lz4(blocklist{i}, SEM_MULTI), bins);
             chist = chist + tmp;   %#ok<PFBNS> (reduction)
         end
         chist     = cumsum(chist) / max(chist) * 100;
         low_clip  = findClosest(chist,       clipval) * binwidth;
         high_clip = findClosest(chist, 100 - clipval) * binwidth;
+
+        semaphore_destroy(SEM_MULTI);
     end
 
     % -------------------------------------------------------------------------
@@ -1167,10 +1169,6 @@ function postprocess_save( ...
         nextFileIdx = nextFileIdx + size(R,3);
     end
 
-    % -------------------------------------------------------------------------
-    % 6.  Cleanup
-    % -------------------------------------------------------------------------
-    semaphore_destroy(SEM_MULTI);
     fprintf('postprocess_save completed successfully.\\n');
 end
 
