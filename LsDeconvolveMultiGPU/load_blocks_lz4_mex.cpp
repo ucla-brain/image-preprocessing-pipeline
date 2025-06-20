@@ -26,7 +26,7 @@
 
   AUTHORSHIP
       Initial specification : Keivan Moradi
-      Implementation        : ChatGPT-4o  (June 2025)
+      Implementation        : ChatGPT-O3 and 4o  (June 2025)
 
   LICENSE
       GNU General Public License v3.0  –  https://www.gnu.org/licenses/gpl-3.0
@@ -256,7 +256,7 @@ void mexFunction(int nlhs, mxArray* plhs[],
         if (x1>=dimX || y1>=dimY || z1>=dimZ)
             mexErrMsgTxt("Brick exceeds requested volume bounds");
 
-        jobs.push_back({fname,x0,y0,z0,x1,y1,z1,dimX,dimY,dimZ,volPtr});
+        jobs.push_back({fname, x0, y0, z0, x1, y1, z1, dimX, dimY, dimZ, volPtr});
     }
 
     /* Launch async jobs ---------------------------------------------------*/
