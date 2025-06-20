@@ -1050,6 +1050,11 @@ function postprocess_save( ...
     % 3.  Global histogram for symmetric clip (optional)
     % -------------------------------------------------------------------------
     if clipval > 0
+        num_workers = feature('numcores');
+        if isempty(gcp('nocreate'))
+            parpool('local', num_workers, 'IdleTimeout', Inf);
+        end
+
         nbins    = 1e6;
         binwidth = deconvmax / nbins;
         bins     = 0:binwidth:deconvmax;
@@ -1090,17 +1095,12 @@ function postprocess_save( ...
     end
 
     % -------------------------------------------------------------------------
-    % 5.  Parallel pool  (needed only for the earlier parfor histogram)
-    % -------------------------------------------------------------------------
-    num_workers = feature('numcores');
-    if isempty(gcp('nocreate'))
-        parpool('local', num_workers, 'IdleTimeout', Inf);
-    end
-
-    % -------------------------------------------------------------------------
-    % 6.  Process each slab – all bricks loaded in one MEX call
+    % 5.  Re-assemble z-slabs (float32), re-scale to 8-bit or 16-bit, and save as 2D tif series
     % -------------------------------------------------------------------------
     for nz = starting_z_block : block.nz
+        % -------------------------------------------------------------------------
+        % 5a.  Process each slab – all bricks (bls) loaded in one MEX call
+        % -------------------------------------------------------------------------
         fprintf('Slab %d / %d – mounting blocks …\n', nz, block.nz);
 
         block_inds = ((nz-1)*blocksPerSlab + 1) : (nz*blocksPerSlab);
@@ -1129,11 +1129,11 @@ function postprocess_save( ...
         slabSize = uint64([ stack_info.x, stack_info.y, slab_depth ]);
 
         % ---- Parallel load + assemble (inside C++) -------------------------
-        [R, delta_t] = load_blocks_lz4_mex( blocklist(block_inds), p1_slab, p2_slab, slabSize );
-        fprintf('   slab assembled (%d blocks) in %.1fs\n', blocksPerSlab, delta_t);
+        [R, elapsed] = load_blocks_lz4_mex( blocklist(block_inds), p1_slab, p2_slab, slabSize );
+        fprintf('   slab assembled (%d blocks) in %.1fs\n', blocksPerSlab, elapsed);
 
         % ---------------------------------------------------------------------
-        % 6a.  Rescale / clip / flip
+        % 5b.  Rescale / clip / flip
         % ---------------------------------------------------------------------
         if clipval > 0
             R = R - low_clip;
@@ -1159,23 +1159,57 @@ function postprocess_save( ...
         end
 
         % ---------------------------------------------------------------------
-        % 6b.  Write slab slices as TIFFs
+        % 5c.  Write slab slices as TIFFs
         % ---------------------------------------------------------------------
         file_z1 = nextFileIdx;
-        fprintf('Slab %d – saving %d slices starting at %06d …\n', ...
-                nz, size(R,3), file_z1);
-
+        fprintf('   saving %d slices starting at %06d …\n', size(R,3), file_z1);
         save_slices_with_bl_tif(R, outpath, file_z1);
-
         nextFileIdx = nextFileIdx + size(R,3);
     end
 
     % -------------------------------------------------------------------------
-    % 7.  Cleanup
+    % 6.  Cleanup
     % -------------------------------------------------------------------------
     semaphore_destroy(SEM_MULTI);
     fprintf('postprocess_save completed successfully.\\n');
 end
+
+function save_slices_with_bl_tif(R, outpath, slab_z1)
+    %SAVE_SLICES_WITH_BL_TIF Save 3D image block using save_bl_tif with file skipping
+    %   R        : 3D block (X x Y x Z or Y x X x Z)
+    %   outpath  : directory to save TIFF slices
+    %   slab_z1  : base z-index (integer offset for naming)
+
+    start_t = tic;
+
+    assert(ndims(R) == 3, 'R must be a 3D array');
+    Z = size(R, 3);
+    indices = slab_z1 + (0:Z-1);
+    fileNames = compose("img_%06d.tif", indices);
+    fileList = cellstr(fullfile(outpath, fileNames));  % Ensure char cell array
+    existing = cellfun(@(f) exist(f, 'file'), fileList);
+
+    % Skip slices that already exist
+    if all(existing)
+        fprintf('   ✅ All %d slices already exist in %s\n', Z, outpath);
+        return;
+    end
+
+    % Slice only non-existing files
+    slicesToSave = find(~existing);
+    R = R(:, :, slicesToSave);
+    fileList = fileList(~existing);
+
+    % Determine array class and orientation flag
+    orderFlag = true;  % R is in [X Y Z] format
+    compression = 'deflate'; % use char '' not string ""
+
+    % Save using compiled multithreaded MEX
+    save_bl_tif(R, fileList, orderFlag, compression);
+
+    fprintf('   ✅ Saved %d slices in %.1fs.\n', numel(fileList), toc(start_t));
+end
+
 
 function bl = load_bl_lz4(path, semkey)
     semaphore('wait', semkey);
@@ -1322,22 +1356,6 @@ function baseline_subtraction = dark(filter, bit_depth)
     end
 end
 
-%writes 32bit float tiff-imges
-function writeTiff32(img, fname)
-    t = Tiff(fname, 'w');
-    tag.ImageLength = size(img, 1);
-    tag.ImageWidth = size(img, 2);
-    tag.Compression = Tiff.Compression.LZW;
-    tag.SampleFormat = Tiff.SampleFormat.IEEEFP;
-    tag.Photometric = Tiff.Photometric.MinIsBlack;
-    tag.BitsPerSample = 32;
-    tag.SamplesPerPixel = 1;
-    tag.PlanarConfiguration = Tiff.PlanarConfiguration.Chunky;
-    t.setTag(tag);
-    t.write(img);
-    t.close();
-end
-
 function index = findClosest(data, x)
     [~,index] = min(abs(data-x));
 end
@@ -1349,58 +1367,4 @@ function [lb, ub] = deconvolved_stats(deconvolved)
     end
     lb = stats(1);
     ub = stats(2);
-end
-
-function message = save_image_2d(im, path, s, rawmax, save_time)
-    im = squeeze(im);
-    im = im';
-    for num_retries = 1 : 40
-        try
-            if rawmax <= 255       % 8bit data
-                imwrite(im, path, 'Compression', 'Deflate');
-            elseif rawmax <= 65535 % 16bit data
-                imwrite(im, path, 'Compression', 'Deflate');
-            else                   % 32 bit data
-                writeTiff32(im, path) %im must be single;
-            end
-            break
-        catch
-            pause(1);
-        end
-    end
-    message = ['   saved img_' s ' in ' num2str(round(toc(save_time), 1)) ' seconds and after ' num2str(num_retries) ' attempts.'];
-end
-
-function save_slices_with_bl_tif(R, outpath, slab_z1)
-%SAVE_SLICES_WITH_BL_TIF Save 3D image block using save_bl_tif with file skipping
-%   R        : 3D block (X x Y x Z or Y x X x Z)
-%   outpath  : directory to save TIFF slices
-%   slab_z1  : base z-index (integer offset for naming)
-
-    assert(ndims(R) == 3, 'R must be a 3D array');
-    Z = size(R, 3);
-    indices = slab_z1 + (0:Z-1);
-    fileNames = compose("img_%06d.tif", indices);
-    fileList = cellstr(fullfile(outpath, fileNames));  % Ensure char cell array
-    existing = cellfun(@(f) exist(f, 'file'), fileList);
-
-    % Skip slices that already exist
-    if all(existing)
-        fprintf('✅ All %d slices already exist in %s\n', Z, outpath);
-        return;
-    end
-
-    % Slice only non-existing files
-    slicesToSave = find(~existing);
-    R = R(:, :, slicesToSave);
-    fileList = fileList(~existing);
-
-    % Determine array class and orientation flag
-    orderFlag = true;  % R is in [X Y Z] format
-    compression = 'deflate';
-
-    % Save using compiled multithreaded MEX
-    save_bl_tif(R, fileList, orderFlag, compression);
-
-    fprintf('✅ Saved %d slices to %s\n', numel(fileList), outpath);
 end
