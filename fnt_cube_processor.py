@@ -263,8 +263,8 @@ def process_cube(
                         sigma = (
                             gaussian_sigma,
                             gaussian_sigma,
-                            round(gaussian_sigma, 0) + (2.0 if deconvolution_args['doubled_psf'] else 1.0) if i==0 else 0
-                        ) # 2 --> dpsf
+                            (round(gaussian_sigma, 0) + (2.0 if deconvolution_args['doubled_psf'] else 1.5)) if i==0 else gaussian_sigma
+                        )
                         gaussian(img_decon, sigma=sigma, output=img_decon)
 
                     img_decon = apply_deconvolution(img_decon, deconvolution_args, gpu_semaphore, num_gaussian_decons)
@@ -407,7 +407,7 @@ if __name__ == '__main__':
                         default=0,
                         help="int or 'auto': User-supplied background to subtract.")
     parser.add_argument("--n_iters", "-it", type=int, required=False,
-                        default=12,
+                        default=6,
                         help="int: Number of iterations, by default 12")
     parser.add_argument("--dg_interation", "-dgi", type=int, required=False,
                         default=3,
