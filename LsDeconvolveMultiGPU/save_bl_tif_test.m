@@ -14,13 +14,14 @@ rng(42);                                   % reproducible random data
 fprintf("🧪 Running save_bl_tif extended tests…\n");
 
 %% 0. Quick SIMD correctness check via the MEX itself
-simdVol = uint8(randi(255, 256, 256, 1));
-tmp     = tempname + ".tif";
-save_bl_tif(simdVol, {tmp}, false, "none");   % YXZ → MEX transposes
+simdVol = uint8(randi(255, [256 256 1]));    % 3-D volume, Z = 1
+tmp     = [tempname '.tif'];
+save_bl_tif(simdVol, {tmp}, false, "none");  % YXZ → transpose inside MEX
 simdOut = imread(tmp);
 delete(tmp);
-assert(isequal(simdOut, simdVol.'), ...
-      'SIMD transpose (256×256 uint8) failed');
+
+assert(isequal(simdOut, simdVol(:,:,1).'), ...
+      'SIMD transpose (256×256×1 uint8) failed');
 fprintf("✅ SIMD slice sanity check passed\n");
 
 %% 1. Main matrix of tests
