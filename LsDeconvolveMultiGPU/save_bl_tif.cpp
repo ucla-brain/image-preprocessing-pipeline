@@ -157,7 +157,6 @@ static void save_slice(const SaveTask& t, std::vector<std::future<void>>& flush_
         ioBuf = dst;
     }
 
-    // Use .tmp file path
     const std::string tmpPath = t.filePath + ".tmp";
 
     TIFF* tif = TIFFOpen(tmpPath.c_str(), "w");
@@ -182,17 +181,13 @@ static void save_slice(const SaveTask& t, std::vector<std::future<void>>& flush_
         throw std::runtime_error("TIFF write failed on " + tmpPath);
     }
 
-    // Asynchronous close and rename
-    flush_futures.emplace_back(std::async(std::launch::async, [tif, tmpPath, finalPath = t.filePath]() {
-        TIFFClose(tif);
+    TIFFClose(tif);  // Must succeed before renaming
 
-        // Atomically rename .tmp → final (throws if fails)
-        if (std::rename(tmpPath.c_str(), finalPath.c_str()) != 0) {
-            std::remove(tmpPath.c_str());  // attempt cleanup
-            std::string err = "Atomic rename failed from " + tmpPath + " → " + finalPath;
-            throw std::runtime_error(err);  // will propagate via .get()
-        }
-    }));
+    // Atomically rename .tmp → final
+    if (std::rename(tmpPath.c_str(), t.filePath.c_str()) != 0) {
+        std::remove(tmpPath.c_str());  // Cleanup
+        throw std::runtime_error("Atomic rename failed from " + tmpPath + " → " + t.filePath);
+    }
 }
 
 /* ───────────────────────────── FILE LIST CACHE ──────────────────────────── */
