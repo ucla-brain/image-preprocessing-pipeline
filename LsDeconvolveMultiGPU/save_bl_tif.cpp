@@ -24,9 +24,10 @@
 ==============================================================================*/
 
 /*==============================================================================
-  save_bl_tif.cpp (OpenMP + Latency-Minimized Version)
-  -----------------------------------------------------------------------------
-  Fast Z-slice TIFF saver with minimal MATLAB overhead and optimized dispatch.
+  save_bl_tif.cpp (Persistent Thread Pool Version)
+  ------------------------------------------------------------------------------
+  Save Z-slices of a 3D MATLAB array into separate TIFF files using a persistent
+  std::thread pool with atomic task dispatch.
 
   Author        : Keivan Moradi (with ChatGPT-4o assistance)
   License       : GNU GPL v3
@@ -34,11 +35,15 @@
 
 #include "mex.h"
 #include "tiffio.h"
+#include <atomic>
+#include <condition_variable>
 #include <cstring>
-#include <string>
+#include <memory>
+#include <mutex>
 #include <stdexcept>
+#include <string>
+#include <thread>
 #include <vector>
-#include <omp.h>
 
 #if defined(__linux__)
 # include <fcntl.h>
@@ -57,7 +62,9 @@ struct SaveTask {
     size_t bytesPerPixel;
 };
 
-static void save_slice(const SaveTask& t, std::vector<uint8_t>& scratch)
+static thread_local std::vector<uint8_t> scratch;
+
+static void save_slice(const SaveTask& t)
 {
     const mwSize srcRows = t.isXYZ ? t.dim1 : t.dim0;
     const mwSize srcCols = t.isXYZ ? t.dim0 : t.dim1;
@@ -118,6 +125,68 @@ static void save_slice(const SaveTask& t, std::vector<uint8_t>& scratch)
     TIFFClose(tif);
 }
 
+// === Persistent Pool ===
+namespace {
+std::shared_ptr<const std::vector<SaveTask>> g_tasks;
+std::atomic_size_t g_next{0};
+std::atomic_size_t g_remaining{0};
+std::vector<std::string> g_errs;
+std::mutex g_mtx;
+std::condition_variable g_cv;
+bool g_stop = false;
+std::vector<std::thread> g_workers;
+
+void worker_loop()
+{
+    for (;;) {
+        std::unique_lock<std::mutex> lock(g_mtx);
+        g_cv.wait(lock, [] { return g_tasks || g_stop; });
+        if (g_stop) return;
+        auto tasks = g_tasks;
+        lock.unlock();
+
+        size_t idx = g_next.fetch_add(1);
+        while (idx < tasks->size()) {
+            try { save_slice((*tasks)[idx]); }
+            catch (const std::exception& e) {
+                std::lock_guard<std::mutex> errlock(g_mtx);
+                g_errs.emplace_back(e.what());
+            }
+            if (g_remaining.fetch_sub(1) == 1) {
+                std::lock_guard<std::mutex> finlock(g_mtx);
+                g_tasks.reset();
+                g_cv.notify_all();
+            }
+            idx = g_next.fetch_add(1);
+        }
+    }
+}
+
+void ensure_pool(size_t nSlices)
+{
+    if (!g_workers.empty()) return;
+    size_t hw = std::thread::hardware_concurrency();
+    if (hw == 0) hw = 8;
+    size_t nThreads = std::min(nSlices, hw);
+    if (hw >= 8) nThreads = std::max<size_t>(8, nThreads);
+    if (nThreads == 0) nThreads = 1;
+
+    g_workers.reserve(nThreads);
+    for (size_t i = 0; i < nThreads; ++i)
+        g_workers.emplace_back(worker_loop);
+
+    mexAtExit(+[] {
+        {
+            std::lock_guard<std::mutex> lock(g_mtx);
+            g_stop = true;
+        }
+        g_cv.notify_all();
+        for (auto& t : g_workers)
+            if (t.joinable()) t.join();
+    });
+}
+} // namespace
+
 void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
 {
     try {
@@ -144,39 +213,37 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
             ((mxIsUint32(prhs[2]) || mxIsInt32(prhs[2])) &&
              *static_cast<uint32_t*>(mxGetData(prhs[2])));
 
-        // --- Parse compression ONCE ---
+        // Compression parsing
         char* comp_cstr = mxArrayToUTF8String(prhs[3]);
         if (!comp_cstr)
-            mexErrMsgIdAndTxt("save_bl_tif:Input", "Failed to convert compression input");
+            mexErrMsgIdAndTxt("save_bl_tif:Input", "Failed to parse compression type");
         std::string comp(comp_cstr);
         mxFree(comp_cstr);
-        uint16_t compressionTag = COMPRESSION_NONE;
-        if (comp == "lzw")      compressionTag = COMPRESSION_LZW;
-        else if (comp == "deflate") compressionTag = COMPRESSION_DEFLATE;
-        else if (comp != "none")
-            mexErrMsgIdAndTxt("save_bl_tif:Input",
-                              "compression must be \"none\", \"lzw\", or \"deflate\"");
 
-        // --- Extract all filenames at once ---
+        uint16_t compTag = COMPRESSION_NONE;
+        if (comp == "lzw") compTag = COMPRESSION_LZW;
+        else if (comp == "deflate") compTag = COMPRESSION_DEFLATE;
+        else if (comp != "none")
+            mexErrMsgIdAndTxt("save_bl_tif:Input", "Invalid compression option");
+
+        // File list
         if (!mxIsCell(prhs[1]) || mxGetNumberOfElements(prhs[1]) != dim2)
             mexErrMsgIdAndTxt("save_bl_tif:Input", "fileList size mismatch");
         mxArray** file_cells = static_cast<mxArray**>(mxGetData(prhs[1]));
 
-        std::vector<std::string> file_paths;
-        file_paths.reserve(dim2);
+        std::vector<std::string> file_paths(dim2);
         for (size_t i = 0; i < dim2; ++i) {
             if (!mxIsChar(file_cells[i]))
                 mexErrMsgIdAndTxt("save_bl_tif:Input", "fileList must be cellstr");
             char* s = mxArrayToUTF8String(file_cells[i]);
-            file_paths.emplace_back(s);
+            file_paths[i] = s;
             mxFree(s);
         }
 
-        // --- Prepare tasks ---
-        std::vector<SaveTask> tasks;
-        tasks.reserve(dim2);
+        auto tasks = std::make_shared<std::vector<SaveTask>>();
+        tasks->reserve(dim2);
         for (size_t z = 0; z < dim2; ++z) {
-            tasks.push_back(SaveTask{
+            tasks->push_back({
                 base,
                 z * bytesPerSlice,
                 dim0,
@@ -184,36 +251,38 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
                 file_paths[z],
                 isXYZ,
                 classId,
-                compressionTag,
+                compTag,
                 bytesPerSlice,
                 bytesPerPixel
             });
         }
 
-        std::vector<std::string> errors;
+        if (tasks->empty()) return;
+        ensure_pool(tasks->size());
 
-#pragma omp parallel
         {
-            std::vector<uint8_t> scratch;
-#pragma omp for schedule(dynamic)
-            for (int i = 0; i < static_cast<int>(tasks.size()); ++i) {
-                try {
-                    save_slice(tasks[i], scratch);
-                } catch (const std::exception& e) {
-#pragma omp critical
-                    errors.emplace_back(e.what());
-                }
-            }
+            std::lock_guard<std::mutex> lock(g_mtx);
+            g_tasks = tasks;
+            g_next = 0;
+            g_remaining = tasks->size();
+            g_errs.clear();
+        }
+        g_cv.notify_all();
+
+        {
+            std::unique_lock<std::mutex> lock(g_mtx);
+            g_cv.wait(lock, [] { return !g_tasks; });
         }
 
-        if (!errors.empty()) {
+        if (!g_errs.empty()) {
             std::string msg("save_bl_tif errors:\n");
-            for (const auto& e : errors) msg += "  - " + e + '\n';
+            for (const auto& e : g_errs)
+                msg += "  - " + e + '\n';
             mexErrMsgIdAndTxt("save_bl_tif:Runtime", "%s", msg.c_str());
         }
 
         if (nlhs > 0)
-            plhs[0] = const_cast<mxArray*>(prhs[0]);  // return original array
+            plhs[0] = const_cast<mxArray*>(prhs[0]);
     }
     catch (const std::exception& e) {
         mexErrMsgIdAndTxt("save_bl_tif:Exception", "%s", e.what());
