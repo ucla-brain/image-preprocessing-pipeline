@@ -283,7 +283,8 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(...
 
     % Parameters for RAM and block sizing
     physCores   = feature('numCores');
-    ram_usage_portion = 0.9;               % Use at most 50% of available RAM
+    ram_usage_portion = 0.9;               % Use at most 90% of free RAM
+    usable_ram = ram_available * ram_usage_portion;
     R_bytes_per_voxel = 4;
     max_elements_per_dim = min(1290, floor(block_size_max^(1/3)));  % 3D cube limit from (2^31-1)^(1/3) = 1290 elements
     if filter.use_fft, max_elements_per_dim = min(1281, max_elements_per_dim); end
@@ -291,7 +292,7 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(...
 
     % Compute the max z size that fits in RAM (capped at 1290 and stack_info.z)
     slice_size = stack_info.x * stack_info.y;
-    z_max_ram = floor(ram_available * ram_usage_portion / (R_bytes_per_voxel * slice_size));
+    z_max_ram = floor(usable_ram / (R_bytes_per_voxel * slice_size));
     z_max = min(z_max_ram, stack_info.z);
 
     % Set min and max block sizes, capping to allowed per-dimension limit
@@ -328,7 +329,7 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(...
 
             if any(bl_shape > max_elements_per_dim), continue; end
             if prod(bl_shape) >= block_size_max, continue; end
-            if R_bytes_per_voxel * (slice_size * z + x * y * z * physCores) >= ram_available, continue; end
+            if R_bytes_per_voxel * (slice_size * z + x * y * z * physCores) > usable_ram, continue; end
 
             score = prod(bl_core);
             if score > best_score
