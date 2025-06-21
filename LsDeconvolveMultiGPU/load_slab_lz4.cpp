@@ -1,5 +1,5 @@
 /*==============================================================================
-  load_blocks_lz4_mex.cpp
+  load_slab_lz4.cpp
   ------------------------------------------------------------------------------
   Reconstruct a very large 3-D single-precision volume from many *.lz4 bricks,
   loading each brick in parallel C++ threads and writing directly into a
@@ -22,7 +22,7 @@
 
   COMPILATION
       >> mex -R2018a CXXFLAGS="$CXXFLAGS -std=c++17 -O3" ...
-             load_blocks_lz4_mex.cpp lz4.c
+             load_slab_lz4.cpp lz4.c
 
   AUTHORSHIP
       Initial specification : Keivan Moradi
@@ -32,7 +32,7 @@
       GNU General Public License v3.0  –  https://www.gnu.org/licenses/gpl-3.0
 ==============================================================================*/
 
-// BEGIN: Optimized load_blocks_lz4_mex.cpp (Performance Focus)
+// BEGIN: Optimized load_slab_lz4.cpp (Performance Focus)
 // NOTE: Keep LZ4, header parsing, and idx3D definitions the same as before...
 
 #include "mex.h"
@@ -239,7 +239,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
 {
     const auto tStart = std::chrono::high_resolution_clock::now();
     if (nrhs < 4 || nrhs > 5)
-        mexErrMsgTxt("Usage: [vol, elapsed] = load_blocks_lz4_mex(fnames, p1, p2, volSize, [maxThreads])");
+        mexErrMsgTxt("Usage: [vol, elapsed] = load_slab_lz4(fnames, p1, p2, volSize, [maxThreads])");
 
     if (!mxIsCell(prhs[0])) mexErrMsgTxt("First arg must be cellstr");
     const mwSize N = mxGetNumberOfElements(prhs[0]);
@@ -300,7 +300,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
             });
         pool.wait();  // Waits for all tasks to complete
     } catch (const std::exception& e) {
-        mexErrMsgIdAndTxt("load_blocks_lz4_mex:ThreadError", e.what());
+        mexErrMsgIdAndTxt("load_slab_lz4:ThreadError", e.what());
     }
 
     plhs[0] = volMx;
