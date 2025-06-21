@@ -102,9 +102,12 @@ static void save_slice(const SaveTask& t)
 
     /* (5) Write */
     tsize_t wrote = (t.compressionTag == COMPRESSION_NONE)
-        ? TIFFWriteRawStrip(tif, 0, const_cast<uint8_t*>(ioBuf),
-                            t.bytesPerSlice)
-        : TIFFWriteEncodedStrip(tif, 0, ioBuf, t.bytesPerSlice);
+        ? TIFFWriteRawStrip(tif, 0,
+                            const_cast<uint8_t*>(ioBuf),
+                            static_cast<tsize_t>(t.bytesPerSlice))
+        : TIFFWriteEncodedStrip(tif, 0,
+                                const_cast<uint8_t*>(ioBuf),
+                                static_cast<tsize_t>(t.bytesPerSlice));
 
     if (wrote < 0) {
         TIFFClose(tif);
