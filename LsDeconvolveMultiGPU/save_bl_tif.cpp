@@ -159,31 +159,33 @@ static void save_slice(const SaveTask& t)
             }
         }
     }
-    else  /* [X Y Z] rows contiguous ---------------------------------------- */
+    else  /* [X Y Z] rows contiguous ----------------------------------------- */
     {
-        const size_t srcRowBytes = t.dim0 * bytesPerPixel;   // step between source rows
-        const size_t dstRowBytes = srcCols * bytesPerPixel;  // step between dest rows
-        const size_t baseOff     = sliceIndex * pixelsPerSlice * bytesPerPixel;
+        const size_t srcRowBytes = t.dim0 * bytesPerPixel;   // step in MATLAB vol
+        const size_t dstRowBytes = srcCols * bytesPerPixel;  // step in scratch buf
+        const size_t baseBytes   = sliceIndex * pixelsPerSlice * bytesPerPixel;
 
         if (cpuHasAVX2 && bytesPerPixel == 1 &&
             (srcCols & 15) == 0 && (srcRows & 15) == 0)
         {
-            for (mwSize y0 = 0; y0 < srcRows; y0 += 16)
-                for (mwSize x0 = 0; x0 < srcCols; x0 += 16)
+            for (mwSize y0 = 0; y0 < srcRows; y0 += 16) {
+                for (mwSize x0 = 0; x0 < srcCols; x0 += 16) {
                     simd::transpose16x16_u8_stride(
                         /* src */
-                        t.base + baseOff +
+                        t.base + baseBytes +
                                  (static_cast<size_t>(y0) * t.dim0 + x0) * bytesPerPixel,
                         srcRowBytes,
                         /* dst */
                         dstBuffer + (static_cast<size_t>(y0) * srcCols + x0) * bytesPerPixel,
                         dstRowBytes);
+                }
+            }
         }
-        else  /* fallback: row-wise memcpy */
+        else   /* fallback: plain row copy */
         {
             for (mwSize y = 0; y < srcRows; ++y) {
                 const uint8_t* srcRow =
-                    t.base + baseOff +
+                    t.base + baseBytes +
                              static_cast<size_t>(y) * t.dim0 * bytesPerPixel;
 
                 std::memcpy(dstBuffer + static_cast<size_t>(y) * dstRowBytes,
