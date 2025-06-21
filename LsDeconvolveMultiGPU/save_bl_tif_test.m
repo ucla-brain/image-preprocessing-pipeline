@@ -11,7 +11,7 @@ function save_bl_tif_test()
 
     vol1b = reshape(vol1, 256,256,1);          % explicit 3-D singleton
     out1b = [tempname '.tif'];
-    save_bl_tif(vol1b, {out1b}, false, "none");
+    save_bl_tif(vol1b, {out1b}, false, 'none');
     assert(isequal(imread(out1b), vol1b(:,:,1)), "3-D-singleton path failed");
     delete(out1b);
 
@@ -19,7 +19,7 @@ function save_bl_tif_test()
     vol2 = uint8(randi(255, [256 256 2]));     % 2 slices
     files = { [tempname '_0.tif'], [tempname '_1.tif'] };
 
-    save_bl_tif(vol2, files, false, "none");   % YXZ → no transpose
+    save_bl_tif(vol2, files, false, 'none');   % YXZ → no transpose
 
     for k = 1:2
         data = imread(files{k});
