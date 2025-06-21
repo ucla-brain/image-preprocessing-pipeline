@@ -129,16 +129,21 @@ static void io_writer()
 {
     try {
         for (;;) {
-            /* --- wait for a job ----------------------------------------- */
             std::unique_lock<std::mutex> ql(g_queueMtx);
             g_queueNotEmpty.wait(ql, []{
                 return !g_queue.empty() ||
-                       (g_computeRemaining.load() == 0);    // no more producers
+                       (g_computeRemaining.load() == 0);
             });
 
-            if (g_queue.empty() && g_computeRemaining.load() == 0)
-                break;                                     // all done
+            /* ----------   exit condition   ---------- */
+            if (g_queue.empty() && g_computeRemaining.load() == 0) {
+                /* wake the MATLAB thread that is waiting for completion */
+                ql.unlock();                 // avoid notifying with the lock held
+                g_queueNotEmpty.notify_all();
+                break;
+            }
 
+            /* ----------   normal write path   ---------- */
             WriteJob job = std::move(g_queue.front());
             g_queue.pop_front();
             g_queueNotFull.notify_one();
@@ -184,6 +189,7 @@ static void io_writer()
     catch (const std::exception& e) {
         std::lock_guard<std::mutex> el(g_errMtx);
         g_errors.emplace_back(e.what());
+        g_queueNotEmpty.notify_all();   // unblock main thread on error
     }
 }
 
