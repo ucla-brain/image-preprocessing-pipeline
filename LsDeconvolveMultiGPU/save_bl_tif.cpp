@@ -75,14 +75,14 @@ struct MatlabString {
   Task description — one per Z-slice (input phase)
 ==============================================================================*/
 struct SliceTask {
-    const uint8_t* base;          // pointer to whole volume (MATLAB memory)
-    mwSize         dimY;          // rows   in MATLAB storage (Y)
-    mwSize         dimX;          // cols   in MATLAB storage (X)
-    mwSize         zIndex;        // slice index 0-based
-    bool           isXYZlayout;   // true => [X Y Z]  (already row-major)
-    mxClassID      classId;       // uint8 / uint16
-    std::string    outPath;
-    std::string    compression;   // "none" | "lzw" | "deflate"
+    const uint8_t* base;     // pointer to whole volume
+    mwSize         dimY;     // MATLAB rows (Y)
+    mwSize         dimX;     // MATLAB cols (X)
+    mwSize         zIndex;   // slice index
+    std::string    outPath;  // destination TIFF
+    bool           isXYZlayout;
+    mxClassID      classId;
+    std::string    compression;
 };
 
 /*==============================================================================
@@ -200,11 +200,11 @@ static void compute_worker()
 
         const SliceTask& task = (*g_tasks)[idx];
 
-        /* figure out final image size ------------------------------------- */
-        const std::size_t bpp = (task.classId == mxUINT16_CLASS ? 2 : 1);
-        const mwSize rowsFinal = task.isXYZlayout ? task.dim1 : task.dim0;
-        const mwSize colsFinal = task.isXYZlayout ? task.dim0 : task.dim1;
-        const std::size_t pixelsPerSlice = static_cast<std::size_t>(task.dim0) * task.dim1;
+        const std::size_t bpp            = (task.classId == mxUINT16_CLASS ? 2 : 1);
+        const mwSize      rowsFinal      = task.dimY;  // always Y
+        const mwSize      colsFinal      = task.dimX;  // always X
+        const std::size_t pixelsPerSlice = static_cast<std::size_t>(task.dimY) *
+                                           task.dimX;
         const std::size_t bytesPerSlice  = pixelsPerSlice * bpp;
 
         WriteJob job;
@@ -215,34 +215,36 @@ static void compute_worker()
         job.compression = task.compression;
         job.pixels.resize(bytesPerSlice);
 
-        uint8_t* dst = job.pixels.data();
-        const uint8_t* srcVolumeBase = task.base +
+        uint8_t*       dst = job.pixels.data();
+        const uint8_t* srcVolumeBase =
+            task.base +
             static_cast<std::size_t>(task.zIndex) * pixelsPerSlice * bpp;
 
-        /* ------------------ transpose / copy ----------------------------- */
-        if (!task.isXYZlayout) {   /* MATLAB default [Y X Z] (column-major) */
+        /* ---------------- transpose / copy ------------------------------- */
+        if (!task.isXYZlayout) {               /* column-major → row-major */
             for (mwSize col = 0; col < colsFinal; ++col) {
                 const uint8_t* srcColumn =
-                    srcVolumeBase + static_cast<std::size_t>(col) * task.dim0 * bpp;
+                    srcVolumeBase + static_cast<std::size_t>(col) * task.dimY * bpp;
 
                 for (mwSize row = 0; row < rowsFinal; ++row) {
-                    std::size_t dstIdx = (static_cast<std::size_t>(row) * colsFinal + col) * bpp;
+                    std::size_t dstIdx =
+                        (static_cast<std::size_t>(row) * colsFinal + col) * bpp;
                     std::memcpy(dst + dstIdx,
                                 srcColumn + static_cast<std::size_t>(row) * bpp,
                                 bpp);
                 }
             }
-        } else {                   /* [X Y Z] already row-major */
+        } else {                               /* already row-major */
             const std::size_t rowBytes = colsFinal * bpp;
             for (mwSize row = 0; row < rowsFinal; ++row) {
                 const uint8_t* srcRow =
-                    srcVolumeBase + static_cast<std::size_t>(row) * task.dim0 * bpp;
+                    srcVolumeBase + static_cast<std::size_t>(row) * task.dimY * bpp;
                 std::memcpy(dst + static_cast<std::size_t>(row) * rowBytes,
                             srcRow, rowBytes);
             }
         }
 
-        /* ------------------ enqueue -------------------------------------- */
+        /* ---------------- enqueue write job ------------------------------ */
         std::unique_lock<std::mutex> ql(g_queueMtx);
         g_queueNotFull.wait(ql, []{ return g_queue.size() < kQueueCapacity; });
         g_queue.emplace_back(std::move(job));
@@ -252,7 +254,7 @@ static void compute_worker()
 
     /* producer done */
     if (g_computeRemaining.fetch_sub(1) == 1)
-        g_queueNotEmpty.notify_one();   // wake writer for shutdown
+        g_queueNotEmpty.notify_one();
 }
 
 /*==============================================================================
@@ -367,12 +369,17 @@ void mexFunction(int, mxArray*[], int nrhs, const mxArray* prhs[])
                 mexErrMsgIdAndTxt("save_bl_tif:Input", "fileList must be char");
 
             MatlabString path(c);
-            taskVec->push_back({basePtr,
-                                dimY, dimX, z,
-                                path.get(),
-                                isXYZ,
-                                mxGetClassID(vol),
-                                compression});
+            taskVec->emplace_back(
+                SliceTask{
+                    basePtr,          // whole volume pointer
+                    dimY, dimX,       // Y, X dimensions
+                    z,                // slice index
+                    path.get(),       // output path
+                    isXYZ,            // layout flag
+                    mxGetClassID(vol),
+                    compression       // "none" | "lzw" | "deflate"
+                }
+            );
         }
 
         if (taskVec->empty()) return;   // nothing to do
