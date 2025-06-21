@@ -339,7 +339,10 @@ void mexFunction(int nlhs, mxArray* plhs[],
         for (size_t i = 0; i < maxThreads; ++i) {
             workers.emplace_back([&, i]() {
                 // Apply pthread attributes to this thread
-                pthread_setschedparam(pthread_self(), SCHED_BATCH, nullptr);
+                sched_param param{};
+                param.sched_priority = 0; // default priority
+
+                pthread_setschedparam(pthread_self(), SCHED_BATCH, &param);
                 pthread_setname_np(pthread_self(), "save_bl_tif");
 
                 #if defined(__linux__)
@@ -360,7 +363,10 @@ void mexFunction(int nlhs, mxArray* plhs[],
             // Apply stack size (attr) directly to each std::thread
             pthread_t native_thread = workers.back().native_handle();
             pthread_attr_setstacksize(&attr, 256 * 1024);
-            pthread_setschedparam(native_thread, SCHED_BATCH, nullptr);
+            sched_param param{};
+            param.sched_priority = 0; // default priority
+
+            pthread_setschedparam(native_thread, SCHED_BATCH, &param);
         }
 
         // Ensure attribute cleanup
