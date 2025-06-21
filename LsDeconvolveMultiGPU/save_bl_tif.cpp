@@ -23,6 +23,7 @@
       – AVX-2 16×16 blocked transpose for [Y X Z] slices when CPU supports it
       – Fast path for [Y X Z] avoids per-pixel multiplications.
       – Matches `load_bl_tif.cpp` for slice order and dimensions.
+      – Pool size clamped to min(Z-slices, HW threads); excess threads stay idle.
 
   PARALLELISM
   -----------
@@ -75,20 +76,19 @@
 
 /* --- runtime AVX-2 check (GCC/Clang) ----------------------------------- */
 #if defined(__x86_64__) && defined(__AVX2__)
-#   if defined(__GNUC__) || defined(__clang__)
-    static bool have_avx2 = __builtin_cpu_supports("avx2");
-#   else   /* MSVC */
-    #include <intrin.h>
-    static bool have_avx2 = ([]{
-        int cpuInfo[4];
-        __cpuid(cpuInfo, 7);
-        return (cpuInfo[1] & (1 << 5)) != 0;   // EBX bit 5 = AVX2
-    })();
-#   endif
+#  if defined(__GNUC__) || defined(__clang__)
+     static inline bool have_avx2 = __builtin_cpu_supports("avx2");
+#  else  /* MSVC */
+     #include <intrin.h>
+     static inline bool have_avx2 = ([]{
+         int cpuInfo[4];
+         __cpuid(cpuInfo, 7);
+         return (cpuInfo[1] & (1 << 5)) != 0;   // EBX bit 5 = AVX2
+     })();
+#  endif
 #else
-    static const bool have_avx2 = false;
+     static inline bool have_avx2 = false;      // <-- remove const, keep inline
 #endif
-
 
 /*==============================================================================
    RAII wrapper for MATLAB strings
@@ -280,20 +280,36 @@ static void worker_loop()
     }
 }
 
-inline void ensure_pool(size_t requested)
+inline void ensure_pool(size_t nSlices)      // nSlices == taskVec->size()
 {
+    /* Pool already exists → nothing to do.
+       (We do not shrink on later calls; excess threads stay idle.) */
     if (!g_workers.empty()) return;
 
 #if defined(__linux__)
-    shrink_default_stack();
+    shrink_default_stack();                  // 1 MiB stacks on glibc ≥ 2.34
 #endif
-    requested = std::max<size_t>(8, std::thread::hardware_concurrency()); // user-approved: all hw threads, ≥8
+
+    /* Hardware limit (may return 0 on exotic VMs) */
+    size_t hw = std::thread::hardware_concurrency();
+    if (hw == 0) hw = 8;                 // fallback if API fails
+
+    size_t requested = std::min(nSlices, hw);   // never exceed cores or slices
+    if (requested < 8) requested = std::max<size_t>(1, requested); // keep ≥1; no forced 8
+
+    /* final thread count:
+         – at least 1
+         – at least 8  (user-approved floor)
+         – no more than hardware threads
+         – no more than Z-slices in this batch                */
+    size_t requested = std::min(nSlices, std::max<size_t>(8, hw));
+    requested        = std::max<size_t>(1, requested);
 
     g_workers.reserve(requested);
     try {
         for (size_t i = 0; i < requested; ++i)
             g_workers.emplace_back(worker_loop);
-    } catch (...) {
+    } catch (...) {                           // clean up if creation fails
         g_stop = true;
         g_cv.notify_all();
         for (auto& t : g_workers)
@@ -301,6 +317,7 @@ inline void ensure_pool(size_t requested)
         throw;
     }
 
+    /* tear-down at mexClear */
     mexAtExit(+[] {
         {
             std::lock_guard<std::mutex> lk(g_mtx);
