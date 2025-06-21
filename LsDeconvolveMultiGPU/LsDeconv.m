@@ -325,7 +325,7 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(...
             end
 
             if any(bl_shape > max_elements_per_dim), continue; end
-            if prod(bl_shape) > block_size_max, continue; end
+            if prod(bl_shape) >= block_size_max, continue; end
 
             score = prod(bl_core);
             if score > best_score
