@@ -311,8 +311,26 @@ void mexFunction(int, mxArray*[], int nrhs, const mxArray* prhs[])
         const mxArray* V = prhs[0];
         if (!mxIsUint8(V) && !mxIsUint16(V))
             mexErrMsgIdAndTxt("save_bl_tif:Input", "Volume must be uint8/uint16");
-        if (mxGetNumberOfDimensions(V) != 3)
-            mexErrMsgIdAndTxt("save_bl_tif:Input", "Volume must be 3-D");
+
+        /* ---- dimensions ---- */
+        mwSize nd = mxGetNumberOfDimensions(V);
+        const mwSize* d = mxGetDimensions(V);
+
+        mwSize dim0, dim1, dim2;
+        if (nd == 2) {              // e.g. 256 x 256  -> treat as 256 x 256 x 1
+            dim0 = d[0];
+            dim1 = d[1];
+            dim2 = 1;
+        }
+        else if (nd == 3) {         // proper 3-D input
+            dim0 = d[0];
+            dim1 = d[1];
+            dim2 = d[2];
+        }
+        else {
+            mexErrMsgIdAndTxt("save_bl_tif:Input",
+                              "Volume must be 2-D or 3-D.");
+        }
 
         const mwSize dim0 = mxGetDimensions(V)[0];
         const mwSize dim1 = mxGetDimensions(V)[1];

@@ -2,20 +2,33 @@ function save_bl_tif_test()
     rng(42);
     fprintf("🧪 Running save_bl_tif extended tests…\n");
 
-    %% 0. Quick SIMD correctness check via the MEX itself
-    simdVol = uint8(randi(255, [256 256 2]));       % 2 slices
-    tmpBase = tempname;                             % unique base
-    fileList = {[tmpBase '_1.tif'], [tmpBase '_2.tif']};
+    %% (A) single-slice volume  — accepted as 2-D or 3-D [ dim3 == 1 ]
+    vol1  = uint8(randi(255, [256 256]));      % plain 2-D matrix
+    out1  = [tempname '.tif'];
+    save_bl_tif(vol1, {out1}, false, "none"); % YXZ, no transpose needed
+    assert(isequal(imread(out1), vol1),  "2-D path failed (YXZ)");
+    delete(out1);
 
-    save_bl_tif(simdVol, fileList, false, 'none');  % YXZ → transpose in MEX
+    vol1b = reshape(vol1, 256,256,1);          % explicit 3-D singleton
+    out1b = [tempname '.tif'];
+    save_bl_tif(vol1b, {out1b}, false, "none");
+    assert(isequal(imread(out1b), vol1b(:,:,1)), "3-D-singleton path failed");
+    delete(out1b);
+
+    %% (B) two-slice volume — true 3-D
+    vol2 = uint8(randi(255, [256 256 2]));     % 2 slices
+    files = { [tempname '_0.tif'], [tempname '_1.tif'] };
+
+    save_bl_tif(vol2, files, false, "none");   % YXZ → no transpose
 
     for k = 1:2
-        simdOut = imread(fileList{k});
-        delete(fileList{k});
-        assert(isequal(simdOut, simdVol(:,:,k)), ...
-              "SIMD transpose failed on slice %d", k);
+        data = imread(files{k});
+        assert(isequal(data, vol2(:,:,k)), ...
+            "Multi-slice check failed on slice %d", k);
+        delete(files{k});
     end
-    fprintf("✅ SIMD slice sanity check passed\n");
+
+    fprintf("✅ 2-D and 3-D slice sanity checks passed\n");
 
     outdir = fullfile(tempdir, 'save_bl_tif_test');
     if exist(outdir, 'dir'), rmdir(outdir, 's'); end
