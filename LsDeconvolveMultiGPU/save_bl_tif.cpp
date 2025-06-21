@@ -19,7 +19,8 @@
       – Reusable std::thread pool (one thread per HW core, min 8).
       – 1 MiB thread stacks on glibc ≥ 2.34 to minimise VM usage.
       – Thread-local scratch buffer allocated **once** per worker.
-      – Whole-slice output via `TIFFWriteEncodedStrip` (one syscall/CRC).
+      – Uses TIFFWriteRawStrip when compression="none" (no extra memcpy/CRC)
+      – AVX-2 16×16 blocked transpose for [Y X Z] slices when CPU supports it
       – Fast path for [Y X Z] avoids per-pixel multiplications.
       – Matches `load_bl_tif.cpp` for slice order and dimensions.
 
@@ -54,6 +55,7 @@
 #include "mex.h"
 #include "matrix.h"
 #include "tiffio.h"
+#include "transpose_avx2.h"
 
 #include <atomic>
 #include <condition_variable>
@@ -70,6 +72,23 @@
   #include <fcntl.h>     // posix_fadvise
   #include <unistd.h>
 #endif
+
+/* --- runtime AVX-2 check (GCC/Clang) ----------------------------------- */
+#if defined(__x86_64__) && defined(__AVX2__)
+#   if defined(__GNUC__) || defined(__clang__)
+    static bool have_avx2 = __builtin_cpu_supports("avx2");
+#   else   /* MSVC */
+    #include <intrin.h>
+    static bool have_avx2 = ([]{
+        int cpuInfo[4];
+        __cpuid(cpuInfo, 7);
+        return (cpuInfo[1] & (1 << 5)) != 0;   // EBX bit 5 = AVX2
+    })();
+#   endif
+#else
+    static const bool have_avx2 = false;
+#endif
+
 
 /*==============================================================================
    RAII wrapper for MATLAB strings
@@ -124,28 +143,46 @@ static void save_slice(const SaveTask& t)
     /* -------- transpose into buf -------- */
     if (!t.isXYZ)   /* fast Y-X-Z path */
     {
-        for (mwSize x = 0; x < width; ++x) {
-            const uint8_t* srcCol =
-                t.base + (sliceOff + static_cast<size_t>(x) * t.dim0) * es;
-            for (mwSize y = 0; y < height; ++y) {
-                size_t dst = (static_cast<size_t>(y) * width + x) * es;
-                const uint8_t* src = srcCol + static_cast<size_t>(y) * es;
-                if (es == 1) buf[dst] = *src;
-                else         std::memcpy(buf + dst, src, 2);
+        if (have_avx2 && (width & 15) == 0 && (height & 15) == 0)
+        {
+            /* tile-wise 16×16 SIMD transpose */
+            for (mwSize y0 = 0; y0 < height; y0 += 16) {
+                for (mwSize x0 = 0; x0 < width; x0 += 16) {
+                    const uint8_t* sp =
+                        t.base + (sliceOff + static_cast<size_t>(x0) * t.dim0
+                                  + y0) * es;
+                    uint8_t* dp = buf + (static_cast<size_t>(y0) * width + x0) * es;
+                    if (es == 1)
+                        simd::transpose16x16_u8(sp, es * t.dim0, dp, es * width);
+                    else
+                        simd::transpose16x16_u16((const uint16_t*)sp, t.dim0,
+                                                 (uint16_t*)dp, width);
+                }
+            }
+        }
+        else
+        {
+            /* scalar column-wise copy (unchanged) */
+            for (mwSize x = 0; x < width; ++x) {
+                const uint8_t* srcCol =
+                    t.base + (sliceOff + static_cast<size_t>(x) * t.dim0) * es;
+                for (mwSize y = 0; y < height; ++y) {
+                    size_t dstIdx = (static_cast<size_t>(y) * width + x) * es;
+                    const uint8_t* src = srcCol + static_cast<size_t>(y) * es;
+                    if (es == 1) buf[dstIdx] = *src;
+                    else         std::memcpy(buf + dstIdx, src, 2);
+                }
             }
         }
     }
-    else            /* X-Y-Z path */
+    else   /* X-Y-Z: each row already contiguous */
     {
+        const size_t rowBytes = width * es;
         for (mwSize y = 0; y < height; ++y) {
-            const size_t rowDst = static_cast<size_t>(y) * width * es;
-            const size_t colBase = static_cast<size_t>(y) * t.dim0;
-            for (mwSize x = 0; x < width; ++x) {
-                size_t srcIdx = x + colBase + sliceOff;
-                size_t dstIdx = rowDst + static_cast<size_t>(x) * es;
-                if (es == 1) buf[dstIdx] = t.base[srcIdx];
-                else         std::memcpy(buf + dstIdx, t.base + srcIdx * es, 2);
-            }
+            const uint8_t* srcRow =
+                t.base + (sliceOff + static_cast<size_t>(y) * t.dim0) * es;
+            std::memcpy(buf + static_cast<size_t>(y) * rowBytes,
+                        srcRow, rowBytes);
         }
     }
 
