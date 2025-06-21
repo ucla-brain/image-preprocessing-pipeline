@@ -117,6 +117,58 @@ private:
 };
 
 /*==============================================================================
+ *                     File-format constants & helpers
+ *============================================================================*/
+constexpr uint32_t MAGIC_NUMBER = 0x4C5A4331U;   // 'LZ4C'
+constexpr uint32_t HEADER_SIZE  = 33280U;        // bytes (fixed)
+constexpr uint32_t MAX_DIMS     = 16;
+constexpr uint32_t MAX_CHUNKS   = 2048;
+enum DType : uint8_t { DT_DOUBLE = 1, DT_SINGLE = 2, DT_UINT16 = 3 };
+
+struct FileHeader {
+    uint32_t magic;
+    uint8_t  dtype;
+    uint8_t  ndims;
+    uint64_t dims[MAX_DIMS];
+    uint64_t totalUncompressed;
+    uint64_t chunkSize;
+    uint32_t numChunks;
+    uint64_t chunkUncomp[MAX_CHUNKS];
+    uint64_t chunkComp  [MAX_CHUNKS];
+    uint8_t  padding[HEADER_SIZE -
+                     (4 + 1 + 1 + 8*MAX_DIMS + 8 + 8 + 4 + 8*MAX_CHUNKS*2)];
+};
+
+static void freadExact(FILE* f, void* dst, size_t n, const char* context)
+{
+    if (std::fread(dst, 1, n, f) != n)
+        throw std::runtime_error(std::string("I/O error while ") + context);
+}
+
+static FileHeader readHeader(FILE* f, const std::string& fname)
+{
+    FileHeader h{};
+    freadExact(f, &h, HEADER_SIZE, ("reading header of " + fname).c_str());
+
+    if (h.magic != MAGIC_NUMBER)
+        throw std::runtime_error(fname + ": wrong magic number (not LZ4C)");
+    if (h.dtype != DT_SINGLE)
+        throw std::runtime_error(fname + ": unsupported dtype (expect single)");
+    if (h.ndims != 2 && h.ndims != 3)
+        throw std::runtime_error(fname + ": ndims must be 2 or 3");
+    if (h.numChunks == 0 || h.numChunks > MAX_CHUNKS)
+        throw std::runtime_error(fname + ": invalid chunk count");
+
+    return h;
+}
+
+static inline uint64_t idx3D(uint64_t x, uint64_t y, uint64_t z,
+                             uint64_t dimX, uint64_t dimY)
+{
+    return x + dimX * (y + dimY * z);
+}
+
+/*==============================================================================
  *                   2.  BrickJob (Rewritten for Buffer Reuse)
  *============================================================================*/
 struct BrickJob {
