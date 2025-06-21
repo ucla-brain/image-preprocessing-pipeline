@@ -157,9 +157,8 @@ static void save_slice(const SaveTask& t, std::vector<std::future<void>>& flush_
         ioBuf = dst;
     }
 
-    // Use .tmp file path
+    // Write to .tmp file
     const std::string tmpPath = t.filePath + ".tmp";
-
     TIFF* tif = TIFFOpen(tmpPath.c_str(), "w");
     if (!tif) throw std::runtime_error("Cannot open temporary file " + tmpPath);
 
@@ -173,7 +172,7 @@ static void save_slice(const SaveTask& t, std::vector<std::future<void>>& flush_
     TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP, srcRows);
 
     uint8_t* writeBuf = const_cast<uint8_t*>(ioBuf);
-    tsize_t  nWritten = (t.compressionTag == COMPRESSION_NONE)
+    tsize_t nWritten = (t.compressionTag == COMPRESSION_NONE)
         ? TIFFWriteRawStrip    (tif, 0, writeBuf, static_cast<tsize_t>(t.bytesPerSlice))
         : TIFFWriteEncodedStrip(tif, 0, writeBuf, static_cast<tsize_t>(t.bytesPerSlice));
 
@@ -182,25 +181,34 @@ static void save_slice(const SaveTask& t, std::vector<std::future<void>>& flush_
         throw std::runtime_error("TIFF write failed on " + tmpPath);
     }
 
-    // Asynchronous close and rename
-    flush_futures.emplace_back(std::async(std::launch::async, [tif, tmpPath, finalPath = t.filePath]() {
-        TIFFClose(tif);
+    // Forward exceptions from async to main thread
+    std::promise<void> p;
+    flush_futures.emplace_back(p.get_future());
 
-        // Check if the final path exists and is non-writable
-        if (FILE* existing = std::fopen(finalPath.c_str(), "rb")) {
-            std::fclose(existing);
-            if (std::fopen(finalPath.c_str(), "wb") == nullptr) {
+    std::thread([p = std::move(p), tif, tmpPath, finalPath = t.filePath]() mutable {
+        try {
+            TIFFClose(tif);
+
+            // Preflight check: if final file exists and isn't writable
+            FILE* testW = std::fopen(finalPath.c_str(), "wb");
+            if (!testW) {
                 std::remove(tmpPath.c_str());
                 throw std::runtime_error("Refused to overwrite read-only file: " + finalPath);
             }
-        }
+            std::fclose(testW);
 
-        // Attempt atomic rename
-        if (std::rename(tmpPath.c_str(), finalPath.c_str()) != 0) {
-            std::remove(tmpPath.c_str());
-            throw std::runtime_error("Atomic rename failed from " + tmpPath + " → " + finalPath);
+            if (std::rename(tmpPath.c_str(), finalPath.c_str()) != 0) {
+                std::remove(tmpPath.c_str());
+                throw std::runtime_error("Atomic rename failed: " + tmpPath + " → " + finalPath);
+            }
+
+            p.set_value();  // success
+        } catch (...) {
+            try {
+                p.set_exception(std::current_exception());
+            } catch (...) {}
         }
-    }));
+    }).detach();
 }
 
 /* ───────────────────────────── FILE LIST CACHE ──────────────────────────── */
