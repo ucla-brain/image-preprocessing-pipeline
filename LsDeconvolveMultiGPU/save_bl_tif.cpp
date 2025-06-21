@@ -14,7 +14,10 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -23,8 +26,6 @@
 #include <vector>
 #include <unordered_map>
 #include <type_traits>
-#include <cstdlib>
-#include <cstdio>
 
 #if defined(__linux__)
 #  include <fcntl.h>
@@ -32,6 +33,7 @@
 #  include <sys/mman.h>
 #  include <pthread.h>
 #  include <sched.h>
+#  include <numa.h>
 #endif
 
 #if defined(_WIN32)
@@ -119,24 +121,22 @@ static void ensure_scratch(size_t bytes) {
 }
 
 /* ───────────────────────────── LOW-LEVEL TIFF WRITE ─────────────────────── */
-static void save_slice(const SaveTask& t)
+static void save_slice(const SaveTask& t, std::vector<std::future<void>>& flush_futures)
 {
-    const mwSize srcRows = t.alreadyXYZ ? t.cols : t.rows;    // If transpose needed
+    const mwSize srcRows = t.alreadyXYZ ? t.cols : t.rows;
     const mwSize srcCols = t.alreadyXYZ ? t.rows : t.cols;
 
     const uint8_t* src = t.basePtr + t.sliceOffset;
     const bool directWrite = (t.compressionTag == COMPRESSION_NONE && t.alreadyXYZ);
 
-    const uint8_t* ioBuf = nullptr;          // Buffer actually passed to libtiff
+    const uint8_t* ioBuf = nullptr;
 
-    /* 1. Prepare buffer (handle transpose / compression fast-path) */
     if (directWrite) {
-        ioBuf = src;                         // Zero-copy path 🚀
+        ioBuf = src;
     } else {
         ensure_scratch(t.bytesPerSlice);
         uint8_t* dst = scratch_aligned;
-
-        if (!t.alreadyXYZ) {                 // Transpose [Y X] → [X Y]
+        if (!t.alreadyXYZ) {
             for (mwSize col = 0; col < srcCols; ++col) {
                 const uint8_t* srcColumn = src + col * t.rows * t.bytesPerPixel;
                 for (mwSize row = 0; row < srcRows; ++row) {
@@ -146,7 +146,7 @@ static void save_slice(const SaveTask& t)
                                 t.bytesPerPixel);
                 }
             }
-        } else {                            // Already XYZ – need copy only for compression
+        } else {
             const size_t rowBytes = srcCols * t.bytesPerPixel;
             for (mwSize row = 0; row < srcRows; ++row)
                 std::memcpy(dst + row * rowBytes,
@@ -156,23 +156,18 @@ static void save_slice(const SaveTask& t)
         ioBuf = dst;
     }
 
-    /* 2. Open TIFF (write-mode) */
     TIFF* tif = TIFFOpen(t.filePath.c_str(), "w");
     if (!tif) throw std::runtime_error("Cannot open " + t.filePath);
 
-    /* 3. Required baseline tags */
-    TIFFSetField(tif, TIFFTAG_IMAGEWIDTH,      srcCols);
-    TIFFSetField(tif, TIFFTAG_IMAGELENGTH,     srcRows);
+    TIFFSetField(tif, TIFFTAG_IMAGEWIDTH, srcCols);
+    TIFFSetField(tif, TIFFTAG_IMAGELENGTH, srcRows);
     TIFFSetField(tif, TIFFTAG_SAMPLESPERPIXEL, 1);
-    TIFFSetField(tif, TIFFTAG_BITSPERSAMPLE,   t.bytesPerPixel == 2 ? 16 : 8);
-    TIFFSetField(tif, TIFFTAG_COMPRESSION,     t.compressionTag);
-    TIFFSetField(tif, TIFFTAG_PHOTOMETRIC,     PHOTOMETRIC_MINISBLACK);
-    TIFFSetField(tif, TIFFTAG_PLANARCONFIG,    PLANARCONFIG_CONTIG);
-
-    /* 4. One-strip-per-image (fast and simple) */
+    TIFFSetField(tif, TIFFTAG_BITSPERSAMPLE, t.bytesPerPixel == 2 ? 16 : 8);
+    TIFFSetField(tif, TIFFTAG_COMPRESSION, t.compressionTag);
+    TIFFSetField(tif, TIFFTAG_PHOTOMETRIC, PHOTOMETRIC_MINISBLACK);
+    TIFFSetField(tif, TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG);
     TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP, srcRows);
 
-    /* 5. Write the single strip */
     uint8_t* writeBuf = const_cast<uint8_t*>(ioBuf);
     tsize_t  nWritten = (t.compressionTag == COMPRESSION_NONE)
         ? TIFFWriteRawStrip    (tif, 0, writeBuf, static_cast<tsize_t>(t.bytesPerSlice))
@@ -183,18 +178,10 @@ static void save_slice(const SaveTask& t)
         throw std::runtime_error("TIFF write failed on " + t.filePath);
     }
 
-#if defined(__linux__)
-    int fd = TIFFFileno(tif);
-    if (fd != -1) posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED);  // Drop page cache
-#endif
-
-#if defined(_WIN32)
-    // Flush file buffers for async I/O flush on Windows (for very large batch jobs or non-SSD)
-    HANDLE hFile = (HANDLE)_get_osfhandle(TIFFFileno(tif));
-    if (hFile != INVALID_HANDLE_VALUE) FlushFileBuffers(hFile);
-#endif
-
-    TIFFClose(tif);
+    // Perform asynchronous file flush and close to avoid blocking computation
+    flush_futures.emplace_back(std::async(std::launch::async, [tif]() {
+        TIFFClose(tif);
+    }));
 }
 
 /* ───────────────────────────── FILE LIST CACHE ──────────────────────────── */
@@ -227,21 +214,33 @@ struct CallContext {
     size_t maxSliceBytes{0};
 };
 
-void worker_entry(CallContext& ctx)
+void worker_entry(CallContext& ctx, int thread_id)
 {
-    // Thread affinity is handled at thread creation (not here)
+#if defined(__linux__)
+    // NUMA-aware thread affinity for improved memory access efficiency
+    if (numa_available() != -1) {
+        int max_node = numa_max_node();
+        int target_node = thread_id % (max_node + 1);
+        numa_run_on_node(target_node);
+    }
+#endif
+
     const auto& jobList = *ctx.tasks;
     size_t idx = ctx.nextIndex.fetch_add(1, std::memory_order_relaxed);
+    std::vector<std::future<void>> flush_futures;
 
     while (idx < jobList.size()) {
         try {
-            save_slice(jobList[idx]);
+            save_slice(jobList[idx], flush_futures);
         } catch (const std::exception& e) {
             std::lock_guard<std::mutex> lk(ctx.errMutex);
             ctx.errors.emplace_back(e.what());
         }
         idx = ctx.nextIndex.fetch_add(1, std::memory_order_relaxed);
     }
+
+    // Wait for all asynchronous file flushes to complete before thread exits
+    for (auto& fut : flush_futures) fut.get();
 }
 
 } // unnamed namespace
@@ -368,7 +367,7 @@ void mexFunction(int nlhs, mxArray* plhs[],
 #endif
 
         for (size_t i = 0; i < nThreads; ++i) {
-            workers.emplace_back(worker_entry, std::ref(ctx));
+            workers.emplace_back(worker_entry, std::ref(ctx), static_cast<int>(i));
 #ifdef PIN_THREADS
 #if defined(__linux__)
             cpu_set_t cpuset;
