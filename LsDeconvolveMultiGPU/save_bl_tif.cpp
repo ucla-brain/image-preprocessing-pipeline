@@ -332,10 +332,6 @@ void mexFunction(int, mxArray*[], int nrhs, const mxArray* prhs[])
                               "Volume must be 2-D or 3-D.");
         }
 
-        const mwSize dim0 = mxGetDimensions(V)[0];
-        const mwSize dim1 = mxGetDimensions(V)[1];
-        const mwSize dim2 = mxGetDimensions(V)[2];
-
         if (!mxIsCell(prhs[1]) || mxGetNumberOfElements(prhs[1]) != dim2)
             mexErrMsgIdAndTxt("save_bl_tif:Input", "fileList size mismatch");
 
