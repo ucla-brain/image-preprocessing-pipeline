@@ -32,9 +32,6 @@
       GNU General Public License v3.0  –  https://www.gnu.org/licenses/gpl-3.0
 ==============================================================================*/
 
-// BEGIN: Optimized load_slab_lz4.cpp (Performance Focus)
-// NOTE: Keep LZ4, header parsing, and idx3D definitions the same as before...
-
 #include "mex.h"
 #include "matrix.h"
 #include "lz4.h"
@@ -267,7 +264,8 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
     if (maxThreads < 1) maxThreads = 1;
 
     mwSize mdims[3] = { static_cast<mwSize>(dimX), static_cast<mwSize>(dimY), static_cast<mwSize>(dimZ) };
-    mxArray* volMx = mxCreateUninitNumericArray(3, mdims, mxSINGLE_CLASS, mxREAL);
+    // mxArray* volMx = mxCreateUninitNumericArray(3, mdims, mxSINGLE_CLASS, mxREAL);
+    mxArray* volMx = mxCreateNumericArray(3, mdims, mxSINGLE_CLASS, mxREAL);
     if (!volMx) mexErrMsgTxt("Cannot allocate output volume");
     float* volPtr = static_cast<float*>(mxGetData(volMx));
 
