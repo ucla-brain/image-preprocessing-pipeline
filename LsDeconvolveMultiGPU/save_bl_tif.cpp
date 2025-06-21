@@ -193,18 +193,19 @@ static void io_writer()
 static void compute_worker()
 {
     for (;;) {
-        /* fetch next slice index ------------------------------------------ */
+        /* ------------ claim next slice ------------------------------- */
         size_t idx = g_nextTask.fetch_add(1);
         if (idx >= g_tasks->size())
             break;
 
         const SliceTask& task = (*g_tasks)[idx];
 
+        /* ------------ prepare WriteJob (unchanged) -------------------- */
         const std::size_t bpp            = (task.classId == mxUINT16_CLASS ? 2 : 1);
-        const mwSize      rowsFinal      = task.dimY;  // always Y
-        const mwSize      colsFinal      = task.dimX;  // always X
-        const std::size_t pixelsPerSlice = static_cast<std::size_t>(task.dimY) *
-                                           task.dimX;
+        const mwSize      rowsFinal      = task.dimY;
+        const mwSize      colsFinal      = task.dimX;
+        const std::size_t pixelsPerSlice =
+            static_cast<std::size_t>(task.dimY) * task.dimX;
         const std::size_t bytesPerSlice  = pixelsPerSlice * bpp;
 
         WriteJob job;
@@ -220,12 +221,11 @@ static void compute_worker()
             task.base +
             static_cast<std::size_t>(task.zIndex) * pixelsPerSlice * bpp;
 
-        /* ---------------- transpose / copy ------------------------------- */
-        if (!task.isXYZlayout) {               /* column-major → row-major */
+        /* ------------ transpose / copy (unchanged) -------------------- */
+        if (!task.isXYZlayout) {
             for (mwSize col = 0; col < colsFinal; ++col) {
                 const uint8_t* srcColumn =
                     srcVolumeBase + static_cast<std::size_t>(col) * task.dimY * bpp;
-
                 for (mwSize row = 0; row < rowsFinal; ++row) {
                     std::size_t dstIdx =
                         (static_cast<std::size_t>(row) * colsFinal + col) * bpp;
@@ -234,7 +234,7 @@ static void compute_worker()
                                 bpp);
                 }
             }
-        } else {                               /* already row-major */
+        } else {
             const std::size_t rowBytes = colsFinal * bpp;
             for (mwSize row = 0; row < rowsFinal; ++row) {
                 const uint8_t* srcRow =
@@ -244,12 +244,17 @@ static void compute_worker()
             }
         }
 
-        /* ---------------- enqueue write job ------------------------------ */
-        std::unique_lock<std::mutex> ql(g_queueMtx);
-        g_queueNotFull.wait(ql, []{ return g_queue.size() < kQueueCapacity; });
-        g_queue.emplace_back(std::move(job));
-        ql.unlock();
+        /* ------------ enqueue job & signal writer --------------------- */
+        {
+            std::unique_lock<std::mutex> ql(g_queueMtx);
+            g_queueNotFull.wait(ql, []{ return g_queue.size() < kQueueCapacity; });
+            g_queue.emplace_back(std::move(job));
+        }
         g_queueNotEmpty.notify_one();
+
+        /* ------------ mark ONE slice completed ------------------------ */
+        if (g_computeRemaining.fetch_sub(1) == 1)          // last slice done?
+            g_queueNotEmpty.notify_one();                  // wake writer if idle
     }
 }
 
