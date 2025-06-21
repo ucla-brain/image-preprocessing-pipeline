@@ -161,33 +161,30 @@ static void save_slice(const SaveTask& t)
     }
     else  /* [X Y Z] rows contiguous ---------------------------------------- */
     {
-        const size_t srcRowBytes = t.dim0 * bytesPerPixel;
-        const size_t dstRowBytes = srcCols * bytesPerPixel;
+        const size_t srcRowBytes = t.dim0 * bytesPerPixel;   // step between source rows
+        const size_t dstRowBytes = srcCols * bytesPerPixel;  // step between dest rows
+        const size_t baseOff     = sliceIndex * pixelsPerSlice * bytesPerPixel;
 
         if (cpuHasAVX2 && bytesPerPixel == 1 &&
             (srcCols & 15) == 0 && (srcRows & 15) == 0)
         {
-            const size_t baseOff = sliceIndex * pixelsPerSlice * bytesPerPixel;
-
-            for (mwSize y0 = 0; y0 < srcRows; y0 += 16) {
-                for (mwSize x0 = 0; x0 < srcCols; x0 += 16) {
+            for (mwSize y0 = 0; y0 < srcRows; y0 += 16)
+                for (mwSize x0 = 0; x0 < srcCols; x0 += 16)
                     simd::transpose16x16_u8_stride(
-                        /* src ptr */
+                        /* src */
                         t.base + baseOff +
                                  (static_cast<size_t>(y0) * t.dim0 + x0) * bytesPerPixel,
                         srcRowBytes,
-                        /* dst ptr */
+                        /* dst */
                         dstBuffer + (static_cast<size_t>(y0) * srcCols + x0) * bytesPerPixel,
                         dstRowBytes);
-                }
-            }
         }
-        else   /* fallback: row-wise memcpy */
+        else  /* fallback: row-wise memcpy */
         {
             for (mwSize y = 0; y < srcRows; ++y) {
                 const uint8_t* srcRow =
-                    t.base + (sliceIndex * pixelsPerSlice +
-                              static_cast<size_t>(y) * t.dim0) * bytesPerPixel;
+                    t.base + baseOff +
+                             static_cast<size_t>(y) * t.dim0 * bytesPerPixel;
 
                 std::memcpy(dstBuffer + static_cast<size_t>(y) * dstRowBytes,
                             srcRow, dstRowBytes);
