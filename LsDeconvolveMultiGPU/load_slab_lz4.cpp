@@ -32,23 +32,24 @@
       GNU General Public License v3.0  –  https://www.gnu.org/licenses/gpl-3.0
 ==============================================================================*/
 
-#include "mex.h"
-#include "matrix.h"
 #include "lz4.h"
+#include "matrix.h"
+#include "mex.h"
 
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <string>
-#include <vector>
-#include <queue>
-#include <mutex>
-#include <condition_variable>
-#include <thread>
 #include <functional>
-#include <stdexcept>
 #include <memory>
-#include <chrono>
+#include <mutex>
+#include <queue>
+#include <stdexcept>
+#include <string>
+#include <thread>
+#include <vector>
 
 /*==============================================================================
  *                         Thread-Local Cleanup Helper
