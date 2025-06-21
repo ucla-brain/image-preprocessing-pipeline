@@ -46,10 +46,8 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstring>
-#include <functional>
 #include <memory>
 #include <mutex>
-#include <queue>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -60,7 +58,7 @@
 #endif
 
 /*==============================================================================
-    Helper RAII for MATLAB strings
+   RAII wrapper for MATLAB strings
 ==============================================================================*/
 struct MatlabString {
     char* ptr;
@@ -80,28 +78,70 @@ struct MatlabString {
 ==============================================================================*/
 struct SaveTask {
     const uint8_t* base;
-    mwSize         dim0;
-    mwSize         dim1;
-    mwSize         z;
+    mwSize         dim0;      // Y
+    mwSize         dim1;      // X
+    mwSize         z;         // slice index
     std::string    path;
-    bool           isXYZ;
-    mxClassID      classId;
-    std::string    comp;
+    bool           isXYZ;     // true => [X Y Z] memory layout
+    mxClassID      classId;   // uint8 / uint16
+    std::string    comp;      // "none" | "lzw" | "deflate"
 };
 
 /*==============================================================================
-    Per-slice save implementation (unchanged)
+    Per-slice save with all approved optimisations
 ==============================================================================*/
+static thread_local std::vector<uint8_t> scratch;   // reused by thread
+
 static void save_slice(const SaveTask& t)
 {
     const size_t es = (t.classId == mxUINT16_CLASS ? 2 : 1);
-
-    const mwSize width  = t.isXYZ ? t.dim0 : t.dim1;
-    const mwSize height = t.isXYZ ? t.dim1 : t.dim0;
+    const mwSize width  = t.isXYZ ? t.dim0 : t.dim1;   // X
+    const mwSize height = t.isXYZ ? t.dim1 : t.dim0;   // Y
     const size_t sliceOff = static_cast<size_t>(t.z) * t.dim0 * t.dim1;
+    const size_t bytes = static_cast<size_t>(width) * height * es;
 
+    /* ensure thread-local buffer large enough */
+    scratch.resize(bytes);
+    uint8_t* buf = scratch.data();
+
+    /* ---------------- transpose into buf ---------------- */
+    if (!t.isXYZ)   /* fast Y-X-Z path (MATLAB default) */
+    {
+        /* Each MATLAB column (X) is already contiguous in memory.
+           Copy one column at a time into row-major destination. */
+        for (mwSize x = 0; x < width; ++x) {
+            const uint8_t* srcCol =
+                t.base + (sliceOff + static_cast<size_t>(x) * t.dim0) * es;
+            for (mwSize y = 0; y < height; ++y) {
+                size_t dstIdx = (static_cast<size_t>(y) * width + x) * es;
+                const uint8_t* src = srcCol + static_cast<size_t>(y) * es;
+                if (es == 1)
+                    buf[dstIdx] = *src;
+                else
+                    std::memcpy(buf + dstIdx, src, 2);   // uint16
+            }
+        }
+    }
+    else            /* X-Y-Z layout – keep original loops but hoist multiply */
+    {
+        for (mwSize y = 0; y < height; ++y) {
+            const size_t rowDstBase = static_cast<size_t>(y) * width * es;
+            const size_t colBase = static_cast<size_t>(y) * t.dim0;  // for srcCol*dim0
+            for (mwSize x = 0; x < width; ++x) {
+                size_t srcIdx = x + colBase + sliceOff; // srcRow (x) + srcCol(y)*dim0
+                size_t dstIdx = rowDstBase + static_cast<size_t>(x) * es;
+                if (es == 1)
+                    buf[dstIdx] = t.base[srcIdx];
+                else
+                    std::memcpy(buf + dstIdx, t.base + srcIdx * es, 2);
+            }
+        }
+    }
+
+    /* ---------------- write whole slice in one strip ---------------- */
     TIFF* tif = TIFFOpen(t.path.c_str(), "w");
-    if (!tif) throw std::runtime_error("Cannot open " + t.path);
+    if (!tif)
+        throw std::runtime_error("Cannot open " + t.path);
 
     TIFFSetField(tif, TIFFTAG_IMAGEWIDTH,  width);
     TIFFSetField(tif, TIFFTAG_IMAGELENGTH, height);
@@ -114,31 +154,21 @@ static void save_slice(const SaveTask& t)
     TIFFSetField(tif, TIFFTAG_COMPRESSION,  compTag);
     TIFFSetField(tif, TIFFTAG_PHOTOMETRIC,  PHOTOMETRIC_MINISBLACK);
     TIFFSetField(tif, TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG);
-    TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP, height);
+    TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP, height);    // 1 strip
 
-    std::vector<uint8_t> scan(width * es);
-
-    for (mwSize y = 0; y < height; ++y) {
-        for (mwSize x = 0; x < width; ++x) {
-            mwSize srcRow = t.isXYZ ? x : y;
-            mwSize srcCol = t.isXYZ ? y : x;
-            size_t srcIdx = srcRow + srcCol * t.dim0 + sliceOff;
-            std::memcpy(&scan[x * es], t.base + srcIdx * es, es);
-        }
-        if (TIFFWriteScanline(tif, scan.data(), y, 0) < 0) {
-            TIFFClose(tif);
-            throw std::runtime_error("TIFFWriteScanline failed on " + t.path);
-        }
+    if (TIFFWriteEncodedStrip(tif, 0, buf, bytes) < 0) {
+        TIFFClose(tif);
+        throw std::runtime_error("TIFFWriteEncodedStrip failed on " + t.path);
     }
     TIFFClose(tif);
 }
 
 /*==============================================================================
-    Thread-pool internals (persistent across MEX calls)
+    Thread-pool internals (unchanged – but with shared_ptr fix)
 ==============================================================================*/
 namespace {
 
-static std::shared_ptr<const std::vector<SaveTask>> g_tasks; // nullptr when idle
+static std::shared_ptr<const std::vector<SaveTask>> g_tasks;
 static std::atomic_size_t           g_next{0};
 static std::atomic_size_t           g_remaining{0};
 static std::vector<std::string>     g_errs;
@@ -148,17 +178,17 @@ static std::condition_variable      g_cv;
 static bool                         g_stop = false;
 static std::vector<std::thread>     g_workers;
 
-/* shrink default thread stack on Linux/glibc ≥2.34 */
+/* shrink default pthread stack to 1 MiB (Linux/glibc ≥2.34) */
 #if defined(__linux__)
 inline void shrink_default_stack()
 {
     static bool done = false;
     if (done) return;
     done = true;
-  #if defined(__GLIBC_PREREQ) && __GLIBC_PREREQ(2, 34)
+  #if defined(__GLIBC_PREREQ) && __GLIBC_PREREQ(2,34)
     pthread_attr_t a;
     if (!pthread_attr_init(&a)) {
-        pthread_attr_setstacksize(&a, 1 << 20);           // 1 MiB
+        pthread_attr_setstacksize(&a, 1 << 20);
         pthread_setattr_default_np(&a);
         pthread_attr_destroy(&a);
     }
@@ -166,7 +196,6 @@ inline void shrink_default_stack()
 }
 #endif
 
-/* worker loop */
 static void worker_loop()
 {
     for (;;) {
@@ -174,22 +203,19 @@ static void worker_loop()
         g_cv.wait(ul, [] { return g_tasks || g_stop; });
         if (g_stop) return;
 
-        /* local shared_ptr keeps the vector alive while this thread works */
-        auto tasks = g_tasks;
+        auto tasks = g_tasks;  // retain vector
         ul.unlock();
 
         size_t idx = g_next.fetch_add(1);
         while (idx < tasks->size()) {
-            try {
-                save_slice((*tasks)[idx]);
-            } catch (const std::exception& e) {
+            try { save_slice((*tasks)[idx]); }
+            catch (const std::exception& e) {
                 std::lock_guard<std::mutex> lk(g_mtx);
                 g_errs.emplace_back(e.what());
             }
-
             if (g_remaining.fetch_sub(1) == 1) {
                 std::lock_guard<std::mutex> lk(g_mtx);
-                g_tasks.reset();         // clear global ptr; vector freed when last thread releases its copy
+                g_tasks.reset();
                 g_cv.notify_all();
             }
             idx = g_next.fetch_add(1);
@@ -197,7 +223,6 @@ static void worker_loop()
     }
 }
 
-/* create pool once */
 inline void ensure_pool(size_t requested)
 {
     if (!g_workers.empty()) return;
@@ -205,7 +230,7 @@ inline void ensure_pool(size_t requested)
 #if defined(__linux__)
     shrink_default_stack();
 #endif
-    requested = std::max<size_t>(1, requested);
+    requested = std::max<size_t>(8, std::thread::hardware_concurrency()); // user-approved: all hw threads, ≥8
 
     g_workers.reserve(requested);
     try {
@@ -227,11 +252,10 @@ inline void ensure_pool(size_t requested)
         g_cv.notify_all();
         for (auto& t : g_workers)
             if (t.joinable()) t.join();
-        g_workers.clear();
     });
 }
 
-} // namespace
+} // anonymous namespace
 
 /*==============================================================================
     MEX gateway
@@ -239,7 +263,7 @@ inline void ensure_pool(size_t requested)
 void mexFunction(int, mxArray*[], int nrhs, const mxArray* prhs[])
 {
     try {
-        /* argument checks (unchanged) */
+        /* -------- argument validation (unchanged) -------- */
         if (nrhs != 4)
             mexErrMsgIdAndTxt("save_bl_tif:Input",
                               "Usage: save_bl_tif(vol, fileList, orderFlag, compression)");
@@ -267,7 +291,7 @@ void mexFunction(int, mxArray*[], int nrhs, const mxArray* prhs[])
             mexErrMsgIdAndTxt("save_bl_tif:Input",
                               "compression must be \"none\", \"lzw\", or \"deflate\"");
 
-        /* build tasks */
+        /* -------- build task vector -------- */
         const uint8_t* base = static_cast<const uint8_t*>(mxGetData(V));
         auto taskVec = std::make_shared<std::vector<SaveTask>>();
         taskVec->reserve(dim2);
@@ -277,28 +301,26 @@ void mexFunction(int, mxArray*[], int nrhs, const mxArray* prhs[])
             if (!mxIsChar(c))
                 mexErrMsgIdAndTxt("save_bl_tif:Input", "fileList must be char");
 
-            MatlabString p(c);
-            taskVec->push_back({base, dim0, dim1, z, p.get(),
+            MatlabString path(c);
+            taskVec->push_back({base, dim0, dim1, z, path.get(),
                                 isXYZ, mxGetClassID(V), comp});
         }
 
         if (taskVec->empty()) return;
 
-        /* schedule batch */
-        const size_t poolSize =
-            std::max<size_t>(std::thread::hardware_concurrency(), 8);
-        ensure_pool(poolSize);
+        /* -------- hand tasks to pool -------- */
+        ensure_pool(taskVec->size());    // start workers once
 
         {
             std::lock_guard<std::mutex> lk(g_mtx);
-            g_tasks      = taskVec;
-            g_next       = 0;
-            g_remaining  = taskVec->size();
+            g_tasks     = taskVec;
+            g_next      = 0;
+            g_remaining = taskVec->size();
             g_errs.clear();
         }
         g_cv.notify_all();
 
-        /* wait for completion; g_tasks reset by last worker */
+        /* wait for batch completion */
         {
             std::unique_lock<std::mutex> lk(g_mtx);
             g_cv.wait(lk, [] { return !g_tasks; });
