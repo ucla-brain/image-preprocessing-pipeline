@@ -961,7 +961,7 @@ function postprocess_save( ...
     %POSTPROCESS_SAVE   Final stage: re-assembles cached LZ4 blocks into TIFFs.
     %
     %   • For each Z-slab (one full X-Y plane stack), all bricks are loaded and
-    %     decompressed **in C++ threads** via load_blocks_lz4_mex (zero MATLAB-side
+    %     decompressed **in C++ threads** via load_slab_lz4 (zero MATLAB-side
     %     parallel plumbing).  Only one slab lives in RAM at a time.
     %
     %   • Optional global histogram determines symmetric clip limits.
@@ -983,7 +983,7 @@ function postprocess_save( ...
     %     amplification  – display-style gain factor applied after clipping
     %
     %   The function assumes *save_lz4_mex* (for writing bricks) and
-    %   *load_blocks_lz4_mex* (parallel reader) are on the MATLAB path.
+    %   *load_slab_lz4* (parallel reader) are on the MATLAB path.
     % -------------------------------------------------------------------------
 
     % -------------------------------------------------------------------------
@@ -1129,7 +1129,7 @@ function postprocess_save( ...
         slabSize = uint64([ stack_info.x, stack_info.y, slab_depth ]);
 
         % ---- Parallel load + assemble (inside C++) -------------------------
-        [R, elapsed] = load_blocks_lz4_mex( blocklist(block_inds), p1_slab, p2_slab, slabSize );
+        [R, elapsed] = load_slab_lz4( blocklist(block_inds), p1_slab, p2_slab, slabSize );
         fprintf('   slab assembled (%d blocks) in %.1fs\n', blocksPerSlab, elapsed);
 
         % ---------------------------------------------------------------------

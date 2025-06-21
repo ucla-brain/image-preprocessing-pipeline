@@ -1,5 +1,5 @@
-function load_blocks_lz4_mex_test(varargin)
-% End-to-end validation & benchmark for load_blocks_lz4_mex.
+function load_slab_lz4_test(varargin)
+% End-to-end validation & benchmark for load_slab_lz4.
 %   • Generates a random 3-D single array.
 %   • Splits & saves bricks with save_lz4_mex (char filenames).
 %   • Reassembles with threaded MEX.
@@ -39,10 +39,9 @@ end
 fprintf("Done saving\n");
 
 % ─── 5. RECONSTRUCT WITH THREADED MEX ────────────────────────────────────
-fprintf("Reconstructing with load_blocks_lz4_mex …\n");
+fprintf("Reconstructing with load_slab_lz4 …\n");
 tic;
-V_mex = load_blocks_lz4_mex(fnames, uint64(p1d), uint64(p2d), ...
-                            uint64([stack.x stack.y stack.z]));
+V_mex = load_slab_lz4(fnames, uint64(p1d), uint64(p2d), uint64([stack.x stack.y stack.z]));
 t_mex = toc;
 fprintf("MEX time : %.2f s\n",t_mex);
 
