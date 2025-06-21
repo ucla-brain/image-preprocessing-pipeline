@@ -196,7 +196,7 @@ struct BrickJob {
             throw std::runtime_error(file + ": dims in header ≠ expected brick dims");
 
         const uint64_t totalVoxels = brickX * brickY * brickZ;
-        uBuffer.resize(totalVoxels);
+        if (uBuffer.size() < totalVoxels) uBuffer.resize(totalVoxels);
         char* dst = reinterpret_cast<char*>(uBuffer.data());
 
         uint64_t offset = 0;
@@ -207,7 +207,7 @@ struct BrickJob {
             if (compB > 0x7FFFFFFF || uncomp > 0x7FFFFFFF)
                 throw std::runtime_error(file + ": chunk > 2 GB");
 
-            cBuf.resize(compB);
+            if (cBuf.size() < compB) cBuf.resize(compB);
             freadExact(fp.get(), cBuf.data(), compB, ("reading chunk of " + file).c_str());
 
             const int decoded = LZ4_decompress_safe(cBuf.data(), dst + offset,
@@ -267,7 +267,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
     if (maxThreads < 1) maxThreads = 1;
 
     mwSize mdims[3] = { static_cast<mwSize>(dimX), static_cast<mwSize>(dimY), static_cast<mwSize>(dimZ) };
-    mxArray* volMx = mxCreateNumericArray(3, mdims, mxSINGLE_CLASS, mxREAL);
+    mxArray* volMx = mxCreateUninitNumericArray(3, mdims, mxSINGLE_CLASS, mxREAL);
     if (!volMx) mexErrMsgTxt("Cannot allocate output volume");
     float* volPtr = static_cast<float*>(mxGetData(volMx));
 
