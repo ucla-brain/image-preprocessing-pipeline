@@ -141,48 +141,39 @@ static void save_slice(const SaveTask& t)
     uint8_t* buf = scratch.data();
 
     /* -------- transpose into buf -------- */
-    if (!t.isXYZ)   /* fast Y-X-Z path */
+    if (!t.isXYZ)   /* [Y X Z]  (column-major) → use scalar copy */
     {
-        if (have_avx2 && (width & 15) == 0 && (height & 15) == 0)
-        {
-            /* tile-wise 16×16 SIMD transpose */
-            for (mwSize y0 = 0; y0 < height; y0 += 16) {
-                for (mwSize x0 = 0; x0 < width; x0 += 16) {
-                    const uint8_t* sp =
-                        t.base + (sliceOff + static_cast<size_t>(x0) * t.dim0
-                                  + y0) * es;
-                    uint8_t* dp = buf + (static_cast<size_t>(y0) * width + x0) * es;
-                    if (es == 1)
-                        simd::transpose16x16_u8(sp, es * t.dim0, dp, es * width);
-                    else
-                        simd::transpose16x16_u16((const uint16_t*)sp, t.dim0,
-                                                 (uint16_t*)dp, width);
-                }
-            }
-        }
-        else
-        {
-            /* scalar column-wise copy (unchanged) */
-            for (mwSize x = 0; x < width; ++x) {
-                const uint8_t* srcCol =
-                    t.base + (sliceOff + static_cast<size_t>(x) * t.dim0) * es;
-                for (mwSize y = 0; y < height; ++y) {
-                    size_t dstIdx = (static_cast<size_t>(y) * width + x) * es;
-                    const uint8_t* src = srcCol + static_cast<size_t>(y) * es;
-                    if (es == 1) buf[dstIdx] = *src;
-                    else         std::memcpy(buf + dstIdx, src, 2);
-                }
+        /* scalar column-wise copy */
+        for (mwSize x = 0; x < width; ++x) {
+            const uint8_t* srcCol =
+                t.base + (sliceOff + static_cast<size_t>(x) * t.dim0) * es;
+            for (mwSize y = 0; y < height; ++y) {
+                size_t dst = (static_cast<size_t>(y) * width + x) * es;
+                const uint8_t* src = srcCol + static_cast<size_t>(y) * es;
+                if (es == 1) buf[dst] = *src;
+                else         std::memcpy(buf + dst, src, 2);
             }
         }
     }
-    else   /* X-Y-Z: each row already contiguous */
+    else            /* [X Y Z] rows contiguous → SIMD if available */
     {
-        const size_t rowBytes = width * es;
-        for (mwSize y = 0; y < height; ++y) {
-            const uint8_t* srcRow =
-                t.base + (sliceOff + static_cast<size_t>(y) * t.dim0) * es;
-            std::memcpy(buf + static_cast<size_t>(y) * rowBytes,
-                        srcRow, rowBytes);
+        if (have_avx2 && (width & 15) == 0 && (height & 15) == 0 && es == 1) {
+            for (mwSize y0 = 0; y0 < height; y0 += 16)
+                for (mwSize x0 = 0; x0 < width; x0 += 16)
+                    simd::transpose16x16_u8(
+                        t.base + (sliceOff + static_cast<size_t>(y0)*t.dim0 + x0),
+                        1,                       /* src stride in bytes        */
+                        buf + (static_cast<size_t>(y0)*width + x0),
+                        width);                  /* dst stride in bytes        */
+        } else {
+            /* row-wise memcpy fallback */
+            const size_t rowBytes = width * es;
+            for (mwSize y = 0; y < height; ++y) {
+                const uint8_t* srcRow =
+                    t.base + (sliceOff + static_cast<size_t>(y) * t.dim0) * es;
+                std::memcpy(buf + static_cast<size_t>(y) * rowBytes,
+                            srcRow, rowBytes);
+            }
         }
     }
 
