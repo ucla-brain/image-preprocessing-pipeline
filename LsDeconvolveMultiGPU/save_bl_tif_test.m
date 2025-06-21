@@ -18,7 +18,7 @@ simdVol = uint8(randi(255, [256 256 2]));       % 2 slices
 tmpBase = tempname;                             % unique base
 fileList = {[tmpBase '_1.tif'], [tmpBase '_2.tif']};
 
-save_bl_tif(simdVol, fileList, false, "none");  % YXZ → transpose in MEX
+save_bl_tif(simdVol, fileList, false, 'none');  % YXZ → transpose in MEX
 
 for k = 1:2
     simdOut = imread(fileList{k});
