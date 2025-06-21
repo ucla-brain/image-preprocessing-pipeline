@@ -83,75 +83,72 @@ struct SliceDone {
 /* === worker ============================================================= */
 static void worker()
 {
-    try {
-        for (;;) {
-            std::size_t idx = g_nextSlice.fetch_add(1);
-            if (idx >= g_tasks->size()) break;
+    for (;;) {
+        size_t idx = g_nextSlice.fetch_add(1);
+        if (idx >= g_tasks->size())
+            break;
 
-            const SliceTask& t = (*g_tasks)[idx];
-            SliceDone        onExit;                   // RAII counter
+        const SliceTask& t = (*g_tasks)[idx];
+        SliceDone        onExit;                      // always dec-ref
 
-            std::size_t bpp   = (t.classId == mxUINT16_CLASS ? 2 : 1);
-            std::size_t pix   = static_cast<std::size_t>(t.dimY) * t.dimX;
-            std::size_t bytes = pix * bpp;
+        const std::size_t bpp  = (t.classId == mxUINT16_CLASS ? 2 : 1);
+        const std::size_t pix  = static_cast<std::size_t>(t.dimY) * t.dimX;
+        const std::size_t bytes = pix * bpp;
 
-            if (tls_buf.size() < bytes) {
-                tls_buf.resize(bytes);
-            }
-            uint8_t* dst = tls_buf.data();
+        if (tls_buf.size() < bytes) tls_buf.resize(bytes);
+        uint8_t*       dst = tls_buf.data();
+        const uint8_t* srcBase =
+            t.base + static_cast<std::size_t>(t.z) * pix * bpp;
 
-            const uint8_t* srcBase =
-                t.base + static_cast<std::size_t>(t.z) * pix * bpp;
-
-            /* ---- transpose / copy ----------------------------------- */
-            if (!t.isXYZ) {                     /* [Y X Z] → transpose */
-                for (mwSize col = 0; col < t.dimX; ++col) {
-                    const uint8_t* srcCol =
-                        srcBase + static_cast<std::size_t>(col) * t.dimY * bpp;
-                    for (mwSize row = 0; row < t.dimY; ++row) {
-                        std::size_t di = (static_cast<std::size_t>(row)
-                                         * t.dimX + col) * bpp;
-                        std::memcpy(dst + di,
-                                    srcCol + static_cast<std::size_t>(row) * bpp,
-                                    bpp);
-                    }
-                }
-            } else {                             /* already row-major */
-                std::size_t rowBytes = t.dimX * bpp;
+        /* ------------- transpose / copy ------------------------------- */
+        if (t.isXYZlayout) {                       // XYZ → needs transpose
+            for (mwSize col = 0; col < t.dimX; ++col) {
+                const uint8_t* srcCol =
+                    srcBase + static_cast<std::size_t>(col) * t.dimY * bpp;
                 for (mwSize row = 0; row < t.dimY; ++row) {
-                    const uint8_t* srcRow =
-                        srcBase + static_cast<std::size_t>(row) * t.dimY * bpp;
-                    std::memcpy(dst + static_cast<std::size_t>(row) * rowBytes,
-                                srcRow, rowBytes);
+                    std::size_t di =
+                        (static_cast<std::size_t>(row) * t.dimX + col) * bpp;
+                    std::memcpy(dst + di,
+                                srcCol + static_cast<std::size_t>(row) * bpp,
+                                bpp);
                 }
             }
-
-            /* ---- write TIFF ----------------------------------------- */
-            TIFF* tif = TIFFOpen(t.outPath.c_str(), "w");
-            if (!tif)
-                throw std::runtime_error("Cannot open " + t.outPath);
-
-            TIFFSetField(tif, TIFFTAG_IMAGEWIDTH,  t.dimX);
-            TIFFSetField(tif, TIFFTAG_IMAGELENGTH, t.dimY);
-            TIFFSetField(tif, TIFFTAG_SAMPLESPERPIXEL, 1);
-            TIFFSetField(tif, TIFFTAG_BITSPERSAMPLE, bpp == 2 ? 16 : 8);
-
-            uint16_t compTag = (t.compression == "none")   ? COMPRESSION_NONE   :
-                               (t.compression == "lzw")    ? COMPRESSION_LZW    :
-                                                            COMPRESSION_DEFLATE;
-            TIFFSetField(tif, TIFFTAG_COMPRESSION,  compTag);
-            TIFFSetField(tif, TIFFTAG_PHOTOMETRIC,  PHOTOMETRIC_MINISBLACK);
-            TIFFSetField(tif, TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG);
-            TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP, t.dimY);
-
-            tsize_t wrote = (t.compression == "none")
-                ? TIFFWriteRawStrip    (tif, 0, dst, bytes)
-                : TIFFWriteEncodedStrip(tif, 0, dst, bytes);
-
-            if (wrote < 0) {
-                TIFFClose(tif);
-                throw std::runtime_error("TIFF write failed on " + t.outPath);
+        } else {                                   // YXZ → already row-major
+            const std::size_t rowBytes = t.dimX * bpp;
+            for (mwSize row = 0; row < t.dimY; ++row) {
+                const uint8_t* srcRow =
+                    srcBase + static_cast<std::size_t>(row) * t.dimY * bpp;
+                std::memcpy(dst + static_cast<std::size_t>(row) * rowBytes,
+                            srcRow, rowBytes);
             }
+        }
+
+        /* ---- write TIFF ----------------------------------------- */
+        TIFF* tif = TIFFOpen(t.outPath.c_str(), "w");
+        if (!tif)
+            throw std::runtime_error("Cannot open " + t.outPath);
+
+        TIFFSetField(tif, TIFFTAG_IMAGEWIDTH,  t.dimX);
+        TIFFSetField(tif, TIFFTAG_IMAGELENGTH, t.dimY);
+        TIFFSetField(tif, TIFFTAG_SAMPLESPERPIXEL, 1);
+        TIFFSetField(tif, TIFFTAG_BITSPERSAMPLE, bpp == 2 ? 16 : 8);
+
+        uint16_t compTag = (t.compression == "none")   ? COMPRESSION_NONE   :
+                           (t.compression == "lzw")    ? COMPRESSION_LZW    :
+                                                        COMPRESSION_DEFLATE;
+        TIFFSetField(tif, TIFFTAG_COMPRESSION,  compTag);
+        TIFFSetField(tif, TIFFTAG_PHOTOMETRIC,  PHOTOMETRIC_MINISBLACK);
+        TIFFSetField(tif, TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG);
+        TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP, t.dimY);
+
+        tsize_t wrote = (t.compression == "none")
+            ? TIFFWriteRawStrip    (tif, 0, dst, bytes)
+            : TIFFWriteEncodedStrip(tif, 0, dst, bytes);
+
+        if (wrote < 0) {
+            TIFFClose(tif);
+            throw std::runtime_error("TIFF write failed on " + t.outPath);
+        }
 
 #if defined(__linux__)
             int fd = TIFFFileno(tif);
