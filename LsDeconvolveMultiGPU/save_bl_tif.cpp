@@ -145,8 +145,11 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
              *static_cast<uint32_t*>(mxGetData(prhs[2])));
 
         // --- Parse compression ONCE ---
-        MatlabString cs(prhs[3]);
-        const std::string comp(cs.get());
+        char* comp_cstr = mxArrayToUTF8String(prhs[3]);
+        if (!comp_cstr)
+            mexErrMsgIdAndTxt("save_bl_tif:Input", "Failed to convert compression input");
+        std::string comp(comp_cstr);
+        mxFree(comp_cstr);
         uint16_t compressionTag = COMPRESSION_NONE;
         if (comp == "lzw")      compressionTag = COMPRESSION_LZW;
         else if (comp == "deflate") compressionTag = COMPRESSION_DEFLATE;
