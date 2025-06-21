@@ -68,63 +68,99 @@ thread_local std::vector<char>  ThreadLocalCleaner::thread_local_cBuf;
 
 /*==============================================================================
  *                           Thread Pool Implementation
+  AtomicThreadPool
+  ----------------------------------------------------------
+  • FIFO task queue protected by a mutex
+  • Atomic counter tracks tasks still “in flight”
+  • Two condition variables:
+        – cv_job_   : workers sleep here waiting for work
+        – cv_done_  : the main thread sleeps here in wait()
+  • When the counter hits zero the last worker notifies cv_done_
  *============================================================================*/
-class ThreadPool {
+class ThreadPool
+{
 public:
-    explicit ThreadPool(size_t numThreads) : stop(false) {
-        for (size_t i = 0; i < numThreads; ++i)
-            workers.emplace_back([this] {
-                ThreadLocalCleaner cleaner;  // ensures buffer release on thread exit
-                while (true) {
+    explicit ThreadPool(std::size_t numThreads)
+        : stop_{false}, pending_{0}
+    {
+        for (std::size_t i = 0; i < numThreads; ++i)
+            workers_.emplace_back([this]
+            {
+                ThreadLocalCleaner cleaner;           // per-thread buffer cleanup
+                while (true)
+                {
                     std::function<void()> task;
-
-                    {   // Lock scope
-                        std::unique_lock<std::mutex> lock(this->queueMutex);
-                        this->condition.wait(lock, [this] {
-                            return this->stop || !this->tasks.empty();
+                    {   // ---- get next job (or quit) ----
+                        std::unique_lock<std::mutex> lk(queueMtx_);
+                        cv_job_.wait(lk, [this]
+                        {
+                            return stop_ || !tasks_.empty();
                         });
-                        if (this->stop && this->tasks.empty()) return;
-                        task = std::move(this->tasks.front());
-                        this->tasks.pop();
+                        if (stop_ && tasks_.empty())
+                            return;
+                        task = std::move(tasks_.front());
+                        tasks_.pop();
                     }
-
+                    // ---- run job ----
                     task();
+
+                    // ---- one task done ----
+                    if (pending_.fetch_sub(1, std::memory_order_acq_rel) == 1)
+                    {
+                        std::lock_guard<std::mutex> lk(doneMtx_);
+                        cv_done_.notify_one();          // last task woke the waiter
+                    }
                 }
             });
     }
 
     template<class F>
-    void enqueue(F&& f) {
+    void enqueue(F&& f)
+    {
         {
-            std::unique_lock<std::mutex> lock(queueMutex);
-            if (stop) throw std::runtime_error("enqueue on stopped ThreadPool");
-            tasks.emplace(std::forward<F>(f));
+            std::lock_guard<std::mutex> lk(queueMtx_);
+            if (stop_)
+                throw std::runtime_error("enqueue on stopped ThreadPool");
+            tasks_.emplace(std::forward<F>(f));
+            pending_.fetch_add(1, std::memory_order_relaxed);
         }
-        condition.notify_one();
+        cv_job_.notify_one();
     }
 
-    void wait() {
-        std::unique_lock<std::mutex> lock(queueMutex);
-        condition.wait(lock, [this] {
-            return tasks.empty();
-        });
+    /*------------------------------------------------------------------
+        Blocks the caller until **all** enqueued tasks have finished.
+        Safe to call multiple times; returns immediately if idle.
+    ------------------------------------------------------------------*/
+    void wait()
+    {
+        std::unique_lock<std::mutex> lk(doneMtx_);
+        cv_done_.wait(lk, [this] { return pending_.load(std::memory_order_acquire) == 0; });
     }
 
-    ~ThreadPool() {
+    ~ThreadPool()
+    {
         {
-            std::unique_lock<std::mutex> lock(queueMutex);
-            stop = true;
+            std::lock_guard<std::mutex> lk(queueMtx_);
+            stop_ = true;
         }
-        condition.notify_all();
-        for (auto& worker : workers) worker.join();
+        cv_job_.notify_all();              // wake every sleeper
+        for (auto& t : workers_) t.join(); // join in order
     }
 
 private:
-    std::vector<std::thread> workers;
-    std::queue<std::function<void()>> tasks;
-    std::mutex queueMutex;
-    std::condition_variable condition;
-    bool stop;
+    /*--- worker side ---*/
+    std::vector<std::thread>            workers_;
+    std::queue<std::function<void()>>   tasks_;
+    std::mutex                          queueMtx_;
+    std::condition_variable             cv_job_;
+
+    /*--- completion side ---*/
+    std::atomic<std::size_t>            pending_;
+    std::mutex                          doneMtx_;
+    std::condition_variable             cv_done_;
+
+    /*--- state ---*/
+    bool                                stop_;
 };
 
 /*==============================================================================
