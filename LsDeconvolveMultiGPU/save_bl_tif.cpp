@@ -63,7 +63,7 @@ static thread_local size_t   scratch_capacity = 0;
 static thread_local bool     scratch_hugepage = false;
 
 static void ensure_scratch(size_t bytes) {
-    if (scratch_capacity >= bytes) return;
+    if (scratch_capacity >= bytes && scratch_aligned != nullptr) return;
     // Free any existing buffer first
     if (scratch_aligned) {
 #if defined(__linux__)
@@ -79,10 +79,13 @@ static void ensure_scratch(size_t bytes) {
         scratch_hugepage = false;
     }
     constexpr size_t ALIGN = 64;
+    // size must be a multiple of alignment for aligned_alloc!
+    size_t aligned_bytes = ((bytes + ALIGN - 1) / ALIGN) * ALIGN;
+
     // For hugepage, require at least 2MB, aligned to 2MB
-    if (bytes >= (2 << 20)) {
+    if (aligned_bytes >= (2 << 20)) {
 #if defined(__linux__)
-        size_t huge_sz = ((bytes + (2 << 20) - 1) / (2 << 20)) * (2 << 20); // Round up
+        size_t huge_sz = ((aligned_bytes + (2 << 20) - 1) / (2 << 20)) * (2 << 20); // Round up
         void* ptr = mmap(nullptr, huge_sz, PROT_READ | PROT_WRITE,
                          MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB, -1, 0);
         if (ptr != MAP_FAILED) {
@@ -99,17 +102,19 @@ static void ensure_scratch(size_t bytes) {
 #endif
     // Standard aligned allocation
 #if defined(__cpp_aligned_new) && __cpp_aligned_new >= 201606
-    scratch_aligned = static_cast<uint8_t*>(std::aligned_alloc(ALIGN, ((bytes + ALIGN - 1) / ALIGN) * ALIGN));
+    scratch_aligned = static_cast<uint8_t*>(std::aligned_alloc(ALIGN, aligned_bytes));
+#elif defined(_ISOC11_SOURCE)
+    scratch_aligned = static_cast<uint8_t*>(aligned_alloc(ALIGN, aligned_bytes));
 #else
     void* ptr = nullptr;
-    if (posix_memalign(&ptr, ALIGN, ((bytes + ALIGN - 1) / ALIGN) * ALIGN) == 0)
+    if (posix_memalign(&ptr, ALIGN, aligned_bytes) == 0)
         scratch_aligned = static_cast<uint8_t*>(ptr);
     else
-        throw std::bad_alloc();
+        scratch_aligned = nullptr;
 #endif
     if (!scratch_aligned)
         throw std::bad_alloc();
-    scratch_capacity = ((bytes + ALIGN - 1) / ALIGN) * ALIGN;
+    scratch_capacity = aligned_bytes;
     scratch_hugepage = false;
 }
 
