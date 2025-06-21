@@ -80,76 +80,89 @@ struct SliceDone {
     }
 };
 
-/* === worker ============================================================= */
+/* ---------------------------------------------------------------
+   Thread-pool worker:  pull one SliceTask, build pixel buffer,
+   write the TIFF, and loop until every slice is done.
+   --------------------------------------------------------------- */
 static void worker()
 {
-    for (;;) {
-        size_t idx = g_nextSlice.fetch_add(1);
-        if (idx >= g_tasks->size())
-            break;
+    try
+    {
+        for (;;)                                     /* main loop */
+        {
+            std::size_t idx = g_nextSlice.fetch_add(1);
+            if (idx >= g_tasks->size()) break;       /* no more work */
 
-        const SliceTask& t = (*g_tasks)[idx];
-        SliceDone        onExit;                      // always dec-ref
+            /* ---------- unpack task ----------------------------------- */
+            const SliceTask& t  = (*g_tasks)[idx];
+            const std::size_t bpp  = (t.classId == mxUINT16_CLASS ? 2 : 1);
+            const std::size_t nPix = static_cast<std::size_t>(t.dimY) * t.dimX;
+            const std::size_t nByte = nPix * bpp;
 
-        const std::size_t bpp  = (t.classId == mxUINT16_CLASS ? 2 : 1);
-        const std::size_t pix  = static_cast<std::size_t>(t.dimY) * t.dimX;
-        const std::size_t bytes = pix * bpp;
+            /* ---------- thread-local scratch -------------------------- */
+            thread_local std::vector<uint8_t> tlsBuf;
+            if (tlsBuf.size() < nByte) tlsBuf.resize(nByte);
 
-        if (tls_buf.size() < bytes) tls_buf.resize(bytes);
-        uint8_t*       dst = tls_buf.data();
-        const uint8_t* srcBase =
-            t.base + static_cast<std::size_t>(t.z) * pix * bpp;
+            uint8_t*       dst = tlsBuf.data();
+            const uint8_t* src = t.base
+                   + static_cast<std::size_t>(t.zIndex) * nPix * bpp;
 
-        /* ------------- transpose / copy ------------------------------- */
-        if (t.isXYZlayout) {                       // XYZ → needs transpose
-            for (mwSize col = 0; col < t.dimX; ++col) {
-                const uint8_t* srcCol =
-                    srcBase + static_cast<std::size_t>(col) * t.dimY * bpp;
-                for (mwSize row = 0; row < t.dimY; ++row) {
-                    std::size_t di =
-                        (static_cast<std::size_t>(row) * t.dimX + col) * bpp;
-                    std::memcpy(dst + di,
-                                srcCol + static_cast<std::size_t>(row) * bpp,
-                                bpp);
+            /* ---------- transpose / copy ------------------------------ */
+            if (!t.isXYZlayout)          /* input is Y-X-Z  → needs transpose */
+            {
+                for (mwSize col = 0; col < t.dimX; ++col)
+                {
+                    const uint8_t* colPtr = src
+                          + static_cast<std::size_t>(col) * t.dimY * bpp;
+                    for (mwSize row = 0; row < t.dimY; ++row)
+                    {
+                        std::size_t di =
+                            (static_cast<std::size_t>(row) * t.dimX + col) * bpp;
+                        std::memcpy(dst + di,
+                                    colPtr + static_cast<std::size_t>(row) * bpp,
+                                    bpp);
+                    }
                 }
             }
-        } else {                                   // YXZ → already row-major
-            const std::size_t rowBytes = t.dimX * bpp;
-            for (mwSize row = 0; row < t.dimY; ++row) {
-                const uint8_t* srcRow =
-                    srcBase + static_cast<std::size_t>(row) * t.dimY * bpp;
-                std::memcpy(dst + static_cast<std::size_t>(row) * rowBytes,
-                            srcRow, rowBytes);
+            else                           /* input is X-Y-Z → already row-major */
+            {
+                const std::size_t rowBytes = t.dimX * bpp;
+                for (mwSize row = 0; row < t.dimY; ++row)
+                {
+                    const uint8_t* rowPtr =
+                        src + static_cast<std::size_t>(row) * t.dimY * bpp;
+                    std::memcpy(dst + static_cast<std::size_t>(row) * rowBytes,
+                                rowPtr, rowBytes);
+                }
             }
-        }
 
-        /* ---- write TIFF ----------------------------------------- */
-        TIFF* tif = TIFFOpen(t.outPath.c_str(), "w");
-        if (!tif)
-            throw std::runtime_error("Cannot open " + t.outPath);
+            /* ---------- write TIFF (strictly local, no shared state) -- */
+            TIFF* tif = TIFFOpen(t.outPath.c_str(), "w");
+            if (!tif) throw std::runtime_error("Cannot open " + t.outPath);
 
-        TIFFSetField(tif, TIFFTAG_IMAGEWIDTH,  t.dimX);
-        TIFFSetField(tif, TIFFTAG_IMAGELENGTH, t.dimY);
-        TIFFSetField(tif, TIFFTAG_SAMPLESPERPIXEL, 1);
-        TIFFSetField(tif, TIFFTAG_BITSPERSAMPLE, bpp == 2 ? 16 : 8);
+            TIFFSetField(tif, TIFFTAG_IMAGEWIDTH,  t.dimX);
+            TIFFSetField(tif, TIFFTAG_IMAGELENGTH, t.dimY);
+            TIFFSetField(tif, TIFFTAG_SAMPLESPERPIXEL, 1);
+            TIFFSetField(tif, TIFFTAG_BITSPERSAMPLE,  (bpp == 2 ? 16 : 8));
 
-        uint16_t compTag = (t.compression == "none")   ? COMPRESSION_NONE   :
-                           (t.compression == "lzw")    ? COMPRESSION_LZW    :
-                                                        COMPRESSION_DEFLATE;
-        TIFFSetField(tif, TIFFTAG_COMPRESSION,  compTag);
-        TIFFSetField(tif, TIFFTAG_PHOTOMETRIC,  PHOTOMETRIC_MINISBLACK);
-        TIFFSetField(tif, TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG);
-        TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP, t.dimY);
+            const uint16_t compTag =
+                  (t.compression == "none")   ? COMPRESSION_NONE   :
+                  (t.compression == "lzw")    ? COMPRESSION_LZW    :
+                                                COMPRESSION_DEFLATE;
+            TIFFSetField(tif, TIFFTAG_COMPRESSION,  compTag);
+            TIFFSetField(tif, TIFFTAG_PHOTOMETRIC,  PHOTOMETRIC_MINISBLACK);
+            TIFFSetField(tif, TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG);
+            TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP, t.dimY);
 
-        tsize_t wrote = (t.compression == "none")
-            ? TIFFWriteRawStrip    (tif, 0, dst, bytes)
-            : TIFFWriteEncodedStrip(tif, 0, dst, bytes);
+            tsize_t wrote = (t.compression == "none")
+                ? TIFFWriteRawStrip    (tif, 0, dst, nByte)
+                : TIFFWriteEncodedStrip(tif, 0, dst, nByte);
 
-        if (wrote < 0) {
-            TIFFClose(tif);
-            throw std::runtime_error("TIFF write failed on " + t.outPath);
-        }
-
+            if (wrote < 0)
+            {
+                TIFFClose(tif);
+                throw std::runtime_error("TIFF write failed on " + t.outPath);
+            }
 #if defined(__linux__)
             int fd = TIFFFileno(tif);
             if (fd != -1) posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED);
@@ -157,7 +170,8 @@ static void worker()
             TIFFClose(tif);
         }
     }
-    catch (const std::exception& e) {
+    catch (const std::exception& e)
+    {
         std::lock_guard<std::mutex> lk(g_errMtx);
         g_errors.emplace_back(e.what());
     }
