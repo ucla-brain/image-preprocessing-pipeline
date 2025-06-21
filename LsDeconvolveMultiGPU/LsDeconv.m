@@ -1205,7 +1205,7 @@ function save_slices_with_bl_tif(R, outpath, slab_z1)
     compression = 'deflate'; % use char '' not string ""
 
     % Save using compiled multithreaded MEX
-    save_bl_tif(R, fileList, orderFlag, compression);
+    save_bl_tif(R, fileList, orderFlag, compression, feature('numCores'));
 
     fprintf('   ✅ Saved %d slices in %.1fs.\n', numel(fileList), toc(start_t));
 end
