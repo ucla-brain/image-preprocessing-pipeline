@@ -384,14 +384,16 @@ void mexFunction(int, mxArray*[], int nrhs, const mxArray* prhs[])
 
         if (taskVec->empty()) return;   // nothing to do
 
-        /* ---- hand over to pool ---------------------------------------- */
-        ensure_pool(taskVec->size());
-
+        /* -------- publish tasks & counters BEFORE starting / waking pool -------- */
         {
             std::lock_guard<std::mutex> lk(g_poolMtx);
-            g_tasks        = std::move(taskVec);
-            g_nextTask     = 0;
+            g_tasks            = std::move(taskVec);
+            g_nextTask         = 0;
+            g_computeRemaining = g_tasks->size();
         }
+
+        /* now start (or wake) the thread pool */
+        ensure_pool(g_tasks->size());
 
         /* wait until writer empties queue & finishes */
         {
