@@ -328,7 +328,7 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(...
 
             if any(bl_shape > max_elements_per_dim), continue; end
             if prod(bl_shape) >= block_size_max, continue; end
-            if R_bytes_per_voxel * (slice_size * z + x * y * z * physCores) > ram_available, continue; end
+            if R_bytes_per_voxel * (slice_size * z + x * y * z * physCores) >= ram_available, continue; end
 
             score = prod(bl_core);
             if score > best_score
