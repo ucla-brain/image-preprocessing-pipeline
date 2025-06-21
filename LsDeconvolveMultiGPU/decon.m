@@ -172,9 +172,9 @@ function x = convFFT(x, otf)
     %   The result y is real(single) and the same “gather-state” (CPU vs GPU)
     %   as the input.
 
-    x =  fftn(x, [], 'like', x);   % x now holds fft(x)
+    x =  fftn(x);   % x now holds fft(x)
     x = x .* otf;                  % x now holds fft(x) .* otf
-    x = ifftn(x, [], 'like', x);
+    x = ifftn(x);
     x = real(x);                   % final output
 end
 
@@ -197,7 +197,7 @@ function [otf, otf_conj] = calculate_otf(psf, fft_shape, device_id)
     else
         [otf, ~, ~] = pad_block_to_fft_shape(psf, fft_shape, 0);
         otf = ifftshift(otf);
-        otf = fftn(otf, [], 'like', otf);
+        otf = fftn(otf);
         otf_conj = conj(otf);
     end
     fprintf('%s: OTF computed for size %s in %.2fs\n', ...
