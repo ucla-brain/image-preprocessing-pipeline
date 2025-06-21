@@ -186,10 +186,11 @@ static void save_slice(const SaveTask& t, std::vector<std::future<void>>& flush_
     flush_futures.emplace_back(std::async(std::launch::async, [tif, tmpPath, finalPath = t.filePath]() {
         TIFFClose(tif);
 
-        // Atomically move .tmp → final
+        // Atomically rename .tmp → final (throws if fails)
         if (std::rename(tmpPath.c_str(), finalPath.c_str()) != 0) {
-            std::remove(tmpPath.c_str());  // Remove incomplete file
-            throw std::runtime_error("Failed to rename " + tmpPath + " → " + finalPath);
+            std::remove(tmpPath.c_str());  // attempt cleanup
+            std::string err = "Atomic rename failed from " + tmpPath + " → " + finalPath;
+            throw std::runtime_error(err);  // will propagate via .get()
         }
     }));
 }
