@@ -45,21 +45,36 @@
 #include <mutex>
 #include <condition_variable>
 #include <thread>
-#include <future>
+#include <functional>
 #include <stdexcept>
-#include <algorithm>
-#include <chrono>
 #include <memory>
-#include <functional>   // << REQUIRED
+#include <chrono>
 
 /*==============================================================================
- *                       1.  Simple C++17 Thread Pool
+ *                         Thread-Local Cleanup Helper
+ *============================================================================*/
+struct ThreadLocalCleaner {
+    ~ThreadLocalCleaner() {
+        thread_local_uBuffer = std::vector<float>();
+        thread_local_cBuf = std::vector<char>();
+    }
+
+    static thread_local std::vector<float> thread_local_uBuffer;
+    static thread_local std::vector<char>  thread_local_cBuf;
+};
+
+thread_local std::vector<float> ThreadLocalCleaner::thread_local_uBuffer;
+thread_local std::vector<char>  ThreadLocalCleaner::thread_local_cBuf;
+
+/*==============================================================================
+ *                           Thread Pool Implementation
  *============================================================================*/
 class ThreadPool {
 public:
     explicit ThreadPool(size_t numThreads) : stop(false) {
         for (size_t i = 0; i < numThreads; ++i)
             workers.emplace_back([this] {
+                ThreadLocalCleaner cleaner;  // ensures buffer release on thread exit
                 while (true) {
                     std::function<void()> task;
 
@@ -80,7 +95,7 @@ public:
 
     template<class F>
     void enqueue(F&& f) {
-        {   // Lock scope
+        {
             std::unique_lock<std::mutex> lock(queueMutex);
             if (stop) throw std::runtime_error("enqueue on stopped ThreadPool");
             tasks.emplace(std::forward<F>(f));
@@ -96,7 +111,7 @@ public:
     }
 
     ~ThreadPool() {
-        {   // Lock scope
+        {
             std::unique_lock<std::mutex> lock(queueMutex);
             stop = true;
         }
@@ -107,7 +122,6 @@ public:
 private:
     std::vector<std::thread> workers;
     std::queue<std::function<void()>> tasks;
-
     std::mutex queueMutex;
     std::condition_variable condition;
     bool stop;
@@ -132,8 +146,7 @@ struct FileHeader {
     uint32_t numChunks;
     uint64_t chunkUncomp[MAX_CHUNKS];
     uint64_t chunkComp  [MAX_CHUNKS];
-    uint8_t  padding[HEADER_SIZE -
-                     (4 + 1 + 1 + 8*MAX_DIMS + 8 + 8 + 4 + 8*MAX_CHUNKS*2)];
+    uint8_t  padding[HEADER_SIZE - (4 + 1 + 1 + 8*MAX_DIMS + 8 + 8 + 4 + 8*MAX_CHUNKS*2)];
 };
 
 static void freadExact(FILE* f, void* dst, size_t n, const char* context)
@@ -166,7 +179,7 @@ static inline uint64_t idx3D(uint64_t x, uint64_t y, uint64_t z,
 }
 
 /*==============================================================================
- *                   2.  BrickJob (Rewritten for Buffer Reuse)
+ *                        BrickJob (Buffer Reuse Enabled)
  *============================================================================*/
 struct BrickJob {
     std::string file;
@@ -175,8 +188,8 @@ struct BrickJob {
     float* volPtr;
 
     void operator()() const {
-        static thread_local std::vector<float> uBuffer;
-        static thread_local std::vector<char> cBuf;
+        auto& uBuffer = ThreadLocalCleaner::thread_local_uBuffer;
+        auto& cBuf    = ThreadLocalCleaner::thread_local_cBuf;
 
         std::unique_ptr<FILE, decltype(&std::fclose)>
             fp(std::fopen(file.c_str(), "rb"), &std::fclose);
@@ -193,10 +206,12 @@ struct BrickJob {
             throw std::runtime_error(file + ": dims in header ≠ expected brick dims");
 
         const uint64_t totalVoxels = brickX * brickY * brickZ;
-        if (uBuffer.size() < totalVoxels) uBuffer.resize(totalVoxels);
-        char* dst = reinterpret_cast<char*>(uBuffer.data());
+        if (uBuffer.size() < totalVoxels)
+            uBuffer.resize(totalVoxels);
 
+        char* dst = reinterpret_cast<char*>(uBuffer.data());
         uint64_t offset = 0;
+
         for (uint32_t c = 0; c < h.numChunks; ++c) {
             const uint64_t compB = h.chunkComp[c];
             const uint64_t uncomp = h.chunkUncomp[c];
@@ -204,7 +219,9 @@ struct BrickJob {
             if (compB > 0x7FFFFFFF || uncomp > 0x7FFFFFFF)
                 throw std::runtime_error(file + ": chunk > 2 GB");
 
-            if (cBuf.size() < compB) cBuf.resize(compB);
+            if (cBuf.size() < compB)
+                cBuf.resize(compB);
+
             freadExact(fp.get(), cBuf.data(), compB, ("reading chunk of " + file).c_str());
 
             const int decoded = LZ4_decompress_safe(cBuf.data(), dst + offset,
@@ -215,6 +232,7 @@ struct BrickJob {
 
             offset += uncomp;
         }
+
         if (offset != h.totalUncompressed)
             throw std::runtime_error(file + ": size mismatch after decompress");
 
@@ -230,13 +248,13 @@ struct BrickJob {
 };
 
 /*==============================================================================
- *                  3.  MEX Entry – Uses ThreadPool for Dispatch
+ *                               MEX Entry Point
  *============================================================================*/
 void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
 {
     const auto tStart = std::chrono::high_resolution_clock::now();
     if (nrhs < 4 || nrhs > 5)
-        mexErrMsgTxt("Usage: [vol, elapsed] = load_slab_lz4(fnames, p1, p2, volSize, [maxThreads])");
+        mexErrMsgTxt("Usage: [vol, elapsed] = load_slabs_lz4(fnames, p1, p2, volSize, [maxThreads])");
 
     if (!mxIsCell(prhs[0])) mexErrMsgTxt("First arg must be cellstr");
     const mwSize N = mxGetNumberOfElements(prhs[0]);
@@ -264,8 +282,8 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
     if (maxThreads < 1) maxThreads = 1;
 
     mwSize mdims[3] = { static_cast<mwSize>(dimX), static_cast<mwSize>(dimY), static_cast<mwSize>(dimZ) };
-    // mxArray* volMx = mxCreateUninitNumericArray(3, mdims, mxSINGLE_CLASS, mxREAL);
     mxArray* volMx = mxCreateNumericArray(3, mdims, mxSINGLE_CLASS, mxREAL);
+    // mxArray* volMx = mxCreateUninitNumericArray(3, mdims, mxSINGLE_CLASS, mxREAL);
     if (!volMx) mexErrMsgTxt("Cannot allocate output volume");
     float* volPtr = static_cast<float*>(mxGetData(volMx));
 
@@ -296,9 +314,9 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
             pool.enqueue([&job]() {
                 job();
             });
-        pool.wait();  // Waits for all tasks to complete
+        pool.wait();  // Waits until all jobs finish
     } catch (const std::exception& e) {
-        mexErrMsgIdAndTxt("load_slab_lz4:ThreadError", e.what());
+        mexErrMsgIdAndTxt("load_slabs_lz4:ThreadError", e.what());
     }
 
     plhs[0] = volMx;
