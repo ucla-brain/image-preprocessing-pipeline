@@ -159,7 +159,7 @@ static void save_slice(const SaveTask& t)
         const size_t srcStride = t.dim0 * es;   // bytes between source rows
         const size_t dstStride = width  * es;   // bytes between dest rows
 
-        if (have_avx2 && (width & 15) == 0 && (height & 15) == 0 && es == 1)
+        if (have_avx2 && (width  & 15) == 0 && (height & 15) == 0 && es == 1 && t.comp != "none")
         {
             for (mwSize y0 = 0; y0 < height; y0 += 16) {
                 for (mwSize x0 = 0; x0 < width; x0 += 16) {
