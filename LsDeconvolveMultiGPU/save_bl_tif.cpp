@@ -157,8 +157,11 @@ static void save_slice(const SaveTask& t, std::vector<std::future<void>>& flush_
         ioBuf = dst;
     }
 
-    TIFF* tif = TIFFOpen(t.filePath.c_str(), "w");
-    if (!tif) throw std::runtime_error("Cannot open " + t.filePath);
+    // Use .tmp file path
+    const std::string tmpPath = t.filePath + ".tmp";
+
+    TIFF* tif = TIFFOpen(tmpPath.c_str(), "w");
+    if (!tif) throw std::runtime_error("Cannot open temporary file " + tmpPath);
 
     TIFFSetField(tif, TIFFTAG_IMAGEWIDTH, srcCols);
     TIFFSetField(tif, TIFFTAG_IMAGELENGTH, srcRows);
@@ -176,12 +179,18 @@ static void save_slice(const SaveTask& t, std::vector<std::future<void>>& flush_
 
     if (nWritten < 0) {
         TIFFClose(tif);
-        throw std::runtime_error("TIFF write failed on " + t.filePath);
+        throw std::runtime_error("TIFF write failed on " + tmpPath);
     }
 
-    // Perform asynchronous file flush and close to avoid blocking computation
-    flush_futures.emplace_back(std::async(std::launch::async, [tif]() {
+    // Asynchronous close and rename
+    flush_futures.emplace_back(std::async(std::launch::async, [tif, tmpPath, finalPath = t.filePath]() {
         TIFFClose(tif);
+
+        // Atomically move .tmp → final
+        if (std::rename(tmpPath.c_str(), finalPath.c_str()) != 0) {
+            std::remove(tmpPath.c_str());  // Remove incomplete file
+            throw std::runtime_error("Failed to rename " + tmpPath + " → " + finalPath);
+        }
     }));
 }
 
