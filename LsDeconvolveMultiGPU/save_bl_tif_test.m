@@ -23,7 +23,7 @@ save_bl_tif(simdVol, fileList, false, 'none');  % YXZ → transpose in MEX
 for k = 1:2
     simdOut = imread(fileList{k});
     delete(fileList{k});
-    assert(isequal(simdOut, simdVol(:,:,k).'), ...
+    assert(isequal(simdOut, simdVol(:,:,k)), ...
           "SIMD transpose failed on slice %d", k);
 end
 fprintf("✅ SIMD slice sanity check passed\n");
