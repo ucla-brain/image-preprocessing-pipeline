@@ -10,18 +10,22 @@ function save_bl_tif_test()
 %
 % Author: ChatGPT-4o patch for Keivan Moradi, 2025-06-21
 
-rng(42);                                   % reproducible random data
+rng(42);
 fprintf("🧪 Running save_bl_tif extended tests…\n");
 
 %% 0. Quick SIMD correctness check via the MEX itself
-simdVol = uint8(randi(255, [256 256 2]));    % 3-D volume, Z = 2
-tmp     = [tempname '.tif'];
-save_bl_tif(simdVol, {tmp}, false, "none");  % YXZ → transpose inside MEX
-simdOut = imread(tmp);
-delete(tmp);
+simdVol = uint8(randi(255, [256 256 2]));       % 2 slices
+tmpBase = tempname;                             % unique base
+fileList = {[tmpBase '_1.tif'], [tmpBase '_2.tif']};
 
-assert(isequal(simdOut, simdVol(:,:,1).'), ...
-      'SIMD transpose (256×256×1 uint8) failed');
+save_bl_tif(simdVol, fileList, false, "none");  % YXZ → transpose in MEX
+
+for k = 1:2
+    simdOut = imread(fileList{k});
+    delete(fileList{k});
+    assert(isequal(simdOut, simdVol(:,:,k).'), ...
+          "SIMD transpose failed on slice %d", k);
+end
 fprintf("✅ SIMD slice sanity check passed\n");
 
 %% 1. Main matrix of tests
