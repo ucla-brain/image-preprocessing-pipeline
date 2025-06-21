@@ -100,7 +100,7 @@ mex(mex_flags_cpu{:}, src_lz4_load, src_lz4_c);
 mex(mex_flags_cpu{:}, src_load_slab_lz4, src_lz4_c);
 mex(mex_flags_cpu{:}, src_load_bl, tiff_include{:}, tiff_lib{:}, tiff_link{:});
 if ispc
-    mex(mex_flags_cpu{:}, src_save_bl, tiff_include{:}, tiff_lib{:}, tiff_link{:}, '-lnuma');
+    mex(mex_flags_cpu{:}, src_save_bl, tiff_include{:}, tiff_lib{:}, tiff_link{:});
 else
     mex(mex_flags_cpu{:}, src_save_bl, tiff_include{:}, tiff_lib{:}, tiff_link{:}, '-lnuma');
 end
