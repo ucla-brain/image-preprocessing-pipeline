@@ -1,38 +1,35 @@
 /*==============================================================================
-  save_bl_tif.cpp
+  save_bl_tif.cpp (OpenMP Version)
   -----------------------------------------------------------------------------
   High-throughput Z-slice saver for 3-D MATLAB arrays (one TIFF per slice).
 
-  Author        : Keivan Moradi  (with ChatGPT-4o assistance)
-  License       : GNU GPL v3   <https://www.gnu.org/licenses/>
+  Author        : Keivan Moradi (with ChatGPT-4o assistance)
+  License       : GNU GPL v3 <https://www.gnu.org/licenses/>
 
   OVERVIEW
   -------
   • Purpose
-      Save every Z-slice of a 3-D volume to its own TIFF file, optionally
-      compressed (LZW or Deflate). Supports MATLAB’s default [Y X Z] layout
-      and the alternative [X Y Z] layout.
+      Save each Z-slice of a 3-D array to its own TIFF file. Optimized for
+      [Y X Z] (MATLAB default) and [X Y Z] order, with or without compression.
 
-  • Key features
-      – Accepts uint8 or uint16 input.
-      – Cross-platform: Windows, Linux, macOS (libtiff backend).
-      – One thread per call, launched immediately without global pool.
-      – Optimized fast-path for [X Y Z] + compression=none (no copy).
-      – Thread-local scratch buffer resized, not just reserved.
-      – Matches `load_bl_tif.cpp` for slice order and dimensions.
+  • Parallelism
+      Uses OpenMP with dynamic scheduling. Threads are reused by runtime.
+
+  • Features
+      – Supports uint8/uint16
+      – Uses TIFFWriteRawStrip if compression="none" + [X Y Z]
+      – Fully drop-in for MATLAB
+      – Thread-local scratch buffer per OpenMP thread
 
 ==============================================================================*/
 
 #include "mex.h"
 #include "tiffio.h"
-#include <atomic>
 #include <cstring>
-#include <memory>
-#include <stdexcept>
 #include <string>
-#include <thread>
+#include <stdexcept>
 #include <vector>
-#include <mutex>
+#include <omp.h>
 
 #if defined(__linux__)
 # include <fcntl.h>
@@ -54,29 +51,24 @@ struct MatlabString {
 
 struct SaveTask {
     const uint8_t* base;
-    mwSize         dim0;   // Y
-    mwSize         dim1;   // X
-    mwSize         z;      // slice index
-    std::string    path;
-    bool           isXYZ;
-    mxClassID      classId;
-    std::string    comp;
+    mwSize dim0, dim1, z;
+    std::string path;
+    bool isXYZ;
+    mxClassID classId;
+    std::string comp;
 };
 
-static thread_local std::vector<uint8_t> scratch;
-
-static void save_slice(const SaveTask& t)
+static void save_slice(const SaveTask& t, std::vector<uint8_t>& scratch)
 {
-    const size_t bytesPerPixel   = (t.classId == mxUINT16_CLASS ? 2 : 1);
-    const mwSize srcRows         = t.isXYZ ? t.dim1 : t.dim0;
-    const mwSize srcCols         = t.isXYZ ? t.dim0 : t.dim1;
-    const size_t pixelsPerSlice  = static_cast<size_t>(t.dim0) * t.dim1;
-    const size_t bytesPerSlice   = pixelsPerSlice * bytesPerPixel;
-    const size_t sliceIndex      = static_cast<size_t>(t.z);
-    const bool isRaw             = (t.comp == "none");
+    const size_t bytesPerPixel = (t.classId == mxUINT16_CLASS ? 2 : 1);
+    const mwSize srcRows = t.isXYZ ? t.dim1 : t.dim0;
+    const mwSize srcCols = t.isXYZ ? t.dim0 : t.dim1;
+    const size_t pixelsPerSlice = static_cast<size_t>(t.dim0) * t.dim1;
+    const size_t bytesPerSlice = pixelsPerSlice * bytesPerPixel;
+    const size_t sliceIndex = static_cast<size_t>(t.z);
+    const bool isRaw = (t.comp == "none");
 
     const uint8_t* inputSlice = t.base + sliceIndex * bytesPerSlice;
-
     const bool directWrite = isRaw && t.isXYZ;
 
     if (!directWrite) {
@@ -84,7 +76,7 @@ static void save_slice(const SaveTask& t)
             scratch.resize(bytesPerSlice);
         uint8_t* dstBuffer = scratch.data();
 
-        if (!t.isXYZ) { // MATLAB default [Y X Z]
+        if (!t.isXYZ) {
             for (mwSize col = 0; col < srcCols; ++col) {
                 const uint8_t* srcColumn =
                     inputSlice + static_cast<size_t>(col) * t.dim0 * bytesPerPixel;
@@ -97,11 +89,11 @@ static void save_slice(const SaveTask& t)
                         std::memcpy(dstBuffer + dstIdx, src, 2);
                 }
             }
-        } else { // [X Y Z]
-            const size_t dstRowBytes = srcCols * bytesPerPixel;
+        } else {
+            const size_t rowBytes = srcCols * bytesPerPixel;
             for (mwSize row = 0; row < srcRows; ++row) {
-                const uint8_t* srcRow = inputSlice + row * dstRowBytes;
-                std::memcpy(dstBuffer + row * dstRowBytes, srcRow, dstRowBytes);
+                const uint8_t* src = inputSlice + row * rowBytes;
+                std::memcpy(dstBuffer + row * rowBytes, src, rowBytes);
             }
         }
     }
@@ -109,16 +101,15 @@ static void save_slice(const SaveTask& t)
     TIFF* tif = TIFFOpen(t.path.c_str(), "w");
     if (!tif) throw std::runtime_error("Cannot open " + t.path);
 
-    TIFFSetField(tif, TIFFTAG_IMAGEWIDTH,  srcCols);
+    TIFFSetField(tif, TIFFTAG_IMAGEWIDTH, srcCols);
     TIFFSetField(tif, TIFFTAG_IMAGELENGTH, srcRows);
     TIFFSetField(tif, TIFFTAG_SAMPLESPERPIXEL, 1);
     TIFFSetField(tif, TIFFTAG_BITSPERSAMPLE, bytesPerPixel == 2 ? 16 : 8);
 
     const uint16_t compTag = isRaw ? COMPRESSION_NONE :
-                              (t.comp == "lzw") ? COMPRESSION_LZW : COMPRESSION_DEFLATE;
-
-    TIFFSetField(tif, TIFFTAG_COMPRESSION,  compTag);
-    TIFFSetField(tif, TIFFTAG_PHOTOMETRIC,  PHOTOMETRIC_MINISBLACK);
+        (t.comp == "lzw" ? COMPRESSION_LZW : COMPRESSION_DEFLATE);
+    TIFFSetField(tif, TIFFTAG_COMPRESSION, compTag);
+    TIFFSetField(tif, TIFFTAG_PHOTOMETRIC, PHOTOMETRIC_MINISBLACK);
     TIFFSetField(tif, TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG);
     TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP, srcRows);
 
@@ -139,23 +130,6 @@ static void save_slice(const SaveTask& t)
     TIFFClose(tif);
 }
 
-static void worker_loop(std::shared_ptr<const std::vector<SaveTask>> tasks,
-                        std::atomic_size_t* next,
-                        std::vector<std::string>* errors,
-                        std::mutex* errmtx)
-{
-    size_t idx = next->fetch_add(1);
-    while (idx < tasks->size()) {
-        try {
-            save_slice((*tasks)[idx]);
-        } catch (const std::exception& e) {
-            std::lock_guard<std::mutex> lock(*errmtx);
-            errors->emplace_back(e.what());
-        }
-        idx = next->fetch_add(1);
-    }
-}
-
 void mexFunction(int, mxArray*[], int nrhs, const mxArray* prhs[])
 {
     try {
@@ -169,7 +143,6 @@ void mexFunction(int, mxArray*[], int nrhs, const mxArray* prhs[])
 
         const mwSize* dims = mxGetDimensions(V);
         mwSize nd = mxGetNumberOfDimensions(V);
-
         mwSize dim0, dim1, dim2;
         if (nd == 2) { dim0 = dims[0]; dim1 = dims[1]; dim2 = 1; }
         else if (nd == 3) { dim0 = dims[0]; dim1 = dims[1]; dim2 = dims[2]; }
@@ -187,39 +160,36 @@ void mexFunction(int, mxArray*[], int nrhs, const mxArray* prhs[])
         std::string comp(cs.get());
         if (comp != "none" && comp != "lzw" && comp != "deflate")
             mexErrMsgIdAndTxt("save_bl_tif:Input",
-                              "compression must be \"none\", \"lzw\", or \"deflate\"");
+                "compression must be \"none\", \"lzw\", or \"deflate\"");
 
         const uint8_t* base = static_cast<const uint8_t*>(mxGetData(V));
-        auto tasks = std::make_shared<std::vector<SaveTask>>();
-        tasks->reserve(dim2);
+        std::vector<SaveTask> tasks;
+        tasks.reserve(dim2);
 
         for (mwSize z = 0; z < dim2; ++z) {
             const mxArray* cell = mxGetCell(prhs[1], z);
             if (!mxIsChar(cell))
                 mexErrMsgIdAndTxt("save_bl_tif:Input", "fileList must be char");
             MatlabString path(cell);
-            tasks->push_back({ base, dim0, dim1, z, path.get(),
-                               isXYZ, mxGetClassID(V), comp });
+            tasks.push_back({ base, dim0, dim1, z, path.get(),
+                              isXYZ, mxGetClassID(V), comp });
         }
 
-        if (tasks->empty()) return;
-
-        std::atomic_size_t next{0};
         std::vector<std::string> errors;
-        std::mutex errmtx;
 
-        size_t hw = std::thread::hardware_concurrency();
-        if (hw == 0) hw = 8;
-        size_t nThreads = std::min(hw, tasks->size());
-        if (hw >= 8) nThreads = std::max<size_t>(8, nThreads);
-
-        std::vector<std::thread> threads;
-        threads.reserve(nThreads);
-        for (size_t i = 0; i < nThreads; ++i)
-            threads.emplace_back(worker_loop, tasks, &next, &errors, &errmtx);
-
-        for (auto& t : threads)
-            if (t.joinable()) t.join();
+#pragma omp parallel
+        {
+            std::vector<uint8_t> threadScratch;
+#pragma omp for schedule(dynamic)
+            for (int i = 0; i < static_cast<int>(tasks.size()); ++i) {
+                try {
+                    save_slice(tasks[i], threadScratch);
+                } catch (const std::exception& e) {
+#pragma omp critical
+                    errors.emplace_back(e.what());
+                }
+            }
+        }
 
         if (!errors.empty()) {
             std::string msg("save_bl_tif errors:\n");
