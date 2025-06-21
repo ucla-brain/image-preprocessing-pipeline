@@ -354,8 +354,8 @@ void mexFunction(int nlhs, mxArray* plhs[],
         size_t nThreads = std::min(hw, ctx.tasks->size());
         if (nrhs == 5) {
             double reqThreads = mxGetScalar(prhs[4]);
-            if (!(reqThreads > 0 && reqThreads <= ctx.tasks->size()))
-                mexErrMsgIdAndTxt("save_bl_tif:Input", "Invalid nThreads value.");
+            if (!(reqThreads > 0))
+                mexErrMsgIdAndTxt("save_bl_tif:Input", "nThreads must be positive.");
             nThreads = std::min((size_t)reqThreads, ctx.tasks->size());
         }
 
