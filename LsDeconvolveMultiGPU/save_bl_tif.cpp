@@ -251,16 +251,20 @@ static void compute_worker()
         }
 
         /* ------------ enqueue job & signal writer --------------------- */
+        /* ---------------- enqueue write job ------------------------------ */
         {
             std::unique_lock<std::mutex> ql(g_queueMtx);
             g_queueNotFull.wait(ql, []{ return g_queue.size() < kQueueCapacity; });
-            g_queue.emplace_back(std::move(job));
-        }
-        g_queueNotEmpty.notify_one();
-
-        /* ------------ mark ONE slice completed ------------------------ */
-        if (g_computeRemaining.fetch_sub(1) == 1)          // last slice done?
-            g_queueNotEmpty.notify_one();                  // wake writer if idle
+            g_queue.emplace_back(std::move(job));          // queue the slice
+            /*  ↓↓↓  mark this slice as produced                                     */
+            if (g_computeRemaining.fetch_sub(1) == 1) {    // this was the *last* slice
+                // queue may already be empty if writer is faster → wake it up
+                if (g_queue.empty())
+                    g_queueNotEmpty.notify_all();
+            } else {
+                g_queueNotEmpty.notify_one();              // normal case
+            }
+        }   // unlock
     }
 }
 
