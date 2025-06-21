@@ -100,13 +100,13 @@ static void save_slice(const SaveTask& t)
         TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP,
                      TIFFDefaultStripSize(tif, 0));   // libtiff default (~8 k)
 
-    /* (5) Write -------------------------------------------------------------- */
-    uint8_t* writeBuf = const_cast<uint8_t*>(ioBuf);          // mutable view
-
+    /* (5) Write */
     tsize_t wrote = (t.compressionTag == COMPRESSION_NONE)
-        ? TIFFWriteRawStrip    (tif, 0, writeBuf,
-                                static_cast<tsize_t>(t.bytesPerSlice))
-        : TIFFWriteEncodedStrip(tif, 0, writeBuf,
+        ? TIFFWriteRawStrip(tif, 0,
+                            const_cast<uint8_t*>(ioBuf),
+                            static_cast<tsize_t>(t.bytesPerSlice))
+        : TIFFWriteEncodedStrip(tif, 0,
+                                const_cast<uint8_t*>(ioBuf),
                                 static_cast<tsize_t>(t.bytesPerSlice));
 
     if (wrote < 0) {
