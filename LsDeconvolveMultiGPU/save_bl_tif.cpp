@@ -23,7 +23,7 @@
 # include <unistd.h>
 #endif
 
-/* === UTF-8 helper ============================================================== */
+/* ------------ UTF-8 helper ------------------------------------------------- */
 struct MatlabString {
     char* ptr;
     explicit MatlabString(const mxArray* a) : ptr(mxArrayToUTF8String(a)) {
@@ -36,23 +36,21 @@ struct MatlabString {
     MatlabString& operator=(const MatlabString&) = delete;
 };
 
-/* === one slice description ==================================================== */
+/* ------------ one slice description --------------------------------------- */
 struct SliceTask {
-    const uint8_t* base;      // full volume
-    mwSize         dimY;      // rows
-    mwSize         dimX;      // cols
-    mwSize         z;         // slice index
+    const uint8_t* base;
+    mwSize         dimY, dimX, z;
     std::string    outPath;
-    bool           isXYZ;     // true = X-Y-Z input  (needs transpose)
-    mxClassID      classId;   // uint8|uint16
+    bool           isXYZ;          // true → X-Y-Z   (row-major)
+    mxClassID      classId;
     std::string    compression;
 };
 
-/* === batch-wide state ========================================================= */
+/* ------------ batch-wide state -------------------------------------------- */
 namespace {
 std::shared_ptr<const std::vector<SliceTask>> g_tasks;
-std::atomic_size_t  g_next{0};            // ticket dispenser
-std::atomic_size_t  g_left{0};            // slices remaining
+std::atomic_size_t  g_next{0};              // ticket dispenser
+std::atomic_size_t  g_left{0};              // slices remaining
 
 std::mutex              g_waitMtx;
 std::condition_variable g_waitCV;
@@ -63,10 +61,9 @@ std::vector<std::string> g_errors;
 std::vector<std::thread> g_pool;
 } // namespace
 
-/* === per-thread buffer ======================================================== */
 static thread_local std::vector<uint8_t> tls_buf;
 
-/* === automatic countdown helper ============================================== */
+/* --- automatic countdown --------------------------------------------------- */
 struct SliceDone {
     ~SliceDone() {
         if (g_left.fetch_sub(1) == 1) {
@@ -76,7 +73,7 @@ struct SliceDone {
     }
 };
 
-/* === worker =================================================================== */
+/* ------------ worker ------------------------------------------------------- */
 static void worker()
 {
     try {
@@ -97,8 +94,8 @@ static void worker()
             const uint8_t* src =
                 t.base + static_cast<std::size_t>(t.z) * nPix * bpp;
 
-            /* ------------ build pixel buffer ------------------------- */
-            if (t.isXYZ) {               /* X-Y-Z input → needs transpose */
+            /* ---------- build slice buffer -------------------------------- */
+            if (!t.isXYZ) {            /* Y-X-Z input  ⇒  transpose needed */
                 for (mwSize col = 0; col < t.dimX; ++col) {
                     const uint8_t* srcCol =
                         src + static_cast<std::size_t>(col) * t.dimY * bpp;
@@ -110,7 +107,7 @@ static void worker()
                                     bpp);
                     }
                 }
-            } else {                     /* Y-X-Z input → already OK */
+            } else {                   /* X-Y-Z input  ⇒  rows already contig */
                 const std::size_t rowBytes = t.dimX * bpp;
                 for (mwSize row = 0; row < t.dimY; ++row) {
                     const uint8_t* srcRow =
@@ -120,7 +117,7 @@ static void worker()
                 }
             }
 
-            /* ------------ write TIFF ---------------------------------- */
+            /* ---------- write TIFF --------------------------------------- */
             TIFF* tif = TIFFOpen(t.outPath.c_str(), "w");
             if (!tif) throw std::runtime_error("Cannot open " + t.outPath);
 
@@ -159,7 +156,7 @@ static void worker()
     }
 }
 
-/* === shrink pthread stack (Linux/glibc ≥2.34) ================================ */
+/* ------------ Linux: shrink default pthread stack ------------------------- */
 #if defined(__linux__)
 static void shrink_stack()
 {
@@ -177,19 +174,17 @@ static void shrink_stack()
 }
 #endif
 
-/* ============================================================================ */
+/* ========================================================================== */
 void mexFunction(int, mxArray*[], int nrhs, const mxArray* prhs[])
 {
     try {
-        /* ---- parse & validate inputs -------------------------------- */
         if (nrhs != 4)
             mexErrMsgIdAndTxt("save_bl_tif:Input",
               "Usage: save_bl_tif(volume, fileList, orderFlag, compression)");
 
         const mxArray* vol = prhs[0];
         if (!mxIsUint8(vol) && !mxIsUint16(vol))
-            mexErrMsgIdAndTxt("save_bl_tif:Input",
-                              "Volume must be uint8 or uint16");
+            mexErrMsgIdAndTxt("save_bl_tif:Input", "Volume must be uint8/uint16");
 
         const mwSize* dims = mxGetDimensions(vol);
         mwSize nd = mxGetNumberOfDimensions(vol);
@@ -213,7 +208,7 @@ void mexFunction(int, mxArray*[], int nrhs, const mxArray* prhs[])
             mexErrMsgIdAndTxt("save_bl_tif:Input",
               "compression must be \"none\", \"lzw\", or \"deflate\"");
 
-        /* ---- task vector ------------------------------------------- */
+        /* ---- tasks ---------------------------------------------------- */
         const uint8_t* base = static_cast<const uint8_t*>(mxGetData(vol));
         auto tasks = std::make_shared<std::vector<SliceTask>>();
         tasks->reserve(dimZ);
@@ -231,13 +226,11 @@ void mexFunction(int, mxArray*[], int nrhs, const mxArray* prhs[])
 
         if (tasks->empty()) return;
 
-        /* ---- publish & reset counters ------------------------------- */
-        g_tasks   = std::move(tasks);
-        g_next    = 0;
-        g_left    = g_tasks->size();
+        g_tasks = std::move(tasks);
+        g_next  = 0;
+        g_left  = g_tasks->size();
         g_errors.clear();
 
-        /* ---- create pool ------------------------------------------- */
 #if defined(__linux__)
         shrink_stack();
 #endif
@@ -252,7 +245,6 @@ void mexFunction(int, mxArray*[], int nrhs, const mxArray* prhs[])
         for (std::size_t i = 0; i < nThreads; ++i)
             g_pool.emplace_back(worker);
 
-        /* ---- wait --------------------------------------------------- */
         {
             std::unique_lock<std::mutex> lk(g_waitMtx);
             g_waitCV.wait(lk, []{ return g_left.load() == 0; });
@@ -260,7 +252,6 @@ void mexFunction(int, mxArray*[], int nrhs, const mxArray* prhs[])
         for (auto& t : g_pool) if (t.joinable()) t.join();
         g_pool.clear();
 
-        /* ---- propagate errors -------------------------------------- */
         if (!g_errors.empty()) {
             std::string msg("save_bl_tif errors:\n");
             for (auto& e : g_errors) msg += "  - " + e + '\n';
