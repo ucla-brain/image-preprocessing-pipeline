@@ -20,6 +20,7 @@
 #include <future>
 #include <memory>
 #include <mutex>
+#include <pthread.h>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -217,12 +218,15 @@ struct CallContext {
 void worker_entry(CallContext& ctx, int thread_id)
 {
 #if defined(__linux__)
-    // NUMA-aware thread affinity for improved memory access efficiency
     if (numa_available() != -1) {
         int max_node = numa_max_node();
         int target_node = thread_id % (max_node + 1);
         numa_run_on_node(target_node);
     }
+
+    pthread_setname_np(pthread_self(), "save_bl_tif");
+    sched_param param{};
+    pthread_setschedparam(pthread_self(), SCHED_BATCH, &param); // Reduce scheduling overhead
 #endif
 
     const auto& jobList = *ctx.tasks;
@@ -239,149 +243,133 @@ void worker_entry(CallContext& ctx, int thread_id)
         idx = ctx.nextIndex.fetch_add(1, std::memory_order_relaxed);
     }
 
-    // Wait for all asynchronous file flushes to complete before thread exits
     for (auto& fut : flush_futures) fut.get();
 }
 
 } // unnamed namespace
 
 /* ──────────────────────────────── MEX ENTRY ─────────────────────────────── */
-/* ... [rest of includes and code above unchanged] ... */
-
 void mexFunction(int nlhs, mxArray* plhs[],
                  int nrhs, const mxArray* prhs[])
 {
     try {
-        /* ─── 1. ARGUMENT VALIDATION ─────────────────────────────────────── */
+        // ──────────────────── Argument Validation ────────────────────────── //
         if (nrhs != 4 && nrhs != 5)
             mexErrMsgIdAndTxt("save_bl_tif:Input",
                 "Usage: save_bl_tif(volume, fileList, orderFlag, compression [, nThreads])");
 
         const mxArray* V = prhs[0];
         if (!mxIsUint8(V) && !mxIsUint16(V))
-            mexErrMsgIdAndTxt("save_bl_tif:Input",
-                "Volume must be uint8 or uint16.");
+            mexErrMsgIdAndTxt("save_bl_tif:Input", "Volume must be uint8 or uint16.");
 
-        const mwSize* dims   = mxGetDimensions(V);
-        const size_t  dim0   = dims[0];
-        const size_t  dim1   = dims[1];
-        const size_t  dim2   = (mxGetNumberOfDimensions(V) == 3) ? dims[2] : 1;
+        const mwSize* dims = mxGetDimensions(V);
+        const size_t dim0 = dims[0], dim1 = dims[1];
+        const size_t dim2 = (mxGetNumberOfDimensions(V) == 3) ? dims[2] : 1;
 
-        const uint8_t* basePtr  = static_cast<const uint8_t*>(mxGetData(V));
+        const uint8_t* basePtr = static_cast<const uint8_t*>(mxGetData(V));
         const mxClassID classId = mxGetClassID(V);
         const size_t bytesPerPx = (classId == mxUINT16_CLASS) ? 2 : 1;
         const size_t bytesPerSl = dim0 * dim1 * bytesPerPx;
 
-        bool alreadyXYZ = false;
-        const mxArray* ord = prhs[2];
-        if (mxIsLogicalScalar(ord)) alreadyXYZ = mxIsLogicalScalarTrue(ord);
-        else if (mxIsNumeric(ord))  alreadyXYZ = (mxGetScalar(ord) != 0.0);
+        bool alreadyXYZ = mxIsLogicalScalarTrue(prhs[2]) || (mxIsNumeric(prhs[2]) && mxGetScalar(prhs[2]) != 0.0);
 
-        std::string compStr;
-        {
-            char* cstr = mxArrayToUTF8String(prhs[3]);
-            if (!cstr) mexErrMsgIdAndTxt("save_bl_tif:Input", "Invalid compression string.");
-            compStr = cstr; mxFree(cstr);
-        }
+        char* cstr = mxArrayToUTF8String(prhs[3]);
+        if (!cstr) mexErrMsgIdAndTxt("save_bl_tif:Input", "Invalid compression string.");
+        std::string compStr(cstr); mxFree(cstr);
+
         uint16_t compTag = COMPRESSION_NONE;
-        if (compStr == "lzw")           compTag = COMPRESSION_LZW;
-        else if (compStr == "deflate" || compStr == "zip")
-                                         compTag = COMPRESSION_DEFLATE;
+        if (compStr == "lzw") compTag = COMPRESSION_LZW;
+        else if (compStr == "deflate" || compStr == "zip") compTag = COMPRESSION_DEFLATE;
         else if (compStr != "none")
-            mexErrMsgIdAndTxt("save_bl_tif:Input",
-                              "Compression must be 'none', 'lzw', or 'deflate'.");
+            mexErrMsgIdAndTxt("save_bl_tif:Input", "Compression must be 'none', 'lzw', or 'deflate'.");
 
         if (!mxIsCell(prhs[1]) || mxGetNumberOfElements(prhs[1]) != dim2)
-            mexErrMsgIdAndTxt("save_bl_tif:Input",
-                "fileList must be a cell array matching Z dimension.");
+            mexErrMsgIdAndTxt("save_bl_tif:Input", "fileList must match Z dimension.");
 
-        // ── FILE LIST CACHE ──
+        // ─────────────── File List Cache ──────────────────── //
         static std::unordered_map<FileListCacheKey, std::vector<std::string>> fileListCache;
         FileListCacheKey cacheKey{prhs[1], dim2};
-        std::vector<std::string>* cachedPaths = nullptr;
         auto it = fileListCache.find(cacheKey);
-        if (it != fileListCache.end()) {
-            cachedPaths = &it->second;
-        }
         std::vector<std::string> paths;
-        if (cachedPaths) {
-            paths = *cachedPaths;
+        if (it != fileListCache.end()) {
+            paths = it->second;
         } else {
-            mxArray** cellPtr = static_cast<mxArray**>(mxGetData(prhs[1]));
             paths.resize(dim2);
             for (size_t z = 0; z < dim2; ++z) {
-                if (!mxIsChar(cellPtr[z]))
-                    mexErrMsgIdAndTxt("save_bl_tif:Input",
-                        "fileList element is not a string.");
-                char* s = mxArrayToUTF8String(cellPtr[z]);
+                mxArray* elem = mxGetCell(prhs[1], z);
+                if (!mxIsChar(elem))
+                    mexErrMsgIdAndTxt("save_bl_tif:Input", "fileList elements must be strings.");
+                char* s = mxArrayToUTF8String(elem);
                 paths[z] = s; mxFree(s);
             }
             fileListCache[cacheKey] = paths;
         }
 
-        if (paths.empty()) return;
-
-        /* ─── 2. BUILD TASK VECTOR ───────────────────────────────────────── */
+        // ─────────────── Build Task Vector ────────────────── //
         auto taskVec = std::make_shared<std::vector<SaveTask>>();
         taskVec->reserve(dim2);
         for (size_t z = 0; z < dim2; ++z)
-            taskVec->push_back({ basePtr,
-                                 z * bytesPerSl,
-                                 dim0, dim1,
-                                 paths[z],
-                                 alreadyXYZ,
-                                 classId,
-                                 compTag,
-                                 bytesPerSl,
-                                 bytesPerPx });
+            taskVec->emplace_back(SaveTask{ basePtr, z * bytesPerSl, dim0, dim1, paths[z], alreadyXYZ, classId, compTag, bytesPerSl, bytesPerPx });
 
-        /* ─── 3. EAGER-BIND libtiff symbols (one quick call) ─────────────── */
-        {
-            TIFF* tmp = TIFFOpen("/dev/null", "r");
-            if (tmp) TIFFClose(tmp);
-        }
+        TIFF* tmp = TIFFOpen("/dev/null", "r"); if (tmp) TIFFClose(tmp);
 
-        /* ─── 4. LAUNCH ONE-SHOT THREAD POOL ─────────────────────────────── */
+        // ──────────── Optimized Thread Launching ──────────── //
+        pthread_attr_t attr;
+        pthread_attr_init(&attr);
+        pthread_attr_setstacksize(&attr, 256 * 1024); // Optimization #1: smaller stack
+
         CallContext ctx;
-        ctx.tasks          = std::move(taskVec);
-        ctx.maxSliceBytes  = bytesPerSl;
+        ctx.tasks = std::move(taskVec);
+        ctx.maxSliceBytes = bytesPerSl;
 
-        // Optional thread count argument
         size_t hw = std::thread::hardware_concurrency();
         if (hw == 0) hw = ctx.tasks->size();
 
-        size_t nThreads = std::min(hw, ctx.tasks->size());
+        size_t maxThreads = std::min(hw, ctx.tasks->size());
         if (nrhs == 5) {
             double reqThreads = mxGetScalar(prhs[4]);
             if (!(reqThreads > 0))
                 mexErrMsgIdAndTxt("save_bl_tif:Input", "nThreads must be positive.");
-            nThreads = std::min((size_t)reqThreads, ctx.tasks->size());
+            maxThreads = std::min((size_t)reqThreads, ctx.tasks->size());
         }
 
+        size_t initialThreads = std::min(maxThreads, size_t(4)); // Optimization #3: fewer initial threads
         std::vector<std::thread> workers;
-        workers.reserve(nThreads);
+        workers.reserve(maxThreads);
 
-#ifdef PIN_THREADS
-        std::vector<int> coreIds;
-        for (int i = 0; i < int(hw); ++i) coreIds.push_back(i);
-#endif
-
-        for (size_t i = 0; i < nThreads; ++i) {
-            workers.emplace_back(worker_entry, std::ref(ctx), static_cast<int>(i));
-#ifdef PIN_THREADS
-#if defined(__linux__)
-            cpu_set_t cpuset;
-            CPU_ZERO(&cpuset);
-            CPU_SET(coreIds[i % coreIds.size()], &cpuset);
-            pthread_setaffinity_np(workers.back().native_handle(), sizeof(cpu_set_t), &cpuset);
-#elif defined(_WIN32)
-            DWORD_PTR mask = DWORD_PTR(1) << (coreIds[i % coreIds.size()]);
-            SetThreadAffinityMask(workers.back().native_handle(), mask);
-#endif
-#endif
+        // Launch initial threads early and detached (optimizations #2 & #4)
+        for (size_t i = 0; i < initialThreads; ++i) {
+            pthread_t tid;
+            pthread_create(&tid, &attr, [](void* arg) -> void* {
+                auto [c, thread_id] = *static_cast<std::pair<CallContext*, int>*>(arg);
+                worker_entry(*c, thread_id);
+                delete static_cast<std::pair<CallContext*, int>*>(arg);
+                return nullptr;
+            }, new std::pair<CallContext*, int>(&ctx, int(i)));
+            pthread_detach(tid);
         }
 
-        for (auto& t : workers) t.join();
+        // Dynamically add remaining threads via async (optimizations #5 & #6)
+        std::vector<std::future<void>> futures;
+        for (size_t i = initialThreads; i < maxThreads; ++i) {
+            futures.emplace_back(std::async(std::launch::async, [&, i] {
+                pthread_t tid;
+                pthread_create(&tid, &attr, [](void* arg) -> void* {
+                    auto [c, thread_id] = *static_cast<std::pair<CallContext*, int>*>(arg);
+                    worker_entry(*c, thread_id);
+                    delete static_cast<std::pair<CallContext*, int>*>(arg);
+                    return nullptr;
+                }, new std::pair<CallContext*, int>(&ctx, int(i)));
+                pthread_detach(tid);
+            }));
+        }
+
+        // Explicit NUMA-aware affinity (optimization #7 handled in worker_entry)
+
+        pthread_attr_destroy(&attr);
+
+        // Wait for dynamically created threads
+        for (auto &f : futures) f.get();
 
         if (!ctx.errors.empty()) {
             std::string msg("save_bl_tif errors:\n");

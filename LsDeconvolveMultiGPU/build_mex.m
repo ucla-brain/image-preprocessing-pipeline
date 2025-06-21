@@ -60,14 +60,14 @@ else
             '-R2018a', ...
             'CFLAGS="$CFLAGS -O0 -g"', ...
             'CXXFLAGS="$CXXFLAGS -O0 -g"', ...
-            'LDFLAGS="$LDFLAGS -g"'
+            'LDFLAGS="$LDFLAGS -g -lnuma"'
         };
     else
         mex_flags_cpu = {
             '-R2018a', ...
             'CFLAGS="$CFLAGS -O2 -march=native -fomit-frame-pointer"', ...
             'CXXFLAGS="$CXXFLAGS -O2 -march=native -fomit-frame-pointer"', ...
-            'LDFLAGS="$LDFLAGS"'
+            'LDFLAGS="$LDFLAGS -lnuma"'
         };
     end
 end
@@ -99,7 +99,7 @@ mex(mex_flags_cpu{:}, src_lz4_save, src_lz4_c);
 mex(mex_flags_cpu{:}, src_lz4_load, src_lz4_c);
 mex(mex_flags_cpu{:}, src_load_slab_lz4, src_lz4_c);
 mex(mex_flags_cpu{:}, src_load_bl, tiff_include{:}, tiff_lib{:}, tiff_link{:});
-mex(mex_flags_cpu{:}, src_save_bl, tiff_include{:}, tiff_lib{:}, tiff_link{:}, '-lnuma');
+mex(mex_flags_cpu{:}, src_save_bl, tiff_include{:}, tiff_lib{:}, tiff_link{:});
 
 % CUDA optimization flags
 if ispc
