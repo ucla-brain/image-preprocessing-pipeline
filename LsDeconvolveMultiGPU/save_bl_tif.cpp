@@ -283,16 +283,10 @@ inline void ensure_pool(size_t nSlices)      // nSlices == taskVec->size()
 
     /* decide thread count */
     size_t hw = std::thread::hardware_concurrency();
-    if (hw == 0) hw = 8;                     // fallback if API fails
-
-    size_t requested = std::min(nSlices, hw);          // never exceed cores
-
-    /* if the machine has 8 + cores, enforce the “min-8” policy,
-       otherwise keep the smaller number */
-    if (hw >= 8) requested = std::min(nSlices, std::max<size_t>(8, hw));
-
-    /* always at least one thread */
-    if (requested == 0) requested = 1;
+    if (hw == 0) hw = 8;
+    size_t requested = std::min(nSlices, hw);     // never exceed cores or slices
+    if (hw >= 8) requested = std::max<size_t>(8, requested); // floor 8 when possible
+    if (requested == 0) requested = 1;            // safety
 
     g_workers.reserve(requested);
     try {
