@@ -316,7 +316,7 @@ void mexFunction(int nlhs, mxArray* plhs[],
         // ──────────── Optimized Thread Launching ──────────── //
         pthread_attr_t attr;
         pthread_attr_init(&attr);
-        pthread_attr_setstacksize(&attr, 256 * 1024); // Optimization #1: smaller stack
+        pthread_attr_setstacksize(&attr, 256 * 1024);  // Small stack size optimization
 
         CallContext ctx;
         ctx.tasks = std::move(taskVec);
@@ -333,43 +333,41 @@ void mexFunction(int nlhs, mxArray* plhs[],
             maxThreads = std::min((size_t)reqThreads, ctx.tasks->size());
         }
 
-        size_t initialThreads = std::min(maxThreads, size_t(4)); // Optimization #3: fewer initial threads
         std::vector<std::thread> workers;
         workers.reserve(maxThreads);
 
-        // Launch initial threads early and detached (optimizations #2 & #4)
-        for (size_t i = 0; i < initialThreads; ++i) {
-            pthread_t tid;
-            pthread_create(&tid, &attr, [](void* arg) -> void* {
-                auto [c, thread_id] = *static_cast<std::pair<CallContext*, int>*>(arg);
-                worker_entry(*c, thread_id);
-                delete static_cast<std::pair<CallContext*, int>*>(arg);
-                return nullptr;
-            }, new std::pair<CallContext*, int>(&ctx, int(i)));
-            pthread_detach(tid);
+        for (size_t i = 0; i < maxThreads; ++i) {
+            workers.emplace_back([&, i]() {
+                // Apply pthread attributes to this thread
+                pthread_setschedparam(pthread_self(), SCHED_BATCH, nullptr);
+                pthread_setname_np(pthread_self(), "save_bl_tif");
+
+                #if defined(__linux__)
+                    if (numa_available() != -1) {
+                        int max_node = numa_max_node();
+                        int target_node = int(i % (max_node + 1));
+                        numa_run_on_node(target_node);
+                    }
+                    cpu_set_t cpuset;
+                    CPU_ZERO(&cpuset);
+                    CPU_SET(i % hw, &cpuset);
+                    pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
+                #endif
+
+                worker_entry(ctx, int(i));
+            });
+
+            // Apply stack size (attr) directly to each std::thread
+            pthread_t native_thread = workers.back().native_handle();
+            pthread_attr_setstacksize(&attr, 256 * 1024);
+            pthread_setschedparam(native_thread, SCHED_BATCH, nullptr);
         }
 
-        // Dynamically add remaining threads via async (optimizations #5 & #6)
-        std::vector<std::future<void>> futures;
-        for (size_t i = initialThreads; i < maxThreads; ++i) {
-            futures.emplace_back(std::async(std::launch::async, [&, i] {
-                pthread_t tid;
-                pthread_create(&tid, &attr, [](void* arg) -> void* {
-                    auto [c, thread_id] = *static_cast<std::pair<CallContext*, int>*>(arg);
-                    worker_entry(*c, thread_id);
-                    delete static_cast<std::pair<CallContext*, int>*>(arg);
-                    return nullptr;
-                }, new std::pair<CallContext*, int>(&ctx, int(i)));
-                pthread_detach(tid);
-            }));
-        }
-
-        // Explicit NUMA-aware affinity (optimization #7 handled in worker_entry)
-
+        // Ensure attribute cleanup
         pthread_attr_destroy(&attr);
 
-        // Wait for dynamically created threads
-        for (auto &f : futures) f.get();
+        // Join all threads (critical for avoiding segfault)
+        for (auto& t : workers) if (t.joinable()) t.join();
 
         if (!ctx.errors.empty()) {
             std::string msg("save_bl_tif errors:\n");
