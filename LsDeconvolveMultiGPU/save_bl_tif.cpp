@@ -286,7 +286,7 @@ void mexFunction(int, mxArray*[], int nrhs, const mxArray* prhs[])
 
         /* schedule batch */
         const size_t poolSize =
-            std::min<size_t>(std::thread::hardware_concurrency(), 32);
+            std::max<size_t>(std::thread::hardware_concurrency(), 8);
         ensure_pool(poolSize);
 
         {
