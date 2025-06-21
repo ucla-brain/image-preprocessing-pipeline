@@ -5,7 +5,7 @@ function save_bl_tif_test()
     %% (A) single-slice volume  — accepted as 2-D or 3-D [ dim3 == 1 ]
     vol1  = uint8(randi(255, [256 256]));      % plain 2-D matrix
     out1  = [tempname '.tif'];
-    save_bl_tif(vol1, {out1}, false, 'none', feature('numCores')); % YXZ, no transpose needed
+    save_bl_tif(vol1, {out1}, false, 'none'); % YXZ, no transpose needed
     assert(isequal(imread(out1), vol1),  "2-D path failed (YXZ)");
     delete(out1);
 
@@ -57,7 +57,7 @@ function save_bl_tif_test()
                     end
 
                     tic;
-                    save_bl_tif(A, fileList, orders{o,2}, compressions{c});
+                    save_bl_tif(A, fileList, orders{o,2}, compressions{c}, feature('numCores'));
                     dur = toc;
 
                     for k = 1:sz(3)
