@@ -193,7 +193,7 @@ function [] = LsDeconv(varargin)
             block.stack_info = stack_info;
             [block.nx, block.ny, block.nz, block.x, block.y, block.z, ...
              block.x_pad, block.y_pad, block.z_pad, block.fft_shape] = ...
-                autosplit(stack_info, size(psf.psf), filter, block_size_max, ram_total, numit);
+                autosplit(stack_info, size(psf.psf), filter, block_size_max, ram_available, numit);
 
             [block.p1, block.p2] = split(stack_info, block);
             save(block_path, 'block');
