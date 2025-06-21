@@ -283,7 +283,7 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(...
 
     % Parameters for RAM and block sizing
     ram_usage_portion = 0.5;               % Use at most 50% of available RAM
-    R_bytes_per_voxel = 8;
+    R_bytes_per_voxel = 4;
     max_elements_per_dim = min(1290, floor(block_size_max^(1/3)));  % 3D cube limit from (2^31-1)^(1/3) = 1290 elements
     if filter.use_fft, max_elements_per_dim = min(1281, max_elements_per_dim); end
     max_elements_total  = 2^31 - 1;        % MATLAB's total element limit
@@ -306,14 +306,14 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(...
     best = struct();
     num_failed = 0;
 
-    d_pad = [0 0 0];
-    if filter.destripe_sigma > 0, d_pad = max(d_pad, [1 1 1]); end
-    if numit > 0, d_pad = max(d_pad, decon_pad_size(psf_size)); end
+    d_pad_base = [0 0 0];
+    if filter.destripe_sigma > 0, d_pad_base = max(d_pad_base, [1 1 1]); end
+    if numit > 0, d_pad_base = max(d_pad_base, decon_pad_size(psf_size)); end
     % Use coarse step for initial sweep (square xy blocks)
     for z = max_block(3):-1:min_block(3)
         for xy = max_block(1):-1:min_block(1)
-            x = xy; y = xy;
-            bl_core = [x y z];
+            x = xy; y = xy; bl_core = [x y z];
+            d_pad = d_pad_base;
 
             if any(filter.gaussian_sigma > 0),
                 d_pad = max(d_pad, gaussian_pad_size(bl_core, filter.gaussian_sigma, filter.gaussian_size));

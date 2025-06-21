@@ -160,13 +160,35 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regula
 end
 
 function x = convFFT(x, otf)
-    x = fftn(x);              % x now holds fft(x)
-    x = x .* otf;             % x now holds fft(x) .* otf
-    x = ifftn(x);
-    x = real(x);              % final output
+    %CONVFFT  Frequency–domain convolution with fixed precision.
+    %
+    %   y = convFFT(x, otf)
+    %
+    %   Arguments
+    %   ---------
+    %     x   – real/complex volume (single or gpuArray/single)
+    %     otf – pre-computed OTF with the *same* class as x
+    %
+    %   The result y is real(single) and the same “gather-state” (CPU vs GPU)
+    %   as the input.
+
+    x =  fftn(x, [], 'like', x);   % x now holds fft(x)
+    x = x .* otf;                  % x now holds fft(x) .* otf
+    x = ifftn(x, [], 'like', x);
+    x = real(x);                   % final output
 end
 
 function [otf, otf_conj] = calculate_otf(psf, fft_shape, device_id)
+    %CALCULATE_OTF  Build an OTF in single precision (CPU or GPU).
+    %
+    %   [otf, otf_conj] = calculate_otf(psf, fft_shape, device_id)
+    %
+    %   • psf         – real PSF, any numeric class
+    %   • fft_shape   – 3-element vector, power-of-2 friendly
+    %   • device_id   – >0 ⇒ use GPU via otf_gpu_mex
+    %
+    %   Both outputs are single (CPU) or gpuArray/single (GPU).
+
     t_compute = tic;
     if ~isa(psf, 'single'), psf = single(psf); end
     if device_id > 0
@@ -175,7 +197,7 @@ function [otf, otf_conj] = calculate_otf(psf, fft_shape, device_id)
     else
         [otf, ~, ~] = pad_block_to_fft_shape(psf, fft_shape, 0);
         otf = ifftshift(otf);
-        otf = fftn(otf);
+        otf = fftn(otf, [], 'like', otf);
         otf_conj = conj(otf);
     end
     fprintf('%s: OTF computed for size %s in %.2fs\n', ...
