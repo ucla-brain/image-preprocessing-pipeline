@@ -94,26 +94,44 @@ static void worker()
             const uint8_t* src =
                 t.base + static_cast<std::size_t>(t.z) * nPix * bpp;
 
-            /* ---------- build slice buffer -------------------------------- */
-            if (!t.isXYZ) {            /* Y-X-Z input  ⇒  transpose needed */
-                for (mwSize col = 0; col < t.dimX; ++col) {
+            /* ---------- transpose / copy slice into slice buffer -------------------------- */
+            /*
+               isXYZ == false   →  input layout is [Y X Z]  (MATLAB default).
+                                  The first dimension already maps to TIFF rows, so
+                                  we simply copy each *row* unchanged.
+
+               isXYZ == true    →  input layout is [X Y Z]  (user supplied volume
+                                  after permute).  Now the first dimension is X,
+                                  which means the slice is stored column-major with
+                                  respect to TIFF.  We must transpose to obtain
+                                  row-major order before writing.
+            */
+            if (!t.isXYZ)                                         /* Y-X-Z  →  NO transpose */
+            {
+                const std::size_t rowBytes = t.dimX * bpp;
+                for (mwSize row = 0; row < t.dimY; ++row)
+                {
+                    const uint8_t* srcRow =
+                        src + static_cast<std::size_t>(row) * t.dimY * bpp;
+                    std::memcpy(dst + static_cast<std::size_t>(row) * rowBytes,
+                                srcRow, rowBytes);
+                }
+            }
+            else                                                  /* X-Y-Z  →  TRANSPOSE    */
+            {
+                for (mwSize col = 0; col < t.dimX; ++col)
+                {
                     const uint8_t* srcCol =
                         src + static_cast<std::size_t>(col) * t.dimY * bpp;
-                    for (mwSize row = 0; row < t.dimY; ++row) {
+
+                    for (mwSize row = 0; row < t.dimY; ++row)
+                    {
                         std::size_t di =
                             (static_cast<std::size_t>(row) * t.dimX + col) * bpp;
                         std::memcpy(dst + di,
                                     srcCol + static_cast<std::size_t>(row) * bpp,
                                     bpp);
                     }
-                }
-            } else {                   /* X-Y-Z input  ⇒  rows already contig */
-                const std::size_t rowBytes = t.dimX * bpp;
-                for (mwSize row = 0; row < t.dimY; ++row) {
-                    const uint8_t* srcRow =
-                        src + static_cast<std::size_t>(row) * t.dimY * bpp;
-                    std::memcpy(dst + static_cast<std::size_t>(row) * rowBytes,
-                                srcRow, rowBytes);
                 }
             }
 
