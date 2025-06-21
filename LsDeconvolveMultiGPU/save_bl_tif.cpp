@@ -93,20 +93,16 @@ static void save_slice(const SaveTask& t)
     TIFFSetField(tif, TIFFTAG_PHOTOMETRIC,     PHOTOMETRIC_MINISBLACK);
     TIFFSetField(tif, TIFFTAG_PLANARCONFIG,    PLANARCONFIG_CONTIG);
 
-    /* (4) Choose strip size – don’t allocate >2 GB in libtiff when compressed */
-    if (t.compressionTag == COMPRESSION_NONE)
-        TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP, srcRows);
-    else
-        TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP,
-                     TIFFDefaultStripSize(tif, 0));   // libtiff default (~8 k)
+    /* (4) Strip size: one-strip-per-slice is safest & fastest  ─────────────── */
+    TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP, srcRows);          //  🚩 FIX ①
 
-    /* (5) Write */
+    /* (5) Write the single strip  ──────────────────────────────────────────── */
+    uint8_t* writeBuf = const_cast<uint8_t*>(ioBuf);           //  🚩 FIX ②
+
     tsize_t wrote = (t.compressionTag == COMPRESSION_NONE)
-        ? TIFFWriteRawStrip(tif, 0,
-                            const_cast<uint8_t*>(ioBuf),
-                            static_cast<tsize_t>(t.bytesPerSlice))
-        : TIFFWriteEncodedStrip(tif, 0,
-                                const_cast<uint8_t*>(ioBuf),
+        ? TIFFWriteRawStrip    (tif, 0, writeBuf,
+                                static_cast<tsize_t>(t.bytesPerSlice))
+        : TIFFWriteEncodedStrip(tif, 0, writeBuf,
                                 static_cast<tsize_t>(t.bytesPerSlice));
 
     if (wrote < 0) {
