@@ -35,11 +35,25 @@
 // BEGIN: Optimized load_blocks_lz4_mex.cpp (Performance Focus)
 // NOTE: Keep LZ4, header parsing, and idx3D definitions the same as before...
 
+#include "mex.h"
+#include "matrix.h"
+#include "lz4.h"
+
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <string>
+#include <vector>
 #include <queue>
 #include <mutex>
 #include <condition_variable>
-#include <atomic>
 #include <thread>
+#include <future>
+#include <stdexcept>
+#include <algorithm>
+#include <chrono>
+#include <memory>
+#include <functional>   // << REQUIRED
 
 /*==============================================================================
  *                       1.  Simple C++17 Thread Pool
@@ -223,7 +237,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         if (x1 >= dimX || y1 >= dimY || z1 >= dimZ)
             mexErrMsgTxt("Brick exceeds bounds");
 
-        jobs.push_back({ fname, x0, y0, z0, x1, y1, z1, dimX, dimY, dimZ, volPtr });
+        jobs.emplace_back(BrickJob{ fname, x0, y0, z0, x1, y1, z1, dimX, dimY, dimZ, volPtr });
     }
 
     try {
