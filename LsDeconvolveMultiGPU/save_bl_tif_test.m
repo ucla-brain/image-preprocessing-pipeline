@@ -57,7 +57,7 @@ function save_bl_tif_test()
                     end
 
                     tic;
-                    save_bl_tif(A, fileList, orders{o,2}, compressions{c});
+                    save_bl_tif(A, fileList, orders{o,2}, compressions{c}, feature('numCores'));
                     dur = toc;
 
                     for k = 1:sz(3)
