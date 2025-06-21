@@ -294,16 +294,11 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
 
     try {
         ThreadPool pool(maxThreads);
-        std::atomic<size_t> completed{0};
-
         for (const auto& job : jobs)
-            pool.enqueue([&job, &completed]() {
+            pool.enqueue([&job]() {
                 job();
-                ++completed;
             });
-
-        while (completed.load() < jobs.size())
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        pool.wait();  // Waits for all tasks to complete
     } catch (const std::exception& e) {
         mexErrMsgIdAndTxt("load_blocks_lz4_mex:ThreadError", e.what());
     }
