@@ -234,6 +234,9 @@ struct CallContext {
 
 void worker_entry(CallContext& ctx, int thread_id)
 {
+    std::vector<std::future<void>> flush_futures;  // Store async futures
+    std::vector<std::thread> flush_threads;        // Store threads that run packaged tasks
+
 #if defined(__linux__)
     if (numa_available() != -1) {
         int max_node = numa_max_node();
@@ -243,16 +246,15 @@ void worker_entry(CallContext& ctx, int thread_id)
 
     pthread_setname_np(pthread_self(), "save_bl_tif");
     sched_param param{};
-    pthread_setschedparam(pthread_self(), SCHED_BATCH, &param); // Reduce scheduling overhead
+    pthread_setschedparam(pthread_self(), SCHED_BATCH, &param);
 #endif
 
     const auto& jobList = *ctx.tasks;
     size_t idx = ctx.nextIndex.fetch_add(1, std::memory_order_relaxed);
-    std::vector<std::future<void>> flush_futures;
 
     while (idx < jobList.size()) {
         try {
-            save_slice(jobList[idx], flush_futures);
+            save_slice(jobList[idx], flush_futures, flush_threads);  // ✅ pass both
         } catch (const std::exception& e) {
             std::lock_guard<std::mutex> lk(ctx.errMutex);
             ctx.errors.emplace_back(e.what());
@@ -260,7 +262,9 @@ void worker_entry(CallContext& ctx, int thread_id)
         idx = ctx.nextIndex.fetch_add(1, std::memory_order_relaxed);
     }
 
-    for (auto& fut : flush_futures) fut.get();
+    // Wait for async work to finish
+    for (auto& f : flush_futures) f.get();
+    for (auto& t : flush_threads) t.join();
 }
 
 } // unnamed namespace
