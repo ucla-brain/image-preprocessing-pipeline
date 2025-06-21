@@ -45,7 +45,7 @@ if ispc
         mex_flags_cpu = {
             '-R2018a', ...
             'COMPFLAGS="$COMPFLAGS /std:c++17 /Od /Zi "', ...
-            'LINKFLAGS="$LINKFLAGS /DEBUG
+            'LINKFLAGS="$LINKFLAGS /DEBUG"'
         };
     else
         mex_flags_cpu = {
