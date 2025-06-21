@@ -261,4 +261,3 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         plhs[1] = mxCreateDoubleScalar(
             std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - tStart).count());
 }
-// END: Optimized load_blocks_lz4_mex.cpp
