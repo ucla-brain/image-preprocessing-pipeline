@@ -3,7 +3,8 @@
   ------------------------------------------------------------------------------
   High-throughput Z-slice saver for 3-D MATLAB arrays (one TIFF per slice).
 
-  VERSION  : 2025-06-21  (no-persistence, per-call pool, eager-bind, pre-scratch)
+  VERSION  : 2025-06-21 (alignment, file list cache, Windows FlushFileBuffers,
+                         thread native_handle stub, hugepages, comments updated)
   AUTHOR   : Keivan Moradi  (with ChatGPT-4o assistance)
   LICENSE  : GNU GPL v3   <https://www.gnu.org/licenses/>
 ==============================================================================*/
@@ -20,49 +21,114 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <unordered_map>
+#include <type_traits>
+#include <cstdlib>
+#include <cstdio>
 
 #if defined(__linux__)
 #  include <fcntl.h>
 #  include <unistd.h>
+#  include <sys/mman.h>
+#endif
+
+#if defined(_WIN32)
+#  include <windows.h>
 #endif
 
 /* ───────────────────────────── TASK DESCRIPTION ─────────────────────────── */
 struct SaveTask {
-    const uint8_t* basePtr;       // start of whole volume
-    size_t         sliceOffset;   // byte-offset of this slice
+    const uint8_t* basePtr;       // Start of whole volume
+    size_t         sliceOffset;   // Byte-offset of this slice
     mwSize         rows, cols;    // MATLAB dims *after* any transpose
-    std::string    filePath;      // destination path
-    bool           alreadyXYZ;    // true if input is [X Y Z]
+    std::string    filePath;      // Destination path
+    bool           alreadyXYZ;    // True if input is [X Y Z]
     mxClassID      classId;
     uint16_t       compressionTag;
     size_t         bytesPerSlice;
     size_t         bytesPerPixel;
 };
 
-/* Each thread owns one reusable scratch buffer large enough for one slice.   */
-static thread_local std::vector<uint8_t> scratch;
+/* Each thread owns one reusable aligned scratch buffer large enough for one slice. */
+/* Alignment: 64 bytes for SIMD/AVX2 (safe default, covers common cache lines)     */
+/* Hugepages: Use for large buffers (2MB+), platform-dependent implementation      */
+
+static thread_local uint8_t* scratch_aligned = nullptr;
+static thread_local size_t   scratch_capacity = 0;
+static thread_local bool     scratch_hugepage = false;
+
+/* Allocate aligned buffer (with optional hugepage support for large sizes) */
+static void ensure_scratch(size_t bytes) {
+    if (scratch_capacity >= bytes) return;
+    // Free any existing buffer first
+    if (scratch_aligned) {
+#if defined(__linux__)
+        if (scratch_hugepage) {
+            munmap(scratch_aligned, scratch_capacity);
+        } else
+#endif
+        {
+            std::free(scratch_aligned);
+        }
+        scratch_aligned = nullptr;
+        scratch_capacity = 0;
+        scratch_hugepage = false;
+    }
+    constexpr size_t ALIGN = 64;
+    // For hugepage, require at least 2MB, aligned to 2MB
+    if (bytes >= (2 << 20)) {
+#if defined(__linux__)
+        size_t huge_sz = ((bytes + (2 << 20) - 1) / (2 << 20)) * (2 << 20); // Round up
+        void* ptr = mmap(nullptr, huge_sz, PROT_READ | PROT_WRITE,
+                         MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB, -1, 0);
+        if (ptr != MAP_FAILED) {
+            scratch_aligned = static_cast<uint8_t*>(ptr);
+            scratch_capacity = huge_sz;
+            scratch_hugepage = true;
+            return;
+        }
+        // Fallthrough to normal allocation if mmap fails
+#endif
+    }
+#if defined(_WIN32)
+    // No direct hugepage support here, fallback to aligned_alloc
+#endif
+    // Standard aligned allocation
+#if defined(__cpp_aligned_new) && __cpp_aligned_new >= 201606
+    scratch_aligned = static_cast<uint8_t*>(std::aligned_alloc(ALIGN, ((bytes + ALIGN - 1) / ALIGN) * ALIGN));
+#else
+    // C11 aligned_alloc or posix_memalign
+    void* ptr = nullptr;
+    if (posix_memalign(&ptr, ALIGN, ((bytes + ALIGN - 1) / ALIGN) * ALIGN) == 0)
+        scratch_aligned = static_cast<uint8_t*>(ptr);
+    else
+        throw std::bad_alloc();
+#endif
+    if (!scratch_aligned)
+        throw std::bad_alloc();
+    scratch_capacity = ((bytes + ALIGN - 1) / ALIGN) * ALIGN;
+    scratch_hugepage = false;
+}
 
 /* ───────────────────────────── LOW-LEVEL TIFF WRITE ─────────────────────── */
 static void save_slice(const SaveTask& t)
 {
-    const mwSize srcRows = t.alreadyXYZ ? t.cols : t.rows;    // if transpose needed
+    const mwSize srcRows = t.alreadyXYZ ? t.cols : t.rows;    // If transpose needed
     const mwSize srcCols = t.alreadyXYZ ? t.rows : t.cols;
 
     const uint8_t* src = t.basePtr + t.sliceOffset;
     const bool directWrite = (t.compressionTag == COMPRESSION_NONE && t.alreadyXYZ);
 
-    const uint8_t* ioBuf = nullptr;          // buffer actually passed to libtiff
+    const uint8_t* ioBuf = nullptr;          // Buffer actually passed to libtiff
 
     /* 1. Prepare buffer (handle transpose / compression fast-path) */
     if (directWrite) {
-        ioBuf = src;                         // zero-copy path 🚀
+        ioBuf = src;                         // Zero-copy path 🚀
     } else {
-        if (scratch.size() < t.bytesPerSlice)
-            scratch.resize(t.bytesPerSlice); // one-time per thread
+        ensure_scratch(t.bytesPerSlice);
+        uint8_t* dst = scratch_aligned;
 
-        uint8_t* dst = scratch.data();
-
-        if (!t.alreadyXYZ) {                 // transpose [Y X] → [X Y]
+        if (!t.alreadyXYZ) {                 // Transpose [Y X] → [X Y]
             for (mwSize col = 0; col < srcCols; ++col) {
                 const uint8_t* srcColumn = src + col * t.rows * t.bytesPerPixel;
                 for (mwSize row = 0; row < srcRows; ++row) {
@@ -72,7 +138,7 @@ static void save_slice(const SaveTask& t)
                                 t.bytesPerPixel);
                 }
             }
-        } else {                            // already XYZ – need copy only for compression
+        } else {                            // Already XYZ – need copy only for compression
             const size_t rowBytes = srcCols * t.bytesPerPixel;
             for (mwSize row = 0; row < srcRows; ++row)
                 std::memcpy(dst + row * rowBytes,
@@ -111,9 +177,35 @@ static void save_slice(const SaveTask& t)
 
 #if defined(__linux__)
     int fd = TIFFFileno(tif);
-    if (fd != -1) posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED);  // drop page cache
+    if (fd != -1) posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED);  // Drop page cache
 #endif
+
+#if defined(_WIN32)
+    // Flush file buffers for async I/O flush on Windows (for very large batch jobs or non-SSD)
+    HANDLE hFile = (HANDLE)_get_osfhandle(TIFFFileno(tif));
+    if (hFile != INVALID_HANDLE_VALUE) FlushFileBuffers(hFile);
+#endif
+
     TIFFClose(tif);
+}
+
+/* ───────────────────────────── FILE LIST CACHE ──────────────────────────── */
+/* Caches file lists (vector<string>) to avoid reparsing for repeated calls   */
+/* Keyed by prhs[1] (cell ptr) and length                                    */
+struct FileListCacheKey {
+    const void* mxArrayPtr;
+    size_t      length;
+    bool operator==(const FileListCacheKey& other) const {
+        return mxArrayPtr == other.mxArrayPtr && length == other.length;
+    }
+};
+namespace std {
+template<>
+struct hash<FileListCacheKey> {
+    std::size_t operator()(const FileListCacheKey& k) const {
+        return std::hash<const void*>()(k.mxArrayPtr) ^ std::hash<size_t>()(k.length);
+    }
+};
 }
 
 /* ───────────────────────────── ONE-SHOT POOL (PER CALL) ─────────────────── */
@@ -131,8 +223,9 @@ struct CallContext {
 /* Worker entry ------------------------------------------------------------ */
 void worker_entry(CallContext& ctx)
 {
-    /* Pre-allocate this thread’s scratch once (largest slice) */
-    if (scratch.size() < ctx.maxSliceBytes) scratch.resize(ctx.maxSliceBytes);
+    /* Native handle available for future affinity/pinning; not used here yet. */
+    std::thread::native_handle_type this_handle = std::this_thread::get_id(); // stub
+    (void)this_handle; // suppress unused warning
 
     const auto& jobList = *ctx.tasks;
     size_t idx = ctx.nextIndex.fetch_add(1, std::memory_order_relaxed);
@@ -201,14 +294,28 @@ void mexFunction(int nlhs, mxArray* plhs[],
             mexErrMsgIdAndTxt("save_bl_tif:Input",
                               "fileList must be a cell array matching Z dimension.");
 
-        mxArray** cellPtr = static_cast<mxArray**>(mxGetData(prhs[1]));
-        std::vector<std::string> paths(dim2);
-        for (size_t z = 0; z < dim2; ++z) {
-            if (!mxIsChar(cellPtr[z]))
-                mexErrMsgIdAndTxt("save_bl_tif:Input",
-                                  "fileList element is not a string.");
-            char* s = mxArrayToUTF8String(cellPtr[z]);
-            paths[z] = s; mxFree(s);
+        // ── FILE LIST CACHE ──
+        static std::unordered_map<FileListCacheKey, std::vector<std::string>> fileListCache;
+        FileListCacheKey cacheKey{prhs[1], dim2};
+        std::vector<std::string>* cachedPaths = nullptr;
+        auto it = fileListCache.find(cacheKey);
+        if (it != fileListCache.end()) {
+            cachedPaths = &it->second;
+        }
+        std::vector<std::string> paths;
+        if (cachedPaths) {
+            paths = *cachedPaths;
+        } else {
+            mxArray** cellPtr = static_cast<mxArray**>(mxGetData(prhs[1]));
+            paths.resize(dim2);
+            for (size_t z = 0; z < dim2; ++z) {
+                if (!mxIsChar(cellPtr[z]))
+                    mexErrMsgIdAndTxt("save_bl_tif:Input",
+                                      "fileList element is not a string.");
+                char* s = mxArrayToUTF8String(cellPtr[z]);
+                paths[z] = s; mxFree(s);
+            }
+            fileListCache[cacheKey] = paths; // cache for future calls
         }
 
         if (paths.empty()) return;      // Nothing to do
@@ -238,10 +345,14 @@ void mexFunction(int nlhs, mxArray* plhs[],
         ctx.tasks          = std::move(taskVec);
         ctx.maxSliceBytes  = bytesPerSl;
 
-        /* Thread count: do *not* artificially cap per user's request          */
+        /* Thread count: use hardware_concurrency().
+           Note: No robust way (cross-platform) to get only physical cores on hybrid CPUs.
+           You may implement future pinning/affinity here using native_handle.
+           For now, leave at std::thread::hardware_concurrency() and warn user. */
         size_t hw = std::thread::hardware_concurrency();
         if (hw == 0) hw = ctx.tasks->size();            // fallback
         const size_t nThreads = std::min(hw, ctx.tasks->size());
+        // NOTE: See README for physical-core-only future extension (hybrid Intel CPUs).
 
         std::vector<std::thread> workers;
         workers.reserve(nThreads);
