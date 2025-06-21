@@ -251,10 +251,6 @@ static void compute_worker()
         ql.unlock();
         g_queueNotEmpty.notify_one();
     }
-
-    /* producer done */
-    if (g_computeRemaining.fetch_sub(1) == 1)
-        g_queueNotEmpty.notify_one();
 }
 
 /*==============================================================================
