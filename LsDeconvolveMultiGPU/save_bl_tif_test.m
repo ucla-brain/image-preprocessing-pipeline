@@ -69,8 +69,16 @@ for s = 1:numel(stackSizes)
           %% verify every slice
           for k = 1:sz(3)
             B = imread(fileList{k});
-            ok = isequal(B, ...
-                 useXYZ ? A(:,:,k).' : A(:,:,k));
+            for k = 1:sz(3)
+                B = imread(fileList{k});
+                if useXYZ
+                    ref = A(:,:,k).';   % transpose reference slice
+                else
+                    ref = A(:,:,k);     % no transpose
+                end
+                ok = isequal(B, ref);
+                assert(ok, 'Mismatch slice %d', k);
+            end
             assert(ok, 'Mismatch slice %d', k);
           end
 
