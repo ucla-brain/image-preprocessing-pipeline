@@ -1,41 +1,53 @@
 /*==============================================================================
   save_bl_tif.cpp
   -----------------------------------------------------------------------------
-  High-throughput Z-slice saver for 3-D MATLAB arrays (1 TIFF per Z-slice)
+  High-throughput Z-slice saver for 3-D MATLAB arrays (one TIFF per slice).
 
-  Author:       Keivan Moradi (in collaboration with ChatGPT-4o)
-  License:      GNU General Public License v3.0 (https://www.gnu.org/licenses/)
+  Author        : Keivan Moradi  (with ChatGPT-4o assistance)
+  License       : GNU GPL v3   <https://www.gnu.org/licenses/>
 
   OVERVIEW
   -------
-  • Purpose:
-      Efficiently saves each Z-slice from a 3D MATLAB array to a separate TIFF
-      file using LZW, Deflate, or no compression. Supports [X Y Z] or [Y X Z] input.
+  • Purpose
+      Save every Z-slice of a 3-D volume to its own TIFF file, optionally
+      compressed (LZW or Deflate). Supports MATLAB’s default [Y X Z] layout
+      and the alternative [X Y Z] layout.
 
-  • Highlights:
-      – Accepts `uint8` or `uint16` MATLAB input arrays.
-      – Fully cross-platform (uses libtiff).
-      – Supports multithreading.
-      – Compression: none, lzw, or deflate.
-      – Matches `load_bl_tif.cpp` slice order and dimensions.
+  • Key features
+      – Accepts uint8 or uint16 input.
+      – Cross-platform: Windows, Linux, macOS (libtiff backend).
+      – Reusable std::thread pool (one thread per HW core, min 8).
+      – 1 MiB thread stacks on glibc ≥ 2.34 to minimise VM usage.
+      – Thread-local scratch buffer allocated **once** per worker.
+      – Whole-slice output via `TIFFWriteEncodedStrip` (one syscall/CRC).
+      – Fast path for [Y X Z] avoids per-pixel multiplications.
+      – Matches `load_bl_tif.cpp` for slice order and dimensions.
 
   PARALLELISM
   -----------
-  • Parallel I/O is implemented using atomic index dispatching:
-      Each worker thread atomically claims the next available task index
-      using `std::atomic<size_t>::fetch_add`, avoiding locks or queues.
-      This model scales efficiently for uniform workloads like per-slice saves.
+  • Atomic index dispatch:
+        next = g_next.fetch_add(1);          // lock-free task claim
+    Workers loop until all slices are processed.
+  • Task vector is held in a `shared_ptr`, eliminating race conditions at
+    batch teardown.
+  • Pool is created once per MATLAB session and destroyed via `mexAtExit`.
+
+  MEMORY
+  ------
+  • Each worker owns a thread-local `std::vector<uint8_t>` large enough for the
+    biggest slice seen so far; no further reallocations on later calls.
+  • Total additional RAM ≈ (#threads × slice_bytes) + O(Z).
 
   USAGE
   -----
-      save_bl_tif(array3d, fileList, orderFlag, compression)
+      save_bl_tif(volume3d, fileList, orderFlag, compression)
 
-      • array3d      : 3D numeric array, uint8 or uint16
-      • fileList     : 1xZ cell array of full path strings
-      • orderFlag    : (logical or uint32 scalar)
-                         true  = [X Y Z] input
-                         false = [Y X Z] input (MATLAB default)
-      • compression  : string: "none", "lzw", or "deflate"
+      volume3d    : 3-D uint8 | uint16 array
+      fileList    : 1×Z cell array of output paths (char or string)
+      orderFlag   : logical or uint32
+                      true  → input is [X Y Z]
+                      false → input is [Y X Z]  (MATLAB default)
+      compression : "none" | "lzw" | "deflate"
 
   ==============================================================================*/
 
@@ -55,6 +67,8 @@
 
 #if defined(__linux__)
   #include <pthread.h>
+  #include <fcntl.h>     // posix_fadvise
+  #include <unistd.h>
 #endif
 
 /*==============================================================================
@@ -78,97 +92,94 @@ struct MatlabString {
 ==============================================================================*/
 struct SaveTask {
     const uint8_t* base;
-    mwSize         dim0;      // Y
-    mwSize         dim1;      // X
-    mwSize         z;         // slice index
+    mwSize         dim0;   // Y
+    mwSize         dim1;   // X
+    mwSize         z;      // slice index
     std::string    path;
-    bool           isXYZ;     // true => [X Y Z] memory layout
-    mxClassID      classId;   // uint8 / uint16
-    std::string    comp;      // "none" | "lzw" | "deflate"
+    bool           isXYZ;
+    mxClassID      classId;  // uint8/uint16
+    std::string    comp;     // "none" | "lzw" | "deflate"
 };
 
 /*==============================================================================
-    Per-slice save with all approved optimisations
+    Per-slice save – now with raw-strip + fadvise
 ==============================================================================*/
 static thread_local std::vector<uint8_t> scratch;   // reused by thread
 
 static void save_slice(const SaveTask& t)
 {
     const size_t es = (t.classId == mxUINT16_CLASS ? 2 : 1);
-    const mwSize width  = t.isXYZ ? t.dim0 : t.dim1;   // X
-    const mwSize height = t.isXYZ ? t.dim1 : t.dim0;   // Y
+    const mwSize width  = t.isXYZ ? t.dim0 : t.dim1;
+    const mwSize height = t.isXYZ ? t.dim1 : t.dim0;
     const size_t sliceOff = static_cast<size_t>(t.z) * t.dim0 * t.dim1;
-    const size_t bytes = static_cast<size_t>(width) * height * es;
+    const size_t bytes    = static_cast<size_t>(width) * height * es;
 
-    /* ---------- ensure thread-local buffer exists exactly once ---------- */
-    if (scratch.capacity() < bytes)           // allocate only when a larger slice
-    {
-        scratch.reserve(bytes);               // single mmap/zero-fill per worker
-        scratch.resize(bytes);                // establish legal size once
+    /* Allocate scratch buffer once per worker (grow-only) */
+    if (scratch.capacity() < bytes) {
+        scratch.reserve(bytes);
+        scratch.resize(bytes);
     }
-    else if (scratch.size() < bytes)          // capacity ok but size smaller
-    {
-        scratch.resize(bytes);                // happens only if dataset size grew
-    }
-    /* no resize on identical-size slices, so no extra allocator traffic */
     uint8_t* buf = scratch.data();
 
-    /* ---------------- transpose into buf ---------------- */
-    if (!t.isXYZ)   /* fast Y-X-Z path (MATLAB default) */
+    /* -------- transpose into buf -------- */
+    if (!t.isXYZ)   /* fast Y-X-Z path */
     {
-        /* Each MATLAB column (X) is already contiguous in memory.
-           Copy one column at a time into row-major destination. */
         for (mwSize x = 0; x < width; ++x) {
             const uint8_t* srcCol =
                 t.base + (sliceOff + static_cast<size_t>(x) * t.dim0) * es;
             for (mwSize y = 0; y < height; ++y) {
-                size_t dstIdx = (static_cast<size_t>(y) * width + x) * es;
+                size_t dst = (static_cast<size_t>(y) * width + x) * es;
                 const uint8_t* src = srcCol + static_cast<size_t>(y) * es;
-                if (es == 1)
-                    buf[dstIdx] = *src;
-                else
-                    std::memcpy(buf + dstIdx, src, 2);   // uint16
+                if (es == 1) buf[dst] = *src;
+                else         std::memcpy(buf + dst, src, 2);
             }
         }
     }
-    else            /* X-Y-Z layout – keep original loops but hoist multiply */
+    else            /* X-Y-Z path */
     {
         for (mwSize y = 0; y < height; ++y) {
-            const size_t rowDstBase = static_cast<size_t>(y) * width * es;
-            const size_t colBase = static_cast<size_t>(y) * t.dim0;  // for srcCol*dim0
+            const size_t rowDst = static_cast<size_t>(y) * width * es;
+            const size_t colBase = static_cast<size_t>(y) * t.dim0;
             for (mwSize x = 0; x < width; ++x) {
-                size_t srcIdx = x + colBase + sliceOff; // srcRow (x) + srcCol(y)*dim0
-                size_t dstIdx = rowDstBase + static_cast<size_t>(x) * es;
-                if (es == 1)
-                    buf[dstIdx] = t.base[srcIdx];
-                else
-                    std::memcpy(buf + dstIdx, t.base + srcIdx * es, 2);
+                size_t srcIdx = x + colBase + sliceOff;
+                size_t dstIdx = rowDst + static_cast<size_t>(x) * es;
+                if (es == 1) buf[dstIdx] = t.base[srcIdx];
+                else         std::memcpy(buf + dstIdx, t.base + srcIdx * es, 2);
             }
         }
     }
 
-    /* ---------------- write whole slice in one strip ---------------- */
+    /* -------- write entire slice in one strip -------- */
     TIFF* tif = TIFFOpen(t.path.c_str(), "w");
-    if (!tif)
-        throw std::runtime_error("Cannot open " + t.path);
+    if (!tif) throw std::runtime_error("Cannot open " + t.path);
 
     TIFFSetField(tif, TIFFTAG_IMAGEWIDTH,  width);
     TIFFSetField(tif, TIFFTAG_IMAGELENGTH, height);
     TIFFSetField(tif, TIFFTAG_SAMPLESPERPIXEL, 1);
     TIFFSetField(tif, TIFFTAG_BITSPERSAMPLE, (es == 2 ? 16 : 8));
 
-    uint16_t compTag = (t.comp == "lzw")     ? COMPRESSION_LZW
-                     : (t.comp == "deflate") ? COMPRESSION_DEFLATE
-                     :                         COMPRESSION_NONE;
+    const bool noComp = (t.comp == "none");
+    uint16_t compTag  = noComp ? COMPRESSION_NONE :
+                       (t.comp == "lzw") ? COMPRESSION_LZW : COMPRESSION_DEFLATE;
     TIFFSetField(tif, TIFFTAG_COMPRESSION,  compTag);
     TIFFSetField(tif, TIFFTAG_PHOTOMETRIC,  PHOTOMETRIC_MINISBLACK);
     TIFFSetField(tif, TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG);
-    TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP, height);    // 1 strip
+    TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP, height);  // one strip
 
-    if (TIFFWriteEncodedStrip(tif, 0, buf, bytes) < 0) {
+    const tsize_t wrote = noComp
+        ? TIFFWriteRawStrip    (tif, 0, buf, bytes)
+        : TIFFWriteEncodedStrip(tif, 0, buf, bytes);
+
+    if (wrote < 0) {
         TIFFClose(tif);
-        throw std::runtime_error("TIFFWriteEncodedStrip failed on " + t.path);
+        throw std::runtime_error("TIFF write failed on " + t.path);
     }
+
+#if defined(__linux__)
+    /* Hint kernel: drop file pages from cache immediately */
+    int fd = TIFFFileno(tif);
+    if (fd != -1) posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED);
+#endif
     TIFFClose(tif);
 }
 
