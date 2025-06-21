@@ -4,19 +4,18 @@
   High-throughput Z-slice saver for 2-D / 3-D MATLAB arrays
   (one TIFF per slice, optional LZW / Deflate compression).
 
-  Author   : Keivan Moradi (with ChatGPT assistance)
-  License  : GNU GPL-3 <https://www.gnu.org/licenses/>
+  Author : Keivan Moradi  (with ChatGPT assistance)
+  License: GNU GPL v3   <https://www.gnu.org/licenses/>
 
-  HIGHLIGHTS
-  ----------
-  • uint8 / uint16 input, 2-D promoted to [Y X 1].
-  • Thread pool per MATLAB session
-        – N “compute” workers (copy / transpose)
-        – 1 writer (TIFF output)
-    Bounded queue (16 jobs) ⇒ compute/IO overlap, bounded RAM.
-  • 1 MiB pthread stacks (glibc ≥ 2.34); posix_fadvise(DONTNEED) per slice.
-  • TIFFWriteRawStrip for "none", TIFFWriteEncodedStrip otherwise.
-  • Pool size ≤ min(Z, hw threads) and ≥ 8 where possible.
+  KEY FEATURES
+  ------------
+  • uint8 | uint16 input, 2-D promoted to [Y X 1]
+  • Reusable thread pool:
+        one worker per HW thread (≥ 8) – each worker both transposes & writes
+  • Zero mutexes on the hot path – slice indices are handed out with
+        g_nextSlice.fetch_add(1)
+  • 1 MiB pthread stacks (glibc ≥ 2.34); posix_fadvise(DONTNEED) per slice
+  • Matches load_bl_tif.cpp for slice order and dimensions
 ==============================================================================*/
 
 #include "mex.h"
@@ -26,7 +25,6 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstring>
-#include <deque>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -35,14 +33,14 @@
 #include <vector>
 
 #if defined(__linux__)
-  #include <pthread.h>
-  #include <fcntl.h>     // posix_fadvise
-  #include <unistd.h>
+# include <pthread.h>
+# include <fcntl.h>   // posix_fadvise
+# include <unistd.h>
 #endif
 
-/*==============================================================================
-  UTF-8 helper for MATLAB strings
-==============================================================================*/
+/*=============================================================================
+  Small RAII helper: convert MATLAB char / string → UTF-8
+=============================================================================*/
 struct MatlabString {
     char* ptr;
     explicit MatlabString(const mxArray* a) : ptr(mxArrayToUTF8String(a)) {
@@ -56,195 +54,146 @@ struct MatlabString {
     MatlabString& operator=(const MatlabString&) = delete;
 };
 
-/*==============================================================================
-  Per-slice task (input → compute)
-==============================================================================*/
+/*=============================================================================
+  Slice task (immutable – shared by all workers)
+=============================================================================*/
 struct SliceTask {
-    const uint8_t* base;       // pointer to whole volume
-    mwSize         dimY;       // MATLAB rows  (Y)
-    mwSize         dimX;       // MATLAB cols  (X)
-    mwSize         zIndex;     // slice index
-    std::string    outPath;    // destination TIFF
-    bool           isXYZ;      // true = [X Y Z] layout
-    mxClassID      classId;    // uint8 / uint16
-    std::string    compression;
+    const uint8_t* base;   // pointer to full volume
+    mwSize         dimY;
+    mwSize         dimX;
+    mwSize         z;      // slice index
+    std::string    outPath;
+    bool           isXYZ;  // true  → input already row-major
+    mxClassID      classId;
+    std::string    compression;   // "none" | "lzw" | "deflate"
 };
 
-/*==============================================================================
-  Job handed to the writer (owns pixel buffer)
-==============================================================================*/
-struct WriteJob {
-    std::string          outPath;
-    std::vector<uint8_t> pixels;       // already transposed / packed
-    mwSize               rows, cols;   // TIFF dimensions
-    mxClassID            classId;
-    std::string          compression;
-};
-
-/*==============================================================================
-  Global concurrency state
-==============================================================================*/
+/*=============================================================================
+  Global pool state
+=============================================================================*/
 namespace {
 
-constexpr std::size_t                    kQueueCap = 16;     // bounded FIFO
-std::deque<WriteJob>                     g_queue;
-std::mutex                               g_qMtx;
-std::condition_variable                  g_qNotEmpty;
-std::condition_variable                  g_qNotFull;
+std::shared_ptr<const std::vector<SliceTask>> g_tasks;     // current batch
+std::atomic_size_t        g_nextSlice{0};  // atomic index dispenser
+std::atomic_size_t        g_activeSlices{0};
 
-std::shared_ptr<const std::vector<SliceTask>> g_tasks;
-std::atomic_size_t                       g_nextIdx{0};       // slice dispatch
-std::atomic_size_t                       g_leftToProduce{0}; // slices yet to produce
+std::mutex                g_finishMtx;
+std::condition_variable   g_finishCV;
 
-std::mutex                               g_errMtx;
-std::vector<std::string>                 g_errors;
+std::mutex                g_errorMtx;
+std::vector<std::string>  g_errors;
 
-std::mutex                               g_poolMtx;
-std::vector<std::thread>                 g_threads;
-bool                                     g_poolAlive = false;
+/* thread pool (created once per MATLAB session) */
+std::vector<std::thread>  g_workers;
 
-} // namespace
+} // anonymous namespace
 
-/*==============================================================================
-  Writer thread – TIFF output
-==============================================================================*/
-static void writer_thread()
+/*=============================================================================
+  Per-thread scratch buffer (grow-only)
+=============================================================================*/
+static thread_local std::vector<uint8_t> tls_scratch;
+
+/*=============================================================================
+  Worker – fetch / transpose / write
+=============================================================================*/
+static void worker_loop()
 {
     try {
         for (;;) {
-            /* ---------- wait for an available job or completion ---------- */
-            std::unique_lock<std::mutex> ul(g_qMtx);
-            g_qNotEmpty.wait(ul, []{
-                return !g_queue.empty() || g_leftToProduce.load() == 0;
-            });
+            std::size_t idx = g_nextSlice.fetch_add(1);
+            if (idx >= g_tasks->size()) break;
 
-            if (g_queue.empty() && g_leftToProduce.load() == 0) {
-                ul.unlock();
-                g_qNotEmpty.notify_all();              // wake MATLAB thread
-                break;                                 // finished
+            const SliceTask& t = (*g_tasks)[idx];
+            const std::size_t bpp = (t.classId == mxUINT16_CLASS ? 2 : 1);
+            const std::size_t pixels =
+                static_cast<std::size_t>(t.dimY) * t.dimX;
+            const std::size_t bytes = pixels * bpp;
+
+            if (tls_scratch.capacity() < bytes) {
+                tls_scratch.reserve(bytes);
+                tls_scratch.resize(bytes);
+            }
+            uint8_t* dst = tls_scratch.data();
+
+            const uint8_t* srcBase =
+                t.base + static_cast<std::size_t>(t.z) * pixels * bpp;
+
+            /* -------- transpose / copy -------------------------------- */
+            if (!t.isXYZ) {                          // MATLAB default [Y X Z]
+                for (mwSize col = 0; col < t.dimX; ++col) {
+                    const uint8_t* srcCol =
+                        srcBase + static_cast<std::size_t>(col) * t.dimY * bpp;
+                    for (mwSize row = 0; row < t.dimY; ++row) {
+                        std::size_t dstIdx =
+                            (static_cast<std::size_t>(row) * t.dimX + col) * bpp;
+                        std::memcpy(dst + dstIdx,
+                                    srcCol + static_cast<std::size_t>(row) * bpp,
+                                    bpp);
+                    }
+                }
+            } else {                                 // already row-major
+                const std::size_t rowBytes = t.dimX * bpp;
+                for (mwSize row = 0; row < t.dimY; ++row) {
+                    const uint8_t* srcRow =
+                        srcBase + static_cast<std::size_t>(row) * t.dimY * bpp;
+                    std::memcpy(dst + static_cast<std::size_t>(row) * rowBytes,
+                                srcRow, rowBytes);
+                }
             }
 
-            WriteJob job = std::move(g_queue.front());
-            g_queue.pop_front();
-            g_qNotFull.notify_one();
-            ul.unlock();
-
-            /* --------------------- write a TIFF ------------------------- */
-            const std::size_t bpp = (job.classId == mxUINT16_CLASS ? 2 : 1);
-
-            TIFF* tif = TIFFOpen(job.outPath.c_str(), "w");
+            /* -------- write TIFF -------------------------------------- */
+            TIFF* tif = TIFFOpen(t.outPath.c_str(), "w");
             if (!tif)
-                throw std::runtime_error("Cannot open " + job.outPath);
+                throw std::runtime_error("Cannot open " + t.outPath);
 
-            TIFFSetField(tif, TIFFTAG_IMAGEWIDTH,  job.cols);
-            TIFFSetField(tif, TIFFTAG_IMAGELENGTH, job.rows);
+            TIFFSetField(tif, TIFFTAG_IMAGEWIDTH,  t.dimX);
+            TIFFSetField(tif, TIFFTAG_IMAGELENGTH, t.dimY);
             TIFFSetField(tif, TIFFTAG_SAMPLESPERPIXEL, 1);
             TIFFSetField(tif, TIFFTAG_BITSPERSAMPLE,  bpp == 2 ? 16 : 8);
 
-            const bool raw = (job.compression == "none");
+            const bool raw = (t.compression == "none");
             const uint16_t compTag = raw ? COMPRESSION_NONE :
-                                  (job.compression == "lzw") ? COMPRESSION_LZW :
-                                                               COMPRESSION_DEFLATE;
+                                   (t.compression == "lzw") ? COMPRESSION_LZW :
+                                                              COMPRESSION_DEFLATE;
             TIFFSetField(tif, TIFFTAG_COMPRESSION,  compTag);
             TIFFSetField(tif, TIFFTAG_PHOTOMETRIC,  PHOTOMETRIC_MINISBLACK);
             TIFFSetField(tif, TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG);
-            TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP, job.rows);
+            TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP, t.dimY);
 
             const tsize_t wrote = raw
-                ? TIFFWriteRawStrip    (tif, 0, job.pixels.data(), job.pixels.size())
-                : TIFFWriteEncodedStrip(tif, 0, job.pixels.data(), job.pixels.size());
+                ? TIFFWriteRawStrip    (tif, 0, dst, bytes)
+                : TIFFWriteEncodedStrip(tif, 0, dst, bytes);
 
             if (wrote < 0) {
                 TIFFClose(tif);
-                throw std::runtime_error("TIFF write failed on " + job.outPath);
+                throw std::runtime_error("TIFF write failed on " + t.outPath);
             }
 
 #if defined(__linux__)
-            if (int fd = TIFFFileno(tif); fd != -1)
-                posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED);
+            int fd = TIFFFileno(tif);
+            if (fd != -1) posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED);
 #endif
             TIFFClose(tif);
+
+            /* one slice finished */
+            if (g_activeSlices.fetch_sub(1) == 1) {
+                std::lock_guard<std::mutex> lk(g_finishMtx);
+                g_finishCV.notify_one();
+            }
         }
-    } catch (const std::exception& e) {
-        std::lock_guard<std::mutex> lk(g_errMtx);
+    }
+    catch (const std::exception& e) {
+        std::lock_guard<std::mutex> lk(g_errorMtx);
         g_errors.emplace_back(e.what());
-        g_qNotEmpty.notify_all();                       // unblock MATLAB
+        /* wake MATLAB even on error */
+        std::lock_guard<std::mutex> lk2(g_finishMtx);
+        g_finishCV.notify_one();
     }
 }
 
-/*==============================================================================
-  Compute worker – copy / transpose then queue
-==============================================================================*/
-static void compute_thread()
-{
-    for (;;) {
-        /* -------------- claim next slice index -------------------------- */
-        size_t idx = g_nextIdx.fetch_add(1);
-        if (idx >= g_tasks->size())
-            break;
-
-        const SliceTask& t = (*g_tasks)[idx];
-
-        /* ---------- build WriteJob buffer ------------------------------- */
-        const std::size_t bpp      = (t.classId == mxUINT16_CLASS ? 2 : 1);
-        const mwSize      rowsOut  = t.dimY;
-        const mwSize      colsOut  = t.dimX;
-        const std::size_t pixels   = static_cast<std::size_t>(rowsOut) * colsOut;
-        const std::size_t bytes    = pixels * bpp;
-
-        WriteJob job;
-        job.outPath     = t.outPath;
-        job.rows        = rowsOut;
-        job.cols        = colsOut;
-        job.classId     = t.classId;
-        job.compression = t.compression;
-        job.pixels.resize(bytes);
-
-        uint8_t*       dst = job.pixels.data();
-        const uint8_t* srcSlice =
-            t.base + static_cast<std::size_t>(t.zIndex) * pixels * bpp;
-
-        /* ---------- copy / transpose ------------------------------------ */
-        if (!t.isXYZ) {                                   // [Y X Z] → transpose
-            for (mwSize col = 0; col < colsOut; ++col) {
-                const uint8_t* srcCol =
-                    srcSlice + static_cast<std::size_t>(col) * rowsOut * bpp;
-                for (mwSize row = 0; row < rowsOut; ++row) {
-                    std::size_t dstIdx =
-                        (static_cast<std::size_t>(row) * colsOut + col) * bpp;
-                    std::memcpy(dst + dstIdx,
-                                srcCol + static_cast<std::size_t>(row) * bpp,
-                                bpp);
-                }
-            }
-        } else {                                          // [X Y Z] → fast path
-            const std::size_t rowBytes = colsOut * bpp;
-            for (mwSize row = 0; row < rowsOut; ++row) {
-                const uint8_t* srcRow =
-                    srcSlice + static_cast<std::size_t>(row) * rowsOut * bpp;
-                std::memcpy(dst + static_cast<std::size_t>(row) * rowBytes,
-                            srcRow, rowBytes);
-            }
-        }
-
-        /* ---------- enqueue job & signal writer ------------------------- */
-        {
-            std::unique_lock<std::mutex> ql(g_qMtx);
-            g_qNotFull.wait(ql, []{ return g_queue.size() < kQueueCap; });
-            g_queue.emplace_back(std::move(job));
-
-            std::size_t prev = g_leftToProduce.fetch_sub(1);
-            if (prev == 1)               // last slice just produced
-                g_qNotEmpty.notify_all();
-            else
-                g_qNotEmpty.notify_one();
-        }
-    }
-}
-
-/*==============================================================================
-  Linux: shrink default pthread stack to 1 MiB (glibc ≥ 2.34)
-==============================================================================*/
+/*=============================================================================
+  Linux: shrink default pthread stack to 1 MiB on glibc ≥ 2.34
+=============================================================================*/
 #if defined(__linux__)
 static void shrink_default_stack()
 {
@@ -263,75 +212,69 @@ static void shrink_default_stack()
 }
 #endif
 
-/*==============================================================================
-  Thread-pool bootstrap (run once per MATLAB session)
-==============================================================================*/
-static void ensure_pool(std::size_t nSlices)
+/*=============================================================================
+  Initialise pool (once per MATLAB session)
+=============================================================================*/
+static void ensure_pool(std::size_t numSlices)
 {
-    std::lock_guard<std::mutex> lk(g_poolMtx);
-    if (g_poolAlive) return;
+    if (!g_workers.empty()) return;   // already created
 
 #if defined(__linux__)
     shrink_default_stack();
 #endif
     std::size_t hw = std::thread::hardware_concurrency();
     if (hw == 0) hw = 8;
+    std::size_t nThreads = std::min(hw, numSlices);
+    if (hw >= 8) nThreads = std::max<std::size_t>(8, nThreads);
+    nThreads = std::max<std::size_t>(1, nThreads);
 
-    std::size_t nCompute = std::min(nSlices, hw);
-    if (hw >= 8) nCompute = std::max<std::size_t>(8, nCompute);
-    nCompute = std::max<std::size_t>(1, nCompute);
-
-    g_threads.reserve(nCompute + 1);
-    g_threads.emplace_back(writer_thread);
-    for (std::size_t i = 0; i < nCompute; ++i)
-        g_threads.emplace_back(compute_thread);
-
-    g_poolAlive = true;
+    g_workers.reserve(nThreads);
+    try {
+        for (std::size_t i = 0; i < nThreads; ++i)
+            g_workers.emplace_back(worker_loop);
+    } catch (...) {
+        for (auto& t : g_workers)
+            if (t.joinable()) t.join();
+        throw;
+    }
 
     mexAtExit(+[] {
-        {
-            std::lock_guard<std::mutex> lk(g_qMtx);
-            g_leftToProduce = 0;
-            g_queue.clear();
-        }
-        g_qNotEmpty.notify_all();
-        g_qNotFull.notify_all();
-        for (auto& t : g_threads)
+        for (auto& t : g_workers)
             if (t.joinable()) t.join();
     });
 }
 
-/*==============================================================================
+/*=============================================================================
   MEX gateway
-==============================================================================*/
+=============================================================================*/
 void mexFunction(int, mxArray*[], int nrhs, const mxArray* prhs[])
 {
     try {
+        /* ------------ validate inputs ------------------------------- */
         if (nrhs != 4)
             mexErrMsgIdAndTxt("save_bl_tif:Input",
               "Usage: save_bl_tif(volume, fileList, orderFlag, compression)");
 
-        /* ---------------- validate input ------------------------------- */
-        const mxArray* V = prhs[0];
-        if (!mxIsUint8(V) && !mxIsUint16(V))
-            mexErrMsgIdAndTxt("save_bl_tif:Input", "Volume must be uint8/uint16");
+        const mxArray* vol = prhs[0];
+        if (!mxIsUint8(vol) && !mxIsUint16(vol))
+            mexErrMsgIdAndTxt("save_bl_tif:Input",
+                              "Volume must be uint8 or uint16");
 
-        const mwSize* d = mxGetDimensions(V);
-        mwSize nd = mxGetNumberOfDimensions(V);
+        const mwSize* dims = mxGetDimensions(vol);
+        mwSize nd = mxGetNumberOfDimensions(vol);
 
         mwSize dimY, dimX, dimZ;
-        if (nd == 2)      { dimY = d[0]; dimX = d[1]; dimZ = 1; }
-        else if (nd == 3) { dimY = d[0]; dimX = d[1]; dimZ = d[2]; }
-        else
-            mexErrMsgIdAndTxt("save_bl_tif:Input",
-                              "Volume must be 2-D or 3-D.");
+        if (nd == 2) { dimY = dims[0]; dimX = dims[1]; dimZ = 1; }
+        else if (nd == 3) { dimY = dims[0]; dimX = dims[1]; dimZ = dims[2]; }
+        else mexErrMsgIdAndTxt("save_bl_tif:Input", "Volume must be 2-D or 3-D");
 
         if (!mxIsCell(prhs[1]) || mxGetNumberOfElements(prhs[1]) != dimZ)
             mexErrMsgIdAndTxt("save_bl_tif:Input", "fileList size mismatch");
 
-        const bool isXYZ = mxIsLogicalScalarTrue(prhs[2]) ||
-                          ((mxIsUint32(prhs[2]) || mxIsInt32(prhs[2])) &&
-                           *static_cast<uint32_t*>(mxGetData(prhs[2])));
+        const bool isXYZ =
+            mxIsLogicalScalarTrue(prhs[2]) ||
+            ((mxIsUint32(prhs[2]) || mxIsInt32(prhs[2])) &&
+             *static_cast<uint32_t*>(mxGetData(prhs[2])));
 
         MatlabString compStr(prhs[3]);
         std::string  compression(compStr.get());
@@ -339,45 +282,38 @@ void mexFunction(int, mxArray*[], int nrhs, const mxArray* prhs[])
             mexErrMsgIdAndTxt("save_bl_tif:Input",
                               "compression must be \"none\", \"lzw\", or \"deflate\"");
 
-        /* ---------------- build slice-task vector ---------------------- */
-        auto tasks = std::make_shared<std::vector<SliceTask>>();
-        tasks->reserve(dimZ);
-
-        const uint8_t* basePtr = static_cast<const uint8_t*>(mxGetData(V));
+        /* ------------ build task vector ----------------------------- */
+        const uint8_t* basePtr = static_cast<const uint8_t*>(mxGetData(vol));
+        auto taskVec = std::make_shared<std::vector<SliceTask>>();
+        taskVec->reserve(dimZ);
 
         for (mwSize z = 0; z < dimZ; ++z) {
-            const mxArray* c = mxGetCell(prhs[1], z);
-            if (!mxIsChar(c))
+            const mxArray* cell = mxGetCell(prhs[1], z);
+            if (!mxIsChar(cell))
                 mexErrMsgIdAndTxt("save_bl_tif:Input", "fileList must be char");
 
-            MatlabString path(c);
-            tasks->push_back(SliceTask{ basePtr, dimY, dimX, z,
-                                        path.get(), isXYZ,
-                                        mxGetClassID(V), compression });
+            MatlabString p(cell);
+            taskVec->push_back(
+                { basePtr, dimY, dimX, z, p.get(),
+                  isXYZ, mxGetClassID(vol), compression });
         }
 
-        if (tasks->empty()) return;
+        if (taskVec->empty()) return;          // nothing to do
 
-        /* ---------------- publish tasks & counters --------------------- */
-        {
-            std::lock_guard<std::mutex> lk(g_qMtx);
-            g_tasks           = std::move(tasks);
-            g_nextIdx         = 0;
-            g_leftToProduce   = g_tasks->size();
-        }
+        /* ------------ hand to pool & wait --------------------------- */
+        g_tasks          = std::move(taskVec);
+        g_nextSlice      = 0;
+        g_activeSlices   = g_tasks->size();
 
-        /* ---------------- start / wake thread-pool --------------------- */
         ensure_pool(g_tasks->size());
 
-        /* ---------------- wait for completion -------------------------- */
+        /* wait for completion */
         {
-            std::unique_lock<std::mutex> ul(g_qMtx);
-            g_qNotEmpty.wait(ul, []{
-                return g_leftToProduce.load() == 0 && g_queue.empty();
-            });
+            std::unique_lock<std::mutex> lk(g_finishMtx);
+            g_finishCV.wait(lk, []{ return g_activeSlices.load() == 0; });
         }
 
-        /* ---------------- propagate worker errors ---------------------- */
+        /* propagate errors from worker threads ----------------------- */
         if (!g_errors.empty()) {
             std::string msg("save_bl_tif errors:\n");
             for (const auto& e : g_errors) msg += "  - " + e + '\n';
