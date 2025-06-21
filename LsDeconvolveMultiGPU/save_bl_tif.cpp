@@ -75,19 +75,13 @@
 #endif
 
 /* --- runtime AVX-2 check (GCC/Clang) ----------------------------------- */
-#if defined(__x86_64__) && defined(__AVX2__)
-#  if defined(__GNUC__) || defined(__clang__)
-     static inline bool have_avx2 = __builtin_cpu_supports("avx2");
-#  else  /* MSVC */
-     #include <intrin.h>
-     static inline bool have_avx2 = ([]{
-         int cpuInfo[4];
-         __cpuid(cpuInfo, 7);
-         return (cpuInfo[1] & (1 << 5)) != 0;   // EBX bit 5 = AVX2
-     })();
-#  endif
+static inline bool cpuHasAVX2 =
+#if defined(__x86_64__) && defined(__AVX2__) && (defined(__GNUC__) || defined(__clang__))
+    __builtin_cpu_supports("avx2");
+#elif defined(_MSC_VER) && defined(__AVX2__)
+    ([]{ int c[4]; __cpuid(c,7); return (c[1] & (1<<5))!=0; })();
 #else
-     static inline bool have_avx2 = false;      // <-- remove const, keep inline
+    false;
 #endif
 
 /*==============================================================================
@@ -125,84 +119,99 @@ struct SaveTask {
 ==============================================================================*/
 static thread_local std::vector<uint8_t> scratch;   // reused by thread
 
+/* --------------- slice copy (transpose) ---------------- */
 static void save_slice(const SaveTask& t)
 {
-    const size_t es = (t.classId == mxUINT16_CLASS ? 2 : 1);
-    const mwSize width  = t.isXYZ ? t.dim0 : t.dim1;
-    const mwSize height = t.isXYZ ? t.dim1 : t.dim0;
-    const size_t sliceOff = static_cast<size_t>(t.z) * t.dim0 * t.dim1;
-    const size_t bytes    = static_cast<size_t>(width) * height * es;
+    /* Pixel size in bytes -------------------------------------------------- */
+    const size_t bytesPerPixel = (t.classId == mxUINT16_CLASS ? 2 : 1);
 
-    /* Allocate scratch buffer once per worker (grow-only) */
-    if (scratch.capacity() < bytes) {
-        scratch.reserve(bytes);
-        scratch.resize(bytes);
+    /* Readable names for volume geometry ----------------------------------- */
+    const mwSize srcRows    = t.isXYZ ? t.dim1 : t.dim0;   // MATLAB rows  (Y)
+    const mwSize srcCols    = t.isXYZ ? t.dim0 : t.dim1;   // MATLAB cols  (X)
+    const size_t sliceIndex = static_cast<size_t>(t.z);
+    const size_t pixelsPerSlice = static_cast<size_t>(t.dim0) * t.dim1;
+    const size_t bytesPerSlice  = pixelsPerSlice * bytesPerPixel;
+
+    /* Ensure each worker’s scratch buffer is big enough -------------------- */
+    if (scratch.capacity() < bytesPerSlice) {
+        scratch.reserve(bytesPerSlice);
+        scratch.resize(bytesPerSlice);
     }
-    uint8_t* buf = scratch.data();
+    uint8_t* dstBuffer = scratch.data();
 
-    /* -------- transpose into buf -------- */
-    if (!t.isXYZ)   /* [Y X Z] column-major → scalar copy */
-    {
-        for (mwSize x = 0; x < width; ++x) {
-            const uint8_t* srcCol =
-                t.base + (sliceOff + static_cast<size_t>(x) * t.dim0) * es;
-            for (mwSize y = 0; y < height; ++y) {
-                size_t dst = (static_cast<size_t>(y) * width + x) * es;
-                const uint8_t* src = srcCol + static_cast<size_t>(y) * es;
-                if (es == 1) buf[dst] = *src;
-                else         std::memcpy(buf + dst, src, 2);
+    /* ============================ COPY ==================================== */
+
+    if (!t.isXYZ) {                     /* --- MATLAB default [Y X Z] --- */
+        /* Column-major → row-major transpose (scalar, cache-friendly) */
+        for (mwSize col = 0; col < srcCols; ++col) {
+            const uint8_t* srcColumn =
+                t.base + (sliceIndex * pixelsPerSlice +
+                          static_cast<size_t>(col) * t.dim0) * bytesPerPixel;
+
+            for (mwSize row = 0; row < srcRows; ++row) {
+                size_t dstIdx = (static_cast<size_t>(row) * srcCols + col) * bytesPerPixel;
+                const uint8_t* src = srcColumn + static_cast<size_t>(row) * bytesPerPixel;
+
+                if (bytesPerPixel == 1)
+                    dstBuffer[dstIdx] = *src;
+                else
+                    std::memcpy(dstBuffer + dstIdx, src, 2);   // uint16
             }
         }
     }
-    else            /* [X Y Z] rows contiguous → SIMD if available */
+    else            /* [X Y Z] rows already contiguous */
     {
-        const size_t srcStride = t.dim0 * es;   // bytes between source rows
-        const size_t dstStride = width  * es;   // bytes between dest rows
+        const size_t srcRowBytes = t.dim0 * bytesPerPixel;   // bytes between rows in MATLAB
+        const size_t dstRowBytes = width   * bytesPerPixel;
 
-        if (have_avx2 && (width  & 15) == 0 && (height & 15) == 0 && es == 1 && t.comp != "none")
+        if (have_avx2 && bytesPerPixel == 1 &&
+            (width & 15) == 0 && (height & 15) == 0)
         {
-            for (mwSize y0 = 0; y0 < height; y0 += 16) {
-                for (mwSize x0 = 0; x0 < width; x0 += 16) {
-                    simd::transpose16x16_u8(
-                        t.base + (sliceOff + static_cast<size_t>(y0) * t.dim0 + x0) * es,
-                        srcStride,
-                        buf + (static_cast<size_t>(y0) * width + x0) * es,
-                        dstStride);
-                }
-            }
+            for (mwSize y0 = 0; y0 < height; y0 += 16)
+                for (mwSize x0 = 0; x0 < width; x0 += 16)
+                    simd::transpose16x16_u8_stride(
+                        /* src ptr */
+                        t.base + (sliceOff +
+                                  static_cast<size_t>(y0) * t.dim0 + x0) * bytesPerPixel,
+                        srcRowBytes,
+                        /* dst ptr */
+                        dstBuffer + (static_cast<size_t>(y0) * width + x0) * bytesPerPixel,
+                        dstRowBytes);
         }
         else
-        {
-            const size_t rowBytes = width * es;
+        {   /* fallback: row-wise memcpy */
             for (mwSize y = 0; y < height; ++y) {
                 const uint8_t* srcRow =
-                    t.base + (sliceOff + static_cast<size_t>(y) * t.dim0) * es;
-                std::memcpy(buf + static_cast<size_t>(y) * rowBytes,
-                            srcRow, rowBytes);
+                    t.base + (sliceOff +
+                              static_cast<size_t>(y) * t.dim0) * bytesPerPixel;
+
+                std::memcpy(dstBuffer + static_cast<size_t>(y) * dstRowBytes,
+                            srcRow, dstRowBytes);
             }
         }
     }
 
-    /* -------- write entire slice in one strip -------- */
+    /* ============================ WRITE TIFF ============================== */
     TIFF* tif = TIFFOpen(t.path.c_str(), "w");
     if (!tif) throw std::runtime_error("Cannot open " + t.path);
 
-    TIFFSetField(tif, TIFFTAG_IMAGEWIDTH,  width);
-    TIFFSetField(tif, TIFFTAG_IMAGELENGTH, height);
+    TIFFSetField(tif, TIFFTAG_IMAGEWIDTH,  srcCols);
+    TIFFSetField(tif, TIFFTAG_IMAGELENGTH, srcRows);
     TIFFSetField(tif, TIFFTAG_SAMPLESPERPIXEL, 1);
-    TIFFSetField(tif, TIFFTAG_BITSPERSAMPLE, (es == 2 ? 16 : 8));
+    TIFFSetField(tif, TIFFTAG_BITSPERSAMPLE,  bytesPerPixel == 2 ? 16 : 8);
 
-    const bool noComp = (t.comp == "none");
-    uint16_t compTag  = noComp ? COMPRESSION_NONE :
-                       (t.comp == "lzw") ? COMPRESSION_LZW : COMPRESSION_DEFLATE;
+    const bool isRaw = (t.comp == "none");
+    const uint16_t compTag = isRaw ? COMPRESSION_NONE :
+                              (t.comp == "lzw") ? COMPRESSION_LZW : COMPRESSION_DEFLATE;
+
     TIFFSetField(tif, TIFFTAG_COMPRESSION,  compTag);
     TIFFSetField(tif, TIFFTAG_PHOTOMETRIC,  PHOTOMETRIC_MINISBLACK);
     TIFFSetField(tif, TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG);
-    TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP, height);  // one strip
+    TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP, srcRows);          // one strip
 
-    const tsize_t wrote = noComp
-        ? TIFFWriteRawStrip    (tif, 0, buf, bytes)
-        : TIFFWriteEncodedStrip(tif, 0, buf, bytes);
+    const tsize_t wrote = isRaw
+        ? TIFFWriteRawStrip    (tif, 0, dstBuffer, bytesPerSlice)
+        : TIFFWriteEncodedStrip(tif, 0, dstBuffer, bytesPerSlice);
 
     if (wrote < 0) {
         TIFFClose(tif);
@@ -210,7 +219,6 @@ static void save_slice(const SaveTask& t)
     }
 
 #if defined(__linux__)
-    /* Hint kernel: drop file pages from cache immediately */
     int fd = TIFFFileno(tif);
     if (fd != -1) posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED);
 #endif
@@ -277,28 +285,26 @@ static void worker_loop()
     }
 }
 
-inline void ensure_pool(size_t nSlices)      // nSlices == taskVec->size()
+/* ------------ pool size: ≤ slices, ≤ hardware, floor 1/8 --------------- */
+inline void ensure_pool(size_t nSlices)
 {
-    /* Pool already exists → nothing to do.
-       (We do not shrink on later calls; excess threads stay idle.) */
-    if (!g_workers.empty()) return;
+    if (!g_workers.empty()) return;                // already created
 
 #if defined(__linux__)
-    shrink_default_stack();                  // 1 MiB stacks on glibc ≥ 2.34
+    shrink_default_stack();                        // 1 MiB stacks
 #endif
+    size_t hwThreads = std::thread::hardware_concurrency();
+    if (hwThreads == 0) hwThreads = 8;
 
-    /* decide thread count */
-    size_t hw = std::thread::hardware_concurrency();
-    if (hw == 0) hw = 8;
-    size_t requested = std::min(nSlices, hw);     // never exceed cores or slices
-    if (hw >= 8) requested = std::max<size_t>(8, requested); // floor 8 when possible
-    if (requested == 0) requested = 1;            // safety
+    size_t threadCount = std::min(nSlices, hwThreads);
+    if (hwThreads >= 8) threadCount = std::max<size_t>(8, threadCount);
+    if (threadCount == 0) threadCount = 1;
 
-    g_workers.reserve(requested);
+    g_workers.reserve(threadCount);
     try {
-        for (size_t i = 0; i < requested; ++i)
+        for (size_t i = 0; i < threadCount; ++i)
             g_workers.emplace_back(worker_loop);
-    } catch (...) {                           // clean up if creation fails
+    } catch (...) {
         g_stop = true;
         g_cv.notify_all();
         for (auto& t : g_workers)
@@ -306,7 +312,6 @@ inline void ensure_pool(size_t nSlices)      // nSlices == taskVec->size()
         throw;
     }
 
-    /* tear-down at mexClear */
     mexAtExit(+[] {
         {
             std::lock_guard<std::mutex> lk(g_mtx);
