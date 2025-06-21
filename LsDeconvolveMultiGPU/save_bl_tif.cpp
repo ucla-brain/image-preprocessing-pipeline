@@ -1,11 +1,11 @@
 /*==============================================================================
   save_bl_tif.cpp
-  -----------------------------------------------------------------------------
+  ------------------------------------------------------------------------------
   High-throughput Z-slice saver for 3-D MATLAB arrays (one TIFF per slice).
 
-  Version      : 2025-06-21 (persistent-pool, thread-reuse, bug-fixed)
-  Author       : Keivan Moradi  (with ChatGPT-4o assistance)
-  License      : GNU GPL v3   <https://www.gnu.org/licenses/>
+  VERSION  : 2025-06-21  (no-persistence, per-call pool, eager-bind, pre-scratch)
+  AUTHOR   : Keivan Moradi  (with ChatGPT-4o assistance)
+  LICENSE  : GNU GPL v3   <https://www.gnu.org/licenses/>
 ==============================================================================*/
 
 #include "mex.h"
@@ -22,69 +22,71 @@
 #include <vector>
 
 #if defined(__linux__)
-# include <fcntl.h>
-# include <unistd.h>
+#  include <fcntl.h>
+#  include <unistd.h>
 #endif
 
-/* ───────────────────────────────── TASK DESCRIPTION ─────────────────────── */
+/* ───────────────────────────── TASK DESCRIPTION ─────────────────────────── */
 struct SaveTask {
-    const uint8_t* base;          // start of whole volume
-    size_t         offset_bytes;  // start of this slice
-    mwSize         dim0, dim1;    // MATLAB dims (rows, cols)
-    std::string    path;          // destination file
-    bool           isXYZ;         // storage order flag
+    const uint8_t* basePtr;       // start of whole volume
+    size_t         sliceOffset;   // byte-offset of this slice
+    mwSize         rows, cols;    // MATLAB dims *after* any transpose
+    std::string    filePath;      // destination path
+    bool           alreadyXYZ;    // true if input is [X Y Z]
     mxClassID      classId;
     uint16_t       compressionTag;
     size_t         bytesPerSlice;
     size_t         bytesPerPixel;
 };
 
-/* Each thread owns one scratch buffer large enough for the biggest slice. */
+/* Each thread owns one reusable scratch buffer large enough for one slice.   */
 static thread_local std::vector<uint8_t> scratch;
 
-/* ───────────────────────────────── SLICE WRITER ─────────────────────────── */
+/* ───────────────────────────── LOW-LEVEL TIFF WRITE ─────────────────────── */
 static void save_slice(const SaveTask& t)
 {
-    const mwSize srcRows = t.isXYZ ? t.dim1 : t.dim0;
-    const mwSize srcCols = t.isXYZ ? t.dim0 : t.dim1;
-    const uint8_t* inputSlice = t.base + t.offset_bytes;
-    const bool directWrite = (t.compressionTag == COMPRESSION_NONE && t.isXYZ);
+    const mwSize srcRows = t.alreadyXYZ ? t.cols : t.rows;    // if transpose needed
+    const mwSize srcCols = t.alreadyXYZ ? t.rows : t.cols;
 
-    const uint8_t* ioBuf = nullptr;         // pointer actually passed to libtiff
+    const uint8_t* src = t.basePtr + t.sliceOffset;
+    const bool directWrite = (t.compressionTag == COMPRESSION_NONE && t.alreadyXYZ);
 
-    /* (1) Prepare IO buffer ­– transpose if slice is [Y X] order or if compressed */
+    const uint8_t* ioBuf = nullptr;          // buffer actually passed to libtiff
+
+    /* 1. Prepare buffer (handle transpose / compression fast-path) */
     if (directWrite) {
-        ioBuf = inputSlice;                 // happy fast-path
+        ioBuf = src;                         // zero-copy path 🚀
     } else {
         if (scratch.size() < t.bytesPerSlice)
-            scratch.resize(t.bytesPerSlice);
+            scratch.resize(t.bytesPerSlice); // one-time per thread
+
         uint8_t* dst = scratch.data();
 
-        if (!t.isXYZ) {                     // transpose [Y X] → [X Y]
+        if (!t.alreadyXYZ) {                 // transpose [Y X] → [X Y]
             for (mwSize col = 0; col < srcCols; ++col) {
-                const uint8_t* srcColumn = inputSlice + col * t.dim0 * t.bytesPerPixel;
+                const uint8_t* srcColumn = src + col * t.rows * t.bytesPerPixel;
                 for (mwSize row = 0; row < srcRows; ++row) {
-                    size_t dstIdx = (size_t(row) * srcCols + col) * t.bytesPerPixel;
+                    size_t dstIdx = (static_cast<size_t>(row) * srcCols + col) * t.bytesPerPixel;
                     std::memcpy(dst + dstIdx,
                                 srcColumn + row * t.bytesPerPixel,
-                                t.bytesPerPixel);          // FIX: honour 1- or 2-byte pixel
+                                t.bytesPerPixel);
                 }
             }
-        } else {                            // already [X Y] – just copy row-wise
+        } else {                            // already XYZ – need copy only for compression
             const size_t rowBytes = srcCols * t.bytesPerPixel;
             for (mwSize row = 0; row < srcRows; ++row)
                 std::memcpy(dst + row * rowBytes,
-                            inputSlice + row * rowBytes,
+                            src + row * rowBytes,
                             rowBytes);
         }
         ioBuf = dst;
     }
 
-    /* (2) Open TIFF */
-    TIFF* tif = TIFFOpen(t.path.c_str(), "w");
-    if (!tif) throw std::runtime_error("Cannot open " + t.path);
+    /* 2. Open TIFF (write-mode) */
+    TIFF* tif = TIFFOpen(t.filePath.c_str(), "w");
+    if (!tif) throw std::runtime_error("Cannot open " + t.filePath);
 
-    /* (3) Baseline tags */
+    /* 3. Required baseline tags */
     TIFFSetField(tif, TIFFTAG_IMAGEWIDTH,      srcCols);
     TIFFSetField(tif, TIFFTAG_IMAGELENGTH,     srcRows);
     TIFFSetField(tif, TIFFTAG_SAMPLESPERPIXEL, 1);
@@ -93,222 +95,170 @@ static void save_slice(const SaveTask& t)
     TIFFSetField(tif, TIFFTAG_PHOTOMETRIC,     PHOTOMETRIC_MINISBLACK);
     TIFFSetField(tif, TIFFTAG_PLANARCONFIG,    PLANARCONFIG_CONTIG);
 
-    /* (4) Strip size: one-strip-per-slice is safest & fastest  ─────────────── */
-    TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP, srcRows);          //  🚩 FIX ①
+    /* 4. One-strip-per-image (fast and simple) */
+    TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP, srcRows);
 
-    /* (5) Write the single strip  ──────────────────────────────────────────── */
-    uint8_t* writeBuf = const_cast<uint8_t*>(ioBuf);           //  🚩 FIX ②
+    /* 5. Write the single strip */
+    uint8_t* writeBuf = const_cast<uint8_t*>(ioBuf);
+    tsize_t  nWritten = (t.compressionTag == COMPRESSION_NONE)
+        ? TIFFWriteRawStrip    (tif, 0, writeBuf, static_cast<tsize_t>(t.bytesPerSlice))
+        : TIFFWriteEncodedStrip(tif, 0, writeBuf, static_cast<tsize_t>(t.bytesPerSlice));
 
-    tsize_t wrote = (t.compressionTag == COMPRESSION_NONE)
-        ? TIFFWriteRawStrip    (tif, 0, writeBuf,
-                                static_cast<tsize_t>(t.bytesPerSlice))
-        : TIFFWriteEncodedStrip(tif, 0, writeBuf,
-                                static_cast<tsize_t>(t.bytesPerSlice));
-
-    if (wrote < 0) {
+    if (nWritten < 0) {
         TIFFClose(tif);
-        throw std::runtime_error("TIFF write failed on " + t.path);
+        throw std::runtime_error("TIFF write failed on " + t.filePath);
     }
 
 #if defined(__linux__)
     int fd = TIFFFileno(tif);
-    if (fd != -1) posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED);
+    if (fd != -1) posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED);  // drop page cache
 #endif
     TIFFClose(tif);
 }
 
-/* ──────────────────────────────── THREAD POOL ───────────────────────────── */
+/* ───────────────────────────── ONE-SHOT POOL (PER CALL) ─────────────────── */
 namespace {
 
-std::shared_ptr<const std::vector<SaveTask>> g_tasks;
-std::atomic_size_t g_next{0};
-std::atomic_size_t g_remaining{0};
-std::vector<std::string> g_errs;
+/* Context shared by all threads of *this* mexFunction call */
+struct CallContext {
+    std::shared_ptr<const std::vector<SaveTask>> tasks;
+    std::atomic_size_t nextIndex{0};
+    std::mutex errMutex;
+    std::vector<std::string> errors;
+    size_t maxSliceBytes{0};                 // for scratch pre-allocation
+};
 
-std::mutex              g_mtx;
-std::condition_variable g_cv;
-std::atomic<bool>       g_stop{false};
-std::vector<std::thread> g_workers;
-
-/* Worker routine ---------------------------------------------------------- */
-void worker_loop()
+/* Worker entry ------------------------------------------------------------ */
+void worker_entry(CallContext& ctx)
 {
-    for (;;) {
-        std::shared_ptr<const std::vector<SaveTask>> myTasks;
+    /* Pre-allocate this thread’s scratch once (largest slice) */
+    if (scratch.size() < ctx.maxSliceBytes) scratch.resize(ctx.maxSliceBytes);
 
-        /* Wait for work or shutdown */
-        {
-            std::unique_lock<std::mutex> lk(g_mtx);
-            g_cv.wait(lk, [] { return g_tasks || g_stop.load(); });
-            if (g_stop) return;
-            myTasks = g_tasks;          // keep a reference so tasks stay alive
+    const auto& jobList = *ctx.tasks;
+    size_t idx = ctx.nextIndex.fetch_add(1, std::memory_order_relaxed);
+
+    while (idx < jobList.size()) {
+        try {
+            save_slice(jobList[idx]);
+        } catch (const std::exception& e) {
+            std::lock_guard<std::mutex> lk(ctx.errMutex);
+            ctx.errors.emplace_back(e.what());
         }
-
-        /* Pop indices atomically and process */
-        size_t idx = g_next.fetch_add(1, std::memory_order_relaxed);
-        while (idx < myTasks->size()) {
-            try {
-                save_slice((*myTasks)[idx]);
-            } catch (const std::exception& e) {
-                std::lock_guard<std::mutex> errlk(g_mtx);
-                g_errs.emplace_back(e.what());
-            }
-
-            if (g_remaining.fetch_sub(1, std::memory_order_acq_rel) == 1) {
-                /* last slice done; wake main thread */
-                std::lock_guard<std::mutex> lk(g_mtx);
-                g_tasks.reset();        // mark queue empty
-                g_cv.notify_all();
-            }
-            idx = g_next.fetch_add(1, std::memory_order_relaxed);
-        }
-    }
-}
-
-/* Pool initialiser / grower ---------------------------------------------- */
-void ensure_pool(size_t nSlices)
-{
-    size_t hw = std::thread::hardware_concurrency();
-    if (hw <= 1) hw = 8;                        // fall-back heuristic
-
-    size_t want = std::min(nSlices, hw);
-    if (hw >= 8) want = std::max<size_t>(8, want);
-    if (want == 0) want = 1;
-
-    /* Grow pool if needed */
-    std::lock_guard<std::mutex> lk(g_mtx);
-    while (g_workers.size() < want)
-        g_workers.emplace_back(worker_loop);
-
-    /* Register atexit once */
-    static bool exitHooked = false;
-    if (!exitHooked) {
-        mexAtExit(+[] {
-            g_stop.store(true, std::memory_order_relaxed);
-            g_cv.notify_all();
-            for (auto& t : g_workers)
-                if (t.joinable()) t.join();
-        });
-        exitHooked = true;
+        idx = ctx.nextIndex.fetch_add(1, std::memory_order_relaxed);
     }
 }
 
 } // unnamed namespace
 
-/* ───────────────────────────────── MEX ENTRY ────────────────────────────── */
+/* ──────────────────────────────── MEX ENTRY ─────────────────────────────── */
 void mexFunction(int nlhs, mxArray* plhs[],
                  int nrhs, const mxArray* prhs[])
 {
     try {
+        /* ─── 1. ARGUMENT VALIDATION ─────────────────────────────────────── */
         if (nrhs != 4)
             mexErrMsgIdAndTxt("save_bl_tif:Input",
-                "Usage: save_bl_tif(vol, fileList, orderFlag, compression)");
+                              "Usage: save_bl_tif(volume, fileList, orderFlag, compression)");
 
-        /* ---- volume ---- */
         const mxArray* V = prhs[0];
         if (!mxIsUint8(V) && !mxIsUint16(V))
             mexErrMsgIdAndTxt("save_bl_tif:Input",
-                "Volume must be uint8 or uint16");
+                              "Volume must be uint8 or uint16.");
 
-        const mwSize* dims = mxGetDimensions(V);
-        const size_t dim0 = dims[0];
-        const size_t dim1 = dims[1];
-        const size_t dim2 =
-            (mxGetNumberOfDimensions(V) == 3) ? dims[2] : 1;
+        const mwSize* dims   = mxGetDimensions(V);
+        const size_t  dim0   = dims[0];
+        const size_t  dim1   = dims[1];
+        const size_t  dim2   = (mxGetNumberOfDimensions(V) == 3) ? dims[2] : 1;
 
-        const uint8_t* base = static_cast<const uint8_t*>(mxGetData(V));
+        const uint8_t* basePtr  = static_cast<const uint8_t*>(mxGetData(V));
         const mxClassID classId = mxGetClassID(V);
-        const size_t bytesPerPixel = (classId == mxUINT16_CLASS) ? 2 : 1;
-        const size_t bytesPerSlice = dim0 * dim1 * bytesPerPixel;
+        const size_t bytesPerPx = (classId == mxUINT16_CLASS) ? 2 : 1;
+        const size_t bytesPerSl = dim0 * dim1 * bytesPerPx;
 
-        /* ---- order flag ---- */
-        bool isXYZ = false;
+        /* orderFlag: true  => already [X Y Z];  false => MATLAB [Y X Z] default */
+        bool alreadyXYZ = false;
         const mxArray* ord = prhs[2];
-        if (mxIsLogicalScalar(ord))
-            isXYZ = mxIsLogicalScalarTrue(ord);
-        else if (mxIsDouble(ord) || mxIsSingle(ord))
-            isXYZ = (mxGetScalar(ord) != 0.0);
-        else if (mxIsUint32(ord) || mxIsInt32(ord))
-            isXYZ = (*static_cast<uint32_t*>(mxGetData(ord)) != 0);
+        if (mxIsLogicalScalar(ord)) alreadyXYZ = mxIsLogicalScalarTrue(ord);
+        else if (mxIsNumeric(ord))  alreadyXYZ = (mxGetScalar(ord) != 0.0);
 
-        /* ---- compression ---- */
-        char* comp_cstr = mxArrayToUTF8String(prhs[3]);
-        if (!comp_cstr)
-            mexErrMsgIdAndTxt("save_bl_tif:Input",
-                              "Failed to parse compression");
-        std::string comp(comp_cstr);
-        mxFree(comp_cstr);
-
+        /* compression: 'none' | 'lzw' | 'deflate' */
+        std::string compStr;
+        {
+            char* cstr = mxArrayToUTF8String(prhs[3]);
+            if (!cstr) mexErrMsgIdAndTxt("save_bl_tif:Input", "Invalid compression string.");
+            compStr = cstr; mxFree(cstr);
+        }
         uint16_t compTag = COMPRESSION_NONE;
-        if (comp == "lzw")      compTag = COMPRESSION_LZW;
-        else if (comp == "deflate" || comp == "zip")
-                               compTag = COMPRESSION_DEFLATE;
-        else if (comp != "none")
+        if (compStr == "lzw")           compTag = COMPRESSION_LZW;
+        else if (compStr == "deflate" || compStr == "zip")
+                                         compTag = COMPRESSION_DEFLATE;
+        else if (compStr != "none")
             mexErrMsgIdAndTxt("save_bl_tif:Input",
-                              "Compression must be 'none', 'lzw', or 'deflate'");
+                              "Compression must be 'none', 'lzw', or 'deflate'.");
 
-        /* ---- file list ---- */
-        if (!mxIsCell(prhs[1]) ||
-            mxGetNumberOfElements(prhs[1]) != dim2)
+        /* fileList cell array (length == dim2) */
+        if (!mxIsCell(prhs[1]) || mxGetNumberOfElements(prhs[1]) != dim2)
             mexErrMsgIdAndTxt("save_bl_tif:Input",
-                              "fileList must be a cell array matching Z-size");
+                              "fileList must be a cell array matching Z dimension.");
 
-        mxArray** file_cells =
-            static_cast<mxArray**>(mxGetData(prhs[1]));
-
+        mxArray** cellPtr = static_cast<mxArray**>(mxGetData(prhs[1]));
         std::vector<std::string> paths(dim2);
-        for (size_t i = 0; i < dim2; ++i) {
-            if (!mxIsChar(file_cells[i]))
+        for (size_t z = 0; z < dim2; ++z) {
+            if (!mxIsChar(cellPtr[z]))
                 mexErrMsgIdAndTxt("save_bl_tif:Input",
-                                  "fileList element is not a string");
-            char* s = mxArrayToUTF8String(file_cells[i]);
-            paths[i] = s; mxFree(s);
+                                  "fileList element is not a string.");
+            char* s = mxArrayToUTF8String(cellPtr[z]);
+            paths[z] = s; mxFree(s);
         }
 
-        /* ---- build task list ---- */
-        auto tasks = std::make_shared<std::vector<SaveTask>>();
-        tasks->reserve(dim2);
+        if (paths.empty()) return;      // Nothing to do
+
+        /* ─── 2. BUILD TASK VECTOR ───────────────────────────────────────── */
+        auto taskVec = std::make_shared<std::vector<SaveTask>>();
+        taskVec->reserve(dim2);
         for (size_t z = 0; z < dim2; ++z)
-            tasks->push_back({ base,
-                               z * bytesPerSlice,
-                               dim0, dim1,
-                               paths[z],
-                               isXYZ, classId,
-                               compTag,
-                               bytesPerSlice,
-                               bytesPerPixel });
+            taskVec->push_back({ basePtr,
+                                 z * bytesPerSl,
+                                 dim0, dim1,
+                                 paths[z],
+                                 alreadyXYZ,
+                                 classId,
+                                 compTag,
+                                 bytesPerSl,
+                                 bytesPerPx });
 
-        if (tasks->empty()) return;
-
-        /* ---- dispatch ---- */
-        ensure_pool(tasks->size());
-
+        /* ─── 3. EAGER-BIND libtiff symbols (one quick call) ─────────────── */
         {
-            std::lock_guard<std::mutex> lk(g_mtx);
-            g_tasks     = tasks;
-            g_next      = 0;
-            g_remaining = tasks->size();
-            g_errs.clear();
-        }
-        g_cv.notify_all();
-
-        /* Wait for completion */
-        {
-            std::unique_lock<std::mutex> lk(g_mtx);
-            g_cv.wait(lk, [] { return g_tasks == nullptr; });
+            TIFF* tmp = TIFFOpen("/dev/null", "r");
+            if (tmp) TIFFClose(tmp);
         }
 
-        /* Report errors if any */
-        if (!g_errs.empty()) {
+        /* ─── 4. LAUNCH ONE-SHOT THREAD POOL ─────────────────────────────── */
+        CallContext ctx;
+        ctx.tasks          = std::move(taskVec);
+        ctx.maxSliceBytes  = bytesPerSl;
+
+        /* Thread count: do *not* artificially cap per user's request          */
+        size_t hw = std::thread::hardware_concurrency();
+        if (hw == 0) hw = ctx.tasks->size();            // fallback
+        const size_t nThreads = std::min(hw, ctx.tasks->size());
+
+        std::vector<std::thread> workers;
+        workers.reserve(nThreads);
+        for (size_t i = 0; i < nThreads; ++i)
+            workers.emplace_back(worker_entry, std::ref(ctx));
+
+        for (auto& t : workers) t.join();               // wait & release pool
+
+        /* ─── 5. PROPAGATE ERRORS (if any) ───────────────────────────────── */
+        if (!ctx.errors.empty()) {
             std::string msg("save_bl_tif errors:\n");
-            for (const auto& e : g_errs)
-                msg += "  - " + e + '\n';
+            for (const auto& e : ctx.errors) msg += "  - " + e + '\n';
             mexErrMsgIdAndTxt("save_bl_tif:Runtime", "%s", msg.c_str());
         }
 
         /* Optional pass-through return */
-        if (nlhs > 0)
-            plhs[0] = const_cast<mxArray*>(prhs[0]);
+        if (nlhs) plhs[0] = const_cast<mxArray*>(prhs[0]);
     }
     catch (const std::exception& e) {
         mexErrMsgIdAndTxt("save_bl_tif:Exception", "%s", e.what());
