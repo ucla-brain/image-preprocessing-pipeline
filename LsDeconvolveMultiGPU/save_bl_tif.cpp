@@ -290,20 +290,18 @@ inline void ensure_pool(size_t nSlices)      // nSlices == taskVec->size()
     shrink_default_stack();                  // 1 MiB stacks on glibc ≥ 2.34
 #endif
 
-    /* Hardware limit (may return 0 on exotic VMs) */
+    /* decide thread count */
     size_t hw = std::thread::hardware_concurrency();
-    if (hw == 0) hw = 8;                 // fallback if API fails
+    if (hw == 0) hw = 8;                     // fallback if API fails
 
-    size_t requested = std::min(nSlices, hw);   // never exceed cores or slices
-    if (requested < 8) requested = std::max<size_t>(1, requested); // keep ≥1; no forced 8
+    size_t requested = std::min(nSlices, hw);          // never exceed cores
 
-    /* final thread count:
-         – at least 1
-         – at least 8  (user-approved floor)
-         – no more than hardware threads
-         – no more than Z-slices in this batch                */
-    size_t requested = std::min(nSlices, std::max<size_t>(8, hw));
-    requested        = std::max<size_t>(1, requested);
+    /* if the machine has 8 + cores, enforce the “min-8” policy,
+       otherwise keep the smaller number */
+    if (hw >= 8) requested = std::min(nSlices, std::max<size_t>(8, hw));
+
+    /* always at least one thread */
+    if (requested == 0) requested = 1;
 
     g_workers.reserve(requested);
     try {
