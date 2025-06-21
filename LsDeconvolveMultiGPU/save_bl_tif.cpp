@@ -247,19 +247,21 @@ void worker_entry(CallContext& ctx)
 } // unnamed namespace
 
 /* ──────────────────────────────── MEX ENTRY ─────────────────────────────── */
+/* ... [rest of includes and code above unchanged] ... */
+
 void mexFunction(int nlhs, mxArray* plhs[],
                  int nrhs, const mxArray* prhs[])
 {
     try {
         /* ─── 1. ARGUMENT VALIDATION ─────────────────────────────────────── */
-        if (nrhs != 4)
+        if (nrhs != 4 && nrhs != 5)
             mexErrMsgIdAndTxt("save_bl_tif:Input",
-                              "Usage: save_bl_tif(volume, fileList, orderFlag, compression)");
+                "Usage: save_bl_tif(volume, fileList, orderFlag, compression [, nThreads])");
 
         const mxArray* V = prhs[0];
         if (!mxIsUint8(V) && !mxIsUint16(V))
             mexErrMsgIdAndTxt("save_bl_tif:Input",
-                              "Volume must be uint8 or uint16.");
+                "Volume must be uint8 or uint16.");
 
         const mwSize* dims   = mxGetDimensions(V);
         const size_t  dim0   = dims[0];
@@ -271,13 +273,11 @@ void mexFunction(int nlhs, mxArray* plhs[],
         const size_t bytesPerPx = (classId == mxUINT16_CLASS) ? 2 : 1;
         const size_t bytesPerSl = dim0 * dim1 * bytesPerPx;
 
-        /* orderFlag: true  => already [X Y Z];  false => MATLAB [Y X Z] default */
         bool alreadyXYZ = false;
         const mxArray* ord = prhs[2];
         if (mxIsLogicalScalar(ord)) alreadyXYZ = mxIsLogicalScalarTrue(ord);
         else if (mxIsNumeric(ord))  alreadyXYZ = (mxGetScalar(ord) != 0.0);
 
-        /* compression: 'none' | 'lzw' | 'deflate' */
         std::string compStr;
         {
             char* cstr = mxArrayToUTF8String(prhs[3]);
@@ -292,10 +292,9 @@ void mexFunction(int nlhs, mxArray* plhs[],
             mexErrMsgIdAndTxt("save_bl_tif:Input",
                               "Compression must be 'none', 'lzw', or 'deflate'.");
 
-        /* fileList cell array (length == dim2) */
         if (!mxIsCell(prhs[1]) || mxGetNumberOfElements(prhs[1]) != dim2)
             mexErrMsgIdAndTxt("save_bl_tif:Input",
-                              "fileList must be a cell array matching Z dimension.");
+                "fileList must be a cell array matching Z dimension.");
 
         // ── FILE LIST CACHE ──
         static std::unordered_map<FileListCacheKey, std::vector<std::string>> fileListCache;
@@ -314,14 +313,14 @@ void mexFunction(int nlhs, mxArray* plhs[],
             for (size_t z = 0; z < dim2; ++z) {
                 if (!mxIsChar(cellPtr[z]))
                     mexErrMsgIdAndTxt("save_bl_tif:Input",
-                                      "fileList element is not a string.");
+                        "fileList element is not a string.");
                 char* s = mxArrayToUTF8String(cellPtr[z]);
                 paths[z] = s; mxFree(s);
             }
-            fileListCache[cacheKey] = paths; // cache for future calls
+            fileListCache[cacheKey] = paths;
         }
 
-        if (paths.empty()) return;      // Nothing to do
+        if (paths.empty()) return;
 
         /* ─── 2. BUILD TASK VECTOR ───────────────────────────────────────── */
         auto taskVec = std::make_shared<std::vector<SaveTask>>();
@@ -348,15 +347,22 @@ void mexFunction(int nlhs, mxArray* plhs[],
         ctx.tasks          = std::move(taskVec);
         ctx.maxSliceBytes  = bytesPerSl;
 
+        // Optional thread count argument
         size_t hw = std::thread::hardware_concurrency();
         if (hw == 0) hw = ctx.tasks->size();
-        const size_t nThreads = std::min(hw, ctx.tasks->size());
+
+        size_t nThreads = std::min(hw, ctx.tasks->size());
+        if (nrhs == 5) {
+            double reqThreads = mxGetScalar(prhs[4]);
+            if (!(reqThreads > 0 && reqThreads <= ctx.tasks->size()))
+                mexErrMsgIdAndTxt("save_bl_tif:Input", "Invalid nThreads value.");
+            nThreads = std::min((size_t)reqThreads, ctx.tasks->size());
+        }
 
         std::vector<std::thread> workers;
         workers.reserve(nThreads);
 
 #ifdef PIN_THREADS
-        // For affinity: assign each worker to a physical core, round-robin
         std::vector<int> coreIds;
         for (int i = 0; i < int(hw); ++i) coreIds.push_back(i);
 #endif
@@ -364,7 +370,6 @@ void mexFunction(int nlhs, mxArray* plhs[],
         for (size_t i = 0; i < nThreads; ++i) {
             workers.emplace_back(worker_entry, std::ref(ctx));
 #ifdef PIN_THREADS
-            // Platform-specific affinity logic
 #if defined(__linux__)
             cpu_set_t cpuset;
             CPU_ZERO(&cpuset);
@@ -374,19 +379,17 @@ void mexFunction(int nlhs, mxArray* plhs[],
             DWORD_PTR mask = DWORD_PTR(1) << (coreIds[i % coreIds.size()]);
             SetThreadAffinityMask(workers.back().native_handle(), mask);
 #endif
-#endif // PIN_THREADS
+#endif
         }
 
         for (auto& t : workers) t.join();
 
-        /* ─── 5. PROPAGATE ERRORS (if any) ───────────────────────────────── */
         if (!ctx.errors.empty()) {
             std::string msg("save_bl_tif errors:\n");
             for (const auto& e : ctx.errors) msg += "  - " + e + '\n';
             mexErrMsgIdAndTxt("save_bl_tif:Runtime", "%s", msg.c_str());
         }
 
-        /* Optional pass-through return */
         if (nlhs) plhs[0] = const_cast<mxArray*>(prhs[0]);
     }
     catch (const std::exception& e) {
