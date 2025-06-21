@@ -62,6 +62,7 @@ Key scripts check file paths, validate image data, and provide meaningful error 
 - CUDA-compatible NVIDIA GPUs (with at least 12 GB vRAM recommended)
 - `nvidia-smi` available in system path (for Python wrapper)
 - MATLAB Parallel Computing, Image Processing, and Wavelet Toolboxe
+- 
 
 ---
 
@@ -85,7 +86,7 @@ Key scripts check file paths, validate image data, and provide meaningful error 
 
     From command line:
    ```bash
-   sudo apt install numactl
+   sudo apt install numactl libnuma-dev
    ```
 ---
 
