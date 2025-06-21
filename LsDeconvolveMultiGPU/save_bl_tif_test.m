@@ -13,12 +13,15 @@ function save_bl_tif_test()
 rng(42);                                   % reproducible random data
 fprintf("🧪 Running save_bl_tif extended tests…\n");
 
-%% 0. Quick stand-alone SIMD correctness check
-A   = randi(255, 256, 256, 'uint8');        % square, hits 16×16 kernel
-out = uint8(zeros(size(A.')));
-transpose_avx_test(A, out);                % helper MEX you mentioned
-assert(isequal(out, A.'), 'SIMD transpose failed');
-fprintf("✅ SIMD kernel sanity check passed\n");
+%% 0. Quick SIMD correctness check via the MEX itself
+simdVol = uint8(randi(255, 256, 256, 1));
+tmp     = tempname + ".tif";
+save_bl_tif(simdVol, {tmp}, false, "none");   % YXZ → MEX transposes
+simdOut = imread(tmp);
+delete(tmp);
+assert(isequal(simdOut, simdVol.'), ...
+      'SIMD transpose (256×256 uint8) failed');
+fprintf("✅ SIMD slice sanity check passed\n");
 
 %% 1. Main matrix of tests
 outdir = fullfile(tempdir, 'save_bl_tif_test');
