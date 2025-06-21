@@ -122,14 +122,13 @@ static void ensure_scratch(size_t bytes) {
 }
 
 /* ───────────────────────────── LOW-LEVEL TIFF WRITE ─────────────────────── */
-static void save_slice(const SaveTask& t, std::vector<std::future<void>>& flush_futures)
+static void save_slice(const SaveTask& t, std::vector<std::future<void>>& flush_futures, std::vector<std::thread>& flush_threads)
 {
     const mwSize srcRows = t.alreadyXYZ ? t.cols : t.rows;
     const mwSize srcCols = t.alreadyXYZ ? t.rows : t.cols;
 
     const uint8_t* src = t.basePtr + t.sliceOffset;
     const bool directWrite = (t.compressionTag == COMPRESSION_NONE && t.alreadyXYZ);
-
     const uint8_t* ioBuf = nullptr;
 
     if (directWrite) {
@@ -137,6 +136,7 @@ static void save_slice(const SaveTask& t, std::vector<std::future<void>>& flush_
     } else {
         ensure_scratch(t.bytesPerSlice);
         uint8_t* dst = scratch_aligned;
+
         if (!t.alreadyXYZ) {
             for (mwSize col = 0; col < srcCols; ++col) {
                 const uint8_t* srcColumn = src + col * t.rows * t.bytesPerPixel;
@@ -157,7 +157,6 @@ static void save_slice(const SaveTask& t, std::vector<std::future<void>>& flush_
         ioBuf = dst;
     }
 
-    // Write to .tmp file
     const std::string tmpPath = t.filePath + ".tmp";
     TIFF* tif = TIFFOpen(tmpPath.c_str(), "w");
     if (!tif) throw std::runtime_error("Cannot open temporary file " + tmpPath);
@@ -181,34 +180,26 @@ static void save_slice(const SaveTask& t, std::vector<std::future<void>>& flush_
         throw std::runtime_error("TIFF write failed on " + tmpPath);
     }
 
-    // Forward exceptions from async to main thread
-    std::promise<void> p;
-    flush_futures.emplace_back(p.get_future());
+    // Safe: use packaged_task
+    std::packaged_task<void()> task([tif, tmpPath, finalPath = t.filePath]() {
+        TIFFClose(tif);
 
-    std::thread([p = std::move(p), tif, tmpPath, finalPath = t.filePath]() mutable {
-        try {
-            TIFFClose(tif);
-
-            // Preflight check: if final file exists and isn't writable
-            FILE* testW = std::fopen(finalPath.c_str(), "wb");
-            if (!testW) {
-                std::remove(tmpPath.c_str());
-                throw std::runtime_error("Refused to overwrite read-only file: " + finalPath);
-            }
-            std::fclose(testW);
-
-            if (std::rename(tmpPath.c_str(), finalPath.c_str()) != 0) {
-                std::remove(tmpPath.c_str());
-                throw std::runtime_error("Atomic rename failed: " + tmpPath + " → " + finalPath);
-            }
-
-            p.set_value();  // success
-        } catch (...) {
-            try {
-                p.set_exception(std::current_exception());
-            } catch (...) {}
+        // Check if final file is writable
+        FILE* testW = std::fopen(finalPath.c_str(), "wb");
+        if (!testW) {
+            std::remove(tmpPath.c_str());
+            throw std::runtime_error("Refused to overwrite read-only file: " + finalPath);
         }
-    }).detach();
+        std::fclose(testW);
+
+        if (std::rename(tmpPath.c_str(), finalPath.c_str()) != 0) {
+            std::remove(tmpPath.c_str());
+            throw std::runtime_error("Atomic rename failed: " + tmpPath + " → " + finalPath);
+        }
+    });
+
+    flush_futures.emplace_back(task.get_future());
+    flush_threads.emplace_back(std::move(task));
 }
 
 /* ───────────────────────────── FILE LIST CACHE ──────────────────────────── */
