@@ -1,64 +1,38 @@
 /*==============================================================================
   save_bl_tif.cpp
-  -----------------------------------------------------------------------------
+  ------------------------------------------------------------------------------
   High-throughput Z-slice saver for 3-D MATLAB arrays (one TIFF per slice).
 
-  Author        : Keivan Moradi  (with ChatGPT-4o assistance)
-  License       : GNU GPL v3   <https://www.gnu.org/licenses/>
+  Author   : Keivan Moradi  (with ChatGPT assistance)
+  License  : GNU GPL v3 <https://www.gnu.org/licenses/>
 
   OVERVIEW
-  -------
-  • Purpose
-      Save every Z-slice of a 3-D volume to its own TIFF file, optionally
-      compressed (LZW or Deflate). Supports MATLAB’s default [Y X Z] layout
-      and the alternative [X Y Z] layout.
-
-  • Key features
-      – Accepts uint8 or uint16 input.
-      – Cross-platform: Windows, Linux, macOS (libtiff backend).
-      – Reusable std::thread pool (one thread per HW core, min 8).
-      – 1 MiB thread stacks on glibc ≥ 2.34 to minimise VM usage.
-      – Thread-local scratch buffer allocated **once** per worker.
-      – Uses TIFFWriteRawStrip when compression="none" (no extra memcpy/CRC)
-      – Fast path for [Y X Z] avoids per-pixel multiplications.
-      – Matches `load_bl_tif.cpp` for slice order and dimensions.
-      – Pool size clamped to min(Z-slices, HW threads); excess threads stay idle.
-      - Accepts 2-D (promoted to 3-D [Y X 1]), or true 3-D, uint8 | uint16 data.
-      - Thread pool:
-            – N compute workers   (transpose / copy)
-            – 1 I/O writer thread (TIFF output)
-        Queue depth 16  ⇒  compute + I/O overlap without unbounded RAM growth.
-      - Uses TIFFWriteRawStrip for "none" compression; TIFFWriteEncodedStrip
-        otherwise.
-      - Linux:  posix_fadvise DONTNEED after every write; 1 MiB pthread stacks.
-
-  PARALLELISM
-  -----------
-  • Atomic index dispatch:
-        next = g_next.fetch_add(1);          // lock-free task claim
-    Workers loop until all slices are processed.
-  • Task vector is held in a `shared_ptr`, eliminating race conditions at
-    batch teardown.
-  • Pool is created once per MATLAB session and destroyed via `mexAtExit`.
+  --------
+  • Accepts uint8 / uint16, 2-D (promoted to [Y X 1]) or true 3-D input.
+  • Reusable thread pool
+        – N compute workers   (transpose / copy)
+        – 1 I/O writer thread (TIFF output)
+    Bounded queue (16 jobs) → compute + I/O overlap without unbounded RAM.
+  • 1 MiB pthread stacks (glibc ≥ 2.34); posix_fadvise(DONTNEED) per slice.
+  • Uses TIFFWriteRawStrip for "none" compression, TIFFWriteEncodedStrip
+    otherwise.
+  • Pool size ≤ min(Z-slices, hardware threads) and ≥ 8 when possible.
+  • Matches load_bl_tif.cpp for slice order and dimensions.
 
   MEMORY
   ------
-  • Each worker owns a thread-local `std::vector<uint8_t>` large enough for the
-    biggest slice seen so far; no further reallocations on later calls.
-  • Total additional RAM ≈ (#threads × slice_bytes) + O(Z).
+  Each worker owns a grow-only scratch buffer; additional RAM is roughly
+  (#threads × largestSlice) + queueDepth × largestSlice.
 
   USAGE
   -----
       save_bl_tif(volume3d, fileList, orderFlag, compression)
 
-      volume3d    : 3-D uint8 | uint16 array
-      fileList    : 1×Z cell array of output paths (char or string)
-      orderFlag   : logical or uint32
-                      true  → input is [X Y Z]
-                      false → input is [Y X Z]  (MATLAB default)
+      volume3d    : 2-D or 3-D uint8 | uint16 array
+      fileList    : 1×Z cell array of output paths
+      orderFlag   : logical | uint32   (true → [X Y Z], false → [Y X Z])
       compression : "none" | "lzw" | "deflate"
-
-  ==============================================================================*/
+==============================================================================*/
 
 #include "mex.h"
 #include "matrix.h"
