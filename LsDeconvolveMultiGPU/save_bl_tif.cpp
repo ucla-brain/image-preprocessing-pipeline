@@ -100,8 +100,17 @@ static void save_slice(const SaveTask& t)
     const size_t sliceOff = static_cast<size_t>(t.z) * t.dim0 * t.dim1;
     const size_t bytes = static_cast<size_t>(width) * height * es;
 
-    /* ensure thread-local buffer large enough */
-    scratch.resize(bytes);
+    /* ---------- ensure thread-local buffer exists exactly once ---------- */
+    if (scratch.capacity() < bytes)           // allocate only when a larger slice
+    {
+        scratch.reserve(bytes);               // single mmap/zero-fill per worker
+        scratch.resize(bytes);                // establish legal size once
+    }
+    else if (scratch.size() < bytes)          // capacity ok but size smaller
+    {
+        scratch.resize(bytes);                // happens only if dataset size grew
+    }
+    /* no resize on identical-size slices, so no extra allocator traffic */
     uint8_t* buf = scratch.data();
 
     /* ---------------- transpose into buf ---------------- */
