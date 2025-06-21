@@ -72,7 +72,7 @@ function save_bl_tif_test()
                         end
                     end
 
-                    fprintf("✅ Passed in %.2fs\n", dur);
+                    fprintf("✅ Passed in %.4fs\n", dur);
                 catch ME
                     fprintf("❌ Failed: %s\n", ME.message);
                     all_passed = false;
