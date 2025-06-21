@@ -4,7 +4,7 @@
   High-throughput Z-slice saver for 3-D MATLAB arrays (one TIFF per slice).
 
   VERSION  : 2025-06-21 (alignment, file list cache, Windows FlushFileBuffers,
-                         thread native_handle stub, hugepages, comments updated)
+                         thread native_handle affinity, hugepages)
   AUTHOR   : Keivan Moradi  (with ChatGPT-4o assistance)
   LICENSE  : GNU GPL v3   <https://www.gnu.org/licenses/>
 ==============================================================================*/
@@ -30,11 +30,16 @@
 #  include <fcntl.h>
 #  include <unistd.h>
 #  include <sys/mman.h>
+#  include <pthread.h>
+#  include <sched.h>
 #endif
 
 #if defined(_WIN32)
 #  include <windows.h>
 #endif
+
+// Uncomment to enable thread pinning for benchmarking
+//#define PIN_THREADS
 
 /* ───────────────────────────── TASK DESCRIPTION ─────────────────────────── */
 struct SaveTask {
@@ -57,7 +62,6 @@ static thread_local uint8_t* scratch_aligned = nullptr;
 static thread_local size_t   scratch_capacity = 0;
 static thread_local bool     scratch_hugepage = false;
 
-/* Allocate aligned buffer (with optional hugepage support for large sizes) */
 static void ensure_scratch(size_t bytes) {
     if (scratch_capacity >= bytes) return;
     // Free any existing buffer first
@@ -97,7 +101,6 @@ static void ensure_scratch(size_t bytes) {
 #if defined(__cpp_aligned_new) && __cpp_aligned_new >= 201606
     scratch_aligned = static_cast<uint8_t*>(std::aligned_alloc(ALIGN, ((bytes + ALIGN - 1) / ALIGN) * ALIGN));
 #else
-    // C11 aligned_alloc or posix_memalign
     void* ptr = nullptr;
     if (posix_memalign(&ptr, ALIGN, ((bytes + ALIGN - 1) / ALIGN) * ALIGN) == 0)
         scratch_aligned = static_cast<uint8_t*>(ptr);
@@ -211,22 +214,17 @@ struct hash<FileListCacheKey> {
 /* ───────────────────────────── ONE-SHOT POOL (PER CALL) ─────────────────── */
 namespace {
 
-/* Context shared by all threads of *this* mexFunction call */
 struct CallContext {
     std::shared_ptr<const std::vector<SaveTask>> tasks;
     std::atomic_size_t nextIndex{0};
     std::mutex errMutex;
     std::vector<std::string> errors;
-    size_t maxSliceBytes{0};                 // for scratch pre-allocation
+    size_t maxSliceBytes{0};
 };
 
-/* Worker entry ------------------------------------------------------------ */
 void worker_entry(CallContext& ctx)
 {
-    /* Native handle available for future affinity/pinning; not used here yet. */
-    std::thread::native_handle_type this_handle = std::this_thread::get_id(); // stub
-    (void)this_handle; // suppress unused warning
-
+    // Thread affinity is handled at thread creation (not here)
     const auto& jobList = *ctx.tasks;
     size_t idx = ctx.nextIndex.fetch_add(1, std::memory_order_relaxed);
 
@@ -345,21 +343,36 @@ void mexFunction(int nlhs, mxArray* plhs[],
         ctx.tasks          = std::move(taskVec);
         ctx.maxSliceBytes  = bytesPerSl;
 
-        /* Thread count: use hardware_concurrency().
-           Note: No robust way (cross-platform) to get only physical cores on hybrid CPUs.
-           You may implement future pinning/affinity here using native_handle.
-           For now, leave at std::thread::hardware_concurrency() and warn user. */
         size_t hw = std::thread::hardware_concurrency();
-        if (hw == 0) hw = ctx.tasks->size();            // fallback
+        if (hw == 0) hw = ctx.tasks->size();
         const size_t nThreads = std::min(hw, ctx.tasks->size());
-        // NOTE: See README for physical-core-only future extension (hybrid Intel CPUs).
 
         std::vector<std::thread> workers;
         workers.reserve(nThreads);
-        for (size_t i = 0; i < nThreads; ++i)
-            workers.emplace_back(worker_entry, std::ref(ctx));
 
-        for (auto& t : workers) t.join();               // wait & release pool
+#ifdef PIN_THREADS
+        // For affinity: assign each worker to a physical core, round-robin
+        std::vector<int> coreIds;
+        for (int i = 0; i < int(hw); ++i) coreIds.push_back(i);
+#endif
+
+        for (size_t i = 0; i < nThreads; ++i) {
+            workers.emplace_back(worker_entry, std::ref(ctx));
+#ifdef PIN_THREADS
+            // Platform-specific affinity logic
+#if defined(__linux__)
+            cpu_set_t cpuset;
+            CPU_ZERO(&cpuset);
+            CPU_SET(coreIds[i % coreIds.size()], &cpuset);
+            pthread_setaffinity_np(workers.back().native_handle(), sizeof(cpu_set_t), &cpuset);
+#elif defined(_WIN32)
+            DWORD_PTR mask = DWORD_PTR(1) << (coreIds[i % coreIds.size()]);
+            SetThreadAffinityMask(workers.back().native_handle(), mask);
+#endif
+#endif // PIN_THREADS
+        }
+
+        for (auto& t : workers) t.join();
 
         /* ─── 5. PROPAGATE ERRORS (if any) ───────────────────────────────── */
         if (!ctx.errors.empty()) {
