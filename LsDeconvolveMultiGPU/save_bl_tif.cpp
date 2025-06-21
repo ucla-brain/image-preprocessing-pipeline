@@ -75,7 +75,7 @@
 #endif
 
 /* --- runtime AVX-2 check (GCC/Clang) ----------------------------------- */
-static inline bool cpuHasAVX2 =
+const inline bool cpuHasAVX2 =
 #if defined(__x86_64__) && defined(__AVX2__) && (defined(__GNUC__) || defined(__clang__))
     __builtin_cpu_supports("avx2");
 #elif defined(_MSC_VER) && defined(__AVX2__)
@@ -159,30 +159,34 @@ static void save_slice(const SaveTask& t)
             }
         }
     }
-    else            /* [X Y Z] rows already contiguous */
+    else  /* [X Y Z] rows contiguous ---------------------------------------- */
     {
-        const size_t srcRowBytes = t.dim0 * bytesPerPixel;   // bytes between rows in MATLAB
-        const size_t dstRowBytes = width   * bytesPerPixel;
+        const size_t srcRowBytes = t.dim0 * bytesPerPixel;
+        const size_t dstRowBytes = srcCols * bytesPerPixel;
 
-        if (have_avx2 && bytesPerPixel == 1 &&
-            (width & 15) == 0 && (height & 15) == 0)
+        if (cpuHasAVX2 && bytesPerPixel == 1 &&
+            (srcCols & 15) == 0 && (srcRows & 15) == 0)
         {
-            for (mwSize y0 = 0; y0 < height; y0 += 16)
-                for (mwSize x0 = 0; x0 < width; x0 += 16)
+            const size_t baseOff = sliceIndex * pixelsPerSlice * bytesPerPixel;
+
+            for (mwSize y0 = 0; y0 < srcRows; y0 += 16) {
+                for (mwSize x0 = 0; x0 < srcCols; x0 += 16) {
                     simd::transpose16x16_u8_stride(
                         /* src ptr */
-                        t.base + (sliceOff +
-                                  static_cast<size_t>(y0) * t.dim0 + x0) * bytesPerPixel,
+                        t.base + baseOff +
+                                 (static_cast<size_t>(y0) * t.dim0 + x0) * bytesPerPixel,
                         srcRowBytes,
                         /* dst ptr */
-                        dstBuffer + (static_cast<size_t>(y0) * width + x0) * bytesPerPixel,
+                        dstBuffer + (static_cast<size_t>(y0) * srcCols + x0) * bytesPerPixel,
                         dstRowBytes);
+                }
+            }
         }
-        else
-        {   /* fallback: row-wise memcpy */
-            for (mwSize y = 0; y < height; ++y) {
+        else   /* fallback: row-wise memcpy */
+        {
+            for (mwSize y = 0; y < srcRows; ++y) {
                 const uint8_t* srcRow =
-                    t.base + (sliceOff +
+                    t.base + (sliceIndex * pixelsPerSlice +
                               static_cast<size_t>(y) * t.dim0) * bytesPerPixel;
 
                 std::memcpy(dstBuffer + static_cast<size_t>(y) * dstRowBytes,
