@@ -283,7 +283,7 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(...
 
     % Parameters for RAM and block sizing
     physCores   = feature('numCores');
-    ram_usage_portion = 0.5;               % Use at most 50% of available RAM
+    ram_usage_portion = 0.9;               % Use at most 50% of available RAM
     R_bytes_per_voxel = 4;
     max_elements_per_dim = min(1290, floor(block_size_max^(1/3)));  % 3D cube limit from (2^31-1)^(1/3) = 1290 elements
     if filter.use_fft, max_elements_per_dim = min(1281, max_elements_per_dim); end
