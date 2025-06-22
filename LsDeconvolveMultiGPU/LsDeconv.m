@@ -78,13 +78,13 @@ function [] = LsDeconv(varargin)
             disp('Cache drive dir exists: ' + cache_drive)
         end
         
-        assert(isa(inpath, 'string'), 'wrong type ' + class(inpath));
-        assert(isa(dxy, 'double'), 'wrong type ' + class(dxy));
-        assert(isa(dz, 'double'), 'wrong type ' + class(dz));
-        assert(isa(numit, 'double'), 'wrong type ' + class(numit));
-        assert(isa(lambda_ex, 'double'), 'wrong type ' + class(lambda_ex));
-        assert(isa(lambda_em, 'double'), 'wrong type ' + class(lambda_em));
-        assert(isa(cache_drive, 'string'), 'wrong type ' + class(cache_drive));
+        assert(isa(inpath, 'string'     ), "wrong type " + class(inpath));
+        assert(isa(dxy, 'double'        ), "wrong type " + class(dxy));
+        assert(isa(dz, 'double'         ), "wrong type " + class(dz));
+        assert(isa(numit, 'double'      ), "wrong type " + class(numit));
+        assert(isa(lambda_ex, 'double'  ), "wrong type " + class(lambda_ex));
+        assert(isa(lambda_em, 'double'  ), "wrong type " + class(lambda_em));
+        assert(isa(cache_drive, 'string'), "wrong type " + class(cache_drive));
 
         if isfolder(inpath)
             % make folder for results and make sure the outpath is writable
