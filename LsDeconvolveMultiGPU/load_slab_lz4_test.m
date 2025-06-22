@@ -12,13 +12,13 @@ brick.ny = ceil(stack.y/brick.y);
 brick.nz = ceil(stack.z/brick.z);
 
 % --- Parameters to sweep ---
-scal_options      = [255, 65535];
-clipval_options   = [0, 1];           % 0 = no clip, 1 = with clip
-deconvmin_options = [0, 0.1];         % test with and without deconvmin > 0
-low_clip          = 0.1;
-high_clip         = 0.9;
-amplification     = 1;
-deconvmax         = 1;
+scal_options      = single([255, 65535]);
+clipval_options   = single([0, 1]);           % 0 = no clip, 1 = with clip
+deconvmin_options = single([0, 0.1]);         % test with and without deconvmin > 0
+low_clip          = single(0.1);
+high_clip         = single(0.9);
+amplification     = single(1);
+deconvmax         = single(1);
 
 % ─── TEMP DIR ───────────────────────────────────────────────────────────
 tmpDir  = tempname;  mkdir(tmpDir);
@@ -70,7 +70,6 @@ for scal = scal_options
                     V_ref = V_ref .* (scal .* amplification ./ deconvmax);
                 end
             end
-            V_ref = single(V_ref);    % <-- Add this line
             V_ref = round(V_ref - amplification);
             V_ref = min(max(V_ref, 0), scal); % clamp
 
