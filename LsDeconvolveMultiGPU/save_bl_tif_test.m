@@ -102,23 +102,23 @@ T = cell2table(rows, 'VariableNames', ...
     {'DataType','Compression','Time_YXZ_s','Time_XYZ_s','Speedup'});
 disp(T);
 
-%% ---------- E. extra benchmark: XYZ deflate uint16 (MEX vs MATLAB async) ----------
-fprintf("\n   🏁 Extra benchmark: XYZ deflate uint16 — MEX vs native MATLAB async\n");
+%% ---------- E. extra benchmark: XYZ deflate uint16 (MEX vs native MATLAB spmd) ----------
+fprintf("\n   🏁 Extra benchmark: XYZ deflate uint16 — MEX vs native MATLAB spmd+imwrite\n");
 benchSize = [512 512 64];
 benchVol  = uint16(randi(65535, benchSize));
 
 % — MEX path (XYZ + deflate) —
-V_mex   = permute(benchVol, [2 1 3]);
+V_mex    = permute(benchVol, [2 1 3]);
 mexFiles = arrayfun(@(k) fullfile(tmpRoot,sprintf('mex_deflate_%03d.tif',k)), ...
                     1:benchSize(3),'Uni',false);
 t0 = tic;
 save_bl_tif(V_mex, mexFiles, true, 'deflate');
 tMex  = toc(t0);
-MiB   = prod(benchSize(1:2)) * 2 * benchSize(3) / 2^20;
+MiB    = prod(benchSize(1:2)) * 2 * benchSize(3) / 2^20;
 spdMex = MiB / tMex;
 fprintf("      MEX save_bl_tif: %.2f s  (%.1f MiB/s)\n", tMex, spdMex);
 
-% — MATLAB parfor+imwrite path (YXZ layout so no transpose) —
+% — MATLAB spmd+imwrite path (YXZ layout) —
 matFiles = arrayfun(@(k) fullfile(tmpRoot,sprintf('mat_deflate_%03d.tif',k)), ...
                     1:benchSize(3),'Uni',false);
 
@@ -126,26 +126,29 @@ matFiles = arrayfun(@(k) fullfile(tmpRoot,sprintf('mat_deflate_%03d.tif',k)), ..
 p = gcp('nocreate');
 if isempty(p) || strcmp(p.Profile,'threads')
     delete(gcp('nocreate'));
-    parpool('Processes');
+    p = parpool('Processes');
 end
 
 t1 = tic;
-parfor k = 1:benchSize(3)
-    sliceYXZ = benchVol(:,:,k);  % imwrite expects YXZ
-    imwrite(sliceYXZ, matFiles{k}, 'Compression','deflate');
+spmd
+    % Each worker writes every Nth slice
+    N = numlabs;
+    for k = labindex:N:benchSize(3)
+        sliceYXZ = benchVol(:,:,k);  % in YXZ order
+        imwrite(sliceYXZ, matFiles{k}, 'Compression','deflate');
+    end
 end
 tMat = toc(t1);
 spdMat = MiB / tMat;
-fprintf("      MATLAB parfor+imwrite: %.2f s  (%.1f MiB/s)\n", tMat, spdMat);
+fprintf("      MATLAB spmd+imwrite: %.2f s  (%.1f MiB/s)\n", tMat, spdMat);
 
 fprintf("\n   📊 MEX vs MATLAB native performance:\n");
 T_extra = table( ...
-    {'MEX save_bl_tif'; 'MATLAB parfor+imwrite'}, ...
+    {'MEX save_bl_tif'; 'MATLAB spmd+imwrite'}, ...
     [tMex; tMat], ...
     [spdMex; spdMat], ...
     'VariableNames', {'Method','Time_s','MiB_s'});
 disp(T_extra);
-
 
 fprintf("\n🎉  all save_bl_tif tests passed\n");
 end
