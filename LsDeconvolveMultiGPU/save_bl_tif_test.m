@@ -81,7 +81,6 @@ parFiles  = strrep(mexFiles,'mex_','par_');
 p = gcp('nocreate');
 if isempty(p)
     cluster = parcluster('local');
-    cluster.IdleTimeout = Inf;
     cluster.NumWorkers = min(8, feature('numCores'));
     p = parpool(cluster, cluster.NumWorkers);
 end
