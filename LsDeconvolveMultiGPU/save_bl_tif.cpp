@@ -75,62 +75,65 @@ static void writeSlice(
     size_t                bytesPerSample,
     bool                  isXYZ,
     uint16_t              compression,
-    const std::string&    outPath,
-    std::vector<uint8_t>& scratch
+    const std::string&    outPath
 ) {
-    size_t width      = isXYZ ? dimX : dimY;
-    size_t height     = isXYZ ? dimY : dimX;
-    size_t sliceBytes = dimX * dimY * bytesPerSample;
+    const size_t width  = isXYZ ? dimX : dimY;
+    const size_t height = isXYZ ? dimY : dimX;
+    const size_t sliceBytes = dimX * dimY * bytesPerSample;
     const uint8_t* srcBase = volumeData + sliceIdx * sliceBytes;
 
-    fs::path tmpPath = fs::path(outPath).concat(".tmp");
+    // tmp filename
+    fs::path tmp = fs::path(outPath).concat(".tmp");
 
     {
-        TiffHandle tf(tmpPath.string(), "w");
+        TiffHandle tf(tmp.string(), "w");
         TIFF* tif = tf.tif;
 
-        TIFFSetField(tif, TIFFTAG_IMAGEWIDTH,       (uint32_t)width);
-        TIFFSetField(tif, TIFFTAG_IMAGELENGTH,      (uint32_t)height);
-        TIFFSetField(tif, TIFFTAG_BITSPERSAMPLE,    (uint16_t)(bytesPerSample*8));
-        TIFFSetField(tif, TIFFTAG_SAMPLESPERPIXEL,  (uint16_t)1);
-        TIFFSetField(tif, TIFFTAG_COMPRESSION,      compression);
-        TIFFSetField(tif, TIFFTAG_PHOTOMETRIC,      PHOTOMETRIC_MINISBLACK);
-        TIFFSetField(tif, TIFFTAG_PLANARCONFIG,     PLANARCONFIG_CONTIG);
+        // set tags
+        TIFFSetField(tif, TIFFTAG_IMAGEWIDTH,   (uint32_t)width);
+        TIFFSetField(tif, TIFFTAG_IMAGELENGTH,  (uint32_t)height);
+        TIFFSetField(tif, TIFFTAG_BITSPERSAMPLE,(uint16_t)(bytesPerSample*8));
+        TIFFSetField(tif, TIFFTAG_SAMPLESPERPIXEL,(uint16_t)1);
+        TIFFSetField(tif, TIFFTAG_COMPRESSION, compression);
+        TIFFSetField(tif, TIFFTAG_PHOTOMETRIC,  PHOTOMETRIC_MINISBLACK);
+        TIFFSetField(tif, TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG);
 
-        uint32_t rowsPerStrip = std::min<uint32_t>(height, 64);
+        // choose your strip height
+        uint32_t rowsPerStrip = std::min<uint32_t>(height, 64u);
         TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP, rowsPerStrip);
 
-        // reorder entire slice into row-major once
-        for (size_t r = 0; r < height; ++r) {
-            for (size_t c = 0; c < width; ++c) {
-                size_t orow   = isXYZ ? c : r;
-                size_t ocol   = isXYZ ? r : c;
-                size_t srcOff = (orow + ocol * dimX) * bytesPerSample;
-                size_t dstOff = (r * width + c) * bytesPerSample;
-                memcpy(scratch.data() + dstOff,
-                       srcBase + srcOff,
-                       bytesPerSample);
-            }
-        }
-
         uint32_t nStrips = (height + rowsPerStrip - 1) / rowsPerStrip;
+
+        // buffer just ONE strip at a time
+        std::vector<uint8_t> stripBuf(width * rowsPerStrip * bytesPerSample);
+
         for (uint32_t s = 0; s < nStrips; ++s) {
             uint32_t row0       = s * rowsPerStrip;
             uint32_t actualRows = std::min<uint32_t>(rowsPerStrip, height - row0);
             size_t   byteCount  = width * actualRows * bytesPerSample;
-            uint8_t* stripData  = scratch.data() + row0 * width * bytesPerSample;
+
+            // scatter/gather only these actualRows
+            for (uint32_t r = 0; r < actualRows; ++r) {
+                for (size_t c = 0; c < width; ++c) {
+                    size_t orow   = isXYZ ? c : (row0 + r);
+                    size_t ocol   = isXYZ ? (row0 + r) : c;
+                    size_t srcOff = (orow + ocol * dimX) * bytesPerSample;
+                    size_t dstOff = (r * width + c) * bytesPerSample;
+                    memcpy(&stripBuf[dstOff], srcBase + srcOff, bytesPerSample);
+                }
+            }
 
             tsize_t written = (compression == COMPRESSION_NONE)
-                ? TIFFWriteRawStrip(tif, s, stripData, byteCount)
-                : TIFFWriteEncodedStrip(tif, s, stripData, byteCount);
-            if (written < 0)
-                throw std::runtime_error(
-                    "TIFF write failed for strip " + std::to_string(s));
-        }
-    }  // TIFFClose here
+              ? TIFFWriteRawStrip   (tif, s, stripBuf.data(), byteCount)
+              : TIFFWriteEncodedStrip(tif, s, stripBuf.data(), byteCount);
 
+            if (written < 0)
+                throw std::runtime_error("TIFF write failed on strip " + std::to_string(s));
+        }
+    }
+    // swap in atomically
     if (fs::exists(outPath)) fs::remove(outPath);
-    fs::rename(tmpPath, outPath);
+    fs::rename(tmp, outPath);
 }
 
 // MEX entry point
@@ -215,25 +218,20 @@ void mexFunction(int nlhs, mxArray* plhs[],
     workers.reserve(numThreads);
     for (size_t t = 0; t < numThreads; ++t) {
         workers.emplace_back([&, t]() {
-            // one scratch buffer per thread
-            std::vector<uint8_t> scratch(dimX * dimY * bytesPerSample);
+            // each thread just loops over slices:
             while (true) {
-                size_t idx = nextSlice.fetch_add(1, std::memory_order_relaxed);
-                if (idx >= numSlices) break;
-                try {
-                    writeSlice(volumeData, idx,
-                               dimX, dimY,
-                               bytesPerSample,
-                               isXYZ,
-                               compression,
-                               outputFiles[idx],
-                               scratch);
-                }
-                catch (const std::exception& ex) {
-                    std::lock_guard<std::mutex> lk(errorLock);
-                    threadErrors.push_back(ex.what());
-                    break;
-                }
+              size_t idx = nextSlice.fetch_add(1, std::memory_order_relaxed);
+              if (idx >= numSlices) break;
+              try {
+                writeSlice(volumeData, idx,
+                           dimX, dimY, bytesPerSample,
+                           isXYZ, compression,
+                           outputFiles[idx]);
+              } catch (const std::exception &ex) {
+                std::lock_guard<std::mutex> lk(errorLock);
+                threadErrors.push_back(ex.what());
+                break;  // stop this thread
+              }
             }
         });
     }
