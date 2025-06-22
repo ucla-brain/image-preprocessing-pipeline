@@ -13,6 +13,7 @@
 #include "tiffio.h"
 
 #include <atomic>
+#include <cerrno>     // errno
 #include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
@@ -30,9 +31,6 @@
 
 #if defined(__linux__)
 #  include <fcntl.h>
-#if !defined(O_BINARY)          // POSIX: harmless no-op
-#   define O_BINARY 0
-#endif
 #  include <unistd.h>
 #  include <sys/mman.h>
 #  include <sched.h>
@@ -46,15 +44,41 @@
 #  if !defined(O_BINARY)
 #    define O_BINARY 0        // ← add these three lines
 #  endif
+#  include <unistd.h> // access
+#  define ACCESS access
 #endif
 
 #if defined(_WIN32)
 #  include <windows.h>
 #  include <io.h>
+#  include <io.h>     // _access
+#  define ACCESS _access
 #endif
 
 // Uncomment to enable thread pinning for benchmarking
 //#define PIN_THREADS
+
+inline void guard_overwrite_writable(const std::string& path)
+{
+    /* Does the path exist?  (If it does not, we’re fine.) */
+    if (ACCESS(path.c_str(), F_OK) == 0)           // file is present
+    {
+        /* Is it writable?  (W_OK asks the kernel, not ACLs on Windows.) */
+        if (ACCESS(path.c_str(), W_OK) == -1)      // ❌ not writable
+        {
+#if defined(_WIN32)
+            if (errno == EACCES || errno == EPERM)
+#else
+            if (errno == EACCES)
+#endif
+                throw std::runtime_error("Refused to overwrite read-only file: "
+                                         + path);
+            /* For other errno values (e.g. ETXTBSY, EPERM) you can decide
+               whether to throw or fall through; EACCES is the canonical
+               “read-only” case. */
+        }
+    }
+}
 
 /* ───────────────────────── Utility: NUMA-aware / hugepage alloc ─────────── */
 namespace {
@@ -138,7 +162,10 @@ static void ensure_scratch(size_t want, int node) {
     if (scratch_buf) free_on_node(scratch_buf, scratch_bytes, scratch_huge);
     bool hugeReq = true;
     scratch_buf = static_cast<uint8_t*>(alloc_on_node(want, node, hugeReq));
-    scratch_huge = hugeReq && scratch_buf;
+    auto* newBuf = alloc_on_node(want, node, /*wantHuge=*/true);
+    scratch_huge  = (newBuf && want >= (2UL<<20) &&
+                     ((uintptr_t)newBuf & ((2UL<<20)-1)) == 0);   // mmap+hugetlb path
+    scratch_buf   = static_cast<uint8_t*>(newBuf);
     scratch_bytes = want;
     if (!scratch_buf) throw std::bad_alloc();
 }
@@ -170,69 +197,91 @@ static constexpr uint8_t ifdBlob[] = {
 /* ───────────────────────────── LOW-LEVEL TIFF WRITE ─────────────────────── */
 static void save_slice(const SaveTask& t, int node)
 {
-    /* -------- 1. Overwrite-safety pre-flight ------------------------------ */
-    {
-        FILE* stub = std::fopen(t.filePath.c_str(), "wb");
-        if (!stub)
-            throw std::runtime_error("Refused to overwrite read-only file: "
-                                     + t.filePath);
-        std::fclose(stub);                 // leave zero-byte stub for atomicity
-    }
+    /* ---- 1.  Refuse to clobber read-only files -------------------------- */
+    guard_overwrite_writable(t.filePath);
 
     const mwSize srcRows = t.alreadyXYZ ? t.cols : t.rows;
     const mwSize srcCols = t.alreadyXYZ ? t.rows : t.cols;
     const uint8_t* src   = t.basePtr + t.sliceOffset;
 
-    const bool direct    = (t.compressionTag == COMPRESSION_NONE && t.alreadyXYZ);
+    const bool direct = (t.compressionTag == COMPRESSION_NONE && t.alreadyXYZ);
     const std::string tmpPath = t.filePath + ".tmp";
 
-/* ───────────── 2. Raw gather-write path (uncompressed, XYZ already) ─────── */
+/* ───────────── 2.  RAW gather-write path (uncompressed & already-XYZ) ─── */
     if (direct)
     {
-        // -------- build minimal little-endian TIFF header + IFD -------------
-        rawtiff::Header hdr{0x4949, 42, sizeof(rawtiff::Header)};
-        uint8_t ifd[sizeof(rawtiff::ifdBlob)];
-        std::memcpy(ifd, rawtiff::ifdBlob, sizeof(ifd));
-        auto s32=[&](size_t off,uint32_t v){ std::memcpy(ifd+off,&v,4);} ;
-        auto s16=[&](size_t off,uint16_t v){ std::memcpy(ifd+off,&v,2);} ;
-        s32( 8+8, static_cast<uint32_t>(srcCols));           // ImageWidth
-        s32(20+8, static_cast<uint32_t>(srcRows));           // ImageLength
-        s16(32+8, t.bytesPerPixel==2?16:8);                  // BitsPerSample
-        uint32_t stripOff = sizeof(rawtiff::Header)+sizeof(ifd);
-        s32(56+8, stripOff);                                 // StripOffsets
-        s32(76+8, static_cast<uint32_t>(srcRows));           // RowsPerStrip
-        s32(88+8, static_cast<uint32_t>(t.bytesPerSlice));   // StripByteCounts
+        /* -------- build header + IFD in little-endian --------------------- */
+        struct Entry { uint16_t tag,type; uint32_t count,val; };
 
-        /* -------- write header + IFD + pixels in one go ------------------- */
-        int fd = ::open(tmpPath.c_str(), O_CREAT|O_TRUNC|O_WRONLY|O_BINARY, 0644);
-        if (fd == -1) throw std::runtime_error("open " + tmpPath);
+        constexpr uint16_t TIFF_LONG = 4;
+        constexpr uint16_t TIFF_SHORT= 3;
+
+        Entry e[9] = {
+            {256, TIFF_LONG , 1, uint32_t(srcCols)},          // ImageWidth
+            {257, TIFF_LONG , 1, uint32_t(srcRows)},          // ImageLength
+            {258, TIFF_SHORT, 1, uint32_t(t.bytesPerPixel==2?16:8)}, // BitsPerSample
+            {259, TIFF_SHORT, 1, 1},                          // Compression=1 (none)
+            {262, TIFF_SHORT, 1, 1},                          // Photometric=min-is-black
+            {273, TIFF_LONG , 1, 0},                          // StripOffsets (fix later)
+            {277, TIFF_SHORT, 1, 1},                          // SamplesPerPixel
+            {278, TIFF_LONG , 1, uint32_t(srcRows)},          // RowsPerStrip
+            {279, TIFF_LONG , 1, uint32_t(t.bytesPerSlice)}   // StripByteCounts
+        };
+
+        const uint16_t nEntries = sizeof(e)/sizeof(e[0]);
+        const uint32_t ifdOffset = 8;                         // right after header
+        const uint32_t ifdSize   = 2 + nEntries*12 + 4;       // count + entries + next=0
+        const uint32_t pixelOffset = ifdOffset + ifdSize;     // data starts here
+        e[5].val = pixelOffset;                               // patch StripOffsets
+
+        /* ---- marshal little-endian header & IFD into stack buffers ------- */
+        uint8_t hdr[8] = { 'I','I', 42,0, 8,0,0,0 };          // LE, magic 42, IFD @8
+        uint8_t ifd[ifdSize];
+        auto wr16=[&](uint8_t* p,uint16_t v){ p[0]=v&0xFF; p[1]=v>>8; };
+        auto wr32=[&](uint8_t* p,uint32_t v){
+            p[0]=v&0xFF; p[1]=v>>8; p[2]=v>>16; p[3]=v>>24; };
+        wr16(ifd, nEntries);
+        uint8_t* cur = ifd+2;
+        for (uint16_t i=0;i<nEntries;++i){
+            wr16(cur+0, e[i].tag);
+            wr16(cur+2, e[i].type);
+            wr32(cur+4, e[i].count);
+            wr32(cur+8,  e[i].val);
+            cur += 12;
+        }
+        std::memset(cur, 0, 4);     // next IFD offset = 0
+
+        /* ---- write header + IFD + pixel data in a single system call ----- */
+        int fd = ::open(tmpPath.c_str(),
+                        O_CREAT|O_TRUNC|O_WRONLY|O_BINARY, 0644);
+        if (fd == -1) throw std::runtime_error("open "+tmpPath);
 
 #if defined(__linux__)
         struct iovec iov[3] = {
-            {&hdr, sizeof(hdr)},
+            {hdr, sizeof(hdr)},
             {ifd, sizeof(ifd)},
             {const_cast<uint8_t*>(src), t.bytesPerSlice}
         };
-        ssize_t n = ::writev(fd, iov, 3);
-        if (n != ssize_t(sizeof(hdr)+sizeof(ifd)+t.bytesPerSlice))
-            throw std::runtime_error("writev failed on " + tmpPath);
+        if (::writev(fd, iov, 3) !=
+            ssize_t(sizeof(hdr)+sizeof(ifd)+t.bytesPerSlice))
+            throw std::runtime_error("writev failed on "+tmpPath);
 #else
-        if (::write(fd, &hdr, sizeof(hdr)) != ssize_t(sizeof(hdr)) ||
+        if (::write(fd, hdr, sizeof(hdr)) != ssize_t(sizeof(hdr)) ||
             ::write(fd, ifd, sizeof(ifd)) != ssize_t(sizeof(ifd)) ||
-            ::write(fd, src, t.bytesPerSlice) != ssize_t(t.bytesPerSlice))
-            throw std::runtime_error("write failed on " + tmpPath);
+            ::write(fd, src, t.bytesPerSlice)!=ssize_t(t.bytesPerSlice))
+            throw std::runtime_error("write failed on "+tmpPath);
 #endif
         ::close(fd);
 
-        /* -------- unlink stub then rename atomically ---------------------- */
-        ::unlink(t.filePath.c_str());
+        /* ---- atomic replace ------------------------------------------------*/
+        ::unlink(t.filePath.c_str());                          // drop stub
         if (::rename(tmpPath.c_str(), t.filePath.c_str()) != 0)
-            throw std::runtime_error("rename failed on " + tmpPath +
-                                     " → " + t.filePath);
+            throw std::runtime_error("rename failed on "+tmpPath+
+                                     " → "+t.filePath);
         return;
     }
 
-/* ───────────── 3. LibTIFF path (compressed or needs transpose) ──────────── */
+/* ───────────── 3.  LibTIFF path (compressed or needs transpose) ────────── */
     if (!tl_tiff) tl_tiff = std::make_unique<TiffLocal>();
     tl_tiff->ensure_open(tmpPath);
     TIFF* tif = tl_tiff->tif;
@@ -246,21 +295,19 @@ static void save_slice(const SaveTask& t, int node)
     TIFFSetField(tif, TIFFTAG_PLANARCONFIG,     PLANARCONFIG_CONTIG);
     TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP,     srcRows);
 
-    /* -------- prepare I/O buffer (transpose if required) ------------------ */
+    /* -------- build / transpose I/O buffer -------------------------------- */
     const uint8_t* ioBuf = nullptr;
-    if (t.alreadyXYZ && t.compressionTag == COMPRESSION_NONE) {
+    if (t.alreadyXYZ && t.compressionTag==COMPRESSION_NONE){
         ioBuf = src;
     } else {
         ensure_scratch(t.bytesPerSlice, node);
         uint8_t* dst = scratch_buf;
-        if (!t.alreadyXYZ) {                         // transpose YX → XY
-            for (mwSize c = 0; c < srcCols; ++c) {
-                const uint8_t* colSrc = src + c * t.rows * t.bytesPerPixel;
-                for (mwSize r = 0; r < srcRows; ++r) {
-                    size_t d = (size_t(r)*srcCols + c) * t.bytesPerPixel;
-                    std::memcpy(dst + d,
-                                colSrc + r * t.bytesPerPixel,
-                                t.bytesPerPixel);
+        if (!t.alreadyXYZ){
+            for (mwSize c=0;c<srcCols;++c){
+                const uint8_t* colSrc = src + c*t.rows*t.bytesPerPixel;
+                for (mwSize r=0;r<srcRows;++r){
+                    size_t d = (size_t(r)*srcCols + c)*t.bytesPerPixel;
+                    std::memcpy(dst+d, colSrc+r*t.bytesPerPixel, t.bytesPerPixel);
                 }
             }
         } else {
@@ -269,28 +316,28 @@ static void save_slice(const SaveTask& t, int node)
         ioBuf = dst;
     }
 
-    /* -------- write single strip ----------------------------------------- */
     tsize_t nWritten =
-        (t.compressionTag == COMPRESSION_NONE)
-            ? TIFFWriteRawStrip    (tif, 0, const_cast<uint8_t*>(ioBuf),
+        (t.compressionTag==COMPRESSION_NONE)
+            ? TIFFWriteRawStrip    (tif,0,const_cast<uint8_t*>(ioBuf),
                                     (tsize_t)t.bytesPerSlice)
-            : TIFFWriteEncodedStrip(tif, 0, const_cast<uint8_t*>(ioBuf),
+            : TIFFWriteEncodedStrip(tif,0,const_cast<uint8_t*>(ioBuf),
                                     (tsize_t)t.bytesPerSlice);
     if (nWritten < 0)
-        throw std::runtime_error("TIFF write failed on slice " +
+        throw std::runtime_error("TIFF write failed on slice "+
                                  std::to_string(t.sliceIndex));
 
-    TIFFRewriteDirectory(tif);                       // commit tag offsets
+    TIFFRewriteDirectory(tif);                         // commit IFD
 
-    ::unlink(t.filePath.c_str());                    // remove stub
+    ::unlink(t.filePath.c_str());                      // drop stub
     if (::rename(tmpPath.c_str(), t.filePath.c_str()) != 0)
-        throw std::runtime_error("rename failed on " + tmpPath +
-                                 " → " + t.filePath);
+        throw std::runtime_error("rename failed on "+tmpPath+
+                                 " → "+t.filePath);
 
-    TIFFFlush(tif);                                  // finish I/O
-    TIFFClose(tif);                                  // fresh tmp name next slice
+    TIFFFlush(tif);
+    TIFFClose(tif);                                    // fresh tmp next slice
     tl_tiff->tif = nullptr;
 }
+
 
 /* ─────────────────────────── Thread worker / dispatcher ─────────────────── */
 struct CallContext {
