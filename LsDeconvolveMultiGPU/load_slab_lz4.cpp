@@ -140,11 +140,12 @@ struct BrickJob {
     std::string file;
     uint64_t x0, y0, z0, x1, y1, z1;
     uint64_t dimX, dimY, dimZ;
-    void* volPtr;              // pointer to output (uint8_t* or uint16_t*)
-    mxClassID outClass;        // mxUINT8_CLASS or mxUINT16_CLASS
+    float* volPtr;
 
-    // Scaling/clip args:
-    double clipval, scal, amplification, deconvmin, deconvmax, low_clip, high_clip;
+    // Scalar math params (added for clarity)
+    double scal_, amplification_, low_clip_, high_clip_, deconvmin_, deconvmax_;
+    int    outClass;
+    int    clipval_;
 
     void operator()() const {
         auto& uBuffer = ThreadLocalCleaner::thread_local_uBuffer;
@@ -191,41 +192,66 @@ struct BrickJob {
 
             offset += uncomp;
         }
+
         if (offset != h.totalUncompressed)
             throw std::runtime_error(file + ": size mismatch after decompress");
 
-        // Now scale/clip/cast to final type, then copy to output
-        double scal_ = scal, amplification_ = amplification, clipval_ = clipval;
-        double deconvmin_ = deconvmin, deconvmax_ = deconvmax;
-        double low_clip_ = low_clip, high_clip_ = high_clip;
+        //================= PARAMETER TYPE FIX SECTION ==========================
+        // Convert all input parameters to float once (single precision)
+        const float scalF  = static_cast<float>(scal_);
+        const float ampF   = static_cast<float>(amplification_);
+        const float lowF   = static_cast<float>(low_clip_);
+        const float highF  = static_cast<float>(high_clip_);
+        const float dminF  = static_cast<float>(deconvmin_);
+        const float dmaxF  = static_cast<float>(deconvmax_);
+        const float clipSpanF = highF - lowF;
 
+        // Compute scale factors with double division, cast to float (matches MATLAB's single(double(...)/double(...)))
+        const float scaleClip = static_cast<float>(
+            (double)scalF * (double)ampF / (double)clipSpanF);
+
+        const float scaleNC0 = static_cast<float>(
+            (double)scalF * (double)ampF / (double)dmaxF);
+
+        const float scaleNC1 = static_cast<float>(
+            (double)scalF * (double)ampF / ((double)dmaxF - (double)dminF));
+
+        const bool out8 = (outClass == mxUINT8_CLASS);
+        //=======================================================================
+
+        const uint64_t rowElems = brickX;
+        const float*   src      = uBuffer.data();
+
+        //================== SINGLE PRECISION PER-VOXEL LOGIC ===================
         for (uint64_t z = 0; z < brickZ; ++z)
-        for (uint64_t y = 0; y < brickY; ++y) {
-            uint64_t dstIdx = idx3D(x0, y0 + y, z0 + z, dimX, dimY);
-            for (uint64_t x = 0; x < brickX; ++x) {
-                float v = uBuffer[(z * brickY + y) * brickX + x];
+        for (uint64_t y = 0; y < brickY; ++y)
+        {
+            const uint64_t dstIdx = idx3D(x0, y0 + y, z0 + z, dimX, dimY);
+            for (uint64_t x = 0; x < brickX; ++x)
+            {
+                float v = src[(z * brickY + y) * brickX + x];
 
-                // Rescale/clip as in your MATLAB code
                 if (clipval_ > 0) {
-                    v -= low_clip_;
-                    v = std::min(v, (float)(high_clip_ - low_clip_));
-                    v = v * (float)(scal_ * amplification_ / (high_clip_ - low_clip_));
-                } else if (deconvmin_ > 0) {
-                    v = (v - (float)deconvmin_) * (float)(scal_ * amplification_ / (deconvmax_ - deconvmin_));
+                    v -= lowF;
+                    v  = (v < 0.f) ? 0.f : (v > clipSpanF ? clipSpanF : v);
+                    v *= scaleClip;
                 } else {
-                    v = v * (float)(scal_ * amplification_ / deconvmax_);
+                    if (dminF > 0.f)
+                        v = (v - dminF) * scaleNC1;
+                    else
+                        v = v * scaleNC0;
                 }
-                v = std::round(v - amplification_);
-                v = std::min(std::max(v, 0.0f), (float)scal_);
 
-                // Store as uint8 or uint16:
-                if (outClass == mxUINT8_CLASS) {
-                    ((uint8_t*)volPtr)[dstIdx + x] = (uint8_t)v;
-                } else if (outClass == mxUINT16_CLASS) {
-                    ((uint16_t*)volPtr)[dstIdx + x] = (uint16_t)v;
-                }
+                v = roundf(v - ampF);
+                v = (v < 0.f) ? 0.f : (v > scalF ? scalF : v);
+
+                if (out8)
+                    ((uint8_t*)volPtr)[dstIdx + x]  = static_cast<uint8_t >(v);
+                else
+                    ((uint16_t*)volPtr)[dstIdx + x] = static_cast<uint16_t>(v);
             }
         }
+        //=======================================================================
     }
 };
 
@@ -237,12 +263,20 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
     // 7: deconvmin, 8: deconvmax, 9: low_clip, 10: high_clip, 11: [maxThreads]
     const auto tStart = std::chrono::high_resolution_clock::now();
 
-    if (nrhs < 11 || nrhs > 12)
-        mexErrMsgTxt("Usage: [vol, elapsed] = load_slab_lz4(fnames, p1, p2, volSize, clipval, scal, amplification, deconvmin, deconvmax, low_clip, high_clip, [maxThreads])");
+    if (nrhs < 12)
+        mexErrMsgTxt("Usage: vol = load_slab_lz4(fnames, p1, p2, volSize, "
+                     "clipval, scal, amplification, deconvmin, deconvmax, "
+                     "low_clip, high_clip, [maxThreads])");
 
+    // Argument unpacking
+    // fnames : cellstr of brick files
     if (!mxIsCell(prhs[0])) mexErrMsgTxt("First arg must be cellstr");
     const mwSize N = mxGetNumberOfElements(prhs[0]);
     if (N == 0) mexErrMsgTxt("No files given");
+
+    // Brick indices and volume size
+    const mxArray* p1mx = prhs[1];
+    const mxArray* p2mx = prhs[2];
 
     auto getIdx = [N](const mxArray* A, mwSize linear) -> uint64_t {
         return mxIsUint64(A) ? static_cast<uint64_t*>(mxGetData(A))[linear]
@@ -258,54 +292,76 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         dimX = p[0]; dimY = p[1]; dimZ = p[2];
     }
 
-    double clipval = mxGetScalar(prhs[4]);
-    double scal = mxGetScalar(prhs[5]);
-    double amplification = mxGetScalar(prhs[6]);
-    double deconvmin = mxGetScalar(prhs[7]);
-    double deconvmax = mxGetScalar(prhs[8]);
-    double low_clip = mxGetScalar(prhs[9]);
-    double high_clip = mxGetScalar(prhs[10]);
-
-    int maxThreads = (nrhs == 12) ? static_cast<int>(mxGetScalar(prhs[11]))
-                                  : static_cast<int>(std::thread::hardware_concurrency());
+    // All further parameters (scalars)
+    double clipval      = mxGetScalar(prhs[4]);
+    double scal         = mxGetScalar(prhs[5]);
+    double amplification= mxGetScalar(prhs[6]);
+    double deconvmin    = mxGetScalar(prhs[7]);
+    double deconvmax    = mxGetScalar(prhs[8]);
+    double low_clip     = mxGetScalar(prhs[9]);
+    double high_clip    = mxGetScalar(prhs[10]);
+    int maxThreads      = (nrhs > 11) ? static_cast<int>(mxGetScalar(prhs[11]))
+                                      : static_cast<int>(std::thread::hardware_concurrency());
     if (maxThreads < 1) maxThreads = 1;
 
-    mxClassID outClass = (scal <= 255) ? mxUINT8_CLASS : mxUINT16_CLASS;
+    // Output type (uint8 or uint16)
+    int outClass = (scal <= 255) ? mxUINT8_CLASS : mxUINT16_CLASS;
+
+    // Allocate output
     mwSize mdims[3] = { static_cast<mwSize>(dimX), static_cast<mwSize>(dimY), static_cast<mwSize>(dimZ) };
     mxArray* volMx = mxCreateNumericArray(3, mdims, outClass, mxREAL);
     if (!volMx) mexErrMsgTxt("Cannot allocate output volume");
-    void* volPtr = mxGetData(volMx);
+    float* volPtr = static_cast<float*>(mxMalloc(sizeof(float) * dimX * dimY * dimZ));
+    if (!volPtr) mexErrMsgTxt("Cannot allocate working buffer");
 
+    // Prepare jobs
     std::vector<BrickJob> jobs; jobs.reserve(N);
     for (mwSize i = 0; i < N; ++i) {
         char* tmp = mxArrayToUTF8String(mxGetCell(prhs[0], i));
         if (!tmp) mexErrMsgTxt("Invalid filename cell");
         std::string fname(tmp); mxFree(tmp);
 
-        uint64_t x0 = getIdx(prhs[1], i) - 1,
-                 y0 = getIdx(prhs[1], i + N) - 1,
-                 z0 = getIdx(prhs[1], i + 2 * N) - 1;
-        uint64_t x1 = getIdx(prhs[2], i) - 1,
-                 y1 = getIdx(prhs[2], i + N) - 1,
-                 z1 = getIdx(prhs[2], i + 2 * N) - 1;
+        uint64_t x0 = getIdx(p1mx, i) - 1,
+                 y0 = getIdx(p1mx, i + N) - 1,
+                 z0 = getIdx(p1mx, i + 2 * N) - 1;
+        uint64_t x1 = getIdx(p2mx, i) - 1,
+                 y1 = getIdx(p2mx, i + N) - 1,
+                 z1 = getIdx(p2mx, i + 2 * N) - 1;
 
         if (x1 < x0 || y1 < y0 || z1 < z0)
             mexErrMsgTxt("p1 > p2 for at least one brick");
         if (x1 >= dimX || y1 >= dimY || z1 >= dimZ)
             mexErrMsgTxt("Brick exceeds bounds");
 
-        jobs.emplace_back(BrickJob{fname, x0, y0, z0, x1, y1, z1, dimX, dimY, dimZ,
-                                   volPtr, outClass, clipval, scal, amplification, deconvmin, deconvmax, low_clip, high_clip});
+        jobs.emplace_back(
+            BrickJob{ fname, x0, y0, z0, x1, y1, z1, dimX, dimY, dimZ,
+                      volPtr, scal, amplification, low_clip, high_clip,
+                      deconvmin, deconvmax, outClass, static_cast<int>(clipval) }
+        );
     }
 
+    // Parallel load
     try {
         ThreadPool pool(maxThreads);
         for (const auto& job : jobs)
             pool.enqueue([&job]() { job(); });
         pool.wait();
     } catch (const std::exception& e) {
+        mxFree(volPtr);
         mexErrMsgIdAndTxt("load_slab_lz4:ThreadError", e.what());
     }
+
+    // Convert working buffer to uint8/uint16 output
+    if (outClass == mxUINT8_CLASS) {
+        uint8_t* outPtr = static_cast<uint8_t*>(mxGetData(volMx));
+        for (mwSize i = 0; i < dimX * dimY * dimZ; ++i)
+            outPtr[i] = static_cast<uint8_t>(volPtr[i]);
+    } else {
+        uint16_t* outPtr = static_cast<uint16_t*>(mxGetData(volMx));
+        for (mwSize i = 0; i < dimX * dimY * dimZ; ++i)
+            outPtr[i] = static_cast<uint16_t>(volPtr[i]);
+    }
+    mxFree(volPtr);
 
     plhs[0] = volMx;
     if (nlhs > 1)
