@@ -77,7 +77,7 @@ parFiles  = strrep(mexFiles,'mex_','par_');
 p = gcp('nocreate');
 if isempty(p)
     try
-        p = parpool('local');
+        p = parpool('Processes');
     catch ME
         disp(ME.getReport);
         warning("⚠️  Failed to start parallel pool. Benchmark skipped.");
