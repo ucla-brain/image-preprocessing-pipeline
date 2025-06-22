@@ -66,58 +66,77 @@ struct TiffHandle {
 
 // Write one slice to disk (buffer closed before rename)
 static void writeSlice(
-    const uint8_t* volumeData,
-    size_t         sliceIdx,
-    size_t         dimX,
-    size_t         dimY,
-    size_t         bytesPerSample,
-    bool           isXYZ,
-    uint16_t       compression,
-    const std::string& outPath,
+    const uint8_t*        volumeData,
+    size_t                sliceIdx,
+    size_t                dimX,
+    size_t                dimY,
+    size_t                bytesPerSample,
+    bool                  isXYZ,
+    uint16_t              compression,
+    const std::string&    outPath,
     std::vector<uint8_t>& scratch
 ) {
-    size_t width      = isXYZ ? dimX : dimY;
-    size_t height     = isXYZ ? dimY : dimX;
-    size_t sliceBytes = dimX * dimY * bytesPerSample;
-    const uint8_t* srcBase = volumeData + sliceIdx * sliceBytes;
+    // Compute image dimensions
+    const size_t width      = isXYZ ? dimX : dimY;
+    const size_t height     = isXYZ ? dimY : dimX;
+    const size_t sliceBytes = dimX * dimY * bytesPerSample;
+    const uint8_t* srcBase  = volumeData + sliceIdx * sliceBytes;
 
-    fs::path tmpP = fs::path(outPath).concat(".tmp");
+    // Build temporary filename
+    fs::path tmpPath = fs::path(outPath).concat(".tmp");
 
+    // Scope so TIFF handle closes before rename
     {
-        TiffHandle tf(tmpP.string(), "w");
-        TIFF* tif = tf.tif;
+        TiffHandle tiff(tmpPath.string(), "w");
+        TIFF* tif = tiff.tif;
 
-        TIFFSetField(tif, TIFFTAG_IMAGEWIDTH,      (uint32_t)width);
-        TIFFSetField(tif, TIFFTAG_IMAGELENGTH,     (uint32_t)height);
-        TIFFSetField(tif, TIFFTAG_BITSPERSAMPLE,   (uint16_t)(bytesPerSample*8));
-        TIFFSetField(tif, TIFFTAG_SAMPLESPERPIXEL, (uint16_t)1);
-        TIFFSetField(tif, TIFFTAG_COMPRESSION,     compression);
-        TIFFSetField(tif, TIFFTAG_PHOTOMETRIC,     PHOTOMETRIC_MINISBLACK);
-        TIFFSetField(tif, TIFFTAG_PLANARCONFIG,    PLANARCONFIG_CONTIG);
-        TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP,    (uint32_t)height);
+        // Standard tags
+        TIFFSetField(tif, TIFFTAG_IMAGEWIDTH,       (uint32_t)width);
+        TIFFSetField(tif, TIFFTAG_IMAGELENGTH,      (uint32_t)height);
+        TIFFSetField(tif, TIFFTAG_BITSPERSAMPLE,    (uint16_t)(bytesPerSample * 8));
+        TIFFSetField(tif, TIFFTAG_SAMPLESPERPIXEL,  (uint16_t)1);
+        TIFFSetField(tif, TIFFTAG_COMPRESSION,      compression);
+        TIFFSetField(tif, TIFFTAG_PHOTOMETRIC,      PHOTOMETRIC_MINISBLACK);
+        TIFFSetField(tif, TIFFTAG_PLANARCONFIG,     PLANARCONFIG_CONTIG);
 
-        uint8_t* dst = scratch.data();
-        // reorder column-major → row-major
+        // Choose a moderate strip height (e.g. 64 rows)
+        uint32_t rowsPerStrip = std::min<uint32_t>(height, 64);
+        TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP, rowsPerStrip);
+
+        // Reorder whole slice once into row-major scratch buffer
         for (size_t r = 0; r < height; ++r) {
             for (size_t c = 0; c < width; ++c) {
-                size_t orow = isXYZ ? c : r;
-                size_t ocol = isXYZ ? r : c;
+                size_t orow   = isXYZ ? c : r;
+                size_t ocol   = isXYZ ? r : c;
                 size_t srcOff = (orow + ocol * dimX) * bytesPerSample;
                 size_t dstOff = (r * width + c) * bytesPerSample;
-                memcpy(dst + dstOff, srcBase + srcOff, bytesPerSample);
+                memcpy(scratch.data() + dstOff,
+                       srcBase + srcOff,
+                       bytesPerSample);
             }
         }
 
-        tsize_t written = (compression == COMPRESSION_NONE)
-            ? TIFFWriteRawStrip(tif, 0, scratch.data(), sliceBytes)
-            : TIFFWriteEncodedStrip(tif, 0, scratch.data(), sliceBytes);
+        // Write each strip
+        uint32_t nStrips = (height + rowsPerStrip - 1) / rowsPerStrip;
+        for (uint32_t s = 0; s < nStrips; ++s) {
+            uint32_t row0       = s * rowsPerStrip;
+            uint32_t actualRows = std::min<uint32_t>(rowsPerStrip, height - row0);
+            size_t   byteCount  = width * actualRows * bytesPerSample;
+            uint8_t* stripData  = scratch.data() + row0 * width * bytesPerSample;
 
-        if (written < 0)
-            throw std::runtime_error("TIFF write failed on slice " + std::to_string(sliceIdx));
+            tsize_t written = (compression == COMPRESSION_NONE)
+                ? TIFFWriteRawStrip(tif, s, stripData, byteCount)
+                : TIFFWriteEncodedStrip(tif, s, stripData, byteCount);
+
+            if (written < 0)
+                throw std::runtime_error(
+                    "TIFF write failed for strip " + std::to_string(s));
+        }
     }  // TIFFClose happens here
 
+    // Atomically swap in the new slice file
     if (fs::exists(outPath)) fs::remove(outPath);
-    fs::rename(tmpP, outPath);
+    fs::rename(tmpPath, outPath);
 }
 
 // The MEX gateway
