@@ -194,7 +194,7 @@ void run_atomic_thread_pool(const std::vector<JobT>& jobs, int nThreads) {
 /*============================= MEX Entry Point ================================*/
 void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     auto now = std::chrono::high_resolution_clock::now();
-    if (nrhs < 12) mexErrMsgTxt("Expected 12 input arguments.");
+    if (nrhs < 11) mexErrMsgTxt("Expected 12 input arguments.");
     if (!mxIsCell(prhs[0])) mexErrMsgTxt("filenames must be a cell array.");
 
     const mwSize nFiles = mxGetNumberOfElements(prhs[0]);
