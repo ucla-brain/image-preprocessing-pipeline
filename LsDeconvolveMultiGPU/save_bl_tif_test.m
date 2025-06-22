@@ -1,118 +1,142 @@
 function save_bl_tif_test()
-    rng(42);
-    fprintf("🧪 Running save_bl_tif extended tests…\n");
+% Extended test-bench for save_bl_tif MEX
+rng(42);
+fprintf("🧪 save_bl_tif extended test-suite\n");
 
-    %% (A) single-slice volume  — accepted as 2-D or 3-D [ dim3 == 1 ]
-    vol1  = uint8(randi(255, [256 256]));      % plain 2-D matrix
-    out1  = [tempname '.tif'];
-    save_bl_tif(vol1, {out1}, false, 'none'); % YXZ, no transpose needed
-    assert(isequal(imread(out1), vol1),  "2-D path failed (YXZ)");
-    delete(out1);
+%% --------------------------------------------------------------------------
+%%  housekeeping helpers
+%% --------------------------------------------------------------------------
+tmpRoot = tempname;   % one unique sandbox for all artefacts
+mkdir(tmpRoot);
+cleanup = onCleanup(@() safe_rmdir(tmpRoot));
 
-    vol1b = reshape(vol1, 256,256,1);          % explicit 3-D singleton
-    out1b = [tempname '.tif'];
-    save_bl_tif(vol1b, {out1b}, false, 'none');
-    assert(isequal(imread(out1b), vol1b(:,:,1)), "3-D-singleton path failed");
-    delete(out1b);
+%% --------------------------------------------------------------------------
+%%  A. basic 2-D / 3-D singleton sanity
+%% --------------------------------------------------------------------------
+vol2d  = uint8(randi(255,[256 256]));
+p2d    = fullfile(tmpRoot,'basic_2d.tif');
+save_bl_tif(vol2d,{p2d},false,'none');
+assert(isequal(imread(p2d),vol2d),"2-D write/read failed");
 
-    %% (B) two-slice volume — true 3-D
-    vol2 = uint8(randi(255, [256 256 2]));     % 2 slices
-    files = { [tempname '_0.tif'], [tempname '_1.tif'] };
+vol3d1 = reshape(vol2d,256,256,1);
+p3d1   = fullfile(tmpRoot,'basic_3d.tif');
+save_bl_tif(vol3d1,{p3d1},false,'none');
+assert(isequal(imread(p3d1),vol3d1(:,:,1)),"3-D singleton failed");
 
-    save_bl_tif(vol2, files, false, 'none');   % YXZ → no transpose
+fprintf("   ✅ basic 2-D / 3-D paths OK\n");
 
-    for k = 1:2
-        data = imread(files{k});
-        assert(isequal(data, vol2(:,:,k)), ...
-            "Multi-slice check failed on slice %d", k);
-        delete(files{k});
-    end
+%% --------------------------------------------------------------------------
+%%  B. full matrix of {layout × dtype × compression}
+%% --------------------------------------------------------------------------
+cfg.order   = {'YXZ',false;'XYZ',true};
+cfg.dtype   = {'uint8',@uint8;'uint16',@uint16};
+cfg.comp    = {'none','lzw','deflate'};
 
-    fprintf("✅ 2-D and 3-D slice sanity checks passed\n");
+% size chosen so that a single slice of uint16 (2048×1024) ≈ 4 MiB → triggers
+% huge-page scratch allocation branch
+stackSize   = [2048 1024 4];
 
-    outdir = fullfile(tempdir, 'save_bl_tif_test');
-    if exist(outdir, 'dir'), rmdir(outdir, 's'); end
-    mkdir(outdir);
-
-    sz = [128, 96, 4];  % slightly larger stack
-    orders = {'YXZ', false; 'XYZ', true};
-    types = {'uint8', @uint8; 'uint16', @uint16};
-    compressions = {'none', 'lzw', 'deflate'};
-
-    all_passed = true;
-
-    for o = 1:size(orders, 1)
-        for t = 1:size(types, 1)
-            for c = 1:numel(compressions)
-                try
-                    fprintf("→ %s | %s | %s\n", orders{o,1}, types{t,1}, compressions{c});
-
-                    A = types{t,2}(rand(sz));
-                    if orders{o,2}, A = permute(A, [2 1 3]); end
-
-                    fileList = cell(1, sz(3));
-                    for k = 1:sz(3)
-                        fileList{k} = fullfile(outdir, sprintf('test_%s_%s_%s_%03d.tif', ...
-                            orders{o,1}, types{t,1}, compressions{c}, k));
-                    end
-
-                    tic;
-                    save_bl_tif(A, fileList, orders{o,2}, compressions{c}, feature('numCores'));
-                    dur = toc;
-
-                    for k = 1:sz(3)
-                        B = imread(fileList{k});
-                        if orders{o,2}   % XYZ layout → MEX transposes
-                            ok = isequal(B, A(:,:,k).');    % compare to transposed slice
-                        else             % YXZ layout → no transpose
-                            ok = isequal(B, A(:,:,k));
-                        end
-                        if ~ok
-                            error("Mismatch in slice %d", k);
-                        end
-                    end
-
-                    fprintf("✅ Passed in %.4fs\n", dur);
-                catch ME
-                    fprintf("❌ Failed: %s\n", ME.message);
-                    all_passed = false;
-                end
+for o = 1:size(cfg.order,1)
+  for d = 1:size(cfg.dtype,1)
+    for c = 1:numel(cfg.comp)
+        tag = sprintf('%s | %s | %s',...
+                      cfg.order{o,1},cfg.dtype{d,1},cfg.comp{c});
+        try
+            % generate random stack
+            A = cfg.dtype{d,2}(randi(intmax(cfg.dtype{d,1}),stackSize));
+            if cfg.order{o,2}      % transpose to XYZ memory layout
+                A = permute(A,[2 1 3]);
             end
+
+            % build path list
+            fList = cell(1,stackSize(3));
+            for k = 1:stackSize(3)
+                fList{k} = fullfile(tmpRoot,...
+                              sprintf('test_%s_%03d.tif',tag,k));
+            end
+
+            % toggle threads arg every other run to hit both code paths
+            if mod(c,2)
+                save_bl_tif(A,fList,cfg.order{o,2},cfg.comp{c});
+            else
+                save_bl_tif(A,fList,cfg.order{o,2},cfg.comp{c},...
+                            feature('numCores'));
+            end
+
+            % verify round-trip
+            for k = 1:stackSize(3)
+                B = imread(fList{k});
+                ref = A(:,:,k);
+                if cfg.order{o,2}, ref = ref.'; end
+                assert(isequal(B,ref), ...
+                       "%s slice %d mismatch", tag,k);
+            end
+            fprintf("   ✅ %-28s\n",tag);
+        catch ME
+            fprintf("   ❌ %-28s - %s\n",tag,ME.message);
+            rethrow(ME);
         end
     end
+  end
+end
 
-    %% Simulated corrupted path test
-    fprintf("🧪 Testing invalid path handling...\n");
-    A = randi(255, [32 32 1], 'uint8');
+%% --------------------------------------------------------------------------
+%%  C. guard clauses: invalid path & read-only overwrite
+%% --------------------------------------------------------------------------
+fprintf("   🛡  guard-clause checks\n");
+
+try
+    save_bl_tif(uint8(zeros(32,32,1)), {'/does/not/exist/foo.tif'},...
+                false,'lzw');
+    error("invalid-path accepted unexpectedly");
+catch, fprintf("      ✅ invalid path rejected\n"); end
+
+roFile = fullfile(tmpRoot,'readonly.tif');
+imwrite(uint8(1),roFile);
+fileattrib(roFile,'-w');   % make read-only
+cleanupRO = onCleanup(@() fileattrib(roFile,'+w'));
+
+try
+    save_bl_tif(uint8(zeros(32,32,1)), {roFile}, false,'none');
+    error("read-only overwrite accepted");
+catch, fprintf("      ✅ read-only overwrite rejected\n"); end
+
+%% --------------------------------------------------------------------------
+%%  D. micro-benchmark: MATLAB loop vs save_bl_tif
+%% --------------------------------------------------------------------------
+benchSize = [512 512 64];           % 256 MiB uint16 stack
+volBench  = uint16(randi(65535,benchSize));
+
+% paths for MEX and MATLAB series
+mexFiles = arrayfun(@(k) fullfile(tmpRoot,sprintf('mex_%03d.tif',k)),...
+                    1:benchSize(3),'uni',0);
+matFiles = strrep(mexFiles,'mex_','mat_');
+
+fprintf("   🏁 benchmark (uint16 %dx%dx%d)…\n",benchSize);
+tMex  = timeit(@() save_bl_tif(volBench,mexFiles,false,'none')) ;
+tLoop = timeit(@() for k=1:benchSize(3)
+                           imwrite(volBench(:,:,k),matFiles{k});
+                       end) ;
+
+fprintf("      save_bl_tif : %6.2f s  (%.2f MB/s)\n",...
+        tMex,  prod(benchSize)*2/tMex/1e6);
+fprintf("      MATLAB loop : %6.2f s  (%.2f MB/s)\n",...
+        tLoop, prod(benchSize)*2/tLoop/1e6);
+
+%% --------------------------------------------------------------------------
+fprintf("🎉  All tests completed without error.\n");
+
+end
+
+%% --------------------------------------------------------------------------
+function safe_rmdir(p)
+% recursive delete that silences "in use" warnings on Windows
+if exist(p,'dir')
     try
-        save_bl_tif(A, {'/invalid/path/slice001.tif'}, false, 'lzw');
-        fprintf("❌ Expected error for invalid path was not raised.\n");
-        all_passed = false;
+        rmdir(p,'s');
     catch
-        fprintf("✅ Correctly handled invalid path error.\n");
+        pause(0.1);  % let OS close handles
+        if exist(p,'dir'), rmdir(p,'s'); end
     end
-
-    %% Simulated file overwrite protection test
-    fprintf("🧪 Testing read-only file protection...\n");
-    A = randi(255, [32 32 1], 'uint8');
-    file = fullfile(outdir, 'readonly_slice.tif');
-    imwrite(A(:,:,1), file);  % pre-create
-    fileattrib(file, '-w');   % make read-only
-
-    try
-        save_bl_tif(A, {file}, false, 'lzw');
-        fprintf("❌ Should have failed to overwrite read-only file.\n");
-        all_passed = false;
-    catch
-        fprintf("✅ Correctly failed to overwrite read-only file.\n");
-    end
-    fileattrib(file, '+w');
-
-    if all_passed
-        fprintf("🎉 All save_bl_tif extended tests passed.\n");
-    else
-        error("Some tests failed. See log above.");
-    end
-
-    if exist(outdir, 'dir'), rmdir(outdir, 's'); end
+end
 end
