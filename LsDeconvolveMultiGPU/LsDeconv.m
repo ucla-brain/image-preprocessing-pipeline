@@ -30,7 +30,7 @@ function [] = LsDeconv(varargin)
         disp('LsDeconv: Deconvolution tool for Light Sheet Microscopy.');
         disp('TU Wien, 2019: This program was was initially written in MATLAB V2018b by klaus.becker@tuwien.ac.at');
         disp('Keivan Moradi, 2023: Patched it in MATLAB V2023a. kmoradi@mednet.ucla.edu. UCLA B.R.A.I.N (Dong lab)');
-        disp('Main changes: Improved block size calculareon and Multi-GPU and Multi-CPU parallel processing, Resume, Flip Y axis, and 3D gaussian filter support');
+        disp('Main changes: Improved block size calculation and Multi-GPU and Multi-CPU parallel processing, Resume, Flip Y axis, and 3D gaussian filter support');
         disp(' ');
         disp(datetime('now'));
         disp(' ');
@@ -42,7 +42,7 @@ function [] = LsDeconv(varargin)
         end
 
         %read command line parameters
-        disp("assigning command line parameter strings")
+        disp('assigning command line parameter strings')
         inpath = varargin{1};
         dxy = varargin{2};
         dz = varargin{3};
@@ -71,9 +71,11 @@ function [] = LsDeconv(varargin)
         convert_to_16bit = varargin{26};
         filter.use_fft = varargin{27};
         cache_drive = varargin{28};
-        if ~exist(cache_drive, "dir")
-            disp('making cache drive dir ' + cache_drive)
+        if ~exist(cache_drive, 'dir')
             mkdir(cache_drive);
+            disp('Cache drive dir created: ' + cache_drive)
+        else
+            disp('Cache drive dir exists: ' + cache_drive)
         end
         disp('cache drive dir created and/or exists ' + cache_drive)
         
@@ -89,7 +91,7 @@ function [] = LsDeconv(varargin)
             % make folder for results and make sure the outpath is writable
             outpath = fullfile(inpath, 'deconvolved');
             if flip_upside_down
-                outpath = fullfile(inpath, 'deconvolved_fliped_upside_down');
+                outpath = fullfile(inpath, 'deconvolved_flipped_upside_down');
             end
             if ~exist(outpath, 'dir')
                 disp('making folder ' + outpath )
@@ -117,7 +119,7 @@ function [] = LsDeconv(varargin)
             stack_info.convert_to_16bit = convert_to_16bit;
 
             if resume && numel(dir(fullfile(outpath, 'img_*.tif'))) == stack_info.z
-                disp("it seems all the files are already deconvolved!");
+                disp('it seems all the files are already deconvolved!');
                 return
             elseif ~resume
                 delete(fullfile(outpath, '*.tif'));
