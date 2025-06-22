@@ -80,7 +80,7 @@ for scal = scalS
       else
           fail = fail + 1;
           nerr = nnz(V_mex ~= Vref);
-          maxabs = max(abs(double(V_mex(:)) - double(Vref(:))));
+          maxabs = max(abs(V_mex(:) - Vref(:)));
           fprintf('❌ scal=%g clip=%g dmin=%g  (#diff=%d max|Δ|=%.4g)\n', ...
               scal, clipval, deconvmin, nerr, maxabs);
       end
