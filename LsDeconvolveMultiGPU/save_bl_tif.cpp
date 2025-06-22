@@ -30,6 +30,9 @@
 
 #if defined(__linux__)
 #  include <fcntl.h>
+#if !defined(O_BINARY)          // POSIX: harmless no-op
+#   define O_BINARY 0
+#endif
 #  include <unistd.h>
 #  include <sys/mman.h>
 #  include <sched.h>
@@ -167,44 +170,56 @@ static constexpr uint8_t ifdBlob[] = {
 /* ───────────────────────────── LOW-LEVEL TIFF WRITE ─────────────────────── */
 static void save_slice(const SaveTask& t, int node)
 {
+    /* ---------- read-only / overwrite safety check ---------- */
+    {
+        FILE* testW = std::fopen(t.filePath.c_str(), "wb");
+        if (!testW)                     // cannot open → read-only or perm denied
+            throw std::runtime_error("Refused to overwrite read-only file: "
+                                     + t.filePath);
+        std::fclose(testW);             // ok; leave stub for atomic replace
+    }
+
     const mwSize srcRows = t.alreadyXYZ ? t.cols : t.rows;
     const mwSize srcCols = t.alreadyXYZ ? t.rows : t.cols;
+    const uint8_t* src   = t.basePtr + t.sliceOffset;
 
-    const uint8_t* src = t.basePtr + t.sliceOffset;
-    const bool direct = (t.compressionTag == COMPRESSION_NONE && t.alreadyXYZ);
+    const bool direct    = (t.compressionTag == COMPRESSION_NONE && t.alreadyXYZ);
     const std::string tmpPath = t.filePath + ".tmp";
 
-    /* ─────────────── Raw gather-write path (uncompressed, already XYZ) ─── */
+/* ─────────────────────────────── Raw gather-write path ─────────────────────────────── */
     if (direct)
     {
-        // … (unchanged raw-TIFF header / writev code) …
+        // … (unchanged raw-TIFF header + writev/WriteFile code) …
+
         if (::rename(tmpPath.c_str(), t.filePath.c_str()) != 0)
             throw std::runtime_error("rename failed on " + tmpPath +
                                      " → " + t.filePath);
         return;
     }
 
-    /* ─────────────── LibTIFF path (compressed or needs transpose) ──────── */
+/* ─────────────────────────────── LibTIFF path ─────────────────────────────── */
     if (!tl_tiff) tl_tiff = std::make_unique<TiffLocal>();
     tl_tiff->ensure_open(tmpPath);
     TIFF* tif = tl_tiff->tif;
 
-    TIFFSetField(tif, TIFFTAG_IMAGEWIDTH,  srcCols);
-    TIFFSetField(tif, TIFFTAG_IMAGELENGTH, srcRows);
-    TIFFSetField(tif, TIFFTAG_SAMPLESPERPIXEL, 1);
-    TIFFSetField(tif, TIFFTAG_BITSPERSAMPLE, (t.bytesPerPixel==2)?16:8);
-    TIFFSetField(tif, TIFFTAG_COMPRESSION,  t.compressionTag);
-    TIFFSetField(tif, TIFFTAG_PHOTOMETRIC,  PHOTOMETRIC_MINISBLACK);
-    TIFFSetField(tif, TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG);
-    TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP, srcRows);
+    /* -------- tag setup (unchanged) -------- */
+    TIFFSetField(tif, TIFFTAG_IMAGEWIDTH,       srcCols);
+    TIFFSetField(tif, TIFFTAG_IMAGELENGTH,      srcRows);
+    TIFFSetField(tif, TIFFTAG_SAMPLESPERPIXEL,  1);
+    TIFFSetField(tif, TIFFTAG_BITSPERSAMPLE,    (t.bytesPerPixel==2)?16:8);
+    TIFFSetField(tif, TIFFTAG_COMPRESSION,      t.compressionTag);
+    TIFFSetField(tif, TIFFTAG_PHOTOMETRIC,      PHOTOMETRIC_MINISBLACK);
+    TIFFSetField(tif, TIFFTAG_PLANARCONFIG,     PLANARCONFIG_CONTIG);
+    TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP,     srcRows);
 
-    /* -------- prepare I/O buffer (transpose if necessary) -------- */
+    /* -------- build / transpose I/O buffer -------- */
     const uint8_t* ioBuf = nullptr;
     if (t.alreadyXYZ && t.compressionTag == COMPRESSION_NONE) {
         ioBuf = src;
     } else {
         ensure_scratch(t.bytesPerSlice, node);
         uint8_t* dst = scratch_buf;
+
         if (!t.alreadyXYZ) {                       // transpose YX → XY
             for (mwSize c = 0; c < srcCols; ++c) {
                 const uint8_t* colSrc = src + c * t.rows * t.bytesPerPixel;
@@ -232,15 +247,14 @@ static void save_slice(const SaveTask& t, int node)
         throw std::runtime_error("TIFF write failed on slice " +
                                  std::to_string(t.sliceIndex));
 
-    TIFFRewriteDirectory(tif);       // commit offsets to disk
+    TIFFRewriteDirectory(tif);                       // commit offsets
 
-    /* -------- atomic rename & handle reset -------- */
     if (::rename(tmpPath.c_str(), t.filePath.c_str()) != 0)
         throw std::runtime_error("rename failed on " + tmpPath +
                                  " → " + t.filePath);
 
-    TIFFFlush(tif);                  // finish I/O
-    TIFFClose(tif);                  // close to get a fresh tmp name next time
+    TIFFFlush(tif);                                  // finish I/O
+    TIFFClose(tif);                                  // fresh tmp name next slice
     tl_tiff->tif = nullptr;
 }
 
