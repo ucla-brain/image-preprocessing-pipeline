@@ -1,5 +1,6 @@
 function load_slab_lz4_fulltest(varargin)
 % Comprehensive test for load_slab_lz4: covers all scaling/clip/cast logic paths.
+% All temporary files are deleted on exit or error.
 
 if nargin && strcmpi(varargin{1},'big')
     stack = struct('x',1024,'y',2049,'z',3073);  brick = struct('x',256,'y',256,'z',384);
@@ -21,8 +22,7 @@ deconvmax         = 1;
 
 % ─── TEMP DIR ───────────────────────────────────────────────────────────
 tmpDir  = tempname;  mkdir(tmpDir);
-cleanup = onCleanup(@() rmdir(tmpDir,'s'));
-fprintf("Temp dir : %s\n",tmpDir);
+cleanup = onCleanup(@() mycleanup(tmpDir)); % Robust cleanup
 
 % ─── SYNTHETIC VOLUME ──────────────────────────────────────────────────
 rng(1);  V = rand([stack.x stack.y stack.z],'single');
@@ -46,22 +46,18 @@ all_pass = true; total_cases = 0; failed_cases = 0;
 for scal = scal_options
     for clipval = clipval_options
         for deconvmin = deconvmin_options
-            % --- skip deconvmin > 0 for clipval > 0 (as in code logic) ---
             if clipval > 0 && deconvmin > 0
                 continue
             end
 
-            % Print test case:
             fprintf("Testing: scal=%d, clipval=%g, deconvmin=%g\n", scal, clipval, deconvmin);
 
-            % --- MEX CALL ---
             tic;
             V_mex = load_slab_lz4( ...
                 fnames, uint64(p1d), uint64(p2d), uint64([stack.x stack.y stack.z]), ...
                 clipval, scal, amplification, deconvmin, deconvmax, low_clip, high_clip, feature('numCores'));
             t_mex = toc;
 
-            % --- MATLAB reference postprocessing ---
             V_ref = V;
             if clipval > 0
                 V_ref = V_ref - low_clip;
@@ -93,7 +89,6 @@ for scal = scal_options
                 dif = nnz(V_mex ~= V_ref);
                 maxabs = double(max(abs(double(V_mex(:)) - double(V_ref(:)))));
                 fprintf("   ❌  FAIL   |  #diff=%d, maxabs=%.4g\n", dif, maxabs);
-                % Optionally: show slice or histogram diff here
             end
         end
     end
@@ -106,4 +101,11 @@ else
     fprintf("❌ %d of %d test cases FAILED.\n", failed_cases, total_cases);
 end
 
+end
+
+function mycleanup(d)
+    if exist(d, 'dir')
+        fprintf('[cleanup] Removing tempdir %s\n', d);
+        rmdir(d, 's');
+    end
 end
