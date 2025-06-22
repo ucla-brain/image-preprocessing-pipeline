@@ -202,7 +202,7 @@ static void save_slice(const SaveTask& t)
 
 /* ───────────────────────────── FILE LIST CACHE ──────────────────────────── */
 /* Caches file lists (vector<string>) to avoid reparsing for repeated calls   */
-/* Keyed by prhs[1] (cell ptr) and length                                    */
+/* Keyed by prhs[1] (cell ptr) and length                                     */
 struct FileListCacheKey {
     const void* mxArrayPtr;
     size_t      length;
