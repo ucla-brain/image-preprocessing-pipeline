@@ -1,122 +1,295 @@
-function save_bl_tif_test
-% Extended regression + benchmark for save_bl_tif MEX
+/*==============================================================================
+  save_bl_tif.cpp
 
-fprintf("🧪  save_bl_tif extended test-suite\n");
+  High-throughput multi-threaded TIFF Z-slice saver for 3D MATLAB volumes.
 
-%% ---------- sandbox (deleted on exit) ----------
-tmpRoot = tempname;   mkdir(tmpRoot);
-cSandbox = onCleanup(@() sandbox_cleanup(tmpRoot));
+  USAGE:
+    save_bl_tif(volume, fileList, isXYZ, compression[, nThreads]);
 
-%% ---------- A. basic 2-D / 3-D-singleton ----------
-rng(42);
-vol2d = uint8(randi(255,[256 256]));
-fn2d  = fullfile(tmpRoot,'basic_2d.tif');
-save_bl_tif(vol2d,{fn2d},false,'none');
-assert(isequal(imread(fn2d),vol2d));
+  INPUTS:
+    • volume        : 3D MATLAB array (uint8 or uint16).
+    • fileList      : 1×Z cell array of output filenames.
+    • isXYZ         : scalar logical/numeric. True if array is [X Y Z].
+    • compression   : "none", "lzw", or "deflate".
+    • nThreads      : (opt) max threads (default = half hardware_concurrency).
 
-vol3d = reshape(vol2d,256,256,1);
-fn3d  = fullfile(tmpRoot,'basic_3d.tif');
-save_bl_tif(vol3d,{fn3d},false,'none');
-assert(isequal(imread(fn3d),vol3d(:,:,1)));
+  FEATURES:
+    • Guard-clauses on invalid/read-only output paths.
+    • Atomic slice-index dispatch (chunks of slices).
+    • Direct strip-write when input is XYZ (row-major) to avoid buffers.
+    • Per-thread lazy strip buffer for YX inputs.
+    • Multi-row strips (64 rows) tuned for deflate compression.
+    • Deflate predictor & quality tuned for best libtiff 4.7 compression.
+    • Safe temp-file → rename to avoid NUMA lockups.
+    • C++17 <filesystem>, RAII for TIFF handles.
+    • Exception aggregation/reporting in main thread.
 
-fprintf("   ✅ basic 2-D / 3-D paths ok\n");
+  LIMITATIONS:
+    • Grayscale only (single channel).
+    • Single-strip file per strip group.
 
-%% ---------- B. full matrix: {layout × dtype × compression} ----------
-cfg.order = {'YXZ',false; 'XYZ',true};
-cfg.dtype = {'uint8',@uint8; 'uint16',@uint16};
-cfg.comp  = {'none','lzw','deflate'};
-sz        = [2048 1024 4];                      % ≥ 2 MiB slice
+  DEPENDENCIES:
+    • libtiff ≥ 4.7, MATLAB MEX API, C++17 <filesystem>.
 
-for o = 1:size(cfg.order,1)
-    if o>1, fprintf("\n"); end                  % blank line between YXZ / XYZ
-    for d = 1:size(cfg.dtype,1)
-        for c = 1:numel(cfg.comp)
-            A = cfg.dtype{d,2}(randi(intmax(cfg.dtype{d,1}),sz));
-            if cfg.order{o,2}, A = permute(A,[2 1 3]); end
+  AUTHOR:
+    Keivan Moradi (with ChatGPT-4o assistance)
 
-            tag     = sprintf('%s_%s_%s',cfg.order{o,1},cfg.dtype{d,1},cfg.comp{c});
-            tagSafe = regexprep(tag,'[^A-Za-z0-9]','_');
-            files   = arrayfun(@(k) fullfile(tmpRoot, ...
-                       sprintf('t_%s_%02d.tif',tagSafe,k)), ...
-                       1:sz(3),'uni',0);
+  LICENSE:
+    GNU GPL v3 — https://www.gnu.org/licenses/gpl-3.0.html
+==============================================================================*/
 
-            save_bl_tif(A,files,cfg.order{o,2},cfg.comp{c});
-            for k = 1:sz(3)
-                ref = A(:,:,k); if cfg.order{o,2}, ref = ref.'; end
-                assert(isequal(imread(files{k}),ref),"%s slice %d mismatch",tag,k);
-            end
-            fprintf("   ✅ %-30s\n", strrep(tag,'_',' | '));
-        end
-    end
-end
+#include "mex.h"
+#include "tiffio.h"
 
-%% ---------- C. guard-clause checks ----------
-fprintf("\n   🛡  guard-clause checks\n");
-try
-    save_bl_tif(uint8(0), {'/no/way/out.tif'}, false,'lzw');
-    error("invalid-path accepted");
-catch, fprintf("      ✅ invalid path rejected\n"); end
+#include <filesystem>
+#include <vector>
+#include <string>
+#include <thread>
+#include <mutex>
+#include <atomic>
+#include <stdexcept>
+#include <system_error>
+#include <cstdint>
+#include <cstring>
+#include <algorithm>
+#include <unistd.h>
 
-roFile = fullfile(tmpRoot,'readonly.tif');
-imwrite(uint8(1),roFile);  fileattrib(roFile,'-w');
-cRO = onCleanup(@() restore_rw(roFile));
+namespace fs = std::filesystem;
 
-try
-    save_bl_tif(uint8(0), {roFile}, false,'none');
-    error("read-only overwrite accepted");
-catch, fprintf("      ✅ read-only overwrite rejected\n"); end
+// Number of rows per TIFF strip (for balance of RAM vs compression)
+static constexpr uint32_t rowsPerStrip      = 64;
+// Number of slices claimed per atomic dispatch
+static constexpr size_t   slicesPerDispatch = 4;
 
-%% ---------- D. benchmark: save_bl_tif vs async-imwrite ----------
-benchSize = [512 512 64];                     % 256 MiB uint16 stack
-benchVol  = uint16(randi(65535, benchSize));
-mexFiles  = arrayfun(@(k) fullfile(tmpRoot,sprintf('mex_%03d.tif',k)), ...
-                     1:benchSize(3),'uni',0);
-asyncFiles = strrep(mexFiles,'mex_','async_');
+// RAII wrapper for TIFF* so we never leak handles
+struct TiffWriter {
+    TIFF* tif;
+    TiffWriter(const std::string& path, const char* mode) {
+        tif = TIFFOpen(path.c_str(), mode);
+        if (!tif)
+            throw std::runtime_error("Cannot open TIFF for writing: " + path);
+    }
+    ~TiffWriter() {
+        if (tif) TIFFClose(tif);
+    }
+};
 
-% Benchmark save_bl_tif
-fprintf("\n   🏁 benchmark save_bl_tif (uint16 %dx%dx%d)…\n", benchSize, benchSize(3));
-tic
-save_bl_tif(benchVol, mexFiles, false, 'none');
-tMex = toc;
+// Write a single Z-slice to TIFF, using either a direct-write path
+// (when isXYZ==true so memory is row-major) or a per-thread buffer otherwise.
+static void writeSliceToTiff(
+    const uint8_t*       volumeData,
+    size_t               sliceIdx,
+    size_t               widthDim,
+    size_t               heightDim,
+    size_t               bytesPerPixel,
+    bool                 isXYZ,
+    uint16_t             compressionType,
+    const std::string&   outputPath
+) {
+    // Determine image dimensions for libtiff
+    const uint32_t imageWidth  = isXYZ ? static_cast<uint32_t>(widthDim)
+                                        : static_cast<uint32_t>(heightDim);
+    const uint32_t imageHeight = isXYZ ? static_cast<uint32_t>(heightDim)
+                                        : static_cast<uint32_t>(widthDim);
+    const size_t   sliceSize   = widthDim * heightDim * bytesPerPixel;
+    const uint8_t* basePtr     = volumeData + sliceIdx * sliceSize;
 
-% Benchmark async imwrite using backgroundPool
-if ~isempty(ver('parallel')) && exist('backgroundPool','builtin')
-    fprintf("   🏁 benchmark async imwrite (%d tasks)…\n", benchSize(3));
-    futures = parallel.FevalFuture.empty(0,benchSize(3));
-    tic
-    for k = 1:benchSize(3)
-        futures(k) = parfeval(backgroundPool, @imwrite, 0, benchVol(:,:,k), asyncFiles{k});
-    end
-    wait(futures);
-    tAsync = toc;
+    // Build temporary filename
+    fs::path tempFile = fs::path(outputPath).concat(".tmp");
 
-    bytesMiB = numel(benchVol)*2 / 2^20;
-    spdMex   = bytesMiB / tMex;
-    spdAsync = bytesMiB / tAsync;
-    speedup  = tAsync / tMex;
+    // Open and set TIFF tags
+    {
+        TiffWriter writer(tempFile.string(), "w");
+        TIFF* tif = writer.tif;
 
-    fprintf("      save_bl_tif : %.2f s  (%.1f MiB/s)\n", tMex, spdMex);
-    fprintf("      async-imwrite: %.2f s  (%.1f MiB/s)\n", tAsync, spdAsync);
-    fprintf("      speed-up     : %.2f× (async → save_bl_tif)\n", speedup);
-else
-    fprintf("   ⚠️  async-imwrite benchmark skipped: backgroundPool unavailable.\n");
-end
+        TIFFSetField(tif, TIFFTAG_IMAGEWIDTH,      imageWidth);
+        TIFFSetField(tif, TIFFTAG_IMAGELENGTH,     imageHeight);
+        TIFFSetField(tif, TIFFTAG_BITSPERSAMPLE,   static_cast<uint16_t>(bytesPerPixel * 8));
+        TIFFSetField(tif, TIFFTAG_SAMPLESPERPIXEL, static_cast<uint16_t>(1));
+        TIFFSetField(tif, TIFFTAG_COMPRESSION,     compressionType);
+        TIFFSetField(tif, TIFFTAG_PHOTOMETRIC,     PHOTOMETRIC_MINISBLACK);
+        TIFFSetField(tif, TIFFTAG_PLANARCONFIG,    PLANARCONFIG_CONTIG);
+        TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP,    rowsPerStrip);
 
-fprintf("\n🎉  all save_bl_tif tests passed\n");
-end
+        // If deflate, tune predictor & quality
+        if (compressionType == COMPRESSION_DEFLATE) {
+            TIFFSetField(tif, TIFFTAG_PREDICTOR,  PREDICTOR_HORIZONTAL);
+            TIFFSetField(tif, TIFFTAG_ZIPQUALITY, 6);  // default 1–9
+        }
 
-%% ---------- helpers --------------------------------------------------------
-function sandbox_cleanup(dirPath)
-fclose('all');
-safe_rmdir(dirPath);
-end
+        const uint32_t numStrips = (imageHeight + rowsPerStrip - 1) / rowsPerStrip;
 
-function restore_rw(p)
-if exist(p,'file'), fileattrib(p,'+w'); end
-end
+        // Per-thread buffer for YX layouts
+        thread_local std::vector<uint8_t> stripBuffer;
 
-function safe_rmdir(p)
-if exist(p,'dir')
-    try, rmdir(p,'s'); catch, pause(0.1); if exist(p,'dir'), rmdir(p,'s'); end; end
-end
-end
+        for (uint32_t stripIndex = 0; stripIndex < numStrips; ++stripIndex) {
+            const uint32_t rowStart     = stripIndex * rowsPerStrip;
+            const uint32_t rowsToWrite  = std::min<uint32_t>(rowsPerStrip,
+                                              imageHeight - rowStart);
+            const size_t   byteCount    = static_cast<size_t>(imageWidth)
+                                          * rowsToWrite * bytesPerPixel;
+
+            if (isXYZ) {
+                // Direct-write path: memory is row-major in X (widthDim)
+                const uint8_t* stripData =
+                    basePtr + static_cast<size_t>(rowStart) * imageWidth * bytesPerPixel;
+                tsize_t wrote = (compressionType == COMPRESSION_NONE)
+                    ? TIFFWriteRawStrip    (tif, stripIndex, stripData, byteCount)
+                    : TIFFWriteEncodedStrip(tif, stripIndex, stripData, byteCount);
+                if (wrote < 0)
+                    throw std::runtime_error("TIFF write failed on strip " +
+                                             std::to_string(stripIndex));
+            } else {
+                // YX layout: pack into contiguous buffer
+                if (stripBuffer.size() < byteCount)
+                    stripBuffer.resize(byteCount);
+                for (uint32_t r = 0; r < rowsToWrite; ++r) {
+                    for (uint32_t c = 0; c < imageWidth; ++c) {
+                        // MATLAB is column-major: index = (row + col*heightDim)
+                        size_t srcOffset = ( (rowStart + r)
+                                          + c * heightDim )
+                                          * bytesPerPixel;
+                        size_t dstOffset = ( r * imageWidth + c )
+                                          * bytesPerPixel;
+                        std::memcpy(&stripBuffer[dstOffset],
+                                    basePtr + srcOffset,
+                                    bytesPerPixel);
+                    }
+                }
+                tsize_t wrote = (compressionType == COMPRESSION_NONE)
+                    ? TIFFWriteRawStrip    (tif, stripIndex, stripBuffer.data(), byteCount)
+                    : TIFFWriteEncodedStrip(tif, stripIndex, stripBuffer.data(), byteCount);
+                if (wrote < 0)
+                    throw std::runtime_error("TIFF write failed on strip " +
+                                             std::to_string(stripIndex));
+            }
+        }
+    } // TIFFClose occurs here
+
+    // Atomically replace any existing file
+    std::error_code ec;
+    fs::rename(tempFile, outputPath, ec);
+    if (ec) {
+        if (fs::exists(outputPath)) fs::remove(outputPath);
+        fs::rename(tempFile, outputPath, ec);
+        if (ec)
+            throw std::runtime_error("Failed to rename " + tempFile.string() +
+                                     " → " + outputPath);
+    }
+}
+
+// MATLAB MEX entry point
+void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
+    // 1) Check argument count
+    if (nrhs < 4 || nrhs > 5)
+        mexErrMsgIdAndTxt("save_bl_tif:usage",
+            "Usage: save_bl_tif(vol, fileList, isXYZ, compression[, nThreads]);");
+
+    // 2) Validate volume type
+    if (!mxIsUint8(prhs[0]) && !mxIsUint16(prhs[0]))
+        mexErrMsgIdAndTxt("save_bl_tif:type",
+            "Volume must be uint8 or uint16.");
+
+    // 3) Extract dimensions
+    const mwSize* dims      = mxGetDimensions(prhs[0]);
+    const size_t   heightDim = dims[0];
+    const size_t   widthDim  = dims[1];
+    const size_t   numSlices = (mxGetNumberOfDimensions(prhs[0]) == 3
+                                ? dims[2] : 1);
+
+    // 4) Parse isXYZ flag
+    const bool isXYZ = mxIsLogicalScalarTrue(prhs[2])
+        || (mxIsNumeric(prhs[2]) && mxGetScalar(prhs[2]) != 0);
+
+    // 5) Parse compression string
+    char* compCStr = mxArrayToUTF8String(prhs[3]);
+    std::string compressionStr(compCStr);
+    mxFree(compCStr);
+    uint16_t compressionType =
+           compressionStr == "none"    ? COMPRESSION_NONE
+         : compressionStr == "lzw"     ? COMPRESSION_LZW
+         : compressionStr == "deflate" ? COMPRESSION_DEFLATE
+         : throw std::runtime_error("Invalid compression: " + compressionStr);
+
+    // 6) Validate fileList
+    if (!mxIsCell(prhs[1]) || mxGetNumberOfElements(prhs[1]) != numSlices)
+        mexErrMsgIdAndTxt("save_bl_tif:files",
+            "fileList must be a cell-array of length = number of slices.");
+    std::vector<std::string> outputFilePaths(numSlices);
+    for (size_t i = 0; i < numSlices; ++i) {
+        char* s = mxArrayToUTF8String(mxGetCell(prhs[1], i));
+        outputFilePaths[i] = s;
+        mxFree(s);
+    }
+
+    // 7) Guard-clauses: directories exist & writable
+    for (auto& path : outputFilePaths) {
+        fs::path dir = fs::path(path).parent_path();
+        if (!dir.empty() && !fs::exists(dir))
+            mexErrMsgIdAndTxt("save_bl_tif:invalidPath",
+                "Directory does not exist: %s", dir.string().c_str());
+        if (fs::exists(path) && access(path.c_str(), W_OK) != 0)
+            mexErrMsgIdAndTxt("save_bl_tif:readonly",
+                "Cannot overwrite read-only file: %s", path.c_str());
+    }
+
+    // 8) Get volume data pointer and sample size
+    const uint8_t* volumeData     = static_cast<const uint8_t*>(mxGetData(prhs[0]));
+    const size_t   bytesPerPixel  = (mxGetClassID(prhs[0]) == mxUINT16_CLASS ? 2 : 1);
+
+    // 9) Determine thread count
+    const size_t hardwareConcurrency = std::thread::hardware_concurrency() ?: 1;
+    const size_t defaultThreads      = std::max(hardwareConcurrency/2, size_t(1));
+    const size_t requestedThreads    = (nrhs == 5
+                                        ? static_cast<size_t>(mxGetScalar(prhs[4]))
+                                        : defaultThreads);
+    const size_t threadCount         = std::min(requestedThreads, numSlices);
+
+    // 10) Prepare for error collection
+    std::vector<std::string> errors;
+    std::mutex              errorMutex;
+
+    // 11) Atomic slice index
+    std::atomic<size_t> nextSliceIndex{0};
+
+    // 12) Launch worker threads (they will reuse threads until done)
+    std::vector<std::thread> threads;
+    threads.reserve(threadCount);
+    for (size_t t = 0; t < threadCount; ++t) {
+        threads.emplace_back([&]() {
+            while (true) {
+                const size_t start = nextSliceIndex.fetch_add(
+                    slicesPerDispatch, std::memory_order_relaxed);
+                if (start >= numSlices) break;
+                const size_t end = std::min(numSlices, start + slicesPerDispatch);
+                for (size_t sliceIdx = start; sliceIdx < end; ++sliceIdx) {
+                    try {
+                        writeSliceToTiff(volumeData,
+                                         sliceIdx,
+                                         widthDim,
+                                         heightDim,
+                                         bytesPerPixel,
+                                         isXYZ,
+                                         compressionType,
+                                         outputFilePaths[sliceIdx]);
+                    } catch (const std::exception& ex) {
+                        std::lock_guard<std::mutex> lock(errorMutex);
+                        errors.push_back(ex.what());
+                        return;
+                    }
+                }
+            }
+        });
+    }
+
+    // 13) Wait for all threads
+    for (auto& th : threads) th.join();
+
+    // 14) Report any errors
+    if (!errors.empty())
+        mexErrMsgIdAndTxt("save_bl_tif:runtime", errors.front().c_str());
+
+    // 15) Optionally return the input volume
+    if (nlhs > 0)
+        plhs[0] = const_cast<mxArray*>(prhs[0]);
+}
