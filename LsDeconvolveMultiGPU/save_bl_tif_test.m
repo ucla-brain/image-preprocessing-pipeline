@@ -1,5 +1,6 @@
 function save_bl_tif_test
 % Extended regression + benchmark for save_bl_tif MEX
+
 fprintf("🧪  save_bl_tif extended test-suite\n");
 
 %% ---------- sandbox (deleted on exit) ----------
@@ -27,23 +28,18 @@ cfg.comp  = {'none','lzw','deflate'};
 sz        = [2048 1024 4];                      % ≥ 2 MiB slice
 
 for o = 1:size(cfg.order,1)
-    if o > 1, fprintf("\n"); end  % blank line between YXZ and XYZ
-
+    if o>1, fprintf("\n"); end                  % blank line between YXZ / XYZ
     for d = 1:size(cfg.dtype,1)
         for c = 1:numel(cfg.comp)
-            % --- create data ---
             A = cfg.dtype{d,2}(randi(intmax(cfg.dtype{d,1}),sz));
             if cfg.order{o,2}, A = permute(A,[2 1 3]); end
 
-            % --- safe tag & file list ---
-            tag     = sprintf('%s_%s_%s',cfg.order{o,1}, ...
-                              cfg.dtype{d,1},cfg.comp{c});
-            tagSafe = lower(regexprep(tag,'[^A-Za-z0-9]','_'));
+            tag     = sprintf('%s_%s_%s',cfg.order{o,1},cfg.dtype{d,1},cfg.comp{c});
+            tagSafe = regexprep(tag,'[^A-Za-z0-9]','_');
             files   = arrayfun(@(k) fullfile(tmpRoot, ...
                        sprintf('t_%s_%02d.tif',tagSafe,k)), ...
                        1:sz(3),'uni',0);
 
-            % --- write & verify ---
             save_bl_tif(A,files,cfg.order{o,2},cfg.comp{c});
             for k = 1:sz(3)
                 ref = A(:,:,k); if cfg.order{o,2}, ref = ref.'; end
@@ -71,49 +67,54 @@ try
 catch, fprintf("      ✅ read-only overwrite rejected\n"); end
 
 %% ---------- D. benchmark: save_bl_tif vs parfor-imwrite ----------
-benchSize = [512 512 64];                     % 64 slices of 512×512 (uint16)
+benchSize = [512 512 64];                     % 256 MiB uint16 stack
 benchVol  = uint16(randi(65535, benchSize));
 mexFiles  = arrayfun(@(k) fullfile(tmpRoot,sprintf('mex_%03d.tif',k)), ...
                      1:benchSize(3),'uni',0);
 parFiles  = strrep(mexFiles,'mex_','par_');
 
-% Ensure parallel pool
+% Try to start a local pool safely (supports batch mode)
 p = gcp('nocreate');
 if isempty(p)
-    cluster = parcluster('local');
-    cluster.NumWorkers = min(8, feature('numCores'));
-    p = parpool(cluster, cluster.NumWorkers);
+    try
+        p = parpool("local");
+    catch
+        warning("⚠️  Failed to start parallel pool. Benchmark skipped.");
+        p = [];
+    end
 end
-wait(p);
 
-fprintf("\n   🏁 benchmark (uint16 %dx%dx%d, %d workers)…\n", ...
-        benchSize(1),benchSize(2),benchSize(3),p.NumWorkers);
+if isempty(p)
+    fprintf("   ⚠️  Benchmark skipped: parallel pool unavailable.\n");
+else
+    wait(p);
+    fprintf("\n   🏁 benchmark (uint16 %dx%dx%d, %d workers)…\n", ...
+            benchSize(1),benchSize(2),benchSize(3),p.NumWorkers);
 
-% --- save_bl_tif path ---
-tic
-save_bl_tif(benchVol, mexFiles, false, 'none');
-tMex = toc;
+    tic
+    save_bl_tif(benchVol, mexFiles, false, 'none');
+    tMex = toc;
 
-% --- parfor path ---
-tic
-parfor k = 1:benchSize(3)
-    imwrite(benchVol(:,:,k), parFiles{k});
+    tic
+    parfor k = 1:benchSize(3)
+        imwrite(benchVol(:,:,k), parFiles{k});
+    end
+    tPar = toc;
+
+    bytesMiB = numel(benchVol)*2 / 2^20;
+    spdMex   = bytesMiB / tMex;
+    spdPar   = bytesMiB / tPar;
+    speedup  = tPar / tMex;
+
+    fprintf("      save_bl_tif : %.2f s  (%.1f MiB/s)\n", tMex, spdMex);
+    fprintf("      parfor loop : %.2f s  (%.1f MiB/s)\n", tPar, spdPar);
+    fprintf("      speed-up     : %.2f× (parfor → save_bl_tif)\n", speedup);
 end
-tPar = toc;
-
-bytesMiB = numel(benchVol)*2 / 2^20;
-spdMex   = bytesMiB / tMex;
-spdPar   = bytesMiB / tPar;
-speedup  = tPar / tMex;
-
-fprintf("      save_bl_tif : %.2f s  (%.1f MiB/s)\n", tMex, spdMex);
-fprintf("      parfor loop : %.2f s  (%.1f MiB/s)\n", tPar, spdPar);
-fprintf("      speed-up     : %.2f× (parfor → save_bl_tif)\n", speedup);
 
 fprintf("\n🎉  all save_bl_tif tests passed\n");
 end
 
-%% ---------- helpers ----------
+%% ---------- helpers --------------------------------------------------------
 function sandbox_cleanup(dirPath)
 fclose('all');
 safe_rmdir(dirPath);
@@ -125,11 +126,6 @@ end
 
 function safe_rmdir(p)
 if exist(p,'dir')
-    try
-        rmdir(p,'s');
-    catch
-        pause(0.1);
-        if exist(p,'dir'), rmdir(p,'s'); end
-    end
+    try, rmdir(p,'s'); catch, pause(0.1); if exist(p,'dir'), rmdir(p,'s'); end, end
 end
 end
