@@ -1,10 +1,10 @@
 /*==============================================================================
-
   save_bl_tif.cpp
   ------------------------------------------------------------------------------
 
   DESCRIPTION
     High-throughput TIFF saver for 3-D MATLAB volumes (one TIFF per Z-slice).
+    NUMA-aware. Robust error reporting. Per-slice parallelization.
 
   USAGE
       save_bl_tif(volume, fileList, isXYZ, compression[, nThreads])
@@ -16,11 +16,12 @@
                                            false == data is [Y X Z]
         compression : 'none' | 'lzw' | 'deflate'
         nThreads    : optional, maximum number of worker threads
-                      (default = std::thread::hardware_concurrency()).
+                      (default = number of physical CPU cores, not logical).
 
   FEATURES
     • Per-slice TIFF output with optional LZW / Deflate compression.
     • NUMA-aware, per-thread, reusable scratch buffers (huge-page if possible).
+    • NUMA-local thread binding for best performance (Linux).
     • Safe overwrite detection (refuses to touch read-only paths).
     • Robust error aggregation & throw-on-first-failure semantics.
     • No memory leaks — correct deallocator chosen for every allocator.
@@ -36,7 +37,6 @@
 
   LICENSE
     GNU GPL v3 <https://www.gnu.org/licenses/>
-
 ==============================================================================*/
 
 #include "mex.h"
@@ -52,8 +52,11 @@
 #include <mutex>
 #include <string>
 #include <thread>
-#include <type_traits>
 #include <vector>
+#include <stdexcept>
+#include <memory>
+#include <algorithm>
+#include <iostream>
 
 #if defined(__linux__)
   #include <errno.h>
@@ -73,7 +76,31 @@
 #endif
 
 //==============================================================================
-//  Helpers & low-level utilities
+//  NUMA Thread Pinning (Linux)
+//==============================================================================
+#if defined(__linux__)
+void pin_thread_to_numa_node(int node) {
+    cpu_set_t cpu_set;
+    CPU_ZERO(&cpu_set);
+
+    // Bind to any CPU on the NUMA node
+    struct bitmask *node_cpus = numa_allocate_cpumask();
+    numa_node_to_cpus(node, node_cpus);
+    for (int c = 0; c < CPU_SETSIZE; ++c) {
+        if (numa_bitmask_isbitset(node_cpus, c))
+            CPU_SET(c, &cpu_set);
+    }
+    numa_free_cpumask(node_cpus);
+
+    if (sched_setaffinity(0, sizeof(cpu_set), &cpu_set) != 0) {
+        // Just warn, don't hard-fail
+        std::cerr << "Warning: Failed to set thread affinity for NUMA node " << node << std::endl;
+    }
+}
+#endif
+
+//==============================================================================
+//  Low-level helpers
 //==============================================================================
 
 namespace detail {
@@ -284,29 +311,60 @@ static void save_one_slice(const SliceJob& job, int numaNode)
 
 struct JobQueue {
     const std::vector<SliceJob>* jobs = nullptr;
-    std::atomic_size_t nextIdx {0};
+    std::atomic_size_t nextJobIndex {0};
     std::mutex  errorMutex;
     std::vector<std::string> errors;
 };
 
-static void worker(JobQueue& q, int numaNode)
+static void worker(JobQueue& queue, int numaNode)
 {
     constexpr size_t CHUNK = 16;
 
+#if defined(__linux__)
+    pin_thread_to_numa_node(numaNode);  // Critical: ensure NUMA-locality
+#endif
+
     while (true) {
-        const size_t start = q.nextIdx.fetch_add(CHUNK, std::memory_order_relaxed);
-        if (start >= q.jobs->size()) break;
-        const size_t end = std::min(start + CHUNK, q.jobs->size());
+        const size_t start = queue.nextJobIndex.fetch_add(CHUNK, std::memory_order_relaxed);
+        if (start >= queue.jobs->size()) break;
+        const size_t end = std::min(start + CHUNK, queue.jobs->size());
 
         for (size_t i = start; i < end; ++i) {
             try {
-                save_one_slice((*q.jobs)[i], numaNode);
+                save_one_slice((*queue.jobs)[i], numaNode);
             } catch (const std::exception& ex) {
-                std::lock_guard<std::mutex> lock(q.errorMutex);
-                q.errors.emplace_back(ex.what());
+                std::lock_guard<std::mutex> lock(queue.errorMutex);
+                queue.errors.emplace_back(ex.what());
             }
         }
     }
+}
+
+//==============================================================================
+//  Utility: Count physical CPU cores (Linux)
+//==============================================================================
+static size_t count_physical_cores() {
+#if defined(__linux__)
+    // Count physical (not logical/HT) cores using /proc/cpuinfo
+    std::vector<std::pair<int,int>> unique_pairs;
+    FILE* fp = fopen("/proc/cpuinfo", "r");
+    if (!fp) return std::thread::hardware_concurrency();
+    char line[256];
+    int phys_id = -1, core_id = -1;
+    while (fgets(line, sizeof(line), fp)) {
+        if (sscanf(line, "physical id\t: %d", &phys_id) == 1) continue;
+        if (sscanf(line, "core id\t: %d", &core_id) == 1) {
+            unique_pairs.emplace_back(phys_id, core_id);
+        }
+    }
+    fclose(fp);
+    // Deduplicate
+    std::sort(unique_pairs.begin(), unique_pairs.end());
+    unique_pairs.erase(std::unique(unique_pairs.begin(), unique_pairs.end()), unique_pairs.end());
+    return unique_pairs.empty() ? std::thread::hardware_concurrency() : unique_pairs.size();
+#else
+    return std::thread::hardware_concurrency();
+#endif
 }
 
 //==============================================================================
@@ -317,76 +375,76 @@ void mexFunction(int nlhs, mxArray* plhs[],
                  int nrhs, const mxArray* prhs[])
 {
     try {
-        /*------------------------------------------------------------------*/
-        /*  Parse input                                                     */
-        /*------------------------------------------------------------------*/
+        // --------------------------------------------------------------
+        // Parse input arguments and validate
+        // --------------------------------------------------------------
         if (nrhs < 4 || nrhs > 5)
             mexErrMsgIdAndTxt("save_bl_tif:Input",
                               "Usage: save_bl_tif(volume, fileList, isXYZ, compression[, nThreads])");
 
-        const mxArray* vol = prhs[0];
-        if (!mxIsUint8(vol) && !mxIsUint16(vol))
+        const mxArray* volumeMx = prhs[0];
+        if (!mxIsUint8(volumeMx) && !mxIsUint16(volumeMx))
             mexErrMsgIdAndTxt("save_bl_tif:Input",
                               "Volume must be uint8 or uint16.");
 
-        const mwSize* dims = mxGetDimensions(vol);
-        const size_t  rows = dims[0];
-        const size_t  cols = dims[1];
-        const size_t  zs   = (mxGetNumberOfDimensions(vol) == 3) ? dims[2] : 1;
+        const mwSize* dims = mxGetDimensions(volumeMx);
+        const size_t rows = dims[0];
+        const size_t cols = dims[1];
+        const size_t numZSlices = (mxGetNumberOfDimensions(volumeMx) == 3) ? dims[2] : 1;
 
         const bool isXYZ = mxIsLogicalScalarTrue(prhs[2]) ||
                            (mxIsNumeric(prhs[2]) && mxGetScalar(prhs[2]) != 0);
 
-        char* compCStr  = mxArrayToUTF8String(prhs[3]);
-        if (!compCStr) mexErrMsgIdAndTxt("save_bl_tif:Input","Bad compression arg");
-        const std::string compStr(compCStr);
-        mxFree(compCStr);
+        char* compressionCStr  = mxArrayToUTF8String(prhs[3]);
+        if (!compressionCStr) mexErrMsgIdAndTxt("save_bl_tif:Input","Bad compression arg");
+        const std::string compressionStr(compressionCStr);
+        mxFree(compressionCStr);
 
-        const uint16_t compTag =
-              (compStr == "lzw")     ? COMPRESSION_LZW
-            : (compStr == "deflate") ? COMPRESSION_DEFLATE
-            : (compStr == "zip")     ? COMPRESSION_DEFLATE
-            : (compStr == "none")    ? COMPRESSION_NONE
+        const uint16_t compressionTag =
+              (compressionStr == "lzw")     ? COMPRESSION_LZW
+            : (compressionStr == "deflate") ? COMPRESSION_DEFLATE
+            : (compressionStr == "zip")     ? COMPRESSION_DEFLATE
+            : (compressionStr == "none")    ? COMPRESSION_NONE
             : throw std::runtime_error("Invalid compression option");
 
-        if (!mxIsCell(prhs[1]) || mxGetNumberOfElements(prhs[1]) != zs)
+        if (!mxIsCell(prhs[1]) || mxGetNumberOfElements(prhs[1]) != numZSlices)
             mexErrMsgIdAndTxt("save_bl_tif:Input",
                               "fileList must be a 1×Z cell array.");
 
-        std::vector<std::string> paths(zs);
-        for (size_t k = 0; k < zs; ++k) {
+        std::vector<std::string> filePaths(numZSlices);
+        for (size_t k = 0; k < numZSlices; ++k) {
             char* s = mxArrayToUTF8String(mxGetCell(prhs[1], k));
-            paths[k].assign(s);
+            filePaths[k].assign(s);
             mxFree(s);
         }
 
-        /*------------------------------------------------------------------*/
-        /*  Build job list                                                  */
-        /*------------------------------------------------------------------*/
-        const uint8_t* base  = static_cast<const uint8_t*>(mxGetData(vol));
-        const mxClassID id   = mxGetClassID(vol);
-        const size_t    bpp  = (id == mxUINT16_CLASS) ? 2 : 1;
-        const size_t    sliceBytes = rows * cols * bpp;
+        // --------------------------------------------------------------
+        // Build job list
+        // --------------------------------------------------------------
+        const uint8_t* volumeBasePtr = static_cast<const uint8_t*>(mxGetData(volumeMx));
+        const mxClassID mxId   = mxGetClassID(volumeMx);
+        const size_t    bytesPerPx  = (mxId == mxUINT16_CLASS) ? 2 : 1;
+        const size_t    bytesPerSlice = rows * cols * bytesPerPx;
 
         std::vector<SliceJob> jobs;
-        jobs.reserve(zs);
-        for (size_t z = 0; z < zs; ++z) {
-            jobs.push_back({ base,
-                             z * sliceBytes,
+        jobs.reserve(numZSlices);
+        for (size_t z = 0; z < numZSlices; ++z) {
+            jobs.push_back({ volumeBasePtr,
+                             z * bytesPerSlice,
                              rows, cols,
                              isXYZ,
-                             id,
-                             compTag,
-                             sliceBytes,
-                             bpp,
+                             mxId,
+                             compressionTag,
+                             bytesPerSlice,
+                             bytesPerPx,
                              z,
-                             paths[z] });
+                             filePaths[z] });
         }
 
-        /*------------------------------------------------------------------*/
-        /*  Determine thread count & NUMA topology                          */
-        /*------------------------------------------------------------------*/
-        size_t maxThreads = std::thread::hardware_concurrency();
+        // --------------------------------------------------------------
+        // Determine thread count & NUMA topology
+        // --------------------------------------------------------------
+        size_t maxThreads = count_physical_cores();
         if (maxThreads == 0) maxThreads = 1;
 
         if (nrhs == 5) {
@@ -397,40 +455,41 @@ void mexFunction(int nlhs, mxArray* plhs[],
             maxThreads = std::min(maxThreads, jobs.size());
         }
 
+        // NUMA node count
         size_t numaNodes = 1;
 #if defined(__linux__)
         if (numa_available() != -1)
             numaNodes = numa_max_node() + 1;
 #endif
 
-        /*------------------------------------------------------------------*/
-        /*  Launch worker threads                                           */
-        /*------------------------------------------------------------------*/
+        // --------------------------------------------------------------
+        // Launch worker threads
+        // --------------------------------------------------------------
         JobQueue queue;
         queue.jobs = &jobs;
 
-        std::vector<std::thread> threads;
-        threads.reserve(maxThreads);
+        std::vector<std::thread> workerThreads;
+        workerThreads.reserve(maxThreads);
 
         for (size_t t = 0; t < maxThreads; ++t) {
             const int node = static_cast<int>(t % numaNodes);
-            threads.emplace_back(worker, std::ref(queue), node);
+            workerThreads.emplace_back(worker, std::ref(queue), node);
         }
-        for (auto& th : threads) th.join();
+        for (auto& th : workerThreads) th.join();
 
-        /*------------------------------------------------------------------*/
-        /*  Report aggregated errors (if any)                               */
-        /*------------------------------------------------------------------*/
+        // --------------------------------------------------------------
+        // Report aggregated errors (if any)
+        // --------------------------------------------------------------
         if (!queue.errors.empty()) {
             std::string msg("save_bl_tif encountered errors:\n");
             for (const auto& e : queue.errors) msg += "  • " + e + '\n';
             mexErrMsgIdAndTxt("save_bl_tif:Runtime", "%s", msg.c_str());
         }
 
-        /*------------------------------------------------------------------*/
-        /*  Optional echo-back of the volume                                */
-        /*------------------------------------------------------------------*/
-        if (nlhs > 0) plhs[0] = const_cast<mxArray*>(vol);
+        // --------------------------------------------------------------
+        // Optional echo-back of the volume
+        // --------------------------------------------------------------
+        if (nlhs > 0) plhs[0] = const_cast<mxArray*>(volumeMx);
     }
     catch (const std::exception& ex) {
         mexErrMsgIdAndTxt("save_bl_tif:Exception", "%s", ex.what());
