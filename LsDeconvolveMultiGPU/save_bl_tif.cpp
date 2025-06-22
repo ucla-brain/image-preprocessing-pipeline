@@ -307,7 +307,7 @@ void mexFunction(int nlhs, mxArray* plhs[],
             paths = it->second;
         } else {
             paths.resize(dim2);
-            for (size_t sliceIndex = 0; z < dim2; ++sliceIndex) {
+            for (size_t sliceIndex = 0; sliceIndex < dim2; ++sliceIndex) {
                 mxArray* elem = mxGetCell(prhs[1], sliceIndex);
                 if (!mxIsChar(elem))
                     mexErrMsgIdAndTxt("save_bl_tif:Input", "fileList elements must be strings.");
