@@ -21,42 +21,59 @@ assert(isequal(imread(fn3d),vol3d(:,:,1)));
 
 fprintf("   ✅ basic 2-D / 3-D paths ok\n");
 
-%% ---------- B. full matrix: {layout × dtype × compression} + timing ----------
+%% ---------- B. full matrix: {layout × dtype × compression} + per-test timing ----------
 cfg.order = {'YXZ',false; 'XYZ',true};
 cfg.dtype = {'uint8',@uint8; 'uint16',@uint16};
 cfg.comp  = {'none','lzw','deflate'};
 sz        = [2048 1024 4];  % ≥ 2 MiB slice
 
-layoutTimes = zeros(size(cfg.order,1),1);
-for o = 1:size(cfg.order,1)
+nLayouts = size(cfg.order,1);
+nTypes   = size(cfg.dtype,1);
+nComps   = numel(cfg.comp);
+times    = zeros(nLayouts,nTypes,nComps);
+speeds   = zeros(nLayouts,nTypes,nComps);
+
+for o = 1:nLayouts
     fprintf("\n   🏁 Testing layout: %s\n", cfg.order{o,1});
-    tStart = tic;
-    for d = 1:size(cfg.dtype,1)
-        for c = 1:numel(cfg.comp)
-            % generate random volume
-            A = cfg.dtype{d,2}(randi(intmax(cfg.dtype{d,1}), sz));
+    for d = 1:nTypes
+        bytesPerSample = strcmp(cfg.dtype{d,1},'uint16') * 1 + 1;  % uint8→1, uint16→2
+        for c = 1:nComps
+            % prepare volume & permute if needed
+            V = cfg.dtype{d,2}(randi(intmax(cfg.dtype{d,1}), sz));
             if cfg.order{o,2}
-                A = permute(A,[2 1 3]);
+                V = permute(V,[2 1 3]);
             end
 
-            tag     = sprintf('%s_%s_%s',cfg.order{o,1},...
-                              cfg.dtype{d,1},cfg.comp{c});
-            tagSafe = regexprep(tag,'[^A-Za-z0-9]','_');
-            files   = arrayfun(@(k) fullfile(tmpRoot, ...
-                       sprintf('t_%s_%02d.tif',tagSafe,k)), 1:sz(3),'uni',0);
+            % build file list
+            tagSafe = regexprep(sprintf('%s_%s_%s',cfg.order{o,1},...
+                          cfg.dtype{d,1},cfg.comp{c}), '[^A-Za-z0-9]','_');
+            files = arrayfun(@(k) fullfile(tmpRoot, ...
+                     sprintf('t_%s_%02d.tif',tagSafe,k)), 1:sz(3), 'Uni',false);
 
-            % write & verify
-            save_bl_tif(A, files, cfg.order{o,2}, cfg.comp{c});
+            % time the write+verify
+            t0 = tic;
+            save_bl_tif(V, files, cfg.order{o,2}, cfg.comp{c});
+            tElapsed = toc(t0);
+
+            % sanity-check
             for k = 1:sz(3)
-                ref = A(:,:,k);
+                ref = V(:,:,k);
                 if cfg.order{o,2}, ref = ref.'; end
                 assert(isequal(imread(files{k}), ref), ...
-                       "%s slice %d mismatch", tag, k);
+                    "Mismatch %s slice %d", tagSafe, k);
             end
-            fprintf("      ✅ %-30s\n", strrep(tag,'_',' | '));
+
+            % record
+            times(o,d,c)  = tElapsed;
+            MiB = prod(sz(1:2)) * bytesPerSample * sz(3) / 2^20;
+            speeds(o,d,c)= MiB / tElapsed;
+
+            fprintf("      ✅ %-30s in %.2f s (%.1f MiB/s)\n", ...
+                    strrep(sprintf('%s_%s_%s',cfg.order{o,1},...
+                    cfg.dtype{d,1},cfg.comp{c}),'_',' | '), ...
+                    tElapsed, speeds(o,d,c));
         end
     end
-    layoutTimes(o) = toc(tStart);
 end
 
 %% ---------- C. guard-clause checks ----------
@@ -75,47 +92,31 @@ try
     error("read-only overwrite accepted");
 catch, fprintf("      ✅ read-only overwrite rejected\n"); end
 
-%% ---------- D. benchmark: YXZ vs XYZ save_bl_tif (uint16 none) ----------
-benchSize = [512 512 64];  % 256 MiB uint16 stack
-benchVol  = uint16(randi(65535, benchSize));
-benchLayouts = {'YXZ',false; 'XYZ',true};
-benchResults = struct('Layout',{},'Time_s',{},'MiB_s',{});
+%% ---------- D. layout performance table ----------
+fprintf("\n   📊 Detailed performance comparison:\n");
+totalEntries = nLayouts * nTypes * nComps;
+Layout   = strings(totalEntries,1);
+DType    = strings(totalEntries,1);
+Compress = strings(totalEntries,1);
+Time_s   = zeros(totalEntries,1);
+MiB_s    = zeros(totalEntries,1);
 
-for b = 1:size(benchLayouts,1)
-    layoutName = benchLayouts{b,1};
-    isXYZ = benchLayouts{b,2};
-
-    fprintf("\n   🏁 benchmark %s save_bl_tif (uint16 %dx%dx%d)…\n", ...
-            layoutName, benchSize(1), benchSize(2), benchSize(3));
-
-    % prepare volume and file list
-    if isXYZ
-        V = permute(benchVol,[2 1 3]);
-    else
-        V = benchVol;
+idx = 1;
+for o = 1:nLayouts
+    for d = 1:nTypes
+        for c = 1:nComps
+            Layout(idx)   = cfg.order{o,1};
+            DType(idx)    = cfg.dtype{d,1};
+            Compress(idx) = cfg.comp{c};
+            Time_s(idx)   = times(o,d,c);
+            MiB_s(idx)    = speeds(o,d,c);
+            idx = idx + 1;
+        end
     end
-    files = arrayfun(@(k) fullfile(tmpRoot, sprintf('%s_mex_%03d.tif',lower(layoutName),k)), ...
-                     1:benchSize(3),'uni',0);
-
-    % run benchmark
-    tStart = tic;
-    save_bl_tif(V, files, isXYZ, 'none');
-    tElapsed = toc(tStart);
-
-    % record
-    benchResults(b).Layout = layoutName;
-    benchResults(b).Time_s = tElapsed;
-    benchResults(b).MiB_s  = prod(benchSize)*2/2^20 / tElapsed;
-
-    fprintf("      Time: %.2f s  (%.1f MiB/s)\n", ...
-            tElapsed, benchResults(b).MiB_s);
 end
 
-%% ---------- E. layout performance table ----------
-fprintf("\n   📊 Layout performance comparison:\n");
-T_layout = table({benchResults.Layout}.' , [benchResults.Time_s].', [benchResults.MiB_s].', ...
-    'VariableNames', {'Layout','Time_s','MiB_s'});
-disp(T_layout);
+T = table(Layout, DType, Compress, Time_s, MiB_s);
+disp(T);
 
 fprintf("\n🎉  all save_bl_tif tests passed\n");
 end
