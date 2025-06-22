@@ -231,24 +231,30 @@ struct BrickJob {
             {
                 float v = src[(z * brickY + y) * brickX + x];
 
-                /* rescale / clip */
-                if (clipOn) {
-                    v  = std::fmaf(v, 1.f, -lowF);                 // v -= lowF
+                /* ── rescale / clip ─────────────────────────────────────────────── */
+                if (clipOn)
+                {
+                    v -= lowF;                                            // v -= lowF
                     v  = (v < 0.f) ? 0.f : (v > clipSpanF ? clipSpanF : v);
-                    v  = std::fmaf(v, scaleClip, 0.f);             // v *= scaleClip
-                } else if (useDMin) {
-                    v  = std::fmaf(v, 1.f, -dminF);                // v -= dminF
-                    v  = std::fmaf(v, scaleNC1, 0.f);              // v *= scaleNC1
-                } else {
-                    v  = std::fmaf(v, scaleNC0, 0.f);              // v *= scaleNC0
+                    v  = std::fmaf(v, scaleClip, 0.f);                    // v *= scaleClip (FMA ok)
+                }
+                else if (useDMin)
+                {
+                    /* NB: keep two explicit float ops to match MATLAB exactly       */
+                    v -= dminF;                                           // round once here
+                    v *= scaleNC1;                                        // and again here
+                }
+                else
+                {
+                    v *= scaleNC0;                                        // trivial scale
                 }
 
-                /* round half-away-from-zero & clamp */
+                /* ── round half-away-from-zero & clamp ──────────────────────────── */
                 v -= ampF;
                 v  = (v >= 0.f) ? floorf(v + 0.5f) : ceilf(v - 0.5f);
                 v  = (v < 0.f) ? 0.f : (v > scalF ? scalF : v);
 
-                volPtr[base + x] = v;   // store as float
+                volPtr[base + x] = v;                                     // store as float
             }
         }
     }
