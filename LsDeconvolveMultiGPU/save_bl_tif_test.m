@@ -31,12 +31,10 @@ nLayouts = size(cfg.order,1);
 nTypes   = size(cfg.dtype,1);
 nComps   = numel(cfg.comp);
 times    = zeros(nLayouts,nTypes,nComps);
-speeds   = zeros(nLayouts,nTypes,nComps);
 
 for o = 1:nLayouts
     fprintf("\n   🏁 Testing layout: %s\n", cfg.order{o,1});
     for d = 1:nTypes
-        bytesPerSample = strcmp(cfg.dtype{d,1},'uint16') * 1 + 1;  % uint8→1, uint16→2
         for c = 1:nComps
             % prepare volume & permute if needed
             V = cfg.dtype{d,2}(randi(intmax(cfg.dtype{d,1}), sz));
@@ -63,15 +61,10 @@ for o = 1:nLayouts
                     "Mismatch %s slice %d", tagSafe, k);
             end
 
-            % record
-            times(o,d,c)  = tElapsed;
-            MiB = prod(sz(1:2)) * bytesPerSample * sz(3) / 2^20;
-            speeds(o,d,c)= MiB / tElapsed;
-
-            fprintf("      ✅ %-30s in %.2f s (%.1f MiB/s)\n", ...
+            times(o,d,c) = tElapsed;
+            fprintf("      ✅ %-30s in %.2f s\n", ...
                     strrep(sprintf('%s_%s_%s',cfg.order{o,1},...
-                    cfg.dtype{d,1},cfg.comp{c}),'_',' | '), ...
-                    tElapsed, speeds(o,d,c));
+                    cfg.dtype{d,1},cfg.comp{c}),'_',' | '), tElapsed);
         end
     end
 end
@@ -92,30 +85,26 @@ try
     error("read-only overwrite accepted");
 catch, fprintf("      ✅ read-only overwrite rejected\n"); end
 
-%% ---------- D. layout performance table ----------
-fprintf("\n   📊 Detailed performance comparison:\n");
-totalEntries = nLayouts * nTypes * nComps;
-Layout   = strings(totalEntries,1);
-DType    = strings(totalEntries,1);
-Compress = strings(totalEntries,1);
-Time_s   = zeros(totalEntries,1);
-MiB_s    = zeros(totalEntries,1);
-
-idx = 1;
-for o = 1:nLayouts
-    for d = 1:nTypes
-        for c = 1:nComps
-            Layout(idx)   = cfg.order{o,1};
-            DType(idx)    = cfg.dtype{d,1};
-            Compress(idx) = cfg.comp{c};
-            Time_s(idx)   = times(o,d,c);
-            MiB_s(idx)    = speeds(o,d,c);
-            idx = idx + 1;
-        end
+%% ---------- D. speed-up table: XYZ vs YXZ ----------
+fprintf("\n   📊 Speed-up (YXZ time / XYZ time) by dtype & compression:\n");
+rows = {};
+for d = 1:nTypes
+    for c = 1:nComps
+        t_YXZ = times(1,d,c);
+        t_XYZ = times(2,d,c);
+        speedup = t_YXZ / t_XYZ;
+        rows(end+1,:) = {
+            cfg.dtype{d,1}, ...
+            cfg.comp{c}, ...
+            t_YXZ, ...
+            t_XYZ, ...
+            speedup ...
+        };
     end
 end
 
-T = table(Layout, DType, Compress, Time_s, MiB_s);
+T = cell2table(rows, 'VariableNames', ...
+    {'DataType','Compression','Time_YXZ_s','Time_XYZ_s','Speedup'});
 disp(T);
 
 fprintf("\n🎉  all save_bl_tif tests passed\n");
