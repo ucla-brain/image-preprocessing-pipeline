@@ -1144,8 +1144,9 @@ function postprocess_save( ...
 
         % ---- Parallel load + assemble (inside C++) -------------------------
         [R, elapsed] = load_slab_lz4(  blocklist(block_inds), p1_slab, p2_slab, slabSize, ...
-                                       clipval, scal, amplification, deconvmin, deconvmax, low_clip, high_clip, ...
-                                       feature('numCores') );
+                                       clipval, scal, amplification, deconvmin, deconvmax, low_clip, high_clip);
+                                       %feature('numCores')
+
         fprintf('   slab assembled + scaled in %.1fs ()\n', elapsed);
 
         if stack_info.flip_upside_down
