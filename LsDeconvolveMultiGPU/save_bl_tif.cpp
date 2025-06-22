@@ -348,38 +348,30 @@ void mexFunction(int nlhs, mxArray* plhs[],
 
         for (size_t i = 0; i < maxThreads; ++i) {
             workers.emplace_back([&, i]() {
-                // Apply pthread attributes to this thread
-                sched_param param{};
-                param.sched_priority = 0; // default priority
+            #if defined(__linux__)
+                // NUMA affinity
+                if (numa_available() != -1) {
+                    int max_node = numa_max_node();
+                    int target_node = int(i % (max_node + 1));
+                    numa_run_on_node(target_node);
+                }
 
-                pthread_setschedparam(pthread_self(), SCHED_BATCH, &param);
+                // Thread name and scheduling
                 pthread_setname_np(pthread_self(), "save_bl_tif");
+                sched_param param{};
+                param.sched_priority = 0;
+                pthread_setschedparam(pthread_self(), SCHED_BATCH, &param);
 
-                #if defined(__linux__)
-                    if (numa_available() != -1) {
-                        int max_node = numa_max_node();
-                        int target_node = int(i % (max_node + 1));
-                        numa_run_on_node(target_node);
-                    }
-                    cpu_set_t cpuset;
-                    CPU_ZERO(&cpuset);
-                    CPU_SET(i % hw, &cpuset);
-                    pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
-                #endif
+                // Core pinning
+                cpu_set_t cpuset;
+                CPU_ZERO(&cpuset);
+                CPU_SET(i % hw, &cpuset);
+                pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
+            #endif
 
                 worker_entry(ctx, int(i));
             });
-
-            // Apply stack size (attr) directly to each std::thread
-            pthread_t native_thread = workers.back().native_handle();
-            sched_param param{};
-            param.sched_priority = 0; // default priority
-
-            pthread_setschedparam(native_thread, SCHED_BATCH, &param);
         }
-
-        // Ensure attribute cleanup
-        pthread_attr_destroy(&attr);
 
         // Join all threads (critical for avoiding segfault)
         for (auto& t : workers) if (t.joinable()) t.join();
