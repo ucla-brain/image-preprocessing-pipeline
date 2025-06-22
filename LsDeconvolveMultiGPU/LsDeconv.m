@@ -193,7 +193,7 @@ function [] = LsDeconv(varargin)
             output_bytes = 2;
             if convert_to_8bit
                 output_bytes = 1;
-            else if stack_info.bit_depth == 8
+            elseif stack_info.bit_depth == 8
                 output_bytes = 1;
             end
 
