@@ -16,7 +16,7 @@
   FEATURES:
     • Guard-clauses on invalid/read-only output paths.
     • Atomic slice-index dispatch (blocks of slices for locality).
-    • Per-thread strip buffer allocated lazily (on first use).
+    • Per-thread strip buffer allocated *lazily* (on first use, not at thread start).
     • Multi-row strips (64 rows) for bounded RAM & better compression.
     • Deflate predictor & quality set for best libtiff4.7 compression.
     • Proper close-before-rename (avoids NUMA lockups).
@@ -55,9 +55,9 @@
 
 namespace fs = std::filesystem;
 
-// number of rows per TIFF strip (tuned for deflate)
+// Number of rows per TIFF strip (tuned for deflate compression)
 constexpr uint32_t kRowsPerStrip      = 64;
-// number of contiguous slices claimed per atomic dispatch
+// Number of contiguous slices claimed per atomic dispatch
 constexpr size_t   kSlicesPerDispatch = 4;
 
 // RAII wrapper: ensures TIFF* is closed on scope exit
@@ -73,7 +73,7 @@ struct TiffHandle {
     }
 };
 
-// Write one Z-slice using multi-row strips and lazy strip buffer
+// Write one Z-slice using multi-row strips and *lazy* strip buffer
 static void writeSlice(
     const uint8_t*      volumeData,
     size_t              sliceIndex,
@@ -114,20 +114,21 @@ static void writeSlice(
 
         uint32_t numStrips = (height + kRowsPerStrip - 1) / kRowsPerStrip;
 
-        // per-thread lazy buffer
+        // per-thread *lazy* buffer: allocated on first use only
         thread_local std::vector<uint8_t> stripBuffer;
 
-        // write each strip
+        // write each strip (buffer size is only rowsToWrite, not full image)
         for (uint32_t s = 0; s < numStrips; ++s) {
             uint32_t rowStart   = s * kRowsPerStrip;
             uint32_t rowsToWrite = std::min<uint32_t>(kRowsPerStrip, height - rowStart);
             size_t   byteCount   = width * rowsToWrite * bytesPerSample;
 
-            // ensure buffer is large enough (allocates on first use)
+            // ensure buffer is large enough (allocates on first use, never up-front)
             if (stripBuffer.size() < byteCount)
                 stripBuffer.resize(byteCount);
 
             // gather pixels into stripBuffer
+            // Output always [width x rowsToWrite], src layout depends on isXYZ
             for (uint32_t r = 0; r < rowsToWrite; ++r) {
                 for (size_t c = 0; c < width; ++c) {
                     size_t srcRow = isXYZ ? c : (rowStart + r);
@@ -138,7 +139,7 @@ static void writeSlice(
                 }
             }
 
-            // write encoded or raw strip
+            // write encoded or raw strip (best for compression/ram)
             tsize_t wrote = (compression == COMPRESSION_NONE)
                 ? TIFFWriteRawStrip    (tif, s, stripBuffer.data(), byteCount)
                 : TIFFWriteEncodedStrip(tif, s, stripBuffer.data(), byteCount);
