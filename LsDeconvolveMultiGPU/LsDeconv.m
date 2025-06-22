@@ -77,7 +77,6 @@ function [] = LsDeconv(varargin)
         else
             disp('Cache drive dir exists: ' + cache_drive)
         end
-        disp('cache drive dir created and/or exists ' + cache_drive)
         
         assert(isa(inpath, 'string'), 'wrong type ' + class(inpath));
         assert(isa(dxy, 'double'), 'wrong type ' + class(dxy));
@@ -1023,7 +1022,7 @@ function postprocess_save( ...
         deconvmax = S.deconvmax;
         rawmax    = S.rawmax;
     else
-        warning("min_max.mat not found – using defaults.");
+        warning('min_max.mat not found – using defaults.');
         deconvmin = 0;
         deconvmax = 5.3374;
         rawmax    = 65535;
