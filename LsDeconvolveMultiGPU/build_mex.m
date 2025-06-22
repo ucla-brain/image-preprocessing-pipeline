@@ -44,13 +44,13 @@ if ispc
     if debug
         mex_flags_cpu = {
             '-R2018a', ...
-            'COMPFLAGS="$COMPFLAGS /std:c++17 /Od /Zi "', ...
+            'COMPFLAGS="$COMPFLAGS /std:c++17 /Od /Zi /fopenmp"', ...
             'LINKFLAGS="$LINKFLAGS /DEBUG"'
         };
     else
         mex_flags_cpu = {
             '-R2018a', ...
-            'COMPFLAGS="$COMPFLAGS /std:c++17 /O3 /arch:AVX2"', ...
+            'COMPFLAGS="$COMPFLAGS /std:c++17 /O3 /arch:AVX2 /fopenmp"', ...
             'LINKFLAGS="$LINKFLAGS"'
         };
     end
@@ -58,16 +58,16 @@ else
     if debug
         mex_flags_cpu = {
             '-R2018a', ...
-            'CFLAGS="$CFLAGS -O0 -g"', ...
-            'CXXFLAGS="$CXXFLAGS -O0 -g"', ...
-            'LDFLAGS="$LDFLAGS -g"'
+            'CFLAGS="$CFLAGS -O0 -g -fopenmp"', ...
+            'CXXFLAGS="$CFLAGS"', ...
+            'LDFLAGS="$LDFLAGS -g -fopenmp"'
         };
     else
         mex_flags_cpu = {
             '-R2018a', ...
-            'CFLAGS="$CFLAGS -O3 -march=native -fomit-frame-pointer"', ...
+            'CFLAGS="$CFLAGS -O3 -march=native -fomit-frame-pointer -fopenmp"', ...
             'CXXFLAGS="$CFLAGS"', ...
-            'LDFLAGS="$LDFLAGS"'
+            'LDFLAGS="$LDFLAGS -fopenmp"'
         };
     end
 end
@@ -100,9 +100,9 @@ mex(mex_flags_cpu{:}, src_lz4_load, src_lz4_c);
 mex(mex_flags_cpu{:}, src_load_slab_lz4, src_lz4_c);
 mex(mex_flags_cpu{:}, src_load_bl, tiff_include{:}, tiff_lib{:}, tiff_link{:});
 if ispc
-    mex(mex_flags_cpu{:}, src_save_bl, tiff_include{:}, tiff_lib{:}, tiff_link{:}, '-fopenmp');
+    mex(mex_flags_cpu{:}, src_save_bl, tiff_include{:}, tiff_lib{:}, tiff_link{:});
 else
-    mex(mex_flags_cpu{:}, src_save_bl, tiff_include{:}, tiff_lib{:}, tiff_link{:}, '-lnuma', '-fopenmp');
+    mex(mex_flags_cpu{:}, src_save_bl, tiff_include{:}, tiff_lib{:}, tiff_link{:}, '-lnuma');
 end
 
 % CUDA optimization flags
