@@ -9,16 +9,16 @@
   INPUT:
     volume      : 3D MATLAB array of type uint8 or uint16.
     fileList    : 1×Z cell array of output filenames.
-    isXYZ       : logical or numeric scalar. True if volume is in [X Y Z] order.
+    isXYZ       : logical or numeric scalar. True if array is [X Y Z].
     compression : "none", "lzw", or "deflate".
     nThreads    : (optional) Number of threads (default = hardware concurrency).
 
   FEATURES:
-    • Fixed-size thread pool (threads reused).
-    • Balanced slice assignment per thread (no atomics).
-    • Memory scratch buffer only for transpose.
+    • Fixed-stride thread pool (no atomics).
+    • Per-thread scratch buffer for row-major reordering.
     • RAII for TIFF handles.
     • Thread-safe error aggregation.
+    • Correct orientation for both YXZ and XYZ.
 
   LIMITATIONS:
     • Grayscale only (single channel).
@@ -38,7 +38,6 @@
 #include "mex.h"
 #include "tiffio.h"
 
-#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <stdexcept>
@@ -47,9 +46,9 @@
 #include <thread>
 #include <mutex>
 #include <sstream>
-#include <unistd.h> // access()
+#include <unistd.h>  // for access()
 
-// RAII wrapper for TIFF file handles
+// RAII wrapper for TIFF*
 struct TiffHandle {
     TIFF* tif;
     TiffHandle(const std::string& path, const char* mode) {
@@ -61,7 +60,7 @@ struct TiffHandle {
     }
 };
 
-// Ensure the output file is writable or does not exist
+// Ensure we can overwrite or create the output file
 static void ensureWritable(const std::string& path) {
     if (access(path.c_str(), F_OK) == 0 &&
         access(path.c_str(), W_OK) != 0) {
@@ -69,193 +68,176 @@ static void ensureWritable(const std::string& path) {
     }
 }
 
-// Write a single Z-slice to disk
+// Write one Z-slice: reorders into row-major then writes as one strip.
 static void writeSlice(
-    const uint8_t* volumeData,
-    size_t sliceIdx,
-    size_t imgHeight,
-    size_t imgWidth,
+    const uint8_t* baseData,
+    size_t sliceIndex,
+    size_t dim0,
+    size_t dim1,
     size_t bytesPerSample,
-    bool isXYZOrder,
+    bool isXYZ,
     uint16_t compression,
-    const std::string& outFile,
-    std::vector<uint8_t>* transposeBuffer // nullptr if not needed
+    const std::string& outPath,
+    std::vector<uint8_t>& scratch
 ) {
-    // Calculate byte offset and slice size
-    size_t sliceSize = imgHeight * imgWidth * bytesPerSample;
-    const uint8_t* srcPtr = volumeData + sliceIdx * sliceSize;
+    // Determine image dimensions:
+    //   if isXYZ, dims are [X Y], so height=Y=dim1, width=X=dim0
+    //   else      dims are [Y X], so height=Y=dim0, width=X=dim1
+    size_t height = isXYZ ? dim1 : dim0;
+    size_t width  = isXYZ ? dim0 : dim1;
+    size_t sliceBytes = dim0 * dim1 * bytesPerSample;
 
-    ensureWritable(outFile);
+    // Pointers
+    const uint8_t* src = baseData + sliceIndex * sliceBytes;
 
-    // Temporary path for atomic replace
-    std::string tmpPath = outFile + ".tmp";
-
-    // Open TIFF file
-    TiffHandle tiff(tmpPath, "w");
+    // Prepare output file
+    ensureWritable(outPath);
+    std::string tmp = outPath + ".tmp";
+    TiffHandle tiff(tmp, "w");
     TIFF* tif = tiff.tif;
 
-    // Set essential TIFF tags
-    TIFFSetField(tif, TIFFTAG_IMAGEWIDTH,
-                 isXYZOrder ? imgWidth : imgHeight);
-    TIFFSetField(tif, TIFFTAG_IMAGELENGTH,
-                 isXYZOrder ? imgHeight : imgWidth);
+    // TIFF tags
+    TIFFSetField(tif, TIFFTAG_IMAGEWIDTH,  width);
+    TIFFSetField(tif, TIFFTAG_IMAGELENGTH, height);
     TIFFSetField(tif, TIFFTAG_BITSPERSAMPLE, bytesPerSample * 8);
     TIFFSetField(tif, TIFFTAG_SAMPLESPERPIXEL, 1);
     TIFFSetField(tif, TIFFTAG_COMPRESSION, compression);
     TIFFSetField(tif, TIFFTAG_PHOTOMETRIC, PHOTOMETRIC_MINISBLACK);
     TIFFSetField(tif, TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG);
-    TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP,
-                 isXYZOrder ? imgHeight : imgWidth);
+    TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP, height);
 
-    const uint8_t* writeBuf = srcPtr;
-
-    // Transpose [Y X] → [X Y] if needed
-    if (!isXYZOrder) {
-        auto& buf = *transposeBuffer;
-        for (size_t row = 0; row < imgHeight; ++row) {
-            for (size_t col = 0; col < imgWidth; ++col) {
-                size_t srcPos = (row * imgWidth + col) * bytesPerSample;
-                size_t dstPos = (col * imgHeight + row) * bytesPerSample;
-                std::memcpy(buf.data() + dstPos,
-                            srcPtr + srcPos,
-                            bytesPerSample);
-            }
+    // Reorder into row-major: scratch must be size = width*height*bytesPerSample
+    // Mapping: for each image row r∈[0,height), col c∈[0,width),
+    //   origRow = isXYZ ? c : r;
+    //   origCol = isXYZ ? r : c;
+    //   src offset = (origRow + origCol*dim0) * bytesPerSample
+    //   dst offset = (r*width + c) * bytesPerSample
+    uint8_t* dstPtr = scratch.data();
+    for (size_t r = 0; r < height; ++r) {
+        for (size_t c = 0; c < width; ++c) {
+            size_t orow = isXYZ ? c : r;
+            size_t ocol = isXYZ ? r : c;
+            size_t srcOff = (orow + ocol * dim0) * bytesPerSample;
+            size_t dstOff = (r    + c    * height) * bytesPerSample;
+            // Note: dstOff uses dst row-major indexing via r*width + c
+            dstOff = (r * width + c) * bytesPerSample;
+            std::memcpy(dstPtr + dstOff,
+                        src    + srcOff,
+                        bytesPerSample);
         }
-        writeBuf = buf.data();
     }
 
-    // Write raw or encoded strip
+    // Write the entire slice in one strip
     tsize_t written = (compression == COMPRESSION_NONE)
-        ? TIFFWriteRawStrip(tif, 0, const_cast<uint8_t*>(writeBuf), sliceSize)
-        : TIFFWriteEncodedStrip(tif, 0, const_cast<uint8_t*>(writeBuf), sliceSize);
-
-    if (written < 0) {
+        ? TIFFWriteRawStrip(tif, 0, scratch.data(), sliceBytes)
+        : TIFFWriteEncodedStrip(tif, 0, scratch.data(), sliceBytes);
+    if (written < 0)
         throw std::runtime_error("TIFF write failed for slice " +
-                                 std::to_string(sliceIdx));
-    }
+                                 std::to_string(sliceIndex));
 
-    // Atomic file replace
-    std::remove(outFile.c_str());
-    if (std::rename(tmpPath.c_str(), outFile.c_str()) != 0) {
+    // Atomic replace
+    std::remove(outPath.c_str());
+    if (std::rename(tmp.c_str(), outPath.c_str()) != 0)
         throw std::runtime_error("Failed to rename slice " +
-                                 std::to_string(sliceIdx));
-    }
+                                 std::to_string(sliceIndex));
 }
 
-// MEX entry point
+// Entry point
 void mexFunction(int nlhs, mxArray* plhs[],
-                 int nrhs, const mxArray* prhs[]) {
-    // Validate input count
-    if (nrhs < 4 || nrhs > 5) {
+                 int nrhs, const mxArray* prhs[])
+{
+    if (nrhs < 4 || nrhs > 5)
         mexErrMsgIdAndTxt("save_bl_tif:usage",
-            "Usage: save_bl_tif(vol, fileList, isXYZ, compression[, nThreads]);");
-    }
-    // Validate data type
-    if (!mxIsUint8(prhs[0]) && !mxIsUint16(prhs[0])) {
+          "Usage: save_bl_tif(vol, fileList, isXYZ, compression[, nThreads]);");
+
+    // Validate type
+    if (!mxIsUint8(prhs[0]) && !mxIsUint16(prhs[0]))
         mexErrMsgIdAndTxt("save_bl_tif:type",
-            "Volume must be uint8 or uint16.");
-    }
+          "Volume must be uint8 or uint16.");
 
-    // Get dimensions
-    const mwSize* dims = mxGetDimensions(prhs[0]);
-    size_t imgHeight = dims[0];
-    size_t imgWidth  = dims[1];
-    size_t numSlices = (mxGetNumberOfDimensions(prhs[0]) == 3)
-        ? dims[2] : 1;
+    // Dimensions
+    const mwSize* dims = mxGetDimensions(prhs[0]];
+    size_t dim0 = dims[0], dim1 = dims[1];
+    size_t numSlices = (mxGetNumberOfDimensions(prhs[0])==3)
+                       ? dims[2] : 1;
 
-    // Parse isXYZ flag
-    bool isXYZOrder = mxIsLogicalScalarTrue(prhs[2]) ||
-                      (mxIsNumeric(prhs[2]) && mxGetScalar(prhs[2]) != 0);
+    // isXYZ flag
+    bool isXYZ = mxIsLogicalScalarTrue(prhs[2]) ||
+                 (mxIsNumeric(prhs[2]) && mxGetScalar(prhs[2]) != 0);
 
-    // Parse compression
-    char* cStr = mxArrayToUTF8String(prhs[3]);
-    std::string comp(cStr);
-    mxFree(cStr);
+    // Compression
+    char* compStr = mxArrayToUTF8String(prhs[3]);
+    std::string cmp(compStr);
+    mxFree(compStr);
+    uint16_t compression =
+         (cmp == "none")    ? COMPRESSION_NONE
+       : (cmp == "lzw")     ? COMPRESSION_LZW
+       : (cmp == "deflate") ? COMPRESSION_DEFLATE
+       : throw std::runtime_error("Invalid compression: " + cmp);
 
-    uint16_t compression;
-    if      (comp == "none")    compression = COMPRESSION_NONE;
-    else if (comp == "lzw")     compression = COMPRESSION_LZW;
-    else if (comp == "deflate") compression = COMPRESSION_DEFLATE;
-    else mexErrMsgIdAndTxt("save_bl_tif:compression",
-             "Compression must be 'none', 'lzw', or 'deflate'.");
-
-    // Parse fileList
-    if (!mxIsCell(prhs[1]) || mxGetNumberOfElements(prhs[1]) != numSlices) {
+    // File list
+    if (!mxIsCell(prhs[1]) || mxGetNumberOfElements(prhs[1]) != numSlices)
         mexErrMsgIdAndTxt("save_bl_tif:files",
-            "fileList must be a cell array matching number of slices.");
-    }
-    std::vector<std::string> fileList(numSlices);
+          "fileList must have one entry per slice.");
+    std::vector<std::string> files(numSlices);
     for (size_t i = 0; i < numSlices; ++i) {
-        char* f = mxArrayToUTF8String(mxGetCell(prhs[1], i));
-        fileList[i] = f;
-        mxFree(f);
+        char* s = mxArrayToUTF8String(mxGetCell(prhs[1], i));
+        files[i] = s;
+        mxFree(s);
     }
 
-    // Get raw volume data pointer and sample size
+    // Data pointer & sample size
     const uint8_t* volumeData =
-        static_cast<const uint8_t*>(mxGetData(prhs[0]));
+      static_cast<const uint8_t*>(mxGetData(prhs[0]));
     size_t bytesPerSample =
-        (mxGetClassID(prhs[0]) == mxUINT16_CLASS ? 2 : 1);
+      (mxGetClassID(prhs[0]) == mxUINT16_CLASS ? 2 : 1);
 
-    // Determine thread count
+    // Thread count
     size_t hw = std::thread::hardware_concurrency();
-    size_t req = (nrhs == 5)
-        ? static_cast<size_t>(mxGetScalar(prhs[4]))
-        : hw;
-    size_t threadCount = std::min(req, numSlices);
-    if (threadCount < 1) threadCount = 1;
+    size_t req = (nrhs == 5) ? (size_t)mxGetScalar(prhs[4]) : hw;
+    size_t numThreads = std::min(req, numSlices);
+    if (numThreads < 1) numThreads = 1;
 
-    // Prepare error aggregation
+    // Prepare error collection
     std::vector<std::string> errors;
     std::mutex errLock;
 
-    // Preallocate transpose buffers if needed
-    std::vector<std::vector<uint8_t>> scratchBufs;
-    if (!isXYZOrder) {
-        scratchBufs.resize(threadCount);
-        size_t bufSize = imgHeight * imgWidth * bytesPerSample;
-        for (auto& buf : scratchBufs) buf.resize(bufSize);
-    }
+    // Preallocate per-thread scratch
+    std::vector<std::vector<uint8_t>> scratch(numThreads,
+      std::vector<uint8_t>(dim0 * dim1 * bytesPerSample));
 
-    // Launch threads
+    // Launch threads (fixed-stride dispatch)
     std::vector<std::thread> workers;
-    workers.reserve(threadCount);
-    for (size_t tid = 0; tid < threadCount; ++tid) {
-        workers.emplace_back([&, tid]() {
-            auto* scratch = !isXYZOrder ? &scratchBufs[tid] : nullptr;
-
-            // Assign slices in fixed stride: tid, tid+N, tid+2N…
-            for (size_t idx = tid; idx < numSlices; idx += threadCount) {
+    workers.reserve(numThreads);
+    for (size_t tid = 0; tid < numThreads; ++tid) {
+        workers.emplace_back([&,tid]() {
+            auto& buf = scratch[tid];
+            for (size_t idx = tid; idx < numSlices; idx += numThreads) {
                 try {
                     writeSlice(volumeData, idx,
-                               imgHeight, imgWidth,
+                               dim0, dim1,
                                bytesPerSample,
-                               isXYZOrder,
-                               compression,
-                               fileList[idx],
-                               scratch);
+                               isXYZ, compression,
+                               files[idx],
+                               buf);
                 }
                 catch (const std::exception& ex) {
-                    std::lock_guard<std::mutex> lg(errLock);
+                    std::lock_guard<std::mutex> lk(errLock);
                     errors.push_back(ex.what());
                 }
             }
         });
     }
 
-    // Join all threads
+    // Join & report
     for (auto& t : workers) t.join();
-
-    // Report any errors
     if (!errors.empty()) {
         std::ostringstream oss;
-        oss << "Errors during save_bl_tif:\n";
-        for (const auto& e : errors) oss << " - " << e << "\n";
+        oss << "save_bl_tif errors:\n";
+        for (auto& e : errors) oss << " - " << e << "\n";
         mexErrMsgIdAndTxt("save_bl_tif:runtime", oss.str().c_str());
     }
 
-    // Return the input volume if requested
-    if (nlhs > 0) {
+    if (nlhs > 0)  // return input if requested
         plhs[0] = const_cast<mxArray*>(prhs[0]);
-    }
 }
