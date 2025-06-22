@@ -1,34 +1,33 @@
-function load_slab_lz4_test(varargin)
-% End-to-end validation & benchmark for load_slab_lz4, including scaling/clipping postprocessing.
+function load_slab_lz4_fulltest(varargin)
+% Comprehensive test for load_slab_lz4: covers all scaling/clip/cast logic paths.
 
-% ─── 1. CONFIG ───────────────────────────────────────────────────────────
 if nargin && strcmpi(varargin{1},'big')
     stack = struct('x',1024,'y',2049,'z',3073);  brick = struct('x',256,'y',256,'z',384);
 else
-    stack = struct('x',256,'y',512,'z',768);     brick = struct('x',64 ,'y',64 ,'z',96);
+    stack = struct('x',128,'y',128,'z',192);     brick = struct('x',32 ,'y',32 ,'z',48);
 end
 brick.nx = ceil(stack.x/brick.x);
 brick.ny = ceil(stack.y/brick.y);
 brick.nz = ceil(stack.z/brick.z);
 
-% --- TEST SCALING/CLIPPING PARAMETERS (you may change these for other scenarios) ---
-clipval       = 0;     % set >0 for hard clipping, or 0 for plain scale
-scal          = 255;   % 255 for uint8 output, 65535 for uint16 output, etc.
-amplification = 1;
-deconvmin     = 0;
-deconvmax     = 1;
-low_clip      = 0.1;
-high_clip     = 0.9;
+% --- Parameters to sweep ---
+scal_options      = [255, 65535];
+clipval_options   = [0, 1];           % 0 = no clip, 1 = with clip
+deconvmin_options = [0, 0.1];         % test with and without deconvmin > 0
+low_clip          = 0.1;
+high_clip         = 0.9;
+amplification     = 1;
+deconvmax         = 1;
 
-% ─── 2. TEMP DIR ─────────────────────────────────────────────────────────
+% ─── TEMP DIR ───────────────────────────────────────────────────────────
 tmpDir  = tempname;  mkdir(tmpDir);
 cleanup = onCleanup(@() rmdir(tmpDir,'s'));
 fprintf("Temp dir : %s\n",tmpDir);
 
-% ─── 3. SYNTHETIC VOLUME ────────────────────────────────────────────────
+% ─── SYNTHETIC VOLUME ──────────────────────────────────────────────────
 rng(1);  V = rand([stack.x stack.y stack.z],'single');
 
-% ─── 4. SPLIT & SAVE BRICKS (char filenames) ─────────────────────────────
+% ─── SPLIT & SAVE BRICKS ───────────────────────────────────────────────
 [p1d,p2d] = split(stack,brick);   % double indices for MATLAB
 nBricks   = size(p1d,1);
 fnames    = cell(nBricks,1);
@@ -40,54 +39,71 @@ for k = 1:nBricks
     save_lz4_mex(fname, blk);
     fnames{k} = fname;
 end
-fprintf("Done saving\n");
+fprintf("Done saving\n\n");
 
-% ─── 5. RECONSTRUCT WITH THREADED MEX ────────────────────────────────────
-fprintf("Reconstructing with load_slab_lz4 …\n");
-tic;
-V_mex = load_slab_lz4( ...
-    fnames, uint64(p1d), uint64(p2d), uint64([stack.x stack.y stack.z]), ...
-    clipval, scal, amplification, deconvmin, deconvmax, low_clip, high_clip, feature('numCores'));
-t_mex = toc;
-fprintf("MEX time : %.2f s\n",t_mex);
+all_pass = true; total_cases = 0; failed_cases = 0;
 
-% ─── 6. BUILD REFERENCE IN MATLAB (for final 8/16-bit result) ─────────────
-fprintf("Building MATLAB reference (with postprocessing) …\n");
-tic;
-V_ref = V;
+for scal = scal_options
+    for clipval = clipval_options
+        for deconvmin = deconvmin_options
+            % --- skip deconvmin > 0 for clipval > 0 (as in code logic) ---
+            if clipval > 0 && deconvmin > 0
+                continue
+            end
 
-if clipval > 0
-    V_ref = V_ref - low_clip;
-    V_ref = min(V_ref, high_clip - low_clip);
-    V_ref = V_ref .* (scal .* amplification ./ (high_clip - low_clip));
-else
-    if deconvmin > 0
-        V_ref = (V_ref - deconvmin) .* (scal .* amplification ./ (deconvmax - deconvmin));
-    else
-        V_ref = V_ref .* (scal .* amplification ./ deconvmax);
+            % Print test case:
+            fprintf("Testing: scal=%d, clipval=%g, deconvmin=%g\n", scal, clipval, deconvmin);
+
+            % --- MEX CALL ---
+            tic;
+            V_mex = load_slab_lz4( ...
+                fnames, uint64(p1d), uint64(p2d), uint64([stack.x stack.y stack.z]), ...
+                clipval, scal, amplification, deconvmin, deconvmax, low_clip, high_clip, feature('numCores'));
+            t_mex = toc;
+
+            % --- MATLAB reference postprocessing ---
+            V_ref = V;
+            if clipval > 0
+                V_ref = V_ref - low_clip;
+                V_ref = min(V_ref, high_clip - low_clip);
+                V_ref = V_ref .* (scal .* amplification ./ (high_clip - low_clip));
+            else
+                if deconvmin > 0
+                    V_ref = (V_ref - deconvmin) .* (scal .* amplification ./ (deconvmax - deconvmin));
+                else
+                    V_ref = V_ref .* (scal .* amplification ./ deconvmax);
+                end
+            end
+            V_ref = round(V_ref - amplification);
+            V_ref = min(max(V_ref, 0), scal); % clamp
+
+            if scal <= 255
+                V_ref = uint8(V_ref);
+            elseif scal <= 65535
+                V_ref = uint16(V_ref);
+            end
+
+            total_cases = total_cases + 1;
+            eq = isequaln(V_mex, V_ref);
+
+            if eq
+                fprintf("   ✅  PASS   |  t=%.2fs\n", t_mex);
+            else
+                all_pass = false; failed_cases = failed_cases + 1;
+                dif = nnz(V_mex ~= V_ref);
+                maxabs = double(max(abs(double(V_mex(:)) - double(V_ref(:)))));
+                fprintf("   ❌  FAIL   |  #diff=%d, maxabs=%.4g\n", dif, maxabs);
+                % Optionally: show slice or histogram diff here
+            end
+        end
     end
 end
-V_ref = round(V_ref - amplification);
-V_ref = min(max(V_ref, 0), scal); % clamp
 
-if scal <= 255
-    V_ref = uint8(V_ref);
-elseif scal <= 65535
-    V_ref = uint16(V_ref);
-end
-t_ref = toc;
-fprintf("MATLAB reference time : %.2f s\n",t_ref);
-
-% ─── 7. VERIFY ───────────────────────────────────────────────────────────
-eq = isequaln(V_mex, V_ref);
-if eq
-    fprintf('\n✅ SUCCESS: load_slab_lz4 output matches MATLAB reference exactly!\n');
-    fprintf('Speed-up: %.2fx\n', t_ref/t_mex);
+fprintf("\n-------------------------------------------------\n");
+if all_pass
+    fprintf("🎉 All %d test cases PASSED.\n", total_cases);
 else
-    fprintf('\n❌ MISMATCH: load_slab_lz4 output does not match MATLAB postprocessing.\n');
-    dif = nnz(V_mex ~= V_ref);
-    maxabs = double(max(abs(double(V_mex(:)) - double(V_ref(:)))));
-    fprintf('  #mismatched voxels: %d (max abs diff: %.4g)\n', dif, maxabs);
+    fprintf("❌ %d of %d test cases FAILED.\n", failed_cases, total_cases);
 end
 
 end
