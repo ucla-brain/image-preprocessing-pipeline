@@ -16,7 +16,7 @@
     nThreads    : (optional) number of threads (default = physical cores or Z count).
 
   FEATURES:
-    • Fixed‐size thread pool with atomic slice dispatch
+    • Fixed-size thread pool with atomic slice dispatch
     • Per-thread scratch buffer reserved (no zero-initialization)
     • RAII for TIFF handles and clean error collection
     • Atomic replace (remove+rename) of temp files
@@ -46,7 +46,9 @@
 #include <thread>
 #include <mutex>
 #include <sstream>
-#include <unistd.h>   // for access()
+#include <unistd.h>    // for access()
+#include <algorithm>   // for std::sort, std::unique
+#include <utility>     // for std::pair
 
 // RAII TIFF handle
 struct TiffHandle {
@@ -224,7 +226,6 @@ void mexFunction(int nlhs, mxArray* plhs[],
     // Launch worker threads
     for (size_t t = 0; t < threadCount; ++t) {
         workers.emplace_back([&](){
-            // Per-thread scratch (reserve only)
             std::vector<uint8_t> scratch;
             scratch.reserve(sliceBytes);
 
@@ -254,7 +255,7 @@ void mexFunction(int nlhs, mxArray* plhs[],
     // Wait for all to finish
     for (auto& th : workers) th.join();
 
-    // If any errors, report
+    // Report any errors
     if (!errorMessages.empty()) {
         std::ostringstream oss;
         oss << "Errors occurred:\n";
