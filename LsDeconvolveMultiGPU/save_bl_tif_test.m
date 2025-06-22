@@ -36,24 +36,20 @@ for o = 1:nLayouts
     fprintf("\n   🏁 Testing layout: %s\n", cfg.order{o,1});
     for d = 1:nTypes
         for c = 1:nComps
-            % prepare volume & permute if needed
             V = cfg.dtype{d,2}(randi(intmax(cfg.dtype{d,1}), sz));
             if cfg.order{o,2}
                 V = permute(V,[2 1 3]);
             end
-
-            % build file list
             tagSafe = regexprep(sprintf('%s_%s_%s',cfg.order{o,1},...
                           cfg.dtype{d,1},cfg.comp{c}), '[^A-Za-z0-9]','_');
             files = arrayfun(@(k) fullfile(tmpRoot, ...
                      sprintf('t_%s_%02d.tif',tagSafe,k)), 1:sz(3), 'Uni',false);
 
-            % time the write+verify
             t0 = tic;
             save_bl_tif(V, files, cfg.order{o,2}, cfg.comp{c});
             tElapsed = toc(t0);
 
-            % sanity-check
+            % verify
             for k = 1:sz(3)
                 ref = V(:,:,k);
                 if cfg.order{o,2}, ref = ref.'; end
@@ -102,18 +98,60 @@ for d = 1:nTypes
         };
     end
 end
-
 T = cell2table(rows, 'VariableNames', ...
     {'DataType','Compression','Time_YXZ_s','Time_XYZ_s','Speedup'});
 disp(T);
+
+%% ---------- E. extra benchmark: XYZ deflate uint16 (MEX vs MATLAB async) ----------
+fprintf("\n   🏁 Extra benchmark: XYZ deflate uint16 — MEX vs native MATLAB async\n");
+benchSize = [512 512 64];
+benchVol  = uint16(randi(65535, benchSize));
+
+% MEX path (XYZ + deflate)
+V_mex = permute(benchVol, [2 1 3]);
+mexFiles = arrayfun(@(k) fullfile(tmpRoot,sprintf('mex_deflate_%03d.tif',k)), ...
+                    1:benchSize(3),'Uni',false);
+tMex = tic;
+save_bl_tif(V_mex, mexFiles, true, 'deflate');
+tMex = toc(tMex);
+MiB = prod(benchSize(1:2)) * 2 * benchSize(3) / 2^20;
+spdMex = MiB / tMex;
+fprintf("      MEX save_bl_tif: %.2f s  (%.1f MiB/s)\n", tMex, spdMex);
+
+% MATLAB async-imwrite path (needs transpose back to YXZ)
+matFiles = arrayfun(@(k) fullfile(tmpRoot,sprintf('mat_deflate_%03d.tif',k)), ...
+                    1:benchSize(3),'Uni',false);
+if ~isempty(ver('parallel')) && exist('backgroundPool','builtin')
+    t0 = tic;
+    futures = parallel.FevalFuture.empty(0,benchSize(3));
+    for k = 1:benchSize(3)
+        sliceYXZ = benchVol(:,:,k);  % in YXZ already
+        futures(k) = parfeval(backgroundPool, @imwrite, 0, ...
+                               sliceYXZ, matFiles{k}, 'tif', 'Compression','deflate');
+    end
+    wait(futures);
+    tMat = toc(t0);
+    spdMat = MiB / tMat;
+    fprintf("      MATLAB async-imwrite: %.2f s  (%.1f MiB/s)\n", tMat, spdMat);
+else
+    tMat = NaN; spdMat = NaN;
+    fprintf("      MATLAB async-imwrite skipped: backgroundPool unavailable.\n");
+end
+
+fprintf("\n   📊 MEX vs MATLAB native performance:\n");
+T_extra = table( ...
+    {'MEX save_bl_tif'; 'MATLAB async-imwrite'}, ...
+    [tMex; tMat], ...
+    [spdMex; spdMat], ...
+    'VariableNames', {'Method','Time_s','MiB_s'});
+disp(T_extra);
 
 fprintf("\n🎉  all save_bl_tif tests passed\n");
 end
 
 %% ---------- helpers --------------------------------------------------------
 function sandbox_cleanup(dirPath)
-    fclose('all');
-    safe_rmdir(dirPath);
+    fclose('all'); safe_rmdir(dirPath);
 end
 
 function restore_rw(p)
@@ -122,11 +160,6 @@ end
 
 function safe_rmdir(p)
     if exist(p,'dir')
-        try
-            rmdir(p,'s');
-        catch
-            pause(0.1);
-            if exist(p,'dir'), rmdir(p,'s'); end
-        end
+        try rmdir(p,'s'); catch, pause(0.1); if exist(p,'dir'), rmdir(p,'s'); end; end
     end
 end
