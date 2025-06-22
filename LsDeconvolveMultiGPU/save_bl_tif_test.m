@@ -77,7 +77,12 @@ mexFiles  = arrayfun(@(k) fullfile(tmpRoot,sprintf('mex_%03d.tif',k)), ...
                      1:benchSize(3),'uni',0);
 parFiles  = strrep(mexFiles,'mex_','par_');
 
-p = gcp('nocreate');  if isempty(p), p = parpool; end,  wait(p);
+p = gcp('nocreate');
+if isempty(p)
+    p = parpool("local", "IdleTimeout", Inf);   % always works, never times out
+end
+wait(p);        % warm the workers before timing
+
 fprintf("\n   🏁 benchmark (uint16 %dx%dx%d, %d workers)…\n", ...
         benchSize(1),benchSize(2),benchSize(3),p.NumWorkers);
 
