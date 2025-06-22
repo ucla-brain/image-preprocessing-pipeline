@@ -33,7 +33,6 @@ function [] = LsDeconv(varargin)
         disp('Main changes: Improved block size calculation and Multi-GPU and Multi-CPU parallel processing, Resume, Flip Y axis, and 3D gaussian filter support');
         disp(' ');
         disp(datetime('now'));
-        disp(' ');
 
         % make sure correct number of parameters specified
         if nargin < 28
@@ -1053,6 +1052,7 @@ function postprocess_save( ...
     % -------------------------------------------------------------------------
     % 3.  Global histogram for symmetric clip (optional)
     % -------------------------------------------------------------------------
+    low_clip = 0; high_clip = 0;
     if clipval > 0
         % == Semaphore guarding low-level load_bl_lz4 in histogram step ===========
         SEM_MULTI = 10000;
