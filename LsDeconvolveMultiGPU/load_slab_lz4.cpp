@@ -32,13 +32,6 @@
   DATE    : 2025-06-22
 ==============================================================================*/
 
-/*==============================================================================
-  load_slab_lz4.cpp
-  ------------------------------------------------------------------------------
-  High-throughput LZ4 brick loader for MATLAB (MEX)
-  … usage / features header unchanged …
-==============================================================================*/
-
 #include "lz4.h"
 #include "mex.h"
 
@@ -46,7 +39,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
-#include <cmath>          // std::floor / std::ceil
+#include <cmath>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -154,8 +147,46 @@ private:
     bool                                  shuttingDown_;
 };
 
-/*----------------------------- brick header etc. -----------------------------*/
-/* … unchanged (MAGIC, struct BrickHeader, readHeader, idx3d) …                */
+/*----------------------------- LZ4 brick header, helpers --------------------*/
+constexpr uint32_t MAGIC      = 0x4C5A4331U;   // 'LZC1'
+constexpr uint32_t HDR_BYTES  = 33280U;
+constexpr uint32_t MAX_CHUNKS = 2048U;
+
+enum DType : uint8_t { DT_DOUBLE = 1, DT_SINGLE = 2, DT_UINT16 = 3 };
+
+struct BrickHeader {
+    uint32_t magic;
+    uint8_t  dtype, ndims;
+    uint64_t dims[16];
+    uint64_t totalBytes, chunkBytes;
+    uint32_t nChunks;
+    uint64_t uLen[MAX_CHUNKS], cLen[MAX_CHUNKS];
+    uint8_t  _pad[HDR_BYTES - (4 + 1 + 1 + 16*8 + 8 + 8 + 4 + MAX_CHUNKS*16)];
+};
+
+static void freadExact(FILE* fp, void* dst, std::size_t n, const char* ctx)
+{
+    if (std::fread(dst, 1, n, fp) != n)
+        throw std::runtime_error(std::string(ctx) + ": I/O error");
+}
+
+static BrickHeader readHeader(FILE* fp, const std::string& file)
+{
+    BrickHeader h{};
+    freadExact(fp, &h, HDR_BYTES, "header");
+    if (h.magic != MAGIC)              throw std::runtime_error(file + ": bad magic");
+    if (h.dtype != DT_SINGLE)          throw std::runtime_error(file + ": not float32");
+    if (h.nChunks == 0 || h.nChunks > MAX_CHUNKS)
+        throw std::runtime_error(file + ": bad chunk count");
+    return h;
+}
+
+// Column-major 3D index
+inline uint64_t idx3d(uint64_t x, uint64_t y, uint64_t z,
+                      uint64_t dimX, uint64_t dimY)
+{
+    return x + dimX * (y + dimY * z);
+}
 
 /*=============================== BrickJob ====================================*/
 struct BrickJob {
@@ -293,7 +324,7 @@ void mexFunction(int nlhs, mxArray* plhs[],
 
     /* run pool -------------------------------------------------------------*/
     try {
-        ThreadPool pool(size_t(maxThreads));
+        ThreadPool pool{size_t(maxThreads)};
         for (const auto& j: jobs) pool.enqueue([j]{ j(); });
         pool.wait();
     } catch(const std::exception& e){
