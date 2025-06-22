@@ -70,6 +70,7 @@ for scal = scal_options
                     V_ref = V_ref .* (scal .* amplification ./ deconvmax);
                 end
             end
+            V_ref = single(V_ref);    % <-- Add this line
             V_ref = round(V_ref - amplification);
             V_ref = min(max(V_ref, 0), scal); % clamp
 
