@@ -1,11 +1,32 @@
 /*==============================================================================
-  save_bl_tif.cpp  (experimental-opt patched-r2)
+  save_bl_tif.cpp
   ------------------------------------------------------------------------------
   High-throughput Z-slice saver for 3-D MATLAB arrays (one TIFF per slice).
+  (NUMA-aware, memory-safe, robust, cross-platform, highly parallelized)
 
-  VERSION  : 2025-06-21-exp-r2  (thread-local TIFF reuse, chunked fetch,
-                                NUMA-local hugepages, raw gather-write path)
-  AUTHOR   : Keivan Moradi  (with ChatGPT-o assistance)
+  USAGE:
+    save_bl_tif(volume, fileList, orderXYZ, compression, [nThreads])
+
+    - volume     : 3-D uint8 or uint16 array, [X Y Z] or [Y X Z] (see orderXYZ)
+    - fileList   : cell array of strings, one filename per Z-slice
+    - orderXYZ   : logical or numeric; true if already [X Y Z], else [Y X Z]
+    - compression: 'none', 'lzw', or 'deflate'
+    - nThreads   : (optional) max number of threads to use (default: hardware_concurrency)
+
+  FEATURES:
+    - Each Z-slice is saved to its own TIFF file (optionally compressed).
+    - Ultra-high parallel throughput; optimized for multi-socket NUMA servers.
+    - Safe overwrite checks (won't clobber read-only files).
+    - Robust error reporting.
+    - No memory leaks: all per-thread resources are released.
+    - Automatically uses hugepages and NUMA locality if available (Linux).
+
+  LIMITATIONS:
+    - Large numbers of threads may allocate significant RAM.
+    - Make sure per-slice buffer size fits into RAM across all threads.
+    - Does not support RGB, only grayscale uint8/uint16.
+
+  AUTHOR   : Keivan Moradi (with ChatGPT-4o assistance)
   LICENSE  : GNU GPL v3   <https://www.gnu.org/licenses/>
 ==============================================================================*/
 
@@ -13,20 +34,16 @@
 #include "tiffio.h"
 
 #include <atomic>
-#include <cerrno>     // errno
 #include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <future>
 #include <memory>
 #include <mutex>
-#include <pthread.h>
 #include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
-#include <unordered_map>
 #include <type_traits>
 
 #if defined(__linux__)
@@ -50,43 +67,32 @@
 #if defined(_WIN32)
 #  include <windows.h>
 #  include <io.h>
-#  include <io.h>     // _access
 #  define ACCESS _access
 #endif
 
-// Uncomment to enable thread pinning for benchmarking
-//#define PIN_THREADS
+// -------------------------------- UTILS ------------------------------------
 
-inline void guard_overwrite_writable(const std::string& path)
-{
-    /* Does the path exist?  (If it does not, we’re fine.) */
-    if (ACCESS(path.c_str(), F_OK) == 0)           // file is present
-    {
-        /* Is it writable?  (W_OK asks the kernel, not ACLs on Windows.) */
-        if (ACCESS(path.c_str(), W_OK) == -1)      // ❌ not writable
-        {
+inline void guard_overwrite_writable(const std::string& path) {
+    // Refuse to overwrite a read-only file (cross-platform).
+    if (ACCESS(path.c_str(), F_OK) == 0) {
+        if (ACCESS(path.c_str(), W_OK) == -1) {
 #if defined(_WIN32)
             if (errno == EACCES || errno == EPERM)
 #else
             if (errno == EACCES)
 #endif
-                throw std::runtime_error("Refused to overwrite read-only file: "
-                                         + path);
-            /* For other errno values (e.g. ETXTBSY, EPERM) you can decide
-               whether to throw or fall through; EACCES is the canonical
-               “read-only” case. */
+                throw std::runtime_error("Refused to overwrite read-only file: " + path);
         }
     }
 }
 
-/* ───────────────────────── Utility: NUMA-aware / hugepage alloc ─────────── */
+// NUMA-aware/hugepage allocator (Linux only, safe fallback elsewhere)
 namespace {
 
-static void* alloc_on_node(size_t bytes, int node, bool wantHuge)
-{
+void* alloc_on_node(size_t bytes, int node, bool wantHuge) {
     void* p = nullptr;
 #if defined(__linux__)
-    // try hugepage first
+    // Try hugepage mmap first (only if >2MB)
     if (wantHuge && bytes >= (2UL << 20)) {
         size_t hugeSz = ((bytes + (2UL << 20) - 1) >> 21) << 21; // align 2 MiB
         void* hp = ::mmap(nullptr, hugeSz, PROT_READ | PROT_WRITE,
@@ -99,19 +105,18 @@ static void* alloc_on_node(size_t bytes, int node, bool wantHuge)
             return hp;
         }
     }
-    // fall back to libnuma-based alloc on node
+    // Fallback to libnuma alloc
     p = ::numa_alloc_onnode(bytes, node);
     if (p) return p;
 #endif
-    // generic aligned alloc
+    // Generic aligned alloc
     constexpr size_t ALIGN = 64;
     if (::posix_memalign(&p, ALIGN, ((bytes + ALIGN - 1) / ALIGN) * ALIGN) != 0)
         p = nullptr;
     return p;
 }
 
-static void free_on_node(void* ptr, size_t bytes, bool huge)
-{
+void free_on_node(void* ptr, size_t bytes, bool huge) {
 #if defined(__linux__)
     if (!ptr) return;
     if (huge) { ::munmap(ptr, bytes); return; }
@@ -121,77 +126,79 @@ static void free_on_node(void* ptr, size_t bytes, bool huge)
 #endif
 }
 
-} // unnamed namespace
+} // end namespace
 
-/* ───────────────────────────── TASK DESCRIPTION ─────────────────────────── */
+// -------------------------------- TASK STRUCT ------------------------------
+
 struct SaveTask {
-    const uint8_t* basePtr;
-    size_t         sliceOffset;
+    const uint8_t* basePtr;     // Pointer to start of volume
+    size_t         sliceOffset; // Offset to this Z-slice
     mwSize         rows, cols;
     std::string    filePath;
-    bool           alreadyXYZ;
+    bool           alreadyXYZ;  // Layout flag
     mxClassID      classId;
     uint16_t       compressionTag;
     size_t         bytesPerSlice;
     size_t         bytesPerPixel;
-    size_t         sliceIndex;
+    size_t         sliceIndex;  // For error messages
 };
 
-/* ───────────── Thread-local scratch & TIFF handle (reuse between slices) ─── */
-static thread_local uint8_t* scratch_buf   = nullptr;
-static thread_local size_t   scratch_bytes = 0;
-static thread_local bool     scratch_huge  = false;
+// ------------------- THREAD-LOCAL SCRATCH & TIFF HANDLE --------------------
 
-struct TiffLocal {
-    TIFF* tif        = nullptr;
+struct ScratchBufferRAII {
+    // Guarantees buffer cleanup for each thread
+    uint8_t* buf;
+    size_t   bytes;
+    bool     huge;
+    ScratchBufferRAII() : buf(nullptr), bytes(0), huge(false) {}
+    ~ScratchBufferRAII() {
+        if (buf) free_on_node(buf, bytes, huge);
+    }
+    void ensure(size_t want, int node) {
+        if (buf && bytes >= want) return;
+        if (buf) free_on_node(buf, bytes, huge);
+        void* p = alloc_on_node(want, node, /*wantHuge=*/true);
+        huge = (p && want >= (2UL<<20) && ((uintptr_t)p & ((2UL<<20)-1)) == 0);
+        if (!p) throw std::bad_alloc();
+        buf = static_cast<uint8_t*>(p);
+        bytes = want;
+    }
+};
+
+// Thread-local buffer and TIFF handle (RAII wrappers to avoid leaks)
+static thread_local ScratchBufferRAII tls_scratch;
+struct TiffLocalRAII {
+    TIFF* tif = nullptr;
     std::string tmpPath;
-    void ensure_open(const std::string& path) {
+    ~TiffLocalRAII() { if (tif) TIFFClose(tif); }
+    void open(const std::string& path) {
         if (!tif) {
             tif = TIFFOpen(path.c_str(), "w");
             if (!tif) throw std::runtime_error("Cannot open tmp " + path);
             tmpPath = path;
         }
     }
-    ~TiffLocal() { if (tif) TIFFClose(tif); }
 };
-static thread_local std::unique_ptr<TiffLocal> tl_tiff;
+static thread_local std::unique_ptr<TiffLocalRAII> tls_tiff;
 
-static void ensure_scratch(size_t want, int node)
-{
-    if (scratch_buf && scratch_bytes >= want) return;
-    if (scratch_buf) free_on_node(scratch_buf, scratch_bytes, scratch_huge);
+// -------------------------------- TIFF WRITE -------------------------------
 
-    void* p = alloc_on_node(want, node, /*wantHuge=*/true);
-    scratch_huge  = (p && want >= (2UL<<20) &&
-                     ((uintptr_t)p & ((2UL<<20)-1)) == 0);   // mmap+hugetlb?
-    if (!p) throw std::bad_alloc();
-
-    scratch_buf   = static_cast<uint8_t*>(p);
-    scratch_bytes = want;
-}
-
-/* ───────────────────────────── LOW-LEVEL TIFF WRITE ─────────────────────── */
 static void save_slice(const SaveTask& t, int node)
 {
-    /* ---- 1.  Refuse to clobber read-only files -------------------------- */
     guard_overwrite_writable(t.filePath);
 
     const mwSize srcRows = t.alreadyXYZ ? t.cols : t.rows;
     const mwSize srcCols = t.alreadyXYZ ? t.rows : t.cols;
     const uint8_t* src   = t.basePtr + t.sliceOffset;
-
     const bool direct = (t.compressionTag == COMPRESSION_NONE && t.alreadyXYZ);
     const std::string tmpPath = t.filePath + ".tmp";
 
-/* ───────────── 2.  RAW gather-write path (uncompressed & already-XYZ) ─── */
+    // -------- RAW gather-write path (no compression, already XYZ) ----------
     if (direct)
     {
-        /* -------- build header + IFD in little-endian --------------------- */
         struct Entry { uint16_t tag,type; uint32_t count,val; };
-
         constexpr uint16_t TIFF_LONG = 4;
         constexpr uint16_t TIFF_SHORT= 3;
-
         Entry e[9] = {
             {256, TIFF_LONG , 1, uint32_t(srcCols)},          // ImageWidth
             {257, TIFF_LONG , 1, uint32_t(srcRows)},          // ImageLength
@@ -205,13 +212,12 @@ static void save_slice(const SaveTask& t, int node)
         };
 
         const uint16_t nEntries = sizeof(e)/sizeof(e[0]);
-        const uint32_t ifdOffset = 8;                         // right after header
-        const uint32_t ifdSize   = 2 + nEntries*12 + 4;       // count + entries + next=0
-        const uint32_t pixelOffset = ifdOffset + ifdSize;     // data starts here
-        e[5].val = pixelOffset;                               // patch StripOffsets
+        const uint32_t ifdOffset = 8;
+        const uint32_t ifdSize   = 2 + nEntries*12 + 4;
+        const uint32_t pixelOffset = ifdOffset + ifdSize;
+        e[5].val = pixelOffset;
 
-        /* ---- marshal little-endian header & IFD into stack buffers ------- */
-        uint8_t hdr[8] = { 'I','I', 42,0, 8,0,0,0 };          // LE, magic 42, IFD @8
+        uint8_t hdr[8] = { 'I','I', 42,0, 8,0,0,0 };
         uint8_t ifd[ifdSize];
         auto wr16=[&](uint8_t* p,uint16_t v){ p[0]=v&0xFF; p[1]=v>>8; };
         auto wr32=[&](uint8_t* p,uint32_t v){
@@ -225,9 +231,8 @@ static void save_slice(const SaveTask& t, int node)
             wr32(cur+8,  e[i].val);
             cur += 12;
         }
-        std::memset(cur, 0, 4);     // next IFD offset = 0
+        std::memset(cur, 0, 4);
 
-        /* ---- write header + IFD + pixel data in a single system call ----- */
         int fd = ::open(tmpPath.c_str(),
                         O_CREAT|O_TRUNC|O_WRONLY|O_BINARY, 0644);
         if (fd == -1) throw std::runtime_error("open "+tmpPath);
@@ -249,18 +254,17 @@ static void save_slice(const SaveTask& t, int node)
 #endif
         ::close(fd);
 
-        /* ---- atomic replace ------------------------------------------------*/
-        ::unlink(t.filePath.c_str());                          // drop stub
+        ::unlink(t.filePath.c_str());
         if (::rename(tmpPath.c_str(), t.filePath.c_str()) != 0)
             throw std::runtime_error("rename failed on "+tmpPath+
                                      " → "+t.filePath);
         return;
     }
 
-/* ───────────── 3.  LibTIFF path (compressed or needs transpose) ────────── */
-    if (!tl_tiff) tl_tiff = std::make_unique<TiffLocal>();
-    tl_tiff->ensure_open(tmpPath);
-    TIFF* tif = tl_tiff->tif;
+    // ---- LibTIFF path (compressed or needs transpose) ----
+    if (!tls_tiff) tls_tiff = std::make_unique<TiffLocalRAII>();
+    tls_tiff->open(tmpPath);
+    TIFF* tif = tls_tiff->tif;
 
     TIFFSetField(tif, TIFFTAG_IMAGEWIDTH,       srcCols);
     TIFFSetField(tif, TIFFTAG_IMAGELENGTH,      srcRows);
@@ -271,13 +275,13 @@ static void save_slice(const SaveTask& t, int node)
     TIFFSetField(tif, TIFFTAG_PLANARCONFIG,     PLANARCONFIG_CONTIG);
     TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP,     srcRows);
 
-    /* -------- build / transpose I/O buffer -------------------------------- */
+    // -- Build or transpose slice as needed --
     const uint8_t* ioBuf = nullptr;
-    if (t.alreadyXYZ && t.compressionTag==COMPRESSION_NONE){
+    if (t.alreadyXYZ && t.compressionTag==COMPRESSION_NONE) {
         ioBuf = src;
     } else {
-        ensure_scratch(t.bytesPerSlice, node);
-        uint8_t* dst = scratch_buf;
+        tls_scratch.ensure(t.bytesPerSlice, node);
+        uint8_t* dst = tls_scratch.buf;
         if (!t.alreadyXYZ){
             for (mwSize c=0;c<srcCols;++c){
                 const uint8_t* colSrc = src + c*t.rows*t.bytesPerPixel;
@@ -302,20 +306,19 @@ static void save_slice(const SaveTask& t, int node)
         throw std::runtime_error("TIFF write failed on slice "+
                                  std::to_string(t.sliceIndex));
 
-    TIFFRewriteDirectory(tif);                         // commit IFD
-
-    ::unlink(t.filePath.c_str());                      // drop stub
+    TIFFRewriteDirectory(tif);
+    ::unlink(t.filePath.c_str());
     if (::rename(tmpPath.c_str(), t.filePath.c_str()) != 0)
         throw std::runtime_error("rename failed on "+tmpPath+
                                  " → "+t.filePath);
 
     TIFFFlush(tif);
-    TIFFClose(tif);                                    // fresh tmp next slice
-    tl_tiff->tif = nullptr;
+    TIFFClose(tif);
+    tls_tiff->tif = nullptr;
 }
 
+// ------------------------ PARALLEL THREAD DISPATCH -------------------------
 
-/* ─────────────────────────── Thread worker / dispatcher ─────────────────── */
 struct CallContext {
     const std::vector<SaveTask>* tasks;
     std::atomic_size_t next{0};
@@ -327,6 +330,7 @@ static void worker_entry(CallContext& ctx, int tid, int numaNode)
 {
     constexpr size_t CHUNK = 8;
     auto jobList = ctx.tasks;
+    // Each thread has its own tls_scratch (RAII, auto cleanup!)
     for (;;) {
         size_t base = ctx.next.fetch_add(CHUNK, std::memory_order_relaxed);
         if (base >= jobList->size()) break;
@@ -339,14 +343,15 @@ static void worker_entry(CallContext& ctx, int tid, int numaNode)
             }
         }
     }
+    // RAII destructors run: thread-local scratch buffer is released here!
 }
 
-/* ──────────────────────────────── MEX ENTRY ─────────────────────────────── */
+// ------------------------------- MEX ENTRY ---------------------------------
+
 void mexFunction(int nlhs, mxArray* plhs[],
                  int nrhs, const mxArray* prhs[])
 {
     try {
-        /* -------- argument check -------- */
         if (nrhs != 4 && nrhs != 5)
             mexErrMsgIdAndTxt("save_bl_tif:Input",
                 "Usage: save_bl_tif(volume, fileList, orderXYZ, compression [, nThreads])");
@@ -373,7 +378,6 @@ void mexFunction(int nlhs, mxArray* plhs[],
         if (!mxIsCell(prhs[1]) || mxGetNumberOfElements(prhs[1])!=Z)
             mexErrMsgIdAndTxt("save_bl_tif:Input","fileList must match Z dim");
 
-        /* -------- build path list (no cache for brevity) -------- */
         std::vector<std::string> paths(Z);
         for (size_t k=0;k<Z;++k){
             mxArray* s = mxGetCell(prhs[1],k);
@@ -381,7 +385,6 @@ void mexFunction(int nlhs, mxArray* plhs[],
             paths[k]=p; mxFree(p);
         }
 
-        /* -------- build task array -------- */
         const uint8_t* base = static_cast<const uint8_t*>(mxGetData(V));
         mxClassID id = mxGetClassID(V);
         size_t bpp = (id==mxUINT16_CLASS)?2:1;
@@ -394,7 +397,6 @@ void mexFunction(int nlhs, mxArray* plhs[],
                                          paths[z], alreadyXYZ, id, compTag,
                                          bpslice, bpp, z });
 
-        /* -------- prepare thread pool -------- */
         CallContext ctx; ctx.tasks = &tasks;
 
         size_t hw = std::thread::hardware_concurrency();
