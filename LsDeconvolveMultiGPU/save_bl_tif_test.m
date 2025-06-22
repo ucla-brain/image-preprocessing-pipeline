@@ -107,36 +107,39 @@ fprintf("\n   🏁 Extra benchmark: XYZ deflate uint16 — MEX vs native MATLAB 
 benchSize = [512 512 64];
 benchVol  = uint16(randi(65535, benchSize));
 
-% MEX path (XYZ + deflate)
-V_mex = permute(benchVol, [2 1 3]);
+% — MEX path (XYZ + deflate) —
+V_mex   = permute(benchVol, [2 1 3]);
 mexFiles = arrayfun(@(k) fullfile(tmpRoot,sprintf('mex_deflate_%03d.tif',k)), ...
                     1:benchSize(3),'Uni',false);
-tMex = tic;
+t0 = tic;
 save_bl_tif(V_mex, mexFiles, true, 'deflate');
-tMex = toc(tMex);
-MiB = prod(benchSize(1:2)) * 2 * benchSize(3) / 2^20;
+tMex  = toc(t0);
+MiB   = prod(benchSize(1:2)) * 2 * benchSize(3) / 2^20;
 spdMex = MiB / tMex;
 fprintf("      MEX save_bl_tif: %.2f s  (%.1f MiB/s)\n", tMex, spdMex);
 
-% MATLAB async-imwrite path (needs transpose back to YXZ)
+% — MATLAB async-imwrite path —
 matFiles = arrayfun(@(k) fullfile(tmpRoot,sprintf('mat_deflate_%03d.tif',k)), ...
                     1:benchSize(3),'Uni',false);
-if ~isempty(ver('parallel')) && exist('backgroundPool','builtin')
-    t0 = tic;
-    futures = parallel.FevalFuture.empty(0,benchSize(3));
-    for k = 1:benchSize(3)
-        sliceYXZ = benchVol(:,:,k);  % in YXZ already
-        futures(k) = parfeval(backgroundPool, @imwrite, 0, ...
-                               sliceYXZ, matFiles{k}, 'tif', 'Compression','deflate');
-    end
-    wait(futures);
-    tMat = toc(t0);
-    spdMat = MiB / tMat;
-    fprintf("      MATLAB async-imwrite: %.2f s  (%.1f MiB/s)\n", tMat, spdMat);
-else
-    tMat = NaN; spdMat = NaN;
-    fprintf("      MATLAB async-imwrite skipped: backgroundPool unavailable.\n");
+
+% ensure a process-based pool for file I/O
+p = gcp('nocreate');
+if isempty(p) || strcmp(p.Profile, 'threads')
+    delete(gcp('nocreate'));
+    p = parpool('Processes');
 end
+
+futures(benchSize(3)) = parallel.FevalFuture;  % preallocate
+t1 = tic;
+for k = 1:benchSize(3)
+    sliceYXZ = benchVol(:,:,k);  % imwrite wants YXZ layout
+    futures(k) = parfeval(p, @imwrite, 0, ...
+                          sliceYXZ, matFiles{k}, 'Compression','deflate');
+end
+wait(futures);
+tMat = toc(t1);
+spdMat = MiB / tMat;
+fprintf("      MATLAB async-imwrite: %.2f s  (%.1f MiB/s)\n", tMat, spdMat);
 
 fprintf("\n   📊 MEX vs MATLAB native performance:\n");
 T_extra = table( ...
