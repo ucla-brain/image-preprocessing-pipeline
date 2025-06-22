@@ -1,41 +1,43 @@
 /*==============================================================================
   load_slab_lz4.cpp
   ------------------------------------------------------------------------------
-  High-throughput LZ4 brick loader for MATLAB [MEX].
+  High-throughput LZ4 brick loader for MATLAB (MEX).
 
-  USAGE:
-    vol = load_slab_lz4(filenames, p1, p2, dims, clipOn, scal, ampl,
-                        dmin, dmax, lowClip, highClip, maxThreads)
-      - filenames:  Cell array of brick filenames (cellstr)
-      - p1, p2:     Block coordinates (uint64/double, MATLAB-style 1-based)
-      - dims:       [X Y Z] full output volume size
-      - clipOn:     Logical (1=enable clipping/scaling)
-      - scal,ampl:  Scaling parameters
-      - dmin,dmax:  Dynamic range mapping parameters
-      - lowClip,highClip: Clipping range
-      - maxThreads: (Optional) default: all hardware threads
+  USAGE
+  -----
+    vol = load_slab_lz4(filenames, p1, p2, dims, clipOn,
+                        scal, ampl, dmin, dmax, lowClip, highClip, maxThreads)
 
-  FEATURES:
-    - Multi-threaded LZ4 brick decompression & placement
-    - Thread-local scratch buffers (no RAM contention)
-    - Robust error handling (all threads join on exceptions)
-    - Efficient conversion to uint8/uint16 (in-place)
-    - C++14/17 compatible, pure std::thread (no external deps except LZ4/MEX)
-    - Informative error reporting
+      filenames   : Nx1 cellstr – path to each *.lz4c brick
+      p1, p2      : Nx3 uint64/double – 1-based XYZ start / end coords (inclusive)
+      dims        : 1x3 [X Y Z] of the final volume
+      clipOn      : logical – enable range clipping
+      scal, ampl  : intensity scaling parameters
+      dmin, dmax  : optional dynamic-range mapping
+      lowClip     : lower clipping bound (when clipOn = true)
+      highClip    : upper clipping bound (when clipOn = true)
+      maxThreads  : (optional) max #worker threads – default = hw threads
 
-  AUTHOR:   Keivan Moradi (with ChatGPT-4o assistance)
-  LICENSE:  GNU GPL v3   <https://www.gnu.org/licenses/>
-  DATE:     2025-06-22
+  FEATURES
+  --------
+    • True multi-threaded LZ4 decompression (std::thread, no OpenMP/PThreads)
+    • Atomic task dispatch with lost-wake-up fix
+    • Per-thread scratch buffers → zero RAM contention
+    • Robust error propagation – any worker exception aborts the MEX cleanly
+    • Clean RAII resource management, no malloc/free leaks
+    • C++17, single-header LZ4 dependency only
+
+  AUTHOR  : Keivan Moradi  (with ChatGPT-4o assistance)
+  LICENSE : GNU GPL v3  <https://www.gnu.org/licenses/>
+  DATE    : 2025-06-22
 ==============================================================================*/
 
 #include "lz4.h"
-#include "matrix.h"
 #include "mex.h"
-
 #include <atomic>
 #include <chrono>
-#include <cmath>
 #include <condition_variable>
+#include <cstdio>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -45,308 +47,347 @@
 #include <thread>
 #include <vector>
 
-/*------------------------------------------------------------------------------
-    fmaf fallback for legacy toolchains
-------------------------------------------------------------------------------*/
+/*-------------------------------- fmaf fallback -----------------------------*/
 #ifndef fmaf
-#  define fmaf(a,b,c) ((a)*(b)+(c))
+#  define fmaf(a, b, c) ((a) * (b) + (c))
 #endif
 
-/*------------------------------------------------------------------------------
-    Thread-local scratch buffer (auto-freed)
-------------------------------------------------------------------------------*/
+/*=============================== ThreadScratch ==============================*/
 struct ThreadScratch {
-    ~ThreadScratch() {
-        threadUncompressed.clear();
-        threadCompressed.clear();
-    }
-    static thread_local std::vector<float> threadUncompressed;
-    static thread_local std::vector<char>  threadCompressed;
+    static thread_local std::vector<float> uncompressed;
+    static thread_local std::vector<char>  compressed;
+    ~ThreadScratch() { uncompressed.clear(); compressed.clear(); }
 };
-thread_local std::vector<float> ThreadScratch::threadUncompressed;
-thread_local std::vector<char>  ThreadScratch::threadCompressed;
+thread_local std::vector<float> ThreadScratch::uncompressed;
+thread_local std::vector<char>  ThreadScratch::compressed;
 
-/*------------------------------------------------------------------------------
-    Minimal FIFO Thread Pool
-------------------------------------------------------------------------------*/
+/*================================ ThreadPool ===============================*/
 class ThreadPool {
 public:
-    explicit ThreadPool(size_t numThreads)
-        : shuttingDown_(false), unfinishedTasks_(0)
+    explicit ThreadPool(std::size_t numThreads)
+        : shuttingDown_(false), unfinished_(0)
     {
         workers_.reserve(numThreads);
-        for (size_t i = 0; i < numThreads; ++i) {
-            workers_.emplace_back([this] {
-                ThreadScratch scratch; // Thread-local
-                while (true) {
-                    std::function<void()> job;
-                    {
-                        std::unique_lock<std::mutex> lock(mtx_);
-                        cvJob_.wait(lock, [this] {
-                            return shuttingDown_ || !jobs_.empty();
-                        });
-                        if (shuttingDown_ && jobs_.empty()) return;
-                        job = std::move(jobs_.front());
-                        jobs_.pop();
-                    }
-                    try { job(); } catch (...) { /* Optionally log error */ }
-                    if (unfinishedTasks_.fetch_sub(1) == 1)
-                        cvDone_.notify_one();
-                }
-            });
-        }
+        for (std::size_t i = 0; i < numThreads; ++i)
+            workers_.emplace_back(&ThreadPool::workerLoop, this);
     }
+    ~ThreadPool() { shutdown(); }
 
-    template <class Func>
-    void enqueue(Func&& job) {
+    template <class F>
+    void enqueue(F&& job)
+    {
         {
-            std::lock_guard<std::mutex> lock(mtx_);
-            jobs_.emplace(std::forward<Func>(job));
-            unfinishedTasks_.fetch_add(1, std::memory_order_relaxed);
+            std::lock_guard<std::mutex> lock(queueMtx_);
+            jobQueue_.emplace(std::forward<F>(job));
+            ++unfinished_;
         }
-        cvJob_.notify_one(); // Use notify_one for better wakeup performance
+        /*  FIX: wake *all* sleepers if more than one task is waiting        */
+        queueCv_.notify_all();
     }
 
-    void waitAll() {
-        std::unique_lock<std::mutex> lock(mtx_);
-        cvDone_.wait(lock, [this] { return unfinishedTasks_.load() == 0; });
+    void wait()
+    {
+        std::unique_lock<std::mutex> lock(queueMtx_);
+        finishedCv_.wait(lock, [this]{ return unfinished_ == 0; });
     }
 
-    ~ThreadPool() {
-        {
-            std::lock_guard<std::mutex> lock(mtx_);
-            shuttingDown_ = true;
-        }
-        cvJob_.notify_all();
-        for (auto& worker : workers_) if (worker.joinable()) worker.join();
-    }
-
-    ThreadPool(const ThreadPool&) = delete;
+    /* non-copyable */
+    ThreadPool(const ThreadPool&)            = delete;
     ThreadPool& operator=(const ThreadPool&) = delete;
 
 private:
-    std::vector<std::thread> workers_;
-    std::queue<std::function<void()>> jobs_;
-    std::mutex mtx_;
-    std::condition_variable cvJob_, cvDone_;
-    std::atomic<size_t> unfinishedTasks_;
-    bool shuttingDown_;
+    void workerLoop()
+    {
+        ThreadScratch scratch;                        // thread-local buffers
+        for (;;)
+        {
+            std::function<void()> job;
+            {
+                std::unique_lock<std::mutex> lock(queueMtx_);
+                queueCv_.wait(lock, [this]{ return shuttingDown_ || !jobQueue_.empty(); });
+
+                if (shuttingDown_ && jobQueue_.empty()) return;
+
+                job = std::move(jobQueue_.front());
+                jobQueue_.pop();
+
+                /*  If more work remains, wake another sleeping worker       */
+                if (!jobQueue_.empty())
+                    queueCv_.notify_one();
+            }
+
+            try       { job(); }
+            catch (...) { firstException_.store(std::current_exception()); }
+
+            if (--unfinished_ == 0)
+                finishedCv_.notify_one();
+        }
+    }
+
+    void shutdown()
+    {
+        {
+            std::lock_guard<std::mutex> lock(queueMtx_);
+            shuttingDown_ = true;
+        }
+        queueCv_.notify_all();
+        for (auto& th : workers_) if (th.joinable()) th.join();
+
+        if (firstException_) std::rethrow_exception(firstException_);
+    }
+
+    std::vector<std::thread>              workers_;
+    std::queue<std::function<void()>>     jobQueue_;
+    std::mutex                            queueMtx_;
+    std::condition_variable               queueCv_, finishedCv_;
+    std::atomic<std::size_t>              unfinished_;
+    bool                                  shuttingDown_;
+    std::atomic<std::exception_ptr>       firstException_{nullptr};
 };
 
-/*------------------------------------------------------------------------------
-    LZ4 brick header (fixed size, validated)
-------------------------------------------------------------------------------*/
-constexpr uint32_t LZ4_MAGIC  = 0x4C5A4331U;
-constexpr uint32_t LZ4_HSIZE  = 33280U;
-constexpr uint32_t LZ4_MAXC   = 2048U;
-enum BrickDType : uint8_t { DT_DOUBLE = 1, DT_SINGLE = 2, DT_UINT16 = 3 };
+/*============================== LZ4 brick header ============================*/
+constexpr uint32_t MAGIC      = 0x4C5A4331U;   // 'LZC1'
+constexpr uint32_t HDR_BYTES  = 33280U;
+constexpr uint32_t MAX_CHUNKS = 2048U;
+
+enum DType : uint8_t { DT_DOUBLE = 1, DT_SINGLE = 2, DT_UINT16 = 3 };
 
 struct BrickHeader {
     uint32_t magic;
-    uint8_t dtype, ndims;
+    uint8_t  dtype, ndims;
     uint64_t dims[16];
-    uint64_t total, chunkSize;
+    uint64_t totalBytes, chunkBytes;
     uint32_t nChunks;
-    uint64_t uLen[LZ4_MAXC], cLen[LZ4_MAXC];
-    uint8_t  pad[LZ4_HSIZE - (4 + 1 + 1 + 16 * 8 + 8 + 8 + 4 + LZ4_MAXC * 16)];
+    uint64_t uLen[MAX_CHUNKS], cLen[MAX_CHUNKS];
+    uint8_t  _pad[HDR_BYTES -
+                 (4 + 1 + 1 + 16*8 + 8 + 8 + 4 + MAX_CHUNKS*16)];
 };
 
-static void freadExact(FILE* fp, void* dest, size_t nBytes, const char* context) {
-    if (std::fread(dest, 1, nBytes, fp) != nBytes)
-        throw std::runtime_error(std::string(context) + ": fread failed");
+static void freadExact(FILE* fp, void* dst, std::size_t n, const char* ctx)
+{
+    if (std::fread(dst, 1, n, fp) != n)
+        throw std::runtime_error(std::string(ctx) + ": I/O error");
 }
 
-static BrickHeader readBrickHeader(FILE* fp, const std::string& filename) {
-    BrickHeader header{};
-    freadExact(fp, &header, LZ4_HSIZE, "LZ4 header");
-    if (header.magic != LZ4_MAGIC)
-        throw std::runtime_error(filename + ": invalid magic");
-    if (header.dtype != DT_SINGLE)
-        throw std::runtime_error(filename + ": not single-precision");
-    if (header.nChunks == 0 || header.nChunks > LZ4_MAXC)
-        throw std::runtime_error(filename + ": bad chunk count");
-    return header;
+static BrickHeader readHeader(FILE* fp, const std::string& file)
+{
+    BrickHeader h{};
+    freadExact(fp, &h, HDR_BYTES, "header");
+    if (h.magic != MAGIC)              throw std::runtime_error(file + ": bad magic");
+    if (h.dtype != DT_SINGLE)          throw std::runtime_error(file + ": not float32");
+    if (h.nChunks == 0 || h.nChunks > MAX_CHUNKS)
+        throw std::runtime_error(file + ": bad chunk count");
+    return h;
 }
 
-// 3D indexer for MATLAB-style column-major [X Y Z]
-inline uint64_t idx3D(uint64_t x, uint64_t y, uint64_t z, uint64_t dimX, uint64_t dimY) {
+/*------------------------ column-major 3-D linear index ---------------------*/
+inline uint64_t idx3d(uint64_t x, uint64_t y, uint64_t z,
+                      uint64_t dimX, uint64_t dimY)
+{
     return x + dimX * (y + dimY * z);
 }
 
-/*------------------------------------------------------------------------------
-    BrickJob: decompress & rescale a brick into the shared volume buffer
-------------------------------------------------------------------------------*/
+/*============================ BrickJob functor =============================*/
 struct BrickJob {
-    std::string filename;
-    uint64_t x0, y0, z0, x1, y1, z1, volDimX, volDimY, volDimZ;
-    float* volume;
+    /* geometry & destination ------------------------------------------------*/
+    std::string file;
+    uint64_t x0, y0, z0, x1, y1, z1;
+    uint64_t dimX, dimY, dimZ;
+    float*    dst;
+
+    /* scaling / clipping ----------------------------------------------------*/
     float scal, ampl, lowClip, highClip, dmin, dmax;
-    bool clipEnabled;
+    bool  clip;
 
-    void operator()() const {
-        auto& uncompressed = ThreadScratch::threadUncompressed;
-        auto& compressed   = ThreadScratch::threadCompressed;
+    void operator()() const
+    {
+        auto& uc = ThreadScratch::uncompressed;
+        auto& cc = ThreadScratch::compressed;
 
+        /* open & header -----------------------------------------------------*/
         std::unique_ptr<FILE, decltype(&std::fclose)>
-            fp(std::fopen(filename.c_str(), "rb"), &std::fclose);
-        if (!fp) throw std::runtime_error("open " + filename);
+            fp(std::fopen(file.c_str(), "rb"), &std::fclose);
+        if (!fp) throw std::runtime_error("open " + file);
 
-        BrickHeader h = readBrickHeader(fp.get(), filename);
-        const uint64_t brickX = x1 - x0 + 1, brickY = y1 - y0 + 1, brickZ = z1 - z0 + 1;
-        const uint64_t numVoxels = brickX * brickY * brickZ;
-        if (uncompressed.size() < numVoxels) uncompressed.resize(numVoxels);
+        BrickHeader h = readHeader(fp.get(), file);
 
-        // Decompress all LZ4 chunks into uncompressed buffer
-        char* uDst = reinterpret_cast<char*>(uncompressed.data());
-        uint64_t offset = 0;
-        for (uint32_t c = 0; c < h.nChunks; ++c) {
-            if (compressed.size() < h.cLen[c]) compressed.resize(h.cLen[c]);
-            freadExact(fp.get(), compressed.data(), h.cLen[c], "LZ4 chunk");
-            int decompSize = LZ4_decompress_safe(
-                compressed.data(), uDst + offset,
-                static_cast<int>(h.cLen[c]), static_cast<int>(h.uLen[c])
-            );
-            if (decompSize < 0 || static_cast<uint64_t>(decompSize) != h.uLen[c])
-                throw std::runtime_error(filename + ": LZ4 decompression failed");
-            offset += h.uLen[c];
+        const uint64_t bx = x1 - x0 + 1, by = y1 - y0 + 1, bz = z1 - z0 + 1;
+        const uint64_t voxels = bx * by * bz;
+        if (uc.size() < voxels) uc.resize(voxels);
+
+        /* decompress --------------------------------------------------------*/
+        char* uPtr = reinterpret_cast<char*>(uc.data());
+        uint64_t off = 0;
+        for (uint32_t c = 0; c < h.nChunks; ++c)
+        {
+            if (cc.size() < h.cLen[c]) cc.resize(h.cLen[c]);
+            freadExact(fp.get(), cc.data(), h.cLen[c], "chunk");
+
+            int got = LZ4_decompress_safe(cc.data(), uPtr + off,
+                                          static_cast<int>(h.cLen[c]),
+                                          static_cast<int>(h.uLen[c]));
+            if (got < 0 || static_cast<uint64_t>(got) != h.uLen[c])
+                throw std::runtime_error(file + ": LZ4 error");
+            off += h.uLen[c];
         }
-        if (offset != h.total)
-            throw std::runtime_error(filename + ": size mismatch after decompression");
+        if (off != h.totalBytes)
+            throw std::runtime_error(file + ": size mismatch");
 
-        // Precompute scaling and clipping
-        const bool useDmin = (!clipEnabled && dmin > 0.f);
-        const float clipSpan = highClip - lowClip;
-        const float scaleClip = clipEnabled ? scal * ampl / clipSpan : 0.f;
-        const float scaleNoClip0 = scal * ampl / dmax;
-        const float scaleNoClip1 = scal * ampl / (dmax - dmin);
+        /* pre-computed factors ---------------------------------------------*/
+        const float span      = highClip - lowClip;
+        const float kClip     = clip ? scal * ampl / span : 0.f;
+        const float kNoClip0  = scal * ampl / dmax;
+        const float kNoClip1  = scal * ampl / (dmax - dmin);
+        const bool  useDmin   = (!clip && dmin > 0.f);
 
-        const float* src = uncompressed.data();
+        /* voxel loop --------------------------------------------------------*/
+        const float* src = uc.data();
 #if defined(__GNUC__) || defined(__clang__)
 #pragma GCC ivdep
 #pragma GCC unroll 8
 #endif
-        for (uint64_t z = 0; z < brickZ; ++z)
-        for (uint64_t y = 0; y < brickY; ++y) {
-            const uint64_t base = idx3D(x0, y0 + y, z0 + z, volDimX, volDimY);
-            for (uint64_t x = 0; x < brickX; ++x) {
-                float R = src[(z * brickY + y) * brickX + x];
+        for (uint64_t z = 0; z < bz; ++z)
+        for (uint64_t y = 0; y < by; ++y)
+        {
+            const uint64_t base = idx3d(x0, y0 + y, z0 + z, dimX, dimY);
+            for (uint64_t x = 0; x < bx; ++x)
+            {
+                float v = src[(z * by + y) * bx + x];
 
-                // Apply clipping/scaling
-                if (clipEnabled) {
-                    R = fmaf(R, 1.f, -lowClip);
-                    R = (R < 0.f) ? 0.f : ((R > clipSpan) ? clipSpan : R);
-                    R = fmaf(R, scaleClip, 0.f);
-                } else if (useDmin) {
-                    R = fmaf(R, 1.f, -dmin);
-                    R = fmaf(R, scaleNoClip1, 0.f);
-                } else {
-                    R = fmaf(R, scaleNoClip0, 0.f);
+                if (clip)
+                {
+                    v = std::clamp(v - lowClip, 0.f, span) * kClip;
+                }
+                else if (useDmin)
+                {
+                    v = (v - dmin) * kNoClip1;
+                }
+                else
+                {
+                    v = v * kNoClip0;
                 }
 
-                R -= ampl;
-                R = (R >= 0.f) ? std::floor(R + 0.5f) : std::ceil(R - 0.5f);
-                R = (R < 0.f) ? 0.f : ((R > scal) ? scal : R);
+                v = v - ampl;
+                v = (v >= 0.f) ? std::floor(v + .5f) : std::ceil(v - .5f);
+                v = std::clamp(v, 0.f, scal);
 
-                volume[base + x] = R;
+                dst[base + x] = v;
             }
         }
     }
 };
 
-/*------------------------------------------------------------------------------
-    MEX entrypoint: load_slab_lz4
-------------------------------------------------------------------------------*/
-void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
+/*============================== mexFunction ================================*/
+void mexFunction(int nlhs, mxArray* plhs[],
+                 int nrhs, const mxArray* prhs[])
 {
-    const auto timeStart = std::chrono::high_resolution_clock::now();
+    const auto t0 = std::chrono::high_resolution_clock::now();
 
-    // Validate input count and types
     if (nrhs < 12)
-        mexErrMsgTxt("load_slab_lz4: expected 12 input arguments");
+        mexErrMsgTxt("Expected 12 input arguments.");
+
     if (!mxIsCell(prhs[0]))
-        mexErrMsgTxt("filenames must be a cell array of strings");
+        mexErrMsgTxt("filenames must be a cell array.");
 
-    const mwSize numBricks = mxGetNumberOfElements(prhs[0]);
+    const mwSize nBricks = mxGetNumberOfElements(prhs[0]);
 
-    // Parse output volume size
-    uint64_t volDimX, volDimY, volDimZ;
-    if (mxIsUint64(prhs[3])) {
-        const auto* dimsPtr = reinterpret_cast<uint64_t*>(mxGetData(prhs[3]));
-        volDimX = dimsPtr[0]; volDimY = dimsPtr[1]; volDimZ = dimsPtr[2];
-    } else {
-        const auto* dimsPtr = mxGetPr(prhs[3]);
-        volDimX = static_cast<uint64_t>(dimsPtr[0]);
-        volDimY = static_cast<uint64_t>(dimsPtr[1]);
-        volDimZ = static_cast<uint64_t>(dimsPtr[2]);
-    }
-
-    // Parse scalars
-    const bool   clipOn   = (mxGetScalar(prhs[4]) > 0.0);
-    const float  scal     = static_cast<float>(mxGetScalar(prhs[5]));
-    const float  ampl     = static_cast<float>(mxGetScalar(prhs[6]));
-    const float  dmin     = static_cast<float>(mxGetScalar(prhs[7]));
-    const float  dmax     = static_cast<float>(mxGetScalar(prhs[8]));
-    const float  lowClip  = static_cast<float>(mxGetScalar(prhs[9]));
-    const float  highClip = static_cast<float>(mxGetScalar(prhs[10]));
-    int          maxThreads = (nrhs > 11) ? static_cast<int>(mxGetScalar(prhs[11]))
-                                          : static_cast<int>(std::thread::hardware_concurrency());
-    if (maxThreads < 1) maxThreads = 1;
-
-    // Output array and work buffer
-    mwSize outputDims[3] = {static_cast<mwSize>(volDimX), static_cast<mwSize>(volDimY), static_cast<mwSize>(volDimZ)};
-    mxClassID outClass = (scal <= 255) ? mxUINT8_CLASS : mxUINT16_CLASS;
-    mxArray* outputArr = mxCreateNumericArray(3, outputDims, outClass, mxREAL);
-    float* workVolume = static_cast<float*>(mxMalloc(sizeof(float) * volDimX * volDimY * volDimZ));
-
-    // Parse block coordinates for each brick
-    const mxArray* p1 = prhs[1];
-    const mxArray* p2 = prhs[2];
-    auto getCoord = [&](const mxArray* arr, mwSize idx) -> uint64_t {
+    /* dims ------------------------------------------------------------------*/
+    auto getDim = [&](const mxArray* arr, int idx)->uint64_t{
         return mxIsUint64(arr) ? reinterpret_cast<const uint64_t*>(mxGetData(arr))[idx]
                                : static_cast<uint64_t>(mxGetPr(arr)[idx]);
     };
+    const uint64_t dimX = getDim(prhs[3],0);
+    const uint64_t dimY = getDim(prhs[3],1);
+    const uint64_t dimZ = getDim(prhs[3],2);
+
+    /* options ---------------------------------------------------------------*/
+    const bool  clip     = mxGetScalar(prhs[4]) > 0.0;
+    const float scal     = static_cast<float>(mxGetScalar(prhs[5]));
+    const float ampl     = static_cast<float>(mxGetScalar(prhs[6]));
+    const float dmin     = static_cast<float>(mxGetScalar(prhs[7]));
+    const float dmax     = static_cast<float>(mxGetScalar(prhs[8]));
+    const float lowClip  = static_cast<float>(mxGetScalar(prhs[9]));
+    const float highClip = static_cast<float>(mxGetScalar(prhs[10]));
+    int maxThreads = (nrhs > 11)
+        ? static_cast<int>(mxGetScalar(prhs[11]))
+        : static_cast<int>(std::thread::hardware_concurrency());
+    if (maxThreads < 1) maxThreads = 1;
+
+    /* output array ----------------------------------------------------------*/
+    const mwSize mdims[3] = {
+        static_cast<mwSize>(dimX),
+        static_cast<mwSize>(dimY),
+        static_cast<mwSize>(dimZ)
+    };
+    const mxClassID cls = (scal <= 255) ? mxUINT8_CLASS : mxUINT16_CLASS;
+    mxArray* out = mxCreateNumericArray(3, mdims, cls, mxREAL);
+
+    /* float work buffer (RAII) ---------------------------------------------*/
+    using mxFreeDel = void(*)(void*);
+    std::unique_ptr<float, mxFreeDel>
+        work(static_cast<float*>(mxMalloc(sizeof(float)*dimX*dimY*dimZ)), &mxFree);
+
+    /* build job list --------------------------------------------------------*/
+    const mxArray *p1 = prhs[1], *p2 = prhs[2];
+    auto coord = [&](const mxArray* a, mwSize idx)->uint64_t{
+        return mxIsUint64(a) ? reinterpret_cast<const uint64_t*>(mxGetData(a))[idx]
+                             : static_cast<uint64_t>(mxGetPr(a)[idx]);
+    };
 
     std::vector<BrickJob> jobs;
-    jobs.reserve(numBricks);
-    for (mwSize i = 0; i < numBricks; ++i) {
-        char* filenameCstr = mxArrayToUTF8String(mxGetCell(prhs[0], i));
-        std::string filename(filenameCstr); mxFree(filenameCstr);
+    jobs.reserve(nBricks);
 
-        uint64_t x0 = getCoord(p1, i) - 1,     y0 = getCoord(p1, i + numBricks) - 1,   z0 = getCoord(p1, i + 2 * numBricks) - 1;
-        uint64_t x1 = getCoord(p2, i) - 1,     y1 = getCoord(p2, i + numBricks) - 1,   z1 = getCoord(p2, i + 2 * numBricks) - 1;
+    for (mwSize i = 0; i < nBricks; ++i)
+    {
+        char* fnC = mxArrayToUTF8String(mxGetCell(prhs[0], i));
+        std::string file(fnC); mxFree(fnC);
 
-        jobs.push_back({filename, x0, y0, z0, x1, y1, z1, volDimX, volDimY, volDimZ, workVolume,
-                        scal, ampl, lowClip, highClip, dmin, dmax, clipOn});
+        uint64_t x0 = coord(p1, i    ) - 1,
+                 y0 = coord(p1, i+nBricks) - 1,
+                 z0 = coord(p1, i+2*nBricks) - 1;
+        uint64_t x1 = coord(p2, i    ) - 1,
+                 y1 = coord(p2, i+nBricks) - 1,
+                 z1 = coord(p2, i+2*nBricks) - 1;
+
+        jobs.push_back({file, x0,y0,z0, x1,y1,z1,
+                        dimX,dimY,dimZ,
+                        work.get(),
+                        scal,ampl,lowClip,highClip,dmin,dmax,clip});
     }
 
-    // Parallel brick decompression
-    try {
-        ThreadPool pool(static_cast<size_t>(maxThreads));
-        for (const auto& job : jobs)
-            pool.enqueue([job] { job(); });
-        pool.waitAll();
-    } catch (const std::exception& e) {
-        mxFree(workVolume);
+    /* parallel run ----------------------------------------------------------*/
+    try
+    {
+        ThreadPool pool(static_cast<std::size_t>(maxThreads));
+        for (const auto& j : jobs) pool.enqueue([j]{ j(); });
+        pool.wait();
+    }
+    catch (const std::exception& e)
+    {
         mexErrMsgTxt(e.what());
     }
 
-    // Convert float buffer to MATLAB uint8/uint16
-    if (outClass == mxUINT8_CLASS) {
-        auto* dst = static_cast<uint8_t*>(mxGetData(outputArr));
-        for (uint64_t i = 0; i < volDimX * volDimY * volDimZ; ++i)
-            dst[i] = static_cast<uint8_t>(workVolume[i]);
-    } else {
-        auto* dst = static_cast<uint16_t*>(mxGetData(outputArr));
-        for (uint64_t i = 0; i < volDimX * volDimY * volDimZ; ++i)
-            dst[i] = static_cast<uint16_t>(workVolume[i]);
+    /* copy back as uint8/uint16 --------------------------------------------*/
+    const uint64_t total = dimX*dimY*dimZ;
+    if (cls == mxUINT8_CLASS)
+    {
+        auto* dst = static_cast<uint8_t*>(mxGetData(out));
+        for (uint64_t i = 0; i < total; ++i)
+            dst[i] = static_cast<uint8_t>(work[i]);
     }
-    mxFree(workVolume);
+    else
+    {
+        auto* dst = static_cast<uint16_t*>(mxGetData(out));
+        for (uint64_t i = 0; i < total; ++i)
+            dst[i] = static_cast<uint16_t>(work[i]);
+    }
 
-    // Return output and optional timing
-    plhs[0] = outputArr;
-    if (nlhs > 1) {
-        plhs[1] = mxCreateDoubleScalar(
-            std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - timeStart).count()
-        );
+    /* outputs ---------------------------------------------------------------*/
+    plhs[0] = out;
+    if (nlhs > 1)
+    {
+        double secs = std::chrono::duration<double>(
+            std::chrono::high_resolution_clock::now() - t0).count();
+        plhs[1] = mxCreateDoubleScalar(secs);
     }
 }
