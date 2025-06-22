@@ -31,7 +31,6 @@
 
 #if defined(__linux__)
 #  include <fcntl.h>
-#  include <unistd.h>
 #  include <sys/mman.h>
 #  include <sched.h>
 #  include <numa.h>
@@ -42,9 +41,9 @@
 #    endif
 #  endif
 #  if !defined(O_BINARY)
-#    define O_BINARY 0        // ← add these three lines
+#    define O_BINARY 0
 #  endif
-#  include <unistd.h> // access
+#  include <unistd.h>
 #  define ACCESS access
 #endif
 
@@ -157,17 +156,18 @@ struct TiffLocal {
 };
 static thread_local std::unique_ptr<TiffLocal> tl_tiff;
 
-static void ensure_scratch(size_t want, int node) {
+static void ensure_scratch(size_t want, int node)
+{
     if (scratch_buf && scratch_bytes >= want) return;
     if (scratch_buf) free_on_node(scratch_buf, scratch_bytes, scratch_huge);
-    bool hugeReq = true;
-    scratch_buf = static_cast<uint8_t*>(alloc_on_node(want, node, hugeReq));
-    auto* newBuf = alloc_on_node(want, node, /*wantHuge=*/true);
-    scratch_huge  = (newBuf && want >= (2UL<<20) &&
-                     ((uintptr_t)newBuf & ((2UL<<20)-1)) == 0);   // mmap+hugetlb path
-    scratch_buf   = static_cast<uint8_t*>(newBuf);
+
+    void* p = alloc_on_node(want, node, /*wantHuge=*/true);
+    scratch_huge  = (p && want >= (2UL<<20) &&
+                     ((uintptr_t)p & ((2UL<<20)-1)) == 0);   // mmap+hugetlb?
+    if (!p) throw std::bad_alloc();
+
+    scratch_buf   = static_cast<uint8_t*>(p);
     scratch_bytes = want;
-    if (!scratch_buf) throw std::bad_alloc();
 }
 
 /* ─────────────────────────── Raw gather-write helpers ───────────────────── */
