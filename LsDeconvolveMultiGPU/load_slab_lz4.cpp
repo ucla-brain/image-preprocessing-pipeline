@@ -185,6 +185,8 @@ struct BrickJob {
 /* ── MEX entry (unchanged plumbing) ─────────────────────────────────── */
 void mexFunction(int nlhs,mxArray* plhs[],int nrhs,const mxArray* prhs[])
 {
+    const auto tStart = std::chrono::high_resolution_clock::now();
+
     if(nrhs<12) mexErrMsgTxt("load_slab_lz4: wrong arg count");
 
     if(!mxIsCell(prhs[0])) mexErrMsgTxt("fnames must be cellstr");
@@ -254,5 +256,9 @@ void mexFunction(int nlhs,mxArray* plhs[],int nrhs,const mxArray* prhs[])
         auto* dst=(uint16_t*)mxGetData(out);
         for(uint64_t i=0;i<dimX*dimY*dimZ;++i) dst[i]=(uint16_t)work[i];
     }
-    mxFree(work); plhs[0]=out;
+    mxFree(work);
+    plhs[0]=out;
+    if (nlhs > 1)
+        plhs[1] = mxCreateDoubleScalar(
+            std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - tStart).count());
 }
