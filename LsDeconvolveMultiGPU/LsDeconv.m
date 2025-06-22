@@ -1193,6 +1193,7 @@ function save_slices_with_bl_tif(R, outpath, slab_z1)
     % Determine array class and orientation flag
     orderFlag = true;  % R is in [X Y Z] format
     compression = 'deflate'; % use char '' not string ""
+    R = permute(R, [2 1 3]); orderFlag = false;  % R is in [Y X Z] format
 
     % Save using compiled multithreaded MEX
     save_bl_tif(R, fileList, orderFlag, compression, feature('numCores'));
