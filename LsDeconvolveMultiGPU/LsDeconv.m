@@ -77,12 +77,12 @@ function [] = LsDeconv(varargin)
             disp('Cache drive dir exists: ' + cache_drive)
         end
         
-        assert(isa(inpath, 'string'     ), "wrong type " + class(inpath));
-        assert(isa(dxy, 'double'        ), "wrong type " + class(dxy));
-        assert(isa(dz, 'double'         ), "wrong type " + class(dz));
-        assert(isa(numit, 'double'      ), "wrong type " + class(numit));
-        assert(isa(lambda_ex, 'double'  ), "wrong type " + class(lambda_ex));
-        assert(isa(lambda_em, 'double'  ), "wrong type " + class(lambda_em));
+        assert(isa(inpath     , 'string'), "wrong type " + class(inpath));
+        assert(isa(dxy        , 'double'), "wrong type " + class(dxy));
+        assert(isa(dz         , 'double'), "wrong type " + class(dz));
+        assert(isa(numit      , 'double'), "wrong type " + class(numit));
+        assert(isa(lambda_ex  , 'double'), "wrong type " + class(lambda_ex));
+        assert(isa(lambda_em  , 'double'), "wrong type " + class(lambda_em));
         assert(isa(cache_drive, 'string'), "wrong type " + class(cache_drive));
 
         if isfolder(inpath)
@@ -171,9 +171,10 @@ function [] = LsDeconv(varargin)
         % === split the image into smaller blocks ===
         % x and y pads are interpolated since they are smaller than z
         % z pad is from actual image to avoid artifacts
-        p_log(log_file, 'partitioning the image into blocks ...')
+
         block_path = fullfile(cache_drive, 'block.mat');
         if resume && exist(block_path, 'file')
+            p_log(log_file, 'Resuming by loading block info ...')
             loaded = load(block_path);
             block = loaded.block;
             clear loaded;
@@ -190,6 +191,7 @@ function [] = LsDeconv(varargin)
                 end
             end
         else
+            p_log(log_file, 'partitioning the image into blocks ...')
             output_bytes = 2;
             if convert_to_8bit
                 output_bytes = 1;
