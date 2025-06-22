@@ -34,11 +34,14 @@
 #  include <sys/mman.h>
 #  include <sched.h>
 #  include <numa.h>
-#  include <sys/uio.h>     // writev
+#  include <sys/uio.h>
 #  ifdef __has_include
 #    if __has_include(<numaif.h>)
-#      include <numaif.h>   // mbind / MPOL_BIND
+#      include <numaif.h>
 #    endif
+#  endif
+#  if !defined(O_BINARY)
+#    define O_BINARY 0        // ← add these three lines
 #  endif
 #endif
 
