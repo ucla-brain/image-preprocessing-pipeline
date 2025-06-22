@@ -246,8 +246,8 @@ struct BrickJob
                 }
                 else if (useDMin)
                 {
-                    v  = std::fmaf(v, 1.f, -dminF);   // v -= dminF  (float)
-                    v  = std::fmaf(v, scaleNC1, 0.f); // v *= scaleNC1 (float)
+                    v -= dminF;
+                    v *= scaleNC1;
                 }
                 else
                 {
