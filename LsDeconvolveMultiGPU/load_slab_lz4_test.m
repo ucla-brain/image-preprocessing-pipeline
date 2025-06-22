@@ -50,7 +50,10 @@ for scal = scal_options
                 continue
             end
 
-            % --- Ensure all params are single inside the loop ---
+            % ---------- reference calculation (exact C++ float emulation) ----------
+            V_ref = single(V);                 % source volume as single
+
+            % cast sweep scalars (loop variables are double) to single once
             scalS          = single(scal);
             clipvalS       = single(clipval);
             amplificationS = single(amplification);
@@ -59,36 +62,32 @@ for scal = scal_options
             low_clipS      = single(low_clip);
             high_clipS     = single(high_clip);
 
-            fprintf("Testing: scal=%d, clipval=%g, deconvmin=%g\n", scal, clipval, deconvmin);
-
-            tic;
-            V_mex = load_slab_lz4( ...
-                fnames, uint64(p1d), uint64(p2d), uint64([stack.x stack.y stack.z]), ...
-                clipvalS, scalS, amplificationS, deconvminS, deconvmaxS, low_clipS, high_clipS, feature('numCores'));
-            t_mex = toc;
-
-            % Reference calculation, all single math
-            V_ref = single(V);
             if clipvalS > 0
-                V_ref = V_ref - low_clipS;
-                V_ref = min(V_ref, high_clipS - low_clipS);
-                V_ref = V_ref .* (scalS .* amplificationS ./ (high_clipS - low_clipS));
+                rngS   = high_clipS - low_clipS;                                % single
+                sfS    = single(double(scalS * amplificationS) ./ double(rngS));% float-like
+                V_ref  = V_ref - low_clipS;
+                V_ref  = min(V_ref, rngS);                                      % clamp upper
+                V_ref  = V_ref .* sfS;
             else
                 if deconvminS > 0
-                    V_ref = (V_ref - deconvminS) .* (scalS .* amplificationS ./ (deconvmaxS - deconvminS));
+                    rngS = deconvmaxS - deconvminS;
+                    sfS  = single(double(scalS * amplificationS) ./ double(rngS));
+                    V_ref = (V_ref - deconvminS) .* sfS;
                 else
-                    V_ref = V_ref .* (scalS .* amplificationS ./ deconvmaxS);
+                    sfS  = single(double(scalS * amplificationS) ./ double(deconvmaxS));
+                    V_ref = V_ref .* sfS;
                 end
             end
-            V_ref = single(V_ref);               % force single before round
+
             V_ref = round(V_ref - amplificationS);
-            V_ref = min(max(V_ref, single(0)), scalS); % clamp
+            V_ref = min(max(V_ref, single(0)), scalS);
 
             if scalS <= 255
                 V_ref = uint8(V_ref);
-            elseif scalS <= 65535
+            else                                % scalS == 65535 in this test set
                 V_ref = uint16(V_ref);
             end
+            % -----------------------------------------------------------------------
 
             total_cases = total_cases + 1;
             eq = isequaln(V_mex, V_ref);
