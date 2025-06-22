@@ -1,6 +1,7 @@
 /*==============================================================================
   save_bl_tif.cpp
   ------------------------------------------------------------------------------
+
   High-throughput TIFF Z-slice saver for 3D MATLAB volumes.
   Each slice is saved to a separate TIFF file using OpenMP for multithreading.
 
@@ -15,7 +16,7 @@
     nThreads    : (optional) number of threads (default = physical cores or Z count).
 
   FEATURES:
-    • Uses OpenMP parallel for with dynamic scheduling.
+    • Uses OpenMP parallel for with dynamic scheduling and num_threads clause.
     • Thread-local scratch buffer for efficient transpose/copy.
     • RAII for TIFF file handles.
     • Atomic file replace via std::remove + std::rename.
@@ -26,6 +27,11 @@
     • Grayscale only (1 channel).
     • No retry on I/O errors.
     • Assumes local filesystem.
+
+  AUTHOR:
+    Keivan Moradi (with ChatGPT-4o assistance)
+  LICENSE:
+    GNU GPL v3 — https://www.gnu.org/licenses/gpl-3.0.html
 ==============================================================================*/
 
 #include "mex.h"
@@ -42,7 +48,9 @@
 #include <sstream>
 #include <mutex>
 #include <thread>
-#include <omp.h>
+#ifdef _OPENMP
+  #include <omp.h>
+#endif
 #include <unistd.h>   // for access()
 
 // Thread-local buffer for transpose/compressed writes
@@ -66,8 +74,11 @@ struct TiffHandle {
 
 // Ensure we can overwrite an existing file
 inline void ensureWritable(const std::string& path) {
-    if (access(path.c_str(), F_OK) == 0 && access(path.c_str(), W_OK) != 0)
+    if (access(path.c_str(), F_OK) == 0 &&
+        access(path.c_str(), W_OK) != 0)
+    {
         throw std::runtime_error("Cannot overwrite read-only file: " + path);
+    }
 }
 
 // Save one Z-slice to disk
@@ -85,7 +96,7 @@ void saveSlice(const uint8_t* basePtr, size_t byteOffset,
     std::string tmpPath = filename + ".tmp";
     TiffHandle handle(tmpPath, "w");
     TIFF* tif = handle.tif;
-    TIFFSetField(tif, TIFFTAG_IMAGEWIDTH, outCols);
+    TIFFSetField(tif, TIFFTAG_IMAGEWIDTH,  outCols);
     TIFFSetField(tif, TIFFTAG_IMAGELENGTH, outRows);
     TIFFSetField(tif, TIFFTAG_SAMPLESPERPIXEL, 1);
     TIFFSetField(tif, TIFFTAG_BITSPERSAMPLE,
@@ -130,7 +141,7 @@ void saveSlice(const uint8_t* basePtr, size_t byteOffset,
 
 // Count physical cores on Linux, or fallback
 size_t countPhysicalCores() {
-#if defined(__linux__)
+#ifdef __linux__
     std::vector<std::pair<int,int>> ids;
     FILE* f = std::fopen("/proc/cpuinfo", "r");
     if (!f) return std::thread::hardware_concurrency();
@@ -197,13 +208,11 @@ void mexFunction(int nlhs, mxArray* plhs[],
         : countPhysicalCores();
     size_t numThreads = std::min(maxThreads, static_cast<size_t>(zSlices));
     if (numThreads < 1) numThreads = 1;
-    omp_set_num_threads(numThreads);
 
-    // Parallel loop over slices
     std::vector<std::string> errors;
     std::mutex errorMutex;
 
-    #pragma omp parallel for schedule(dynamic,1)
+    #pragma omp parallel for schedule(dynamic,1) num_threads(numThreads)
     for (mwSize idx = 0; idx < zSlices; ++idx) {
         try {
             saveSlice(basePtr, idx * bytesPerSlice,
