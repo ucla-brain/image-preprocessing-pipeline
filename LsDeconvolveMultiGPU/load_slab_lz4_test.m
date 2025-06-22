@@ -48,9 +48,8 @@ for scal = scalS
             total = total + 1;
 
             % ---- call MEX ----
-            t0 = tic;
             try
-                V_mex = load_slab_lz4( ...
+                [V_mex, t_mex] = load_slab_lz4( ...
                     fn, uint64(p1d), uint64(p2d), ...
                     uint64([stack.x stack.y stack.z]), ...
                     clipval, scal, amplification, ...
@@ -61,7 +60,6 @@ for scal = scalS
                         double(scal), double(clipval), double(deconvmin), ME.message);
                 fail = fail + 1;  continue
             end
-            t_mex = toc(t0);
 
             % ---- MATLAB reference (uses EXACT formula) ----
             R = R0;                                   %#ok<NASGU> base name must be R
