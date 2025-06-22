@@ -75,39 +75,47 @@ try
     error("read-only overwrite accepted");
 catch, fprintf("      ✅ read-only overwrite rejected\n"); end
 
-%% ---------- D. benchmark: save_bl_tif vs async-imwrite ----------
+%% ---------- D. benchmark: YXZ vs XYZ save_bl_tif (uint16 none) ----------
 benchSize = [512 512 64];  % 256 MiB uint16 stack
 benchVol  = uint16(randi(65535, benchSize));
-mexFiles  = arrayfun(@(k) fullfile(tmpRoot,sprintf('mex_%03d.tif',k)), ...
+benchLayouts = {'YXZ',false; 'XYZ',true};
+benchResults = struct('Layout',{},'Time_s',{},'MiB_s',{});
+
+for b = 1:size(benchLayouts,1)
+    layoutName = benchLayouts{b,1};
+    isXYZ = benchLayouts{b,2};
+
+    fprintf("\n   🏁 benchmark %s save_bl_tif (uint16 %dx%dx%d)…\n", ...
+            layoutName, benchSize(1), benchSize(2), benchSize(3));
+
+    % prepare volume and file list
+    if isXYZ
+        V = permute(benchVol,[2 1 3]);
+    else
+        V = benchVol;
+    end
+    files = arrayfun(@(k) fullfile(tmpRoot, sprintf('%s_mex_%03d.tif',lower(layoutName),k)), ...
                      1:benchSize(3),'uni',0);
-asyncFiles = strrep(mexFiles,'mex_','async_');
 
-fprintf("\n   🏁 benchmark save_bl_tif (uint16 %dx%dx%d)…\n", benchSize, benchSize(3));
-tMex = timeit(@() save_bl_tif(benchVol, mexFiles, false, 'none'));
+    % run benchmark
+    tStart = tic;
+    save_bl_tif(V, files, isXYZ, 'none');
+    tElapsed = toc(tStart);
 
-if ~isempty(ver('parallel')) && exist('backgroundPool','builtin')
-    fprintf("   🏁 benchmark async imwrite (%d tasks)…\n", benchSize(3));
-    tAsync = timeit(@() ...
-        arrayfun(@(k) parfeval(backgroundPool, @imwrite, 0, ...
-                benchVol(:,:,k), asyncFiles{k}), 1:benchSize(3)));
-    bytesMiB = numel(benchVol)*2 / 2^20;
-    spdMex   = bytesMiB / tMex;
-    spdAsync = bytesMiB / tAsync;
-    speedup  = tAsync / tMex;
+    % record
+    benchResults(b).Layout = layoutName;
+    benchResults(b).Time_s = tElapsed;
+    benchResults(b).MiB_s  = prod(benchSize)*2/2^20 / tElapsed;
 
-    fprintf("      save_bl_tif : %.2f s  (%.1f MiB/s)\n", tMex, spdMex);
-    fprintf("      async-imwrite: %.2f s  (%.1f MiB/s)\n", tAsync, spdAsync);
-    fprintf("      speed-up     : %.2f× (async → save_bl_tif)\n", speedup);
-else
-    fprintf("   ⚠️  async-imwrite benchmark skipped: backgroundPool unavailable.\n");
+    fprintf("      Time: %.2f s  (%.1f MiB/s)\n", ...
+            tElapsed, benchResults(b).MiB_s);
 end
 
-%% ---------- E. layout comparison table ----------
+%% ---------- E. layout performance table ----------
 fprintf("\n   📊 Layout performance comparison:\n");
-Layouts = cfg.order(:,1);
-Time_s  = layoutTimes;
-T = table(Layouts, Time_s, 'VariableNames', {'Layout','TotalTime_s'});
-disp(T);
+T_layout = table({benchResults.Layout}.' , [benchResults.Time_s].', [benchResults.MiB_s].', ...
+    'VariableNames', {'Layout','Time_s','MiB_s'});
+disp(T_layout);
 
 fprintf("\n🎉  all save_bl_tif tests passed\n");
 end
@@ -128,9 +136,7 @@ function safe_rmdir(p)
             rmdir(p,'s');
         catch
             pause(0.1);
-            if exist(p,'dir')
-                rmdir(p,'s');
-            end
+            if exist(p,'dir'), rmdir(p,'s'); end
         end
     end
 end
