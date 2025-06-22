@@ -111,7 +111,7 @@ static void writeSliceToTiff(
 
         if (compressionType == COMPRESSION_DEFLATE) {
             TIFFSetField(tif, TIFFTAG_PREDICTOR,  PREDICTOR_HORIZONTAL);
-            TIFFSetField(tif, TIFFTAG_ZIPQUALITY, 6);
+            TIFFSetField(tif, TIFFTAG_ZIPQUALITY, 1);
         }
 
         const uint32_t numStrips = (imageHeight + rowsPerStrip - 1) / rowsPerStrip;
