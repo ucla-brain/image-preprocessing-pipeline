@@ -122,13 +122,14 @@ static void ensure_scratch(size_t bytes) {
 }
 
 /* ───────────────────────────── LOW-LEVEL TIFF WRITE ─────────────────────── */
-static void save_slice(const SaveTask& t, std::vector<std::future<void>>& flush_futures, std::vector<std::thread>& flush_threads)
+static void save_slice(const SaveTask& t)
 {
     const mwSize srcRows = t.alreadyXYZ ? t.cols : t.rows;
     const mwSize srcCols = t.alreadyXYZ ? t.rows : t.cols;
 
     const uint8_t* src = t.basePtr + t.sliceOffset;
     const bool directWrite = (t.compressionTag == COMPRESSION_NONE && t.alreadyXYZ);
+
     const uint8_t* ioBuf = nullptr;
 
     if (directWrite) {
@@ -158,6 +159,7 @@ static void save_slice(const SaveTask& t, std::vector<std::future<void>>& flush_
     }
 
     const std::string tmpPath = t.filePath + ".tmp";
+
     TIFF* tif = TIFFOpen(tmpPath.c_str(), "w");
     if (!tif) throw std::runtime_error("Cannot open temporary file " + tmpPath);
 
@@ -170,36 +172,32 @@ static void save_slice(const SaveTask& t, std::vector<std::future<void>>& flush_
     TIFFSetField(tif, TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG);
     TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP, srcRows);
 
-    uint8_t* writeBuf = const_cast<uint8_t*>(ioBuf);
+    uint8_t* writeBuf = (t.compressionTag == COMPRESSION_NONE && t.alreadyXYZ) ? const_cast<uint8_t*>(ioBuf) : scratch_aligned;
     tsize_t nWritten = (t.compressionTag == COMPRESSION_NONE)
         ? TIFFWriteRawStrip    (tif, 0, writeBuf, static_cast<tsize_t>(t.bytesPerSlice))
         : TIFFWriteEncodedStrip(tif, 0, writeBuf, static_cast<tsize_t>(t.bytesPerSlice));
 
     if (nWritten < 0) {
         TIFFClose(tif);
+        std::remove(tmpPath.c_str());
         throw std::runtime_error("TIFF write failed on " + tmpPath);
     }
 
-    // Safe: use packaged_task
-    std::packaged_task<void()> task([tif, tmpPath, finalPath = t.filePath]() {
-        TIFFClose(tif);
+    TIFFClose(tif);
 
-        // Check if final file is writable
-        FILE* testW = std::fopen(finalPath.c_str(), "wb");
-        if (!testW) {
-            std::remove(tmpPath.c_str());
-            throw std::runtime_error("Refused to overwrite read-only file: " + finalPath);
-        }
-        std::fclose(testW);
+    // Preflight check: if final file exists and isn't writable
+    FILE* testW = std::fopen(t.filePath.c_str(), "wb");
+    if (!testW) {
+        std::remove(tmpPath.c_str());
+        throw std::runtime_error("Refused to overwrite read-only file: " + t.filePath);
+    }
+    std::fclose(testW);
 
-        if (std::rename(tmpPath.c_str(), finalPath.c_str()) != 0) {
-            std::remove(tmpPath.c_str());
-            throw std::runtime_error("Atomic rename failed: " + tmpPath + " → " + finalPath);
-        }
-    });
-
-    flush_futures.emplace_back(task.get_future());
-    flush_threads.emplace_back(std::move(task));
+    if (std::rename(tmpPath.c_str(), t.filePath.c_str()) != 0) {
+        std::remove(tmpPath.c_str());
+        throw std::runtime_error("Atomic rename failed: " + tmpPath + " → " + t.filePath +
+                                 " (" + std::strerror(errno) + ")");
+    }
 }
 
 /* ───────────────────────────── FILE LIST CACHE ──────────────────────────── */
@@ -234,9 +232,6 @@ struct CallContext {
 
 void worker_entry(CallContext& ctx, int thread_id)
 {
-    std::vector<std::future<void>> flush_futures;  // Store async futures
-    std::vector<std::thread> flush_threads;        // Store threads that run packaged tasks
-
 #if defined(__linux__)
     if (numa_available() != -1) {
         int max_node = numa_max_node();
@@ -254,17 +249,13 @@ void worker_entry(CallContext& ctx, int thread_id)
 
     while (idx < jobList.size()) {
         try {
-            save_slice(jobList[idx], flush_futures, flush_threads);  // ✅ pass both
+            save_slice(jobList[idx]);  // ✅ now no futures or threads
         } catch (const std::exception& e) {
             std::lock_guard<std::mutex> lk(ctx.errMutex);
             ctx.errors.emplace_back(e.what());
         }
         idx = ctx.nextIndex.fetch_add(1, std::memory_order_relaxed);
     }
-
-    // Wait for async work to finish
-    for (auto& f : flush_futures) f.get();
-    for (auto& t : flush_threads) t.join();
 }
 
 } // unnamed namespace
@@ -332,13 +323,10 @@ void mexFunction(int nlhs, mxArray* plhs[],
         for (size_t z = 0; z < dim2; ++z)
             taskVec->emplace_back(SaveTask{ basePtr, z * bytesPerSl, dim0, dim1, paths[z], alreadyXYZ, classId, compTag, bytesPerSl, bytesPerPx });
 
+        // Warm-up libtiff on first call (lazy loader)
         TIFF* tmp = TIFFOpen("/dev/null", "r"); if (tmp) TIFFClose(tmp);
 
         // ──────────── Optimized Thread Launching ──────────── //
-        pthread_attr_t attr;
-        pthread_attr_init(&attr);
-        pthread_attr_setstacksize(&attr, 256 * 1024);  // Small stack size optimization
-
         CallContext ctx;
         ctx.tasks = std::move(taskVec);
         ctx.maxSliceBytes = bytesPerSl;
