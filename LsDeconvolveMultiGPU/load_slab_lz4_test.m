@@ -12,13 +12,13 @@ brick.ny = ceil(stack.y/brick.y);
 brick.nz = ceil(stack.z/brick.z);
 
 % --- Parameters to sweep ---
-scal_options      = single([255, 65535]);
-clipval_options   = single([0, 1]);           % 0 = no clip, 1 = with clip
-deconvmin_options = single([0, 0.1]);         % test with and without deconvmin > 0
-low_clip          = single(0.1);
-high_clip         = single(0.9);
-amplification     = single(1);
-deconvmax         = single(1);
+scal_options      = [255, 65535];
+clipval_options   = [0, 1];
+deconvmin_options = [0, 0.1];
+low_clip          = 0.1;
+high_clip         = 0.9;
+amplification     = 1;
+deconvmax         = 1;
 
 % ─── TEMP DIR ───────────────────────────────────────────────────────────
 tmpDir  = tempname;  mkdir(tmpDir);
@@ -50,32 +50,43 @@ for scal = scal_options
                 continue
             end
 
+            % --- Ensure all params are single inside the loop ---
+            scalS          = single(scal);
+            clipvalS       = single(clipval);
+            amplificationS = single(amplification);
+            deconvminS     = single(deconvmin);
+            deconvmaxS     = single(deconvmax);
+            low_clipS      = single(low_clip);
+            high_clipS     = single(high_clip);
+
             fprintf("Testing: scal=%d, clipval=%g, deconvmin=%g\n", scal, clipval, deconvmin);
 
             tic;
             V_mex = load_slab_lz4( ...
                 fnames, uint64(p1d), uint64(p2d), uint64([stack.x stack.y stack.z]), ...
-                clipval, scal, amplification, deconvmin, deconvmax, low_clip, high_clip, feature('numCores'));
+                clipvalS, scalS, amplificationS, deconvminS, deconvmaxS, low_clipS, high_clipS, feature('numCores'));
             t_mex = toc;
 
-            V_ref = V;
-            if clipval > 0
-                V_ref = V_ref - low_clip;
-                V_ref = min(V_ref, high_clip - low_clip);
-                V_ref = V_ref .* (scal .* amplification ./ (high_clip - low_clip));
+            % Reference calculation, all single math
+            V_ref = single(V);
+            if clipvalS > 0
+                V_ref = V_ref - low_clipS;
+                V_ref = min(V_ref, high_clipS - low_clipS);
+                V_ref = V_ref .* (scalS .* amplificationS ./ (high_clipS - low_clipS));
             else
-                if deconvmin > 0
-                    V_ref = (V_ref - deconvmin) .* (scal .* amplification ./ (deconvmax - deconvmin));
+                if deconvminS > 0
+                    V_ref = (V_ref - deconvminS) .* (scalS .* amplificationS ./ (deconvmaxS - deconvminS));
                 else
-                    V_ref = V_ref .* (scal .* amplification ./ deconvmax);
+                    V_ref = V_ref .* (scalS .* amplificationS ./ deconvmaxS);
                 end
             end
-            V_ref = round(V_ref - amplification);
-            V_ref = min(max(V_ref, 0), scal); % clamp
+            V_ref = single(V_ref);               % force single before round
+            V_ref = round(V_ref - amplificationS);
+            V_ref = min(max(V_ref, single(0)), scalS); % clamp
 
-            if scal <= 255
+            if scalS <= 255
                 V_ref = uint8(V_ref);
-            elseif scal <= 65535
+            elseif scalS <= 65535
                 V_ref = uint16(V_ref);
             end
 
