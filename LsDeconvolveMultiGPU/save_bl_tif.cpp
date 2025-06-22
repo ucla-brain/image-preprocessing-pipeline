@@ -56,6 +56,15 @@
 
 namespace fs = std::filesystem;
 
+#if defined(_WIN32) || defined(_WIN64)
+    #include <io.h>
+    #define access    _access
+    #define W_OK      2
+#else
+    #include <unistd.h>
+#endif
+
+
 constexpr uint32_t kRowsPerStrip      = 64;  // Strips of 64 rows: good for RAM/throughput
 constexpr size_t   kSlicesPerDispatch = 4;   // Workers claim slices in blocks for cache/Numa
 constexpr int      kDeflateQuality    = 7;   // [1-9], 7 ~ default for libtiff, balanced
@@ -205,6 +214,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
         if (!dir.empty() && !fs::exists(dir))
             mexErrMsgIdAndTxt("save_bl_tif:invalidPath",
                 "Directory does not exist: %s", dir.string().c_str());
+        // cross-platform: check write permission
         if (fs::exists(path) && access(path.c_str(), W_OK) != 0)
             mexErrMsgIdAndTxt("save_bl_tif:readonly",
                 "Cannot overwrite read-only file: %s", path.c_str());
