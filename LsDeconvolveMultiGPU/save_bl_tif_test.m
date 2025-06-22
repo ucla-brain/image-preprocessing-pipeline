@@ -1,5 +1,7 @@
 function save_bl_tif_test
 % Extended regression + benchmark for save_bl_tif MEX
+%
+% Now uses gamma-distributed data with a long tail and ~10% sparsity.
 
 fprintf("🧪  save_bl_tif extended test-suite\n");
 
@@ -36,15 +38,13 @@ sizesMiB = zeros(nLayouts,nTypes,nComps);
 for o = 1:nLayouts
     fprintf("\n   🏁 Testing layout: %s\n", cfg.order{o,1});
     for d = 1:nTypes
-        bytesPerSample = strcmp(cfg.dtype{d,1},'uint16')*1 + 1;  % uint8→1, uint16→2
         for c = 1:nComps
-            % prepare volume & permute if needed
-            V = cfg.dtype{d,2}(randi(intmax(cfg.dtype{d,1}), sz));
+            % generate gamma-distributed, sparse test volume
+            V = generateTestData(sz, cfg.dtype{d,1});
             if cfg.order{o,2}
                 V = permute(V,[2 1 3]);
             end
 
-            % build file list
             tagSafe = regexprep(sprintf('%s_%s_%s',cfg.order{o,1},...
                           cfg.dtype{d,1},cfg.comp{c}), '[^A-Za-z0-9]','_');
             files = arrayfun(@(k) fullfile(tmpRoot, ...
@@ -55,7 +55,7 @@ for o = 1:nLayouts
             save_bl_tif(V, files, cfg.order{o,2}, cfg.comp{c});
             tElapsed = toc(t0);
 
-            % verify and gather sizes
+            % verify & measure on-disk size
             bytesTotal = 0;
             for k = 1:sz(3)
                 ref = V(:,:,k);
@@ -126,6 +126,28 @@ fprintf("\n🎉  all save_bl_tif tests passed\n");
 end
 
 %% ---------- helpers --------------------------------------------------------
+
+function out = generateTestData(sz, dtype)
+% Generate gamma-distributed data with a heavy tail and ~10% sparsity,
+% then scale to full dynamic range of the target integer dtype.
+    alpha = 2;      % shape
+    beta  = 50;     % scale
+    X = gamrnd(alpha, beta, sz);
+    % impose ~10% zeros
+    mask = rand(sz) > 0.10;
+    X(~mask) = 0;
+    % normalize to [0,1]
+    X = X / max(X(:));
+    switch dtype
+        case 'uint8'
+            out = uint8(X * 255);
+        case 'uint16'
+            out = uint16(X * 65535);
+        otherwise
+            error("Unsupported dtype '%s'",dtype);
+    end
+end
+
 function sandbox_cleanup(dirPath)
     fclose('all'); safe_rmdir(dirPath);
 end
