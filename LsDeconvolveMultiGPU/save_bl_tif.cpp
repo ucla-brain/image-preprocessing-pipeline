@@ -86,11 +86,11 @@ static void writeSliceToTiff(
     uint16_t             compressionType,
     const std::string&   outputPath
 ) {
-    // Determine image dimensions for libtiff
+    // Determine image dims for libtiff
     const uint32_t imageWidth  = isXYZ ? static_cast<uint32_t>(widthDim)
-                                        : static_cast<uint32_t>(heightDim);
+                                       : static_cast<uint32_t>(heightDim);
     const uint32_t imageHeight = isXYZ ? static_cast<uint32_t>(heightDim)
-                                        : static_cast<uint32_t>(widthDim);
+                                       : static_cast<uint32_t>(widthDim);
     const size_t   sliceSize   = widthDim * heightDim * bytesPerPixel;
     const uint8_t* basePtr     = volumeData + sliceIdx * sliceSize;
 
@@ -131,11 +131,14 @@ static void writeSliceToTiff(
 
             if (isXYZ) {
                 // Direct-write path: memory is row-major in X (widthDim)
-                const uint8_t* stripData =
-                    basePtr + static_cast<size_t>(rowStart) * imageWidth * bytesPerPixel;
+                const uint8_t* stripData = basePtr +
+                    static_cast<size_t>(rowStart) * imageWidth * bytesPerPixel;
+                // cast away const so libtiff accepts void*
+                void* dataPtr = const_cast<void*>(
+                                  static_cast<const void*>(stripData));
                 tsize_t wrote = (compressionType == COMPRESSION_NONE)
-                    ? TIFFWriteRawStrip    (tif, stripIndex, stripData, byteCount)
-                    : TIFFWriteEncodedStrip(tif, stripIndex, stripData, byteCount);
+                    ? TIFFWriteRawStrip    (tif, stripIndex, dataPtr, byteCount)
+                    : TIFFWriteEncodedStrip(tif, stripIndex, dataPtr, byteCount);
                 if (wrote < 0)
                     throw std::runtime_error("TIFF write failed on strip " +
                                              std::to_string(stripIndex));
@@ -146,16 +149,17 @@ static void writeSliceToTiff(
                 for (uint32_t r = 0; r < rowsToWrite; ++r) {
                     for (uint32_t c = 0; c < imageWidth; ++c) {
                         // MATLAB is column-major: index = (row + col*heightDim)
-                        size_t srcOffset = ( (rowStart + r)
-                                          + c * heightDim )
+                        size_t srcOffset = ((rowStart + r)
+                                          + c * heightDim)
                                           * bytesPerPixel;
-                        size_t dstOffset = ( r * imageWidth + c )
+                        size_t dstOffset = (r * imageWidth + c)
                                           * bytesPerPixel;
                         std::memcpy(&stripBuffer[dstOffset],
                                     basePtr + srcOffset,
                                     bytesPerPixel);
                     }
                 }
+                // stripBuffer.data() is non-const, so no cast needed
                 tsize_t wrote = (compressionType == COMPRESSION_NONE)
                     ? TIFFWriteRawStrip    (tif, stripIndex, stripBuffer.data(), byteCount)
                     : TIFFWriteEncodedStrip(tif, stripIndex, stripBuffer.data(), byteCount);
@@ -164,7 +168,7 @@ static void writeSliceToTiff(
                                              std::to_string(stripIndex));
             }
         }
-    } // TIFFClose occurs here
+    } // TIFFClose happens here
 
     // Atomically replace any existing file
     std::error_code ec;
@@ -252,7 +256,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     // 11) Atomic slice index
     std::atomic<size_t> nextSliceIndex{0};
 
-    // 12) Launch worker threads (they will reuse threads until done)
+    // 12) Launch worker threads
     std::vector<std::thread> threads;
     threads.reserve(threadCount);
     for (size_t t = 0; t < threadCount; ++t) {
