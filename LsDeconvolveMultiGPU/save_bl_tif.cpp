@@ -115,47 +115,49 @@ static void writeSliceToTiff(
         }
 
         const uint32_t numStrips = (imageHeight + rowsPerStrip - 1) / rowsPerStrip;
-        thread_local std::vector<uint8_t> stripBuffer;
 
-        for (uint32_t stripIndex = 0; stripIndex < numStrips; ++stripIndex) {
-            const uint32_t rowStart     = stripIndex * rowsPerStrip;
-            const uint32_t rowsToWrite  = std::min<uint32_t>(rowsPerStrip,
-                                              imageHeight - rowStart);
-            const size_t   byteCount    = static_cast<size_t>(imageWidth)
-                                          * rowsToWrite * bytesPerPixel;
+        if (isXYZ) {
+            // --- XYZ path: no buffer ever allocated, single tight loop
+            for (uint32_t s = 0; s < numStrips; ++s) {
+                uint32_t rowStart    = s * rowsPerStrip;
+                uint32_t rowsToWrite = std::min<uint32_t>(rowsPerStrip,
+                                                          imageHeight - rowStart);
+                size_t   byteCount   = size_t(imageWidth) * rowsToWrite * bytesPerPixel;
+                const uint8_t* dataPtr = basePtr + size_t(rowStart) * imageWidth * bytesPerPixel;
+                void* buf = const_cast<void*>(static_cast<const void*>(dataPtr));
+                // always use encoded strip for both none+deflate
+                if (TIFFWriteEncodedStrip(tif, s, buf, byteCount) < 0)
+                    throw std::runtime_error("TIFF write failed on strip " + std::to_string(s));
+            }
+        }
+        else {
+            // --- YX path: declare one buffer per thread, reused across all strips
+            thread_local std::vector<uint8_t> stripBuffer;
+            for (uint32_t s = 0; s < numStrips; ++s) {
+                uint32_t rowStart    = s * rowsPerStrip;
+                uint32_t rowsToWrite = std::min<uint32_t>(rowsPerStrip,
+                                                          imageHeight - rowStart);
+                size_t   byteCount   = size_t(imageWidth) * rowsToWrite * bytesPerPixel;
 
-            if (isXYZ) {
-                // Direct-write: data is row-major along X
-                const uint8_t* stripData = basePtr +
-                    static_cast<size_t>(rowStart) * imageWidth * bytesPerPixel;
-                void* dataPtr = const_cast<void*>(
-                                  static_cast<const void*>(stripData));
-                // Always use EncodedStrip for correct uncompressed & compressed
-                tsize_t wrote = TIFFWriteEncodedStrip(tif, stripIndex, dataPtr, byteCount);
-                if (wrote < 0)
-                    throw std::runtime_error("TIFF write failed on strip " +
-                                             std::to_string(stripIndex));
-            } else {
-                // YX layout: pack into contiguous buffer
                 if (stripBuffer.size() < byteCount)
                     stripBuffer.resize(byteCount);
+
+                // pack the column-major data into our row-major buffer
                 for (uint32_t r = 0; r < rowsToWrite; ++r) {
                     for (uint32_t c = 0; c < imageWidth; ++c) {
-                        size_t srcOffset = ((rowStart + r)
-                                          + c * heightDim)
-                                          * bytesPerPixel;
-                        size_t dstOffset = (r * imageWidth + c)
-                                          * bytesPerPixel;
-                        memcpy(&stripBuffer[dstOffset],
-                               basePtr + srcOffset,
-                               bytesPerPixel);
+                        size_t srcOff = ((rowStart + r) + c*heightDim) * bytesPerPixel;
+                        size_t dstOff = (r*imageWidth  + c)      * bytesPerPixel;
+                        std::memcpy(&stripBuffer[dstOff],
+                                    basePtr + srcOff,
+                                    bytesPerPixel);
                     }
                 }
-                tsize_t wrote = TIFFWriteEncodedStrip(tif, stripIndex,
-                                                      stripBuffer.data(), byteCount);
-                if (wrote < 0)
-                    throw std::runtime_error("TIFF write failed on strip " +
-                                             std::to_string(stripIndex));
+
+                if (TIFFWriteEncodedStrip(tif, s,
+                      stripBuffer.data(), byteCount) < 0)
+                {
+                    throw std::runtime_error("TIFF write failed on strip " + std::to_string(s));
+                }
             }
         }
     } // TIFFClose
