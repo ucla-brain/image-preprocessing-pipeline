@@ -149,20 +149,18 @@ static inline uint64_t idx3D(uint64_t x, uint64_t y, uint64_t z,
  *==============================================================================*/
 struct BrickJob
 {
-    /* geometry & target */
     std::string file;
     uint64_t x0, y0, z0, x1, y1, z1;
     uint64_t dimX, dimY, dimZ;
     float*   volPtr;
 
-    /* scalar parameters (received as double, cast once to float) */
-    double scal_, amplification_, low_clip_, high_clip_, deconvmin_, deconvmax_;
-    bool   clipOn;
+    /* parameters – same names as MATLAB */
+    double scal, amplification, low_clip, high_clip, deconvmin, deconvmax;
+    bool   clipval;   // true ⇔ clipval > 0 in MATLAB
 
-    /*--------------------------------------------------------*/
     void operator()() const
     {
-        /* 1. open & decompress ------------------------------------------------*/
+        /* 1. decompress ---------------------------------------------------- */
         auto& uBuf = ThreadLocalCleaner::thread_local_uBuffer;
         auto& cBuf = ThreadLocalCleaner::thread_local_cBuf;
 
@@ -171,9 +169,9 @@ struct BrickJob
         if (!fp) throw std::runtime_error("Cannot open " + file);
 
         const FileHeader h = readHeader(fp.get(), file);
-        const uint64_t brickX = x1 - x0 + 1;
-        const uint64_t brickY = y1 - y0 + 1;
-        const uint64_t brickZ = z1 - z0 + 1;
+        const uint64_t brickX = x1 - x0 + 1,
+                       brickY = y1 - y0 + 1,
+                       brickZ = z1 - z0 + 1;
         if (brickX != h.dims[0] || brickY != h.dims[1] ||
             brickZ != ((h.ndims == 3) ? h.dims[2] : 1))
             throw std::runtime_error(file + ": dims mismatch");
@@ -183,12 +181,11 @@ struct BrickJob
 
         char* dst = reinterpret_cast<char*>(uBuf.data());
         uint64_t off = 0;
-        for (uint32_t c = 0; c < h.numChunks; ++c)
-        {
+        for (uint32_t c = 0; c < h.numChunks; ++c) {
             if (cBuf.size() < h.chunkComp[c]) cBuf.resize(h.chunkComp[c]);
             freadExact(fp.get(), cBuf.data(), h.chunkComp[c], "chunk read");
-            const int dec = LZ4_decompress_safe(cBuf.data(), dst + off,
-                static_cast<int>(h.chunkComp[c]), static_cast<int>(h.chunkUncomp[c]));
+            int dec = LZ4_decompress_safe(cBuf.data(), dst + off,
+                    static_cast<int>(h.chunkComp[c]), static_cast<int>(h.chunkUncomp[c]));
             if (dec < 0 || static_cast<uint64_t>(dec) != h.chunkUncomp[c])
                 throw std::runtime_error(file + ": LZ4 error");
             off += h.chunkUncomp[c];
@@ -196,34 +193,34 @@ struct BrickJob
         if (off != h.totalUncompressed)
             throw std::runtime_error(file + ": size mismatch");
 
-        /* 2. pre-compute floats ----------------------------------------------*/
-        const float scalF = static_cast<float>(scal_);
-        const float ampF  = static_cast<float>(amplification_);
-        const float lowF  = static_cast<float>(low_clip_);
-        const float highF = static_cast<float>(high_clip_);
-        const float dminF = static_cast<float>(deconvmin_);
-        const float dmaxF = static_cast<float>(deconvmax_);
+        /* 2. pre-compute (single) ----------------------------------------- */
+        const float scal_f         = static_cast<float>(scal);
+        const float amplification_f= static_cast<float>(amplification);
+        const float low_clip_f     = static_cast<float>(low_clip);
+        const float high_clip_f    = static_cast<float>(high_clip);
+        const float deconvmin_f    = static_cast<float>(deconvmin);
+        const float deconvmax_f    = static_cast<float>(deconvmax);
 
-        const bool useDMin = (!clipOn && dminF > 0.f);
-        if (useDMin && dmaxF == dminF)
-            throw std::runtime_error("deconvmax == deconvmin (division by zero)");
+        const bool useDeconvMin = (!clipval && deconvmin_f > 0.f);
+        if (useDeconvMin && deconvmax_f == deconvmin_f)
+            throw std::runtime_error("deconvmax == deconvmin (div by zero)");
 
-        const float clipSpanF = highF - lowF;
-        if (clipOn && clipSpanF == 0.f)
-            throw std::runtime_error("high_clip == low_clip (division by zero)");
+        const float clipSpan_f = high_clip_f - low_clip_f;
+        if (clipval && clipSpan_f == 0.f)
+            throw std::runtime_error("high_clip == low_clip (div by zero)");
 
-        float scaleClip = 0.f;
-        if (clipOn)
-            scaleClip = static_cast<float>((double)scalF * ampF / (double)clipSpanF);
+        float scaleClip_f = 0.f;
+        if (clipval)
+            scaleClip_f = static_cast<float>((double)scal_f * amplification_f / clipSpan_f);
 
-        const float scaleNC0 = static_cast<float>((double)scalF * ampF / (double)dmaxF);
-        const float scaleNC1 = static_cast<float>((double)scalF * ampF /
-                                                  ((double)dmaxF - (double)dminF));
+        const float scaleNC0_f = static_cast<float>((double)scal_f * amplification_f / deconvmax_f);
+        const float scaleNC1_f = static_cast<float>((double)scal_f * amplification_f /
+                                     (deconvmax_f - deconvmin_f));
 
         const float* src = uBuf.data();
-        const double ampD = static_cast<double>(ampF);   // hoisted once
+        const double amplification_d = static_cast<double>(amplification_f);
 
-        /* 3. per-voxel loop ---------------------------------------------------*/
+        /* 3. per-voxel ------------------------------------------------------ */
 #if defined(__GNUC__) || defined(__clang__)
 #pragma GCC ivdep
 #pragma GCC unroll 8
@@ -232,34 +229,29 @@ struct BrickJob
         for (uint64_t y = 0; y < brickY; ++y)
         {
             const uint64_t base = idx3D(x0, y0 + y, z0 + z, dimX, dimY);
-
             for (uint64_t x = 0; x < brickX; ++x)
             {
-                float v = src[(z * brickY + y) * brickX + x];
+                float R = src[(z * brickY + y) * brickX + x];   // matches MATLAB R
 
-                /* rescale / clip */
-                if (clipOn)
-                {
-                    v -= lowF;
-                    v  = (v < 0.f) ? 0.f : (v > clipSpanF ? clipSpanF : v);
-                    v  = std::fmaf(v, scaleClip, 0.f);
-                }
-                else if (useDMin)
-                {
-                    v -= dminF;
-                    v *= scaleNC1;
-                }
-                else
-                {
-                    v *= scaleNC0;
+                /* ---- rescale / clip ----------------------------------- */
+                if (clipval) {
+                    R -= low_clip_f;
+                    R  = (R < 0.f) ? 0.f : (R > clipSpan_f ? clipSpan_f : R);
+                    R  = R * scaleClip_f;                        // no FMA here
+                } else if (useDeconvMin) {
+                    double tmp = static_cast<double>(R) - deconvmin;   // double product
+                    tmp *= static_cast<double>(scaleNC1_f);
+                    R = static_cast<float>(tmp);
+                } else {
+                    R *= scaleNC0_f;
                 }
 
-                /* round half-away-from-zero & clamp */
-                double vd = static_cast<double>(v) - ampD;
-                v = static_cast<float>( std::round(vd) );
+                /* ---- round & clamp ------------------------------------ */
+                double Rd = static_cast<double>(R) - amplification_d;
+                R = static_cast<float>( std::round(Rd) );
+                R = (R < 0.f) ? 0.f : (R > scal_f ? scal_f : R);
 
-                v = (v < 0.f) ? 0.f : (v > scalF ? scalF : v);
-                volPtr[base + x] = v;
+                volPtr[base + x] = R;                           // store as float
             }
         }
     }
@@ -346,7 +338,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         jobs.emplace_back(
             BrickJob{ fname, x0, y0, z0, x1, y1, z1, dimX, dimY, dimZ,
                       volPtr, scal, amplification, low_clip, high_clip,
-                      deconvmin, deconvmax, clipOn }
+                      deconvmin, deconvmax, clipOn }   // clipOn is bool clipval
         );
     }
 
