@@ -190,10 +190,17 @@ function [] = LsDeconv(varargin)
                 end
             end
         else
+            output_bytes = 2;
+            if convert_to_8bit
+                output_bytes = 1;
+            else if stack_info.bit_depth == 8
+                output_bytes = 1;
+            end
+
             block.stack_info = stack_info;
             [block.nx, block.ny, block.nz, block.x, block.y, block.z, ...
              block.x_pad, block.y_pad, block.z_pad, block.fft_shape] = ...
-                autosplit(stack_info, size(psf.psf), filter, block_size_max, ram_available, numit);
+                autosplit(stack_info, size(psf.psf), filter, block_size_max, ram_available, numit, output_bytes);
 
             [block.p1, block.p2] = split(stack_info, block);
             save(block_path, 'block');
@@ -279,20 +286,19 @@ function [] = LsDeconv(varargin)
 end
 
 function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(...
-    stack_info, psf_size, filter, block_size_max, ram_available, numit)
+    stack_info, psf_size, filter, block_size_max, ram_available, numit, output_bytes)
 
     % Parameters for RAM and block sizing
     physCores   = feature('numCores');
     ram_usage_portion = 0.9;               % Use at most 90% of free RAM
     usable_ram = ram_available * ram_usage_portion;
-    R_bytes_per_voxel = 4;
     max_elements_per_dim = min(1290, floor(block_size_max^(1/3)));  % 3D cube limit from (2^31-1)^(1/3) = 1290 elements
     if filter.use_fft, max_elements_per_dim = min(1281, max_elements_per_dim); end
     max_elements_total  = 2^31 - 1;        % MATLAB's total element limit
 
     % Compute the max z size that fits in RAM (capped at 1290 and stack_info.z)
     slice_size = stack_info.x * stack_info.y;
-    z_max_ram = floor(usable_ram / (R_bytes_per_voxel * slice_size));
+    z_max_ram = floor(usable_ram / (output_bytes * slice_size));
     z_max = min(z_max_ram, stack_info.z);
 
     % Set min and max block sizes, capping to allowed per-dimension limit
@@ -329,7 +335,7 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(...
 
             if any(bl_shape > max_elements_per_dim), continue; end
             if prod(bl_shape) >= block_size_max, continue; end
-            if R_bytes_per_voxel * (slice_size * z + x * y * z * physCores) > usable_ram, continue; end
+            if output_bytes * (slice_size * z + x * y * z * physCores) > usable_ram, continue; end
 
             score = prod(bl_core);
             if score > best_score
