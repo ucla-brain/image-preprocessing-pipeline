@@ -144,7 +144,7 @@ struct BrickJob {
 
     // Scalar math params (added for clarity)
     double scal_, amplification_, low_clip_, high_clip_, deconvmin_, deconvmax_;
-    int    outClass;
+    mxClassID outClass;
     int    clipval_;
 
     void operator()() const {
@@ -305,7 +305,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
     if (maxThreads < 1) maxThreads = 1;
 
     // Output type (uint8 or uint16)
-    int outClass = (scal <= 255) ? mxUINT8_CLASS : mxUINT16_CLASS;
+    mxClassID outClass = (scal <= 255) ? mxUINT8_CLASS : mxUINT16_CLASS;
 
     // Allocate output
     mwSize mdims[3] = { static_cast<mwSize>(dimX), static_cast<mwSize>(dimY), static_cast<mwSize>(dimZ) };
