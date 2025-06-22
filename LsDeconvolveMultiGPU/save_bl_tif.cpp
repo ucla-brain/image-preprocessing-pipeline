@@ -35,6 +35,7 @@
 #include "mex.h"
 #include "tiffio.h"
 
+#include <algorithm>
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
