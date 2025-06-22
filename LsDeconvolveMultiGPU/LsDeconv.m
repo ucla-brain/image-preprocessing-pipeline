@@ -58,7 +58,7 @@ function [] = LsDeconv(varargin)
         stop_criterion = varargin{13};
         block_size_max = double(varargin{14});
         gpus = varargin{15};
-        amplification = varargin{16};
+        amplification = single(varargin{16});
         filter.gaussian_sigma = varargin{17};
         filter.gaussian_size = varargin{18};
         filter.dark = varargin{19};
@@ -72,18 +72,18 @@ function [] = LsDeconv(varargin)
         filter.use_fft = varargin{27};
         cache_drive = varargin{28};
         if ~exist(cache_drive, "dir")
-            disp("making cache drive dir " + cache_drive)
+            disp('making cache drive dir ' + cache_drive)
             mkdir(cache_drive);
         end
-        disp("cache drive dir created and/or exists " + cache_drive)
+        disp('cache drive dir created and/or exists ' + cache_drive)
         
-        assert(isa(inpath, "string"), "wrong type " + class(inpath));
-        assert(isa(dxy, "double"), "wrong type " + class(dxy));
-        assert(isa(dz, "double"), "wrong type " + class(dz));
-        assert(isa(numit, "double"), "wrong type " + class(numit));
-        assert(isa(lambda_ex, "double"), "wrong type " + class(lambda_ex));
-        assert(isa(lambda_em, "double"), "wrong type " + class(lambda_em));
-        assert(isa(cache_drive, "string"), "wrong type " + class(cache_drive));
+        assert(isa(inpath, 'string'), 'wrong type ' + class(inpath));
+        assert(isa(dxy, 'double'), 'wrong type ' + class(dxy));
+        assert(isa(dz, 'double'), 'wrong type ' + class(dz));
+        assert(isa(numit, 'double'), 'wrong type ' + class(numit));
+        assert(isa(lambda_ex, 'double'), 'wrong type ' + class(lambda_ex));
+        assert(isa(lambda_em, 'double'), 'wrong type ' + class(lambda_em));
+        assert(isa(cache_drive, 'string'), 'wrong type ' + class(cache_drive));
 
         if isfolder(inpath)
             % make folder for results and make sure the outpath is writable
@@ -92,10 +92,10 @@ function [] = LsDeconv(varargin)
                 outpath = fullfile(inpath, 'deconvolved_fliped_upside_down');
             end
             if ~exist(outpath, 'dir')
-                disp("making folder " + outpath )
+                disp('making folder ' + outpath )
                 mkdir(outpath);
             end
-            disp("outpath folder created and/or exists " + outpath);
+            disp('outpath folder created and/or exists ' + outpath);
             log_file_path = fullfile(outpath, 'log.txt');
             log_file = fopen(log_file_path, 'w');
             disp('made log file: ' + log_file_path)
@@ -138,13 +138,13 @@ function [] = LsDeconv(varargin)
             delete(fullfile(cache_drive, "*.tmp"));
         end
 
-        disp("Logging image attributes");
+        disp('Logging image attributes');
         p_log(log_file, ['   image size (voxels): ' num2str(stack_info.x)  'x * ' num2str(stack_info.y) 'y * ' num2str(stack_info.z) 'z = ' num2str(stack_info.x * stack_info.y * stack_info.z)]);
         p_log(log_file, ['   voxel size (nm^3): ' num2str(dxy)  'x * ' num2str(dxy) 'y * ' num2str(dz) 'z = ' num2str(dxy^2*dz)]);
         p_log(log_file, ['   image bit depth: ' num2str(stack_info.bit_depth)]);
         p_log(log_file, ' ');
 
-        disp("Logging imaging system parameters");
+        disp('Logging imaging system parameters');
         p_log(log_file, 'imaging system parameters ...')
         p_log(log_file, ['   focal length of cylinder lens (mm): ' num2str(fcyl)]);
         p_log(log_file, ['   width of slit aperture (mm): ' num2str(slitwidth)]);
