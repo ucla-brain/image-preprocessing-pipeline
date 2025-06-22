@@ -1,6 +1,5 @@
 function save_bl_tif_test
 % Extended regression + benchmark for save_bl_tif MEX
-
 fprintf("🧪  save_bl_tif extended test-suite\n");
 
 %% ---------- sandbox (deleted on exit) ----------
@@ -28,17 +27,18 @@ cfg.comp  = {'none','lzw','deflate'};
 sz        = [2048 1024 4];                      % ≥ 2 MiB slice
 
 for o = 1:size(cfg.order,1)
-    if o>1, fprintf("\n"); end                  % ← blank line between YXZ/XYZ
+    if o > 1, fprintf("\n"); end  % blank line between YXZ and XYZ
+
     for d = 1:size(cfg.dtype,1)
         for c = 1:numel(cfg.comp)
             % --- create data ---
             A = cfg.dtype{d,2}(randi(intmax(cfg.dtype{d,1}),sz));
-            if cfg.order{o,2}, A = permute(A,[2 1 3]); end    % XYZ layout
+            if cfg.order{o,2}, A = permute(A,[2 1 3]); end
 
             % --- safe tag & file list ---
             tag     = sprintf('%s_%s_%s',cfg.order{o,1}, ...
                               cfg.dtype{d,1},cfg.comp{c});
-            tagSafe = regexprep(tag,'[^A-Za-z0-9]','_');
+            tagSafe = lower(regexprep(tag,'[^A-Za-z0-9]','_'));
             files   = arrayfun(@(k) fullfile(tmpRoot, ...
                        sprintf('t_%s_%02d.tif',tagSafe,k)), ...
                        1:sz(3),'uni',0);
@@ -71,26 +71,31 @@ try
 catch, fprintf("      ✅ read-only overwrite rejected\n"); end
 
 %% ---------- D. benchmark: save_bl_tif vs parfor-imwrite ----------
-benchSize = [512 512 64];                     % 256 MiB uint16 stack
+benchSize = [512 512 64];                     % 64 slices of 512×512 (uint16)
 benchVol  = uint16(randi(65535, benchSize));
 mexFiles  = arrayfun(@(k) fullfile(tmpRoot,sprintf('mex_%03d.tif',k)), ...
                      1:benchSize(3),'uni',0);
 parFiles  = strrep(mexFiles,'mex_','par_');
 
-if isempty(gcp('nocreate'))
+% Ensure parallel pool
+p = gcp('nocreate');
+if isempty(p)
     cluster = parcluster('local');
-    cluster.IdleTimeout = Inf;   % ensure it doesn't shut down early
-    cluster.NumWorkers = min(8, feature('numCores'));  % or whatever fits
-    parpool(cluster, cluster.NumWorkers);
+    cluster.IdleTimeout = Inf;
+    cluster.NumWorkers = min(8, feature('numCores'));
+    p = parpool(cluster, cluster.NumWorkers);
 end
+wait(p);
 
 fprintf("\n   🏁 benchmark (uint16 %dx%dx%d, %d workers)…\n", ...
         benchSize(1),benchSize(2),benchSize(3),p.NumWorkers);
 
+% --- save_bl_tif path ---
 tic
 save_bl_tif(benchVol, mexFiles, false, 'none');
 tMex = toc;
 
+% --- parfor path ---
 tic
 parfor k = 1:benchSize(3)
     imwrite(benchVol(:,:,k), parFiles{k});
@@ -109,7 +114,7 @@ fprintf("      speed-up     : %.2f× (parfor → save_bl_tif)\n", speedup);
 fprintf("\n🎉  all save_bl_tif tests passed\n");
 end
 
-%% ---------- helpers --------------------------------------------------------
+%% ---------- helpers ----------
 function sandbox_cleanup(dirPath)
 fclose('all');
 safe_rmdir(dirPath);
@@ -121,6 +126,11 @@ end
 
 function safe_rmdir(p)
 if exist(p,'dir')
-    try, rmdir(p,'s'); catch, pause(0.1); if exist(p,'dir'), rmdir(p,'s'); end, end
+    try
+        rmdir(p,'s');
+    catch
+        pause(0.1);
+        if exist(p,'dir'), rmdir(p,'s'); end
+    end
 end
 end
