@@ -147,19 +147,22 @@ static inline uint64_t idx3D(uint64_t x, uint64_t y, uint64_t z,
  *   – All arithmetic in single precision
  *   – Uses FMA where available, pragma-hints for auto-vectorisation
  *==============================================================================*/
-struct BrickJob {
+struct BrickJob
+{
+    /* geometry & target */
     std::string file;
     uint64_t x0, y0, z0, x1, y1, z1;
     uint64_t dimX, dimY, dimZ;
     float*   volPtr;
 
-    /* scalar parameters (double in ctor, cast once to float) */
+    /* scalar parameters (received as double, cast once to float) */
     double scal_, amplification_, low_clip_, high_clip_, deconvmin_, deconvmax_;
-    bool    clipOn;
+    bool   clipOn;
 
+    /*--------------------------------------------------------*/
     void operator()() const
     {
-        /*---------------------------------- 1. open + decompress -------------*/
+        /* 1. open & decompress ------------------------------------------------*/
         auto& uBuf = ThreadLocalCleaner::thread_local_uBuffer;
         auto& cBuf = ThreadLocalCleaner::thread_local_cBuf;
 
@@ -168,9 +171,9 @@ struct BrickJob {
         if (!fp) throw std::runtime_error("Cannot open " + file);
 
         const FileHeader h = readHeader(fp.get(), file);
-        const uint64_t brickX = x1 - x0 + 1,  brickY = y1 - y0 + 1,
-                       brickZ = z1 - z0 + 1;
-
+        const uint64_t brickX = x1 - x0 + 1;
+        const uint64_t brickY = y1 - y0 + 1;
+        const uint64_t brickZ = z1 - z0 + 1;
         if (brickX != h.dims[0] || brickY != h.dims[1] ||
             brickZ != ((h.ndims == 3) ? h.dims[2] : 1))
             throw std::runtime_error(file + ": dims mismatch");
@@ -180,7 +183,8 @@ struct BrickJob {
 
         char* dst = reinterpret_cast<char*>(uBuf.data());
         uint64_t off = 0;
-        for (uint32_t c = 0; c < h.numChunks; ++c) {
+        for (uint32_t c = 0; c < h.numChunks; ++c)
+        {
             if (cBuf.size() < h.chunkComp[c]) cBuf.resize(h.chunkComp[c]);
             freadExact(fp.get(), cBuf.data(), h.chunkComp[c], "chunk read");
             const int dec = LZ4_decompress_safe(cBuf.data(), dst + off,
@@ -192,13 +196,13 @@ struct BrickJob {
         if (off != h.totalUncompressed)
             throw std::runtime_error(file + ": size mismatch");
 
-        /*---------------------------------- 2. pre-compute floats ------------*/
-        const float scalF =  static_cast<float>(scal_);
-        const float ampF  =  static_cast<float>(amplification_);
-        const float lowF  =  static_cast<float>(low_clip_);
-        const float highF =  static_cast<float>(high_clip_);
-        const float dminF =  static_cast<float>(deconvmin_);
-        const float dmaxF =  static_cast<float>(deconvmax_);
+        /* 2. pre-compute floats ----------------------------------------------*/
+        const float scalF = static_cast<float>(scal_);
+        const float ampF  = static_cast<float>(amplification_);
+        const float lowF  = static_cast<float>(low_clip_);
+        const float highF = static_cast<float>(high_clip_);
+        const float dminF = static_cast<float>(deconvmin_);
+        const float dmaxF = static_cast<float>(deconvmax_);
 
         const bool useDMin = (!clipOn && dminF > 0.f);
         if (useDMin && dmaxF == dminF)
@@ -208,7 +212,7 @@ struct BrickJob {
         if (clipOn && clipSpanF == 0.f)
             throw std::runtime_error("high_clip == low_clip (division by zero)");
 
-        float scaleClip = 0.f;     // only valid if clipOn
+        float scaleClip = 0.f;
         if (clipOn)
             scaleClip = static_cast<float>((double)scalF * ampF / (double)clipSpanF);
 
@@ -217,51 +221,49 @@ struct BrickJob {
                                                   ((double)dmaxF - (double)dminF));
 
         const float* src = uBuf.data();
+        const double ampD = static_cast<double>(ampF);   // hoisted once
 
-        /*---------------------------------- 3. per-voxel loop ----------------*/
-const double ampD = static_cast<double>(ampF);   // hoisted once
-
+        /* 3. per-voxel loop ---------------------------------------------------*/
 #if defined(__GNUC__) || defined(__clang__)
 #pragma GCC ivdep
 #pragma GCC unroll 8
 #endif
-    for (uint64_t z = 0; z < brickZ; ++z)
-    for (uint64_t y = 0; y < brickY; ++y)
-    {
-        const uint64_t base = idx3D(x0, y0 + y, z0 + z, dimX, dimY);
-
-        for (uint64_t x = 0; x < brickX; ++x)
+        for (uint64_t z = 0; z < brickZ; ++z)
+        for (uint64_t y = 0; y < brickY; ++y)
         {
-            float v = src[(z * brickY + y) * brickX + x];
+            const uint64_t base = idx3D(x0, y0 + y, z0 + z, dimX, dimY);
 
-            /* ── rescale / clip ─────────────────────────────────────────── */
-            if (clipOn)
+            for (uint64_t x = 0; x < brickX; ++x)
             {
-                v -= lowF;
-                v  = (v < 0.f) ? 0.f : (v > clipSpanF ? clipSpanF : v);
-                v  = std::fmaf(v, scaleClip, 0.f);                 // v *= scaleClip
-            }
-            else if (useDMin)
-            {
-                /* two-step, each rounded to float; both use FMA */
-                v  = std::fmaf(v, 1.f, -dminF);                    // v -= dminF
-                v  = std::fmaf(v, scaleNC1, 0.f);                  // v *= scaleNC1
-            }
-            else
-            {
-                v *= scaleNC0;
-            }
+                float v = src[(z * brickY + y) * brickX + x];
 
-            /* ── round half-away-from-zero (MATLAB-exact) & clamp ───────── */
-            double vd = static_cast<double>(v) - ampD;             // promote once
-            v = static_cast<float>( std::round(vd) );              // ties away-from-zero
+                /* rescale / clip */
+                if (clipOn)
+                {
+                    v -= lowF;
+                    v  = (v < 0.f) ? 0.f : (v > clipSpanF ? clipSpanF : v);
+                    v  = std::fmaf(v, scaleClip, 0.f);
+                }
+                else if (useDMin)
+                {
+                    v  = std::fmaf(v, 1.f, -dminF);   // v -= dminF  (float)
+                    v  = std::fmaf(v, scaleNC1, 0.f); // v *= scaleNC1 (float)
+                }
+                else
+                {
+                    v *= scaleNC0;
+                }
 
-            v = (v < 0.f) ? 0.f : (v > scalF ? scalF : v);
-            volPtr[base + x] = v;                                  // store as float
+                /* round half-away-from-zero & clamp */
+                double vd = static_cast<double>(v) - ampD;
+                v = static_cast<float>( std::round(vd) );
+
+                v = (v < 0.f) ? 0.f : (v > scalF ? scalF : v);
+                volPtr[base + x] = v;
+            }
         }
     }
 };
-
 
 /*==============================================================================*/
 void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
