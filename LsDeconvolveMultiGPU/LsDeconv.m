@@ -296,7 +296,7 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(...
     % Compute the max z size that fits in RAM (capped at 1290 and stack_info.z)
     bl_bytes = 4;                          % saved bls are single
     physCores   = feature('numCores');
-    ram_usage_portion = 0.5;               % Use at most 90% of free RAM
+    ram_usage_portion = 0.5;               % R should use at most 50% of free RAM so that bl's have room to load
     usable_ram = ram_available * ram_usage_portion;
     slice_size = stack_info.x * stack_info.y;
     z_max_ram = floor(usable_ram / (output_bytes * slice_size));  % slabs size is output_bytes * num_elements
