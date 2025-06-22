@@ -26,6 +26,12 @@
 #include <vector>
 #include <algorithm>
 
+#ifndef __cpp_lib_math_constants  // crude “not C++20” check
+#if defined(_MSC_VER) && !defined(fmaf)
+#define fmaf(a,b,c) ((a)*(b)+(c))
+#endif
+#endif
+
 /*==============================================================================*/
 struct ThreadLocalCleaner {
     ~ThreadLocalCleaner() {
@@ -195,6 +201,8 @@ struct BrickJob {
         const float dmaxF =  static_cast<float>(deconvmax_);
 
         const bool useDMin = (!clipOn && dminF > 0.f);
+        if (useDMin && dmaxF == dminF)
+            throw std::runtime_error("deconvmax == deconvmin (division by zero)");
 
         const float clipSpanF = highF - lowF;
         if (clipOn && clipSpanF == 0.f)
