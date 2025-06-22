@@ -219,43 +219,45 @@ struct BrickJob {
         const float* src = uBuf.data();
 
         /*---------------------------------- 3. per-voxel loop ----------------*/
+const double ampD = static_cast<double>(ampF);   // hoisted once
+
 #if defined(__GNUC__) || defined(__clang__)
 #pragma GCC ivdep
 #pragma GCC unroll 8
 #endif
-        for (uint64_t z = 0; z < brickZ; ++z)
-        for (uint64_t y = 0; y < brickY; ++y)
+    for (uint64_t z = 0; z < brickZ; ++z)
+    for (uint64_t y = 0; y < brickY; ++y)
+    {
+        const uint64_t base = idx3D(x0, y0 + y, z0 + z, dimX, dimY);
+
+        for (uint64_t x = 0; x < brickX; ++x)
         {
-            const uint64_t base = idx3D(x0, y0 + y, z0 + z, dimX, dimY);
-            for (uint64_t x = 0; x < brickX; ++x)
+            float v = src[(z * brickY + y) * brickX + x];
+
+            /* ── rescale / clip ─────────────────────────────────────────── */
+            if (clipOn)
             {
-                float v = src[(z * brickY + y) * brickX + x];
-
-                /* ── rescale / clip ─────────────────────────────────────────────── */
-                if (clipOn)
-                {
-                    v -= lowF;                                            // v -= lowF
-                    v  = (v < 0.f) ? 0.f : (v > clipSpanF ? clipSpanF : v);
-                    v  = std::fmaf(v, scaleClip, 0.f);                    // v *= scaleClip (FMA ok)
-                }
-                else if (useDMin)
-                {
-                    /* NB: keep two explicit float ops to match MATLAB exactly       */
-                    v -= dminF;                                           // round once here
-                    v *= scaleNC1;                                        // and again here
-                }
-                else
-                {
-                    v *= scaleNC0;                                        // trivial scale
-                }
-
-                /* ── round half-away-from-zero & clamp ──────────────────────────── */
-                v -= ampF;
-                v  = (v >= 0.f) ? floorf(v + 0.5f) : ceilf(v - 0.5f);
-                v  = (v < 0.f) ? 0.f : (v > scalF ? scalF : v);
-
-                volPtr[base + x] = v;                                     // store as float
+                v -= lowF;
+                v  = (v < 0.f) ? 0.f : (v > clipSpanF ? clipSpanF : v);
+                v  = std::fmaf(v, scaleClip, 0.f);                 // v *= scaleClip
             }
+            else if (useDMin)
+            {
+                /* two-step, each rounded to float; both use FMA */
+                v  = std::fmaf(v, 1.f, -dminF);                    // v -= dminF
+                v  = std::fmaf(v, scaleNC1, 0.f);                  // v *= scaleNC1
+            }
+            else
+            {
+                v *= scaleNC0;
+            }
+
+            /* ── round half-away-from-zero (MATLAB-exact) & clamp ───────── */
+            double vd = static_cast<double>(v) - ampD;             // promote once
+            v = static_cast<float>( std::round(vd) );              // ties away-from-zero
+
+            v = (v < 0.f) ? 0.f : (v > scalF ? scalF : v);
+            volPtr[base + x] = v;                                  // store as float
         }
     }
 };
