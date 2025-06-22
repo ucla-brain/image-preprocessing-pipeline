@@ -1,89 +1,111 @@
-function save_bl_tif_test()
+function save_bl_tif_test
 % Extended regression + benchmark for save_bl_tif MEX (crash-safe)
+
 fprintf("🧪  save_bl_tif extended test-suite\n");
 
-%% sandbox -------------------------------------------------------------------
-tmpRoot = tempname;  mkdir(tmpRoot);
-cSandbox = onCleanup(@() safe_rmdir(tmpRoot));
+%% ────────── one private sandbox (deleted on exit) ──────────
+tmpRoot = tempname;   mkdir(tmpRoot);
+cSandbox = onCleanup(@() ( fclose('all'), safe_rmdir(tmpRoot) ));
 
-%% A. basic sanity -----------------------------------------------------------
+%% ────────── A. basic 2-D / 3-D-singleton sanity ──────────
 rng(42);
-vol2d  = uint8(randi(255,[256 256]));
-fn2d   = fullfile(tmpRoot,'basic_2d.tif');
+vol2d = uint8(randi(255,[256 256]));
+fn2d  = fullfile(tmpRoot,'basic_2d.tif');
 save_bl_tif(vol2d,{fn2d},false,'none');
 assert(isequal(imread(fn2d),vol2d));
 
-vol3d1 = reshape(vol2d,256,256,1);
-fn3d1  = fullfile(tmpRoot,'basic_3d.tif');
-save_bl_tif(vol3d1,{fn3d1},false,'none');
-assert(isequal(imread(fn3d1),vol3d1(:,:,1)));
+vol3d = reshape(vol2d,256,256,1);
+fn3d  = fullfile(tmpRoot,'basic_3d.tif');
+save_bl_tif(vol3d,{fn3d},false,'none');
+assert(isequal(imread(fn3d),vol3d(:,:,1)));
 
 fprintf("   ✅ basic 2-D / 3-D paths ok\n");
 
-%% B. matrix of {layout × dtype × compression} ------------------------------
+%% ────────── B. full matrix of {layout × dtype × compression} ──────────
 cfg.order = {'YXZ',false; 'XYZ',true};
 cfg.dtype = {'uint8',@uint8; 'uint16',@uint16};
 cfg.comp  = {'none','lzw','deflate'};
-sz        = [2048 1024 4];   % ≥2 MiB slice → huge-page path
+sz        = [2048 1024 4];              % ≥ 2 MiB slice → huge-page path
 
-for o = 1:2
-  for d = 1:2
-    for c = 1:3
-        tag = sprintf('%s | %s | %s',cfg.order{o,1},cfg.dtype{d,1},cfg.comp{c});
-        A   = cfg.dtype{d,2}(randi(intmax(cfg.dtype{d,1}),sz));
-        if cfg.order{o,2}, A = permute(A,[2 1 3]); end
+for o = 1:size(cfg.order,1)
+  for d = 1:size(cfg.dtype,1)
+    for c = 1:numel(cfg.comp)
+        % data & tag -------------------------------------------------------
+        A = cfg.dtype{d,2}(randi(intmax(cfg.dtype{d,1}),sz));
+        if cfg.order{o,2}, A = permute(A,[2 1 3]); end           % XYZ
+        tag      = sprintf('%s_%s_%s',cfg.order{o,1}, ...
+                           cfg.dtype{d,1},cfg.comp{c});
+        tagSafe  = regexprep(tag,'[^A-Za-z0-9]','_');
 
-        files = cellfun(@(k) fullfile(tmpRoot,sprintf('t_%s_%02d.tif',tag,k)), ...
-                        num2cell(1:sz(3)),'uni',0);
+        % file list --------------------------------------------------------
+        files = arrayfun(@(k) fullfile(tmpRoot, ...
+                      sprintf('t_%s_%02d.tif',tagSafe,k)), ...
+                      1:sz(3),'uni',0);
 
+        % write & verify ---------------------------------------------------
         save_bl_tif(A,files,cfg.order{o,2},cfg.comp{c});
-        for k=1:sz(3)
-            ref=A(:,:,k); if cfg.order{o,2}, ref = ref.'; end
-            assert(isequal(imread(files{k}),ref),"%s slice %d mismatch",tag,k);
+        for k = 1:sz(3)
+            ref = A(:,:,k);  if cfg.order{o,2}, ref = ref.'; end
+            assert(isequal(imread(files{k}),ref), ...
+                   "%s slice %d mismatch", tag, k);
         end
-        fprintf("   ✅ %-28s\n",tag);
+        fprintf("   ✅ %-30s\n", strrep(tag,'_',' | '));
     end
   end
 end
 
-%% C. guard-clause checks ----------------------------------------------------
-fprintf("   🛡  guard-clauses\n");
+%% ────────── C. guard-clause checks (invalid path & read-only) ──────────
+fprintf("   🛡  guard-clause checks\n");
 try
-    save_bl_tif(uint8(0),{'/no/way/out.tif'},false,'lzw');
-    error("invalid path accepted");
+    save_bl_tif(uint8(0), {'/no/way/out.tif'}, false,'lzw');
+    error("invalid-path accepted");
 catch, fprintf("      ✅ invalid path rejected\n"); end
 
-ro = fullfile(tmpRoot,'ro.tif');
-imwrite(uint8(1),ro);                            % create the file
-fileattrib(ro,'-w');                             % make it read-only
-cRO = onCleanup(@() ( exist(ro,'file') && fileattrib(ro,'+w') ));
+roFile = fullfile(tmpRoot,'readonly.tif');
+imwrite(uint8(1),roFile);  fileattrib(roFile,'-w');
+cRO = onCleanup(@() ( exist(roFile,'file') && fileattrib(roFile,'+w') ));
 
 try
-    save_bl_tif(uint8(0),{ro},false,'none');
+    save_bl_tif(uint8(0), {roFile}, false,'none');
     error("read-only overwrite accepted");
 catch, fprintf("      ✅ read-only overwrite rejected\n"); end
 
-%% D. micro-benchmark (tic/toc) ---------------------------------------------
-bench = uint16(randi(65535,[512 512 64]));    % 64 MiB
-mexF  = arrayfun(@(k) fullfile(tmpRoot,sprintf('m_%03d.tif',k)),1:64,'uni',0);
-matF  = strrep(mexF,'m_','p_');
+%% ────────── D. benchmark: save_bl_tif vs parfor-imwrite ──────────
+benchSize = [512 512 64];                  % 64 × 512 × 512 = 256 MiB
+benchVol  = uint16(randi(65535, benchSize));
+mexFiles  = arrayfun(@(k) fullfile(tmpRoot,sprintf('mex_%03d.tif',k)), ...
+                     1:benchSize(3),'uni',0);
+parFiles  = strrep(mexFiles,'mex_','par_');
 
-fprintf("   🏁 benchmark   (uint16 512×512×64)\n");
-tic, save_bl_tif(bench,mexF,false,'none'); tMex = toc;
-clear mex;                         % free scratch buffers before MATLAB loop
-tic, mat_write_loop(bench,matF);   tLoop = toc;
+p = gcp('nocreate');  if isempty(p), p = parpool; end,  wait(p);
+fprintf("   🏁 benchmark (uint16 %dx%dx%d, %d workers)…\n", ...
+        benchSize, p.NumWorkers);
 
-bytes = numel(bench)*2/1e6;
-fprintf("      save_bl_tif : %.2f s  (%.1f MB/s)\n",tMex ,bytes/tMex );
-fprintf("      MATLAB loop : %.2f s  (%.1f MB/s)\n",tLoop, bytes/tLoop);
+tic
+save_bl_tif(benchVol, mexFiles, false, 'none');
+tMex = toc;
 
-fprintf("🎉  all tests passed\n");
+tic
+parfor k = 1:benchSize(3)
+    imwrite(benchVol(:,:,k), parFiles{k});
+end
+tPar = toc;
+
+bytesMiB = numel(benchVol)*2 / 2^20;      % binary MiB
+spdMex   = bytesMiB / tMex;
+spdPar   = bytesMiB / tPar;
+speedup  = tPar / tMex;                   % >1 ⇒ save_bl_tif faster
+
+fprintf("      save_bl_tif : %.2f s  (%.1f MiB/s)\n", tMex,  spdMex);
+fprintf("      parfor loop : %.2f s  (%.1f MiB/s)\n", tPar,  spdPar);
+fprintf("      speed-up     : %.2f× (parfor → save_bl_tif)\n", speedup);
+
+fprintf("🎉  all save_bl_tif tests passed\n");
 end
 
-%% helper functions ----------------------------------------------------------
-function mat_write_loop(V,paths)
-for k=1:size(V,3), imwrite(V(:,:,k),paths{k}); end
-end
+%% ────────── helper: robust rmdir -------------------------------------------
 function safe_rmdir(p)
-if exist(p,'dir'), try rmdir(p,'s'); catch, end, end
+if exist(p,'dir')
+    try, rmdir(p,'s'); catch, pause(0.1); if exist(p,'dir'), rmdir(p,'s'); end, end
+end
 end
