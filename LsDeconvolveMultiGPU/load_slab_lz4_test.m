@@ -21,7 +21,7 @@ ampS   = single(1);     dmaxS = single(1);
 
 % ── temp dir, synthetic volume, bricks ─────────────────────────────────-
 tmpDir = tempname;  mkdir(tmpDir);  c = onCleanup(@() rmdir(tmpDir,'s'));
-rng(1);  V = rand([stack.x stack.y stack.z],'single');
+builtin('rng',1);  V = rand([stack.x stack.y stack.z],'single');
 
 [p1d,p2d] = split(stack,brick);          % your existing helper
 fn = cell(size(p1d,1),1);
