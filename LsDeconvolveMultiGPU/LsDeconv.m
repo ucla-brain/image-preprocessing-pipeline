@@ -1133,31 +1133,10 @@ function postprocess_save( ...
         slabSize = uint64([ stack_info.x, stack_info.y, slab_depth ]);
 
         % ---- Parallel load + assemble (inside C++) -------------------------
-        [R, elapsed] = load_slab_lz4( blocklist(block_inds), p1_slab, p2_slab, slabSize, feature('numCores') );
-        fprintf('   slab assembled (%d blocks) in %.1fs\n', blocksPerSlab, elapsed);
-
-        % ---------------------------------------------------------------------
-        % 5b.  Rescale / clip / flip
-        % ---------------------------------------------------------------------
-        if clipval > 0
-            R = R - low_clip;
-            R = min(R, high_clip - low_clip);
-            R = R .* (scal .* amplification ./ (high_clip - low_clip));
-        else
-            if deconvmin > 0
-                R = (R - deconvmin) .* (scal .* amplification ./ (deconvmax - deconvmin));
-            else
-                R = R .* (scal .* amplification ./ deconvmax);
-            end
-        end
-        R = round(R - amplification);
-        R = min(max(R, 0), scal);          % clamp
-
-        if scal <= 255
-            R = uint8(R);
-        elseif scal <= 65535
-            R = uint16(R);
-        end
+        [R, elapsed] = load_slab_lz4(  blocklist(block_inds), p1_slab, p2_slab, slabSize, ...
+                                       clipval, scal, amplification, deconvmin, deconvmax, low_clip, high_clip, ...
+                                       feature('numCores') );
+        fprintf('   slab assembled + scaled (%d blocks) in %.1fs\n', blocksPerSlab, elapsed);
 
         if stack_info.flip_upside_down
             R = flip(R, 2);
