@@ -86,11 +86,9 @@ static void writeSliceToTiff(
     uint16_t             compressionType,
     const std::string&   outputPath
 ) {
-    // Determine image dims for libtiff
-    const uint32_t imageWidth  = isXYZ ? static_cast<uint32_t>(widthDim)
-                                       : static_cast<uint32_t>(heightDim);
-    const uint32_t imageHeight = isXYZ ? static_cast<uint32_t>(heightDim)
-                                       : static_cast<uint32_t>(widthDim);
+    // Determine image dimensions for libtiff (width = columns, height = rows)
+    const uint32_t imageWidth  = static_cast<uint32_t>(widthDim);
+    const uint32_t imageHeight = static_cast<uint32_t>(heightDim);
     const size_t   sliceSize   = widthDim * heightDim * bytesPerPixel;
     const uint8_t* basePtr     = volumeData + sliceIdx * sliceSize;
 
@@ -118,8 +116,6 @@ static void writeSliceToTiff(
         }
 
         const uint32_t numStrips = (imageHeight + rowsPerStrip - 1) / rowsPerStrip;
-
-        // Per-thread buffer for YX layouts
         thread_local std::vector<uint8_t> stripBuffer;
 
         for (uint32_t stripIndex = 0; stripIndex < numStrips; ++stripIndex) {
@@ -133,7 +129,6 @@ static void writeSliceToTiff(
                 // Direct-write path: memory is row-major in X (widthDim)
                 const uint8_t* stripData = basePtr +
                     static_cast<size_t>(rowStart) * imageWidth * bytesPerPixel;
-                // cast away const so libtiff accepts void*
                 void* dataPtr = const_cast<void*>(
                                   static_cast<const void*>(stripData));
                 tsize_t wrote = (compressionType == COMPRESSION_NONE)
@@ -159,7 +154,6 @@ static void writeSliceToTiff(
                                     bytesPerPixel);
                     }
                 }
-                // stripBuffer.data() is non-const, so no cast needed
                 tsize_t wrote = (compressionType == COMPRESSION_NONE)
                     ? TIFFWriteRawStrip    (tif, stripIndex, stripBuffer.data(), byteCount)
                     : TIFFWriteEncodedStrip(tif, stripIndex, stripBuffer.data(), byteCount);
