@@ -14,6 +14,7 @@
     nThreads    : (optional) Number of threads (default = hardware concurrency).
 
   FEATURES:
+    • Early guard‐clauses for invalid paths & read‐only files.
     • Persistent thread pool for reuse across calls.
     • Thread-safe task queue with atomic progress counter.
     • Scope-based TIFF handle cleanup (closed before rename).
@@ -27,7 +28,7 @@
     • No retry on I/O errors.
 
   DEPENDENCIES:
-    libtiff, MATLAB MEX API, C++17 <filesystem>.
+    libtiff, MATLAB MEX API, C++17 <filesystem>, <unistd.h>.
 
   AUTHOR:
     Keivan Moradi (with ChatGPT-4o assistance)
@@ -51,6 +52,7 @@
 #include <stdexcept>
 #include <cstdint>
 #include <cstring>
+#include <unistd.h>        // for access()
 
 namespace fs = std::filesystem;
 
@@ -115,13 +117,11 @@ public:
         cvTask.notify_one();
     }
 
-    // Block until all enqueued tasks have finished
     void waitAll() {
         std::unique_lock<std::mutex> lk(doneMutex);
         cvDone.wait(lk, [this]{ return tasksRemaining.load() == 0; });
     }
 
-    // Rethrow first stored exception, if any
     void rethrowFirstError() {
         std::lock_guard<std::mutex> lk(errorMutex);
         if (!errors.empty()) std::rethrow_exception(errors.front());
@@ -154,15 +154,12 @@ static void writeSlice(
     const size_t sliceBytes = dim0 * dim1 * bytesPerSample;
     const uint8_t* srcBase  = volumeData + sliceIndex * sliceBytes;
 
-    // build temporary filename
     fs::path tmpPath = fs::path(outputPath).concat(".tmp");
 
-    // scope the TIFF handle so it is closed before rename
     {
         TiffHandle tiff(tmpPath.string(), "w");
         TIFF* tif = tiff.tif;
 
-        // set up all required TIFF tags
         TIFFSetField(tif, TIFFTAG_IMAGEWIDTH,       static_cast<uint32_t>(width));
         TIFFSetField(tif, TIFFTAG_IMAGELENGTH,      static_cast<uint32_t>(height));
         TIFFSetField(tif, TIFFTAG_BITSPERSAMPLE,    static_cast<uint16_t>(bytesPerSample * 8));
@@ -172,7 +169,6 @@ static void writeSlice(
         TIFFSetField(tif, TIFFTAG_PLANARCONFIG,     PLANARCONFIG_CONTIG);
         TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP,     static_cast<uint32_t>(height));
 
-        // reorder from MATLAB column-major into row-major in our scratch buffer
         for (size_t r = 0; r < height; ++r) {
             for (size_t c = 0; c < width; ++c) {
                 size_t orow = isXYZ ? c : r;
@@ -185,16 +181,14 @@ static void writeSlice(
             }
         }
 
-        // write either raw or encoded strip
         tsize_t written = (compression == COMPRESSION_NONE)
             ? TIFFWriteRawStrip(tif, 0, scratchBuffer.data(), sliceBytes)
             : TIFFWriteEncodedStrip(tif, 0, scratchBuffer.data(), sliceBytes);
         if (written < 0)
             throw std::runtime_error("TIFF write failed for slice " +
                                      std::to_string(sliceIndex));
-    } // <- TIFF closed here
+    }
 
-    // atomically replace any existing file
     if (fs::exists(outputPath)) fs::remove(outputPath);
     fs::rename(tmpPath, outputPath);
 }
@@ -207,22 +201,18 @@ void mexFunction(int nlhs, mxArray* plhs[],
         mexErrMsgIdAndTxt("save_bl_tif:usage",
             "Usage: save_bl_tif(vol, fileList, isXYZ, compression[, nThreads]);");
 
-    // validate volume type
     if (!mxIsUint8(prhs[0]) && !mxIsUint16(prhs[0]))
         mexErrMsgIdAndTxt("save_bl_tif:type",
             "Volume must be uint8 or uint16.");
 
-    // gather dimensions
     const mwSize* dims = mxGetDimensions(prhs[0]);
     size_t dim0 = dims[0], dim1 = dims[1];
     size_t numSlices = (mxGetNumberOfDimensions(prhs[0]) == 3)
                          ? dims[2] : 1;
 
-    // parse transpose flag
     bool isXYZ = mxIsLogicalScalarTrue(prhs[2]) ||
                  (mxIsNumeric(prhs[2]) && mxGetScalar(prhs[2]) != 0);
 
-    // parse compression string
     char* compCStr = mxArrayToUTF8String(prhs[3]);
     std::string compressionMode(compCStr);
     mxFree(compCStr);
@@ -232,7 +222,6 @@ void mexFunction(int nlhs, mxArray* plhs[],
                          : (compressionMode == "deflate") ? COMPRESSION_DEFLATE
                          : throw std::runtime_error("Invalid compression: " + compressionMode);
 
-    // fileList must match slice count
     if (!mxIsCell(prhs[1]) || mxGetNumberOfElements(prhs[1]) != numSlices)
         mexErrMsgIdAndTxt("save_bl_tif:files",
             "fileList must have one entry per slice.");
@@ -244,11 +233,22 @@ void mexFunction(int nlhs, mxArray* plhs[],
         mxFree(s);
     }
 
-    // raw pointer to data bytes
+    // --- guard clauses for invalid directories and read-only files ---
+    for (auto& outPath : outputFiles) {
+        fs::path dir = fs::path(outPath).parent_path();
+        if (!dir.empty() && !fs::exists(dir)) {
+            mexErrMsgIdAndTxt("save_bl_tif:invalidPath",
+                "Output directory does not exist: %s", dir.string().c_str());
+        }
+        if (fs::exists(outPath) && access(outPath.c_str(), W_OK) != 0) {
+            mexErrMsgIdAndTxt("save_bl_tif:readonly",
+                "Cannot overwrite read-only file: %s", outPath.c_str());
+        }
+    }
+
     const uint8_t* volumeData = static_cast<const uint8_t*>(mxGetData(prhs[0]));
     size_t bytesPerSample = (mxGetClassID(prhs[0]) == mxUINT16_CLASS ? 2 : 1);
 
-    // determine thread count
     size_t hardwareThreads = std::thread::hardware_concurrency();
     if (hardwareThreads == 0) hardwareThreads = 1;
     size_t requested = (nrhs == 5) ? static_cast<size_t>(mxGetScalar(prhs[4]))
@@ -256,16 +256,13 @@ void mexFunction(int nlhs, mxArray* plhs[],
     size_t numThreads = std::min(requested, numSlices);
     if (numThreads < 1) numThreads = 1;
 
-    // prepare one scratch buffer per thread
     std::vector<std::vector<uint8_t>> scratchBuffers(
         numThreads,
         std::vector<uint8_t>(dim0 * dim1 * bytesPerSample)
     );
 
-    // create or get persistent pool
     static ThreadPool pool(numThreads);
 
-    // enqueue all slice-writing tasks
     for (size_t idx = 0; idx < numSlices; ++idx) {
         pool.enqueue([&, idx]() {
             writeSlice(volumeData, idx,
@@ -278,7 +275,6 @@ void mexFunction(int nlhs, mxArray* plhs[],
         });
     }
 
-    // wait for completion and check errors
     pool.waitAll();
     try {
         pool.rethrowFirstError();
@@ -286,7 +282,6 @@ void mexFunction(int nlhs, mxArray* plhs[],
         mexErrMsgIdAndTxt("save_bl_tif:runtime", ex.what());
     }
 
-    // return the volume back if requested
     if (nlhs > 0) {
         plhs[0] = const_cast<mxArray*>(prhs[0]);
     }
