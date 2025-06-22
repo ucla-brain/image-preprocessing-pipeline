@@ -118,36 +118,34 @@ MiB   = prod(benchSize(1:2)) * 2 * benchSize(3) / 2^20;
 spdMex = MiB / tMex;
 fprintf("      MEX save_bl_tif: %.2f s  (%.1f MiB/s)\n", tMex, spdMex);
 
-% — MATLAB async-imwrite path —
+% — MATLAB parfor+imwrite path (YXZ layout so no transpose) —
 matFiles = arrayfun(@(k) fullfile(tmpRoot,sprintf('mat_deflate_%03d.tif',k)), ...
                     1:benchSize(3),'Uni',false);
 
-% ensure a process-based pool for file I/O
+% ensure a process-based pool
 p = gcp('nocreate');
-if isempty(p) || strcmp(p.Profile, 'threads')
+if isempty(p) || strcmp(p.Profile,'threads')
     delete(gcp('nocreate'));
-    p = parpool('Processes');
+    parpool('Processes');
 end
 
-futures(benchSize(3)) = parallel.FevalFuture;  % preallocate
 t1 = tic;
-for k = 1:benchSize(3)
-    sliceYXZ = benchVol(:,:,k);  % imwrite wants YXZ layout
-    futures(k) = parfeval(p, @imwrite, 0, ...
-                          sliceYXZ, matFiles{k}, 'Compression','deflate');
+parfor k = 1:benchSize(3)
+    sliceYXZ = benchVol(:,:,k);  % imwrite expects YXZ
+    imwrite(sliceYXZ, matFiles{k}, 'Compression','deflate');
 end
-wait(futures);
 tMat = toc(t1);
 spdMat = MiB / tMat;
-fprintf("      MATLAB async-imwrite: %.2f s  (%.1f MiB/s)\n", tMat, spdMat);
+fprintf("      MATLAB parfor+imwrite: %.2f s  (%.1f MiB/s)\n", tMat, spdMat);
 
 fprintf("\n   📊 MEX vs MATLAB native performance:\n");
 T_extra = table( ...
-    {'MEX save_bl_tif'; 'MATLAB async-imwrite'}, ...
+    {'MEX save_bl_tif'; 'MATLAB parfor+imwrite'}, ...
     [tMex; tMat], ...
     [spdMex; spdMat], ...
     'VariableNames', {'Method','Time_s','MiB_s'});
 disp(T_extra);
+
 
 fprintf("\n🎉  all save_bl_tif tests passed\n");
 end
