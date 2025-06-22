@@ -77,11 +77,12 @@ mexFiles  = arrayfun(@(k) fullfile(tmpRoot,sprintf('mex_%03d.tif',k)), ...
                      1:benchSize(3),'uni',0);
 parFiles  = strrep(mexFiles,'mex_','par_');
 
-p = gcp('nocreate');
-if isempty(p)
-    p = parpool("local", "IdleTimeout", Inf);   % always works, never times out
+if isempty(gcp('nocreate'))
+    cluster = parcluster('local');
+    cluster.IdleTimeout = Inf;   % ensure it doesn't shut down early
+    cluster.NumWorkers = min(8, feature('numCores'));  % or whatever fits
+    parpool(cluster, cluster.NumWorkers);
 end
-wait(p);        % warm the workers before timing
 
 fprintf("\n   🏁 benchmark (uint16 %dx%dx%d, %d workers)…\n", ...
         benchSize(1),benchSize(2),benchSize(3),p.NumWorkers);
