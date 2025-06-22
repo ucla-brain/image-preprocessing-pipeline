@@ -1147,7 +1147,7 @@ function postprocess_save( ...
             blocklist(block_inds), p1_slab, p2_slab, slabSize, ...
             clipval, scal, amplification, deconvmin, deconvmax, low_clip, high_clip, feature('numCores'));
 
-        fprintf('   slab assembled + scaled in %.1fs ()\n', elapsed);
+        fprintf('   slab assembled + scaled in %.1fs.\n', elapsed);
 
         if stack_info.flip_upside_down
             R = flip(R, 2);
