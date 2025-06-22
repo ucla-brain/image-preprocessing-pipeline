@@ -46,9 +46,11 @@
 #include <mutex>
 #include <condition_variable>
 #include <queue>
+#include <functional>
 #include <atomic>
 #include <stdexcept>
 #include <cstdint>
+#include <cstring>
 
 namespace fs = std::filesystem;
 
@@ -171,14 +173,15 @@ static void writeSlice(
         TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP,     static_cast<uint32_t>(height));
 
         // reorder from MATLAB column-major into row-major in our scratch buffer
-        uint8_t* dstRow = scratchBuffer.data();
         for (size_t r = 0; r < height; ++r) {
             for (size_t c = 0; c < width; ++c) {
                 size_t orow = isXYZ ? c : r;
                 size_t ocol = isXYZ ? r : c;
                 size_t srcOff = (orow + ocol * dim0) * bytesPerSample;
                 size_t dstOff = (r * width + c) * bytesPerSample;
-                std::memcpy(dstRow + dstOff, srcBase + srcOff, bytesPerSample);
+                memcpy(scratchBuffer.data() + dstOff,
+                       srcBase + srcOff,
+                       bytesPerSample);
             }
         }
 
@@ -189,7 +192,7 @@ static void writeSlice(
         if (written < 0)
             throw std::runtime_error("TIFF write failed for slice " +
                                      std::to_string(sliceIndex));
-    } // <- TiffHandle destructor runs here, closing the file
+    } // <- TIFF closed here
 
     // atomically replace any existing file
     if (fs::exists(outputPath)) fs::remove(outputPath);
@@ -210,7 +213,7 @@ void mexFunction(int nlhs, mxArray* plhs[],
             "Volume must be uint8 or uint16.");
 
     // gather dimensions
-    const mwSize* dims = mxGetDimensions(prhs[0]];
+    const mwSize* dims = mxGetDimensions(prhs[0]);
     size_t dim0 = dims[0], dim1 = dims[1];
     size_t numSlices = (mxGetNumberOfDimensions(prhs[0]) == 3)
                          ? dims[2] : 1;
