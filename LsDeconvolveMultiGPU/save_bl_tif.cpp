@@ -55,6 +55,7 @@ struct SaveTask {
     uint16_t       compressionTag;
     size_t         bytesPerSlice;
     size_t         bytesPerPixel;
+    size_t         sliceIndex;
 };
 
 /* Each thread owns one reusable aligned scratch buffer large enough for one slice. */
@@ -180,7 +181,7 @@ static void save_slice(const SaveTask& t)
     if (nWritten < 0) {
         TIFFClose(tif);
         std::remove(tmpPath.c_str());
-        throw std::runtime_error("TIFF write failed on " + tmpPath);
+        throw std::runtime_error("TIFF write failed on slice " + std::to_string(t.sliceIndex) + " → " + tmpPath);
     }
 
     TIFFClose(tif);
@@ -195,8 +196,8 @@ static void save_slice(const SaveTask& t)
 
     if (std::rename(tmpPath.c_str(), t.filePath.c_str()) != 0) {
         std::remove(tmpPath.c_str());
-        throw std::runtime_error("Atomic rename failed: " + tmpPath + " → " + t.filePath +
-                                 " (" + std::strerror(errno) + ")");
+        throw std::runtime_error("Atomic rename failed on slice " + std::to_string(t.sliceIndex) +
+                                 ": " + tmpPath + " → " + t.filePath + " (" + std::strerror(errno) + ")");
     }
 }
 
@@ -320,8 +321,8 @@ void mexFunction(int nlhs, mxArray* plhs[],
         // ─────────────── Build Task Vector ────────────────── //
         auto taskVec = std::make_shared<std::vector<SaveTask>>();
         taskVec->reserve(dim2);
-        for (size_t z = 0; z < dim2; ++z)
-            taskVec->emplace_back(SaveTask{ basePtr, z * bytesPerSl, dim0, dim1, paths[z], alreadyXYZ, classId, compTag, bytesPerSl, bytesPerPx });
+        for (size_t sliceIndex = 0; sliceIndex < dim2; ++sliceIndex)
+            taskVec->emplace_back(SaveTask{ basePtr, sliceIndex * bytesPerSl, dim0, dim1, paths[z], alreadyXYZ, classId, compTag, bytesPerSl, bytesPerPx, sliceIndex });
 
         // Warm-up libtiff on first call (lazy loader)
         TIFF* tmp = TIFFOpen("/dev/null", "r"); if (tmp) TIFFClose(tmp);
@@ -371,7 +372,6 @@ void mexFunction(int nlhs, mxArray* plhs[],
 
             // Apply stack size (attr) directly to each std::thread
             pthread_t native_thread = workers.back().native_handle();
-            pthread_attr_setstacksize(&attr, 256 * 1024);
             sched_param param{};
             param.sched_priority = 0; // default priority
 
