@@ -63,8 +63,9 @@ public:
     template<class F> void enqueue(F&& f) {
         std::lock_guard<std::mutex> lk(m_);
         q_.emplace(std::forward<F>(f));
-        pending_.fetch_add(1); // Must be inside the mutex-protected section!
-        cv_job_.notify_one();
+        pending_.fetch_add(1);
+        // Wake all threads, so many can pick up jobs in parallel
+        cv_job_.notify_all();
     }
 
     void wait() {
