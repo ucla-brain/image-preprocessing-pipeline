@@ -1,35 +1,36 @@
 /*==============================================================================
   save_bl_tif.cpp
   ------------------------------------------------------------------------------
-
-  High-throughput TIFF Z-slice saver for 3D MATLAB volumes. Each slice is saved
-  to a separate TIFF file using multithreading and optional compression.
+  High-throughput TIFF Z-slice saver for 3D MATLAB volumes.
+  Each slice is saved to a separate TIFF file using multithreading with NUMA
+  and hugepage support for high throughput and low latency.
 
   USAGE:
       save_bl_tif(volume, fileList, isXYZ, compression[, nThreads])
 
   INPUT:
-    volume      : 3D uint8/uint16 MATLAB array in [X Y Z] or [Y X Z] order.
+    volume      : 3D uint8/uint16 MATLAB array in [X Y Z] or [Y X Z] layout.
     fileList    : 1xZ cell array of filenames (one per Z-slice).
-    isXYZ       : logical or numeric flag, true if data is [X Y Z], else [Y X Z].
-    compression : string: 'none', 'lzw', or 'deflate'.
-    nThreads    : (optional) number of threads to use (default = #physical cores)
+    isXYZ       : boolean or numeric, true if data is [X Y Z] layout.
+    compression : string, one of: 'none', 'lzw', or 'deflate'.
+    nThreads    : (optional) number of threads to use (default = physical cores)
 
   FEATURES:
-    • Uses per-thread scratch buffers, NUMA-aware allocation, and hugepage support.
-    • Robust per-slice TIFF writer with safe overwrite detection.
-    • High throughput by chunked atomic job dispatch.
-    • Portable (Linux + Windows); gracefully degrades on systems without NUMA.
-    • Memory-leak safe; RAII used for all system resources.
-    • Verbose error aggregation: prints all failure messages.
+    • Atomic task dispatch across multiple threads.
+    • NUMA-aware memory pinning and optional hugepage use.
+    • Direct write for uncompressed [X Y Z], otherwise transpose/copy.
+    • Safe rename from .tmp → final slice file.
+    • RAII for all file handles and allocations.
+    • Cross-platform (Linux and Windows).
+    • Thread-safe error collection and reporting.
 
   LIMITATIONS:
-    • Grayscale images only (8-bit or 16-bit, 1 channel).
-    • Each slice must be individually writable and uniquely named.
-    • Assumes local fast storage; no remote/network-specific logic.
+    • Grayscale slices only (1 channel).
+    • No built-in retry on I/O error.
+    • Assumes local filesystem for max performance.
 
   AUTHOR:
-    Keivan Moradi (with assistance from ChatGPT-4o)
+    Keivan Moradi (with ChatGPT-4o assistance)
   LICENSE:
     GNU GPL v3 — https://www.gnu.org/licenses/gpl-3.0.html
 ==============================================================================*/
@@ -70,21 +71,17 @@
   #define ACCESS _access
 #endif
 
-// =========================  NUMA/thread helper  ================================
 namespace detail {
 
-/* Detect if memory interleaving is forced (e.g. with numactl --interleave=all) */
+/* Check for NUMA interleaving via /proc/self/status */
 inline bool numa_interleaving_forced() {
 #if defined(__linux__)
-    // Check environment variable set by numactl (NUMACTL_INTERLEAVE or NUMACTL_NODES)
-    // Or directly check /proc/self/status for "Mems_allowed" with multiple nodes.
     FILE* f = fopen("/proc/self/status", "r");
     if (!f) return false;
     char buf[256];
     while (fgets(buf, sizeof buf, f)) {
         if (strncmp(buf, "Mems_allowed:", 13) == 0) {
             std::string s(buf + 13);
-            // If more than one '1' bit, interleave is in effect.
             int bits = std::count(s.begin(), s.end(), '1');
             fclose(f);
             return bits > 1;
@@ -95,15 +92,12 @@ inline bool numa_interleaving_forced() {
     return false;
 }
 
-/* NUMA-aware pinning: bind thread to CPUs on a given NUMA node */
+/* Optional thread affinity to specific NUMA node */
 inline void pin_thread_to_numa_node(int node, bool disable_pinning) {
 #if defined(__linux__)
-    if (disable_pinning) return;  // <--- Key bugfix: skip pinning if interleaving active
+    if (disable_pinning || numa_available() == -1 || node < 0) return;
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
-    if (node < 0 || numa_available() == -1)
-        return; // no-op on unsupported systems
-
     bitmask* cpumask = numa_allocate_cpumask();
     if (numa_node_to_cpus(node, cpumask) == 0) {
         for (int i = 0; i < CPU_SETSIZE; ++i)
@@ -115,13 +109,13 @@ inline void pin_thread_to_numa_node(int node, bool disable_pinning) {
 #endif
 }
 
-/* Check if file exists and is writable (error if not) */
+/* Ensure we can overwrite the output file */
 inline void ensure_writable(const std::string& path) {
     if (ACCESS(path.c_str(), F_OK) == 0 && ACCESS(path.c_str(), W_OK) != 0)
         throw std::runtime_error("Cannot overwrite read-only file: " + path);
 }
 
-/* Scratch buffer with NUMA/hugepage optimizations */
+/* Per-thread scratch buffer with NUMA-aware allocation */
 struct ScratchBuffer {
     uint8_t* ptr = nullptr;
     size_t   size = 0;
@@ -134,11 +128,9 @@ struct ScratchBuffer {
 
 #if defined(__linux__)
         if (!disable_numa && numa_available() != -1) {
-            // Try hugepage allocation first
             void* mem = mmap(nullptr, bytes, PROT_READ | PROT_WRITE,
                              MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB, -1, 0);
             if (mem != MAP_FAILED) {
-                // Try to bind this allocation to the requested NUMA node
                 unsigned long mask = 1UL << node;
                 if (mbind(mem, bytes, MPOL_BIND, &mask, sizeof(mask) * 8, 0) == 0) {
                     ptr = static_cast<uint8_t*>(mem);
@@ -150,7 +142,6 @@ struct ScratchBuffer {
                     munmap(mem, bytes);
                 }
             }
-            // NUMA allocation (not hugepages)
             ptr = static_cast<uint8_t*>(numa_alloc_onnode(bytes, node));
             if (ptr) {
                 size = bytes;
@@ -160,7 +151,6 @@ struct ScratchBuffer {
             }
         }
 #endif
-        // fallback to normal malloc
         ptr = static_cast<uint8_t*>(malloc(bytes));
         if (!ptr) throw std::bad_alloc();
         size = bytes;
@@ -188,7 +178,7 @@ struct ScratchBuffer {
 
 static thread_local ScratchBuffer threadScratch;
 
-/* RAII wrapper for TIFF* handle */
+/* TIFF RAII wrapper */
 struct TiffHandle {
     TIFF* tif = nullptr;
     TiffHandle(const std::string& path, const char* mode) {
@@ -201,7 +191,6 @@ struct TiffHandle {
 
 } // namespace detail
 
-/* ----------------------------- SliceJob struct ----------------------------- */
 struct SliceJob {
     const uint8_t* base = nullptr;
     size_t offset = 0;
@@ -214,12 +203,11 @@ struct SliceJob {
     std::string filename;
 };
 
-/* ----------------------------- Slice writer ----------------------------- */
+/* Save a single Z-slice to disk */
 static void save_slice(const SliceJob& job, int numaNode, bool disable_numa) {
     using namespace detail;
     ensure_writable(job.filename);
     const uint8_t* src = job.base + job.offset;
-
     mwSize srcRows = job.isXYZ ? job.cols : job.rows;
     mwSize srcCols = job.isXYZ ? job.rows : job.cols;
 
@@ -238,7 +226,6 @@ static void save_slice(const SliceJob& job, int numaNode, bool disable_numa) {
 
     const uint8_t* buf = nullptr;
 
-    // Only [X Y Z] + 'none' allows direct copy; all else needs transpose/copy.
     if (job.isXYZ && job.compressionTag == COMPRESSION_NONE) {
         buf = src;
     } else {
@@ -246,7 +233,6 @@ static void save_slice(const SliceJob& job, int numaNode, bool disable_numa) {
         uint8_t* dst = threadScratch.ptr;
 
         if (!job.isXYZ) {
-            // [Y X Z]: transpose to [X Y]
             for (mwSize c = 0; c < srcCols; ++c) {
                 const uint8_t* srcCol = src + c * job.rows * job.bytesPerPx;
                 for (mwSize r = 0; r < srcRows; ++r) {
@@ -276,7 +262,7 @@ static void save_slice(const SliceJob& job, int numaNode, bool disable_numa) {
         throw std::runtime_error("Rename failed for slice " + std::to_string(job.zIndex));
 }
 
-/* ------------------------- Job Queue and Worker ------------------------- */
+/* Job queue with atomic dispatch */
 struct JobQueue {
     const std::vector<SliceJob>* jobs;
     std::atomic_size_t next{0};
@@ -284,7 +270,7 @@ struct JobQueue {
     std::vector<std::string> errors;
 };
 
-/* Each thread processes jobs in atomic chunks, pins itself if enabled. */
+/* Thread worker */
 static void worker(JobQueue& q, int numaNode, bool disable_pinning, bool disable_numa) {
     detail::pin_thread_to_numa_node(numaNode, disable_pinning);
     constexpr size_t chunkSize = 8;
@@ -304,7 +290,7 @@ static void worker(JobQueue& q, int numaNode, bool disable_pinning, bool disable
     }
 }
 
-/* ------------------ Physical core count helper (Linux only) ----------------- */
+/* Physical core counter */
 size_t count_physical_cores() {
 #if defined(__linux__)
     std::vector<std::pair<int, int>> pairs;
@@ -326,7 +312,7 @@ size_t count_physical_cores() {
 #endif
 }
 
-/* ---------------------------- MEX entry point ---------------------------- */
+/* MEX entry point */
 void mexFunction(int nlhs, mxArray* plhs[],
                  int nrhs, const mxArray* prhs[]) {
     try {
@@ -377,7 +363,7 @@ void mexFunction(int nlhs, mxArray* plhs[],
         if (numa_available() != -1) {
             numaNodes = numa_max_node() + 1;
             disable_pinning = detail::numa_interleaving_forced();
-            disable_numa = disable_pinning; // If interleaving is forced, don't try NUMA alloc.
+            disable_numa = disable_pinning;
         }
 #endif
 
