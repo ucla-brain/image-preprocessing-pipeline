@@ -1112,7 +1112,7 @@ function postprocess_save( ...
         % -------------------------------------------------------------------------
         % 5a.  Process each slab – all bricks (bls) loaded in one MEX call
         % -------------------------------------------------------------------------
-        fprintf('Slab %d / %d – mounting blocks …\n', nz, block.nz);
+        fprintf('Slab %d / %d – mounting %d blocks …\n', nz, block.nz, blocksPerSlab);
 
         block_inds = ((nz-1)*blocksPerSlab + 1) : (nz*blocksPerSlab);
 
@@ -1143,7 +1143,7 @@ function postprocess_save( ...
         [R, elapsed] = load_slab_lz4(  blocklist(block_inds), p1_slab, p2_slab, slabSize, ...
                                        clipval, scal, amplification, deconvmin, deconvmax, low_clip, high_clip, ...
                                        feature('numCores') );
-        fprintf('   slab assembled + scaled (%d blocks) in %.1fs\n', blocksPerSlab, elapsed);
+        fprintf('   slab assembled + scaled in %.1fs\n', blocksPerSlab, elapsed);
 
         if stack_info.flip_upside_down
             R = flip(R, 2);
@@ -1178,7 +1178,7 @@ function save_slices_with_bl_tif(R, outpath, slab_z1)
 
     % Skip slices that already exist
     if all(existing)
-        fprintf('   ✅ All %d slices already exist in %s\n', Z, outpath);
+        fprintf('   All %d slices already exist in %s\n', Z, outpath);
         return;
     end
 
