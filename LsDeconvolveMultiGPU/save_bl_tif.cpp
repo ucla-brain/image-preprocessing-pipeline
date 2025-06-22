@@ -170,13 +170,13 @@ static constexpr uint8_t ifdBlob[] = {
 /* ───────────────────────────── LOW-LEVEL TIFF WRITE ─────────────────────── */
 static void save_slice(const SaveTask& t, int node)
 {
-    /* ---------- read-only / overwrite safety check ---------- */
+    /* -------- 1. Overwrite-safety pre-flight ------------------------------ */
     {
-        FILE* testW = std::fopen(t.filePath.c_str(), "wb");
-        if (!testW)                     // cannot open → read-only or perm denied
+        FILE* stub = std::fopen(t.filePath.c_str(), "wb");
+        if (!stub)
             throw std::runtime_error("Refused to overwrite read-only file: "
                                      + t.filePath);
-        std::fclose(testW);             // ok; leave stub for atomic replace
+        std::fclose(stub);                 // leave zero-byte stub for atomicity
     }
 
     const mwSize srcRows = t.alreadyXYZ ? t.cols : t.rows;
@@ -186,23 +186,57 @@ static void save_slice(const SaveTask& t, int node)
     const bool direct    = (t.compressionTag == COMPRESSION_NONE && t.alreadyXYZ);
     const std::string tmpPath = t.filePath + ".tmp";
 
-/* ─────────────────────────────── Raw gather-write path ─────────────────────────────── */
+/* ───────────── 2. Raw gather-write path (uncompressed, XYZ already) ─────── */
     if (direct)
     {
-        // … (unchanged raw-TIFF header + writev/WriteFile code) …
+        // -------- build minimal little-endian TIFF header + IFD -------------
+        rawtiff::Header hdr{0x4949, 42, sizeof(rawtiff::Header)};
+        uint8_t ifd[sizeof(rawtiff::ifdBlob)];
+        std::memcpy(ifd, rawtiff::ifdBlob, sizeof(ifd));
+        auto s32=[&](size_t off,uint32_t v){ std::memcpy(ifd+off,&v,4);} ;
+        auto s16=[&](size_t off,uint16_t v){ std::memcpy(ifd+off,&v,2);} ;
+        s32( 8+8, static_cast<uint32_t>(srcCols));           // ImageWidth
+        s32(20+8, static_cast<uint32_t>(srcRows));           // ImageLength
+        s16(32+8, t.bytesPerPixel==2?16:8);                  // BitsPerSample
+        uint32_t stripOff = sizeof(rawtiff::Header)+sizeof(ifd);
+        s32(56+8, stripOff);                                 // StripOffsets
+        s32(76+8, static_cast<uint32_t>(srcRows));           // RowsPerStrip
+        s32(88+8, static_cast<uint32_t>(t.bytesPerSlice));   // StripByteCounts
 
+        /* -------- write header + IFD + pixels in one go ------------------- */
+        int fd = ::open(tmpPath.c_str(), O_CREAT|O_TRUNC|O_WRONLY|O_BINARY, 0644);
+        if (fd == -1) throw std::runtime_error("open " + tmpPath);
+
+#if defined(__linux__)
+        struct iovec iov[3] = {
+            {&hdr, sizeof(hdr)},
+            {ifd, sizeof(ifd)},
+            {const_cast<uint8_t*>(src), t.bytesPerSlice}
+        };
+        ssize_t n = ::writev(fd, iov, 3);
+        if (n != ssize_t(sizeof(hdr)+sizeof(ifd)+t.bytesPerSlice))
+            throw std::runtime_error("writev failed on " + tmpPath);
+#else
+        if (::write(fd, &hdr, sizeof(hdr)) != ssize_t(sizeof(hdr)) ||
+            ::write(fd, ifd, sizeof(ifd)) != ssize_t(sizeof(ifd)) ||
+            ::write(fd, src, t.bytesPerSlice) != ssize_t(t.bytesPerSlice))
+            throw std::runtime_error("write failed on " + tmpPath);
+#endif
+        ::close(fd);
+
+        /* -------- unlink stub then rename atomically ---------------------- */
+        ::unlink(t.filePath.c_str());
         if (::rename(tmpPath.c_str(), t.filePath.c_str()) != 0)
             throw std::runtime_error("rename failed on " + tmpPath +
                                      " → " + t.filePath);
         return;
     }
 
-/* ─────────────────────────────── LibTIFF path ─────────────────────────────── */
+/* ───────────── 3. LibTIFF path (compressed or needs transpose) ──────────── */
     if (!tl_tiff) tl_tiff = std::make_unique<TiffLocal>();
     tl_tiff->ensure_open(tmpPath);
     TIFF* tif = tl_tiff->tif;
 
-    /* -------- tag setup (unchanged) -------- */
     TIFFSetField(tif, TIFFTAG_IMAGEWIDTH,       srcCols);
     TIFFSetField(tif, TIFFTAG_IMAGELENGTH,      srcRows);
     TIFFSetField(tif, TIFFTAG_SAMPLESPERPIXEL,  1);
@@ -212,15 +246,14 @@ static void save_slice(const SaveTask& t, int node)
     TIFFSetField(tif, TIFFTAG_PLANARCONFIG,     PLANARCONFIG_CONTIG);
     TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP,     srcRows);
 
-    /* -------- build / transpose I/O buffer -------- */
+    /* -------- prepare I/O buffer (transpose if required) ------------------ */
     const uint8_t* ioBuf = nullptr;
     if (t.alreadyXYZ && t.compressionTag == COMPRESSION_NONE) {
         ioBuf = src;
     } else {
         ensure_scratch(t.bytesPerSlice, node);
         uint8_t* dst = scratch_buf;
-
-        if (!t.alreadyXYZ) {                       // transpose YX → XY
+        if (!t.alreadyXYZ) {                         // transpose YX → XY
             for (mwSize c = 0; c < srcCols; ++c) {
                 const uint8_t* colSrc = src + c * t.rows * t.bytesPerPixel;
                 for (mwSize r = 0; r < srcRows; ++r) {
@@ -236,7 +269,7 @@ static void save_slice(const SaveTask& t, int node)
         ioBuf = dst;
     }
 
-    /* -------- write strip -------- */
+    /* -------- write single strip ----------------------------------------- */
     tsize_t nWritten =
         (t.compressionTag == COMPRESSION_NONE)
             ? TIFFWriteRawStrip    (tif, 0, const_cast<uint8_t*>(ioBuf),
@@ -247,8 +280,9 @@ static void save_slice(const SaveTask& t, int node)
         throw std::runtime_error("TIFF write failed on slice " +
                                  std::to_string(t.sliceIndex));
 
-    TIFFRewriteDirectory(tif);                       // commit offsets
+    TIFFRewriteDirectory(tif);                       // commit tag offsets
 
+    ::unlink(t.filePath.c_str());                    // remove stub
     if (::rename(tmpPath.c_str(), t.filePath.c_str()) != 0)
         throw std::runtime_error("rename failed on " + tmpPath +
                                  " → " + t.filePath);
