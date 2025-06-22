@@ -21,33 +21,42 @@ assert(isequal(imread(fn3d),vol3d(:,:,1)));
 
 fprintf("   ✅ basic 2-D / 3-D paths ok\n");
 
-%% ---------- B. full matrix: {layout × dtype × compression} ----------
+%% ---------- B. full matrix: {layout × dtype × compression} + timing ----------
 cfg.order = {'YXZ',false; 'XYZ',true};
 cfg.dtype = {'uint8',@uint8; 'uint16',@uint16};
 cfg.comp  = {'none','lzw','deflate'};
-sz        = [2048 1024 4];                      % ≥ 2 MiB slice
+sz        = [2048 1024 4];  % ≥ 2 MiB slice
 
+layoutTimes = zeros(size(cfg.order,1),1);
 for o = 1:size(cfg.order,1)
-    if o>1, fprintf("\n"); end                  % blank line between YXZ / XYZ
+    fprintf("\n   🏁 Testing layout: %s\n", cfg.order{o,1});
+    tStart = tic;
     for d = 1:size(cfg.dtype,1)
         for c = 1:numel(cfg.comp)
-            A = cfg.dtype{d,2}(randi(intmax(cfg.dtype{d,1}),sz));
-            if cfg.order{o,2}, A = permute(A,[2 1 3]); end
+            % generate random volume
+            A = cfg.dtype{d,2}(randi(intmax(cfg.dtype{d,1}), sz));
+            if cfg.order{o,2}
+                A = permute(A,[2 1 3]);
+            end
 
-            tag     = sprintf('%s_%s_%s',cfg.order{o,1},cfg.dtype{d,1},cfg.comp{c});
+            tag     = sprintf('%s_%s_%s',cfg.order{o,1},...
+                              cfg.dtype{d,1},cfg.comp{c});
             tagSafe = regexprep(tag,'[^A-Za-z0-9]','_');
             files   = arrayfun(@(k) fullfile(tmpRoot, ...
-                       sprintf('t_%s_%02d.tif',tagSafe,k)), ...
-                       1:sz(3),'uni',0);
+                       sprintf('t_%s_%02d.tif',tagSafe,k)), 1:sz(3),'uni',0);
 
-            save_bl_tif(A,files,cfg.order{o,2},cfg.comp{c});
+            % write & verify
+            save_bl_tif(A, files, cfg.order{o,2}, cfg.comp{c});
             for k = 1:sz(3)
-                ref = A(:,:,k); if cfg.order{o,2}, ref = ref.'; end
-                assert(isequal(imread(files{k}),ref),"%s slice %d mismatch",tag,k);
+                ref = A(:,:,k);
+                if cfg.order{o,2}, ref = ref.'; end
+                assert(isequal(imread(files{k}), ref), ...
+                       "%s slice %d mismatch", tag, k);
             end
-            fprintf("   ✅ %-30s\n", strrep(tag,'_',' | '));
+            fprintf("      ✅ %-30s\n", strrep(tag,'_',' | '));
         end
     end
+    layoutTimes(o) = toc(tStart);
 end
 
 %% ---------- C. guard-clause checks ----------
@@ -67,29 +76,20 @@ try
 catch, fprintf("      ✅ read-only overwrite rejected\n"); end
 
 %% ---------- D. benchmark: save_bl_tif vs async-imwrite ----------
-benchSize = [512 512 64];                     % 256 MiB uint16 stack
+benchSize = [512 512 64];  % 256 MiB uint16 stack
 benchVol  = uint16(randi(65535, benchSize));
 mexFiles  = arrayfun(@(k) fullfile(tmpRoot,sprintf('mex_%03d.tif',k)), ...
                      1:benchSize(3),'uni',0);
 asyncFiles = strrep(mexFiles,'mex_','async_');
 
-% Benchmark save_bl_tif
 fprintf("\n   🏁 benchmark save_bl_tif (uint16 %dx%dx%d)…\n", benchSize, benchSize(3));
-tic
-save_bl_tif(benchVol, mexFiles, false, 'none');
-tMex = toc;
+tMex = timeit(@() save_bl_tif(benchVol, mexFiles, false, 'none'));
 
-% Benchmark async imwrite using backgroundPool
 if ~isempty(ver('parallel')) && exist('backgroundPool','builtin')
     fprintf("   🏁 benchmark async imwrite (%d tasks)…\n", benchSize(3));
-    futures = parallel.FevalFuture.empty(0,benchSize(3));
-    tic
-    for k = 1:benchSize(3)
-        futures(k) = parfeval(backgroundPool, @imwrite, 0, benchVol(:,:,k), asyncFiles{k});
-    end
-    wait(futures);
-    tAsync = toc;
-
+    tAsync = timeit(@() ...
+        arrayfun(@(k) parfeval(backgroundPool, @imwrite, 0, ...
+                benchVol(:,:,k), asyncFiles{k}), 1:benchSize(3)));
     bytesMiB = numel(benchVol)*2 / 2^20;
     spdMex   = bytesMiB / tMex;
     spdAsync = bytesMiB / tAsync;
@@ -102,21 +102,35 @@ else
     fprintf("   ⚠️  async-imwrite benchmark skipped: backgroundPool unavailable.\n");
 end
 
+%% ---------- E. layout comparison table ----------
+fprintf("\n   📊 Layout performance comparison:\n");
+Layouts = cfg.order(:,1);
+Time_s  = layoutTimes;
+T = table(Layouts, Time_s, 'VariableNames', {'Layout','TotalTime_s'});
+disp(T);
+
 fprintf("\n🎉  all save_bl_tif tests passed\n");
 end
 
 %% ---------- helpers --------------------------------------------------------
 function sandbox_cleanup(dirPath)
-fclose('all');
-safe_rmdir(dirPath);
+    fclose('all');
+    safe_rmdir(dirPath);
 end
 
 function restore_rw(p)
-if exist(p,'file'), fileattrib(p,'+w'); end
+    if exist(p,'file'), fileattrib(p,'+w'); end
 end
 
 function safe_rmdir(p)
-if exist(p,'dir')
-    try, rmdir(p,'s'); catch, pause(0.1); if exist(p,'dir'), rmdir(p,'s'); end; end
-end
+    if exist(p,'dir')
+        try
+            rmdir(p,'s');
+        catch
+            pause(0.1);
+            if exist(p,'dir')
+                rmdir(p,'s');
+            end
+        end
+    end
 end
