@@ -54,15 +54,15 @@ for scal = scalS
       Vref = V;
       if clipval > 0
           rng = highS - lowS;
-          sf  = single(double(scal * ampS) / double(rng));
+          sf  = scal * ampS / rng;
           Vref = min(max(Vref - lowS, 0), rng) .* sf;
       else
           if deconvmin > 0
               rng = dmaxS - deconvmin;
-              sf  = single(double(scal * ampS) / double(rng));
+              sf  = scal * ampS / rng;
               Vref = (Vref - deconvmin) .* sf;
           else
-              sf  = single(double(scal * ampS) / double(dmaxS));
+              sf  = scal * ampS / dmaxS;
               Vref = Vref .* sf;
           end
       end
