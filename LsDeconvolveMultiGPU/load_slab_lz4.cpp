@@ -222,6 +222,7 @@ struct BrickJob {
         const float*   src      = uBuffer.data();
 
         //================== SINGLE PRECISION PER-VOXEL LOGIC ===================
+        const bool doClip = (clipval_ > 0);
         for (uint64_t z = 0; z < brickZ; ++z)
         for (uint64_t y = 0; y < brickY; ++y)
         {
@@ -230,21 +231,19 @@ struct BrickJob {
             {
                 float v = src[(z * brickY + y) * brickX + x];
 
-                if (clipval_ > 0) {
+                if (doClip) {
                     v -= lowF;
                     v  = (v < 0.f) ? 0.f : (v > clipSpanF ? clipSpanF : v);
                     v *= scaleClip;
                 } else {
-                    if (dminF > 0.f)
-                        v = (v - dminF) * scaleNC1;
-                    else
-                        v = v * scaleNC0;
+                    v = (dminF > 0.f) ? (v - dminF) * scaleNC1 :  v * scaleNC0;
                 }
 
-                v = roundf(v - ampF);
+                v -= ampF;
+                v = (v >= 0.f) ? floorf(v + 0.5f) : ceilf(v - 0.5f);
                 v = (v < 0.f) ? 0.f : (v > scalF ? scalF : v);
 
-                volPtr[dstIdx + x] = v;   // store as float
+                volPtr[dstIdx + x] = v;
             }
         }
         //=======================================================================
