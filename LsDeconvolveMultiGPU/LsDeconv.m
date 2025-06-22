@@ -1152,14 +1152,15 @@ function postprocess_save( ...
         end
         R = round(R - amplification);
         R = min(max(R, 0), scal);          % clamp
-        if stack_info.flip_upside_down
-            R = flip(R, 2);
-        end
 
         if scal <= 255
             R = uint8(R);
         elseif scal <= 65535
             R = uint16(R);
+        end
+
+        if stack_info.flip_upside_down
+            R = flip(R, 2);
         end
 
         % ---------------------------------------------------------------------
