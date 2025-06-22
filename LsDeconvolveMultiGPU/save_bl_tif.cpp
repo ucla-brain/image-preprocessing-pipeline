@@ -80,23 +80,16 @@ static void writeSlice(
     const std::string& outPath,
     std::vector<uint8_t>& scratch
 ) {
-    // Determine image dimensions:
-    //   if isXYZ, dims are [X Y], so height=Y=dim1, width=X=dim0
-    //   else      dims are [Y X], so height=Y=dim0, width=X=dim1
     size_t height = isXYZ ? dim1 : dim0;
     size_t width  = isXYZ ? dim0 : dim1;
     size_t sliceBytes = dim0 * dim1 * bytesPerSample;
-
-    // Pointers
     const uint8_t* src = baseData + sliceIndex * sliceBytes;
 
-    // Prepare output file
     ensureWritable(outPath);
     std::string tmp = outPath + ".tmp";
     TiffHandle tiff(tmp, "w");
     TIFF* tif = tiff.tif;
 
-    // TIFF tags
     TIFFSetField(tif, TIFFTAG_IMAGEWIDTH,  width);
     TIFFSetField(tif, TIFFTAG_IMAGELENGTH, height);
     TIFFSetField(tif, TIFFTAG_BITSPERSAMPLE, bytesPerSample * 8);
@@ -106,28 +99,19 @@ static void writeSlice(
     TIFFSetField(tif, TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG);
     TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP, height);
 
-    // Reorder into row-major: scratch must be size = width*height*bytesPerSample
-    // Mapping: for each image row r∈[0,height), col c∈[0,width),
-    //   origRow = isXYZ ? c : r;
-    //   origCol = isXYZ ? r : c;
-    //   src offset = (origRow + origCol*dim0) * bytesPerSample
-    //   dst offset = (r*width + c) * bytesPerSample
     uint8_t* dstPtr = scratch.data();
     for (size_t r = 0; r < height; ++r) {
         for (size_t c = 0; c < width; ++c) {
             size_t orow = isXYZ ? c : r;
             size_t ocol = isXYZ ? r : c;
             size_t srcOff = (orow + ocol * dim0) * bytesPerSample;
-            size_t dstOff = (r    + c    * height) * bytesPerSample;
-            // Note: dstOff uses dst row-major indexing via r*width + c
-            dstOff = (r * width + c) * bytesPerSample;
+            size_t dstOff = (r * width + c) * bytesPerSample;
             std::memcpy(dstPtr + dstOff,
                         src    + srcOff,
                         bytesPerSample);
         }
     }
 
-    // Write the entire slice in one strip
     tsize_t written = (compression == COMPRESSION_NONE)
         ? TIFFWriteRawStrip(tif, 0, scratch.data(), sliceBytes)
         : TIFFWriteEncodedStrip(tif, 0, scratch.data(), sliceBytes);
@@ -135,7 +119,6 @@ static void writeSlice(
         throw std::runtime_error("TIFF write failed for slice " +
                                  std::to_string(sliceIndex));
 
-    // Atomic replace
     std::remove(outPath.c_str());
     if (std::rename(tmp.c_str(), outPath.c_str()) != 0)
         throw std::runtime_error("Failed to rename slice " +
@@ -150,22 +133,18 @@ void mexFunction(int nlhs, mxArray* plhs[],
         mexErrMsgIdAndTxt("save_bl_tif:usage",
           "Usage: save_bl_tif(vol, fileList, isXYZ, compression[, nThreads]);");
 
-    // Validate type
     if (!mxIsUint8(prhs[0]) && !mxIsUint16(prhs[0]))
         mexErrMsgIdAndTxt("save_bl_tif:type",
           "Volume must be uint8 or uint16.");
 
-    // Dimensions
-    const mwSize* dims = mxGetDimensions(prhs[0]];
+    const mwSize* dims = mxGetDimensions(prhs[0]);
     size_t dim0 = dims[0], dim1 = dims[1];
-    size_t numSlices = (mxGetNumberOfDimensions(prhs[0])==3)
+    size_t numSlices = (mxGetNumberOfDimensions(prhs[0]) == 3)
                        ? dims[2] : 1;
 
-    // isXYZ flag
     bool isXYZ = mxIsLogicalScalarTrue(prhs[2]) ||
                  (mxIsNumeric(prhs[2]) && mxGetScalar(prhs[2]) != 0);
 
-    // Compression
     char* compStr = mxArrayToUTF8String(prhs[3]);
     std::string cmp(compStr);
     mxFree(compStr);
@@ -175,7 +154,6 @@ void mexFunction(int nlhs, mxArray* plhs[],
        : (cmp == "deflate") ? COMPRESSION_DEFLATE
        : throw std::runtime_error("Invalid compression: " + cmp);
 
-    // File list
     if (!mxIsCell(prhs[1]) || mxGetNumberOfElements(prhs[1]) != numSlices)
         mexErrMsgIdAndTxt("save_bl_tif:files",
           "fileList must have one entry per slice.");
@@ -186,27 +164,22 @@ void mexFunction(int nlhs, mxArray* plhs[],
         mxFree(s);
     }
 
-    // Data pointer & sample size
     const uint8_t* volumeData =
       static_cast<const uint8_t*>(mxGetData(prhs[0]));
     size_t bytesPerSample =
       (mxGetClassID(prhs[0]) == mxUINT16_CLASS ? 2 : 1);
 
-    // Thread count
     size_t hw = std::thread::hardware_concurrency();
     size_t req = (nrhs == 5) ? (size_t)mxGetScalar(prhs[4]) : hw;
     size_t numThreads = std::min(req, numSlices);
     if (numThreads < 1) numThreads = 1;
 
-    // Prepare error collection
     std::vector<std::string> errors;
     std::mutex errLock;
 
-    // Preallocate per-thread scratch
     std::vector<std::vector<uint8_t>> scratch(numThreads,
       std::vector<uint8_t>(dim0 * dim1 * bytesPerSample));
 
-    // Launch threads (fixed-stride dispatch)
     std::vector<std::thread> workers;
     workers.reserve(numThreads);
     for (size_t tid = 0; tid < numThreads; ++tid) {
@@ -229,7 +202,6 @@ void mexFunction(int nlhs, mxArray* plhs[],
         });
     }
 
-    // Join & report
     for (auto& t : workers) t.join();
     if (!errors.empty()) {
         std::ostringstream oss;
@@ -238,6 +210,6 @@ void mexFunction(int nlhs, mxArray* plhs[],
         mexErrMsgIdAndTxt("save_bl_tif:runtime", oss.str().c_str());
     }
 
-    if (nlhs > 0)  // return input if requested
+    if (nlhs > 0)
         plhs[0] = const_cast<mxArray*>(prhs[0]);
 }
