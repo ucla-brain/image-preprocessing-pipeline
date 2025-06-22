@@ -216,7 +216,6 @@ struct BrickJob {
         const float scaleNC1 = static_cast<float>(
             (double)scalF * (double)ampF / ((double)dmaxF - (double)dminF));
 
-        const bool out8 = (outClass == mxUINT8_CLASS);
         //=======================================================================
 
         const uint64_t rowElems = brickX;
@@ -245,10 +244,7 @@ struct BrickJob {
                 v = roundf(v - ampF);
                 v = (v < 0.f) ? 0.f : (v > scalF ? scalF : v);
 
-                if (out8)
-                    ((uint8_t*)volPtr)[dstIdx + x]  = static_cast<uint8_t >(v);
-                else
-                    ((uint16_t*)volPtr)[dstIdx + x] = static_cast<uint16_t>(v);
+                volPtr[dstIdx + x] = v;   // store as float
             }
         }
         //=======================================================================
