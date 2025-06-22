@@ -32,7 +32,6 @@
 #  include <fcntl.h>
 #  include <unistd.h>
 #  include <sys/mman.h>
-#  include <pthread.h>
 #  include <sched.h>
 #  include <numa.h>
 #endif
@@ -308,12 +307,12 @@ void mexFunction(int nlhs, mxArray* plhs[],
             paths = it->second;
         } else {
             paths.resize(dim2);
-            for (size_t z = 0; z < dim2; ++z) {
-                mxArray* elem = mxGetCell(prhs[1], z);
+            for (size_t sliceIndex = 0; z < dim2; ++sliceIndex) {
+                mxArray* elem = mxGetCell(prhs[1], sliceIndex);
                 if (!mxIsChar(elem))
                     mexErrMsgIdAndTxt("save_bl_tif:Input", "fileList elements must be strings.");
                 char* s = mxArrayToUTF8String(elem);
-                paths[z] = s; mxFree(s);
+                paths[sliceIndex] = s; mxFree(s);
             }
             fileListCache[cacheKey] = paths;
         }
@@ -322,7 +321,7 @@ void mexFunction(int nlhs, mxArray* plhs[],
         auto taskVec = std::make_shared<std::vector<SaveTask>>();
         taskVec->reserve(dim2);
         for (size_t sliceIndex = 0; sliceIndex < dim2; ++sliceIndex)
-            taskVec->emplace_back(SaveTask{ basePtr, sliceIndex * bytesPerSl, dim0, dim1, paths[z], alreadyXYZ, classId, compTag, bytesPerSl, bytesPerPx, sliceIndex });
+            taskVec->emplace_back(SaveTask{ basePtr, sliceIndex * bytesPerSl, dim0, dim1, paths[sliceIndex], alreadyXYZ, classId, compTag, bytesPerSl, bytesPerPx, sliceIndex });
 
         // Warm-up libtiff on first call (lazy loader)
         TIFF* tmp = TIFFOpen("/dev/null", "r"); if (tmp) TIFFClose(tmp);
