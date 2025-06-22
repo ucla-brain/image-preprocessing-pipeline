@@ -1,6 +1,7 @@
 /*==============================================================================
   save_bl_tif.cpp
   ------------------------------------------------------------------------------
+
   High-throughput TIFF Z-slice saver for 3D MATLAB volumes. Each slice is saved
   to a separate TIFF file using multithreading and optional compression.
 
@@ -10,24 +11,25 @@
   INPUT:
     volume      : 3D uint8/uint16 MATLAB array in [X Y Z] or [Y X Z] order.
     fileList    : 1xZ cell array of filenames (one per Z-slice).
-    isXYZ       : true if data is [X Y Z], false for [Y X Z].
-    compression : 'none', 'lzw', or 'deflate'
-    nThreads    : (optional) number of threads (defaults to # physical cores)
+    isXYZ       : logical or numeric flag, true if data is [X Y Z], else [Y X Z].
+    compression : string: 'none', 'lzw', or 'deflate'.
+    nThreads    : (optional) number of threads to use (default = #physical cores)
 
   FEATURES:
-    - Uses per-thread scratch buffers (NUMA-aware, hugepage-backed if available)
-    - Chunked atomic dispatch
-    - Per-slice error tracking and aggregation
-    - Avoids thread creation overhead by eager warmup
-    - RAII for resource safety
+    • Uses per-thread scratch buffers, NUMA-aware allocation, and hugepage support.
+    • Robust per-slice TIFF writer with safe overwrite detection.
+    • High throughput by chunked atomic job dispatch.
+    • Portable (Linux + Windows); gracefully degrades on systems without NUMA.
+    • Memory-leak safe; RAII used for all system resources.
+    • Verbose error aggregation: prints all failure messages.
 
   LIMITATIONS:
-    - Grayscale only (1 channel)
-    - Each slice must be writable to disk
-    - No TIFF metadata/tags beyond raw pixel encoding
+    • Grayscale images only (8-bit or 16-bit, 1 channel).
+    • Each slice must be individually writable and uniquely named.
+    • Assumes local fast storage; no remote/network-specific logic.
 
   AUTHOR:
-    Keivan Moradi (with ChatGPT-4o assistance)
+    Keivan Moradi (with assistance from ChatGPT-4o)
   LICENSE:
     GNU GPL v3 — https://www.gnu.org/licenses/gpl-3.0.html
 ==============================================================================*/
@@ -35,24 +37,31 @@
 #include "mex.h"
 #include "tiffio.h"
 
-#include <algorithm>
 #include <atomic>
 #include <condition_variable>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <exception>
 #include <mutex>
+#include <string>
 #include <thread>
 #include <vector>
-#include <string>
 #include <stdexcept>
 #include <memory>
-#include <cstring>
-#include <cstdlib>
+#include <algorithm>
+#include <iostream>
+#include <sstream>
 
 #if defined(__linux__)
+  #include <errno.h>
+  #include <fcntl.h>
   #include <numa.h>
   #include <numaif.h>
   #include <sched.h>
-  #include <fcntl.h>
   #include <sys/mman.h>
+  #include <sys/stat.h>
   #include <unistd.h>
   #define ACCESS access
 #else
@@ -61,281 +70,332 @@
   #define ACCESS _access
 #endif
 
-// -----------------------------------------------------------------------------
-// NUMA + Hugepage-aware per-thread scratch buffer
-// -----------------------------------------------------------------------------
-struct ScratchBuffer {
-    uint8_t* data = nullptr;
-    size_t size = 0;
+// =========================  NUMA/thread helper  ================================
+namespace detail {
 
-    void ensure(size_t bytes, int numaNode) {
-        if (data && size >= bytes) return;
+/* Detect if memory interleaving is forced (e.g. with numactl --interleave=all) */
+inline bool numa_interleaving_forced() {
+#if defined(__linux__)
+    // Check environment variable set by numactl (NUMACTL_INTERLEAVE or NUMACTL_NODES)
+    // Or directly check /proc/self/status for "Mems_allowed" with multiple nodes.
+    FILE* f = fopen("/proc/self/status", "r");
+    if (!f) return false;
+    char buf[256];
+    while (fgets(buf, sizeof buf, f)) {
+        if (strncmp(buf, "Mems_allowed:", 13) == 0) {
+            std::string s(buf + 13);
+            // If more than one '1' bit, interleave is in effect.
+            int bits = std::count(s.begin(), s.end(), '1');
+            fclose(f);
+            return bits > 1;
+        }
+    }
+    fclose(f);
+#endif
+    return false;
+}
+
+/* NUMA-aware pinning: bind thread to CPUs on a given NUMA node */
+inline void pin_thread_to_numa_node(int node, bool disable_pinning) {
+#if defined(__linux__)
+    if (disable_pinning) return;  // <--- Key bugfix: skip pinning if interleaving active
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    if (node < 0 || numa_available() == -1)
+        return; // no-op on unsupported systems
+
+    bitmask* cpumask = numa_allocate_cpumask();
+    if (numa_node_to_cpus(node, cpumask) == 0) {
+        for (int i = 0; i < CPU_SETSIZE; ++i)
+            if (numa_bitmask_isbitset(cpumask, i))
+                CPU_SET(i, &cpuset);
+        sched_setaffinity(0, sizeof(cpu_set_t), &cpuset);
+    }
+    numa_free_cpumask(cpumask);
+#endif
+}
+
+/* Check if file exists and is writable (error if not) */
+inline void ensure_writable(const std::string& path) {
+    if (ACCESS(path.c_str(), F_OK) == 0 && ACCESS(path.c_str(), W_OK) != 0)
+        throw std::runtime_error("Cannot overwrite read-only file: " + path);
+}
+
+/* Scratch buffer with NUMA/hugepage optimizations */
+struct ScratchBuffer {
+    uint8_t* ptr = nullptr;
+    size_t   size = 0;
+    enum { NONE, MMAP, NUMA, MALLOC } allocMode = NONE;
+    int numaNode = -1;
+
+    void ensure(size_t bytes, int node, bool disable_numa) {
+        if (ptr && size >= bytes) return;
         release();
 
 #if defined(__linux__)
-        void* mem = mmap(nullptr, bytes, PROT_READ | PROT_WRITE,
-                         MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB, -1, 0);
-        if (mem != MAP_FAILED) {
-            unsigned long mask = 1UL << numaNode;
-            mbind(mem, bytes, MPOL_BIND, &mask, sizeof(mask) * 8, 0);
-            data = static_cast<uint8_t*>(mem);
-            size = bytes;
-            return;
-        }
-
-        if (numa_available() != -1) {
-            data = static_cast<uint8_t*>(numa_alloc_onnode(bytes, numaNode));
-            size = bytes;
-            return;
+        if (!disable_numa && numa_available() != -1) {
+            // Try hugepage allocation first
+            void* mem = mmap(nullptr, bytes, PROT_READ | PROT_WRITE,
+                             MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB, -1, 0);
+            if (mem != MAP_FAILED) {
+                // Try to bind this allocation to the requested NUMA node
+                unsigned long mask = 1UL << node;
+                if (mbind(mem, bytes, MPOL_BIND, &mask, sizeof(mask) * 8, 0) == 0) {
+                    ptr = static_cast<uint8_t*>(mem);
+                    size = bytes;
+                    allocMode = MMAP;
+                    numaNode = node;
+                    return;
+                } else {
+                    munmap(mem, bytes);
+                }
+            }
+            // NUMA allocation (not hugepages)
+            ptr = static_cast<uint8_t*>(numa_alloc_onnode(bytes, node));
+            if (ptr) {
+                size = bytes;
+                allocMode = NUMA;
+                numaNode = node;
+                return;
+            }
         }
 #endif
-        data = static_cast<uint8_t*>(malloc(bytes));
-        if (!data) throw std::bad_alloc();
+        // fallback to normal malloc
+        ptr = static_cast<uint8_t*>(malloc(bytes));
+        if (!ptr) throw std::bad_alloc();
         size = bytes;
+        allocMode = MALLOC;
+        numaNode = -1;
     }
 
     void release() {
+        if (!ptr) return;
 #if defined(__linux__)
-        if (data) munmap(data, size);
+        if (allocMode == MMAP) munmap(ptr, size);
+        else if (allocMode == NUMA) numa_free(ptr, size);
+        else free(ptr);
 #else
-        free(data);
+        free(ptr);
 #endif
-        data = nullptr;
+        ptr = nullptr;
         size = 0;
+        allocMode = NONE;
+        numaNode = -1;
     }
 
     ~ScratchBuffer() { release(); }
 };
 
-static thread_local ScratchBuffer tlsBuffer;
+static thread_local ScratchBuffer threadScratch;
 
-// -----------------------------------------------------------------------------
-// NUMA-aware thread pinning
-// -----------------------------------------------------------------------------
-void pin_to_numa_node(int node) {
-#if defined(__linux__)
-    if (node < 0 || numa_available() == -1) return;
+/* RAII wrapper for TIFF* handle */
+struct TiffHandle {
+    TIFF* tif = nullptr;
+    TiffHandle(const std::string& path, const char* mode) {
+        tif = TIFFOpen(path.c_str(), mode);
+        if (!tif) throw std::runtime_error("Cannot open TIFF: " + path);
+    }
+    ~TiffHandle() { if (tif) TIFFClose(tif); }
+    TIFF* get() const { return tif; }
+};
 
-    cpu_set_t cpuset;
-    CPU_ZERO(&cpuset);
+} // namespace detail
 
-    bitmask* cpumask = numa_allocate_cpumask();
-    numa_node_to_cpus(node, cpumask);
-    for (int i = 0; i < CPU_SETSIZE; ++i)
-        if (numa_bitmask_isbitset(cpumask, i))
-            CPU_SET(i, &cpuset);
-    numa_free_cpumask(cpumask);
-
-    sched_setaffinity(0, sizeof(cpu_set_t), &cpuset);
-#endif
-}
-
-// -----------------------------------------------------------------------------
-// TIFF slice writer job
-// -----------------------------------------------------------------------------
+/* ----------------------------- SliceJob struct ----------------------------- */
 struct SliceJob {
     const uint8_t* base = nullptr;
     size_t offset = 0;
     mwSize rows = 0, cols = 0;
     bool isXYZ = true;
-    mxClassID type = mxUINT8_CLASS;
-    uint16_t compression = COMPRESSION_NONE;
-    size_t bytesPerPixel = 1;
-    size_t sliceBytes = 0;
+    mxClassID classId = mxUINT8_CLASS;
+    uint16_t compressionTag = COMPRESSION_NONE;
+    size_t bytesPerPx = 1, bytesPerSlice = 0;
     size_t zIndex = 0;
-    std::string path;
+    std::string filename;
 };
 
-// Write one Z-slice to a temporary TIFF and rename it
-void write_slice(const SliceJob& job, int numaNode) {
+/* ----------------------------- Slice writer ----------------------------- */
+static void save_slice(const SliceJob& job, int numaNode, bool disable_numa) {
+    using namespace detail;
+    ensure_writable(job.filename);
     const uint8_t* src = job.base + job.offset;
-    mwSize height = job.isXYZ ? job.cols : job.rows;
-    mwSize width  = job.isXYZ ? job.rows : job.cols;
 
-    std::string tmpPath = job.path + ".tmp";
-    TIFF* tf = TIFFOpen(tmpPath.c_str(), "w");
-    if (!tf) throw std::runtime_error("Cannot open TIFF: " + tmpPath);
+    mwSize srcRows = job.isXYZ ? job.cols : job.rows;
+    mwSize srcCols = job.isXYZ ? job.rows : job.cols;
 
-    TIFFSetField(tf, TIFFTAG_IMAGEWIDTH, width);
-    TIFFSetField(tf, TIFFTAG_IMAGELENGTH, height);
+    std::string tmpPath = job.filename + ".tmp";
+    TiffHandle tif(tmpPath, "w");
+    TIFF* tf = tif.get();
+
+    TIFFSetField(tf, TIFFTAG_IMAGEWIDTH, srcCols);
+    TIFFSetField(tf, TIFFTAG_IMAGELENGTH, srcRows);
     TIFFSetField(tf, TIFFTAG_SAMPLESPERPIXEL, 1);
-    TIFFSetField(tf, TIFFTAG_BITSPERSAMPLE, (job.bytesPerPixel == 2) ? 16 : 8);
-    TIFFSetField(tf, TIFFTAG_COMPRESSION, job.compression);
+    TIFFSetField(tf, TIFFTAG_BITSPERSAMPLE, (job.bytesPerPx == 2) ? 16 : 8);
+    TIFFSetField(tf, TIFFTAG_COMPRESSION, job.compressionTag);
     TIFFSetField(tf, TIFFTAG_PHOTOMETRIC, PHOTOMETRIC_MINISBLACK);
     TIFFSetField(tf, TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG);
-    TIFFSetField(tf, TIFFTAG_ROWSPERSTRIP, height);
+    TIFFSetField(tf, TIFFTAG_ROWSPERSTRIP, srcRows);
 
-    const uint8_t* buffer = nullptr;
+    const uint8_t* buf = nullptr;
 
-    if (job.isXYZ && job.compression == COMPRESSION_NONE) {
-        buffer = src;
+    // Only [X Y Z] + 'none' allows direct copy; all else needs transpose/copy.
+    if (job.isXYZ && job.compressionTag == COMPRESSION_NONE) {
+        buf = src;
     } else {
-        tlsBuffer.ensure(job.sliceBytes, numaNode);
-        uint8_t* dst = tlsBuffer.data;
+        threadScratch.ensure(job.bytesPerSlice, numaNode, disable_numa);
+        uint8_t* dst = threadScratch.ptr;
 
         if (!job.isXYZ) {
-            for (mwSize c = 0; c < width; ++c) {
-                const uint8_t* srcCol = src + c * job.rows * job.bytesPerPixel;
-                for (mwSize r = 0; r < height; ++r) {
-                    size_t dstIdx = (r * width + c) * job.bytesPerPixel;
-                    std::memcpy(dst + dstIdx, srcCol + r * job.bytesPerPixel, job.bytesPerPixel);
+            // [Y X Z]: transpose to [X Y]
+            for (mwSize c = 0; c < srcCols; ++c) {
+                const uint8_t* srcCol = src + c * job.rows * job.bytesPerPx;
+                for (mwSize r = 0; r < srcRows; ++r) {
+                    size_t idx = (r * srcCols + c) * job.bytesPerPx;
+                    std::memcpy(dst + idx, srcCol + r * job.bytesPerPx, job.bytesPerPx);
                 }
             }
         } else {
-            std::memcpy(dst, src, job.sliceBytes);
+            std::memcpy(dst, src, job.bytesPerSlice);
         }
-
-        buffer = dst;
+        buf = dst;
     }
 
-    tsize_t written = (job.compression == COMPRESSION_NONE)
-        ? TIFFWriteRawStrip(tf, 0, const_cast<uint8_t*>(buffer), job.sliceBytes)
-        : TIFFWriteEncodedStrip(tf, 0, const_cast<uint8_t*>(buffer), job.sliceBytes);
-
-    TIFFClose(tf);
+    tsize_t written = (job.compressionTag == COMPRESSION_NONE)
+        ? TIFFWriteRawStrip(tf, 0, const_cast<uint8_t*>(buf), job.bytesPerSlice)
+        : TIFFWriteEncodedStrip(tf, 0, const_cast<uint8_t*>(buf), job.bytesPerSlice);
 
     if (written < 0)
-        throw std::runtime_error("TIFF write failed at Z=" + std::to_string(job.zIndex));
+        throw std::runtime_error("TIFF write failed on slice " + std::to_string(job.zIndex));
 
 #if defined(__linux__)
-    unlink(job.path.c_str());
+    unlink(job.filename.c_str());
 #else
-    _unlink(job.path.c_str());
+    _unlink(job.filename.c_str());
 #endif
-    if (rename(tmpPath.c_str(), job.path.c_str()) != 0)
-        throw std::runtime_error("Rename failed: " + job.path);
+    if (rename(tmpPath.c_str(), job.filename.c_str()) != 0)
+        throw std::runtime_error("Rename failed for slice " + std::to_string(job.zIndex));
 }
 
-// -----------------------------------------------------------------------------
-// Atomic dispatch queue
-// -----------------------------------------------------------------------------
+/* ------------------------- Job Queue and Worker ------------------------- */
 struct JobQueue {
     const std::vector<SliceJob>* jobs;
     std::atomic_size_t next{0};
-    std::mutex errorLock;
+    std::mutex errLock;
     std::vector<std::string> errors;
 };
 
-// Thread worker function
-void thread_worker(JobQueue& queue, int numaNode) {
-    pin_to_numa_node(numaNode);
-    constexpr size_t batchSize = 4;
-
+/* Each thread processes jobs in atomic chunks, pins itself if enabled. */
+static void worker(JobQueue& q, int numaNode, bool disable_pinning, bool disable_numa) {
+    detail::pin_thread_to_numa_node(numaNode, disable_pinning);
+    constexpr size_t chunkSize = 8;
     while (true) {
-        size_t start = queue.next.fetch_add(batchSize);
-        if (start >= queue.jobs->size()) break;
+        size_t start = q.next.fetch_add(chunkSize);
+        if (start >= q.jobs->size()) break;
+        size_t end = std::min(start + chunkSize, q.jobs->size());
 
-        size_t end = std::min(start + batchSize, queue.jobs->size());
         for (size_t i = start; i < end; ++i) {
             try {
-                write_slice((*queue.jobs)[i], numaNode);
+                save_slice((*q.jobs)[i], numaNode, disable_numa);
             } catch (const std::exception& e) {
-                std::lock_guard<std::mutex> lock(queue.errorLock);
-                queue.errors.push_back(e.what());
+                std::lock_guard<std::mutex> g(q.errLock);
+                q.errors.push_back(e.what());
             }
         }
     }
 }
 
-// -----------------------------------------------------------------------------
-// Physical core count (Linux only)
-// -----------------------------------------------------------------------------
+/* ------------------ Physical core count helper (Linux only) ----------------- */
 size_t count_physical_cores() {
 #if defined(__linux__)
-    std::vector<std::pair<int, int>> seen;
+    std::vector<std::pair<int, int>> pairs;
     FILE* f = fopen("/proc/cpuinfo", "r");
     if (!f) return std::thread::hardware_concurrency();
-
     char line[128];
-    int phys = -1, core = -1;
+    int p = -1, c = -1;
     while (fgets(line, sizeof line, f)) {
-        if (sscanf(line, "physical id : %d", &phys) == 1) continue;
-        if (sscanf(line, "core id : %d", &core) == 1)
-            seen.emplace_back(phys, core);
+        if (sscanf(line, "physical id\t: %d", &p) == 1) continue;
+        if (sscanf(line, "core id\t: %d", &c) == 1)
+            pairs.emplace_back(p, c);
     }
     fclose(f);
-    std::sort(seen.begin(), seen.end());
-    auto last = std::unique(seen.begin(), seen.end());
-    return std::distance(seen.begin(), last);
+    std::sort(pairs.begin(), pairs.end());
+    auto last = std::unique(pairs.begin(), pairs.end());
+    return static_cast<size_t>(std::distance(pairs.begin(), last));
 #else
     return std::thread::hardware_concurrency();
 #endif
 }
 
-// -----------------------------------------------------------------------------
-// Main MEX entry point
-// -----------------------------------------------------------------------------
+/* ---------------------------- MEX entry point ---------------------------- */
 void mexFunction(int nlhs, mxArray* plhs[],
                  int nrhs, const mxArray* prhs[]) {
     try {
         if (nrhs < 4 || nrhs > 5)
-            mexErrMsgIdAndTxt("save_bl_tif:Input", "Usage: save_bl_tif(vol, fileList, isXYZ, compression[, nThreads])");
+            mexErrMsgIdAndTxt("save_bl_tif:Input", "Usage: save_bl_tif(vol, list, isXYZ, comp[, threads])");
 
-        const mxArray* vol = prhs[0];
-        const mwSize* dims = mxGetDimensions(vol);
-        if (!mxIsUint8(vol) && !mxIsUint16(vol))
+        const mxArray* volMx = prhs[0];
+        if (!mxIsUint8(volMx) && !mxIsUint16(volMx))
             mexErrMsgIdAndTxt("save_bl_tif:Input", "Volume must be uint8 or uint16");
 
-        mwSize height = dims[0], width = dims[1];
-        mwSize depth = (mxGetNumberOfDimensions(vol) == 3) ? dims[2] : 1;
-        const uint8_t* base = static_cast<const uint8_t*>(mxGetData(vol));
-        mxClassID id = mxGetClassID(vol);
-        size_t bpp = (id == mxUINT16_CLASS) ? 2 : 1;
-        size_t sliceBytes = height * width * bpp;
-
+        const mwSize* dims = mxGetDimensions(volMx);
+        mwSize rows = dims[0], cols = dims[1], zs = (mxGetNumberOfDimensions(volMx) == 3) ? dims[2] : 1;
         bool isXYZ = mxIsLogicalScalarTrue(prhs[2]) || (mxIsNumeric(prhs[2]) && mxGetScalar(prhs[2]));
-        std::string compStr = mxArrayToString(prhs[3]);
-        uint16_t compTag =
-              (compStr == "none")    ? COMPRESSION_NONE
-            : (compStr == "lzw")     ? COMPRESSION_LZW
-            : (compStr == "deflate") ? COMPRESSION_DEFLATE
-            : throw std::runtime_error("Invalid compression type");
 
-        if (!mxIsCell(prhs[1]) || mxGetNumberOfElements(prhs[1]) != depth)
-            mexErrMsgIdAndTxt("save_bl_tif:Input", "fileList must match Z-slices");
+        char* compC = mxArrayToUTF8String(prhs[3]);
+        std::string compStr(compC); mxFree(compC);
 
-        std::vector<std::string> fileList(depth);
-        for (mwSize i = 0; i < depth; ++i) {
-            char* s = mxArrayToUTF8String(mxGetCell(prhs[1], i));
-            fileList[i] = s;
-            mxFree(s);
+        uint16_t compTag = (compStr == "lzw")     ? COMPRESSION_LZW
+                         : (compStr == "deflate") ? COMPRESSION_DEFLATE
+                         : (compStr == "none")    ? COMPRESSION_NONE
+                         : throw std::runtime_error("Invalid compression type");
+
+        if (!mxIsCell(prhs[1]) || mxGetNumberOfElements(prhs[1]) != zs)
+            mexErrMsgIdAndTxt("save_bl_tif:Input", "fileList must match #Z slices");
+
+        std::vector<std::string> fileList(zs);
+        for (mwSize k = 0; k < zs; ++k) {
+            char* s = mxArrayToUTF8String(mxGetCell(prhs[1], k));
+            fileList[k] = s; mxFree(s);
         }
 
-        std::vector<SliceJob> jobs(depth);
-        for (mwSize z = 0; z < depth; ++z)
-            jobs[z] = {base, z * sliceBytes, height, width, isXYZ,
-                       id, compTag, bpp, sliceBytes, z, fileList[z]};
+        const uint8_t* base = static_cast<const uint8_t*>(mxGetData(volMx));
+        mxClassID id = mxGetClassID(volMx);
+        size_t bpp = (id == mxUINT16_CLASS) ? 2 : 1;
+        size_t bpslice = rows * cols * bpp;
 
-        size_t nThreads = (nrhs == 5)
-                        ? std::min<size_t>(mxGetScalar(prhs[4]), depth)
-                        : std::min(count_physical_cores(), static_cast<size_t>(depth));
+        std::vector<SliceJob> jobs(zs);
+        for (mwSize z = 0; z < zs; ++z)
+            jobs[z] = {base, z * bpslice, rows, cols, isXYZ, id, compTag, bpp, bpslice, z, fileList[z]};
+
+        size_t nThreads = (nrhs == 5) ? std::min<size_t>(mxGetScalar(prhs[4]), zs)
+                                     : std::min(count_physical_cores(), static_cast<size_t>(zs));
         nThreads = std::max<size_t>(1, nThreads);
 
         size_t numaNodes = 1;
+        bool disable_pinning = false, disable_numa = false;
 #if defined(__linux__)
-        if (numa_available() != -1)
+        if (numa_available() != -1) {
             numaNodes = numa_max_node() + 1;
+            disable_pinning = detail::numa_interleaving_forced();
+            disable_numa = disable_pinning; // If interleaving is forced, don't try NUMA alloc.
+        }
 #endif
 
-        // Preload TIFF before thread spawn to avoid dynamic TLS latency
-        TIFF* preload = TIFFOpen("/dev/null", "r");
-        if (preload) TIFFClose(preload);
-
         JobQueue queue{&jobs};
-        std::vector<std::thread> pool;
-        for (size_t i = 0; i < nThreads; ++i)
-            pool.emplace_back(thread_worker, std::ref(queue), static_cast<int>(i % numaNodes));
-        for (auto& t : pool) t.join();
+        std::vector<std::thread> threads;
+        for (size_t t = 0; t < nThreads; ++t)
+            threads.emplace_back(worker, std::ref(queue), static_cast<int>(t % numaNodes), disable_pinning, disable_numa);
+        for (auto& th : threads) th.join();
 
         if (!queue.errors.empty()) {
-            std::string msg = "Errors:\n";
-            for (const std::string& e : queue.errors)
-                msg += "• " + e + "\n";
-            mexErrMsgIdAndTxt("save_bl_tif:Runtime", "%s", msg.c_str());
+            std::ostringstream msg;
+            msg << "Errors:\n";
+            for (const auto& e : queue.errors) msg << "• " << e << '\n';
+            mexErrMsgIdAndTxt("save_bl_tif:Runtime", "%s", msg.str().c_str());
         }
 
-        if (nlhs > 0) plhs[0] = const_cast<mxArray*>(vol);
-    } catch (const std::exception& e) {
-        mexErrMsgIdAndTxt("save_bl_tif:Exception", "%s", e.what());
+        if (nlhs > 0) plhs[0] = const_cast<mxArray*>(volMx);
+    } catch (const std::exception& ex) {
+        mexErrMsgIdAndTxt("save_bl_tif:Exception", "%s", ex.what());
     }
 }
