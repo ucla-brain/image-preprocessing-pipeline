@@ -26,10 +26,10 @@
 #include <vector>
 #include <algorithm>
 
-#ifndef __cpp_lib_math_constants  // crude “not C++20” check
-#if defined(_MSC_VER) && !defined(fmaf)
-#define fmaf(a,b,c) ((a)*(b)+(c))
-#endif
+#ifndef fmaf
+#  if defined(_MSC_VER)
+#    define fmaf(a,b,c) ((a)*(b)+(c))
+#  endif
 #endif
 
 /*==============================================================================*/
@@ -221,6 +221,7 @@ struct BrickJob
         const double amplification_d = static_cast<double>(amplification_f);
 
         /* 3. per-voxel ------------------------------------------------------ */
+/*---------------------------------- 3. per-voxel loop (all-single) ----*/
 #if defined(__GNUC__) || defined(__clang__)
 #pragma GCC ivdep
 #pragma GCC unroll 8
@@ -229,29 +230,29 @@ struct BrickJob
         for (uint64_t y = 0; y < brickY; ++y)
         {
             const uint64_t base = idx3D(x0, y0 + y, z0 + z, dimX, dimY);
+
             for (uint64_t x = 0; x < brickX; ++x)
             {
-                float R = src[(z * brickY + y) * brickX + x];   // matches MATLAB R
+                float R = src[(z * brickY + y) * brickX + x];
 
-                /* ---- rescale / clip ----------------------------------- */
+                /*── rescale / clip – all single, FMA where useful ─────────────*/
                 if (clipval) {
-                    R -= low_clip_f;
-                    R  = (R < 0.f) ? 0.f : (R > clipSpan_f ? clipSpan_f : R);
-                    R  = R * scaleClip_f;                        // no FMA here
+                    R = std::fmaf(R, 1.f, -low_clip_f);                // R -= low_clip
+                    R = (R < 0.f) ? 0.f : (R > clipSpan_f ? clipSpan_f : R);
+                    R = std::fmaf(R, scaleClip_f, 0.f);                // R *= scaleClip
                 } else if (useDeconvMin) {
-                    double tmp = static_cast<double>(R) - deconvmin;   // double product
-                    tmp *= static_cast<double>(scaleNC1_f);
-                    R = static_cast<float>(tmp);
+                    R = std::fmaf(R, 1.f, -deconvmin_f);               // R -= deconvmin
+                    R = std::fmaf(R, scaleNC1_f, 0.f);                 // R *= scaleNC1
                 } else {
-                    R *= scaleNC0_f;
+                    R = std::fmaf(R, scaleNC0_f, 0.f);                 // R *= scaleNC0
                 }
 
-                /* ---- round & clamp ------------------------------------ */
-                double Rd = static_cast<double>(R) - amplification_d;
-                R = static_cast<float>( std::round(Rd) );
-                R = (R < 0.f) ? 0.f : (R > scal_f ? scal_f : R);
+                /*── round half-away-from-zero, clamp (single) ─────────────────*/
+                R -= amplification_f;
+                R  = (R >= 0.f) ? floorf(R + 0.5f) : ceilf(R - 0.5f);
+                R  = (R < 0.f) ? 0.f : (R > scal_f ? scal_f : R);
 
-                volPtr[base + x] = R;                           // store as float
+                volPtr[base + x] = R;                                  // store
             }
         }
     }
