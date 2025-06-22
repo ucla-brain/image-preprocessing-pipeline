@@ -66,50 +66,40 @@ try
     error("read-only overwrite accepted");
 catch, fprintf("      ✅ read-only overwrite rejected\n"); end
 
-%% ---------- D. benchmark: save_bl_tif vs parfor-imwrite ----------
+%% ---------- D. benchmark: save_bl_tif vs async-imwrite ----------
 benchSize = [512 512 64];                     % 256 MiB uint16 stack
 benchVol  = uint16(randi(65535, benchSize));
 mexFiles  = arrayfun(@(k) fullfile(tmpRoot,sprintf('mex_%03d.tif',k)), ...
                      1:benchSize(3),'uni',0);
-parFiles  = strrep(mexFiles,'mex_','par_');
+asyncFiles = strrep(mexFiles,'mex_','async_');
 
-% Try to start a local pool safely (supports batch mode)
-p = gcp('nocreate');
-if isempty(p)
-    try
-        p = parpool('Processes');
-    catch ME
-        disp(ME.getReport);
-        warning("⚠️  Failed to start parallel pool. Benchmark skipped.");
-        p = [];
-    end
-end
+% Benchmark save_bl_tif
+fprintf("\n   🏁 benchmark save_bl_tif (uint16 %dx%dx%d)…\n", benchSize, benchSize(3));
+tic
+save_bl_tif(benchVol, mexFiles, false, 'none');
+tMex = toc;
 
-if isempty(p)
-    fprintf("   ⚠️  Benchmark skipped: parallel pool unavailable.\n");
-else
-    wait(p);
-    fprintf("\n   🏁 benchmark (uint16 %dx%dx%d, %d workers)…\n", ...
-            benchSize(1),benchSize(2),benchSize(3),p.NumWorkers);
-
+% Benchmark async imwrite using backgroundPool
+if ~isempty(ver('parallel')) && exist('backgroundPool','builtin')
+    fprintf("   🏁 benchmark async imwrite (%d tasks)…\n", benchSize(3));
+    futures = parallel.FevalFuture.empty(0,benchSize(3));
     tic
-    save_bl_tif(benchVol, mexFiles, false, 'none');
-    tMex = toc;
-
-    tic
-    parfor k = 1:benchSize(3)
-        imwrite(benchVol(:,:,k), parFiles{k});
+    for k = 1:benchSize(3)
+        futures(k) = parfeval(backgroundPool, @imwrite, 0, benchVol(:,:,k), asyncFiles{k});
     end
-    tPar = toc;
+    wait(futures);
+    tAsync = toc;
 
     bytesMiB = numel(benchVol)*2 / 2^20;
     spdMex   = bytesMiB / tMex;
-    spdPar   = bytesMiB / tPar;
-    speedup  = tPar / tMex;
+    spdAsync = bytesMiB / tAsync;
+    speedup  = tAsync / tMex;
 
     fprintf("      save_bl_tif : %.2f s  (%.1f MiB/s)\n", tMex, spdMex);
-    fprintf("      parfor loop : %.2f s  (%.1f MiB/s)\n", tPar, spdPar);
-    fprintf("      speed-up     : %.2f× (parfor → save_bl_tif)\n", speedup);
+    fprintf("      async-imwrite: %.2f s  (%.1f MiB/s)\n", tAsync, spdAsync);
+    fprintf("      speed-up     : %.2f× (async → save_bl_tif)\n", speedup);
+else
+    fprintf("   ⚠️  async-imwrite benchmark skipped: backgroundPool unavailable.\n");
 end
 
 fprintf("\n🎉  all save_bl_tif tests passed\n");
@@ -127,6 +117,6 @@ end
 
 function safe_rmdir(p)
 if exist(p,'dir')
-    try, rmdir(p,'s'); catch, pause(0.1); if exist(p,'dir'), rmdir(p,'s'); end, end
+    try, rmdir(p,'s'); catch, pause(0.1); if exist(p,'dir'), rmdir(p,'s'); end; end
 end
 end
