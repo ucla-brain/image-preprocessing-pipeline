@@ -53,8 +53,10 @@ try
     error("invalid path accepted");
 catch, fprintf("      ✅ invalid path rejected\n"); end
 
-ro = fullfile(tmpRoot,'ro.tif'); imwrite(uint8(1),ro); fileattrib(ro,'-w');
-fileattrib_ro_cleanup = onCleanup(@() fileattrib(ro,'+w'));
+ro = fullfile(tmpRoot,'ro.tif');
+imwrite(uint8(1),ro);                            % create the file
+fileattrib(ro,'-w');                             % make it read-only
+cRO = onCleanup(@() ( exist(ro,'file') && fileattrib(ro,'+w') ));
 
 try
     save_bl_tif(uint8(0),{ro},false,'none');
