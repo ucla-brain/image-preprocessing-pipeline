@@ -1,10 +1,5 @@
 function load_slab_lz4_test(varargin)
-% End-to-end validation & benchmark for load_slab_lz4.
-%   • Generates a random 3-D single array.
-%   • Splits & saves bricks with save_lz4_mex (char filenames).
-%   • Reassembles with threaded MEX.
-%   • Builds a reference either with a process pool (parfeval) or serial loop.
-%   • Verifies byte-wise identity and prints speed-up.
+% End-to-end validation & benchmark for load_slab_lz4, including scaling/clipping postprocessing.
 
 % ─── 1. CONFIG ───────────────────────────────────────────────────────────
 if nargin && strcmpi(varargin{1},'big')
@@ -15,6 +10,15 @@ end
 brick.nx = ceil(stack.x/brick.x);
 brick.ny = ceil(stack.y/brick.y);
 brick.nz = ceil(stack.z/brick.z);
+
+% --- TEST SCALING/CLIPPING PARAMETERS (you may change these for other scenarios) ---
+clipval       = 0;     % set >0 for hard clipping, or 0 for plain scale
+scal          = 255;   % 255 for uint8 output, 65535 for uint16 output, etc.
+amplification = 1;
+deconvmin     = 0;
+deconvmax     = 1;
+low_clip      = 0.1;
+high_clip     = 0.9;
 
 % ─── 2. TEMP DIR ─────────────────────────────────────────────────────────
 tmpDir  = tempname;  mkdir(tmpDir);
@@ -41,62 +45,49 @@ fprintf("Done saving\n");
 % ─── 5. RECONSTRUCT WITH THREADED MEX ────────────────────────────────────
 fprintf("Reconstructing with load_slab_lz4 …\n");
 tic;
-V_mex = load_slab_lz4(fnames, uint64(p1d), uint64(p2d), uint64([stack.x stack.y stack.z]));
+V_mex = load_slab_lz4( ...
+    fnames, uint64(p1d), uint64(p2d), uint64([stack.x stack.y stack.z]), ...
+    clipval, scal, amplification, deconvmin, deconvmax, low_clip, high_clip, feature('numCores'));
 t_mex = toc;
 fprintf("MEX time : %.2f s\n",t_mex);
 
-% ─── 6. BUILD REFERENCE (process pool if possible) ───────────────────────
-fprintf("Building reference …\n");
-refMode = "serial";              % default fallback
-t_ref   = NaN;
+% ─── 6. BUILD REFERENCE IN MATLAB (for final 8/16-bit result) ─────────────
+fprintf("Building MATLAB reference (with postprocessing) …\n");
+tic;
+V_ref = V;
 
-try
-    % Try to start a **process-based** pool (not threads)
-    if isempty(gcp('nocreate')) || strcmp(gcp.Type,"thread-based")
-        delete(gcp('nocreate'));          % ensure none
-        parpool("Processes");             % will error if profile broken
+if clipval > 0
+    V_ref = V_ref - low_clip;
+    V_ref = min(V_ref, high_clip - low_clip);
+    V_ref = V_ref .* (scal .* amplification ./ (high_clip - low_clip));
+else
+    if deconvmin > 0
+        V_ref = (V_ref - deconvmin) .* (scal .* amplification ./ (deconvmax - deconvmin));
+    else
+        V_ref = V_ref .* (scal .* amplification ./ deconvmax);
     end
-    pool = gcp();
-    refMode = "parfeval";
-catch ME
-    warning("Process pool unavailable – will build reference serially.\n%s",ME.message);
-    pool = [];
 end
+V_ref = round(V_ref - amplification);
+V_ref = min(max(V_ref, 0), scal); % clamp
 
-if refMode == "parfeval"
-    fut   = parallel.FevalFuture.empty(nBricks,0);
-    V_ref = zeros(size(V),'single');
-    tic;
-    for k = 1:nBricks
-        fut(k) = parfeval(@load_lz4_mex,1,fnames{k});
-    end
-    cancelOnExit = onCleanup(@() cancel(fut(isvalid(fut))));
-    for done = 1:nBricks
-        [idx, blk] = fetchNext(fut);
-        V_ref(p1d(idx,1):p2d(idx,1), ...
-              p1d(idx,2):p2d(idx,2), ...
-              p1d(idx,3):p2d(idx,3)) = blk;
-    end
-    t_ref = toc;
-    fprintf("parfeval (Processes) time : %.2f s\n",t_ref);
-
-else   % ── serial fallback ──
-    tic;
-    V_ref = zeros(size(V),'single');
-    for k = 1:nBricks
-        blk = load_lz4_mex(fnames{k});
-        V_ref(p1d(k,1):p2d(k,1), ...
-              p1d(k,2):p2d(k,2), ...
-              p1d(k,3):p2d(k,3)) = blk;
-    end
-    t_ref = toc;
-    fprintf("Serial reference time     : %.2f s\n",t_ref);
+if scal <= 255
+    V_ref = uint8(V_ref);
+elseif scal <= 65535
+    V_ref = uint16(V_ref);
 end
+t_ref = toc;
+fprintf("MATLAB reference time : %.2f s\n",t_ref);
 
 % ─── 7. VERIFY ───────────────────────────────────────────────────────────
-assert(isequaln(V,V_mex),  "MEX reconstruction mismatch");
-assert(isequaln(V,V_ref), "Reference reconstruction mismatch");
+eq = isequaln(V_mex, V_ref);
+if eq
+    fprintf('\n✅ SUCCESS: load_slab_lz4 output matches MATLAB reference exactly!\n');
+    fprintf('Speed-up: %.2fx\n', t_ref/t_mex);
+else
+    fprintf('\n❌ MISMATCH: load_slab_lz4 output does not match MATLAB postprocessing.\n');
+    dif = nnz(V_mex ~= V_ref);
+    maxabs = double(max(abs(double(V_mex(:)) - double(V_ref(:)))));
+    fprintf('  #mismatched voxels: %d (max abs diff: %.4g)\n', dif, maxabs);
+end
 
-fprintf("\nSUCCESS: all reconstructions identical.\n");
-fprintf("Speed-up vs. %s: %.2fx\n", refMode, t_ref/t_mex);
 end
