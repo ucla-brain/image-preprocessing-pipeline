@@ -64,7 +64,7 @@ struct TiffHandle {
     ~TiffHandle() {
         if (tif) TIFFClose(tif);
     }
-}
+};
 
 // Write one slice using multi-row strips (default 64 rows per strip)
 static void writeSlice(
