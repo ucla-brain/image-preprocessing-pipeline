@@ -134,8 +134,7 @@ struct BrickJob {
         for(uint32_t c=0;c<h.nChunks;++c){
             if(C.size()<h.cLen[c]) C.resize(h.cLen[c]);
             freadExact(fp.get(),C.data(),h.cLen[c],"chunk");
-            int dec=LZ4_decompress_safe(C.data(),dst+off,
-                    int(h.cLen[c]),int(h.uLen[c]));
+            int dec=LZ4_decompress_safe(C.data(), dst+off, int(h.cLen[c]), int(h.uLen[c]));
             if(dec<0||uint64_t(dec)!=h.uLen[c]) throw std::runtime_error("LZ4");
             off+=h.uLen[c];
         }
@@ -173,8 +172,8 @@ struct BrickJob {
                 }
 
                 R -= ampl;
-                R  = (R>=0.f)?floorf(R+0.5f):ceilf(R-0.5f);
-                R  = (R<0.f)?0.f:((R>scal)?scal:R);
+                R  = (R>=0.f) ? floorf(R+0.5f) : ceilf(R-0.5f);
+                R  = (R <0.f) ? 0.f            : ( (R > scal) ? scal : R );
 
                 vol[base+x]=R;
             }
@@ -241,7 +240,7 @@ void mexFunction(int nlhs,mxArray* plhs[],int nrhs,const mxArray* prhs[])
     /* threaded execution ----------------------------------------------- */
     try{
         ThreadPool pool(maxT);
-        for(auto& j:jobs) pool.enqueue([&]{j();});
+        for (const auto& j : jobs) pool.enqueue([job = j]{ job(); });
         pool.wait();
     }catch(const std::exception& e){
         mxFree(work);
