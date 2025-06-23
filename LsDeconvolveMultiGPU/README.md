@@ -38,7 +38,7 @@ It supports large-scale image data processing using GPU acceleration, automatic 
 | filter_subband_3d_z | Destriping                  | MATLAB       | GPU acceleration                       | 8x                              |
 | decwrap             | Python Wrapper              | Python       | Optimal block size calculation         | Processes larger blocks         |
 | postproceses_save   | 8bit ↔ 16bit conversion     | MATLAB       | 8bit → Float32 → Decon → 16bit         | High Quality 16bit              |
-| load_blocks_lz4_mex | Reassemble blocks to z-slab | C++17        | Shared-memory parallelism              | 6x to 8x - lower ram usage      |
+| load_slab_lz4       | Reassemble blocks to z-slab | C++17        | Shared-memory Parallelism              | 6x to 8x - lower ram usage      |
 | save_bl_tif         | z-slab to 2D tiff series    | C++17        | Parallel I/O: atomic index dispatching | 2x to 3x - lower ram usage      |
 
 ---
@@ -86,7 +86,7 @@ Key scripts check file paths, validate image data, and provide meaningful error 
 
     From command line:
    ```bash
-   sudo apt install numactl libnuma-dev
+   sudo apt install numactl
    ```
 ---
 
@@ -283,10 +283,12 @@ LsDeconvMultiGPU supports both **FFT-based** and **spatial domain** deconvolutio
 Deconvolution of a 3D volume with **8266 × 12778 × 7912 = 835,688,764,576 voxels**
 
 
-| GPUs | vRAM  | Deconvolution Method   | Destriping | Elapsed Time | Speedup |
-|------|-------|------------------------|------------|--------------|---------|
-| 2    | 11 GB | Spatial Domain         | No         | 9h:26m       |         |
-| 2    | 11 GB | Frequency Domain (FFT) | No         | 05h:05m      | ~2x     |
+| Physical CPU cores | RAM    | GPUs  | vRAM  | Deconvolution Method   | Iterations | Gaussian | Regularization Interval | Z-Destriping | Elapsed Time   | Speedup   |
+|--------------------|--------|-------|-------|------------------------|------------|----------|-------------------------|--------------|----------------|-----------|
+| 18                 | 512 GB | 2     | 11 GB | Spatial Domain         | 6          | Yes      | Once Every 3 Iterations | No           | 9h:26m         |           |
+| 18                 | 512 GB | 2     | 11 GB | Frequency Domain (FFT) | 6          | Yes      | Once Every 3 Iterations | No           | 05h:05m        | ~1.85x    |
+| 128                | 4 TB   | 8     | 80 GB | Spatial Domain         | 6          | Yes      | Once Every 3 Iterations | No           | 01h:14m        |           |
+| 128                | 4 TB   | 8     | 80 GB | Frequency Domain (FFT) | 6          | Yes      | Once Every 3 Iterations | No           | 01h:03m        | ~1.16x    |
 
 ## Licensing and Attribution
 
