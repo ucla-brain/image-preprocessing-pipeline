@@ -283,12 +283,12 @@ LsDeconvMultiGPU supports both **FFT-based** and **spatial domain** deconvolutio
 Deconvolution of a 3D volume with **8266 × 12778 × 7912 = 835,688,764,576 voxels**
 
 
-| Physical CPU cores | RAM    | GPUs  | vRAM  | Deconvolution Method   | Iterations | Gaussian | Regularization Interval | Z-Destriping | Elapsed Time   | Speedup   |
-|--------------------|--------|-------|-------|------------------------|------------|----------|-------------------------|--------------|----------------|-----------|
-| 18                 | 512 GB | 2     | 11 GB | Spatial Domain         | 6          | Yes      | Once Every 3 Iterations | No           | 9h:26m         |           |
-| 18                 | 512 GB | 2     | 11 GB | Frequency Domain (FFT) | 6          | Yes      | Once Every 3 Iterations | No           | 05h:05m        | ~1.85x    |
-| 128                | 4 TB   | 8     | 80 GB | Spatial Domain         | 6          | Yes      | Once Every 3 Iterations | No           | 01h:14m        |           |
-| 128                | 4 TB   | 8     | 80 GB | Frequency Domain (FFT) | 6          | Yes      | Once Every 3 Iterations | No           | 01h:03m        | ~1.16x    |
+| Physical CPU cores | RAM    | GPUs           | vRAM  | Deconvolution Method   | Iterations | Gaussian | Regularization Interval | Z-Destriping | Elapsed Time   | Speedup   |
+|--------------------|--------|----------------|-------|------------------------|------------|----------|-------------------------|--------------|----------------|-----------|
+| 18                 | 512 GB | 2x RTX 2080 Ti | 11 GB | Spatial Domain         | 6          | Yes      | Once Every 3 Iterations | No           | 9h:26m         |           |
+| 18                 | 512 GB | 2x RTX 2080 Ti | 11 GB | Frequency Domain (FFT) | 6          | Yes      | Once Every 3 Iterations | No           | 05h:05m        | ~1.85x    |
+| 128                | 4 TB   | 8x A100        | 80 GB | Spatial Domain         | 6          | Yes      | Once Every 3 Iterations | No           | 01h:14m        |           |
+| 128                | 4 TB   | 8x A100        | 80 GB | Frequency Domain (FFT) | 6          | Yes      | Once Every 3 Iterations | No           | 01h:03m        | ~1.16x    |
 
 ## Licensing and Attribution
 
