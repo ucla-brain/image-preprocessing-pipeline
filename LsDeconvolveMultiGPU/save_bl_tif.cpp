@@ -254,8 +254,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     for (size_t t = 0; t < threadCount; ++t) {
         workers.emplace_back([&]() {
             while (true) {
-                size_t start = nextSlice.fetch_add(slicesPerDispatch,
-                                                   std::memory_order_relaxed);
+                size_t start = nextSlice.fetch_add(slicesPerDispatch, std::memory_order_relaxed);
                 if (start >= numSlices) break;
                 size_t end = std::min(numSlices, start + slicesPerDispatch);
                 for (size_t idx = start; idx < end; ++idx) {
