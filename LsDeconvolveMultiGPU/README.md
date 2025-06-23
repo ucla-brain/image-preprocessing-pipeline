@@ -41,6 +41,26 @@ It supports large-scale image data processing using GPU acceleration, automatic 
 | load_slab_lz4       | Reassemble blocks to z-slab | C++17        | Shared-memory Parallelism              | 6x to 8x - lower ram usage      |
 | save_bl_tif         | z-slab to 2D tiff series    | C++17        | Parallel I/O: atomic index dispatching | 2x to 3x - lower ram usage      |
 
+# Notes on FFT-Based Deconvolution
+
+## Performance vs Memory Tradeoff
+
+LsDeconvMultiGPU supports both **FFT-based** and **spatial domain** deconvolution. Each method has advantages and tradeoffs:
+
+- **FFT-based deconvolution** is significantly faster, but it requires **approximately 4× more VRAM**. This limits the maximum block size that can be processed at once.
+- **Spatial domain deconvolution**, while more memory-efficient, is slower and computationally more expensive when calculating convolutions directly.
+
+## ⚙️ Performance Comparison: FFT vs Spatial Deconvolution
+
+Deconvolution of a 3D volume with **8266 × 12778 × 7912 = 835,688,764,576 voxels**
+
+
+| Physical CPU cores  | RAM    | GPUs           | vRAM  | Deconvolution Method   | Iterations | Gaussian | Regularization Interval | Z-Destriping | Elapsed Time | Speedup   |
+|---------------------|--------|----------------|-------|------------------------|------------|----------|-------------------------|--------------|--------------|-----------|
+| 18  (Xeon W-2195)   | 512 GB | 2x RTX 2080 Ti | 11 GB | Spatial Domain         | 6          | Yes      | Once Every 3 Iterations | No           | 09h:26m      |           |
+| 18  (Xeon W-2195)   | 512 GB | 2x RTX 2080 Ti | 11 GB | Frequency Domain (FFT) | 6          | Yes      | Once Every 3 Iterations | No           | 05h:05m      | ~1.85x    |
+| 128 (2x Epyc Milan) | 4 TB   | 8x A100        | 80 GB | Spatial Domain         | 6          | Yes      | Once Every 3 Iterations | No           | 01h:14m      |           |
+| 128 (2x Epyc Milan) | 4 TB   | 8x A100        | 80 GB | Frequency Domain (FFT) | 6          | Yes      | Once Every 3 Iterations | No           | 01h:03m      | ~1.16x    |
 ---
 
 ## Noteworthy Implementation Details
@@ -267,28 +287,6 @@ echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
 
 These settings will help prevent memory allocation failures during GPU-intensive processing and ensure more reliable performance for large dataset deconvolution.
 
-# Notes on FFT-Based Deconvolution
-
-## Performance vs Memory Tradeoff
-
-LsDeconvMultiGPU supports both **FFT-based** and **spatial domain** deconvolution. Each method has advantages and tradeoffs:
-
-- **FFT-based deconvolution** is significantly faster, but it requires **approximately 4× more VRAM**. This limits the maximum block size that can be processed at once.
-- **Spatial domain deconvolution**, while more memory-efficient, is slower and computationally more expensive when calculating convolutions directly.
-
-
-
-## ⚙️ Performance Comparison: FFT vs Spatial Deconvolution
-
-Deconvolution of a 3D volume with **8266 × 12778 × 7912 = 835,688,764,576 voxels**
-
-
-| Physical CPU cores | RAM    | GPUs           | vRAM  | Deconvolution Method   | Iterations | Gaussian | Regularization Interval | Z-Destriping | Elapsed Time   | Speedup   |
-|--------------------|--------|----------------|-------|------------------------|------------|----------|-------------------------|--------------|----------------|-----------|
-| 18                 | 512 GB | 2x RTX 2080 Ti | 11 GB | Spatial Domain         | 6          | Yes      | Once Every 3 Iterations | No           | 9h:26m         |           |
-| 18                 | 512 GB | 2x RTX 2080 Ti | 11 GB | Frequency Domain (FFT) | 6          | Yes      | Once Every 3 Iterations | No           | 05h:05m        | ~1.85x    |
-| 128                | 4 TB   | 8x A100        | 80 GB | Spatial Domain         | 6          | Yes      | Once Every 3 Iterations | No           | 01h:14m        |           |
-| 128                | 4 TB   | 8x A100        | 80 GB | Frequency Domain (FFT) | 6          | Yes      | Once Every 3 Iterations | No           | 01h:03m        | ~1.16x    |
 
 ## Licensing and Attribution
 
