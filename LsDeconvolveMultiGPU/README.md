@@ -78,11 +78,10 @@ Key scripts check file paths, validate image data, and provide meaningful error 
 
 ## Requirements
 
-- MATLAB 2025a (tested)
+- MATLAB 2025a
 - CUDA-compatible NVIDIA GPUs (with at least 12 GB vRAM recommended)
 - `nvidia-smi` available in system path (for Python wrapper)
-- MATLAB Parallel Computing, Image Processing, and Wavelet Toolboxe
-- 
+- MATLAB Parallel Computing, Image Processing, and Wavelet Toolbox
 
 ---
 
