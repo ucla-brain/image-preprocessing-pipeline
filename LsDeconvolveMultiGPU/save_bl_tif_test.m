@@ -28,7 +28,7 @@ fprintf("   ✅ basic 2-D / 3-D paths ok\n");
 cfg.order = {'YXZ',false; 'XYZ',true};
 cfg.dtype = {'uint8',@uint8; 'uint16',@uint16};
 cfg.comp  = {'none','lzw','deflate'};
-sz        = [2048 2048 2048];  % ≥ 2 MiB slice
+sz        = [2048 4096 4];  % ≥ 2 MiB slice
 
 nLayouts = size(cfg.order,1);
 nTypes   = size(cfg.dtype,1);
