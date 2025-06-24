@@ -155,27 +155,38 @@ function ok = try_build_libtiff(libtiff_root, libtiff_install_dir, mex_flags_cpu
         end
     end
 
-    % === Header detection ===
-    incs = {};
-    zstd_ok = false;
-    lz4_ok = false;
+    % === Header & Library detection ===
+    cpp_incs = {}; ld_libs = {}; zstd_ok = false; lz4_ok = false;
 
     if ~isempty(getenv('CONDA_PREFIX'))
-        conda_include = fullfile(getenv('CONDA_PREFIX'), 'include');
-        if isfolder(conda_include)
-            if isfile(fullfile(conda_include, 'zstd.h')), zstd_ok = true; incs{end+1} = ['-I', conda_include]; end
-            if isfile(fullfile(conda_include, 'lz4.h')),  lz4_ok  = true; incs{end+1} = ['-I', conda_include]; end
+        conda_inc = fullfile(getenv('CONDA_PREFIX'), 'include');
+        conda_lib = fullfile(getenv('CONDA_PREFIX'), 'lib');
+        if isfolder(conda_inc)
+            if isfile(fullfile(conda_inc, 'zstd.h')), zstd_ok = true; cpp_incs{end+1} = ['-I', conda_inc]; end
+            if isfile(fullfile(conda_inc, 'lz4.h')),  lz4_ok  = true; cpp_incs{end+1} = ['-I', conda_inc]; end
+        end
+        if isfolder(conda_lib)
+            if isfile(fullfile(conda_lib, 'libzstd.a')) || isfile(fullfile(conda_lib, 'libzstd.so'))
+                ld_libs{end+1} = ['-L', conda_lib];
+            else
+                zstd_ok = false;
+            end
+            if isfile(fullfile(conda_lib, 'liblz4.a')) || isfile(fullfile(conda_lib, 'liblz4.so'))
+                ld_libs{end+1} = ['-L', conda_lib];
+            else
+                lz4_ok = false;
+            end
         end
     end
-    if isfile('zstd.h'), zstd_ok = true; incs{end+1} = ['-I', pwd]; end
-    if isfile('lz4.h'),  lz4_ok  = true; incs{end+1} = ['-I', pwd]; end
+    if isfile('zstd.h'), zstd_ok = true; cpp_incs{end+1} = ['-I', pwd]; end
+    if isfile('lz4.h'),  lz4_ok  = true; cpp_incs{end+1} = ['-I', pwd]; end
 
-    if ~zstd_ok, error('Missing zstd.h. Please install or download it.'); end
-    if ~lz4_ok,  error('Missing lz4.h. Please install or download it.'); end
+    if ~zstd_ok, error('Missing or unusable zstd.h or libzstd.a/.so.'); end
+    if ~lz4_ok,  error('Missing or unusable lz4.h or liblz4.a/.so.'); end
 
-    cppflags = strjoin(incs, ' ');
+    cppflags = strjoin(cpp_incs, ' ');
+    ldflags  = strjoin(ld_libs, ' ');
 
-    % === Build ===
     if ispc
         error('Windows builds must use CMake; not handled here for simplicity.');
     else
@@ -189,14 +200,14 @@ function ok = try_build_libtiff(libtiff_root, libtiff_install_dir, mex_flags_cpu
         end
         cd(src_folder);
 
-        cmd = sprintf(['CPPFLAGS="%s" CFLAGS="%s" CXXFLAGS="%s" ./configure ' ...
+        cmd = sprintf(['CPPFLAGS="%s" LDFLAGS="%s" CFLAGS="%s" CXXFLAGS="%s" ./configure ' ...
             '--disable-jpeg --disable-old-jpeg --enable-cxx --disable-tools ' ...
             '--disable-jbig --disable-lzma --disable-webp --disable-lerc ' ...
             '--disable-pixarlog ' ...
-            '--enable-zlib --enable-libdeflate ' ...
+            '--enable-zlib --enable-libdeflate --enable-zstd --enable-lz4 ' ...
             '--with-pic --enable-shared --disable-static --prefix=%s ' ...
             '&& make -j%d && make install'], ...
-            cppflags, CFLAGS, CXXFLAGS, libtiff_install_dir, feature('numCores'));
+            cppflags, ldflags, CFLAGS, CXXFLAGS, libtiff_install_dir, feature('numCores'));
 
         fprintf('\n📦 Running configure+make:\n%s\n', cmd);
         status = system(cmd);
@@ -224,13 +235,14 @@ function ok = try_build_libtiff(libtiff_root, libtiff_install_dir, mex_flags_cpu
     % === Report ===
     if ok
         fprintf('\n✅ libtiff built successfully with:\n');
-        fprintf('   • lz4.h present : %s\n', ternary(lz4_ok, 'yes', 'no'));
-        fprintf('   • zstd.h present: %s\n', ternary(zstd_ok, 'yes', 'no'));
-        fprintf('   • Enabled codecs : zlib, libdeflate, lz4, zstd\n');
-        fprintf('   • Disabled codecs: jpeg, jbig, lzma, webp, lerc, pixarlog\n');
+        fprintf('   • lz4.h + liblz4     : %s\n', ternary(lz4_ok, 'yes', 'no'));
+        fprintf('   • zstd.h + libzstd   : %s\n', ternary(zstd_ok, 'yes', 'no'));
+        fprintf('   • Enabled codecs     : zlib, libdeflate, lz4, zstd\n');
+        fprintf('   • Disabled codecs    : jpeg, jbig, lzma, webp, lerc, pixarlog\n');
     end
 end
 
 function out = ternary(cond, a, b)
     if cond, out = a; else, out = b; end
 end
+
