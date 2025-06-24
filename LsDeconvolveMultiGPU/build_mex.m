@@ -139,110 +139,117 @@ fprintf('All MEX files built successfully.\n');
 % Function: try_build_libtiff
 % ===============================
 function ok = try_build_libtiff(libtiff_root, libtiff_install_dir, mex_flags_cpu, version)
+    if nargin < 3, mex_flags_cpu = {}; end
+    if nargin < 4 || isempty(version), version = '4.7.0'; end
     orig_dir = pwd;
-    ok = false;
 
-    % === Parse CFLAGS/CXXFLAGS from mex_flags_cpu ===
+    % === Parse CFLAGS from mex_flags_cpu ===
     CFLAGS = '';
-    for tok = mex_flags_cpu
-        s = tok{1};
-        m = regexp(s, 'CFLAGS="\$CFLAGS\s+([^"]+)"', 'tokens');
-        if ~isempty(m), CFLAGS = m{1}{1}; end
+    for i = 1:numel(mex_flags_cpu)
+        token = mex_flags_cpu{i};
+        if contains(token, 'CFLAGS=')
+            m = regexp(token, 'CFLAGS="\$CFLAGS ([^"]+)"', 'tokens');
+            if ~isempty(m), CFLAGS = strtrim(m{1}{1}); break; end
+        end
     end
     CXXFLAGS = CFLAGS;
 
-    % === Locate Conda include/lib or local headers ===
-    conda = getenv('CONDA_PREFIX');
-    inc_dirs = {};
-    lib_dirs = {};
-    if ~isempty(conda)
-        inc_dirs{end+1} = fullfile(conda,'include');
-        lib_dirs{end+1} = fullfile(conda,'lib');
-    end
-    % always include the local root for downloaded headers
-    inc_dirs{end+1} = fullfile(orig_dir);
+    % === Try to locate LZ4 and ZSTD ===
+    extra_flags = '';
+    incs = {};
+    libs = {};
+    % Try conda-forge default install paths
+    guess_paths = {
+        fullfile(getenv('CONDA_PREFIX'), 'include'), ...
+        fullfile(getenv('CONDA_PREFIX'), 'Library', 'include')  % Windows
+    };
+    found_lz4 = false; found_zstd = false;
 
-    % ensure headers exist
-    needed = {'lz4.h','zstd.h','zlib.h','tiff.h'};
-    missing = {};
-    for h = needed
-        found = false;
-        for d = inc_dirs
-            if isfile(fullfile(d{1},h{1}))
-                found = true; break;
-            end
+    for i = 1:numel(guess_paths)
+        incdir = guess_paths{i};
+        if isfile(fullfile(incdir, 'lz4.h'))
+            incs{end+1} = ['-I', incdir]; %#ok<AGROW>
+            extra_flags = [extra_flags, ' --with-lz4']; %#ok<AGROW>
+            found_lz4 = true;
         end
-        if ~found, missing{end+1} = h{1}; end
-    end
-    if ~isempty(missing)
-        error("Missing required headers: %s", strjoin(missing,', '));
-    end
-
-    % === Fetch and extract libtiff source if needed ===
-    if ~isfolder(libtiff_root)
-        archive = sprintf('tiff-%s.tar.gz', version);
-        url = sprintf('https://download.osgeo.org/libtiff/tiff-%s.tar.gz', version);
-        system(sprintf('curl -L -o %s %s', archive, url));
-        system(sprintf('tar xf %s', archive));
-        delete(archive);
-    end
-    cd(libtiff_root);
-
-    % === Configure only needed codecs ===
-    % Disable all optional codecs except LZW, DEFLATE, LZ4, ZSTD
-    configure_cmd = sprintf([...
-        'CFLAGS="%s" CXXFLAGS="%s" ./configure '...
-        '--enable-shared --disable-static '...
-        '--without-jpeg --without-webp --without-jbig '...
-        '--without-pixarlog --without-lzma --without-old-jpeg '...
-        '--with-included-zlib '...         % ensure zlib support
-        '--with-zstd '...                  % rely on zstd detection
-        '--with-lz4 '...                   % rely on lz4 detection
-        '--prefix=%s'], ...
-        CFLAGS, CXXFLAGS, libtiff_install_dir);
-
-    % === Build and install ===
-    cores = feature('numCores');
-    make_cmd = sprintf('make -j%d && make install', cores);
-
-    [status, out] = system([configure_cmd ' && ' make_cmd]);
-    cd(orig_dir);
-    if status ~= 0
-        fprintf('Configure/Build output:\n%s\n', out);
-        return;
+        if isfile(fullfile(incdir, 'zstd.h'))
+            incs{end+1} = ['-I', incdir]; %#ok<AGROW>
+            extra_flags = [extra_flags, ' --with-zstd']; %#ok<AGROW>
+            found_zstd = true;
+        end
     end
 
-    % === Report static libs availability ===
-    report = {};
-    for libn = {'libzstd.a','libz.a'}
-        p = fullfile(libtiff_install_dir,'lib', libn{1});
-        if isfile(p)
-            report{end+1} = sprintf('Found static %s', libn{1}); end
-    end
-    if ~isempty(report)
-        fprintf('=== Static library report ===\n');
-        fprintf('%s\n', report{:});
+    if ~found_lz4,  error('lz4.h not found in conda or expected paths'); end
+    if ~found_zstd, error('zstd.h not found in conda or expected paths'); end
+
+    % === Start build ===
+    if ispc
+        archive = ['tiff-', version, '.zip'];
+        if ~isfolder(libtiff_root)
+            url = ['https://download.osgeo.org/libtiff/tiff-', version, '.zip'];
+            system(['curl -L -o ', archive, ' ', url]);
+            unzip(archive, 'tiff_src'); delete(archive);
+        end
+        cd(libtiff_root);
+        setenv('CFLAGS',   CFLAGS);
+        setenv('CXXFLAGS', CXXFLAGS);
+
+        status = system([
+            'cmake -B build -DCMAKE_BUILD_TYPE=Release ' ...
+            '-DCMAKE_INSTALL_PREFIX="', libtiff_install_dir, '" ' ...
+            '-Dtiff-tools=OFF -Dtiff-tests=OFF . && ' ...
+            'cmake --build build --config Release --target install'
+        ]);
+        setenv('CFLAGS', ''); setenv('CXXFLAGS', '');
+        cd(orig_dir);
+    else
+        archive = ['tiff-', version, '.tar.gz'];
+        if ~isfolder(['tiff-', version])
+            url = ['https://download.osgeo.org/libtiff/', archive];
+            system(['curl -L -o ', archive, ' ', url]);
+            system(['tar -xzf ', archive]); delete(archive);
+        end
+        cd(['tiff-', version]);
+
+        cmd = sprintf('%s CFLAGS="%s" CXXFLAGS="%s" ./configure --disable-jpeg --disable-old-jpeg --disable-cxx --disable-tools --enable-shared --disable-static --with-pic%s --prefix=%s && make -j%d && make install', ...
+            strjoin(incs, ' '), CFLAGS, CXXFLAGS, extra_flags, libtiff_install_dir, feature('numCores'));
+        status = system(cmd);
+        cd(orig_dir);
     end
 
-    % === Simple smoketest of TIFFGetVersion via MEX ===
-    if ~isempty(mex_flags_cpu)
-        test_c = 'tiff_version_test_mex.c';
-        fid = fopen(test_c,'w');
-        fprintf(fid,['#include "mex.h"\n#include "tiffio.h"\n' ...
-            'void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) { '...
-            ' mexPrintf("libtiff: %s\\n", TIFFGetVersion()); }\n']);
+    ok = (status == 0);
+
+    % === Post build test ===
+    if ok
+        fprintf('✔️  libtiff built successfully with:\n');
+        fprintf('   • CFLAGS/CXXFLAGS: %s\n', CFLAGS);
+        fprintf('   • LZ4 enabled:  %s\n', string(found_lz4));
+        fprintf('   • ZSTD enabled: %s\n', string(found_zstd));
+        if ~isempty(dir(fullfile(libtiff_install_dir, 'lib', '*zstd*.a')))
+            fprintf('   • Static libzstd available ✅\n');
+        else
+            fprintf('   • Static libzstd not found ❌\n');
+        end
+        if ~isempty(dir(fullfile(libtiff_install_dir, 'lib', '*z.a')))
+            fprintf('   • Static zlib available ✅\n');
+        else
+            fprintf('   • Static zlib not found ❌\n');
+        end
+
+        % MEX sanity test
+        test_file = 'libtiff_test_mex.c';
+        fid = fopen(test_file, 'w');
+        fprintf(fid, '#include "mex.h"\n#include "tiffio.h"\nvoid mexFunction(int nlhs,mxArray*plhs[],int nrhs,const mxArray*prhs[]){printf("TIFF: %%s\\n",TIFFGetVersion());}\n');
         fclose(fid);
-        inc_flag = ['-I', fullfile(libtiff_install_dir,'include')];
-        lib_flag = ['-L', fullfile(libtiff_install_dir,'lib')];
         try
-            mex(mex_flags_cpu{:}, test_c, inc_flag, lib_flag, '-ltiff');
-            delete(test_c);
-            ok = true;
+            mex(mex_flags_cpu{:}, test_file, ['-I', fullfile(libtiff_install_dir, 'include')], ...
+                ['-L', fullfile(libtiff_install_dir, 'lib')], '-ltiff');
+            delete(test_file);
         catch ME
-            warning('libtiff smoketest failed: %s', ME.message);
+            warning('Post-build libtiff test failed: %s', ME.message);
             ok = false;
         end
     else
-        ok = true;
+        warning('❌ libtiff build failed');
     end
 end
