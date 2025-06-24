@@ -65,7 +65,7 @@ function build_mex(debug)
         fprintf('Building zlib-ng...\n');
         if ~exist(zlibng_src,'dir')
             archive = fullfile(thirdparty,sprintf('zlib-ng-%s.tar.gz',zlibng_v));
-            websave(archive,sprintf('https://github.com/zlib-ng/zlib-ng/archive/refs/tags/v%s.tar.gz',zlibng_v));
+            websave(archive,sprintf('https://github.com/zlib-ng/zlib-ng/archive/refs/tags/%s.tar.gz',zlibng_v));
             untar(archive,thirdparty); delete(archive);
         end
         args = [ ...
