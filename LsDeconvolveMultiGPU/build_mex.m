@@ -159,8 +159,8 @@ function build_mex(debug)
     end
 
     %% 6) Include & link flags for TIFF
-    include_tiff = { ['-I' fullfile(libtiff_inst,'include')] };
-    link_tiff    = { ['-L' fullfile(libtiff_inst,'lib')], '-Wl,-Bstatic', '-ltiff', '-Wl,-Bdynamic' };
+    include_tiff = ['-I' fullfile(libtiff_inst,'include')];
+    link_tiff    = ['-L' fullfile(libtiff_inst,'lib'), '-Wl,-Bstatic', '-ltiff', '-Wl,-Bdynamic' ];
 
     %% 7) Build CPU MEX files
     fprintf('Building CPU MEX files...\n');
@@ -168,8 +168,8 @@ function build_mex(debug)
     mex(mex_cpu{:},'save_lz4_mex.c'   , lz4_c, ['-I', lz4_src]);
     mex(mex_cpu{:},'load_lz4_mex.c'   , lz4_c, ['-I', lz4_src]);
     mex(mex_cpu{:},'load_slab_lz4.cpp', lz4_c, ['-I', lz4_src]);
-    mex(mex_cpu{:}, include_tiff{:}, 'load_bl_tif.cpp', link_tiff{:});
-    mex(mex_cpu{:}, include_tiff{:}, 'save_bl_tif.cpp', link_tiff{:});
+    mex(mex_cpu{:}, include_tiff, 'load_bl_tif.cpp', link_tiff);
+    mex(mex_cpu{:}, include_tiff, 'save_bl_tif.cpp', link_tiff);
 
     %% 8) CUDA MEX compilation (unchanged)
     if ispc
