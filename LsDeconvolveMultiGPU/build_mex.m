@@ -152,11 +152,10 @@ function ok = try_build_libtiff(libtiff_root, libtiff_install_dir, mex_flags_cpu
         if contains(token, 'CFLAGS=')
             pat = 'CFLAGS="\$CFLAGS ([^"]+)"';
             m = regexp(token, pat, 'tokens');
-            if ~isempty(m), CFLAGS = strtrim(m{1}{1}); end
-        elseif contains(token, 'CXXFLAGS=')
-            pat = 'CXXFLAGS="\$CXXFLAGS ([^"]+)"';
-            m = regexp(token, pat, 'tokens');
-            if ~isempty(m), CXXFLAGS = strtrim(m{1}{1}); end
+            if ~isempty(m)
+                CFLAGS = strtrim(m{1}{1});
+                CXXFLAGS = strtrim(m{1}{1});
+            end
         end
     end
 
