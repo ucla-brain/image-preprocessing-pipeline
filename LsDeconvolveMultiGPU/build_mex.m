@@ -138,7 +138,8 @@ if ~isfile(libtiff_stamp)
     fclose(fopen(libtiff_stamp,'w'));
 end
 
-%% MEX compile flags and linking\ nif ispc
+%% MEX compile flags and linking
+if ispc
     if debug
         mex_cpu = {'-R2018a','COMPFLAGS="$COMPFLAGS /std:c++17 /Od /Zi"','LINKFLAGS="$LINKFLAGS /DEBUG"'};
     else
@@ -152,9 +153,11 @@ else
     end
 end
 
+%% Include & link flags for static libs
 include_flags = {'-I',fullfile(libtiff_install,'include')};
 lib_flags     = {'-L',fullfile(libtiff_install,'lib'),'-Wl,-Bstatic','-ltiff','-lzstd','-lz','-Wl,-Bdynamic'};
 
+%% Build CPU MEX files
 cpu_sources = {'semaphore.c','lz4.c','save_lz4_mex.c','load_lz4_mex.c','load_slab_lz4.cpp'};
 fprintf('Building CPU MEX files...\n');
 for k=1:numel(cpu_sources)
