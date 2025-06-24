@@ -2,6 +2,7 @@
 % Supports Linux and Windows (Visual Studio 2022)
 
 function build_mex(debug)
+    % Usage: build_mex(true|false)
     if nargin<1, debug = false; end
 
     % MATLAB version check
@@ -12,7 +13,7 @@ function build_mex(debug)
         error('mexcuda not found. Ensure CUDA is configured');
     end
 
-    % Versions
+    % Third-party versions
     zlibng_v  = '2.2.4';
     zstd_v    = '1.5.7';
     libtiff_v = '4.7.0';
@@ -30,10 +31,11 @@ function build_mex(debug)
     lz4_inst      = fullfile(build_root,'lz4');
     libtiff_inst  = fullfile(build_root,'libtiff');
 
+    % Make sure directories exist
     if ~exist(thirdparty,'dir'), mkdir(thirdparty); end
     if ~exist(build_root,'dir'), mkdir(build_root); end
 
-    % Helper: CMake build & install
+    %% Helper to run CMake
     function status = try_cmake(src, bld, inst, args)
         if ~exist(bld,'dir'), mkdir(bld); end
         old = pwd; cd(bld);
@@ -50,26 +52,25 @@ function build_mex(debug)
         cd(old);
     end
 
-    %% 1) LZ4 download & verify
+    %% 1) Download & verify LZ4 sources
     if ~exist(lz4_src,'dir'), mkdir(lz4_src); end
     lz4_c = fullfile(lz4_src,'lz4.c');
     lz4_h = fullfile(lz4_src,'lz4.h');
     if ~isfile(lz4_c)
-        try websave(lz4_c,'https://raw.githubusercontent.com/lz4/lz4/dev/lib/lz4.c');
+        try websave(lz4_c, 'https://raw.githubusercontent.com/lz4/lz4/dev/lib/lz4.c');
         catch, error('Failed to download lz4.c'); end
     end
     if ~isfile(lz4_h)
-        try websave(lz4_h,'https://raw.githubusercontent.com/lz4/lz4/dev/lib/lz4.h');
+        try websave(lz4_h, 'https://raw.githubusercontent.com/lz4/lz4/dev/lib/lz4.h');
         catch, error('Failed to download lz4.h'); end
     end
-    if ~isfile(lz4_c)||~isfile(lz4_h)
-        error('Missing lz4 sources in %s',lz4_src);
+    if ~isfile(lz4_c) || ~isfile(lz4_h)
+        error('LZ4 source files missing in %s', lz4_src);
     end
+    % Single-token include flag for MEX
+    lz4_include = { ['-I', lz4_src] };
 
-    % Single token include flag for LZ4
-    lz4_include = {['-I', lz4_src]};
-
-    %% 2) zlib-ng
+    %% 2) Build zlib-ng
     stamp = fullfile(zlibng_inst,'.built');
     if ~isfile(stamp)
         fprintf('Building zlib-ng...\n');
@@ -78,20 +79,21 @@ function build_mex(debug)
             websave(archive,sprintf('https://github.com/zlib-ng/zlib-ng/archive/refs/tags/%s.tar.gz',zlibng_v));
             untar(archive,thirdparty); delete(archive);
         end
-        args = [ ...
+        args = [
             '-DBUILD_SHARED_LIBS=OFF ', ...
             '-DCMAKE_POSITION_INDEPENDENT_CODE=ON ', ...
             '-DCMAKE_BUILD_TYPE=Release ', ...
             '-DZLIB_COMPAT=ON ', ...
             '-DCMAKE_C_FLAGS_RELEASE="-O3 -march=native -flto" ', ...
-            '-DCMAKE_CXX_FLAGS_RELEASE="-O3 -march=native -flto"' ];
-        if try_cmake(zlibng_src,fullfile(zlibng_src,'build'),zlibng_inst,args)
+            '-DCMAKE_CXX_FLAGS_RELEASE="-O3 -march=native -flto"'
+        ];
+        if try_cmake(zlibng_src, fullfile(zlibng_src,'build'), zlibng_inst, args)
             error('zlib-ng build failed');
         end
         fclose(fopen(stamp,'w'));
     end
 
-    %% 3) zstd
+    %% 3) Build zstd
     stamp = fullfile(zstd_inst,'.built');
     if ~isfile(stamp)
         fprintf('Building zstd...\n');
@@ -101,25 +103,26 @@ function build_mex(debug)
             untar(archive,thirdparty); delete(archive);
         end
         if ispc
-            args = [ ...
+            args = [
                 '-DBUILD_SHARED_LIBS=OFF ', ...
                 '-DCMAKE_POSITION_INDEPENDENT_CODE=ON ', ...
                 '-DCMAKE_BUILD_TYPE=Release ', ...
                 '-DCMAKE_C_FLAGS_RELEASE="-O3 -arch:AVX2 -GL" ', ...
-                '-DCMAKE_CXX_FLAGS_RELEASE="-O3 -arch:AVX2 -GL"' ];
-            if try_cmake(zstd_src,fullfile(zstd_src,'build'),zstd_inst,args)
-                error('zstd build failed');
+                '-DCMAKE_CXX_FLAGS_RELEASE="-O3 -arch:AVX2 -GL"'
+            ];
+            if try_cmake(zstd_src, fullfile(zstd_src,'build'), zstd_inst, args)
+                error('zstd build failed on Windows');
             end
         else
-            old=pwd; cd(zstd_src);
-            system(sprintf('make -j%d',feature('numCores')));
-            system(sprintf('make PREFIX="%s" install',zstd_inst));
+            old = pwd; cd(zstd_src);
+            system(sprintf('make -j%d', feature('numCores')));
+            system(sprintf('make PREFIX="%s" install', zstd_inst));
             cd(old);
         end
         fclose(fopen(stamp,'w'));
     end
 
-    %% 4) libtiff (LZW,LZ4,ZLIB,ZSTD)
+    %% 4) Build libtiff with only LZW, LZ4, zlib-ng, ZSTD
     stamp = fullfile(libtiff_inst,'.built');
     if ~isfile(stamp)
         fprintf('Building libtiff...\n');
@@ -130,39 +133,39 @@ function build_mex(debug)
         end
         cm_args = sprintf([ ...
             '-DBUILD_SHARED_LIBS=OFF ', ...
-            '-DTIFF_DISABLE_JPEG=ON ', ...
-            '-DTIFF_DISABLE_OLD_JPEG=ON ', ...
-            '-DTIFF_DISABLE_JBIG=ON ', ...
-            '-DTIFF_DISABLE_LZMA=ON ', ...
-            '-DTIFF_DISABLE_WEBP=ON ', ...
-            '-DTIFF_DISABLE_LERC=ON ', ...
-            '-DTIFF_DISABLE_PIXARLOG=ON ', ...
-            '-DTIFF_ENABLE_LZW=ON ', ...
-            '-DTIFF_ENABLE_LZ4=ON ', ...
-            '-DTIFF_ENABLE_ZLIB=ON ', ...
-            '-DTIFF_ENABLE_ZSTD=ON ', ...
+            '-Djpeg=OFF ', ...
+            '-Dold-jpeg=OFF ', ...
+            '-Djbig=OFF ', ...
+            '-Dlzma=OFF ', ...
+            '-Dwebp=OFF ', ...
+            '-Dlerc=OFF ', ...
+            '-Dpixarlog=OFF ', ...
+            '-Dlzw=ON ', ...
+            '-Dlz4=ON ', ...
+            '-Dzlib=ON ', ...
+            '-Dzstd=ON ', ...
             '-Dtiff-opengl=OFF ', ...
-            '-DLZ4_LIBRARY="%s" ', ...
-            '-DLZ4_INCLUDE_DIR="%s" ', ...
-            '-DZLIB_LIBRARY="%s" ', ...
-            '-DZLIB_INCLUDE_DIR="%s" ', ...
-            '-DZSTD_LIBRARY="%s" ', ...
-            '-DZSTD_INCLUDE_DIR="%s" ', ...
-            '-DCMAKE_C_FLAGS_RELEASE="-O3 -march=native -flto" ', ...
-            '-DCMAKE_CXX_FLAGS_RELEASE="-O3 -march=native -flto"' ], ...
+            '-DLZ4_LIBRARY=\"%s\" ', ...
+            '-DLZ4_INCLUDE_DIR=\"%s\" ', ...
+            '-DZLIB_LIBRARY=\"%s\" ', ...
+            '-DZLIB_INCLUDE_DIR=\"%s\" ', ...
+            '-DZSTD_LIBRARY=\"%s\" ', ...
+            '-DZSTD_INCLUDE_DIR=\"%s\" ', ...
+            '-DCMAKE_C_FLAGS_RELEASE=\"-O3 -march=native -flto\" ', ...
+            '-DCMAKE_CXX_FLAGS_RELEASE=\"-O3 -march=native -flto\"' ], ...
             fullfile(lz4_inst,'lib','liblz4.a'), ...
             fullfile(lz4_inst,'include'), ...
             fullfile(zlibng_inst,'lib','libz.a'), ...
             fullfile(zlibng_inst,'include'), ...
             fullfile(zstd_inst,'lib','libzstd.a'), ...
             fullfile(zstd_inst,'include'));
-        if try_cmake(libtiff_src,fullfile(libtiff_src,'build'),libtiff_inst,cm_args)
+        if try_cmake(libtiff_src, fullfile(libtiff_src,'build'), libtiff_inst, cm_args)
             error('libtiff build failed');
         end
         fclose(fopen(stamp,'w'));
     end
 
-    %% 5) MEX flags
+    %% 5) MEX compile flags
     if ispc
         if debug
             mex_cpu = {'-R2018a','COMPFLAGS="$COMPFLAGS /std:c++17 /Od /Zi"','LINKFLAGS="$LINKFLAGS /DEBUG"'};
@@ -177,20 +180,20 @@ function build_mex(debug)
         end
     end
 
-    %% 6) Include & link for TIFF
-    include_flags = {'-I',fullfile(libtiff_inst,'include')};
-    lib_flags     = {'-L',fullfile(libtiff_inst,'lib'),'-Wl,-Bstatic','-ltiff','-llz4','-lzstd','-lz','-Wl,-Bdynamic'};
+    %% 6) Include & link flags for libtiff
+    include_flags = {'-I', fullfile(libtiff_inst,'include')};
+    lib_flags     = {'-L', fullfile(libtiff_inst,'lib'), '-Wl,-Bstatic', '-ltiff', '-llz4', '-lzstd', '-lz', '-Wl,-Bdynamic'};
 
-    %% 7) Build CPU MEX with LZ4 include
+    %% 7) Build CPU MEX files (with LZ4 include)
     cpu_sources = { 'semaphore.c', lz4_c, 'save_lz4_mex.c', 'load_lz4_mex.c', 'load_slab_lz4.cpp' };
     fprintf('Building CPU MEX files...\n');
     for k=1:numel(cpu_sources)
         mex(mex_cpu{:}, cpu_sources{k}, lz4_include{:});
     end
 
-    %% 8) TIFF MEX
-    mex(mex_cpu{:},'load_bl_tif.cpp',include_flags{:},lib_flags{:});
-    mex(mex_cpu{:},'save_bl_tif.cpp',include_flags{:},lib_flags{:});
+    %% 8) Build TIFF MEX files
+    mex(mex_cpu{:}, 'load_bl_tif.cpp', include_flags{:}, lib_flags{:});
+    mex(mex_cpu{:}, 'save_bl_tif.cpp', include_flags{:}, lib_flags{:});
 
     %% 9) CUDA MEX compilation (unchanged)
     if ispc
