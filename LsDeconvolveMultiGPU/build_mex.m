@@ -165,9 +165,9 @@ function build_mex(debug)
     %% 7) Build CPU MEX files
     fprintf('Building CPU MEX files...\n');
     mex(mex_cpu{:},'semaphore.c');
-    mex(mex_cpu{:},'save_lz4_mex.c',lz4_c,lz4_h);
-    mex(mex_cpu{:},'load_lz4_mex.c',lz4_c,lz4_h);
-    mex(mex_cpu{:},'load_slab_lz4.cpp',lz4_c,lz4_h);
+    mex(mex_cpu{:},'save_lz4_mex.c'   ,lz4_c, ['-I', lz4_h]);
+    mex(mex_cpu{:},'load_lz4_mex.c'   ,lz4_c, ['-I', lz4_h]);
+    mex(mex_cpu{:},'load_slab_lz4.cpp',lz4_c, ['-I', lz4_h]);
     mex(mex_cpu{:},'load_bl_tif.cpp',include_tiff{:},link_tiff{:});
     mex(mex_cpu{:},'save_bl_tif.cpp',include_tiff{:},link_tiff{:});
 
