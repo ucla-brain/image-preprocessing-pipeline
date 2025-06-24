@@ -110,7 +110,7 @@ static void writeSliceToTiff(
         TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP,    rowsPerStrip);
 
         if (compressionType == COMPRESSION_LZW || compressionType == COMPRESSION_DEFLATE) {
-            TIFFSetField(tif, TIFFTAG_PREDICTOR, PREDICTOR_HORIZONTAL);
+            TIFFSetField(tif, TIFFTAG_PREDICTOR, PREDICTOR_VERTICAL);
         }
         if (compressionType == COMPRESSION_DEFLATE) {
             TIFFSetField(tif, TIFFTAG_ZIPQUALITY, 1);
