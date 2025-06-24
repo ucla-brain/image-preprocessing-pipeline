@@ -160,7 +160,7 @@ function build_mex(debug)
 
     %% 6) Include & link flags for TIFF
     include_tiff = ['-I' fullfile(libtiff_inst,'include')];
-    link_tiff    = fullfile(libtiff_inst,'lib','libtiffxx.a');
+    link_tiff    = fullfile(libtiff_inst,'lib','libtiff.a');
 
     %% 7) Build CPU MEX files
     fprintf('Building CPU MEX files...\n');
