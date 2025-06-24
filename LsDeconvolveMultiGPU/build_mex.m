@@ -139,14 +139,6 @@ fprintf('All MEX files built successfully.\n');
 % Function: try_build_libtiff
 % ===============================
 function ok = try_build_libtiff(libtiff_root, libtiff_install_dir, mex_flags_cpu, version)
-%TRY_BUILD_LIBTIFF Fetch, configure and build libtiff with only LZW, LZ4, ZSTD, DEFLATE.
-% 1) Detect CONDA_PREFIX and fall back to local headers (lz4.h, zstd.h, zlib.h)
-% 2) Fail early if required headers missing.
-% 3) Use identical CFLAGS and CXXFLAGS.
-% 4) Pass -j<cores> from feature('numCores').
-% 5) Disable all codecs except the needed four.
-% 6) Report if static libs for zstd or zlib were found.
-
     orig_dir = pwd;
     ok = false;
 
@@ -191,7 +183,7 @@ function ok = try_build_libtiff(libtiff_root, libtiff_install_dir, mex_flags_cpu
         archive = sprintf('tiff-%s.tar.gz', version);
         url = sprintf('https://download.osgeo.org/libtiff/tiff-%s.tar.gz', version);
         system(sprintf('curl -L -o %s %s', archive, url));
-        system(sprintf('tar xf %s'), archive);
+        system(sprintf('tar xf %s', archive));
         delete(archive);
     end
     cd(libtiff_root);
