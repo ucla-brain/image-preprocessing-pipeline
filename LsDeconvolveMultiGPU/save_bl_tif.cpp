@@ -109,9 +109,24 @@ static void writeSliceToTiff(
         TIFFSetField(tif, TIFFTAG_PLANARCONFIG,    PLANARCONFIG_CONTIG);
         TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP,    rowsPerStrip);
 
+        // Enable horizontal differencing for any lossless codec:
+        if (compressionType == COMPRESSION_DEFLATE ||
+            compressionType == COMPRESSION_LZ4    ||
+            compressionType == COMPRESSION_ZSTD)
+        {
+            TIFFSetField(tif, TIFFTAG_PREDICTOR, PREDICTOR_HORIZONTAL);
+        }
+
+        // DEFLATE: set a modest compression level (1–9)
         if (compressionType == COMPRESSION_DEFLATE) {
-            TIFFSetField(tif, TIFFTAG_PREDICTOR,  PREDICTOR_HORIZONTAL);
-            TIFFSetField(tif, TIFFTAG_ZIPQUALITY, 1);
+            const int zipLevel = 1;
+            TIFFSetField(tif, TIFFTAG_ZIPQUALITY, zipLevel);
+        }
+
+        // ZSTD: set a low compression tier (1–22 in libtiff ≥4.5)
+        if (compressionType == COMPRESSION_ZSTD) {
+            const int zstdLevel = 1;
+            TIFFSetField(tif, TIFFTAG_ZSTD_LEVEL, zstdLevel);
         }
 
         const uint32_t numStrips = (imageHeight + rowsPerStrip - 1) / rowsPerStrip;
@@ -203,11 +218,14 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     char* compCStr = mxArrayToUTF8String(prhs[3]);
     std::string compressionStr(compCStr);
     mxFree(compCStr);
+    // existing mapping
     uint16_t compressionType =
-           compressionStr == "none"    ? COMPRESSION_NONE
-         : compressionStr == "lzw"     ? COMPRESSION_LZW
-         : compressionStr == "deflate" ? COMPRESSION_DEFLATE
-         : throw std::runtime_error("Invalid compression: " + compressionStr);
+           compStr == "none"    ? COMPRESSION_NONE
+         : compStr == "lzw"     ? COMPRESSION_LZW
+         : compStr == "deflate" ? COMPRESSION_DEFLATE
+         : compStr == "lz4"     ? COMPRESSION_LZ4
+         : compStr == "zstd"    ? COMPRESSION_ZSTD
+         : throw std::runtime_error("Invalid compression: " + compStr);
 
     // fileList validation
     if (!mxIsCell(prhs[1]) || mxGetNumberOfElements(prhs[1]) != numSlices)
