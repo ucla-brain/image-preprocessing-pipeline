@@ -2,7 +2,6 @@
 % Supports Linux and Windows (Visual Studio 2022)
 
 function build_mex(debug)
-    % Usage: build_mex_static(true|false)
     if nargin<1, debug = false; end
 
     % MATLAB version check
@@ -13,36 +12,35 @@ function build_mex(debug)
         error('mexcuda not found. Ensure CUDA is configured');
     end
 
-    % Third-party versions
-    zlibng_version  = '2.2.4';
-    zstd_version    = '1.5.7';
-    libtiff_version = '4.7.0';
+    % Versions
+    zlibng_v  = '2.2.4';
+    zstd_v    = '1.5.7';
+    libtiff_v = '4.7.0';
 
     % Paths
-    root              = pwd;
-    thirdparty        = fullfile(root,'thirdparty');
-    build_root        = fullfile(root,'tiff_build');
-    zlibng_src        = fullfile(thirdparty,['zlib-ng-',zlibng_version]);
-    zstd_src          = fullfile(thirdparty,['zstd-',zstd_version]);
-    lz4_src           = fullfile(thirdparty,'lz4');
-    libtiff_src       = fullfile(thirdparty,['tiff-',libtiff_version]);
-    zlibng_install    = fullfile(build_root,'zlib-ng');
-    zstd_install      = fullfile(build_root,'zstd');
-    lz4_install       = fullfile(build_root,'lz4');
-    libtiff_install   = fullfile(build_root,'libtiff');
+    root          = pwd;
+    thirdparty    = fullfile(root,'thirdparty');
+    build_root    = fullfile(root,'tiff_build');
+    zlibng_src    = fullfile(thirdparty,['zlib-ng-',zlibng_v]);
+    zstd_src      = fullfile(thirdparty,['zstd-',zstd_v]);
+    lz4_src       = fullfile(thirdparty,'lz4');
+    libtiff_src   = fullfile(thirdparty,['tiff-',libtiff_v]);
+    zlibng_inst   = fullfile(build_root,'zlib-ng');
+    zstd_inst     = fullfile(build_root,'zstd');
+    lz4_inst      = fullfile(build_root,'lz4');
+    libtiff_inst  = fullfile(build_root,'libtiff');
 
-    % Ensure directories
     if ~exist(thirdparty,'dir'), mkdir(thirdparty); end
     if ~exist(build_root,'dir'), mkdir(build_root); end
 
-    %% Helper: CMake build & install
-    function status = try_cmake_build(src_dir, build_dir, install_dir, cmake_args)
-        if ~exist(build_dir,'dir'), mkdir(build_dir); end
-        old = pwd; cd(build_dir);
-        cleanupObj = onCleanup(@() cd(old));
-        cmd = sprintf('cmake \"%s\" -DCMAKE_INSTALL_PREFIX=\"%s\" %s', src_dir, install_dir, cmake_args);
+    % Helper: CMake build & install
+    function status = try_cmake(src, bld, inst, args)
+        if ~exist(bld,'dir'), mkdir(bld); end
+        old = pwd; cd(bld);
+        onCleanup(@() cd(old));
+        cmd = sprintf('cmake \"%s\" -DCMAKE_INSTALL_PREFIX=\"%s\" %s', src, inst, args);
         status = system(cmd);
-        if status~=0, cd(old); return; end
+        if status, cd(old); return; end
         if ispc
             cmd = 'cmake --build . --config Release --target INSTALL';
         else
@@ -52,92 +50,85 @@ function build_mex(debug)
         cd(old);
     end
 
-    %% 1) Download & verify LZ4 sources
-    % Ensure the directory exists
+    %% 1) LZ4 download & verify
     if ~exist(lz4_src,'dir'), mkdir(lz4_src); end
-
     lz4_c = fullfile(lz4_src,'lz4.c');
     lz4_h = fullfile(lz4_src,'lz4.h');
     if ~isfile(lz4_c)
-        try
-            websave(lz4_c, 'https://raw.githubusercontent.com/lz4/lz4/dev/lib/lz4.c');
-        catch
-            error('Failed to download lz4.c');
-        end
+        try websave(lz4_c,'https://raw.githubusercontent.com/lz4/lz4/dev/lib/lz4.c');
+        catch, error('Failed to download lz4.c'); end
     end
     if ~isfile(lz4_h)
-        try
-            websave(lz4_h, 'https://raw.githubusercontent.com/lz4/lz4/dev/lib/lz4.h');
-        catch
-            error('Failed to download lz4.h');
-        end
+        try websave(lz4_h,'https://raw.githubusercontent.com/lz4/lz4/dev/lib/lz4.h');
+        catch, error('Failed to download lz4.h'); end
     end
-    if ~isfile(lz4_c) || ~isfile(lz4_h)
-        error('LZ4 source files missing in %s', lz4_src);
+    if ~isfile(lz4_c)||~isfile(lz4_h)
+        error('Missing lz4 sources in %s',lz4_src);
     end
 
-    cpu_include = {'-I', lz4_src};
+    % Single token include flag for LZ4
+    lz4_include = {['-I', lz4_src]};
 
-    %% 2) Build zlib-ng via CMake
-    zlibng_stamp = fullfile(zlibng_install,'.built');
-    if ~isfile(zlibng_stamp)
+    %% 2) zlib-ng
+    stamp = fullfile(zlibng_inst,'.built');
+    if ~isfile(stamp)
         fprintf('Building zlib-ng...\n');
         if ~exist(zlibng_src,'dir')
-            archive = fullfile(thirdparty,sprintf('zlib-ng-%s.tar.gz',zlibng_version));
-            url     = sprintf('https://github.com/zlib-ng/zlib-ng/archive/refs/tags/%s.tar.gz', zlibng_version);
-            websave(archive,url); untar(archive,thirdparty); delete(archive);
+            archive = fullfile(thirdparty,sprintf('zlib-ng-%s.tar.gz',zlibng_v));
+            websave(archive,sprintf('https://github.com/zlib-ng/zlib-ng/archive/refs/tags/%s.tar.gz',zlibng_v));
+            untar(archive,thirdparty); delete(archive);
         end
-        cmake_args = [ ...
+        args = [ ...
             '-DBUILD_SHARED_LIBS=OFF ', ...
             '-DCMAKE_POSITION_INDEPENDENT_CODE=ON ', ...
             '-DCMAKE_BUILD_TYPE=Release ', ...
             '-DZLIB_COMPAT=ON ', ...
             '-DCMAKE_C_FLAGS_RELEASE="-O3 -march=native -flto" ', ...
             '-DCMAKE_CXX_FLAGS_RELEASE="-O3 -march=native -flto"' ];
-        if try_cmake_build(zlibng_src, fullfile(zlibng_src,'build'), zlibng_install, cmake_args)~=0
+        if try_cmake(zlibng_src,fullfile(zlibng_src,'build'),zlibng_inst,args)
             error('zlib-ng build failed');
         end
-        fclose(fopen(zlibng_stamp,'w'));
+        fclose(fopen(stamp,'w'));
     end
 
-    %% 3) Build zstd (Make on Linux; CMake on Windows)
-    zstd_stamp = fullfile(zstd_install,'.built');
-    if ~isfile(zstd_stamp)
+    %% 3) zstd
+    stamp = fullfile(zstd_inst,'.built');
+    if ~isfile(stamp)
         fprintf('Building zstd...\n');
         if ~exist(zstd_src,'dir')
-            archive = fullfile(thirdparty,sprintf('zstd-%s.tar.gz',zstd_version));
-            url     = sprintf('https://github.com/facebook/zstd/archive/refs/tags/v%s.tar.gz', zstd_version);
-            websave(archive,url); untar(archive,thirdparty); delete(archive);
+            archive = fullfile(thirdparty,sprintf('zstd-%s.tar.gz',zstd_v));
+            websave(archive,sprintf('https://github.com/facebook/zstd/archive/refs/tags/v%s.tar.gz',zstd_v));
+            untar(archive,thirdparty); delete(archive);
         end
         if ispc
-            cmake_args = [ ...
+            args = [ ...
                 '-DBUILD_SHARED_LIBS=OFF ', ...
                 '-DCMAKE_POSITION_INDEPENDENT_CODE=ON ', ...
                 '-DCMAKE_BUILD_TYPE=Release ', ...
                 '-DCMAKE_C_FLAGS_RELEASE="-O3 -arch:AVX2 -GL" ', ...
                 '-DCMAKE_CXX_FLAGS_RELEASE="-O3 -arch:AVX2 -GL"' ];
-            if try_cmake_build(zstd_src, fullfile(zstd_src,'build'), zstd_install, cmake_args)~=0
-                error('zstd build failed on Windows');
+            if try_cmake(zstd_src,fullfile(zstd_src,'build'),zstd_inst,args)
+                error('zstd build failed');
             end
         else
-            old = pwd; cd(zstd_src);
-            system(sprintf('make -j%d', feature('numCores')));
-            system(sprintf('make PREFIX="%s" install', zstd_install));
+            old=pwd; cd(zstd_src);
+            system(sprintf('make -j%d',feature('numCores')));
+            system(sprintf('make PREFIX="%s" install',zstd_inst));
             cd(old);
         end
-        fclose(fopen(zstd_stamp,'w'));
+        fclose(fopen(stamp,'w'));
     end
 
-    %% 4) Build libtiff via CMake with LZW, LZ4, ZLIB (zlib-ng), and ZSTD only
-    libtiff_stamp = fullfile(libtiff_install,'.built');
-    if ~isfile(libtiff_stamp)
+    %% 4) libtiff (LZW,LZ4,ZLIB,ZSTD)
+    stamp = fullfile(libtiff_inst,'.built');
+    if ~isfile(stamp)
         fprintf('Building libtiff...\n');
         if ~exist(libtiff_src,'dir')
-            archive = fullfile(thirdparty,sprintf('tiff-%s.tar.gz',libtiff_version));
-            url     = sprintf('https://download.osgeo.org/libtiff/tiff-%s.tar.gz', libtiff_version);
-            websave(archive,url); untar(archive,thirdparty); delete(archive);
+            archive = fullfile(thirdparty,sprintf('tiff-%s.tar.gz',libtiff_v));
+            websave(archive,sprintf('https://download.osgeo.org/libtiff/tiff-%s.tar.gz',libtiff_v));
+            untar(archive,thirdparty); delete(archive);
         end
-        cmake_args = sprintf([ ...
+        cm_args = sprintf([ ...
             '-DBUILD_SHARED_LIBS=OFF ', ...
             '-DTIFF_DISABLE_JPEG=ON ', ...
             '-DTIFF_DISABLE_OLD_JPEG=ON ', ...
@@ -159,19 +150,19 @@ function build_mex(debug)
             '-DZSTD_INCLUDE_DIR="%s" ', ...
             '-DCMAKE_C_FLAGS_RELEASE="-O3 -march=native -flto" ', ...
             '-DCMAKE_CXX_FLAGS_RELEASE="-O3 -march=native -flto"' ], ...
-            fullfile(lz4_install,'lib','liblz4.a'), ...
-            fullfile(lz4_install,'include'), ...
-            fullfile(zlibng_install,'lib','libz.a'), ...
-            fullfile(zlibng_install,'include'), ...
-            fullfile(zstd_install,'lib','libzstd.a'), ...
-            fullfile(zstd_install,'include'));
-        if try_cmake_build(libtiff_src, fullfile(libtiff_src,'build'), libtiff_install, cmake_args)~=0
+            fullfile(lz4_inst,'lib','liblz4.a'), ...
+            fullfile(lz4_inst,'include'), ...
+            fullfile(zlibng_inst,'lib','libz.a'), ...
+            fullfile(zlibng_inst,'include'), ...
+            fullfile(zstd_inst,'lib','libzstd.a'), ...
+            fullfile(zstd_inst,'include'));
+        if try_cmake(libtiff_src,fullfile(libtiff_src,'build'),libtiff_inst,cm_args)
             error('libtiff build failed');
         end
-        fclose(fopen(libtiff_stamp,'w'));
+        fclose(fopen(stamp,'w'));
     end
 
-    %% 5) MEX compile flags
+    %% 5) MEX flags
     if ispc
         if debug
             mex_cpu = {'-R2018a','COMPFLAGS="$COMPFLAGS /std:c++17 /Od /Zi"','LINKFLAGS="$LINKFLAGS /DEBUG"'};
@@ -186,26 +177,20 @@ function build_mex(debug)
         end
     end
 
-    %% 6) Include & link flags for static libs
-    include_flags = {'-I',fullfile(libtiff_install,'include')};
-    lib_flags     = {'-L',fullfile(libtiff_install,'lib'),'-Wl,-Bstatic','-ltiff','-llz4','-lzstd','-lz','-Wl,-Bdynamic'};
+    %% 6) Include & link for TIFF
+    include_flags = {'-I',fullfile(libtiff_inst,'include')};
+    lib_flags     = {'-L',fullfile(libtiff_inst,'lib'),'-Wl,-Bstatic','-ltiff','-llz4','-lzstd','-lz','-Wl,-Bdynamic'};
 
-    %% 7) Build CPU MEX files (with LZ4 include)
-    cpu_sources = {
-        'semaphore.c', ...
-        lz4_c, ...
-        'save_lz4_mex.c', ...
-        'load_lz4_mex.c', ...
-        'load_slab_lz4.cpp'
-    };
+    %% 7) Build CPU MEX with LZ4 include
+    cpu_sources = { 'semaphore.c', lz4_c, 'save_lz4_mex.c', 'load_lz4_mex.c', 'load_slab_lz4.cpp' };
     fprintf('Building CPU MEX files...\n');
     for k=1:numel(cpu_sources)
-        mex(mex_cpu{:}, cpu_sources{k}, cpu_include{:});
+        mex(mex_cpu{:}, cpu_sources{k}, lz4_include{:});
     end
 
-    %% 8) Build TIFF-related MEX files
-    mex(mex_cpu{:}, 'load_bl_tif.cpp', include_flags{:}, lib_flags{:});
-    mex(mex_cpu{:}, 'save_bl_tif.cpp', include_flags{:}, lib_flags{:});
+    %% 8) TIFF MEX
+    mex(mex_cpu{:},'load_bl_tif.cpp',include_flags{:},lib_flags{:});
+    mex(mex_cpu{:},'save_bl_tif.cpp',include_flags{:},lib_flags{:});
 
     %% 9) CUDA MEX compilation (unchanged)
     if ispc
