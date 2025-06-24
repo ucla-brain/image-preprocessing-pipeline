@@ -219,11 +219,11 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     mxFree(compCStr);
     // existing mapping
     uint16_t compressionType =
-           compStr == "none"    ? COMPRESSION_NONE
-         : compStr == "lzw"     ? COMPRESSION_LZW
-         : compStr == "deflate" ? COMPRESSION_DEFLATE
-         : compStr == "zstd"    ? COMPRESSION_ZSTD
-         : throw std::runtime_error("Invalid compression: " + compStr);
+           compressionStr == "none"    ? COMPRESSION_NONE
+         : compressionStr == "lzw"     ? COMPRESSION_LZW
+         : compressionStr == "deflate" ? COMPRESSION_DEFLATE
+         : compressionStr == "zstd"    ? COMPRESSION_ZSTD
+         : throw std::runtime_error("Invalid compression: " + compressionStr);
 
     // fileList validation
     if (!mxIsCell(prhs[1]) || mxGetNumberOfElements(prhs[1]) != numSlices)
