@@ -144,68 +144,31 @@ function ok = try_build_libtiff(libtiff_root, libtiff_install_dir, mex_flags_cpu
 
     orig_dir = pwd;
 
-    % === Parse CFLAGS and CXXFLAGS from mex_flags_cpu ===
-    CFLAGS = '';
-    CXXFLAGS = '';
+    % === Extract CFLAGS/CXXFLAGS from build_mex.m ===
+    CFLAGS = ''; CXXFLAGS = '';
     for i = 1:numel(mex_flags_cpu)
         token = mex_flags_cpu{i};
         if contains(token, 'CFLAGS=')
             pat = 'CFLAGS="\$CFLAGS ([^"]+)"';
             m = regexp(token, pat, 'tokens');
-            if ~isempty(m)
-                CFLAGS = strtrim(m{1}{1});
-                CXXFLAGS = strtrim(m{1}{1});
-            end
+            if ~isempty(m), CFLAGS = strtrim(m{1}{1}); CXXFLAGS = CFLAGS; end
         end
     end
 
-    % === Locate external headers ===
+    % === Header detection ===
     incs = {};
-    % Look in CONDA environment
     if ~isempty(getenv('CONDA_PREFIX'))
         conda_include = fullfile(getenv('CONDA_PREFIX'), 'include');
-        if isfolder(conda_include)
-            incs{end+1} = ['-I', conda_include];
-        end
+        if isfolder(conda_include), incs{end+1} = ['-I', conda_include]; end
     end
-    % Fall back to local dir
-    if isfile('lz4.h')
-        incs{end+1} = ['-I', pwd];
-    end
-    if isfile('zstd.h')
-        incs{end+1} = ['-I', pwd];
-    end
-    if isempty(incs)
-        error('LZ4/ZSTD headers not found. Please install lz4/zstd via conda-forge or place headers next to build_mex.m');
-    end
+    if isfile('lz4.h'),   incs{end+1} = ['-I', pwd]; end
+    if isfile('zstd.h'),  incs{end+1} = ['-I', pwd]; end
+    if isempty(incs), error('Missing lz4.h and/or zstd.h. Please install or download them.'); end
+    cppflags = strjoin(incs, ' ');
 
-    % === Build LibTIFF ===
+    % === Build ===
     if ispc
-        archive = ['tiff-', version, '.zip'];
-        if ~isfolder(libtiff_root)
-            url = ['https://download.osgeo.org/libtiff/tiff-', version, '.zip'];
-            system(['curl -L -o ', archive, ' ', url]);
-            unzip(archive, 'tiff_src');
-            delete(archive);
-        end
-        cd(libtiff_root);
-
-        % Pass CFLAGS/CXXFLAGS as env variables to cmake and msbuild
-        setenv('CFLAGS', CFLAGS);
-        setenv('CXXFLAGS', CXXFLAGS);
-
-        % Windows cmake and build command
-        status = system([
-            'cmake -B build -DCMAKE_BUILD_TYPE=Release ' ...
-            '-DCMAKE_INSTALL_PREFIX="', libtiff_install_dir, '" . && ' ...
-            'cmake --build build --config Release --target install'
-        ]);
-        cd(orig_dir);
-
-        % Reset env variables
-        setenv('CFLAGS', '');
-        setenv('CXXFLAGS', '');
-
+        error('Windows builds must use CMake; not handled here for simplicity.');
     else
         archive = ['tiff-', version, '.tar.gz'];
         src_folder = ['tiff-', version];
@@ -217,19 +180,21 @@ function ok = try_build_libtiff(libtiff_root, libtiff_install_dir, mex_flags_cpu
         end
         cd(src_folder);
 
-        cppflags = strjoin(incs, ' ');
-        extra_flags = ' --with-zstd --with-lz4';
+        cmd = sprintf(['CPPFLAGS="%s" CFLAGS="%s" CXXFLAGS="%s" ./configure ' ...
+            '--disable-jpeg --disable-old-jpeg --disable-cxx --disable-tools ' ...
+            '--disable-lzma --disable-libdeflate --disable-jbig --disable-lerc ' ...
+            '--disable-webp --enable-lzw --enable-zstd --enable-lz4 ' ...
+            '--enable-shared --disable-static --with-pic --prefix=%s ' ...
+            '&& make -j%d && make install'], ...
+            cppflags, CFLAGS, CXXFLAGS, libtiff_install_dir, feature('numCores'));
 
-        cmd = sprintf('CPPFLAGS="%s" CFLAGS="%s" CXXFLAGS="%s" ./configure --disable-jpeg --disable-old-jpeg --disable-cxx --disable-tools --enable-shared --disable-static --with-pic%s --prefix=%s && make -j%d && make install', ...
-            cppflags, CFLAGS, CXXFLAGS, extra_flags, libtiff_install_dir, feature('numCores'));
-
-        fprintf('📦  Running configure+make:\n%s\n', cmd);
+        fprintf('📦 Running configure+make:\n%s\n', cmd);
         status = system(cmd);
         cd(orig_dir);
     end
     ok = (status == 0);
 
-    % === Optional: smoketest for MEX compatibility ===
+    % === Post-build test ===
     if ok && ~isempty(mex_flags_cpu)
         test_c = 'libtiff_test_mex.c';
         fid = fopen(test_c, 'w');
@@ -237,23 +202,21 @@ function ok = try_build_libtiff(libtiff_root, libtiff_install_dir, mex_flags_cpu
         fclose(fid);
         include_flag = ['-I', fullfile(libtiff_install_dir, 'include')];
         lib_flag     = ['-L', fullfile(libtiff_install_dir, 'lib')];
-        link_flag    = {'-ltiff'};
         try
-            mex(mex_flags_cpu{:}, test_c, include_flag, lib_flag, link_flag{:});
+            mex(mex_flags_cpu{:}, test_c, include_flag, lib_flag, '-ltiff');
             delete(test_c);
         catch ME
-            warning('❌ Post-build MEX libtiff test failed: %s', ME.message);
+            warning('❌ Post-build MEX test failed: %s', ME.message);
             ok = false;
         end
     end
 
-    % === Final report ===
+    % === Report ===
     if ok
         fprintf('✅ libtiff built successfully with:\n');
-        fprintf('   • LZ4 header present : %s\n', ternary(isfile('lz4.h'), 'yes', 'no'));
-        fprintf('   • ZSTD header present: %s\n', ternary(isfile('zstd.h'), 'yes', 'no'));
-        fprintf('   • Static ZSTD lib    : %s\n', ternary(~isempty(dir('**/libzstd.a')), 'yes', 'no'));
-        fprintf('   • Static ZLIB lib    : %s\n', ternary(~isempty(dir('**/libz.a')), 'yes', 'no'));
+        fprintf('   • lz4.h present : %s\n', ternary(isfile('lz4.h'), 'yes', 'no'));
+        fprintf('   • zstd.h present: %s\n', ternary(isfile('zstd.h'), 'yes', 'no'));
+        fprintf('   • Disabled codecs: jpeg, jbig, lzma, libdeflate, webp, lerc\n');
     end
 end
 
