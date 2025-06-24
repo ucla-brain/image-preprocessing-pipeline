@@ -50,7 +50,6 @@ function build_mex(debug)
     end
 
     %% 1) Download & build LZ4
-    lz4_stamp = fullfile(lz4_inst,'.built');
     lz4_c     = fullfile(lz4_src,'lz4.c');
     lz4_h     = fullfile(lz4_src,'lz4.h');
     if ~isfile(lz4_c)
@@ -59,18 +58,6 @@ function build_mex(debug)
         websave(lz4_c,'https://raw.githubusercontent.com/lz4/lz4/dev/lib/lz4.c');
         websave(lz4_h,'https://raw.githubusercontent.com/lz4/lz4/dev/lib/lz4.h');
     end
-    if ~isfile(lz4_stamp)
-        fprintf('Building LZ4...\n');
-        if ~exist(lz4_inst,'dir'), mkdir(lz4_inst); end
-        orig = pwd; cd(lz4_src);
-        system(sprintf('make -j%d liblz4.a', feature('numCores')));
-        copyfile(fullfile(lz4_src,'liblz4.a'), fullfile(lz4_inst,'lib'));
-        if ~exist(fullfile(lz4_inst,'include'),'dir'), mkdir(fullfile(lz4_inst,'include')); end
-        copyfile(lz4_h, fullfile(lz4_inst,'include'));
-        cd(orig);
-        fclose(fopen(lz4_stamp,'w'));
-    end
-    lz4_include = {'-I',fullfile(lz4_inst,'include')};
 
     %% 2) Build zlib-ng
     zlibng_stamp = fullfile(zlibng_inst,'.built');
@@ -141,15 +128,13 @@ function build_mex(debug)
             '-DTIFF_DISABLE_WEBP=ON ',...
             '-DTIFF_DISABLE_LERC=ON ',...
             '-DTIFF_DISABLE_PIXARLOG=ON ',...
-            '-DLZ4_INCLUDE_DIRS=%s ',...
-            '-DLZ4_LIBRARIES=%s ',...
             '-DZLIB_LIBRARY=%s ',...
             '-DZLIB_INCLUDE_DIR=%s ',...
             '-DZSTD_LIBRARY=%s ',...
             '-DZSTD_INCLUDE_DIR=%s ',...
             '-DCMAKE_C_FLAGS_RELEASE="-O3 -march=native -flto" ',...
             '-DCMAKE_CXX_FLAGS_RELEASE="-O3 -march=native -flto"' ...
-        ], fullfile(lz4_inst,'include'), fullfile(lz4_inst,'lib','liblz4.a'), ...
+        ], ...
            fullfile(zlibng_inst,'lib','libz.a'), fullfile(zlibng_inst,'include'), ...
            fullfile(zstd_inst,'lib','libzstd.a'), fullfile(zstd_inst,'include'));
         if try_cmake(libtiff_src,fullfile(libtiff_src,'build'),libtiff_inst,cm_args)
@@ -180,9 +165,9 @@ function build_mex(debug)
     %% 7) Build CPU MEX files
     fprintf('Building CPU MEX files...\n');
     mex(mex_cpu{:},'semaphore.c');
-    mex(mex_cpu{:},'save_lz4_mex.c',lz4_c,lz4_include{:});
-    mex(mex_cpu{:},'load_lz4_mex.c',lz4_c,lz4_include{:});
-    mex(mex_cpu{:},'load_slab_lz4.cpp',lz4_c,lz4_include{:});
+    mex(mex_cpu{:},'save_lz4_mex.c',lz4_c,lz4_h);
+    mex(mex_cpu{:},'load_lz4_mex.c',lz4_c,lz4_h);
+    mex(mex_cpu{:},'load_slab_lz4.cpp',lz4_c,lz4_h);
     mex(mex_cpu{:},'load_bl_tif.cpp',include_tiff{:},link_tiff{:});
     mex(mex_cpu{:},'save_bl_tif.cpp',include_tiff{:},link_tiff{:});
 
