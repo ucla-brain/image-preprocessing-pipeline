@@ -56,7 +56,7 @@ if ~isfile(zlibng_stamp)
     fprintf('Building zlib-ng...\n');
     if ~exist(zlibng_src,'dir')
         archive = fullfile(thirdparty,sprintf('zlib-ng-%s.tar.gz',zlibng_version));
-        url = sprintf('https://github.com/zlib-ng/zlib-ng/archive/refs/tags/v%s.tar.gz',zlibng_version);
+        url = sprintf('https://github.com/zlib-ng/zlib-ng/archive/refs/tags/%s.tar.gz',zlibng_version);
         websave(archive,url); untar(archive,thirdparty); delete(archive);
     end
     cmake_args = sprintf([ ...
