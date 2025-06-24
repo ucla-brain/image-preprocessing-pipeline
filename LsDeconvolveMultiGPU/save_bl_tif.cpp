@@ -111,7 +111,6 @@ static void writeSliceToTiff(
 
         // Enable horizontal differencing for any lossless codec:
         if (compressionType == COMPRESSION_DEFLATE ||
-            compressionType == COMPRESSION_LZ4    ||
             compressionType == COMPRESSION_ZSTD)
         {
             TIFFSetField(tif, TIFFTAG_PREDICTOR, PREDICTOR_HORIZONTAL);
@@ -223,7 +222,6 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
            compStr == "none"    ? COMPRESSION_NONE
          : compStr == "lzw"     ? COMPRESSION_LZW
          : compStr == "deflate" ? COMPRESSION_DEFLATE
-         : compStr == "lz4"     ? COMPRESSION_LZ4
          : compStr == "zstd"    ? COMPRESSION_ZSTD
          : throw std::runtime_error("Invalid compression: " + compStr);
 
