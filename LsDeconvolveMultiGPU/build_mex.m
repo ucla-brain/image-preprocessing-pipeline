@@ -72,7 +72,7 @@ if ~isfile(zlibng_stamp)
     fclose(fopen(zlibng_stamp,'w'));
 end
 
-%% Build zstd via Make on Linux, CMake on Windows
+%% Build zstd (Make on Linux, CMake on Windows)
 zstd_stamp = fullfile(zstd_install,'.built');
 if ~isfile(zstd_stamp)
     fprintf('Building zstd...\n');
@@ -82,7 +82,6 @@ if ~isfile(zstd_stamp)
         websave(archive,url); untar(archive,thirdparty); delete(archive);
     end
     if ispc
-        % Use CMake on Windows
         cmake_args = sprintf([ ...
             '-DBUILD_SHARED_LIBS=OFF ',...
             '-DCMAKE_POSITION_INDEPENDENT_CODE=ON ',...
@@ -93,7 +92,6 @@ if ~isfile(zstd_stamp)
             error('zstd build failed on Windows');
         end
     else
-        % Linux: use Makefile
         old = pwd; cd(zstd_src);
         system(sprintf('make -j%d', feature('numCores')));
         system(sprintf('make PREFIX="%s" install', zstd_install));
@@ -102,7 +100,7 @@ if ~isfile(zstd_stamp)
     fclose(fopen(zstd_stamp,'w'));
 end
 
-%% Build libtiff via CMake
+%% Build libtiff via CMake with only zstd and zlib-ng
 libtiff_stamp = fullfile(libtiff_install,'.built');
 if ~isfile(libtiff_stamp)
     fprintf('Building libtiff...\n');
@@ -114,11 +112,16 @@ if ~isfile(libtiff_stamp)
     cmake_args = sprintf([ ...
         '-DBUILD_SHARED_LIBS=OFF ',...
         '-DTIFF_DISABLE_JPEG=ON ',...
+        '-DTIFF_DISABLE_OLD_JPEG=ON ',...
         '-DTIFF_DISABLE_JBIG=ON ',...
         '-DTIFF_DISABLE_LZMA=ON ',...
         '-DTIFF_DISABLE_WEBP=ON ',...
         '-DTIFF_DISABLE_LERC=ON ',...
         '-DTIFF_DISABLE_PIXARLOG=ON ',...
+        '-DTIFF_ENABLE_LIBDEFLATE=OFF ',...
+        '-Dtiff-opengl=OFF ',...
+        '-DTIFF_ENABLE_ZSTD=ON ',...
+        '-DTIFF_ENABLE_ZLIB=ON ',...
         '-DZLIB_LIBRARY="%s" ',...
         '-DZLIB_INCLUDE_DIR="%s" ',...
         '-DZSTD_LIBRARY="%s" ',...
@@ -135,8 +138,7 @@ if ~isfile(libtiff_stamp)
     fclose(fopen(libtiff_stamp,'w'));
 end
 
-%% MEX compile flags
-if ispc
+%% MEX compile flags and linking\ nif ispc
     if debug
         mex_cpu = {'-R2018a','COMPFLAGS="$COMPFLAGS /std:c++17 /Od /Zi"','LINKFLAGS="$LINKFLAGS /DEBUG"'};
     else
@@ -150,11 +152,9 @@ else
     end
 end
 
-%% Include and link flags for static libs
 include_flags = {'-I',fullfile(libtiff_install,'include')};
-lib_flags     = {'-L',fullfile(libtiff_install,'lib'), '-Wl,-Bstatic','-ltiff','-lzstd','-lz','-Wl,-Bdynamic'};
+lib_flags     = {'-L',fullfile(libtiff_install,'lib'),'-Wl,-Bstatic','-ltiff','-lzstd','-lz','-Wl,-Bdynamic'};
 
-%% Build CPU MEX files
 cpu_sources = {'semaphore.c','lz4.c','save_lz4_mex.c','load_lz4_mex.c','load_slab_lz4.cpp'};
 fprintf('Building CPU MEX files...\n');
 for k=1:numel(cpu_sources)
