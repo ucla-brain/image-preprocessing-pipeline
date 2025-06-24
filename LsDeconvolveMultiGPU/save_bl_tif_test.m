@@ -27,16 +27,16 @@ fprintf("   ✅ basic 2-D / 3-D paths ok\n");
 %% ---------- B. full matrix: {layout × dtype × compression} + timing & sizes ----------
 cfg.order = {'YXZ',false; 'XYZ',true};
 cfg.dtype = {'uint8',@uint8; 'uint16',@uint16};
-cfg.comp  = {'none','lzw','deflate'};
-sz        = [2048 4096 4];  % ≥ 64 MiB slice
+% now include lz4 and zstd
+cfg.comp  = {'none','lzw','deflate','lz4','zstd'};
+sz        = [2048 1024 4];  % ≥ 2 MiB slice
 
-nLayouts = size(cfg.order,1);
-nTypes   = size(cfg.dtype,1);
-nComps   = numel(cfg.comp);
-
-times            = zeros(nLayouts,nTypes,nComps);
-logicalMiB       = zeros(nLayouts,nTypes,nComps);
-physicalMiB      = zeros(nLayouts,nTypes,nComps);
+nLayouts   = size(cfg.order,1);
+nTypes     = size(cfg.dtype,1);
+nComps     = numel(cfg.comp);
+times      = zeros(nLayouts,nTypes,nComps);
+logicalMiB = zeros(nLayouts,nTypes,nComps);
+physicalMiB= zeros(nLayouts,nTypes,nComps);
 
 for o = 1:nLayouts
     fprintf("\n   🏁 Testing layout: %s\n", cfg.order{o,1});
@@ -64,30 +64,25 @@ for o = 1:nLayouts
             bytesLogical  = 0;
             bytesPhysical = 0;
             for k = 1:sz(3)
-                % verify
                 ref = V(:,:,k);
                 if cfg.order{o,2}, ref = ref.'; end
                 assert(isequal(imread(files{k}), ref), ...
                        "Mismatch %s slice %d", tagSafe, k);
 
-                % logical size (pre-FS compression)
                 info = dir(files{k});
                 bytesLogical = bytesLogical + info.bytes;
 
-                % physical on-disk size (post-btrfs/zstd)
-                cmdB = sprintf('stat -c "%%b" "%s"', files{k});
-                [~,blkStr] = system(cmdB);
-                blkCount = str2double(strtrim(blkStr));
-                cmdS = sprintf('stat -c "%%B" "%s"', files{k});
-                [~,bsStr] = system(cmdS);
-                blkSize = str2double(strtrim(bsStr));
-                bytesPhysical = bytesPhysical + blkCount * blkSize;
+                % physical on-disk via stat
+                [~,bcount] = system(sprintf('stat -c "%%b" "%s"', files{k}));
+                [~,bsize ] = system(sprintf('stat -c "%%B" "%s"', files{k}));
+                bytesPhysical = bytesPhysical + ...
+                    str2double(strtrim(bcount)) * str2double(strtrim(bsize));
             end
 
             % 5) record
-            times(o,d,c)       = tElapsed;
-            logicalMiB(o,d,c)  = bytesLogical  / 2^20;
-            physicalMiB(o,d,c) = bytesPhysical / 2^20;
+            times(o,d,c)        = tElapsed;
+            logicalMiB(o,d,c)   = bytesLogical  / 2^20;
+            physicalMiB(o,d,c)  = bytesPhysical / 2^20;
 
             fprintf("      ✅ %-30s in %.2f s, logical %.1f MiB, physical %.1f MiB\n", ...
                 strrep(sprintf('%s_%s_%s',cfg.order{o,1},...
@@ -117,20 +112,19 @@ fprintf("\n   📊 XYZ vs YXZ comparison (Time and Sizes):\n");
 rows = {};
 for d = 1:nTypes
     for c = 1:nComps
-        % gather metrics
         t_YXZ   = times(1,d,c);
         t_XYZ   = times(2,d,c);
         sp      = t_YXZ / t_XYZ;
-        log_Y   = logicalMiB(1,d,c);
-        log_X   = logicalMiB(2,d,c);
-        phy_Y   = physicalMiB(1,d,c);
-        phy_X   = physicalMiB(2,d,c);
+        lY      = logicalMiB(1,d,c);
+        lX      = logicalMiB(2,d,c);
+        pY      = physicalMiB(1,d,c);
+        pX      = physicalMiB(2,d,c);
 
         rows(end+1,:) = {
           cfg.dtype{d,1}, cfg.comp{c}, ...
           t_YXZ, t_XYZ, sp, ...
-          log_Y, log_X, ...
-          phy_Y, phy_X ...
+          lY, lX, ...
+          pY, pX ...
         };
     end
 end
@@ -148,16 +142,15 @@ end
 
 %% ---------- helpers --------------------------------------------------------
 function out = generateTestData(sz, dtype)
-    % Gamma distribution + ~10% zeros
     alpha = 2; beta = 50;
     X = gamrnd(alpha, beta, sz);
     mask = rand(sz) > 0.10;
     X(~mask) = 0;
     X = X / max(X(:));
     switch dtype
-        case 'uint8';  out = uint8(X * 255);
-        case 'uint16'; out = uint16(X * 65535);
-        otherwise; error("Unsupported dtype '%s'",dtype);
+        case 'uint8',  out = uint8(X * 255);
+        case 'uint16', out = uint16(X * 65535);
+        otherwise,     error("Unsupported dtype '%s'",dtype);
     end
 end
 
