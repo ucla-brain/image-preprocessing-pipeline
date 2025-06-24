@@ -139,89 +139,113 @@ fprintf('All MEX files built successfully.\n');
 % Function: try_build_libtiff
 % ===============================
 function ok = try_build_libtiff(libtiff_root, libtiff_install_dir, mex_flags_cpu, version)
-    if nargin < 3, mex_flags_cpu = {}; end
-    if nargin < 4 || isempty(version), version = '4.7.0'; end
+    if nargin<3, mex_flags_cpu = {}; end
+    if nargin<4 || isempty(version), version = '4.7.0'; end
 
     orig_dir = pwd;
 
-    % === Parse CFLAGS and CXXFLAGS from mex_flags_cpu ===
+    %--- 1) Extract CFLAGS & CXXFLAGS from mex_flags_cpu ---
     CFLAGS = '';
     CXXFLAGS = '';
     for i = 1:numel(mex_flags_cpu)
-        token = mex_flags_cpu{i};
-        if contains(token, 'CFLAGS=')
-            pat = 'CFLAGS="\$CFLAGS ([^"]+)"';
-            m = regexp(token, pat, 'tokens');
-            if ~isempty(m)
-                CFLAGS = strtrim(m{1}{1});
-                CXXFLAGS = strtrim(m{1}{1});
-            end
+        tok = mex_flags_cpu{i};
+        % look for CFLAGS
+        m = regexp(tok, 'CFLAGS="\$CFLAGS\s*([^"]+)"', 'tokens');
+        if ~isempty(m)
+            CFLAGS = strtrim(m{1}{1});
+        end
+        % look for CXXFLAGS
+        m2 = regexp(tok, 'CXXFLAGS="\$CFLAGS\s*([^"]+)"', 'tokens');
+        if ~isempty(m2)
+            % if user actually wrote CXXFLAGS="$CFLAGS …"
+            CXXFLAGS = strtrim(m2{1}{1});
+        end
+        m3 = regexp(tok, 'CXXFLAGS="\$CXXFLAGS\s*([^"]+)"', 'tokens');
+        if ~isempty(m3)
+            % or CXXFLAGS explicitly
+            CXXFLAGS = strtrim(m3{1}{1});
         end
     end
+    % ensure both are set and identical if only one was given
+    if isempty(CXXFLAGS)
+        CXXFLAGS = CFLAGS;
+    end
 
-    % === Build LibTIFF ===
+    %--- 2) Download & extract source if needed ---
     if ispc
-        archive = ['tiff-', version, '.zip'];
+        archive = fullfile(pwd, sprintf('tiff-%s.zip', version));
         if ~isfolder(libtiff_root)
-            url = ['https://download.osgeo.org/libtiff/tiff-', version, '.zip'];
-            system(['curl -L -o ', archive, ' ', url]);
-            unzip(archive, 'tiff_src');
+            fprintf('Downloading libtiff %s …\n', version);
+            system(sprintf('curl -L -o "%s" "https://download.osgeo.org/libtiff/tiff-%s.zip"', archive, version));
+            unzip(archive, fullfile(pwd,'tiff_src'));
             delete(archive);
         end
         cd(libtiff_root);
 
-        % Pass CFLAGS/CXXFLAGS as env variables to cmake and msbuild
-        setenv('CFLAGS', CFLAGS);
-        setenv('CXXFLAGS', CXXFLAGS);
+        % set env vars for cmake
+        setenv('CFLAGS',  CFLAGS);
+        setenv('CXXFLAGS',CXXFLAGS);
 
-        % Windows cmake and build command
+        % configure & build
         status = system([
-            'cmake -B build -DCMAKE_BUILD_TYPE=Release ' ...
-            '-DCMAKE_INSTALL_PREFIX="', libtiff_install_dir, '" . && ' ...
-            'cmake --build build --config Release --target install'
+          'cmake -B build -DCMAKE_BUILD_TYPE=Release '          ...
+          '-DCMAKE_INSTALL_PREFIX="', libtiff_install_dir, '" ' ...
+          '-DENABLE_LZ4=ON -DENABLE_ZSTD=ON '                   ...
+          '. && cmake --build build --config Release --target install'
         ]);
+
+        % reset
+        setenv('CFLAGS','');
+        setenv('CXXFLAGS','');
         cd(orig_dir);
-
-        % Reset env variables
-        setenv('CFLAGS', '');
-        setenv('CXXFLAGS', '');
-
     else
-        archive = ['tiff-', version, '.tar.gz'];
-        src_folder = ['tiff-', version];
-        if ~isfolder(src_folder)
-            url = ['https://download.osgeo.org/libtiff/tiff-', version, '.tar.gz'];
-            system(['curl -L -o ', archive, ' ', url]);
-            system(['tar -xzf ', archive]);
+        archive = fullfile(pwd, sprintf('tiff-%s.tar.gz', version));
+        src_dir = fullfile(pwd, sprintf('tiff-%s', version));
+        if ~isfolder(src_dir)
+            fprintf('Downloading libtiff %s …\n', version);
+            system(sprintf('curl -L -o "%s" "https://download.osgeo.org/libtiff/tiff-%s.tar.gz"', archive, version));
+            system(sprintf('tar xf "%s"', archive));
             delete(archive);
         end
-        cd(src_folder);
+        cd(src_dir);
 
+        % pass CFLAGS & CXXFLAGS as prefix
         prefix = '';
-        if ~isempty(CFLAGS), prefix = [prefix, 'CFLAGS="', CFLAGS, '" ']; end
-        if ~isempty(CXXFLAGS), prefix = [prefix, 'CXXFLAGS="', CXXFLAGS, '" ']; end
+        if ~isempty(CFLAGS)
+            prefix = sprintf('CFLAGS="%s" CXXFLAGS="%s" ', CFLAGS, CXXFLAGS);
+        end
 
-        cmd = [prefix, './configure --enable-shared --disable-static --with-lz4 --with-zstd --with-pic --prefix=', ...
-                libtiff_install_dir, ' && make -j', feature('numCores'), ' && make install'];
+        cmd = [ prefix,                          ...
+            './configure --enable-shared --disable-static ', ...
+            '--with-lz4 --with-zstd --with-pic ',           ...
+            '--prefix=', libtiff_install_dir, ' && '        ...
+            'make -j', feature('numCores'), ' && make install' ];
+
         status = system(cmd);
         cd(orig_dir);
     end
+
     ok = (status == 0);
 
-    % === Optional: smoketest for MEX compatibility ===
+    %--- 3) Optional smoke-test of the new libtiff via MEX ---
     if ok && ~isempty(mex_flags_cpu)
         test_c = 'libtiff_test_mex.c';
-        fid = fopen(test_c, 'w');
-        fprintf(fid, '#include "mex.h"\n#include "tiffio.h"\nvoid mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {\nprintf("LIBTIFF version: %%s\\n", TIFFGetVersion());\n}');
+        fid = fopen(test_c,'w');
+        fprintf(fid, [
+            '#include "mex.h"\n' ...
+            '#include "tiffio.h"\n' ...
+            'void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {\n' ...
+            '    mexPrintf("TIFF version: %s\\n", TIFFGetVersion());\n' ...
+            '}\n']);
         fclose(fid);
-        include_flag = ['-I', fullfile(libtiff_install_dir, 'include')];
-        lib_flag     = ['-L', fullfile(libtiff_install_dir, 'lib')];
-        link_flag    = {'-ltiff'};
+
+        include_flag = ['-I', fullfile(libtiff_install_dir,'include')];
+        lib_flag     = ['-L', fullfile(libtiff_install_dir,'lib')];
         try
-            mex(mex_flags_cpu{:}, test_c, include_flag, lib_flag, link_flag{:});
+            mex(mex_flags_cpu{:}, test_c, include_flag, lib_flag, '-ltiff');
             delete(test_c);
         catch ME
-            warning('Post-build MEX libtiff test failed: %s', ME.message);
+            warning('libtiff MEX smoke-test failed: %s', ME.message);
             ok = false;
         end
     end
