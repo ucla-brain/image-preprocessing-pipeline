@@ -201,8 +201,8 @@ function ok = try_build_libtiff(libtiff_root, libtiff_install_dir, mex_flags_cpu
         if ~isempty(CFLAGS), prefix = [prefix, 'CFLAGS="', CFLAGS, '" ']; end
         if ~isempty(CXXFLAGS), prefix = [prefix, 'CXXFLAGS="', CXXFLAGS, '" ']; end
 
-        cmd = [prefix, './configure --enable-shared --disable-static --with-lz4 --with-zstd --with-pic --prefix=', libtiff_install_dir, ...
-               ' && make -j18 && make install'];
+        cmd = [prefix, './configure --enable-shared --disable-static --with-lz4 --with-zstd --with-pic --prefix=', ...
+                libtiff_install_dir, ' && make -j', feature('numCores'), ' && make install'];
         status = system(cmd);
         cd(orig_dir);
     end
