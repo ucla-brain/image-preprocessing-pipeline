@@ -180,28 +180,35 @@ function build_mex(debug)
     mex(mex_cpu{:}, inc_tiff, 'save_bl_tif.cpp', link_tiff{:});
 
     %% 8) CUDA MEX files (unchanged)
-    common_nvcc = { ...
-      '-std=c++17', ...
-      '-O3', ...
-      '-Xcompiler','-O3', ...
-      '-Xcompiler','-march=native', ...
-      '-Xcompiler','-flto' ...
-    };
+        % ——————— CUDA MEX (fixed) ———————
     if ispc
-        xmlfile = fullfile(fileparts(mfilename('fullpath')),'nvcc_msvcpp2022.xml');
-        assert(isfile(xmlfile),'nvcc_msvcpp2022.xml not found!');
-        cuda_mex_flags = {'-f',xmlfile};
+        % For MSVC on Windows, wrap everything in NVCCFLAGS
+        xmlfile = fullfile(fileparts(mfilename('fullpath')), 'nvcc_msvcpp2022.xml');
+        assert(isfile(xmlfile), 'nvcc_msvcpp2022.xml not found!');
+        cuda_mex_flags = {'-f', xmlfile};
     else
         cuda_mex_flags = {};
     end
 
-    root_dir    = '.'; include_dir = './mex_incubator';
-    mexcuda(cuda_mex_flags{:}, '-R2018a', common_nvcc{:}, ...
-           'gauss3d_mex.cu',  ['-I',root_dir], ['-I',include_dir]);
-    mexcuda(cuda_mex_flags{:}, '-R2018a', common_nvcc{:}, ...
-           'conv3d_mex.cu',  ['-I',root_dir], ['-I',include_dir]);
-    mexcuda(cuda_mex_flags{:}, '-R2018a', common_nvcc{:}, ...
-           'otf_gpu_mex.cu',['-I',root_dir], ['-I',include_dir], '-lcufft','-L/usr/local/cuda/lib64');
+    if debug
+        nvccflags = [ ...
+          'NVCCFLAGS="$NVCCFLAGS -G -std=c++17 ' ...
+          '-Xcompiler -O0 -Xcompiler -g"' ];
+    else
+        nvccflags = [ ...
+          'NVCCFLAGS="$NVCCFLAGS -O3 -std=c++17 ' ...
+          '-Xcompiler -march=native -Xcompiler -flto"' ];
+    end
+
+    root_dir    = '.';
+    include_dir = './mex_incubator';
+
+    mexcuda(cuda_mex_flags{:}, '-R2018a', nvccflags, 'gauss3d_mex.cu',  ['-I',root_dir], ['-I',include_dir]);
+
+    mexcuda(cuda_mex_flags{:}, '-R2018a', nvccflags, 'conv3d_mex.cu',  ['-I',root_dir], ['-I',include_dir]);
+
+    mexcuda(cuda_mex_flags{:}, '-R2018a', nvccflags, 'otf_gpu_mex.cu', ['-I',root_dir], ['-I',include_dir], ...
+           '-L/usr/local/cuda/lib64', '-lcufft');
 
     fprintf('\n✅  All MEX files built successfully.\n');
 end
