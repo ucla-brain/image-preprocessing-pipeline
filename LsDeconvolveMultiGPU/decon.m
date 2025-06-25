@@ -187,13 +187,20 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, ...
     if stop_criterion>0, delta_prev = norm(bl(:)); end
 
     for i = 1:niter
+        apply_regularization = (regularize_interval > 0) && (regularize_interval < niter);
+        is_regularization_time = apply_regularization && (i > 1) && (i < niter) && (mod(i, regularize_interval) == 0);
+
+        if is_regularization_time
+            if use_gpu, clear buff1, buff2; bl = gauss3d_mex(bl, 0.5); else, bl = imgaussfilt3(bl, 0.5); end
+        end
+
         % ----------- Richardson–Lucy core ------------
         buff1 = convFFT(bl, otf);                 % buff1: H⊗x
         buff1 = max(buff1, eps(dtype));           % avoid /0
         buff2 = bl ./ buff1;                      % buff2: ratio
         buff2 = convFFT(buff2, otf_conj);         % buff2: correction
 
-        if regularize_interval>0 && mod(i,regularize_interval)==0 && lambda>0
+        if regularize_interval>0 && mod(i,regularize_interval)==0 && lambda>0 && i<niter
             buff1 = convn(bl, R, 'same');         % buff1 reused as Laplacian
             bl    = bl .* buff2 .* (1-lambda) + buff1 .* lambda;
         else
