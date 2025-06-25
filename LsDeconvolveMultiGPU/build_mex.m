@@ -5,6 +5,7 @@
 % Author  : Keivan Moradi  (with ChatGPT-o3 assistance)
 % License : MIT
 function build_mex(debug)
+    ncores = feature('numCores');
     if nargin<1, debug=false; end
     if verLessThan('matlab','9.4')
         error('Requires MATLAB R2018a or newer.'); end
@@ -42,7 +43,7 @@ function build_mex(debug)
         if ispc
             status = system('cmake --build . --config Release --target INSTALL');
         else
-            status = system(sprintf('cmake --build . -- -j%d install', feature('numCores')));
+            status = system(sprintf('cmake --build . -- -j%d install', ncores));
         end
     end
 
@@ -70,7 +71,7 @@ function build_mex(debug)
           '-DZLIB_COMPAT=ON ', ...
           '-DCMAKE_POSITION_INDEPENDENT_CODE=ON ', ...
           '-DCMAKE_BUILD_TYPE=Release ', ...
-          '-DCMAKE_C_FLAGS_RELEASE="-O3 -march=native -flto -fPIC"' ...
+          sprintf('-DCMAKE_C_FLAGS_RELEASE="-O3 -march=native -flto=%d -fPIC"', ncores) ...
         ];
         if cmake_build(zlibng_src,fullfile(zlibng_src,'build'),zlibng_inst,args)
             error('zlib-ng build failed.'); end
@@ -101,7 +102,9 @@ function build_mex(debug)
         else
             % Makefile-based on Linux/macOS
             old = cd(zstd_src); onCleanup(@() cd(old));
-            system(sprintf('make -j%d', feature('numCores')));
+            if system(sprintf('make -j%d', ncores))~=0
+                error('zstd make failed');
+            end
             % install static lib + headers
             mkdir(fullfile(zstd_inst,'lib'));
             mkdir(fullfile(zstd_inst,'include'));
@@ -133,7 +136,7 @@ function build_mex(debug)
         ], ...
           fullfile(zlibng_inst,'lib','libz.a'),    fullfile(zlibng_inst,'include'), ...
           fullfile(zstd_inst,  'lib','libzstd.a'), fullfile(zstd_inst,  'include'), ...
-          feature('numCores'), feature('numCores'));
+          ncores, ncores);
         if cmake_build(libtiff_src,fullfile(libtiff_src,'build'),libtiff_inst,args)
             error('libtiff build failed.'); end
         fclose(fopen(stamp,'w'));
@@ -158,9 +161,9 @@ function build_mex(debug)
               'LDFLAGS="$LDFLAGS -g"'};
         else
             mex_cpu = {'-R2018a', ...
-              'CFLAGS="$CFLAGS -O3 -march=native -flto"', ...
-              'CXXFLAGS="$CXXFLAGS -O3 -march=native -flto"', ...
-              'LDFLAGS="$LDFLAGS -flto"'};
+              sprintf('CFLAGS="$CFLAGS -O3 -march=native -flto=%d"'    , ncores), ...
+              sprintf('CXXFLAGS="$CXXFLAGS -O3 -march=native -flto=%d"', ncores), ...
+              sprintf('LDFLAGS="$LDFLAGS -flto=%d"'                    , ncores)};
         end
     end
 
@@ -195,7 +198,7 @@ function build_mex(debug)
       nvccflags = 'NVCCFLAGS="$NVCCFLAGS -G"';
     else
       % only pass host flags; leave -O and -std to mexcuda
-      nvccflags = 'NVCCFLAGS="$NVCCFLAGS -Xcompiler -march=native -Xcompiler -flto"';
+      nvccflags = sprintf('NVCCFLAGS="$NVCCFLAGS -Xcompiler -march=native -Xcompiler -flto=%d"', ncores);
     end
 
     root_dir    = '.';
