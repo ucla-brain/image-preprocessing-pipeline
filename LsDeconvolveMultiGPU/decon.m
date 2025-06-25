@@ -159,27 +159,127 @@ end
 %     bl = unpad_block(bl, pad_pre, pad_post);
 % end
 
-function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regularize_interval, device_id, psf_update_interval)
-    if nargin<9, psf_update_interval = 1; end
+% function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regularize_interval, device_id, psf_update_interval)
+%     if nargin<9, psf_update_interval = 1; end
+%     use_gpu = isgpuarray(bl);
+%     dtype   = classUnderlying(bl);
+%
+%     % Wiener Update
+
+%     %–– Allocate just 3 big buffers ––
+%     buff1 = zeros(fft_shape, dtype);   if use_gpu, buff1 = gpuArray(buff1); end
+%     buff2 = zeros(fft_shape, dtype);   if use_gpu, buff2 = gpuArray(buff2); end
+%     buff3 = zeros(fft_shape, dtype);   if use_gpu, buff3 = gpuArray(buff3); end
+%
+%     % Initial OTFs
+%     [otf, otf_conj] = calculate_otf(psf, fft_shape, device_id);
+%
+%     % Regularizer kernel
+%     if regularize_interval < niter && lambda>0
+%         R = single(1/26*ones(3,3,3)); R(2,2,2)=0;
+%         if use_gpu, R = gpuArray(R); end
+%     end
+%
+%     bl = edgetaper_3d(bl, psf);
+%     [bl, pad_pre, pad_post] = pad_block_to_fft_shape(bl, fft_shape, 0);
+%
+%     if stop_criterion>0, delta_prev = norm(bl(:)); end
+%
+%     for i = 1:niter
+%         %–– (buff1) = convFFT(bl, otf) ––
+%         buff1 = convFFT(bl, otf);
+%
+%         %–– (buff1) = max(buff1, eps) ––
+%         buff1 = max(buff1, eps(dtype));
+%
+%         %–– (buff2) = bl ./ buff1 ––
+%         buff2 = bl ./ buff1;
+%
+%         %–– (buff2) = convFFT(buff2, otf_conj) ––
+%         buff2 = convFFT(buff2, otf_conj);
+%
+%         %–– update bl with/without regularization ––
+%         if regularize_interval>0 && mod(i,regularize_interval)==0 && lambda>0
+%             reg = convn(bl, R, 'same');
+%             bl  = bl .* buff2 .* (1-lambda) + reg .* lambda;
+%         else
+%             bl  = bl .* buff2;
+%         end
+%
+%         bl = abs(bl);
+%
+%         %–– Wiener-PSF update every psf_update_interval ––
+%         if psf_update_interval>0 && mod(i,psf_update_interval)==0 && i<niter
+%             %–– (buff1) = FFT(bl) ––
+%             buff1 = fftn(bl, fft_shape);
+%
+%             %–– (buff2) = FFT(convFFT(bl, otf)) = FFT(Y) ––
+%             buff2 = fftn(convFFT(bl, otf), fft_shape);
+%
+%             %–– (buff3) = |FFT(bl)|² + ε ––
+%             buff3 = abs(buff1).^2 + 1e-4;
+%
+%             %–– (buff1) = conj(FFT(bl)) ––
+%             buff1 = conj(buff1);
+%
+%             %–– (buff1) = (FFT(Y).*conj(FFT(bl))) ./ (|FFT(bl)|²+ε) ––
+%             buff1 = (buff2 .* buff1) ./ buff3;
+%
+%             %–– (buff2) = real(ifftn(buff1)) = new PSF estimate ––
+%             buff2 = real(ifftn(buff1));
+%
+%             % Crop & normalize PSF
+%             sz     = size(psf);
+%             center = floor((fft_shape - sz)/2) + 1;
+%             psf    = buff2( center(1):center(1)+sz(1)-1, ...
+%                             center(2):center(2)+sz(2)-1, ...
+%                             center(3):center(3)+sz(3)-1 );
+%             psf    = max(psf,0); psf = psf/sum(psf(:));
+%             if use_gpu && ~isa(psf,'gpuArray'), psf = gpuArray(psf); end
+%
+%             % Recompute OTFs
+%             [otf, otf_conj] = calculate_otf(psf, fft_shape, device_id);
+%         end
+%
+%         %–– check stop criterion ––
+%         if stop_criterion>0
+%             delta_curr = norm(bl(:));
+%             if abs(delta_prev - delta_curr)/delta_prev*100 <= stop_criterion
+%                 disp('Stop criterion reached.');
+%                 break
+%             end
+%             delta_prev = delta_curr;
+%         end
+%     end
+%
+%     bl = unpad_block(bl, pad_pre, pad_post);
+% end
+
+function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regularize_interval, device_id, blind_update_interval)
+    if nargin<9, blind_update_interval = 1; end  % default: update PSF every iter
     use_gpu = isgpuarray(bl);
     dtype   = classUnderlying(bl);
 
-    %–– Allocate just 3 big buffers ––
+    %–– allocate only 3 big buffers ––
     buff1 = zeros(fft_shape, dtype);   if use_gpu, buff1 = gpuArray(buff1); end
     buff2 = zeros(fft_shape, dtype);   if use_gpu, buff2 = gpuArray(buff2); end
     buff3 = zeros(fft_shape, dtype);   if use_gpu, buff3 = gpuArray(buff3); end
 
-    % Initial OTFs
+    % initial OTFs
     [otf, otf_conj] = calculate_otf(psf, fft_shape, device_id);
 
-    % Regularizer kernel
+    % regularizer kernel
     if regularize_interval < niter && lambda>0
         R = single(1/26*ones(3,3,3)); R(2,2,2)=0;
         if use_gpu, R = gpuArray(R); end
     end
 
+    % store observed image and edge-taper / pad both
+    obs = bl;
     bl = edgetaper_3d(bl, psf);
     [bl, pad_pre, pad_post] = pad_block_to_fft_shape(bl, fft_shape, 0);
+    obs = padarray(obs, pad_pre, 'symmetric','pre');
+    obs = padarray(obs, pad_post,'symmetric','post');
 
     if stop_criterion>0, delta_prev = norm(bl(:)); end
 
@@ -196,46 +296,37 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regula
         %–– (buff2) = convFFT(buff2, otf_conj) ––
         buff2 = convFFT(buff2, otf_conj);
 
-        %–– update bl with/without regularization ––
+        %–– object update with/without regularization ––
         if regularize_interval>0 && mod(i,regularize_interval)==0 && lambda>0
             reg = convn(bl, R, 'same');
             bl  = bl .* buff2 .* (1-lambda) + reg .* lambda;
         else
             bl  = bl .* buff2;
         end
-
         bl = abs(bl);
 
-        %–– Wiener-PSF update every psf_update_interval ––
-        if psf_update_interval>0 && mod(i,psf_update_interval)==0 && i<niter
-            %–– (buff1) = FFT(bl) ––
-            buff1 = fftn(bl, fft_shape);
+        %–– blind-deconv PSF update every blind_update_interval ––
+        if mod(i, blind_update_interval)==0 && i<niter
+            %–– (buff1) = convFFT(bl, psf_old) ––
+            buff1 = convFFT(bl, psf);
 
-            %–– (buff2) = FFT(convFFT(bl, otf)) = FFT(Y) ––
-            buff2 = fftn(convFFT(bl, otf), fft_shape);
+            %–– (buff2) = obs ./ buff1 ––
+            buff2 = obs ./ buff1;
 
-            %–– (buff3) = |FFT(bl)|² + ε ––
-            buff3 = abs(buff1).^2 + 1e-4;
+            %–– (buff3) = flip(bl) ––
+            buff3 = bl;
+            buff3 = flip(buff3,1); buff3 = flip(buff3,2); buff3 = flip(buff3,3);
 
-            %–– (buff1) = conj(FFT(bl)) ––
-            buff1 = conj(buff1);
+            %–– (buff1) = convFFT(buff2, flip(bl)) ––
+            buff1 = convFFT(buff2, buff3);
 
-            %–– (buff1) = (FFT(Y).*conj(FFT(bl))) ./ (|FFT(bl)|²+ε) ––
-            buff1 = (buff2 .* buff1) ./ buff3;
-
-            %–– (buff2) = real(ifftn(buff1)) = new PSF estimate ––
-            buff2 = real(ifftn(buff1));
-
-            % Crop & normalize PSF
-            sz     = size(psf);
-            center = floor((fft_shape - sz)/2) + 1;
-            psf    = buff2( center(1):center(1)+sz(1)-1, ...
-                            center(2):center(2)+sz(2)-1, ...
-                            center(3):center(3)+sz(3)-1 );
-            psf    = max(psf,0); psf = psf/sum(psf(:));
+            %–– PSF update: psf = psf .* buff1; normalize ––
+            psf = psf .* buff1;
+            psf = max(psf,0);
+            psf = psf / sum(psf(:));
             if use_gpu && ~isa(psf,'gpuArray'), psf = gpuArray(psf); end
 
-            % Recompute OTFs
+            %–– recalc OTFs ––
             [otf, otf_conj] = calculate_otf(psf, fft_shape, device_id);
         end
 
@@ -252,7 +343,6 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regula
 
     bl = unpad_block(bl, pad_pre, pad_post);
 end
-
 
 function x = convFFT(x, otf)
     %CONVFFT  Frequency–domain convolution with fixed precision.
