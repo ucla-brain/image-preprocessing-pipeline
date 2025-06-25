@@ -238,7 +238,9 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, ...
         if stop_criterion>0
             delta_cur = norm(bl(:));
             if abs(delta_prev - delta_cur)/delta_prev*100 <= stop_criterion
-                disp('Stop criterion reached.'); break; end
+                sprintf('Stop criterion reached in %d iterations.\n', i);
+                break;
+            end
             delta_prev = delta_cur;
         end
     end
