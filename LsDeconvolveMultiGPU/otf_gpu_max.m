@@ -28,7 +28,8 @@ for idx = 1:numel(candidates)
     try
         psf_shifted_gpu = gpuArray(psf_shifted); % Only allocate/copy here
         fft_shape = [tryN tryN tryN];
-        [otf, otf_conj] = otf_gpu_mex(psf_shifted_gpu, fft_shape);
+        otf = otf_gpu(psf_shifted_gpu, fft_shape);
+        otf_conj = conj_gpu(otf);
         wait(gpuDevice);
         clear otf otf_conj psf_shifted_gpu;
         fprintf('OK\n');

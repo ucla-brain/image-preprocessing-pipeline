@@ -1,5 +1,5 @@
-function test_gauss3d_mex_features()
-% Robust & colorful test harness for gauss3d_mex vs imgaussfilt3 (GPU/CPU fallback).
+function gauss3d_gpu_test()
+% Robust & colorful test harness for gauss3d_gpu vs imgaussfilt3 (GPU/CPU fallback).
 % Single-precision only. Shows performance, speedup, pass/fail, and summary.
 
     g = gpuDevice(1);
@@ -75,9 +75,9 @@ function test_gauss3d_mex_features()
                         end
                         t_ref = toc(t1);
 
-                        % gauss3d_mex single (standard)
+                        % gauss3d_gpu single (standard)
                         t2 = tic;
-                        y_mex_gpu = gauss3d_mex(x_pad_gpu, sigma, kernel_sz);
+                        y_mex_gpu = gauss3d_gpu(x_pad_gpu, sigma, kernel_sz);
                         t_mex = toc(t2);
 
                         % Output checks and stats

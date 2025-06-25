@@ -204,11 +204,10 @@ function build_mex(debug)
     root_dir    = '.';
     include_dir = './mex_incubator';
 
-    mexcuda(cuda_mex_flags{:}, '-R2018a', nvccflags, 'gauss3d_mex.cu',  ['-I',root_dir], ['-I',include_dir]);
-
-    mexcuda(cuda_mex_flags{:}, '-R2018a', nvccflags, 'conv3d_mex.cu',  ['-I',root_dir], ['-I',include_dir]);
-
-    mexcuda(cuda_mex_flags{:}, '-R2018a', nvccflags, 'otf_gpu_mex.cu', ['-I',root_dir], ['-I',include_dir], ...
+    mexcuda(cuda_mex_flags{:}, '-R2018a', nvccflags, 'gauss3d_gpu.cu', ['-I',root_dir], ['-I',include_dir]);
+    mexcuda(cuda_mex_flags{:}, '-R2018a', nvccflags, 'conv3d_gpu.cu' , ['-I',root_dir], ['-I',include_dir]);
+    mexcuda(cuda_mex_flags{:}, '-R2018a', nvccflags, 'conj_gpu.cu'   , ['-I',root_dir], ['-I',include_dir]);
+    mexcuda(cuda_mex_flags{:}, '-R2018a', nvccflags, 'otf_gpu.cu'    , ['-I',root_dir], ['-I',include_dir], ...
            '-L/usr/local/cuda/lib64','-lcufft');
 
     fprintf('\n✅  All MEX files built successfully.\n');

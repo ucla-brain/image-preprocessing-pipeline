@@ -104,7 +104,7 @@ try
         all_ok = false;
     end
 
-    %% 6. Test conv3d_mex against MATLAB's CPU reference (convn + replicate padding)
+    %% 6. Test conv3d_gpu against MATLAB's CPU reference (convn + replicate padding)
     try
         img_sz = [24, 25, 22];
         ker_sz = [7, 5, 3];
@@ -114,7 +114,7 @@ try
         Ig = gpuArray(I);
         Kg = gpuArray(K);
 
-        O_gpu = conv3d_mex(Ig, Kg);
+        O_gpu = conv3d_gpu(Ig, Kg);
         O_gpu_cpu = gather(O_gpu);
 
         pad = floor(ker_sz/2);
@@ -125,17 +125,17 @@ try
             max_conv_diff = max(diff_conv(:));
             mean_conv_diff = mean(diff_conv(:));
             if max_conv_diff < 5e-4 && mean_conv_diff < 1e-4
-                print_pass(sprintf('conv3d_mex matches convn+replicate (max %.2g, mean %.2g)', max_conv_diff, mean_conv_diff));
+                print_pass(sprintf('conv3d_gpu matches convn+replicate (max %.2g, mean %.2g)', max_conv_diff, mean_conv_diff));
             else
-                print_fail(sprintf('conv3d_mex vs convn+replicate: max diff %.2g, mean %.2g', max_conv_diff, mean_conv_diff));
+                print_fail(sprintf('conv3d_gpu vs convn+replicate: max diff %.2g, mean %.2g', max_conv_diff, mean_conv_diff));
                 all_ok = false;
             end
         else
-            print_fail('conv3d_mex output shape does not match CPU reference!');
+            print_fail('conv3d_gpu output shape does not match CPU reference!');
             all_ok = false;
         end
     catch ME
-        print_fail(['conv3d_mex test failed: ' ME.message]);
+        print_fail(['conv3d_gpu test failed: ' ME.message]);
         all_ok = false;
     end
 
@@ -145,7 +145,7 @@ try
         K = ones(3,3,3,'single');
         Ig = gpuArray(I);
         Kg = gpuArray(K);
-        O_gpu = conv3d_mex(Ig, Kg);
+        O_gpu = conv3d_gpu(Ig, Kg);
         O_gpu_cpu = gather(O_gpu);
         pad = floor(size(K)/2);
         Ipad = padarray(I, pad, 'replicate', 'both');

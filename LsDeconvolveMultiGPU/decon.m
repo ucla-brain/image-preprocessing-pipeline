@@ -51,7 +51,7 @@ function bl = deconSpatial(bl, psf, psf_inv, niter, lambda, stop_criterion, regu
         is_regularization_time = apply_regularization && (i > 1) && (i < niter) && (mod(i, regularize_interval) == 0);
 
         if is_regularization_time
-            if use_gpu, clear buf; bl = gauss3d_mex(bl, 0.5); else, bl = imgaussfilt3(bl, 0.5); end
+            if use_gpu, clear buf; bl = gauss3d_gpu(bl, 0.5); else, bl = imgaussfilt3(bl, 0.5); end
         end
 
         buf = convn(bl, psf, 'same');
@@ -96,7 +96,8 @@ end
 % function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regularize_interval, device_id)
 %     use_gpu = isgpuarray(bl);
 %
-%     [otf, otf_conj] = calculate_otf(psf, fft_shape, device_id);
+%     otf = calculate_otf(psf, fft_shape, device_id);
+%     if use_gpu, otf_conj = conj_gpu(otf); else, otf_conj = conj(otf); end
 %
 %     if regularize_interval < niter && lambda > 0
 %         R = single(1/26 * ones(3,3,3)); R(2,2,2) = 0;
@@ -118,7 +119,7 @@ end
 %         is_regularization_time = apply_regularization && (i > 1) && (i < niter) && (mod(i, regularize_interval) == 0);
 %
 %         if is_regularization_time
-%             if use_gpu, clear buf; bl = gauss3d_mex(bl, 0.5); else, bl = imgaussfilt3(bl, 0.5); end
+%             if use_gpu, clear buf; bl = gauss3d_gpu(bl, 0.5); else, bl = imgaussfilt3(bl, 0.5); end
 %         end
 %
 %         buf = convFFT(bl, otf);
@@ -168,11 +169,7 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, ...
     use_gpu = isgpuarray(bl);
     dtype   = classUnderlying(bl);
 
-    if ~isa(psf, 'single'), psf = single(psf); end
-    if device_id > 0, psf = gpuArray(psf); end
-    [otf, ~, ~] = pad_block_to_fft_shape(psf, fft_shape, 0);
-    otf = ifftshift(otf);
-    otf = fftn(otf);
+    otf = calculate_otf(psf, fft_shape, device_id);
 
     % Laplacian-like regulariser (only allocated if used)
     if regularize_interval < niter && lambda>0
@@ -190,15 +187,15 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, ...
         is_regularization_time = apply_regularization && (i > 1) && (i < niter) && (mod(i, regularize_interval) == 0);
 
         if is_regularization_time
-            if use_gpu, bl = gauss3d_mex(bl, 0.5); else, bl = imgaussfilt3(bl, 0.5); end
+            if use_gpu, bl = gauss3d_gpu(bl, 0.5); else, bl = imgaussfilt3(bl, 0.5); end
         end
 
         % ----------- Richardson–Lucy core ------------
-        buff1 = convFFT(bl, otf);                 % buff1: H⊗x
-        buff1 = max(buff1, eps(dtype));           % avoid /0
-        buff2 = bl ./ buff1;                      % buff2: ratio
-        buff1 = conj(otf);                        % buff1: otf_conj
-        buff2 = convFFT(buff2, buff1);            % buff2: correction
+        buff1 = convFFT(bl, otf);                                        % buff1: H⊗x
+        buff1 = max(buff1, eps(dtype));                                  % avoid /0
+        buff2 = bl ./ buff1;                                             % buff2: ratio
+        if use_gpu, buff1 = conj_gpu(otf); else, buff1 = conj(otf); end  % buff1: otf_conj
+        buff2 = convFFT(buff2, buff1);                                   % buff2: correction
 
         if regularize_interval>0 && mod(i,regularize_interval)==0 && lambda>0 && i<niter
             buff1 = convn(bl, R, 'same');         % buff1 reused as Laplacian
@@ -229,13 +226,11 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, ...
             psf = buff1(c(1):c(1)+sz(1)-1, c(2):c(2)+sz(2)-1, c(3):c(3)+sz(3)-1);
             psf = max(psf,0);
             psf = psf / sum(psf(:));
-            [otf, ~, ~] = pad_block_to_fft_shape(psf, fft_shape, 0);
-            otf = ifftshift(otf);
-            otf = fftn(otf);
+            otf = calculate_otf(psf, fft_shape, device_id);
         end
 
         % ------------- stopping test -----------------
-        if stop_criterion>0
+        if stop_criterion > 0
             delta_cur = norm(bl(:));
             if abs(delta_prev - delta_cur)/delta_prev*100 <= stop_criterion
                 fprintf('Stop criterion reached in %d iterations.\n', i);
@@ -267,14 +262,14 @@ function x = convFFT(x, otf)
     x = real(x);                   % final output
 end
 
-function [otf, otf_conj] = calculate_otf(psf, fft_shape, device_id)
+function otf = calculate_otf(psf, fft_shape, device_id)
     %CALCULATE_OTF  Build an OTF in single precision (CPU or GPU).
     %
-    %   [otf, otf_conj] = calculate_otf(psf, fft_shape, device_id)
+    %   otf = calculate_otf(psf, fft_shape, device_id)
     %
     %   • psf         – real PSF, any numeric class
     %   • fft_shape   – 3-element vector, power-of-2 friendly
-    %   • device_id   – >0 ⇒ use GPU via otf_gpu_mex
+    %   • device_id   – >0 ⇒ use GPU via otf_gpu
     %
     %   Both outputs are single (CPU) or gpuArray/single (GPU).
 
@@ -282,12 +277,11 @@ function [otf, otf_conj] = calculate_otf(psf, fft_shape, device_id)
     if ~isa(psf, 'single'), psf = single(psf); end
     if device_id > 0
         psf = gpuArray(psf);
-        [otf, otf_conj] = otf_gpu_mex(psf, fft_shape);
+        otf = otf_gpu(psf, fft_shape);
     else
         [otf, ~, ~] = pad_block_to_fft_shape(psf, fft_shape, 0);
         otf = ifftshift(otf);
         otf = fftn(otf);
-        otf_conj = conj(otf);
     end
     % fprintf('%s: OTF computed for size %s in %.2fs\n', ...
     %     current_device(device_id), mat2str(fft_shape), toc(t_compute));

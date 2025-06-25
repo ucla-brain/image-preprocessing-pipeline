@@ -922,7 +922,7 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
 
     if any(filter.gaussian_sigma > 0)
         if gpu
-            bl = gauss3d_mex(bl, filter.gaussian_sigma, filter.gaussian_size, true);
+            bl = gauss3d_gpu(bl, filter.gaussian_sigma, filter.gaussian_size, true);
         else
             bl = imgaussfilt3(bl, filter.gaussian_sigma, 'FilterSize', filter.gaussian_size, 'Padding', 'symmetric');
         end

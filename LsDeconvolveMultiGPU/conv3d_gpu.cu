@@ -1,5 +1,5 @@
 /*
- * conv3d_mex.cu
+ * conv3d_gpu.cu
  *
  * 3D Convolution with Replicate Boundary Conditions (GPU-Accelerated)
  * --------------------------------------------------------------------
@@ -23,7 +23,7 @@
  *   - CUDA kernel uses (8, 8, 4) block size for reasonable GPU occupancy.
  *   - This function is intended to be called from MATLAB as:
  *
- *       >> out = conv3d_mex(img, kernel);
+ *       >> out = conv3d_gpu(img, kernel);
  *
  * AUTHOR:
  *   Adapted and safety-patched by ChatGPT for Keivan Moradi (2025)
@@ -37,7 +37,7 @@
 #define CUDA_CHECK(ans) { gpuAssert((ans), __FILE__, __LINE__); }
 inline void gpuAssert(cudaError_t code, const char *file, int line) {
     if (code != cudaSuccess)
-        mexErrMsgIdAndTxt("conv3d_mex:CUDA", "CUDA error %s:%d: %s", file, line, cudaGetErrorString(code));
+        mexErrMsgIdAndTxt("conv3d_gpu:CUDA", "CUDA error %s:%d: %s", file, line, cudaGetErrorString(code));
 }
 
 // RAII wrapper for mxGPUArray*
@@ -103,19 +103,19 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
     mxInitGPU();
 
     if (nrhs != 2)
-        mexErrMsgIdAndTxt("conv3d_mex:Args", "Requires two inputs: img, kernel (both gpuArray single 3D).");
+        mexErrMsgIdAndTxt("conv3d_gpu:Args", "Requires two inputs: img, kernel (both gpuArray single 3D).");
     if (nlhs > 1)
-        mexErrMsgIdAndTxt("conv3d_mex:Args", "One output only.");
+        mexErrMsgIdAndTxt("conv3d_gpu:Args", "One output only.");
 
     // Validate types *before* allocating handles
     if (!mxIsGPUArray(prhs[0]) || !mxIsGPUArray(prhs[1]))
-        mexErrMsgIdAndTxt("conv3d_mex:Input", "Inputs must be gpuArray.");
+        mexErrMsgIdAndTxt("conv3d_gpu:Input", "Inputs must be gpuArray.");
     if (mxGPUGetClassID(mxGPUCreateFromMxArray(prhs[0])) != mxSINGLE_CLASS ||
         mxGPUGetNumberOfDimensions(mxGPUCreateFromMxArray(prhs[0])) != 3)
-        mexErrMsgIdAndTxt("conv3d_mex:Input", "Image must be 3D gpuArray single.");
+        mexErrMsgIdAndTxt("conv3d_gpu:Input", "Image must be 3D gpuArray single.");
     if (mxGPUGetClassID(mxGPUCreateFromMxArray(prhs[1])) != mxSINGLE_CLASS ||
         mxGPUGetNumberOfDimensions(mxGPUCreateFromMxArray(prhs[1])) != 3)
-        mexErrMsgIdAndTxt("conv3d_mex:Kernel", "Kernel must be 3D gpuArray single.");
+        mexErrMsgIdAndTxt("conv3d_gpu:Kernel", "Kernel must be 3D gpuArray single.");
 
     // Create RAII-managed GPU handles
     GpuHandle img(mxGPUCreateFromMxArray(prhs[0]));
