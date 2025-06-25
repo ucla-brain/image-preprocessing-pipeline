@@ -160,12 +160,11 @@ end
 % end
 
 function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, ...
-                        regularize_interval, device_id, psf_update_interval)
+                        regularize_interval, device_id)
 
-% Richardson–Lucy + on-the-fly Wiener PSF refinement
-% RAM-minimal version: **only buff1 & buff2 are ever allocated**
+    % Richardson–Lucy + on-the-fly Wiener PSF refinement
+    % RAM-minimal version: **only buff1 & buff2 are ever allocated**
 
-    if nargin<9, psf_update_interval = 1; end
     use_gpu = isgpuarray(bl);
     dtype   = classUnderlying(bl);
 
@@ -191,7 +190,7 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, ...
         is_regularization_time = apply_regularization && (i > 1) && (i < niter) && (mod(i, regularize_interval) == 0);
 
         if is_regularization_time
-            if use_gpu, clear buff1, buff2; bl = gauss3d_mex(bl, 0.5); else, bl = imgaussfilt3(bl, 0.5); end
+            if use_gpu, bl = gauss3d_mex(bl, 0.5); else, bl = imgaussfilt3(bl, 0.5); end
         end
 
         % ----------- Richardson–Lucy core ------------
@@ -199,7 +198,7 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, ...
         buff1 = max(buff1, eps(dtype));           % avoid /0
         buff2 = bl ./ buff1;                      % buff2: ratio
         buff1 = conj(otf);                        % buff1: otf_conj
-        buff2 = convFFT(buff2, buff1);              % buff2: correction
+        buff2 = convFFT(buff2, buff1);            % buff2: correction
 
         if regularize_interval>0 && mod(i,regularize_interval)==0 && lambda>0 && i<niter
             buff1 = convn(bl, R, 'same');         % buff1 reused as Laplacian
@@ -211,14 +210,18 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, ...
         bl = abs(bl);
 
         % ----------- Wiener PSF update ---------------
-        if psf_update_interval>0 && mod(i,psf_update_interval)==0 && i<niter
+        if i<niter
             buff1 = fftn(bl, fft_shape);          % buff1: F{X}
-            buff2 = fftn(convFFT(bl, otf), fft_shape);  % buff2: F{Y}
+            buff2 = convFFT(bl, otf);
+            buff2 = fftn(buff2, fft_shape);       % buff2: F{Y}
 
             buff2 = buff2 .* conj(buff1);         % buff2: numerator  F{Y}·F{X}*
-            buff1 = abs(buff1).^2 + 1e-4;         % buff1: denom |F{X}|^2+ε
+            buff1 = abs(buff1);
+            buff1 = buff1.^2;
+            buff1 = buff1 + eps(dtype);           % buff1: denom |F{X}|^2+ε
             buff2 = buff2 ./ buff1;               % buff2: OTF_new
-            buff1 = real(ifftn(buff2));           % buff1: PSF estimate
+            buff1 = ifftn(buff2);
+            buff1 = real(buff1);                  % buff1: PSF estimate
 
             % crop --> psf, normalise, regenerate OTFs
             sz  = size(psf);
