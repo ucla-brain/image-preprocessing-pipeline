@@ -1162,7 +1162,7 @@ function postprocess_save( ...
         nextFileIdx = nextFileIdx + size(R,3);
     end
 
-    fprintf('postprocess_save completed successfully.\\n');
+    fprintf('postprocess_save completed successfully.\n');
 end
 
 function save_slices_with_bl_tif(R, outpath, slab_z1)
