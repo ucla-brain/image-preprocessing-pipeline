@@ -214,19 +214,16 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regula
             buff1 = fftn(bl, fft_shape);
 
             %–– (buff2) = FFT(convFFT(bl, otf)) = FFT(Y) ––
-            buff2 = convFFT(bl, otf);
-            buff2 = fftn(buff2, fft_shape);
+            buff2 = fftn(convFFT(bl, otf), fft_shape);
 
             %–– (buff3) = |FFT(bl)|² + ε ––
-            buff3 = abs(buff1).^2;
-            buff3 = buff3 + 1e-4;
+            buff3 = abs(buff1).^2 + 1e-4;
 
             %–– (buff1) = conj(FFT(bl)) ––
             buff1 = conj(buff1);
 
             %–– (buff1) = (FFT(Y).*conj(FFT(bl))) ./ (|FFT(bl)|²+ε) ––
-            buff1 = buff2 .* buff1;
-            buff1 = buff1 ./ buff3;
+            buff1 = (buff2 .* buff1) ./ buff3;
 
             %–– (buff2) = real(ifftn(buff1)) = new PSF estimate ––
             buff2 = ifftn(buff1);
