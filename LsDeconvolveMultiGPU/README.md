@@ -31,9 +31,9 @@ It supports large-scale image data processing using GPU acceleration, automatic 
 | save_lz4            | Caching: 3D block save      | C            | Lz4 compression                        | >50x                            |
 | load_lz4            | Caching: 3D block load      | C            | Lz4 decompression                      | >4x                             |
 | semaphore           | Semaphore                   | C            | Multi-GPU processing                   | #GPUx → 2x–8x in our lab        |
-| gauss3d             | 3D Gaussian filter          | C/CUDA       | GPU acceleration / no extra padding    | 1.5x – 50x                      |
+| gauss3d_gpu         | 3D Gaussian filter          | C/CUDA       | GPU acceleration / no extra padding    | 1.5x – 50x                      |
 | edgetaper_3d        | Edge taper                  | C/CUDA       | GPU acceleration                       | 3x – 4x \| fixes edge artifacts |
-| otf_gpu_mex         | OTF calculator              | C/CUDA       | GPU acceleration / bug fix             | 2x MATLAB GPU                   |
+| otf_gpu             | OTF calculator              | C/CUDA       | GPU acceleration / bug fix             | 2x MATLAB GPU                   |
 | deconFFT            | FFT based deconvolution     | MATLAB       | GPU acceleration                       | 2x – 3x Spatial Method          |
 | filter_subband_3d_z | Destriping                  | MATLAB       | GPU acceleration                       | 8x                              |
 | decwrap             | Python Wrapper              | Python       | Optimal block size calculation         | Processes larger blocks         |
