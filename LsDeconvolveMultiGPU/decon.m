@@ -189,7 +189,7 @@ function [otf, otf_conj] = calculate_otf(psf, fft_shape, device_id)
     %
     %   Both outputs are single (CPU) or gpuArray/single (GPU).
 
-    t_compute = tic;
+    % t_compute = tic;
     if ~isa(psf, 'single'), psf = single(psf); end
     if device_id > 0
         psf = gpuArray(psf);
@@ -200,8 +200,8 @@ function [otf, otf_conj] = calculate_otf(psf, fft_shape, device_id)
         otf = fftn(otf);
         otf_conj = conj(otf);
     end
-    fprintf('%s: OTF computed for size %s in %.2fs\n', ...
-        current_device(device_id), mat2str(fft_shape), toc(t_compute));
+    % fprintf('%s: OTF computed for size %s in %.2fs\n', ...
+    %     current_device(device_id), mat2str(fft_shape), toc(t_compute));
 end
 
 function [bl, pad_pre, pad_post] = pad_block_to_fft_shape(bl, fft_shape, mode)
