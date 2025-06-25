@@ -9,7 +9,6 @@ function load_bl_tif_test()
 % ==============================================================
 
 clearvars; clc;
-setenv('PATH',[fullfile(pwd,'tiff_build','libtiff','bin') pathsep getenv('PATH')]);
 % --------- Cross-platform emoji printing ---------
 [EMOJI_PASS, EMOJI_FAIL] = emoji_checkmarks();
 
@@ -430,6 +429,7 @@ end
 
 function exe = findExe(name)
 % Cross-platform command resolver
+    setenv('PATH',[fullfile(pwd,'tiff_build','libtiff','bin') pathsep getenv('PATH')]);
     exe = '';
     if ispc
         [status, out] = system(['where ', name]);
