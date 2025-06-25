@@ -45,7 +45,7 @@ function bl = deconSpatial(bl, psf, psf_inv, niter, lambda, stop_criterion, regu
 
     bl = edgetaper_3d(bl, psf);
     for i = 1:niter
-        start_time = tic;
+        % start_time = tic;
 
         apply_regularization = (regularize_interval > 0) && (regularize_interval < niter);
         is_regularization_time = apply_regularization && (i > 1) && (i < niter) && (mod(i, regularize_interval) == 0);
@@ -78,9 +78,9 @@ function bl = deconSpatial(bl, psf, psf_inv, niter, lambda, stop_criterion, regu
             delta_current = norm(bl(:));
             delta_rel = abs(delta_prev - delta_current) / delta_prev * 100;
             delta_prev = delta_current;
-            disp([current_device(device_id) ': Iter ' num2str(i) ...
-                  ', ΔD: ' num2str(delta_rel,3) ...
-                  ', ΔT: ' num2str(round(toc(start_time),1)) 's']);
+            % disp([current_device(device_id) ': Iter ' num2str(i) ...
+            %       ', ΔD: ' num2str(delta_rel,3) ...
+            %       ', ΔT: ' num2str(round(toc(start_time),1)) 's']);
             if i > 1 && delta_rel <= stop_criterion
                 disp('Stop criterion reached. Finishing iterations.');
                 break
@@ -112,7 +112,7 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regula
     end
 
     for i = 1:niter
-        start_time = tic;
+        % start_time = tic;
 
         apply_regularization = (regularize_interval > 0) && (regularize_interval < niter);
         is_regularization_time = apply_regularization && (i > 1) && (i < niter) && (mod(i, regularize_interval) == 0);
@@ -143,9 +143,9 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regula
             delta_current = norm(bl(:));
             delta_rel = abs(delta_prev - delta_current) / delta_prev * 100;
             delta_prev = delta_current;
-            disp([current_device(device_id) ': Iter ' num2str(i) ...
-                  ', ΔD: ' num2str(delta_rel,3) ...
-                  ', ΔT: ' num2str(round(toc(start_time),1)) 's']);
+            % disp([current_device(device_id) ': Iter ' num2str(i) ...
+            %       ', ΔD: ' num2str(delta_rel,3) ...
+            %       ', ΔT: ' num2str(round(toc(start_time),1)) 's']);
             if i > 1 && delta_rel <= stop_criterion
                 disp('Stop criterion reached. Finishing iterations.');
                 break
