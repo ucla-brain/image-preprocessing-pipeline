@@ -132,7 +132,7 @@ function data = readTiff(fname)
         % Fail‑safe: external tiffcp decompression
     end
     tempName = [fname, '.dc.tif'];
-    cmd = sprintf('tiffcp -c none "%s" "%s"', fname, tempName);
+    cmd = sprintf('tiff_build/libtiff/bin/tiffcp -c none "%s" "%s"', fname, tempName);
     status = system(cmd);
     if status ~= 0
         error('Decompression failed for %s', fname);
