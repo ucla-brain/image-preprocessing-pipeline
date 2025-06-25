@@ -129,10 +129,11 @@ function data = readTiff(fname)
         data = read(t);
         return;
     catch
-        % Fail‑safe: external tiffcp decompression
+        % Fail-safe: use locally built tiffcp with ZSTD support
     end
     tempName = [fname, '.dc.tif'];
-    cmd = sprintf('tiff_build/libtiff/bin/tiffcp -c none "%s" "%s"', fname, tempName);
+    tiffcp_bin = fullfile(pwd, 'tiff_build', 'libtiff', 'bin', 'tiffcp');
+    cmd = sprintf('%s -c none "%s" "%s"', tiffcp_bin, fname, tempName);
     status = system(cmd);
     if status ~= 0
         error('Decompression failed for %s', fname);
