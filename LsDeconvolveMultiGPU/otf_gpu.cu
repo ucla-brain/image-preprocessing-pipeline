@@ -128,7 +128,6 @@ void mexFunction(int nlhs, mxArray *plhs[],
         mexErrMsgIdAndTxt("otf_gpu_mex:fftshape", "fft_shape must be positive.");
 
     mwSize odims[3] = { mwSize(dx), mwSize(dy), mwSize(dz) };
-    size_t N = dx * dy * dz;
 
     // ---- Allocate output ----
     mxGPUArray *otf = mxGPUCreateGPUArray(3, odims, mxSINGLE_CLASS,
