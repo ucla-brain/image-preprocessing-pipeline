@@ -136,11 +136,35 @@ def resolve_path(p):
 def validate_args(args):
     args.input = resolve_path(args.input)
 
-    if args.lambda_ex not in [488, 561, 642] or args.lambda_em not in [525, 600, 690]:
-        raise RuntimeError("Unsupported excitation/emission wavelength. Valid pairs: 488/525, 561/600, 642/690.")
+    # Supported excitation/emission wavelength pairs (nm)
+    supported_pairs = [
+        (350, 460),  # DAPI
+        (405, 450),  # AmCyan
+        (430, 470),  # CFP
+        (458, 480),  # mCerulean
+        (488, 525),  # GFP
+        (514, 530),  # YFP
+        (532, 555),  # TRITC
+        (561, 600),  # mCherry
+        (594, 620),  # Texas Red
+        (633, 660),  # Cy5
+        (642, 690),  # Alexa 647
+        (680, 710),  # Cy7
+    ]
 
-    if [488, 561, 642].index(args.lambda_ex) != [525, 600, 690].index(args.lambda_em):
-        raise RuntimeError(f"Ex {args.lambda_ex} and Em {args.lambda_em} do not match.")
+    ex = getattr(args, 'lambda_ex', None)
+    em = getattr(args, 'lambda_em', None)
+
+    if ex is None or em is None:
+        raise RuntimeError("Missing required arguments: lambda_ex and lambda_em")
+
+    if (ex, em) not in supported_pairs:
+        # Build a readable string of valid pairs
+        pair_str = ', '.join(f"{e}/{m}" for e, m in supported_pairs)
+        raise RuntimeError(
+            f"Unsupported excitation/emission pair: {ex}/{em}. "
+            f"Valid pairs are: {pair_str}"
+        )
 
     if len(args.gaussian_sigma) != 3:
         raise ValueError("Gaussian sigma must be a triplet, e.g., --gaussian-sigma 0.5 0.5 1.5")
