@@ -1,14 +1,14 @@
 /*==============================================================================
-  otf_conj_gpu_mex.cu
+  conj_gpu.cu
   ------------------------------------------------------------------------------
   Compute the complex conjugate of an existing single-precision OTF on the GPU.
 
   Usage in MATLAB (gpuArray):
-      otf_conj = otf_conj_gpu_mex(otf);
+      otf_conj = conj_gpu(otf);
 
   Input
   ──────
-    otf         : 3-D complex single gpuArray (output of otf_gpu_mex)
+    otf         : 3-D complex single gpuArray (output of otf_gpu)
 
   Output
   ──────
@@ -22,7 +22,7 @@
 // ─────────────── Error macro ───────────────
 #define CUDA_CHECK(e) \
     if ((e) != cudaSuccess) \
-        mexErrMsgIdAndTxt("otf_conj_gpu_mex:CUDA", "CUDA error %s:%d: %s", \
+        mexErrMsgIdAndTxt("conj_gpu:CUDA", "CUDA error %s:%d: %s", \
                           __FILE__, __LINE__, cudaGetErrorString(e));
 
 // ─────────────── Kernel ───────────────
@@ -41,29 +41,34 @@ void mexFunction(int nlhs, mxArray *plhs[],
                  int nrhs, const mxArray *prhs[])
 {
     if (nrhs != 1)
-        mexErrMsgIdAndTxt("otf_conj_gpu_mex:nrhs", "One input (otf) required.");
+        mexErrMsgIdAndTxt("conj_gpu:nrhs", "One input (otf) required.");
     if (nlhs != 1)
-        mexErrMsgIdAndTxt("otf_conj_gpu_mex:nlhs", "One output (otf_conj) required.");
+        mexErrMsgIdAndTxt("conj_gpu:nlhs", "One output (otf_conj) required.");
 
     mxInitGPU();
 
     const mxGPUArray *otf = mxGPUCreateFromMxArray(prhs[0]);
-    if (mxGPUGetClassID(otf) != mxSINGLE_CLASS || !mxGPUIsComplex(otf))
-        mexErrMsgIdAndTxt("otf_conj_gpu_mex:input",
-                          "Input must be complex single gpuArray.");
-    size_t N = mxGPUGetElementCount(otf);
+
+    if (mxGPUGetClassID(otf) != mxSINGLE_CLASS)
+        mexErrMsgIdAndTxt("conj_gpu:type", "Input must be single precision.");
+    if (mxGPUGetImagData(otf) == nullptr)
+        mexErrMsgIdAndTxt("conj_gpu:complex", "Input must be complex.");
+
+    // Compute element count manually
+    size_t N = 1;
+    const mwSize *dims = mxGPUGetDimensions(otf);
+    mwSize nd = mxGPUGetNumberOfDimensions(otf);
+    for (mwSize i = 0; i < nd; ++i) N *= dims[i];
+
     const float2 *d_in = static_cast<const float2*>(mxGPUGetDataReadOnly(otf));
 
-    // Allocate output
-    mxGPUArray *out = mxGPUCreateGPUArray(mxGPUGetNumberOfDimensions(otf),
-                                          mxGPUGetDimensions(otf),
+    mxGPUArray *out = mxGPUCreateGPUArray(nd, dims,
                                           mxSINGLE_CLASS, mxCOMPLEX,
                                           MX_GPU_DO_NOT_INITIALIZE);
     float2 *d_out = static_cast<float2*>(mxGPUGetData(out));
 
-    // Launch kernel
     dim3 blk(256);
-    dim3 grd( (N + blk.x - 1) / blk.x );
+    dim3 grd((N + blk.x - 1) / blk.x);
     conj_kernel<<<grd, blk>>>(d_in, d_out, N);
     CUDA_CHECK(cudaGetLastError());
     CUDA_CHECK(cudaDeviceSynchronize());
