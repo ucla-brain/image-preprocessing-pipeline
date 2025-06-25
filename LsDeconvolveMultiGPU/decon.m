@@ -85,9 +85,9 @@ function bl = deconSpatial(bl, psf, psf_inv, niter, lambda, stop_criterion, regu
                 disp('Stop criterion reached. Finishing iterations.');
                 break
             end
-        else
-            disp([current_device(device_id) ': Iter ' num2str(i) ...
-                  ', ΔT: ' num2str(round(toc(start_time),1)) 's']);
+        % else
+        %     disp([current_device(device_id) ': Iter ' num2str(i) ...
+        %           ', ΔT: ' num2str(round(toc(start_time),1)) 's']);
         end
     end
 end
@@ -150,9 +150,9 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regula
                 disp('Stop criterion reached. Finishing iterations.');
                 break
             end
-        else
-            disp([current_device(device_id) ': Iter ' num2str(i) ...
-                  ', ΔT: ' num2str(round(toc(start_time),2)) 's']);
+        % else
+        %     disp([current_device(device_id) ': Iter ' num2str(i) ...
+        %           ', ΔT: ' num2str(round(toc(start_time),2)) 's']);
         end
     end
 
