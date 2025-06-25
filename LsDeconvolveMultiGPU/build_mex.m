@@ -180,24 +180,20 @@ function build_mex(debug)
     mex(mex_cpu{:}, inc_tiff, 'save_bl_tif.cpp', link_tiff{:});
 
     %% 8) CUDA MEX files (unchanged)
-        % ——————— CUDA MEX (fixed) ———————
     if ispc
-        % For MSVC on Windows, wrap everything in NVCCFLAGS
-        xmlfile = fullfile(fileparts(mfilename('fullpath')), 'nvcc_msvcpp2022.xml');
-        assert(isfile(xmlfile), 'nvcc_msvcpp2022.xml not found!');
-        cuda_mex_flags = {'-f', xmlfile};
+      xmlfile = fullfile(fileparts(mfilename('fullpath')), 'nvcc_msvcpp2022.xml');
+      assert(isfile(xmlfile),'nvcc_msvcpp2022.xml not found!');
+      cuda_mex_flags = {'-f',xmlfile};
     else
-        cuda_mex_flags = {};
+      cuda_mex_flags = {};
     end
 
     if debug
-        nvccflags = [ ...
-          'NVCCFLAGS="$NVCCFLAGS -G -std=c++17 ' ...
-          '-Xcompiler -O0 -Xcompiler -g"' ];
+      % keep only the debug flag (-G), no -std or -O here
+      nvccflags = 'NVCCFLAGS="$NVCCFLAGS -G"';
     else
-        nvccflags = [ ...
-          'NVCCFLAGS="$NVCCFLAGS -O3 -std=c++17 ' ...
-          '-Xcompiler -march=native -Xcompiler -flto"' ];
+      % only pass host flags; leave -O and -std to mexcuda
+      nvccflags = 'NVCCFLAGS="$NVCCFLAGS -Xcompiler -march=native -Xcompiler -flto"';
     end
 
     root_dir    = '.';
@@ -208,7 +204,7 @@ function build_mex(debug)
     mexcuda(cuda_mex_flags{:}, '-R2018a', nvccflags, 'conv3d_mex.cu',  ['-I',root_dir], ['-I',include_dir]);
 
     mexcuda(cuda_mex_flags{:}, '-R2018a', nvccflags, 'otf_gpu_mex.cu', ['-I',root_dir], ['-I',include_dir], ...
-           '-L/usr/local/cuda/lib64', '-lcufft');
+           '-L/usr/local/cuda/lib64','-lcufft');
 
     fprintf('\n✅  All MEX files built successfully.\n');
 end
