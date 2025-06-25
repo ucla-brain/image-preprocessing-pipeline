@@ -428,13 +428,29 @@ function run_external_endian_test(tools, label, bigEndian, EMOJI_PASS, EMOJI_FAI
 end
 
 function exe = findExe(name)
-% Cross-platform command resolver
-    setenv('PATH',[fullfile(pwd,'tiff_build','libtiff','bin') pathsep getenv('PATH')]);
+% Cross-platform resolver that first looks in your local libtiff/bin
     exe = '';
+    % 1) check local build directory
+    binDir = fullfile(pwd,'tiff_build','libtiff','bin');
+    % possible extensions on Windows vs. Unix
     if ispc
-        [status, out] = system(['where ', name]);
+        exts = {'.exe','.bat','.cmd',''};
     else
-        [status, out] = system(['which ', name]);
+        exts = {''};
+    end
+    for k = 1:numel(exts)
+        candidate = fullfile(binDir,[name exts{k}]);
+        if exist(candidate,'file') == 2
+            exe = candidate;
+            return;
+        end
+    end
+
+    % 2) fallback to system search
+    if ispc
+        [status,out] = system(['where ', name]);
+    else
+        [status,out] = system(['which ', name]);
     end
     if status == 0
         lines = splitlines(strtrim(out));
