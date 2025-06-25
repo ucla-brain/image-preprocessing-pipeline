@@ -169,10 +169,6 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, ...
     use_gpu = isgpuarray(bl);
     dtype   = classUnderlying(bl);
 
-    % ---- allocate the only two reusable buffers ----
-    buff1 = zeros(fft_shape, dtype); if use_gpu, buff1 = gpuArray(buff1); end
-    buff2 = zeros(fft_shape, dtype); if use_gpu, buff2 = gpuArray(buff2); end
-
     [otf, otf_conj] = calculate_otf(psf, fft_shape, device_id);
 
     % Laplacian-like regulariser (only allocated if used)
