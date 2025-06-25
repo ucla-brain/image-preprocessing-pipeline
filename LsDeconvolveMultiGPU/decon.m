@@ -169,7 +169,11 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, ...
     use_gpu = isgpuarray(bl);
     dtype   = classUnderlying(bl);
 
-    [otf, otf_conj] = calculate_otf(psf, fft_shape, device_id);
+    if ~isa(psf, 'single'), psf = single(psf); end
+    if device_id > 0, psf = gpuArray(psf); end
+    [otf, ~, ~] = pad_block_to_fft_shape(psf, fft_shape, 0);
+    otf = ifftshift(otf);
+    otf = fftn(otf);
 
     % Laplacian-like regulariser (only allocated if used)
     if regularize_interval < niter && lambda>0
@@ -194,7 +198,8 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, ...
         buff1 = convFFT(bl, otf);                 % buff1: H⊗x
         buff1 = max(buff1, eps(dtype));           % avoid /0
         buff2 = bl ./ buff1;                      % buff2: ratio
-        buff2 = convFFT(buff2, otf_conj);         % buff2: correction
+        buff1 = conj(otf);                        % buff1: otf_conj
+        buff2 = convFFT(buff2, buff1);              % buff2: correction
 
         if regularize_interval>0 && mod(i,regularize_interval)==0 && lambda>0 && i<niter
             buff1 = convn(bl, R, 'same');         % buff1 reused as Laplacian
@@ -221,8 +226,9 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, ...
             psf = buff1(c(1):c(1)+sz(1)-1, c(2):c(2)+sz(2)-1, c(3):c(3)+sz(3)-1);
             psf = max(psf,0);
             psf = psf / sum(psf(:));
-            if use_gpu && ~isa(psf,'gpuArray'), psf = gpuArray(psf); end
-            [otf, otf_conj] = calculate_otf(psf, fft_shape, device_id);
+            [otf, ~, ~] = pad_block_to_fft_shape(psf, fft_shape, 0);
+            otf = ifftshift(otf);
+            otf = fftn(otf);
         end
 
         % ------------- stopping test -----------------
