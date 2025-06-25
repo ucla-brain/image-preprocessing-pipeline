@@ -7,7 +7,8 @@ function save_bl_tif_test
 fprintf("🧪  save_bl_tif extended test-suite\n");
 
 %% ---------- sandbox (deleted on exit) ----------
-tmpRoot = tempname;   mkdir(tmpRoot);
+tmpRoot = tempname;
+mkdir(tmpRoot);
 cSandbox = onCleanup(@() sandbox_cleanup(tmpRoot));
 
 %% ---------- A. basic 2-D / 3-D-singleton ----------
@@ -28,7 +29,7 @@ fprintf("   ✅ basic 2-D / 3-D paths ok\n");
 cfg.order = {'YXZ',false; 'XYZ',true};
 cfg.dtype = {'uint8',@uint8; 'uint16',@uint16};
 cfg.comp  = {'none','lzw','deflate','zstd'};
-sz        = [2048 1024 4];  % ≥ 2 MiB slice
+sz        = [2048 1024 4];
 
 nLayouts   = size(cfg.order,1);
 nTypes     = size(cfg.dtype,1);
@@ -46,7 +47,6 @@ for o = 1:nLayouts
             if cfg.order{o,2}
                 V = permute(V,[2 1 3]);
             end
-
             tagSafe = regexprep(sprintf('%s_%s_%s',cfg.order{o,1},...
                           cfg.dtype{d,1},comp), '[^A-Za-z0-9]','_');
             files = arrayfun(@(k) fullfile(tmpRoot, ...
@@ -62,15 +62,11 @@ for o = 1:nLayouts
             for k = 1:sz(3)
                 ref = V(:,:,k);
                 if cfg.order{o,2}, ref = ref.'; end
-
-                % Always use MATLAB Tiff class for reading
                 data = readTiff(files{k});
                 assert(isequal(data, ref), ...
                        'Mismatch %s slice %d via Tiff', tagSafe, k);
-
                 info = dir(files{k});
                 bytesLogical = bytesLogical + info.bytes;
-
                 [~,bcount] = system(sprintf('stat -c "%%b" "%s"', files{k}));
                 [~,bsize ] = system(sprintf('stat -c "%%B" "%s"', files{k}));
                 bytesPhysical = bytesPhysical + ...
@@ -105,7 +101,7 @@ try
 catch, fprintf('      ✅ read-only overwrite rejected\n'); end
 
 %% ---------- D. comparison table ----------
-fprintf("\n   📊 XYZ vs YXZcomparison (Time and Sizes):\n");
+fprintf("\n   📊 XYZ vs YXZ comparison (Time and Sizes):\n");
 rows = {};
 for d = 1:nTypes
     for c = 1:nComps
@@ -116,7 +112,6 @@ for d = 1:nTypes
         lX      = logicalMiB(2,d,c);
         pY      = physicalMiB(1,d,c);
         pX      = physicalMiB(2,d,c);
-
         rows(end+1,:) = {cfg.dtype{d,1}, cfg.comp{c}, t_YXZ, t_XYZ, sp, lY, lX, pY, pX};
     end
 end
@@ -128,8 +123,22 @@ fprintf("\n🎉  all save_bl_tif tests passed\n");
 end
 
 function data = readTiff(fname)
-    t = Tiff(fname,'r');
-    data = read(t);
+    % Primary: MATLAB Tiff class
+    try
+        t = Tiff(fname,'r');
+        data = read(t);
+        return;
+    catch
+        % Fail‑safe: external tiffcp decompression
+    end
+    tempName = [fname, '.dc.tif'];
+    cmd = sprintf('tiffcp -c none "%s" "%s"', fname, tempName);
+    status = system(cmd);
+    if status ~= 0
+        error('Decompression failed for %s', fname);
+    end
+    data = imread(tempName);
+    delete(tempName);
 end
 
 function out = generateTestData(sz, dtype)
