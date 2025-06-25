@@ -180,28 +180,28 @@ function build_mex(debug)
     mex(mex_cpu{:}, inc_tiff, 'save_bl_tif.cpp', link_tiff{:});
 
     %% 8) CUDA MEX files (unchanged)
+    common_nvcc = { ...
+      '-std=c++17', ...
+      '-O3', ...
+      '-Xcompiler','-O3', ...
+      '-Xcompiler','-march=native', ...
+      '-Xcompiler','-flto' ...
+    };
     if ispc
-        if debug
-            nvccflags = 'NVCCFLAGS="$NVCCFLAGS -G -std=c++17 -Xcompiler "/Od,/Zi"" ';
-        else
-            nvccflags = 'NVCCFLAGS="$NVCCFLAGS -O2 -std=c++17 -Xcompiler "/O2,/arch:AVX2"" ';
-        end
         xmlfile = fullfile(fileparts(mfilename('fullpath')),'nvcc_msvcpp2022.xml');
         assert(isfile(xmlfile),'nvcc_msvcpp2022.xml not found!');
         cuda_mex_flags = {'-f',xmlfile};
     else
-        if debug
-            nvccflags = 'NVCCFLAGS="$NVCCFLAGS -G -std=c++17 -Xcompiler ''-O0,-g''" ';
-        else
-            nvccflags = 'NVCCFLAGS="$NVCCFLAGS -O3 -std=c++17 -Xcompiler ''-O3,-march=native -flto''" ';
-        end
         cuda_mex_flags = {};
     end
 
     root_dir    = '.'; include_dir = './mex_incubator';
-    mexcuda(cuda_mex_flags{:},'-R2018a','gauss3d_mex.cu',  ['-I',root_dir],['-I',include_dir],nvccflags);
-    mexcuda(cuda_mex_flags{:},'-R2018a','conv3d_mex.cu',  ['-I',root_dir],['-I',include_dir],nvccflags);
-    mexcuda(cuda_mex_flags{:},'-R2018a','otf_gpu_mex.cu',['-I',root_dir],['-I',include_dir],nvccflags,'-L/usr/local/cuda/lib64','-lcufft');
+    mexcuda(cuda_mex_flags{:}, '-R2018a', common_nvcc{:}, ...
+           'gauss3d_mex.cu',  ['-I',root_dir], ['-I',include_dir]);
+    mexcuda(cuda_mex_flags{:}, '-R2018a', common_nvcc{:}, ...
+           'conv3d_mex.cu',  ['-I',root_dir], ['-I',include_dir]);
+    mexcuda(cuda_mex_flags{:}, '-R2018a', common_nvcc{:}, ...
+           'otf_gpu_mex.cu',['-I',root_dir], ['-I',include_dir], '-lcufft','-L/usr/local/cuda/lib64');
 
     fprintf('\n✅  All MEX files built successfully.\n');
 end
