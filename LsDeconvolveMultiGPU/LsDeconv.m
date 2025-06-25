@@ -1231,7 +1231,7 @@ end
 function semaphore_create(semkey, value)
     semaphore_destroy(semkey);
     semaphore('c', semkey, value);
-    disp(['semaphore ' num2str(semkey) ' is created with the initial value of ' num2str(value)]);
+    % disp(['semaphore ' num2str(semkey) ' is created with the initial value of ' num2str(value)]);
 end
 
 function [x, y, z, bit_depth] = getstackinfo(datadir)
