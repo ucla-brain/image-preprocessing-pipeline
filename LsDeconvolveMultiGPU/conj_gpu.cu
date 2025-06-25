@@ -51,7 +51,7 @@ void mexFunction(int nlhs, mxArray *plhs[],
 
     if (mxGPUGetClassID(otf) != mxSINGLE_CLASS)
         mexErrMsgIdAndTxt("conj_gpu:type", "Input must be single precision.");
-    if (mxGPUGetImagData(otf) == nullptr)
+    if (!mxGPUIsComplex(otf))
         mexErrMsgIdAndTxt("conj_gpu:complex", "Input must be complex.");
 
     // Compute element count manually
