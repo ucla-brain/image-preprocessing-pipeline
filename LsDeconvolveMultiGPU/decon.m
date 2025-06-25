@@ -159,22 +159,23 @@ end
 %     bl = unpad_block(bl, pad_pre, pad_post);
 % end
 
-function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regularize_interval, device_id, psf_update_interval)
+function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, ...
+                        regularize_interval, device_id, psf_update_interval)
+
+% Richardson–Lucy + on-the-fly Wiener PSF refinement
+% RAM-minimal version: **only buff1 & buff2 are ever allocated**
+
     if nargin<9, psf_update_interval = 1; end
     use_gpu = isgpuarray(bl);
     dtype   = classUnderlying(bl);
 
-    % Wiener Update
+    % ---- allocate the only two reusable buffers ----
+    buff1 = zeros(fft_shape, dtype); if use_gpu, buff1 = gpuArray(buff1); end
+    buff2 = zeros(fft_shape, dtype); if use_gpu, buff2 = gpuArray(buff2); end
 
-    %–– Allocate just 3 big buffers ––
-    buff1 = zeros(fft_shape, dtype);   if use_gpu, buff1 = gpuArray(buff1); end
-    buff2 = zeros(fft_shape, dtype);   if use_gpu, buff2 = gpuArray(buff2); end
-    buff3 = zeros(fft_shape, dtype);   if use_gpu, buff3 = gpuArray(buff3); end
-
-    % Initial OTFs
     [otf, otf_conj] = calculate_otf(psf, fft_shape, device_id);
 
-    % Regularizer kernel
+    % Laplacian-like regulariser (only allocated if used)
     if regularize_interval < niter && lambda>0
         R = single(1/26*ones(3,3,3)); R(2,2,2)=0;
         if use_gpu, R = gpuArray(R); end
@@ -186,69 +187,47 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regula
     if stop_criterion>0, delta_prev = norm(bl(:)); end
 
     for i = 1:niter
-        %–– (buff1) = convFFT(bl, otf) ––
-        buff1 = convFFT(bl, otf);
+        % ----------- Richardson–Lucy core ------------
+        buff1 = convFFT(bl, otf);                 % buff1: H⊗x
+        buff1 = max(buff1, eps(dtype));           % avoid /0
+        buff2 = bl ./ buff1;                      % buff2: ratio
+        buff2 = convFFT(buff2, otf_conj);         % buff2: correction
 
-        %–– (buff1) = max(buff1, eps) ––
-        buff1 = max(buff1, eps(dtype));
-
-        %–– (buff2) = bl ./ buff1 ––
-        buff2 = bl ./ buff1;
-
-        %–– (buff2) = convFFT(buff2, otf_conj) ––
-        buff2 = convFFT(buff2, otf_conj);
-
-        %–– update bl with/without regularization ––
         if regularize_interval>0 && mod(i,regularize_interval)==0 && lambda>0
-            reg = convn(bl, R, 'same');
-            bl  = bl .* buff2 .* (1-lambda) + reg .* lambda;
+            buff1 = convn(bl, R, 'same');         % buff1 reused as Laplacian
+            bl    = bl .* buff2 .* (1-lambda) + buff1 .* lambda;
         else
-            bl  = bl .* buff2;
+            bl    = bl .* buff2;
         end
 
         bl = abs(bl);
 
-        %–– Wiener-PSF update every psf_update_interval ––
+        % ----------- Wiener PSF update ---------------
         if psf_update_interval>0 && mod(i,psf_update_interval)==0 && i<niter
-            %–– (buff1) = FFT(bl) ––
-            buff1 = fftn(bl, fft_shape);
+            buff1 = fftn(bl, fft_shape);          % buff1: F{X}
+            buff2 = fftn(convFFT(bl, otf), fft_shape);  % buff2: F{Y}
 
-            %–– (buff2) = FFT(convFFT(bl, otf)) = FFT(Y) ––
-            buff2 = fftn(convFFT(bl, otf), fft_shape);
+            buff2 = buff2 .* conj(buff1);         % buff2: numerator  F{Y}·F{X}*
+            buff1 = abs(buff1).^2 + 1e-4;         % buff1: denom |F{X}|^2+ε
+            buff2 = buff2 ./ buff1;               % buff2: OTF_new
+            buff1 = real(ifftn(buff2));           % buff1: PSF estimate
 
-            %–– (buff3) = |FFT(bl)|² + ε ––
-            buff3 = abs(buff1).^2 + 1e-4;
-
-            %–– (buff1) = conj(FFT(bl)) ––
-            buff1 = conj(buff1);
-
-            %–– (buff1) = (FFT(Y).*conj(FFT(bl))) ./ (|FFT(bl)|²+ε) ––
-            buff1 = (buff2 .* buff1) ./ buff3;
-
-            %–– (buff2) = real(ifftn(buff1)) = new PSF estimate ––
-            buff2 = real(ifftn(buff1));
-
-            % Crop & normalize PSF
-            sz     = size(psf);
-            center = floor((fft_shape - sz)/2) + 1;
-            psf    = buff2( center(1):center(1)+sz(1)-1, ...
-                            center(2):center(2)+sz(2)-1, ...
-                            center(3):center(3)+sz(3)-1 );
-            psf    = max(psf,0); psf = psf/sum(psf(:));
+            % crop --> psf, normalise, regenerate OTFs
+            sz  = size(psf);
+            c   = floor((fft_shape - sz)/2) + 1;
+            psf = buff1(c(1):c(1)+sz(1)-1, c(2):c(2)+sz(2)-1, c(3):c(3)+sz(3)-1);
+            psf = max(psf,0);
+            psf = psf / sum(psf(:));
             if use_gpu && ~isa(psf,'gpuArray'), psf = gpuArray(psf); end
-
-            % Recompute OTFs
             [otf, otf_conj] = calculate_otf(psf, fft_shape, device_id);
         end
 
-        %–– check stop criterion ––
+        % ------------- stopping test -----------------
         if stop_criterion>0
-            delta_curr = norm(bl(:));
-            if abs(delta_prev - delta_curr)/delta_prev*100 <= stop_criterion
-                disp('Stop criterion reached.');
-                break
-            end
-            delta_prev = delta_curr;
+            delta_cur = norm(bl(:));
+            if abs(delta_prev - delta_cur)/delta_prev*100 <= stop_criterion
+                disp('Stop criterion reached.'); break; end
+            delta_prev = delta_cur;
         end
     end
 
