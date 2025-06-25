@@ -9,7 +9,7 @@ function load_bl_tif_test()
 % ==============================================================
 
 clearvars; clc;
-
+setenv('PATH',[fullfile(pwd,'tiff_build','libtiff','bin') pathsep getenv('PATH')]);
 % --------- Cross-platform emoji printing ---------
 [EMOJI_PASS, EMOJI_FAIL] = emoji_checkmarks();
 
