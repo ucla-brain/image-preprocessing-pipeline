@@ -226,8 +226,7 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regula
             buff1 = (buff2 .* buff1) ./ buff3;
 
             %–– (buff2) = real(ifftn(buff1)) = new PSF estimate ––
-            buff2 = ifftn(buff1);
-            buff2 = real(buff2);
+            buff2 = real(ifftn(buff1));
 
             % Crop & normalize PSF
             sz     = size(psf);
