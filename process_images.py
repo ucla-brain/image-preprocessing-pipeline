@@ -237,7 +237,7 @@ class MultiProcessCommandRunner(Process):
                     self.command,
                     stdout=PIPE,
                     stderr=PIPE,
-                    shell=False,
+                    shell=True,
                     text=True,
                     start_new_session=False,
                     bufsize=0
@@ -1598,8 +1598,7 @@ if __name__ == '__main__':
         log.error(f"Error: paraconverter.py not found\n{paraconverter}")
         raise RuntimeError
 
-    # imaris_converter = Path(r"imaris") / "ImarisConvertiv.exe"
-    imaris_converter = Path(r"C:\Program Files\Bitplane\ImarisViewer 10.2.0").absolute() / "ImarisConvertiv.exe"
+    imaris_converter = Path(r"imaris") / "ImarisConvertiv.exe"
     if not imaris_converter.exists():
         log.error("Error: ImarisConvertiv.exe not found")
         raise RuntimeError
