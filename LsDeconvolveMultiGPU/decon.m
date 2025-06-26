@@ -118,7 +118,7 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, ...
         is_regularization_time = apply_regularization && (i > 1) && (i < niter) && (mod(i, regularize_interval) == 0);
 
         if is_regularization_time
-            if use_gpu, clearvars(buff2, buff2); bl = gauss3d_gpu(bl, 0.5); else, bl = imgaussfilt3(bl, 0.5); end
+            if use_gpu, clear buff2, buff2; bl = gauss3d_gpu(bl, 0.5); else, bl = imgaussfilt3(bl, 0.5); end
         end
 
         % ----------- Richardson–Lucy core ------------
