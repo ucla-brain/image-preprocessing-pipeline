@@ -276,7 +276,7 @@ function otf = calculate_otf(psf, fft_shape, device_id)
     % t_compute = tic;
     if ~isa(psf, 'single'), psf = single(psf); end
     if device_id > 0
-        psf = gpuArray(psf);
+        if ~gpuarray(psf), psf = gpuArray(psf); end
         otf = otf_gpu(psf, fft_shape);
     else
         [otf, ~, ~] = pad_block_to_fft_shape(psf, fft_shape, 0);
