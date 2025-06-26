@@ -237,7 +237,7 @@ class MultiProcessCommandRunner(Process):
                     self.command,
                     stdout=PIPE,
                     stderr=PIPE,
-                    shell=True,
+                    shell=False,
                     text=True,
                     start_new_session=False,
                     bufsize=0
