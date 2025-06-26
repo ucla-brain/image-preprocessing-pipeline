@@ -99,7 +99,6 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, ...
     % RAM-minimal version: **only buff1 & buff2 are ever allocated**
 
     use_gpu = isgpuarray(bl);
-    dtype   = classUnderlying(bl);
 
     otf = calculate_otf(psf, fft_shape, device_id);
 
@@ -124,7 +123,7 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, ...
 
         % ----------- Richardson–Lucy core ------------
         buff1 = convFFT(bl, otf);                                        % buff1: H⊗x
-        buff1 = max(buff1, eps(dtype));                                  % avoid /0
+        buff1 = max(buff1, eps('single'));                               % avoid /0
         buff2 = bl ./ buff1;                                             % buff2: ratio
         if use_gpu, buff1 = conj_gpu(otf); else, buff1 = conj(otf); end  % buff1: otf_conj
         buff2 = convFFT(buff2, buff1);                                   % buff2: correction
@@ -147,7 +146,7 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, ...
             buff2 = buff2 .* conj(buff1);         % buff2: numerator  F{Y}·F{X}*
             buff1 = abs(buff1);
             buff1 = buff1.^2;
-            buff1 = buff1 + eps(dtype);           % buff1: denom |F{X}|^2+ε
+            buff1 = buff1 + eps('single');        % buff1: denom |F{X}|^2+ε
             buff2 = buff2 ./ buff1;               % buff2: OTF_new
             buff1 = ifftn(buff2);
             buff1 = real(buff1);                  % buff1: PSF estimate
@@ -205,19 +204,15 @@ function otf = calculate_otf(psf, fft_shape, device_id)
     %
     %   Both outputs are single (CPU) or gpuArray/single (GPU).
 
-    % t_compute = tic;
-    %if ~isa(psf, 'single'), psf = single(psf); end
-    %if device_id > 0
-    %    if ~gpuarray(psf), psf = gpuArray(psf); end
-    %    otf = otf_gpu(psf, fft_shape);
-    %else
-        if device_id > 0 && ~gpuarray(psf), psf = gpuArray(psf); end
+    if ~isa(psf, 'single'), psf = single(psf); end
+    if device_id > 0
+        if ~isgpuarray(psf), psf = gpuArray(psf); end
+        otf = otf_gpu(psf, fft_shape);
+    else
         [otf, ~, ~] = pad_block_to_fft_shape(psf, fft_shape, 0);
         otf = ifftshift(otf);
         otf = fftn(otf);
-    %end
-    % fprintf('%s: OTF computed for size %s in %.2fs\n', ...
-    %     current_device(device_id), mat2str(fft_shape), toc(t_compute));
+    end
 end
 
 function [bl, pad_pre, pad_post] = pad_block_to_fft_shape(bl, fft_shape, mode)
