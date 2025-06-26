@@ -227,7 +227,6 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, ...
             psf = max(psf,0);
             psf = psf / sum(psf(:));
             otf = calculate_otf(psf, fft_shape, device_id);
-            wait(gpuDevice);
         end
 
         % ------------- stopping test -----------------
