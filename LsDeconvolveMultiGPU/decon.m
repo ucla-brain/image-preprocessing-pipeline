@@ -92,74 +92,6 @@ function bl = deconSpatial(bl, psf, psf_inv, niter, lambda, stop_criterion, regu
     end
 end
 
-% === Frequency-domain version with cached OTFs ===
-% function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regularize_interval, device_id)
-%     use_gpu = isgpuarray(bl);
-%
-%     otf = calculate_otf(psf, fft_shape, device_id);
-%     if use_gpu, otf_conj = conj_gpu(otf); else, otf_conj = conj(otf); end
-%
-%     if regularize_interval < niter && lambda > 0
-%         R = single(1/26 * ones(3,3,3)); R(2,2,2) = 0;
-%         if use_gpu, R = gpuArray(R); end
-%     end
-%
-%     bl = edgetaper_3d(bl, psf);
-%
-%     [bl, pad_pre, pad_post] = pad_block_to_fft_shape(bl, fft_shape, 0); % 'symmetric'
-%
-%     if stop_criterion > 0
-%         delta_prev = norm(bl(:));
-%     end
-%
-%     for i = 1:niter
-%         % start_time = tic;
-%
-%         apply_regularization = (regularize_interval > 0) && (regularize_interval < niter);
-%         is_regularization_time = apply_regularization && (i > 1) && (i < niter) && (mod(i, regularize_interval) == 0);
-%
-%         if is_regularization_time
-%             if use_gpu, clear buf; bl = gauss3d_gpu(bl, 0.5); else, bl = imgaussfilt3(bl, 0.5); end
-%         end
-%
-%         buf = convFFT(bl, otf);
-%         buf = max(buf, eps('single'));
-%         buf = bl ./ buf;
-%         buf = convFFT(buf, otf_conj);
-%
-%         if is_regularization_time
-%             if lambda > 0
-%                 reg = convn(bl, R, 'same');
-%                 bl = bl .* buf .* (1 - lambda) + reg .* lambda;
-%             else
-%                 bl = bl .* buf;
-%             end
-%         else
-%             bl = bl .* buf;
-%         end
-%
-%         bl = abs(bl);
-%
-%         if stop_criterion > 0
-%             delta_current = norm(bl(:));
-%             delta_rel = abs(delta_prev - delta_current) / delta_prev * 100;
-%             delta_prev = delta_current;
-%             % disp([current_device(device_id) ': Iter ' num2str(i) ...
-%             %       ', ΔD: ' num2str(delta_rel,3) ...
-%             %       ', ΔT: ' num2str(round(toc(start_time),1)) 's']);
-%             if i > 1 && delta_rel <= stop_criterion
-%                 disp('Stop criterion reached. Finishing iterations.');
-%                 break
-%             end
-%         % else
-%         %     disp([current_device(device_id) ': Iter ' num2str(i) ...
-%         %           ', ΔT: ' num2str(round(toc(start_time),2)) 's']);
-%         end
-%     end
-%
-%     bl = unpad_block(bl, pad_pre, pad_post);
-% end
-
 function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, ...
                         regularize_interval, device_id)
 
@@ -187,7 +119,7 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, ...
         is_regularization_time = apply_regularization && (i > 1) && (i < niter) && (mod(i, regularize_interval) == 0);
 
         if is_regularization_time
-            if use_gpu, bl = gauss3d_gpu(bl, 0.5); else, bl = imgaussfilt3(bl, 0.5); end
+            if use_gpu, clearvars(buff2, buff2); bl = gauss3d_gpu(bl, 0.5); else, bl = imgaussfilt3(bl, 0.5); end
         end
 
         % ----------- Richardson–Lucy core ------------
