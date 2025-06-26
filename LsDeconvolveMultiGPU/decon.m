@@ -211,6 +211,7 @@ function otf = calculate_otf(psf, fft_shape, device_id)
     %    if ~gpuarray(psf), psf = gpuArray(psf); end
     %    otf = otf_gpu(psf, fft_shape);
     %else
+        if device_id > 0 && ~gpuarray(psf), psf = gpuArray(psf); end
         [otf, ~, ~] = pad_block_to_fft_shape(psf, fft_shape, 0);
         otf = ifftshift(otf);
         otf = fftn(otf);
