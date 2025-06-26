@@ -78,7 +78,7 @@ function build_mex(debug)
         fclose(fopen(stamp,'w'));
     end
 
-    %% 3) zstd (Makefile on Linux, CMake on Windows)
+    %% 3) zstd (Makefile on Linux, MSBuild on Windows)
     stamp = fullfile(zstd_inst,'.built');
     if ~isfile(stamp)
         fprintf('[zstd] building…\n');
@@ -88,24 +88,39 @@ function build_mex(debug)
             untar(tgz,thirdparty); delete(tgz);
         end
         if ispc
-            % CMake-based on Windows
-            args = [ ...
-              '-DBUILD_SHARED_LIBS=OFF ', ...
-              '-DZSTD_PROGRAMS=OFF ', ...
-              '-DCMAKE_POSITION_INDEPENDENT_CODE=ON ', ...
-              '-DCMAKE_BUILD_TYPE=Release ', ...
-              '-DCMAKE_C_FLAGS_RELEASE="/O2 /GL" ', ...
-              '-DCMAKE_CXX_FLAGS_RELEASE="/O2 /GL"' ...
-            ];
-            if cmake_build(zstd_src,fullfile(zstd_src,'build'),zstd_inst,args)
-                error('zstd build failed (Windows).'); end
+            % Find MSBuild (should be in PATH if VS2022/2019 installed)
+            msbuild = 'msbuild';
+            vs_proj = fullfile(zstd_src,'build','VS2022','libzstd_static.vcxproj');
+            if ~isfile(vs_proj)
+                % fallback: try VS2019
+                vs_proj = fullfile(zstd_src,'build','VS2019','libzstd_static.vcxproj');
+            end
+            if ~isfile(vs_proj)
+                error('Could not find zstd Visual Studio project (%s).', vs_proj);
+            end
+            % build Release|x64 with LTO (/GL)
+            cmd = sprintf('%s "%s" /p:Configuration=Release /p:Platform=x64 /t:Build /p:WholeProgramOptimization=true /maxcpucount', ...
+                          msbuild, vs_proj);
+            st = system(cmd);
+            if st~=0, error('zstd MSBuild failed'); end
+            % install lib+headers
+            libsrc = fullfile(zstd_src, 'build', 'VS2022', 'x64', 'Release', 'libzstd_static.lib');
+            if ~isfile(libsrc)  % try VS2019 location
+                libsrc = fullfile(zstd_src, 'build', 'VS2019', 'x64', 'Release', 'libzstd_static.lib');
+            end
+            if ~isfile(libsrc)
+                error('zstd .lib not found after build: %s', libsrc);
+            end
+            mkdir(fullfile(zstd_inst,'lib'));
+            mkdir(fullfile(zstd_inst,'include'));
+            copyfile(libsrc, fullfile(zstd_inst,'lib','libzstd_static.lib'));
+            copyfile(fullfile(zstd_src,'lib','*.h'), fullfile(zstd_inst,'include'));
         else
             % Makefile-based on Linux/macOS
             old = cd(zstd_src); onCleanup(@() cd(old));
             if system(sprintf('make -j%d', ncores))~=0
                 error('zstd make failed');
             end
-            % install static lib + headers
             mkdir(fullfile(zstd_inst,'lib'));
             mkdir(fullfile(zstd_inst,'include'));
             copyfile(fullfile(zstd_src,'lib','libzstd.a'), ...
@@ -168,12 +183,22 @@ function build_mex(debug)
     end
 
     %% 6) Include & link for TIFF MEXs
-    inc_tiff  = ['-I' fullfile(libtiff_inst,'include')];
-    link_tiff = { ...
-        fullfile(libtiff_inst,'lib','libtiffxx.a'), ...
-        fullfile(libtiff_inst,'lib','libtiff.a'), ...
-        fullfile(zstd_inst,  'lib','libzstd.a'), ...
-        fullfile(zlibng_inst,'lib','libz.a') };
+    inc_tiff = ['-I' fullfile(libtiff_inst,'include')];
+    if ispc
+        link_tiff = {
+            fullfile(libtiff_inst,'lib','libtiffxx.lib'), ...
+            fullfile(libtiff_inst,'lib','libtiff.lib'), ...
+            fullfile(zstd_inst,  'lib','libzstd_static.lib'), ...
+            fullfile(zlibng_inst,'lib','zlibstatic.lib')     % zlib-ng CMake default is 'zlibstatic.lib'
+        };
+    else
+        link_tiff = {
+            fullfile(libtiff_inst,'lib','libtiffxx.a'), ...
+            fullfile(libtiff_inst,'lib','libtiff.a'), ...
+            fullfile(zstd_inst,  'lib','libzstd.a'), ...
+            fullfile(zlibng_inst,'lib','libz.a')
+        };
+    end
 
     %% 7) Build CPU MEX files
     fprintf('\n[MEX] Compiling CPU modules …\n');
