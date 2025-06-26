@@ -286,7 +286,8 @@ if __name__ == '__main__':
         print("Error: paraconverter not found")
         raise RuntimeError
 
-    imaris_converter = Path(r"imaris") / "ImarisConvertiv.exe"
+    # imaris_converter = Path(r"imaris") / "ImarisConvertiv.exe"
+    imaris_converter = Path(r"C:\Program Files\Bitplane\ImarisViewer 10.2.0") / "ImarisConvertiv.exe"
     if not imaris_converter.exists():
         print("Error: ImarisConvertiv.exe not found")
         raise RuntimeError
