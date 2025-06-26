@@ -34,16 +34,35 @@ function build_mex(debug)
     libtiff_inst = fullfile(build_root,'libtiff');
 
     % Helper to run CMake + install (for zlib-ng & libtiff)
-    function status = cmake_build(src,bld,inst,args)
-        if ~exist(bld,'dir'), mkdir(bld); end
+    function status = cmake_build(src, bld, inst, args, varargin)
+        % cmake_build(..., target)
+        % target: (optional) build only this target (e.g. 'zlibstatic')
+        if ~exist(bld, 'dir'), mkdir(bld); end
         old = cd(bld); onCleanup(@() cd(old));
-        if system(sprintf('cmake "%s" -DCMAKE_INSTALL_PREFIX="%s" %s',src,inst,args))~=0
-            status=1; return;
+        % Configure
+        if system(sprintf('cmake "%s" -DCMAKE_INSTALL_PREFIX="%s" %s', src, inst, args)) ~= 0
+            status = 1; return;
+        end
+        % Build
+        if nargin >= 5 && ~isempty(varargin{1})
+            target = varargin{1};
+        else
+            target = '';  % Default: full install target
         end
         if ispc
-            status = system('cmake --build . --config Release --target INSTALL');
+            if ~isempty(target)
+                % Build just the requested target (e.g., 'zlibstatic')
+                status = system(sprintf('cmake --build . --config Release --target %s', target));
+            else
+                % Usual install (full target)
+                status = system('cmake --build . --config Release --target INSTALL');
+            end
         else
-            status = system(sprintf('cmake --build . -- -j%d install', ncores));
+            if ~isempty(target)
+                status = system(sprintf('cmake --build . --target %s -- -j%d', target, ncores));
+            else
+                status = system(sprintf('cmake --build . -- -j%d install', ncores));
+            end
         end
     end
 
@@ -66,15 +85,34 @@ function build_mex(debug)
             websave(tgz,sprintf(['https://github.com/zlib-ng/zlib-ng/archive/refs/tags/' zlibng_v '.tar.gz']));
             untar(tgz,thirdparty); delete(tgz);
         end
-        args = [ ...
-          '-DBUILD_SHARED_LIBS=OFF ', ...
-          '-DZLIB_COMPAT=ON ', ...
-          '-DCMAKE_POSITION_INDEPENDENT_CODE=ON ', ...
-          '-DCMAKE_BUILD_TYPE=Release ', ...
-          sprintf('-DCMAKE_C_FLAGS_RELEASE="-O3 -march=native -flto=%d -fPIC"', ncores) ...
-        ];
-        if cmake_build(zlibng_src,fullfile(zlibng_src,'build'),zlibng_inst,args)
-            error('zlib-ng build failed.'); end
+        if ispc
+            args = [
+                '-DBUILD_SHARED_LIBS=OFF ', ...
+                '-DZLIB_COMPAT=ON ', ...
+                '-DZLIB_ENABLE_TESTS=OFF -DZLIBNG_ENABLE_TESTS=OFF -DWITH_GTEST=OFF ', ...
+                '-DWITH_BENCHMARKS=OFF -DWITH_BENCHMARK_APPS=OFF ', ...
+                '-DCMAKE_POSITION_INDEPENDENT_CODE=ON ', ...
+                '-DWITH_NATIVE_INSTRUCTIONS=ON -DWITH_NEW_STRATEGIES=ON -DWITH_AVX2=ON ', ...
+                '-DCMAKE_C_FLAGS_RELEASE="/O2 /GL /arch:AVX2" ', ...
+                '-DCMAKE_STATIC_LINKER_FLAGS_RELEASE="/LTCG" '
+            ];
+        else
+            args = [ ...
+                '-DBUILD_SHARED_LIBS=OFF ', ...
+                '-DZLIB_COMPAT=ON ', ...
+                '-DZLIB_ENABLE_TESTS=OFF -DZLIBNG_ENABLE_TESTS=OFF -DWITH_GTEST=OFF ', ...
+                '-DWITH_BENCHMARKS=OFF -DWITH_BENCHMARK_APPS=OFF ', ...
+                '-DZLIBNG_ENABLE_TESTS=OFF ', ...
+                '-DZLIBNG_ENABLE_BENCHMARKS=OFF ', ...
+                '-DCMAKE_POSITION_INDEPENDENT_CODE=ON ', ...
+                '-DCMAKE_BUILD_TYPE=Release ', ...
+                '-DWITH_NATIVE_INSTRUCTIONS=ON -DWITH_NEW_STRATEGIES=ON -DWITH_AVX2=ON ', ...
+                sprintf('-DCMAKE_C_FLAGS_RELEASE="-O3 -march=native -flto=%d -fPIC"', ncores) ...
+            ];
+        end
+        if cmake_build(zlibng_src,fullfile(zlibng_src,'build'),zlibng_inst, args)
+            error('zlib-ng build failed.');
+        end
         fclose(fopen(stamp,'w'));
     end
 
