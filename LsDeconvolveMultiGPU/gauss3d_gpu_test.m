@@ -11,8 +11,8 @@ function gauss3d_gpu_test()
 
     szs = {[32, 64, 32], [512, 512, 256]};
     types = {@single};   % Single only!
-    sigma_tests = {2.5, [2.5 2.5 2.5], [0.5 0.5 2.5], 0.25, 8};
-    ksize_tests = {'auto', 9, [9 11 15], 3, 41};
+    sigma_tests = {2.5, [1.5 1.5 2.5], [0.5 0.5 2.5], 0.25, 8};
+    ksize_tests = {'auto', 9, [9 11 15], 3, 41, [25 25 25]};
     SINGLE_THRESH = 5e-5;
 
     % Summary counters
