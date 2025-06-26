@@ -994,15 +994,16 @@ def get_imaris_command(imaris_path: Path, input_path: Path, output_path: Path = 
         if output_path:
             ims_file_path = output_path
 
+        imaris_path = correct_path_for_cmd(imaris_path)
         command = [
             f"" if sys.platform == "win32" else f"WINEDEBUG=-all GLIBC_TUNABLES=glibc.malloc.hugetlb=2 wine",
-            f"{imaris_path}",
+            f'{imaris_path}',
             f"--input {file}",
             f"--output {ims_file_path}",
         ]
         if sys.platform == "linux" and 'microsoft' in uname().release.lower():
             command = [
-                f'{correct_path_for_cmd(imaris_path)}',
+                f'{imaris_path}',
                 f'--input {correct_path_for_wsl(file)}',
                 f"--output {correct_path_for_wsl(ims_file_path)}",
             ]
