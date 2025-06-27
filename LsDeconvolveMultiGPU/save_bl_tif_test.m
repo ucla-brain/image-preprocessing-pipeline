@@ -28,7 +28,7 @@ fprintf("   ✅ basic 2-D / 3-D paths ok\n");
 %% ---------- B. full matrix: {layout × dtype × compression} + timing & sizes ----------
 cfg.order = {'YXZ',false; 'XYZ',true};
 cfg.dtype = {'uint8',@uint8; 'uint16',@uint16};
-cfg.comp  = {'none','lzw','deflate','zstd'};
+cfg.comp  = {'none','lzw','deflate'};
 sz        = [2048 1024 4];
 
 nLayouts   = size(cfg.order,1);

@@ -125,13 +125,11 @@ def estimate_block_size_max(gpu_indices, workers_per_gpu,
 
     return max_allowed
 
-
 def resolve_path(p):
     p = Path(p)
     if not p.exists():
         raise ValueError(f"Path does not exist: {p}")
     return p.resolve()
-
 
 def validate_args(args):
     args.input = resolve_path(args.input)
@@ -288,7 +286,7 @@ def main():
             args.gpu_indices,
             args.gpu_workers_per_gpu,
             #num_blocks_on_gpu=12 if args.use_fft else 2 + (1 if args.lambda_damping else 0),
-            num_blocks_on_gpu=15 if args.use_fft else 2 + (1 if args.lambda_damping else 0),
+            num_blocks_on_gpu=17 if args.use_fft else 2 + (1 if args.lambda_damping else 0),
         )
         log.info(f"Re-estimated block_size_max: {args.block_size_max}")
 

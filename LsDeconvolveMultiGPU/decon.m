@@ -180,9 +180,10 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, ...
 
     if stop_criterion>0, delta_prev = norm(bl(:)); end
 
-    buff2 = zeros(fft_shape, 'single');
-    buff1 = complex(buff2, buff2);  % complex(single) zeros
-    buff3 = complex(buff2, buff2);
+    buff3 = zeros(fft_shape, 'single');
+    buff1 = complex(buff3, buff3);  % complex(single) zeros
+    buff2 = complex(buff3, buff3);
+    buff3 = complex(buff3, buff3);
     if use_gpu
         buff1 = gpuArray(buff1);
         buff2 = gpuArray(buff2);

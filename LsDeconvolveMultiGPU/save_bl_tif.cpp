@@ -109,23 +109,11 @@ static void writeSliceToTiff(
         TIFFSetField(tif, TIFFTAG_PLANARCONFIG,    PLANARCONFIG_CONTIG);
         TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP,    rowsPerStrip);
 
-        // Enable horizontal differencing for any lossless codec:
-        if (compressionType == COMPRESSION_ADOBE_DEFLATE ||
-            compressionType == COMPRESSION_ZSTD)
-        {
-            TIFFSetField(tif, TIFFTAG_PREDICTOR, PREDICTOR_HORIZONTAL);
-        }
-
         // DEFLATE: set a modest compression level (1–9)
         if (compressionType == COMPRESSION_ADOBE_DEFLATE) {
             const int zipLevel = 1;
             TIFFSetField(tif, TIFFTAG_ZIPQUALITY, zipLevel);
-        }
-
-        // ZSTD: set a low compression tier (1–22 in libtiff ≥4.5)
-        if (compressionType == COMPRESSION_ZSTD) {
-            const int zstdLevel = 1;
-            TIFFSetField(tif, TIFFTAG_ZSTD_LEVEL, zstdLevel);
+            TIFFSetField(tif, TIFFTAG_PREDICTOR, PREDICTOR_HORIZONTAL);
         }
 
         const uint32_t numStrips = (imageHeight + rowsPerStrip - 1) / rowsPerStrip;
@@ -222,7 +210,6 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
            compressionStr == "none"    ? COMPRESSION_NONE
          : compressionStr == "lzw"     ? COMPRESSION_LZW
          : compressionStr == "deflate" ? COMPRESSION_ADOBE_DEFLATE
-         : compressionStr == "zstd"    ? COMPRESSION_ZSTD
          : throw std::runtime_error("Invalid compression: " + compressionStr);
 
     // fileList validation
