@@ -285,29 +285,39 @@ end
     mex(mex_cpu{:}, inc_tiff, 'load_bl_tif.cpp', link_tiff{:});
     mex(mex_cpu{:}, inc_tiff, 'save_bl_tif.cpp', link_tiff{:});
 
-    %% --------- 7) CUDA MEX files (unchanged) ---------
+    %% --------- 7) CUDA MEX files (platform-specific) ---------
     if isWin
         xmlfile = fullfile(fileparts(mfilename('fullpath')), 'nvcc_msvcpp2022.xml');
         assert(isfile(xmlfile), 'nvcc_msvcpp2022.xml not found!');
         cuda_mex_flags = {'-f', xmlfile};
+
+        % Set CUDA path if needed
+        cuda_path = getenv('CUDA_PATH');
+        if isempty(cuda_path)
+            cuda_path = 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.9';
+        end
+        cufft_lib_path = fullfile(cuda_path, 'lib', 'x64');
+        mexcuda_libflags = {['-L"', cufft_lib_path, '"'], '-lcufft'};
+
+        if debug
+            nvccflags = 'NVCCFLAGS="$NVCCFLAGS -allow-unsupported-compiler -G"';
+        else
+            nvccflags = 'NVCCFLAGS="$NVCCFLAGS -allow-unsupported-compiler -Xcompiler /O2"';
+        end
     else
         cuda_mex_flags = {};
+        mexcuda_libflags = {'-L/usr/local/cuda/lib64','-lcufft'};
+        if debug
+            nvccflags = 'NVCCFLAGS="$NVCCFLAGS -G"';
+        else
+            nvccflags = sprintf('NVCCFLAGS="$NVCCFLAGS -Xcompiler -march=native -Xcompiler -flto=%d"', ncores);
+        end
     end
 
-    if debug
-        nvccflags = 'NVCCFLAGS="$NVCCFLAGS -G"';
-    else
-        nvccflags = sprintf('NVCCFLAGS="$NVCCFLAGS -Xcompiler -march=native -Xcompiler -flto=%d"', ncores);
-    end
-
-    root_dir    = '.';
-    include_dir = './mex_incubator';
-
-    mexcuda(cuda_mex_flags{:}, '-R2018a', nvccflags, 'gauss3d_gpu.cu', ['-I',root_dir], ['-I',include_dir]);
-    mexcuda(cuda_mex_flags{:}, '-R2018a', nvccflags, 'conv3d_gpu.cu' , ['-I',root_dir], ['-I',include_dir]);
-    mexcuda(cuda_mex_flags{:}, '-R2018a', nvccflags, 'conj_gpu.cu'   , ['-I',root_dir], ['-I',include_dir]);
-    mexcuda(cuda_mex_flags{:}, '-R2018a', nvccflags, 'otf_gpu.cu'    , ['-I',root_dir], ['-I',include_dir], ...
-            '-L/usr/local/cuda/lib64','-lcufft');
+    mexcuda(cuda_mex_flags{:}, '-R2018a', nvccflags, 'gauss3d_gpu.cu');
+    mexcuda(cuda_mex_flags{:}, '-R2018a', nvccflags, 'conv3d_gpu.cu' );
+    mexcuda(cuda_mex_flags{:}, '-R2018a', nvccflags, 'conj_gpu.cu'   );
+    mexcuda(cuda_mex_flags{:}, '-R2018a', nvccflags, 'otf_gpu.cu'    , mexcuda_libflags{:});
 
     fprintf('\n✅  All MEX files built successfully.\n');
 end

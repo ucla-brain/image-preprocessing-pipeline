@@ -52,7 +52,17 @@
 #include <cstdint>
 #include <cstring>
 #include <algorithm>
-#include <unistd.h>
+
+#if defined(_WIN32)
+  #include <io.h>
+  #ifndef W_OK
+    #define W_OK 2
+  #endif
+  #define access _access
+#else
+  #include <unistd.h>
+#endif
+
 
 namespace fs = std::filesystem;
 
@@ -239,8 +249,9 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     const size_t   bytesPerPixel = (mxGetClassID(prhs[0]) == mxUINT16_CLASS ? 2 : 1);
 
     // Thread count
-    const size_t hwCores       = std::thread::hardware_concurrency() ?: 1;
-    const size_t defaultTh     = std::max(hwCores/2, size_t(1));
+    const size_t hwCores       = std::thread::hardware_concurrency();
+    const size_t safeCores     = hwCores ? hwCores : 1;
+    const size_t defaultTh     = std::max(safeCores / 2, size_t(1));
     const size_t reqTh         = (nrhs == 5
                                   ? static_cast<size_t>(mxGetScalar(prhs[4]))
                                   : defaultTh);
