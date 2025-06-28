@@ -15,76 +15,75 @@ function build_mex(debug)
     %% --------- Compiler Toolchain Discovery ---------
     % Always autodetect and force usage of the *exact* compiler/toolset as MEX
 
-if isWin
-    cc = mex.getCompilerConfigurations('C++','Selected');
-    if isempty(cc)
-        error('No C++ compiler configured for MEX. Run "mex -setup".');
-    end
+    if isWin
+        cc = mex.getCompilerConfigurations('C++','Selected');
+        if isempty(cc)
+            error('No C++ compiler configured for MEX. Run "mex -setup".');
+        end
 
-    % Find cl.exe path from SetEnv
-    setenv_lines = splitlines(cc.Details.SetEnv);
-    cl_path = '';
-    for i = 1:numel(setenv_lines)
-        line = strtrim(setenv_lines{i});
-        if startsWith(line, 'set PATH=', 'IgnoreCase', true)
-            paths_str = extractAfter(line, '=');
-            path_list = split(paths_str, ';');
-            for j = 1:numel(path_list)
-                candidate = strtrim(path_list{j});
-                cl_candidate = fullfile(candidate, 'cl.exe');
-                if isfile(cl_candidate)
-                    cl_path = cl_candidate;
-                    break;
+        % Find cl.exe path from SetEnv
+        setenv_lines = splitlines(cc.Details.SetEnv);
+        cl_path = '';
+        for i = 1:numel(setenv_lines)
+            line = strtrim(setenv_lines{i});
+            if startsWith(line, 'set PATH=', 'IgnoreCase', true)
+                paths_str = extractAfter(line, '=');
+                path_list = split(paths_str, ';');
+                for j = 1:numel(path_list)
+                    candidate = strtrim(path_list{j});
+                    cl_candidate = fullfile(candidate, 'cl.exe');
+                    if isfile(cl_candidate)
+                        cl_path = cl_candidate;
+                        break;
+                    end
                 end
             end
+            if ~isempty(cl_path), break; end
         end
-        if ~isempty(cl_path), break; end
-    end
-    if isempty(cl_path)
-        error('Could not determine cl.exe location from mex config!');
-    end
-
-    % Infer MSVC_BASE and others from cl_path
-    % cl_path: ...\VC\Tools\MSVC\14.44.35207\bin\HostX64\x64\cl.exe
-    MSVC_BASE = fileparts(fileparts(fileparts(cl_path))); % ...\MSVC\14.44.35207
-    VSROOT = fileparts(fileparts(fileparts(fileparts(MSVC_BASE))));  % ...\VC
-    VCVARSALL = fullfile(VSROOT, 'Auxiliary', 'Build', 'vcvars64.bat');
-
-    fprintf('[build_mex] MSVC_BASE:    %s\n', MSVC_BASE);
-    fprintf('[build_mex] cl.exe path:  %s\n', cl_path);
-    fprintf('[build_mex] VCVARSALL:    %s\n', VCVARSALL);
-    fprintf('[build_mex] cc.Version:   %s\n', cc.Version);
-
-    if ~isfile(VCVARSALL), error('vcvars64.bat not found at %s', VCVARSALL); end
-
-    msvc_ver_full = regexp(MSVC_BASE,'\d+\.\d+\.\d+','match','once');
-    VCVARS_CMD = sprintf('"%s" -vcvars_ver=%s && set', VCVARSALL, msvc_ver_full);
-    [~, envout] = system(VCVARS_CMD);
-
-    vars = splitlines(strtrim(envout));
-    env_vars = ["PATH","INCLUDE","LIB","LIBPATH","VCINSTALLDIR","VCToolsInstallDir"];
-    original_env = containers.Map();
-    for k = 1:numel(vars)
-        parts = split(vars{k}, '=');
-        if numel(parts) ~= 2, continue; end
-        key = upper(parts{1});
-        value = parts{2};
-        if ismember(key, env_vars)
-            original_env(key) = getenv(key);
-            setenv(key, value);
-            fprintf('[build_mex] setenv %s\n', key);
+        if isempty(cl_path)
+            error('Could not determine cl.exe location from mex config!');
         end
+
+        % Infer MSVC_BASE and others from cl_path
+        MSVC_BASE = fileparts(fileparts(fileparts(cl_path)));
+        VSROOT = fileparts(fileparts(fileparts(fileparts(MSVC_BASE))));
+        VCVARSALL = fullfile(VSROOT, 'Auxiliary', 'Build', 'vcvars64.bat');
+
+        fprintf('[build_mex] MSVC_BASE:    %s\n', MSVC_BASE);
+        fprintf('[build_mex] cl.exe path:  %s\n', cl_path);
+        fprintf('[build_mex] VCVARSALL:    %s\n', VCVARSALL);
+        fprintf('[build_mex] cc.Version:   %s\n', cc.Version);
+
+        if ~isfile(VCVARSALL), error('vcvars64.bat not found at %s', VCVARSALL); end
+
+        msvc_ver_full = regexp(MSVC_BASE,'\d+\.\d+\.\d+','match','once');
+        VCVARS_CMD = sprintf('"%s" -vcvars_ver=%s && set', VCVARSALL, msvc_ver_full);
+        [~, envout] = system(VCVARS_CMD);
+
+        vars = splitlines(strtrim(envout));
+        env_vars = ["PATH","INCLUDE","LIB","LIBPATH","VCINSTALLDIR","VCToolsInstallDir"];
+        original_env = containers.Map();
+        for k = 1:numel(vars)
+            parts = split(vars{k}, '=');
+            if numel(parts) ~= 2, continue; end
+            key = upper(parts{1});
+            value = parts{2};
+            if ismember(key, env_vars)
+                original_env(key) = getenv(key);
+                setenv(key, value);
+                fprintf('[build_mex] setenv %s\n', key);
+            end
+        end
+        cleanupMexEnv = onCleanup(@() restore_mex_env(original_env));
+
+        [~,cl_out] = system('where cl.exe');
+        fprintf('[build_mex] where cl.exe:\n%s\n',cl_out);
+
+    else
+        MSVC_BASE = '';
+        VCVARSALL = '';
+        msvc_ver_full = '';
     end
-    cleanupMexEnv = onCleanup(@() restore_mex_env(original_env));
-
-    [~,cl_out] = system('where cl.exe');
-    fprintf('[build_mex] where cl.exe:\n%s\n',cl_out);
-
-else
-    MSVC_BASE = '';
-    VCVARSALL = '';
-    msvc_ver_full = '';
-end
 
     %% --------- CMake/MSVC Generator Strings ---------
     if isWin
@@ -302,7 +301,7 @@ end
         if debug
             nvccflags = 'NVCCFLAGS="$NVCCFLAGS -allow-unsupported-compiler -G"';
         else
-            nvccflags = 'NVCCFLAGS="$NVCCFLAGS -allow-unsupported-compiler -Xcompiler /O2"';
+            nvccflags = 'NVCCFLAGS="$NVCCFLAGS -allow-unsupported-compiler -Xcompiler /O2 /arch:AVX2 /GL"';
         end
     else
         cuda_mex_flags = {};
