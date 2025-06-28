@@ -204,7 +204,7 @@ function [] = LsDeconv(varargin)
              block.x_pad, block.y_pad, block.z_pad, block.fft_shape] = ...
                 autosplit(stack_info, size(psf.psf), filter, block_size_max, ram_available, numit, output_bytes);
 
-            [block.p1, block.p2] = split(stack_info, block);
+            [block.p1, block.p2] = split_stack(stack_info, block);
             save(block_path, 'block');
         end
         check_block_coverage_planes(stack_info, block);

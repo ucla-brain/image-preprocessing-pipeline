@@ -1,4 +1,4 @@
-function [p1, p2] = split(stack_info, block)
+function [p1, p2] = split_stack(stack_info, block)
     %% provides coordinates of sub-blocks after splitting
 
     % bounding box coordinate points

@@ -1,56 +1,118 @@
 function build_mex(debug)
-    % build_mex  Compile all C/C++/CUDA MEX files and static libraries.
-    % Keivan Moradi, 2024-2025
+% build_mex  Compile all C/C++/CUDA MEX files and static libraries.
+% Robust, cross-platform, production ready.
+% Keivan Moradi, 2024-2025 (with ChatGPT-4o assistance)
 
-    % --------- USER: SET THIS PATH ON WINDOWS ---------
-    MSVC_BASE = 'C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.39.33519';
-    % --------------------------------------------------
-
-    ncores = feature('numCores');
     if nargin < 1, debug = false; end
     if verLessThan('matlab','9.4')
         error('Requires MATLAB R2018a or newer.'); end
     if exist('mexcuda','file') ~= 2
         error('mexcuda not found – ensure CUDA is configured.'); end
 
+    ncores = feature('numCores');
     isWin = ispc;
-    % ---- BEGIN WINDOWS TOOLCHAIN ENV PATCH ----
-    if isWin
-        BIN     = fullfile(MSVC_BASE, 'bin', 'HostX64', 'x64');
-        INCLUDE = fullfile(MSVC_BASE, 'include');
-        LIB     = fullfile(MSVC_BASE, 'lib', 'x64');
-        VCINSTALLDIR    = fileparts(fileparts(fileparts(MSVC_BASE))); % ...VC
-        VCToolsInstallDir = MSVC_BASE;
 
-        orig_path = getenv('PATH');
-        orig_include = getenv('INCLUDE');
-        orig_lib = getenv('LIB');
-        orig_vcinstalldir = getenv('VCINSTALLDIR');
-        orig_vctools = getenv('VCToolsInstallDir');
+    %% --------- Compiler Toolchain Discovery ---------
+    % Always autodetect and force usage of the *exact* compiler/toolset as MEX
 
-        setenv('PATH', [BIN pathsep orig_path]);
-        setenv('INCLUDE', INCLUDE);
-        setenv('LIB', LIB);
-        setenv('VCINSTALLDIR', VCINSTALLDIR);
-        setenv('VCToolsInstallDir', VCToolsInstallDir);
-
-        cleanupMexEnv = onCleanup(@() restore_mex_env(orig_path, orig_include, orig_lib, orig_vcinstalldir, orig_vctools));
+if isWin
+    cc = mex.getCompilerConfigurations('C++','Selected');
+    if isempty(cc)
+        error('No C++ compiler configured for MEX. Run "mex -setup".');
     end
-    % ---- END WINDOWS TOOLCHAIN ENV PATCH ----
 
-    % ---- Toolchain detection (unchanged) ----
+    % Find cl.exe path from SetEnv
+    setenv_lines = splitlines(cc.Details.SetEnv);
+    cl_path = '';
+    for i = 1:numel(setenv_lines)
+        line = strtrim(setenv_lines{i});
+        if startsWith(line, 'set PATH=', 'IgnoreCase', true)
+            paths_str = extractAfter(line, '=');
+            path_list = split(paths_str, ';');
+            for j = 1:numel(path_list)
+                candidate = strtrim(path_list{j});
+                cl_candidate = fullfile(candidate, 'cl.exe');
+                if isfile(cl_candidate)
+                    cl_path = cl_candidate;
+                    break;
+                end
+            end
+        end
+        if ~isempty(cl_path), break; end
+    end
+    if isempty(cl_path)
+        error('Could not determine cl.exe location from mex config!');
+    end
+
+    % Infer MSVC_BASE and others from cl_path
+    % cl_path: ...\VC\Tools\MSVC\14.44.35207\bin\HostX64\x64\cl.exe
+    MSVC_BASE = fileparts(fileparts(fileparts(cl_path))); % ...\MSVC\14.44.35207
+    VSROOT = fileparts(fileparts(fileparts(fileparts(MSVC_BASE))));  % ...\VC
+    VCVARSALL = fullfile(VSROOT, 'Auxiliary', 'Build', 'vcvars64.bat');
+
+    fprintf('[build_mex] MSVC_BASE:    %s\n', MSVC_BASE);
+    fprintf('[build_mex] cl.exe path:  %s\n', cl_path);
+    fprintf('[build_mex] VCVARSALL:    %s\n', VCVARSALL);
+    fprintf('[build_mex] cc.Version:   %s\n', cc.Version);
+
+    if ~isfile(VCVARSALL), error('vcvars64.bat not found at %s', VCVARSALL); end
+
+    msvc_ver_full = regexp(MSVC_BASE,'\d+\.\d+\.\d+','match','once');
+    VCVARS_CMD = sprintf('"%s" -vcvars_ver=%s && set', VCVARSALL, msvc_ver_full);
+    [~, envout] = system(VCVARS_CMD);
+
+    vars = splitlines(strtrim(envout));
+    env_vars = ["PATH","INCLUDE","LIB","LIBPATH","VCINSTALLDIR","VCToolsInstallDir"];
+    original_env = containers.Map();
+    for k = 1:numel(vars)
+        parts = split(vars{k}, '=');
+        if numel(parts) ~= 2, continue; end
+        key = upper(parts{1});
+        value = parts{2};
+        if ismember(key, env_vars)
+            original_env(key) = getenv(key);
+            setenv(key, value);
+            fprintf('[build_mex] setenv %s\n', key);
+        end
+    end
+    cleanupMexEnv = onCleanup(@() restore_mex_env(original_env));
+
+    [~,cl_out] = system('where cl.exe');
+    fprintf('[build_mex] where cl.exe:\n%s\n',cl_out);
+
+else
+    MSVC_BASE = '';
+    VCVARSALL = '';
+    msvc_ver_full = '';
+end
+
+    %% --------- CMake/MSVC Generator Strings ---------
     if isWin
-        cc = mex.getCompilerConfigurations('C++', 'Selected');
-        [cmake_gen, cmake_arch, msvc] = get_vs_and_msvc(cc, MSVC_BASE);
+        % Figure out the best generator/toolset for CMake
+        if contains(cc.Name, '2022')
+            cmake_gen  = '-G "Visual Studio 17 2022" -T v143';
+            cmake_arch = '-A x64';
+        elseif contains(cc.Name, '2019')
+            cmake_gen  = '-G "Visual Studio 16 2019" -T v142';
+            cmake_arch = '-A x64';
+        else
+            error('Unsupported Visual Studio version for MEX: %s', cc.Name);
+        end
+        msvc.vcvars = VCVARSALL;
+        msvc.ver_full = msvc_ver_full;
+        msvc.cl = cl_path;
+        msvc.msvc_root = MSVC_BASE;
     else
-        cmake_gen = ''; cmake_arch = ''; msvc = [];
+        cmake_gen = '';
+        cmake_arch = '';
+        msvc = [];
     end
 
-    % ---- Version numbers ----
+    %% --------- Library Version Numbers ---------
     zlibng_v  = '2.2.4';
     libtiff_v = '4.7.0';
 
-    % ---- Paths ----
+    %% --------- Paths (never removed) ---------
     root        = pwd;
     thirdparty  = fullfile(root,'thirdparty');
     build_root  = fullfile(root,'tiff_build');
@@ -64,7 +126,7 @@ function build_mex(debug)
     zlibng_inst  = fullfile(build_root,'zlib-ng');
     libtiff_inst = fullfile(build_root,'libtiff');
 
-    %% --- 1) LZ4 (single-file) ---
+    %% --------- 1) LZ4 (single-file) ---------
     lz4_c = fullfile(lz4_src,'lz4.c');
     lz4_h = fullfile(lz4_src,'lz4.h');
     if ~isfile(lz4_c)
@@ -74,7 +136,7 @@ function build_mex(debug)
         websave(lz4_h,'https://raw.githubusercontent.com/lz4/lz4/dev/lib/lz4.h');
     end
 
-    %% --- 2) zlib-ng (static) ---
+    %% --------- 2) zlib-ng (static) ---------
     if isWin
         stamp = fullfile(zlibng_inst, ['.built_', msvc.ver_full]);
     else
@@ -114,13 +176,13 @@ function build_mex(debug)
                 sprintf('-DCMAKE_C_FLAGS_RELEASE="-O3 -march=native -flto=%d -fPIC"', ncores) ...
             ];
         end
-        if cmake_build(zlibng_src, builddir, zlibng_inst, cmake_gen, cmake_arch, args, msvc)
+        if cmake_build(zlibng_src, builddir, zlibng_inst, cmake_gen, cmake_arch, args, msvc, cl_path)
             error('zlib-ng build failed.');
         end
         fclose(fopen(stamp,'w'));
     end
 
-    %% --- 3) libtiff ---
+    %% --------- 3) libtiff (static) ---------
     if isWin
         stamp = fullfile(libtiff_inst, ['.built_', msvc.ver_full]);
     else
@@ -166,21 +228,23 @@ function build_mex(debug)
                 fullfile(zlibng_inst,'include'), ...
                 ncores, ncores);
         end
-        if cmake_build(libtiff_src, builddir, libtiff_inst, cmake_gen, cmake_arch, args, msvc)
+        if cmake_build(libtiff_src, builddir, libtiff_inst, cmake_gen, cmake_arch, args, msvc, cl_path)
             error('libtiff build failed.'); end
         fclose(fopen(stamp,'w'));
     end
 
-    %% --- 4) MEX compilation flags ---
+    %% --------- 4) MEX compilation flags (unchanged) ---------
     if isWin
         if debug
             mex_cpu = {'-R2018a', ...
                 'COMPFLAGS="$COMPFLAGS /std:c++17 /Od /Zi"', ...
-                'LINKFLAGS="$LINKFLAGS /DEBUG"'};
+                'LINKFLAGS="$LINKFLAGS /DEBUG"' ...
+            };
         else
             mex_cpu = {'-R2018a', ...
                 'COMPFLAGS="$COMPFLAGS /std:c++17 /O2 /arch:AVX2 /GL"', ...
-                'LINKFLAGS="$LINKFLAGS /LTCG"'};
+                'LINKFLAGS="$LINKFLAGS /LTCG"', ...
+            };
         end
     else
         if debug
@@ -196,7 +260,7 @@ function build_mex(debug)
         end
     end
 
-    %% --- 5) Include & link for TIFF MEXs ---
+    %% --------- 5) Include & link for TIFF MEXs (unchanged) ---------
     inc_tiff = ['-I' fullfile(libtiff_inst,'include')];
     if isWin
         link_tiff = {
@@ -212,7 +276,7 @@ function build_mex(debug)
         };
     end
 
-    %% --- 6) Build CPU MEX files ---
+    %% --------- 6) Build CPU MEX files (unchanged) ---------
     fprintf('\n[MEX] Compiling CPU modules …\n');
     mex(mex_cpu{:}, 'semaphore.c');
     mex(mex_cpu{:}, 'save_lz4_mex.c',    lz4_c, ['-I' lz4_src]);
@@ -221,7 +285,7 @@ function build_mex(debug)
     mex(mex_cpu{:}, inc_tiff, 'load_bl_tif.cpp', link_tiff{:});
     mex(mex_cpu{:}, inc_tiff, 'save_bl_tif.cpp', link_tiff{:});
 
-    %% --- 7) CUDA MEX files (unchanged) ---
+    %% --------- 7) CUDA MEX files (unchanged) ---------
     if isWin
         xmlfile = fullfile(fileparts(mfilename('fullpath')), 'nvcc_msvcpp2022.xml');
         assert(isfile(xmlfile), 'nvcc_msvcpp2022.xml not found!');
@@ -248,51 +312,15 @@ function build_mex(debug)
     fprintf('\n✅  All MEX files built successfully.\n');
 end
 
-function restore_mex_env(path, include, lib, vcdir, vctools)
-    setenv('PATH', path);
-    setenv('INCLUDE', include);
-    setenv('LIB', lib);
-    setenv('VCINSTALLDIR', vcdir);
-    setenv('VCToolsInstallDir', vctools);
-end
-
-function [cmake_gen, cmake_arch, m] = get_vs_and_msvc(cc, MSVC_BASE)
-    fprintf('\n[get_vs_and_msvc] Selected compiler: %s\n', cc.Name);
-    details = cc.Details;
-    disp('[get_vs_and_msvc] cc.Details:');
-    disp(details);
-
-    % Compose paths from MSVC_BASE
-    cl_path = fullfile(MSVC_BASE, 'bin', 'HostX64', 'x64', 'cl.exe');
-    m.cl = cl_path;
-    m.bin = fileparts(m.cl);
-    m.msvc_root = MSVC_BASE;
-    m.ver_full  = regexp(MSVC_BASE,'\d+\.\d+\.\d+','match','once');
-    m.ver_pair  = regexp(m.ver_full,'^\d+\.\d+','match','once');
-
-    vsroot = fileparts(fileparts(fileparts(MSVC_BASE))); % ...VC
-    m.vcvars = fullfile(vsroot, 'Auxiliary', 'Build', 'vcvars64.bat');
-
-    % CMake generator string
-    if contains(cc.Name, '2022')
-        cmake_gen  = '-G "Visual Studio 17 2022" -T v143';
-        cmake_arch = '-A x64';
-    elseif contains(cc.Name, '2019')
-        cmake_gen  = '-G "Visual Studio 16 2019" -T v142';
-        cmake_arch = '-A x64';
-    else
-        error('[get_vs_and_msvc] Unsupported Visual Studio version for MEX: %s', cc.Name);
+function restore_mex_env(original_env)
+    fprintf('[restore_mex_env] Restoring original environment variables...\n');
+    keys = original_env.keys;
+    for k = 1:numel(keys)
+        setenv(keys{k}, original_env(keys{k}));
     end
-
-    fprintf('[get_vs_and_msvc] Using MSVC cl.exe: %s\n', m.cl);
-    fprintf('[get_vs_and_msvc] Toolset root: %s\n', m.msvc_root);
-    fprintf('[get_vs_and_msvc] Toolset version: %s\n', m.ver_full);
-    fprintf('[get_vs_and_msvc] cmake_gen: %s\n', cmake_gen);
-    fprintf('[get_vs_and_msvc] vcvars64.bat: %s\n', m.vcvars);
 end
 
-function status = cmake_build(src, bld, inst, cmake_gen, cmake_arch, args, msvc)
-    % Ensure build and install dirs exist
+function status = cmake_build(src, bld, inst, cmake_gen, cmake_arch, args, msvc, cl_path)
     if ~exist(bld,'dir'), mkdir(bld); end
     if ~exist(inst,'dir'), mkdir(inst); end
 
@@ -301,50 +329,36 @@ function status = cmake_build(src, bld, inst, cmake_gen, cmake_arch, args, msvc)
     isWin = ispc;
 
     if isWin
-        msvc_bin = msvc.bin;
+        % Force correct cl.exe for CMake!
+        [cl_bin_dir, ~, ~] = fileparts(cl_path);
         orig_path = getenv('PATH');
-        setenv('PATH', [msvc_bin pathsep orig_path]);
-        cleanup = onCleanup(@() setenv('PATH', orig_path));
+        new_path = [cl_bin_dir, ';', orig_path];
+        setenv('PATH', new_path);
+        setenv('CC', cl_path);
+        setenv('CXX', cl_path);
 
-        cmake_cfg = sprintf(['cmake %s %s "%s" -DCMAKE_INSTALL_PREFIX="%s" ' ...
-            '-DCMAKE_C_COMPILER="%s" -DCMAKE_CXX_COMPILER="%s" %s'], ...
-            cmake_gen, cmake_arch, src, inst, ...
-            fullfile(msvc_bin, 'cl.exe'), ...
-            fullfile(msvc_bin, 'cl.exe'), args);
+        % CMake configure/build
+        cmake_cfg = sprintf([
+            'call "%s" && set CC="%s" && set CXX="%s" && cmake %s %s "%s" -DCMAKE_INSTALL_PREFIX="%s" %s && ', ...
+            'cmake --build . --config Release --target INSTALL -- /m:%d'], ...
+            msvc.vcvars, cl_path, cl_path, cmake_gen, cmake_arch, src, inst, args, ncores);
 
-        build_cfg = sprintf('cmake --build . --config Release --target INSTALL -- /m:%d', ncores);
-
-        cmake_cmd = sprintf('call "%s" && %s', msvc.vcvars, cmake_cfg);
-        build_cmd = sprintf('call "%s" && %s', msvc.vcvars, build_cfg);
-
-        fprintf('[cmake_build] CWD: %s\n', bld);
-        [~,out] = system('dir'); fprintf('[cmake_build] Directory listing before configure:\n%s\n', out);
-        fprintf('[cmake_build] Running CMake configure command:\n%s\n', cmake_cmd);
-
-        rc1 = system(cmake_cmd);
-        if rc1 ~= 0
-            fprintf('[cmake_build] CMake configure FAILED (code %d)\n', rc1);
-            status = 1; return;
+        fprintf('[cmake_build] Running combined configure & build:\n%s\n', cmake_cfg);
+        rc = system(cmake_cfg);
+        if rc ~= 0
+            fprintf('[cmake_build] Combined CMake configure & build FAILED (code %d)\n', rc);
+            status = rc;
+            return;
         end
-        fprintf('[cmake_build] Running CMake build command:\n%s\n', build_cmd);
-
-        rc2 = system(build_cmd);
-        if rc2 ~= 0
-            fprintf('[cmake_build] CMake build FAILED (code %d)\n', rc2);
-            status = rc2; return;
-        end
-        status = 0;
     else
-        % ---- LINUX/MAC PATH UNCHANGED ----
         cmake_cmd = sprintf('cmake "%s" -DCMAKE_INSTALL_PREFIX="%s" %s', src, inst, args);
-        fprintf('[cmake_build] CWD: %s\n', bld);
-        [~,out] = system('ls -lh'); fprintf('[cmake_build] Directory listing before configure:\n%s\n', out);
-        fprintf('[cmake_build] Running CMake configure command:\n%s\n', cmake_cmd);
-        if system(cmake_cmd) ~= 0
-            status = 1; return;
-        end
+        fprintf('[cmake_build] Running CMake configure:\n%s\n', cmake_cmd);
+        if system(cmake_cmd) ~= 0, status = 1; return; end
         build_cmd = sprintf('cmake --build . -- -j%d install', ncores);
-        fprintf('[cmake_build] Running CMake build command:\n%s\n', build_cmd);
+        fprintf('[cmake_build] Running CMake build:\n%s\n', build_cmd);
         status = system(build_cmd);
     end
+
+    status = 0;
 end
+

@@ -31,7 +31,7 @@ cleanupObj = onCleanup(@() rmdir(tmpDir,'s'));
 feval('rng',1);   % deterministic
 R0 = rand([stack.x stack.y stack.z],'single');   % original volume
 
-[p1d,p2d] = split(stack,brick);
+[p1d,p2d] = split_stack(stack,brick);
 nBricks   = size(p1d,1);
 fn        = cell(nBricks,1);
 for k = 1:nBricks
