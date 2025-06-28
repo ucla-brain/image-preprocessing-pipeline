@@ -176,7 +176,7 @@ end
                 sprintf('-DCMAKE_C_FLAGS_RELEASE="-O3 -march=native -flto=%d -fPIC"', ncores) ...
             ];
         end
-        if cmake_build(zlibng_src, builddir, zlibng_inst, cmake_gen, cmake_arch, args, msvc, cl_path)
+        if cmake_build(zlibng_src, builddir, zlibng_inst, cmake_gen, cmake_arch, args, msvc)
             error('zlib-ng build failed.');
         end
         fclose(fopen(stamp,'w'));
@@ -330,7 +330,7 @@ function restore_mex_env(original_env)
     end
 end
 
-function status = cmake_build(src, bld, inst, cmake_gen, cmake_arch, args, msvc, cl_path)
+function status = cmake_build(src, bld, inst, cmake_gen, cmake_arch, args, msvc)
     if ~exist(bld,'dir'), mkdir(bld); end
     if ~exist(inst,'dir'), mkdir(inst); end
 
@@ -340,18 +340,18 @@ function status = cmake_build(src, bld, inst, cmake_gen, cmake_arch, args, msvc,
 
     if isWin
         % Force correct cl.exe for CMake!
-        [cl_bin_dir, ~, ~] = fileparts(cl_path);
+        [cl_bin_dir, ~, ~] = fileparts(msvc.cl);
         orig_path = getenv('PATH');
         new_path = [cl_bin_dir, ';', orig_path];
         setenv('PATH', new_path);
-        setenv('CC', cl_path);
-        setenv('CXX', cl_path);
+        setenv('CC', msvc.cl);
+        setenv('CXX', msvc.cl);
 
         % CMake configure/build
         cmake_cfg = sprintf([
             'call "%s" && set CC="%s" && set CXX="%s" && cmake %s %s "%s" -DCMAKE_INSTALL_PREFIX="%s" %s && ', ...
             'cmake --build . --config Release --target INSTALL -- /m:%d'], ...
-            msvc.vcvars, cl_path, cl_path, cmake_gen, cmake_arch, src, inst, args, ncores);
+            msvc.vcvars, msvc.cl, msvc.cl, cmake_gen, cmake_arch, src, inst, args, ncores);
 
         fprintf('[cmake_build] Running combined configure & build:\n%s\n', cmake_cfg);
         rc = system(cmake_cfg);
