@@ -228,7 +228,7 @@ end
                 fullfile(zlibng_inst,'include'), ...
                 ncores, ncores);
         end
-        if cmake_build(libtiff_src, builddir, libtiff_inst, cmake_gen, cmake_arch, args, msvc, cl_path)
+        if cmake_build(libtiff_src, builddir, libtiff_inst, cmake_gen, cmake_arch, args, msvc)
             error('libtiff build failed.'); end
         fclose(fopen(stamp,'w'));
     end
