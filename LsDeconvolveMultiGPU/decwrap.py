@@ -289,9 +289,9 @@ def main():
     user_overrode_block_size = args.block_size_max != block_size_default
     n_blocks_on_gpu = 2
     if args.use_fft:
-        n_blocks_on_gpu = 10
+        n_blocks_on_gpu = 6
         if args.adaptive_psf:
-            n_blocks_on_gpu = 20
+            n_blocks_on_gpu = 8
     if args.lambda_damping:
         n_blocks_on_gpu += 1
     if user_specified_subset or not user_overrode_block_size:
