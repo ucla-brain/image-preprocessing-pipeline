@@ -135,28 +135,25 @@ void mexFunction(int nlhs, mxArray *plhs[],
     mxGPUArray *otf = nullptr;
     bool user_scratch = false;
     if (nrhs == 3 && !mxIsEmpty(prhs[2])) {
-        // User provided scratch: must be complex single, gpuArray, 3D, size match
-        if (!mxIsGPUArray(prhs[2]))
-            mexErrMsgIdAndTxt("otf_gpu_mex:scratch", "scratch must be a gpuArray.");
-        mxGPUArray *scratch = mxGPUCreateFromMxArray(prhs[2]);
+        // Use const pointer, only cast to non-const when/if destroying
+        const mxGPUArray *scratch = mxGPUCreateFromMxArray(prhs[2]);
         if (mxGPUGetClassID(scratch) != mxSINGLE_CLASS ||
             !mxGPUGetComplexity(scratch) ||
             mxGPUGetNumberOfDimensions(scratch) != 3)
         {
-            mxGPUDestroyGPUArray(scratch);
+            mxGPUDestroyGPUArray(const_cast<mxGPUArray*>(scratch));
             mexErrMsgIdAndTxt("otf_gpu_mex:scratch",
                 "scratch must be a 3-D complex single gpuArray.");
         }
         const mwSize *sd = mxGPUGetDimensions(scratch);
         if (sd[0] != dx || sd[1] != dy || sd[2] != dz) {
-            mxGPUDestroyGPUArray(scratch);
+            mxGPUDestroyGPUArray(const_cast<mxGPUArray*>(scratch));
             mexErrMsgIdAndTxt("otf_gpu_mex:scratch",
                 "scratch buffer shape must match [nx ny nz].");
         }
-        otf = scratch; // Take ownership for now, do not destroy at end
+        otf = const_cast<mxGPUArray*>(scratch); // only for data access, not ownership
         user_scratch = true;
     } else {
-        // Allocate our own complex single gpuArray as scratch/output
         otf = mxGPUCreateGPUArray(3, otf_dims, mxSINGLE_CLASS, mxCOMPLEX, MX_GPU_DO_NOT_INITIALIZE);
         user_scratch = false;
     }
@@ -180,7 +177,7 @@ void mexFunction(int nlhs, mxArray *plhs[],
 
     // ---- 3-D FFT ----
     cufftHandle plan;
-    CUFFT_CHECK(cufftPlan3d((int)dz, (int)dy, (int)dx, CUFFT_C2C));
+    CUFFT_CHECK(cufftPlan3d(&plan, (int)dz, (int)dy, (int)dx, CUFFT_C2C));
     CUFFT_CHECK(cufftExecC2C(plan,
         reinterpret_cast<cufftComplex*>(d_otf),
         reinterpret_cast<cufftComplex*>(d_otf),
