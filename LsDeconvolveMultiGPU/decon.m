@@ -1,4 +1,4 @@
-function bl = decon(bl, psf, niter, lambda, stop_criterion, regularize_interval, device_id, use_fft, fft_shape)
+function bl = decon(bl, psf, niter, lambda, stop_criterion, regularize_interval, device_id, use_fft, fft_shape, adaptive_psf)
     % Performs Richardson-Lucy or blind deconvolution (with optional Tikhonov regularization).
     %
     % Inputs:
@@ -12,7 +12,11 @@ function bl = decon(bl, psf, niter, lambda, stop_criterion, regularize_interval,
     % - use_fft: true = use FFT-based convolution (faster, more memory), false = use convn (slower, low-memory)
 
     if use_fft
-        bl = deconFFT(bl, psf.psf, fft_shape, niter, lambda, stop_criterion, regularize_interval, device_id);
+        if adaptive_psf
+            bl = deconFFT_Weiner(bl, psf.psf, fft_shape, niter, lambda, stop_criterion, regularize_interval, device_id);
+        else
+            bl = deconFFT       (bl, psf.psf, fft_shape, niter, lambda, stop_criterion, regularize_interval, device_id);
+        end
     else
         bl = deconSpatial(bl, psf.psf, psf.inv  , niter, lambda, stop_criterion, regularize_interval, device_id);
     end
@@ -92,81 +96,81 @@ function bl = deconSpatial(bl, psf, psf_inv, niter, lambda, stop_criterion, regu
     end
 end
 
-% === Frequency-domain version ===
-% function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regularize_interval, device_id)
-%     use_gpu = isgpuarray(bl);
-%
-%     otf = calculate_otf(psf, fft_shape, device_id);
-%     if use_gpu, otf_conj = conj_gpu(otf); else, otf_conj = conj(otf); end
-%
-%     if regularize_interval < niter && lambda > 0
-%         R = single(1/26 * ones(3,3,3)); R(2,2,2) = 0;
-%         if use_gpu, R = gpuArray(R); end
-%     end
-%
-%     bl = edgetaper_3d(bl, psf);
-%
-%     [bl, pad_pre, pad_post] = pad_block_to_fft_shape(bl, fft_shape, 0); % 'symmetric'
-%
-%     if stop_criterion > 0
-%         delta_prev = norm(bl(:));
-%     end
-%
-%     for i = 1:niter
-%         % start_time = tic;
-%
-%         apply_regularization = (regularize_interval > 0) && (regularize_interval < niter);
-%         is_regularization_time = apply_regularization && (i > 1) && (i < niter) && (mod(i, regularize_interval) == 0);
-%
-%         if is_regularization_time
-%             if use_gpu, clear buf; bl = gauss3d_gpu(bl, 0.5); else, bl = imgaussfilt3(bl, 0.5); end
-%         end
-%
-%         buf = convFFT(bl, otf);
-%         buf = max(buf, single(eps('single')));
-%         buf = bl ./ buf;
-%         buf = convFFT(buf, otf_conj);
-%
-%         if is_regularization_time
-%             if lambda > 0
-%                 reg = convn(bl, R, 'same');
-%                 bl = bl .* buf .* (1 - lambda) + reg .* lambda;
-%             else
-%                 bl = bl .* buf;
-%             end
-%         else
-%             bl = bl .* buf;
-%         end
-%
-%         bl = abs(bl);
-%
-%         if stop_criterion > 0
-%             delta_current = norm(bl(:));
-%             delta_rel = abs(delta_prev - delta_current) / delta_prev * 100;
-%             delta_prev = delta_current;
-%             % disp([current_device(device_id) ': Iter ' num2str(i) ...
-%             %       ', ΔD: ' num2str(delta_rel,3) ...
-%             %       ', ΔT: ' num2str(round(toc(start_time),1)) 's']);
-%             if i > 1 && delta_rel <= stop_criterion
-%                 disp('Stop criterion reached. Finishing iterations.');
-%                 break
-%             end
-%         % else
-%         %     disp([current_device(device_id) ': Iter ' num2str(i) ...
-%         %           ', ΔT: ' num2str(round(toc(start_time),2)) 's']);
-%         end
-%     end
-%
-%     bl = unpad_block(bl, pad_pre, pad_post);
-% end
+%=== Frequency-domain version ===
+function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regularize_interval, device_id)
+    use_gpu = isgpuarray(bl);
+    buf_otf = calculate_otf(psf, fft_shape, device_id);
+    if regularize_interval < niter && lambda > 0
+        R = single(1/26 * ones(3,3,3)); R(2,2,2) = 0;
+        if use_gpu, R = gpuArray(R); end
+    end
+    bl = edgetaper_3d(bl, psf);
+    [bl, pad_pre, pad_post] = pad_block_to_fft_shape(bl, fft_shape, 0); % 'symmetric'
+    if stop_criterion > 0
+        delta_prev = norm(bl(:));
+    end
 
-function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, ...
-                        regularize_interval, device_id)
+    buf = zeros(fft_shape, 'single');
+    buf = complex(buf, buf);
+    for i = 1:niter
+        % start_time = tic;
+        apply_regularization = (regularize_interval > 0) && (regularize_interval < niter);
+        is_regularization_time = apply_regularization && (i > 1) && (i < niter) && (mod(i, regularize_interval) == 0);
+        if is_regularization_time
+            if use_gpu, bl = gauss3d_gpu(bl, 0.5); else, bl = imgaussfilt3(bl, 0.5); end
+        end
+        buf = fftn(bl);                                                        % x now holds fft(x)             complex
+        buf = buf .* buf_otf;                                                  % x now holds fft(x) .* otf      complex
+        buf = ifftn(buf);                                                      % inverse fft                    complex
+        buf = real(buf);                                                       % convFFT                        real
+        buf = max(buf, single(eps('single')));                                 % remove zeros                   real
+        buf = bl ./ buf;                                                       %                                real
+        buf_otf = conj(buf_otf);                                               % otf_conj                       complex
+        buf = fftn(buf);                                                       % x now holds fft(buff)          complex
+        buf = buf .* buf_otf;                                                  % x now holds fft(x) .* otf      complex
+        buf = ifftn(buf);                                                      % inverse fft                    complex
+        buf = real(buf);                                                       % convFFT                        real
+        if i<niter
+            buf_otf = conj(buf_otf);                                           % otf                            complex
+        end
+        if is_regularization_time
+            if lambda > 0
+                reg = convn(bl, R, 'same');
+                bl = bl .* buf .* (1 - lambda) + reg .* lambda;
+            else
+                bl = bl .* buf;
+            end
+        else
+            bl = bl .* buf;
+        end
+        bl = abs(bl);
+        if stop_criterion > 0
+            delta_current = norm(bl(:));
+            delta_rel = abs(delta_prev - delta_current) / delta_prev * 100;
+            delta_prev = delta_current;
+            % disp([current_device(device_id) ': Iter ' num2str(i) ...
+            %       ', ΔD: ' num2str(delta_rel,3) ...
+            %       ', ΔT: ' num2str(round(toc(start_time),1)) 's']);
+            if i > 1 && delta_rel <= stop_criterion
+                disp('Stop criterion reached. Finishing iterations.');
+                break
+            end
+        % else
+        %     disp([current_device(device_id) ': Iter ' num2str(i) ...
+        %           ', ΔT: ' num2str(round(toc(start_time),2)) 's']);
+        end
+    end
+    bl = unpad_block(bl, pad_pre, pad_post);
+end
+
+function bl = deconFFT_Weiner(bl, psf, fft_shape, niter, lambda, stop_criterion, regularize_interval, device_id)
 
     % Richardson–Lucy + on-the-fly Wiener PSF refinement
     % RAM-minimal version
 
     use_gpu = isgpuarray(bl);
+
+    buff3 = calculate_otf(psf, fft_shape, device_id);                % buff3: otf                           complex
 
     % Laplacian-like regulariser (only allocated if used)
     if regularize_interval < niter && lambda > 0
@@ -180,15 +184,12 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, ...
 
     if stop_criterion>0, delta_prev = norm(bl(:)); end
 
-    buff3 = zeros(fft_shape, 'single');
-    buff1 = complex(buff3, buff3);  % complex(single) zeros
-    buff2 = complex(buff3, buff3);
-    buff3 = complex(buff3, buff3);
+    buff2 = zeros(fft_shape, 'single');
     if use_gpu
-        buff1 = gpuArray(buff1);
         buff2 = gpuArray(buff2);
-        buff3 = gpuArray(buff3);
     end
+    buff1 = complex(buff2, buff2);  % complex(single) zeros
+    buff4 = complex(buff2, buff2);
 
     for i = 1:niter
         if i > 1 && regularize_interval>0 && mod(i, regularize_interval)==0
@@ -198,43 +199,40 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, ...
         end
 
         % ----------- Richardson–Lucy core ------------
-        buff3 = calculate_otf(psf, fft_shape, device_id);                % otf                           complex
-        buff1 = convFFT(bl, buff3);                                      % buff1: H{x}                   real
-        buff1 = max(buff1, single(eps('single')));                       % avoid /0                      real
-        buff2 = bl ./ buff1;                                             % buff2: ratio                  real
-        buff1 = conj(buff3);                                             % buff1: otf_conj               complex
-        buff2 = convFFT(buff2, buff1);                                   % buff2: correction             real
+        buff4 = fftn(bl);                                                % buff1: fft(bl)                       complex
+        buff1 = buff4 .* buff3;                                          % buff1: fft(x) .* otf                 complex
+        buff1 = ifftn(buff1);                                            % buff1: inverse fft                   complex
+        buff2 = real(buff1);                                             % buff2: convFFT                       real
+        buff2 = max(buff2, single(eps('single')));                       % buff2: avoid /0                      real
+        buff2 = bl ./ buff2;                                             % buff2: ratio                         real
+        buff3 = conj(buff3);                                             % buff3: otf_conj                      complex
+        buff1 = fftn(buff2);                                             % buff1: holds fft(x)                  complex
+        buff1 = buff1 .* buff3;                                          % buff1: fft(x) .* otf_conj            complex
+        buff1 = ifftn(buff1);                                            % buff1: inverse fft                   complex
+        buff2 = real(buff1);                                             % convFFT                              real
 
         if regularize_interval>0 && mod(i,regularize_interval)==0 && lambda>0 && i<niter
-            buff1 = convn(bl, R, 'same');                                % buff1 reused as Laplacian     real
-            bl    = bl .* buff2 .* (1-lambda) + buff1 .* lambda;         % bl   : decon requalized X     real
+            buff1 = convn(bl, R, 'same');                                % buff1: reused as Laplacian           real
+            buff2 = bl .* buff2 .* (1-lambda) + buff1 .* lambda;         % buff2: decon requalized X            real
         else
-            bl    = bl .* buff2;                                         % bl   : decon X                real
+            buff2 = bl .* buff2;                                         % buff2: decon X                       real
         end
 
-        bl = abs(bl);                                                    % bl   : decon X                real
+        bl = abs(buff2);                                                 % bl   : decon X                       real
 
         % ----------- Wiener PSF update ---------------
+        % Y: observed image (blurred, bl)
+        % X: current object estimate (sharpened)
+        % psf_new = (F{Y} . conj(F{X})) ./ (F{X} . conj(F{X}) + epsilon)
         if i<niter
-            buff1 = fftn(bl, fft_shape);                                 % buff1: F{X}                   complex
-            buff2 = convFFT(bl, buff3);                                  % buff2: Y                      real
-            buff2 = fftn(buff2, fft_shape);                              % buff2: F{Y}                   complex
-            buff3 = conj(buff1);                                         % buff3: F{X}*                  complex
-            buff2 = buff2 .* buff3;                                      % buff2: numerator  F{Y}·F{X}*  complex
-            % Compute |F{x}|^2 using element-wise multiplication: F{x} .* conj(F{x})
-            buff1 = buff1 .* buff3;                                      % buff1: |F{X}|^2               complex
-            buff1 = real(buff1);                                         % buff1: |F{X}|^2               real
-            buff1 = max(buff1, single(eps('single')));                   % buff1: denom |F{X}|^2+ε       real
-            buff2 = buff2 ./ buff1;                                      % buff2: OTF_new                complex
-            buff1 = ifftn(buff2);                                        % buff1: inverse OTF → raw PSF  complex
-            buff1 = real(buff1);                                         % buff1: PSF estimate           real
-
-            % crop → psf, normalize for next OTF calculation
-            sz  = size(psf);
-            c   = floor((fft_shape - sz)/2) + 1;
-            psf = buff1(c(1):c(1)+sz(1)-1, c(2):c(2)+sz(2)-1, c(3):c(3)+sz(3)-1);
-            psf = max(psf,0);
-            psf = psf / sum(psf(:));
+                                                                         % buff4: F{Y}                          complex
+            buff1 = fftn(buff2);                                         % buff1: F{X}                          complex
+            buff3 = conj(buff1);                                         % buff3: conj(F{X})                    complex
+            buff4 = buff4 .* buff3;                                      % buff4: F{Y} . conj(F{X})             complex
+            buff2 = buff1 .* buff3;                                      % buff2: F{X} . conj(F{X}              real
+            buff2 = max(buff2, single(eps('single')));                   % buff2: (F{X} . conj(F{X}) + epsilon  real
+            buff3 = buff4 ./ buff2;                                      % buff3: otf_new                       complex
+            buff3 = buff3 / buff3(1,1,1);                                % buff3: normalized otf                complex
         end
 
         % ------------- stopping test -----------------
@@ -252,22 +250,20 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, ...
 end
 
 function x = convFFT(x, otf)
-    %CONVFFT  Frequency–domain convolution with fixed precision.
+    % CONVFFT  Frequency–domain convolution with fixed precision.
     %
-    %   y = convFFT(x, otf)
+    %   x = convFFT(x, otf)
     %
     %   Arguments
     %   ---------
-    %     x   – real/complex volume (single or gpuArray/single)
-    %     otf – pre-computed OTF with the *same* class as x
+    %     x   – real volume (single or gpuArray/single)
+    %     otf – complex pre-computed OTF (single or gpuArray/single)
     %
-    %   The result y is real(single) and the same “gather-state” (CPU vs GPU)
-    %   as the input.
-
-    x =  fftn(x);   % x now holds fft(x)
-    x = x .* otf;                  % x now holds fft(x) .* otf
-    x = ifftn(x);
-    x = real(x);                   % final output
+    %   The result x is real(single) and on the same device (CPU vs GPU) as the input.
+    buf = fftn(x);        % x now holds fft(x)             complex
+    buf = buf .* otf;     % x now holds fft(x) .* otf      complex
+    buf = ifftn(buf);     % inverse fft                    complex
+    x = real(buf);        % final output                   single
 end
 
 function otf = calculate_otf(psf, fft_shape, device_id)

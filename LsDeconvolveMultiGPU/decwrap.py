@@ -200,6 +200,10 @@ def main():
                         help='Emission wavelength (525, 600, 690)')
 
     # Optional
+    parser.add_argument('--use-fft', action='store_true', default=False,
+                        help='use FFT-based convolution, which is faster but uses more memory.')
+    parser.add_argument('--adaptive-psf', action='store_true', default=False,
+                        help='use Weiner method to adaptively update the PSF at every step.')
     parser.add_argument('--cache-drive', type=str, default=None,
                         help='Optional brain name for cache path construction')
     parser.add_argument('-it', '--numit', type=int, default=6,
@@ -221,9 +225,11 @@ def main():
                              '- 1e-3 to 1e-2: Typical data with moderate noise\n'
                              '- 1e-2 to 0.1: High noise or very ill-posed cases\n'
                              '- Use slightly higher values for fewer iterations, lower for many iterations\n'
-                             '- 5e-3 to 5e-2 recommended for blind deconvolution')
-    parser.add_argument('--clipval', type=int, default=0,
-                        help='Clipping value (0 = disabled)')
+                             '- 5e-3 to 5e-2 recommended for Weiner deconvolution')
+    parser.add_argument('--clipval', type=float, default=99.99,
+                        help='Clip the upper intensity of the entire image at the given percentile (default: 99.99). '
+                             'The upper limit is computed as max(percentile(all_blocks, clipval)). '
+                             'Set to 0 to disable clipping.')
     parser.add_argument('--stop-criterion', type=float, default=0,
                         help='Early stopping threshold as a percentage change in loss between iterations. '
                              'Training stops if the relative change falls below this value. '
@@ -240,7 +246,7 @@ def main():
                         help='Signal amplification factor')
     parser.add_argument('--gaussian-sigma', type=float, nargs=3, default=[0.5, 0.5, 2.5],
                         help='3D Gaussian filter sigma in voxel unit (e.g., 0.5 0.5 1.5). Use 0 0 0 to disable filtering.')
-    parser.add_argument('--gaussian-filter-size', type=int, nargs=3, default=[5, 5, 25],
+    parser.add_argument('--gaussian-filter-size', type=int, nargs=3, default=[13, 13, 25],
                         help='Size of the 3D Gaussian filter kernel in voxel unit')
     parser.add_argument('--denoise-strength', type=int, default=1,
                         help='Denoising strength (e.g., 1 to 255 for 8-bit images)')
@@ -251,7 +257,6 @@ def main():
                              'for most modern cameras, destriping is usually unnecessary.')
     parser.add_argument('--regularize-interval', type=int, default=3,
                         help='Apply a 3D Gaussian smoothing filter (σ=0.5) to the deconvolved volume every N iterations. '
-                             'Enables blind deconvolution by updating the PSF after each smoothing step. '
                              'Set to 0 to disable both smoothing and blind deconvolution.')
     parser.add_argument('--no-resume', dest='resume', action='store_false',
                         help='Disable resuming from previous cache (default: resume is enabled)')
@@ -263,15 +268,16 @@ def main():
     parser.add_argument('--convert-to-16bit', action='store_true',
                         help='Convert output to 16-bit (default keeps original bit depth, usually 16-bit)')
     parser.add_argument('--start-block', type=int, default=1,
-                        help='Starting block index for multi-GPU chunking')
+                        help='Starting block index for multi-GPU or multi-computer processing (default: 1). '
+                             'Intended for collaborative workflows where multiple machines access the same image via a shared network path. '
+                             'Slave computers should use --start-block > 1. '
+                             'The machine with --start-block=1 acts as the master, responsible for assembling slabs and saving the final image.')
     parser.add_argument('--dry-run', action='store_true',
                         help='Print the MATLAB command and exit without executing it')
     parser.add_argument('--use-jemalloc', action='store_true', default=False,
                         help='Use jemalloc allocator (Linux only)')
     parser.add_argument('--use-tcmalloc', action='store_true', default=False,
                         help='Use tcmalloc allocator (Linux only)')
-    parser.add_argument('--use-fft', action='store_true', default=False,
-                        help='use FFT-based convolution, which is faster but uses more memory.')
 
     args = parser.parse_args()
 
@@ -281,12 +287,18 @@ def main():
             and set(args.gpu_indices).issubset(set(default_gpu_indices))
     )
     user_overrode_block_size = args.block_size_max != block_size_default
+    n_blocks_on_gpu = 2
+    if args.use_fft:
+        n_blocks_on_gpu = 10
+        if args.adaptive_psf:
+            n_blocks_on_gpu = 20
+    if args.lambda_damping:
+        n_blocks_on_gpu += 1
     if user_specified_subset or not user_overrode_block_size:
         args.block_size_max = estimate_block_size_max(
             args.gpu_indices,
             args.gpu_workers_per_gpu,
-            #num_blocks_on_gpu=12 if args.use_fft else 2 + (1 if args.lambda_damping else 0),
-            num_blocks_on_gpu=18 if args.use_fft else 2 + (1 if args.lambda_damping else 0),
+            num_blocks_on_gpu=n_blocks_on_gpu
         )
         log.info(f"Re-estimated block_size_max: {args.block_size_max}")
 
@@ -373,6 +385,7 @@ def main():
         f"    {'true' if args.convert_to_8bit else 'false'}, ...\n"
         f"    {'true' if args.convert_to_16bit else 'false'}, ...\n"
         f"    {'true' if args.use_fft else 'false'}, ...\n"
+        f"    {'true' if args.adaptive_psf else 'false'}, ...\n"
         f"    convertCharsToStrings('{cache_drive_folder.as_posix()}') ...\n"
         f");\n"
     )

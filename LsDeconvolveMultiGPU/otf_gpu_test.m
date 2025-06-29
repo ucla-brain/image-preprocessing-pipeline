@@ -46,7 +46,7 @@ for s = 1:length(sigmas)
         Nrep = 10;   % Repeat for robustness
 
         % --- Warm up GPU and code paths
-        [~] = conj_gpu(otf_gpu(gpuArray(psf), sz));
+        [~] = otf_gpu(gpuArray(psf), sz);
 
         % --- MATLAB reference: pad, ifftshift, fftn
         otf_mat = fftn(ifftshift(psf_pad));
@@ -56,7 +56,6 @@ for s = 1:length(sigmas)
         for rr = 1:Nrep
             t0 = tic;
             otf_mex = otf_gpu(gpuArray(psf), sz);
-            otf_conj_mex = conj_gpu(otf_mex);
             t_mex_all(rr) = toc(t0);
         end
         t_mex = mean(t_mex_all(2:end)); % average, ignore first
