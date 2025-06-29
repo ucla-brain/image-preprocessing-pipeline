@@ -171,7 +171,6 @@ function bl = deconFFT_Weiner(bl, psf, fft_shape, niter, lambda, stop_criterion,
     use_gpu = isgpuarray(bl);
 
     buff3 = calculate_otf(psf, fft_shape, device_id);                % buff3: otf                           complex
-    F_Y = fftn(bl);
 
     % Laplacian-like regulariser (only allocated if used)
     if regularize_interval < niter && lambda > 0
@@ -185,6 +184,7 @@ function bl = deconFFT_Weiner(bl, psf, fft_shape, niter, lambda, stop_criterion,
 
     if stop_criterion>0, delta_prev = norm(bl(:)); end
 
+    F_Y = fftn(bl);
     buff2 = zeros(fft_shape, 'single');
     if use_gpu
         buff2 = gpuArray(buff2);
