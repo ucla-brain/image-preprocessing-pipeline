@@ -1,27 +1,29 @@
 /*==============================================================================
   otf_gpu_mex.cu
   ------------------------------------------------------------------------------
-  Compute 3-D Optical Transfer Function (OTF) on the GPU, using a user-provided
-  complex gpuArray as buffer and output.
+  Compute 3-D Optical Transfer Function (OTF) on the GPU, optionally using a
+  user-provided gpuArray (complex single, size [nx ny nz]) as scratch/output buffer.
 
   Usage in MATLAB (all gpuArray, single):
-      otf = otf_gpu_mex(psf, [nx ny nz], ..., buffer);
+      otf = otf_gpu_mex(psf, [nx ny nz]);
+      otf = otf_gpu_mex(psf, [nx ny nz], scratch);
 
   Inputs
   ──────
-    psf        : 3-D unshifted PSF (Y×X×Z)       single gpuArray, real
-    fft_shape  : [nx ny nz]                      double, output size
-    buffer     : 3-D single complex gpuArray     used as internal + output buffer
+    psf        : 3-D unshifted PSF (Y×X×Z)   single gpuArray
+    fft_shape  : [nx ny nz] (double)         desired FFT size
+    scratch    : (optional) gpuArray         complex single, [nx ny nz]
 
   Output
   ──────
-    otf        : 3-D complex single gpuArray     (buffer, filled with OTF)
+    otf        : 3-D complex single gpuArray (C-order on device)
 ==============================================================================*/
 
 #include "mex.h"
 #include "gpu/mxGPUArray.h"
 #include <cuda_runtime.h>
 #include <cufft.h>
+#include <cstring>
 
 // ──────────────── Error-handling helpers ────────────────
 #define CUDA_CHECK(err) \
@@ -104,94 +106,95 @@ __global__ void ifftshift3D(float2 *v, int nx, int ny, int nz)
 void mexFunction(int nlhs, mxArray *plhs[],
                  int nrhs, const mxArray *prhs[])
 {
-    // 4th argument required: user-provided buffer
-    if (nrhs != 3 && nrhs != 4)
-        mexErrMsgIdAndTxt("otf_gpu_mex:nrhs", "Three or four inputs required (psf, fft_shape, [unused], buffer).");
-    if (nlhs != 1)
+    // ================= Input and output count checks =================
+    if (nrhs < 2 || nrhs > 3)
+        mexErrMsgIdAndTxt("otf_gpu_mex:nrhs", "Usage: otf = otf_gpu_mex(psf, fft_shape[, scratch]);");
+    if (nlhs < 1)
         mexErrMsgIdAndTxt("otf_gpu_mex:nlhs", "One output (otf) required.");
 
     mxInitGPU();
 
-    // ---- PSF ----
+    // ===================== Input: PSF =====================
     const mxGPUArray *psf = mxGPUCreateFromMxArray(prhs[0]);
     if (mxGPUGetClassID(psf) != mxSINGLE_CLASS || mxGPUGetNumberOfDimensions(psf) != 3)
-        mexErrMsgIdAndTxt("otf_gpu_mex:psf", "psf must be 3-D single gpuArray.");
-
-    const mwSize *pd = mxGPUGetDimensions(psf);
-    size_t sx = pd[0], sy = pd[1], sz = pd[2];
+        mexErrMsgIdAndTxt("otf_gpu_mex:psf", "psf must be a 3-D single gpuArray.");
+    const mwSize *psf_dims = mxGPUGetDimensions(psf);
+    size_t sx = psf_dims[0], sy = psf_dims[1], sz = psf_dims[2];
     const float *d_psf = static_cast<const float*>(mxGPUGetDataReadOnly(psf));
 
-    // ---- fft_shape ----
+    // ===================== Input: fft_shape =====================
     if (!mxIsDouble(prhs[1]) || mxGetNumberOfElements(prhs[1]) != 3)
         mexErrMsgIdAndTxt("otf_gpu_mex:fftshape", "fft_shape must be [nx ny nz] double.");
-
-    double *sh = mxGetPr(prhs[1]);
+    const double *sh = mxGetPr(prhs[1]);
     size_t dx = size_t(sh[0]), dy = size_t(sh[1]), dz = size_t(sh[2]);
     if (!dx || !dy || !dz)
-        mexErrMsgIdAndTxt("otf_gpu_mex:fftshape", "fft_shape must be positive.");
+        mexErrMsgIdAndTxt("otf_gpu_mex:fftshape", "fft_shape must be all positive.");
+    mwSize otf_dims[3] = { mwSize(dx), mwSize(dy), mwSize(dz) };
 
-    mwSize odims[3] = { mwSize(dx), mwSize(dy), mwSize(dz) };
-
-    // ---- User-provided buffer ----
-    if (nrhs < 4)
-        mexErrMsgIdAndTxt("otf_gpu_mex:buffer", "User-provided buffer (complex single gpuArray) required as 4th argument.");
-
-    mxGPUArray *user_buffer = const_cast<mxGPUArray*>(mxGPUCreateFromMxArray(prhs[3]));
-    if (mxGPUGetClassID(user_buffer) != mxSINGLE_CLASS ||
-        !mxGPUGetIsComplex(user_buffer) ||
-        mxGPUGetNumberOfDimensions(user_buffer) != 3)
-    {
-        mxGPUDestroyGPUArray(user_buffer);
-        mxGPUDestroyGPUArray(psf);
-        mexErrMsgIdAndTxt("otf_gpu_mex:buffer", "Buffer must be 3-D complex single gpuArray.");
+    // ===================== Optional Input: scratch buffer =====================
+    mxGPUArray *otf = nullptr;
+    bool user_scratch = false;
+    if (nrhs == 3 && !mxIsEmpty(prhs[2])) {
+        // User provided scratch: must be complex single, gpuArray, 3D, size match
+        if (!mxIsGPUArray(prhs[2]))
+            mexErrMsgIdAndTxt("otf_gpu_mex:scratch", "scratch must be a gpuArray.");
+        mxGPUArray *scratch = mxGPUCreateFromMxArray(prhs[2]);
+        if (mxGPUGetClassID(scratch) != mxSINGLE_CLASS ||
+            !mxGPUGetComplexity(scratch) ||
+            mxGPUGetNumberOfDimensions(scratch) != 3)
+        {
+            mxGPUDestroyGPUArray(scratch);
+            mexErrMsgIdAndTxt("otf_gpu_mex:scratch",
+                "scratch must be a 3-D complex single gpuArray.");
+        }
+        const mwSize *sd = mxGPUGetDimensions(scratch);
+        if (sd[0] != dx || sd[1] != dy || sd[2] != dz) {
+            mxGPUDestroyGPUArray(scratch);
+            mexErrMsgIdAndTxt("otf_gpu_mex:scratch",
+                "scratch buffer shape must match [nx ny nz].");
+        }
+        otf = scratch; // Take ownership for now, do not destroy at end
+        user_scratch = true;
+    } else {
+        // Allocate our own complex single gpuArray as scratch/output
+        otf = mxGPUCreateGPUArray(3, otf_dims, mxSINGLE_CLASS, mxCOMPLEX, MX_GPU_DO_NOT_INITIALIZE);
+        user_scratch = false;
     }
+    float2 *d_otf = static_cast<float2*>(mxGPUGetData(otf));
 
-    const mwSize *bdims = mxGPUGetDimensions(user_buffer);
-    if (bdims[0] != dx || bdims[1] != dy || bdims[2] != dz)
-    {
-        mxGPUDestroyGPUArray(user_buffer);
-        mxGPUDestroyGPUArray(psf);
-        mexErrMsgIdAndTxt("otf_gpu_mex:buffer", "Buffer must match fft_shape.");
-    }
-
-    float2 *d_otf = static_cast<float2*>(mxGPUGetData(user_buffer));
-
-    // ---- Zero-pad & centre PSF into buffer ----
+    // ================== Main computation: Pad, ifftshift, FFT ==================
+    // ---- Zero-pad & centre ----
     dim3 blk(8,8,8);
-    dim3 grd( (dz+blk.x-1)/blk.x,
-              (dy+blk.y-1)/blk.y,
-              (dx+blk.z-1)/blk.z );
-    ptrdiff_t pre_x = (ptrdiff_t)( (dx - sx) / 2 );
-    ptrdiff_t pre_y = (ptrdiff_t)( (dy - sy) / 2 );
-    ptrdiff_t pre_z = (ptrdiff_t)( (dz - sz) / 2 );
+    dim3 grd( (dz+blk.x-1)/blk.x, (dy+blk.y-1)/blk.y, (dx+blk.z-1)/blk.z );
+    ptrdiff_t pre_x = (ptrdiff_t)((dx - sx) / 2);
+    ptrdiff_t pre_y = (ptrdiff_t)((dy - sy) / 2);
+    ptrdiff_t pre_z = (ptrdiff_t)((dz - sz) / 2);
 
-    pad_center_swap<<<grd, blk>>>(d_psf, sx, sy, sz,
-                                  d_otf, dx, dy, dz,
-                                  pre_x, pre_y, pre_z);
+    pad_center_swap<<<grd, blk>>>(d_psf, sx, sy, sz, d_otf, dx, dy, dz, pre_x, pre_y, pre_z);
     CUDA_CHECK(cudaGetLastError());
 
-    // ---- ifftshift in place (buffer) ----
-    dim3 grd2( (dx+blk.x-1)/blk.x,
-               (dy+blk.y-1)/blk.y,
-               (dz+blk.z-1)/blk.z );
+    // ---- ifftshift ----
+    dim3 grd2( (dx+blk.x-1)/blk.x, (dy+blk.y-1)/blk.y, (dz+blk.z-1)/blk.z );
     ifftshift3D<<<grd2, blk>>>(d_otf, (int)dx, (int)dy, (int)dz);
     CUDA_CHECK(cudaGetLastError());
 
-    // ---- 3-D FFT in place (buffer) ----
+    // ---- 3-D FFT ----
     cufftHandle plan;
     CUFFT_CHECK(cufftPlan3d((int)dz, (int)dy, (int)dx, CUFFT_C2C));
     CUFFT_CHECK(cufftExecC2C(plan,
-                 reinterpret_cast<cufftComplex*>(d_otf),
-                 reinterpret_cast<cufftComplex*>(d_otf),
-                 CUFFT_FORWARD));
+        reinterpret_cast<cufftComplex*>(d_otf),
+        reinterpret_cast<cufftComplex*>(d_otf),
+        CUFFT_FORWARD));
     CUFFT_CHECK(cufftDestroy(plan));
 
     CUDA_CHECK(cudaDeviceSynchronize());
 
-    // ---- Return the user-provided buffer as the OTF (MATLAB gpuArray) ----
-    plhs[0] = mxGPUCreateMxArrayOnGPU(user_buffer);
-
-    // ---- Free input and local references (but not the user buffer, which is output) ----
+    // ================== Output handling, cleanup ==================
+    plhs[0] = mxGPUCreateMxArrayOnGPU(otf);
+    // Destroy our own buffer if we allocated it. (User scratch is returned as output, do not destroy!)
     mxGPUDestroyGPUArray(psf);
-    mxGPUDestroyGPUArray(user_buffer); // safe to destroy here, as output is a new mxArray referencing the same GPU data
+    if (!user_scratch) {
+        mxGPUDestroyGPUArray(otf);
+    }
+    // All done!
 }
