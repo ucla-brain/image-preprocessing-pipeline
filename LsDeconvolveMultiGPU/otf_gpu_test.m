@@ -43,6 +43,7 @@ for s = 1:length(sigmas)
 
         % Warm up
         otf_mat = zeros(sz, 'single', 'gpuArray');
+        otf_mat = complex(otf_mat, otf_mat);
         otf_mat = otf_gpu(gpuArray(psf), sz, otf_mat);
 
         % --- MATLAB reference: pad, ifftshift, fftn, all on GPU, single
