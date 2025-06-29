@@ -52,7 +52,7 @@ for s = 1:length(sigmas)
         for rr = 1:Nrep
             g = gpuDevice; wait(g); % make sure GPU is idle before timing
             t0 = tic;
-            otf_mex = otf_gpu_mex(psf_gpu, sz); % test mex function (gpuArray in, out)
+            otf_mex = otf_gpu(psf_gpu, sz); % test mex function (gpuArray in, out)
             wait(g); % ensure finished
             t_mex_all(rr) = toc(t0);
         end
