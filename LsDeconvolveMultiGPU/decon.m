@@ -245,6 +245,8 @@ function bl = deconFFT_Weiner(bl, psf, fft_shape, niter, lambda, stop_criterion,
             psf = buff2(center(1):center(1)+psf_sz(1)-1, ...
                         center(2):center(2)+psf_sz(2)-1, ...
                         center(3):center(3)+psf_sz(3)-1);
+            psf = max(psf, 0);            % clamp negatives
+            psf = psf / sum(psf(:));      % normalize to unit energy
         end
 
         % ------------- stopping test -----------------
