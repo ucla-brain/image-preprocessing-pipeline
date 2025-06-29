@@ -170,7 +170,8 @@ function bl = deconFFT_Weiner(bl, psf, fft_shape, niter, lambda, stop_criterion,
 
     use_gpu = isgpuarray(bl);
 
-    buff3 = calculate_otf(psf, fft_shape, device_id);                % buff3: otf                           complex
+    psf_sz = size(psf);
+    center = floor((fft_shape - psf_sz) / 2) + 1;
 
     % Laplacian-like regulariser (only allocated if used)
     if regularize_interval < niter && lambda > 0
@@ -190,6 +191,7 @@ function bl = deconFFT_Weiner(bl, psf, fft_shape, niter, lambda, stop_criterion,
         buff2 = gpuArray(buff2);
     end
     buff1 = complex(buff2, buff2);  % complex(single) zeros
+    buff3 = complex(buff2, buff2);  % complex(single) zeros
 
     for i = 1:niter
         if i > 1 && regularize_interval>0 && mod(i, regularize_interval)==0
@@ -204,6 +206,7 @@ function bl = deconFFT_Weiner(bl, psf, fft_shape, niter, lambda, stop_criterion,
         else
             buff1 = fftn(bl);                                            % buff1: fft(bl)                       complex
         end
+        buff3 = calculate_otf(psf, fft_shape, device_id);                % buff3: otf                           complex
         buff1 = buff1 .* buff3;                                          % buff1: fft(x) .* otf                 complex
         buff1 = ifftn(buff1);                                            % buff1: inverse fft                   complex
         buff2 = real(buff1);                                             % buff2: convFFT                       real
@@ -235,7 +238,11 @@ function bl = deconFFT_Weiner(bl, psf, fft_shape, niter, lambda, stop_criterion,
             buff2 = max(buff2, single(eps('single')));                   % buff2: (F{X} . conj(F{X}) + epsilon  real
             buff3 = F_Y .* buff3;                                        % buff3: F{Y} . conj(F{X})             complex
             buff3 = buff3 ./ buff2;                                      % buff3: otf_new                       complex
-            buff3 = buff3 / buff3(1,1,1);                                % buff3: normalized otf                complex
+            buff3 = ifftn(buff3);                                        % buff3: psf                           complex
+            buff2 = real(buff3);                                         % buff2: psf                           real
+            psf = buff2(center(1):center(1)+psf_sz(1)-1, ...
+                        center(2):center(2)+psf_sz(2)-1, ...
+                        center(3):center(3)+psf_sz(3)-1);
         end
 
         % ------------- stopping test -----------------
