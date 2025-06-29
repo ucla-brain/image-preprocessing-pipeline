@@ -171,6 +171,7 @@ function bl = deconFFT_Weiner(bl, psf, fft_shape, niter, lambda, stop_criterion,
     use_gpu = isgpuarray(bl);
 
     buff3 = calculate_otf(psf, fft_shape, device_id);                % buff3: otf                           complex
+    F_Y = fftn(bl);
 
     % Laplacian-like regulariser (only allocated if used)
     if regularize_interval < niter && lambda > 0
@@ -189,7 +190,6 @@ function bl = deconFFT_Weiner(bl, psf, fft_shape, niter, lambda, stop_criterion,
         buff2 = gpuArray(buff2);
     end
     buff1 = complex(buff2, buff2);  % complex(single) zeros
-    buff4 = complex(buff2, buff2);
 
     for i = 1:niter
         if i > 1 && regularize_interval>0 && mod(i, regularize_interval)==0
@@ -199,8 +199,12 @@ function bl = deconFFT_Weiner(bl, psf, fft_shape, niter, lambda, stop_criterion,
         end
 
         % ----------- Richardson–Lucy core ------------
-        buff4 = fftn(bl);                                                % buff1: fft(bl)                       complex
-        buff1 = buff4 .* buff3;                                          % buff1: fft(x) .* otf                 complex
+        if i == 1
+            buff1 = F_Y;
+        else
+            buff1 = fftn(bl);                                            % buff1: fft(bl)                       complex
+        end
+        buff1 = buff1 .* buff3;                                          % buff1: fft(x) .* otf                 complex
         buff1 = ifftn(buff1);                                            % buff1: inverse fft                   complex
         buff2 = real(buff1);                                             % buff2: convFFT                       real
         buff2 = max(buff2, single(eps('single')));                       % buff2: avoid /0                      real
@@ -223,15 +227,15 @@ function bl = deconFFT_Weiner(bl, psf, fft_shape, niter, lambda, stop_criterion,
         % ----------- Wiener PSF update ---------------
         % Y: observed image (blurred, bl)
         % X: current object estimate (sharpened)
-        % psf_new = (F{Y} . conj(F{X})) ./ (F{X} . conj(F{X}) + epsilon)
+        % otf_new = (F{Y} . conj(F{X})) ./ (F{X} . conj(F{X}) + epsilon)
         if i<niter
-                                                                         % buff4: F{Y}                          complex
             buff1 = fftn(buff2);                                         % buff1: F{X}                          complex
             buff3 = conj(buff1);                                         % buff3: conj(F{X})                    complex
-            buff4 = buff4 .* buff3;                                      % buff4: F{Y} . conj(F{X})             complex
-            buff2 = buff1 .* buff3;                                      % buff2: F{X} . conj(F{X}              real
+            buff2 = buff1 .* buff3;                                      % buff2: F{X} . conj(F{X})             real
             buff2 = max(buff2, single(eps('single')));                   % buff2: (F{X} . conj(F{X}) + epsilon  real
-            buff3 = buff4 ./ buff2;                                      % buff3: otf_new                       complex
+            buff3 = F_Y .* buff3;                                        % buff3: F{Y} . conj(F{X})             complex
+            buff3 = buff3 ./ buff2;                                      % buff3: otf_new                       complex
+            buff3 = buff3 / buff3(1,1,1);                                % buff3: normalized otf                complex
         end
 
         % ------------- stopping test -----------------
