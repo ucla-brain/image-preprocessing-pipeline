@@ -232,7 +232,6 @@ function bl = deconFFT_Weiner(bl, psf, fft_shape, niter, lambda, stop_criterion,
             buff2 = buff1 .* buff3;                                      % buff2: F{X} . conj(F{X}              real
             buff2 = max(buff2, single(eps('single')));                   % buff2: (F{X} . conj(F{X}) + epsilon  real
             buff3 = buff4 ./ buff2;                                      % buff3: otf_new                       complex
-            buff3 = buff3 / buff3(1,1,1);                                % buff3: normalized otf                complex
         end
 
         % ------------- stopping test -----------------
