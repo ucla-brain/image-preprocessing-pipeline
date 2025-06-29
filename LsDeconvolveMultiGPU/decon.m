@@ -206,7 +206,9 @@ function bl = deconFFT_Weiner(bl, psf, fft_shape, niter, lambda, stop_criterion,
         else
             buff1 = fftn(bl);                                            % buff1: fft(bl)                       complex
         end
-        buff3 = calculate_otf(psf, fft_shape, device_id);                % buff3: otf                           complex
+        [buff3, ~, ~] = pad_block_to_fft_shape(psf, fft_shape, 0);
+        buff3 = ifftshift(buff3);
+        buff3 = fftn(buff3);
         buff1 = buff1 .* buff3;                                          % buff1: fft(x) .* otf                 complex
         buff1 = ifftn(buff1);                                            % buff1: inverse fft                   complex
         buff2 = real(buff1);                                             % buff2: convFFT                       real
