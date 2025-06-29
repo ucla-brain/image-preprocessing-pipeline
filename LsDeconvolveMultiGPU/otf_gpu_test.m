@@ -3,6 +3,8 @@ fprintf('\n');
 fprintf('PF   Test  Type    Size              Sigma         Kernel          maxErr    RMS       relErr    mex(s)   Speedup\n');
 fprintf('---------------------------------------------------------------------------------------------------------------\n');
 
+Nrep = 5; % <--- Number of repeats for timing (ignore first run for warmup)
+
 sz = [120 120 150];
 kernels = {'auto', 9, [9 9 21], 3, 41};
 sigmas = {2.5, [2.5 2.5 2.5], [0.5 0.5 2.5], 0.25, 8};
@@ -35,44 +37,44 @@ for s = 1:length(sigmas)
             psf = exp(-0.5*((x-center(1))/sigma(1)).^2 -0.5*((y-center(2))/sigma(2)).^2 -0.5*((z-center(3))/sigma(3)).^2);
         end
         psf = psf / sum(psf(:));
-        psf = single(psf); % <--- unshifted
+        psf = single(psf); % always single
 
-        % GPU: Pad and reference calculation ALL on GPU in single precision
+        % ---- GPU: pad and reference calculation ALL on GPU ----
         psf_gpu = gpuArray(psf);   % Move PSF to GPU as single
         [psf_pad, pad_pre, pad_post] = pad_block_to_fft_shape(psf_gpu, sz, 0);
 
-        % Warm up
-        otf_mat = zeros(sz, 'single', 'gpuArray');
-        otf_mat = complex(otf_mat, otf_mat);
-        otf_mat = otf_gpu(gpuArray(psf), sz, otf_mat);
-
         % --- MATLAB reference: pad, ifftshift, fftn, all on GPU, single
-        otf_mat = fftn(ifftshift(psf_pad));
+        otf_mat = fftn(ifftshift(psf_pad));   % On GPU
+        otf_mat = single(otf_mat);            % Enforce single (should already be, but safe)
 
         % --- MEX timing (repeat, ignore first run) ---
-        t_mex_all = zeros(1,Nrep);
+        t_mex_all = zeros(1, Nrep, 'gpuArray'); % <--- Keep as gpuArray for true GPU timing
         for rr = 1:Nrep
+            g = gpuDevice; wait(g); % make sure GPU is idle before timing
             t0 = tic;
-            otf_mex = otf_gpu(gpuArray(psf), sz);
+            otf_mex = otf_gpu_mex(psf_gpu, sz); % test mex function (gpuArray in, out)
+            wait(g); % ensure finished
             t_mex_all(rr) = toc(t0);
         end
-        t_mex = mean(t_mex_all(2:end)); % average, ignore first
+        t_mex = double(gather(mean(t_mex_all(2:end)))); % average, ignore first
 
         % --- MATLAB timing (repeat, ignore first run) ---
-        t_mat_all = zeros(1,Nrep);
+        t_mat_all = zeros(1, Nrep, 'gpuArray');
         for rr = 1:Nrep
+            g = gpuDevice; wait(g);
             t0 = tic;
-            otf_mat = fftn(ifftshift(psf_pad));
+            otf_mat_ref = fftn(ifftshift(psf_pad));
+            wait(g);
             t_mat_all(rr) = toc(t0);
         end
-        t_mat = mean(t_mat_all(2:end)); % average, ignore first
+        t_mat = double(gather(mean(t_mat_all(2:end)))); % average, ignore first
 
-        otf_mat = single(otf_mat);  % force single precision, but should already be
-
-        % gather for error calculation
-        maxErr = double(max(abs(gather(otf_mat(:))-gather(otf_mex(:)))));
-        rmsErr = double(rms(gather(otf_mat(:))-gather(otf_mex(:))));
-        relErr = double(norm(gather(otf_mat(:))-gather(otf_mex(:))) / max(norm(gather(otf_mat(:))),eps('single')));
+        % --- Error metrics: compare gathered outputs
+        otf_mat_gather = gather(otf_mat);
+        otf_mex_gather = gather(otf_mex);
+        maxErr = double(max(abs(otf_mat_gather(:) - otf_mex_gather(:))));
+        rmsErr = double(rms(otf_mat_gather(:) - otf_mex_gather(:)));
+        relErr = double(norm(otf_mat_gather(:) - otf_mex_gather(:)) / max(norm(otf_mat_gather(:)), eps('single')));
 
         pf = relErr < 2e-6; % relax to 2e-6 for roundoff
         pfmark = pass_symbol(pf);
@@ -106,22 +108,15 @@ out = sqrt(mean(abs(x).^2));
 end
 
 function [bl, pad_pre, pad_post] = pad_block_to_fft_shape(bl, fft_shape, mode)
-    % Ensure 3 dimensions for both bl and fft_shape
     sz = size(bl);
     sz = [sz, ones(1, 3-numel(sz))];      % pad size to 3 elements if needed
     fft_shape = [fft_shape(:)', ones(1, 3-numel(fft_shape))]; % ensure row vector, 3 elements
-
-    % Compute missing for each dimension
     assert(all(fft_shape >= sz), ...
         sprintf('pad_block_to_fft_shape: bl [%s] is larger than FFT shape [%s], cannot pad', ...
         num2str(sz), num2str(fft_shape)))
     missing = max(fft_shape - sz, 0);
-
-    % Vectorized pad pre and post calculation
     pad_pre = floor(missing/2);
     pad_post = ceil(missing/2);
-
-    % Only pad if needed
     if any(pad_pre > 0 | pad_post > 0)
         bl = padarray(bl, pad_pre, mode, 'pre');
         bl = padarray(bl, pad_post, mode, 'post');
