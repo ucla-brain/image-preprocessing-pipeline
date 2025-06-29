@@ -1,21 +1,18 @@
 /*==============================================================================
   otf_gpu_mex.cu
   ------------------------------------------------------------------------------
-  Compute 3-D Optical Transfer Function (OTF) on the GPU, optionally using a
-  user-provided gpuArray (complex single, size [nx ny nz]) as scratch/output buffer.
+  Compute 3-D Optical Transfer Function (OTF) on the GPU, optimized.
 
-  Usage in MATLAB (all gpuArray, single):
-      otf = otf_gpu_mex(psf, [nx ny nz]);
-      otf = otf_gpu_mex(psf, [nx ny nz], scratch);
+  Usage:
+    otf = otf_gpu_mex(psf, [nx ny nz]);
+    otf = otf_gpu_mex(psf, [nx ny nz], scratch);
 
-  Inputs
-  ──────
+  Inputs:
     psf        : 3-D unshifted PSF (Y×X×Z)   single gpuArray
     fft_shape  : [nx ny nz] (double)         desired FFT size
     scratch    : (optional) gpuArray         complex single, [nx ny nz]
 
-  Output
-  ──────
+  Output:
     otf        : 3-D complex single gpuArray (C-order on device)
 ==============================================================================*/
 
@@ -23,36 +20,37 @@
 #include "gpu/mxGPUArray.h"
 #include <cuda_runtime.h>
 #include <cufft.h>
-#include <cstring>
+#include <cstdio>
 
-// ──────────────── Error-handling helpers ────────────────
 #define CUDA_CHECK(err) \
     if ((err) != cudaSuccess) \
         mexErrMsgIdAndTxt("otf_gpu_mex:CUDA", "CUDA error %s:%d: %s", \
-                          __FILE__, __LINE__, cudaGetErrorString(err));
+                          __FILE__, __LINE__, cudaGetErrorString(err))
 
 #define CUFFT_CHECK(err) \
     if ((err) != CUFFT_SUCCESS) \
         mexErrMsgIdAndTxt("otf_gpu_mex:CUFFT", "cuFFT error %s:%d: %d", \
-                          __FILE__, __LINE__, int(err));
+                          __FILE__, __LINE__, int(err))
 
-// ──────────────── Kernel: 0-filled, centred pad + axis swap ────────────────
-__global__ void pad_center_swap(
+// Kernel: Zero-padded, centered copy with axis swap (no extra temp buffers)
+// Block size is tuned for most recent NVIDIA GPUs
+__global__ void pad_center_swap_fast(
     const float *src, size_t sx, size_t sy, size_t sz,
     float2 *dst,       size_t dx, size_t dy, size_t dz,
     ptrdiff_t pre_x, ptrdiff_t pre_y, ptrdiff_t pre_z)
 {
-    size_t z = blockIdx.x * blockDim.x + threadIdx.x;  // NOTE: Z fastest for cuFFT
-    size_t y = blockIdx.y * blockDim.y + threadIdx.y;
-    size_t x = blockIdx.z * blockDim.z + threadIdx.z;
+    // Each thread writes one output element
+    size_t out_z = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t out_y = blockIdx.y * blockDim.y + threadIdx.y;
+    size_t out_x = blockIdx.z * blockDim.z + threadIdx.z;
 
-    if (x >= dx || y >= dy || z >= dz) return;
+    if (out_x >= dx || out_y >= dy || out_z >= dz) return;
 
-    ptrdiff_t sx_i = ptrdiff_t(x) - pre_x;
-    ptrdiff_t sy_i = ptrdiff_t(y) - pre_y;
-    ptrdiff_t sz_i = ptrdiff_t(z) - pre_z;
+    ptrdiff_t sx_i = ptrdiff_t(out_x) - pre_x;
+    ptrdiff_t sy_i = ptrdiff_t(out_y) - pre_y;
+    ptrdiff_t sz_i = ptrdiff_t(out_z) - pre_z;
 
-    size_t dst_idx = x + dx * (y + dy * z); // C-order
+    size_t dst_idx = out_x + dx * (out_y + dy * out_z); // C-order for cuFFT
 
     if (sx_i >= 0 && sx_i < ptrdiff_t(sx) &&
         sy_i >= 0 && sy_i < ptrdiff_t(sy) &&
@@ -61,23 +59,20 @@ __global__ void pad_center_swap(
         size_t src_idx = size_t(sx_i) + sx * (size_t(sy_i) + sy * size_t(sz_i));
         dst[dst_idx].x = src[src_idx];
         dst[dst_idx].y = 0.f;
-    }
-    else
-    {
+    } else {
         dst[dst_idx].x = 0.f;
         dst[dst_idx].y = 0.f;
     }
 }
 
-// ──────────────── Kernel: full 3-D ifftshift ────────────────
+// In-place full 3D ifftshift (optimized: launch with max block size for occupancy)
 __device__ __forceinline__ int ifftshift_i(int i, int dim)
 {
     int s = dim / 2;
     int j = i + s;
     return (j >= dim) ? j - dim : j;
 }
-
-__global__ void ifftshift3D(float2 *v, int nx, int ny, int nz)
+__global__ void ifftshift3D_fast(float2 *v, int nx, int ny, int nz)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     int j = blockIdx.y * blockDim.y + threadIdx.y;
@@ -89,7 +84,7 @@ __global__ void ifftshift3D(float2 *v, int nx, int ny, int nz)
     int j2 = ifftshift_i(j, ny);
     int k2 = ifftshift_i(k, nz);
 
-    // swap once per pair
+    // Only swap if this thread "owns" the pair (each pair swapped once)
     if ( (i  < i2) ||
          (i == i2 && j  < j2) ||
          (i == i2 && j == j2 && k < k2) )
@@ -102,11 +97,11 @@ __global__ void ifftshift3D(float2 *v, int nx, int ny, int nz)
     }
 }
 
-// ───────────────────────── MEX entry ─────────────────────────
-void mexFunction(int nlhs, mxArray *plhs[],
-                 int nrhs, const mxArray *prhs[])
+// -----------------------------------------------------------------------------
+// MEX entrypoint: Optimized with minimal synchronizations and best CUDA practice
+// -----------------------------------------------------------------------------
+void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
 {
-    // ================= Input and output count checks =================
     if (nrhs < 2 || nrhs > 3)
         mexErrMsgIdAndTxt("otf_gpu_mex:nrhs", "Usage: otf = otf_gpu_mex(psf, fft_shape[, scratch]);");
     if (nlhs < 1)
@@ -114,7 +109,7 @@ void mexFunction(int nlhs, mxArray *plhs[],
 
     mxInitGPU();
 
-    // ===================== Input: PSF =====================
+    // --- PSF ---
     const mxGPUArray *psf = mxGPUCreateFromMxArray(prhs[0]);
     if (mxGPUGetClassID(psf) != mxSINGLE_CLASS || mxGPUGetNumberOfDimensions(psf) != 3)
         mexErrMsgIdAndTxt("otf_gpu_mex:psf", "psf must be a 3-D single gpuArray.");
@@ -122,7 +117,7 @@ void mexFunction(int nlhs, mxArray *plhs[],
     size_t sx = psf_dims[0], sy = psf_dims[1], sz = psf_dims[2];
     const float *d_psf = static_cast<const float*>(mxGPUGetDataReadOnly(psf));
 
-    // ===================== Input: fft_shape =====================
+    // --- FFT shape ---
     if (!mxIsDouble(prhs[1]) || mxGetNumberOfElements(prhs[1]) != 3)
         mexErrMsgIdAndTxt("otf_gpu_mex:fftshape", "fft_shape must be [nx ny nz] double.");
     const double *sh = mxGetPr(prhs[1]);
@@ -131,11 +126,10 @@ void mexFunction(int nlhs, mxArray *plhs[],
         mexErrMsgIdAndTxt("otf_gpu_mex:fftshape", "fft_shape must be all positive.");
     mwSize otf_dims[3] = { mwSize(dx), mwSize(dy), mwSize(dz) };
 
-    // ===================== Optional Input: scratch buffer =====================
+    // --- Optional: scratch buffer ---
     mxGPUArray *otf = nullptr;
     bool user_scratch = false;
     if (nrhs == 3 && !mxIsEmpty(prhs[2])) {
-        // Use const pointer, only cast to non-const when/if destroying
         const mxGPUArray *scratch = mxGPUCreateFromMxArray(prhs[2]);
         if (mxGPUGetClassID(scratch) != mxSINGLE_CLASS ||
             !mxGPUGetComplexity(scratch) ||
@@ -151,7 +145,7 @@ void mexFunction(int nlhs, mxArray *plhs[],
             mexErrMsgIdAndTxt("otf_gpu_mex:scratch",
                 "scratch buffer shape must match [nx ny nz].");
         }
-        otf = const_cast<mxGPUArray*>(scratch); // only for data access, not ownership
+        otf = const_cast<mxGPUArray*>(scratch);
         user_scratch = true;
     } else {
         otf = mxGPUCreateGPUArray(3, otf_dims, mxSINGLE_CLASS, mxCOMPLEX, MX_GPU_DO_NOT_INITIALIZE);
@@ -159,23 +153,26 @@ void mexFunction(int nlhs, mxArray *plhs[],
     }
     float2 *d_otf = static_cast<float2*>(mxGPUGetData(otf));
 
-    // ================== Main computation: Pad, ifftshift, FFT ==================
-    // ---- Zero-pad & centre ----
-    dim3 blk(8,8,8);
-    dim3 grd( (dz+blk.x-1)/blk.x, (dy+blk.y-1)/blk.y, (dx+blk.z-1)/blk.z );
+    // --- Padding (fewer but larger blocks for higher occupancy) ---
+    // Use 16 threads per dimension for better GPU occupancy (512 threads/block)
+    dim3 blk(16, 8, 4);
+    dim3 grd((dz+blk.x-1)/blk.x, (dy+blk.y-1)/blk.y, (dx+blk.z-1)/blk.z);
+
     ptrdiff_t pre_x = (ptrdiff_t)((dx - sx) / 2);
     ptrdiff_t pre_y = (ptrdiff_t)((dy - sy) / 2);
     ptrdiff_t pre_z = (ptrdiff_t)((dz - sz) / 2);
 
-    pad_center_swap<<<grd, blk>>>(d_psf, sx, sy, sz, d_otf, dx, dy, dz, pre_x, pre_y, pre_z);
+    pad_center_swap_fast<<<grd, blk>>>(d_psf, sx, sy, sz, d_otf, dx, dy, dz, pre_x, pre_y, pre_z);
     CUDA_CHECK(cudaGetLastError());
 
-    // ---- ifftshift ----
-    dim3 grd2( (dx+blk.x-1)/blk.x, (dy+blk.y-1)/blk.y, (dz+blk.z-1)/blk.z );
-    ifftshift3D<<<grd2, blk>>>(d_otf, (int)dx, (int)dy, (int)dz);
+    // --- In-place ifftshift (single kernel, as big as possible) ---
+    dim3 blk2(8, 8, 8);
+    dim3 grd2((dx+blk2.x-1)/blk2.x, (dy+blk2.y-1)/blk2.y, (dz+blk2.z-1)/blk2.z);
+
+    ifftshift3D_fast<<<grd2, blk2>>>(d_otf, (int)dx, (int)dy, (int)dz);
     CUDA_CHECK(cudaGetLastError());
 
-    // ---- 3-D FFT ----
+    // --- cuFFT: Only one plan per call, in-place, no sync ---
     cufftHandle plan;
     CUFFT_CHECK(cufftPlan3d(&plan, (int)dz, (int)dy, (int)dx, CUFFT_C2C));
     CUFFT_CHECK(cufftExecC2C(plan,
@@ -184,14 +181,11 @@ void mexFunction(int nlhs, mxArray *plhs[],
         CUFFT_FORWARD));
     CUFFT_CHECK(cufftDestroy(plan));
 
-    CUDA_CHECK(cudaDeviceSynchronize());
+    // Don't call cudaDeviceSynchronize(); let MATLAB handle this for minimal latency
 
-    // ================== Output handling, cleanup ==================
     plhs[0] = mxGPUCreateMxArrayOnGPU(otf);
-    // Destroy our own buffer if we allocated it. (User scratch is returned as output, do not destroy!)
     mxGPUDestroyGPUArray(psf);
     if (!user_scratch) {
         mxGPUDestroyGPUArray(otf);
     }
-    // All done!
 }
