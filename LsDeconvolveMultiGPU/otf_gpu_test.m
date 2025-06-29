@@ -13,12 +13,10 @@ for s = 1:length(sigmas)
     sigma = sigmas{s};
     for k = 1:length(kernels)
         kernel = kernels{k};
-
-        % For reporting
         sigma_disp = fmtvec(sigma);
         kernel_disp = fmtvec(kernel);
 
-        % Build PSF (Gaussian with custom kernel size or auto, always single)
+        % Build PSF (as before)
         if isequal(kernel, 'auto')
             kernsz = sz;
         elseif isnumeric(kernel) && isscalar(kernel)
@@ -39,18 +37,15 @@ for s = 1:length(sigmas)
         psf = psf / sum(psf(:));
         psf = single(psf); % <--- unshifted
 
-        % Use the provided padding function
-        [psf_pad, pad_pre, pad_post] = pad_block_to_fft_shape(psf, sz, 0);
+        % GPU: Pad and reference calculation ALL on GPU in single precision
+        psf_gpu = gpuArray(psf);   % Move PSF to GPU as single
+        [psf_pad, pad_pre, pad_post] = pad_block_to_fft_shape(psf_gpu, sz, 0);
 
-        % -- Run MEX
-        Nrep = 10;   % Repeat for robustness
-
-        % --- Warm up GPU and code paths
-        otf_mat = zeros(sz, 'single');
-        otf_mat = gpuArray(otf_mat);
+        % Warm up
+        otf_mat = zeros(sz, 'single', 'gpuArray');
         otf_mat = otf_gpu(gpuArray(psf), sz, otf_mat);
 
-        % --- MATLAB reference: pad, ifftshift, fftn
+        % --- MATLAB reference: pad, ifftshift, fftn, all on GPU, single
         otf_mat = fftn(ifftshift(psf_pad));
 
         % --- MEX timing (repeat, ignore first run) ---
@@ -71,16 +66,15 @@ for s = 1:length(sigmas)
         end
         t_mat = mean(t_mat_all(2:end)); % average, ignore first
 
-        otf_mat = single(otf_mat);  % force single precision for fair diff
+        otf_mat = single(otf_mat);  % force single precision, but should already be
 
-        maxErr = double(max(abs(otf_mat(:)-gather(otf_mex(:)))));
-        rmsErr = double(rms(otf_mat(:)-gather(otf_mex(:))));
-        relErr = double(norm(otf_mat(:)-gather(otf_mex(:))) / max(norm(otf_mat(:)),eps('single')));
+        % gather for error calculation
+        maxErr = double(max(abs(gather(otf_mat(:))-gather(otf_mex(:)))));
+        rmsErr = double(rms(gather(otf_mat(:))-gather(otf_mex(:))));
+        relErr = double(norm(gather(otf_mat(:))-gather(otf_mex(:))) / max(norm(gather(otf_mat(:))),eps('single')));
 
         pf = relErr < 2e-6; % relax to 2e-6 for roundoff
         pfmark = pass_symbol(pf);
-
-        % Speedup
         speedup = 100*(t_mat-t_mex)/t_mat;
 
         % Print table row
