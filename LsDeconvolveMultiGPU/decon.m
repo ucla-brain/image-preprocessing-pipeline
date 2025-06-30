@@ -312,7 +312,7 @@ function bl = deconFFT_Weiner(bl, psf, fft_shape, niter, lambda, stop_criterion,
         buff2 = gpuArray(buff2);
     end
     buff1 = complex(buff2, buff2);  % complex(single) zeros
-    buff3 = complex(buff2, buff2);  % complex(single) zeros
+    F_Y = fftn(bl);
     otf_buff = complex(buff2, buff2);  % complex(single) zeros
 
     for i = 1:niter
@@ -337,9 +337,6 @@ function bl = deconFFT_Weiner(bl, psf, fft_shape, niter, lambda, stop_criterion,
         buff1 = buff1 .* otf_buff;                                       % F{Y} .* otf                          complex
         buff1 = ifftn(buff1);                                            % Y                                    complex
         buff2 = real(buff1);                                             % Y                                    real
-        if i<niter
-            buff3 = fftn(buff2);                                         % F{Y}                                 complex
-        end
         % convFFT end
         buff2 = max(buff2, single(eps('single')));                       % X + epsilon                          real
         buff2 = bl ./ buff2;                                             % Y/X                                  real
@@ -370,7 +367,7 @@ function bl = deconFFT_Weiner(bl, psf, fft_shape, niter, lambda, stop_criterion,
             buff1 = conj(otf_buff);                                      % conj(F{X})                           complex
             buff2 = otf_buff .* buff1;                                   % F{X} . conj(F{X})                    real
             buff2 = max(buff2, single(eps('single')));                   % F{X} . conj(F{X}) + epsilon          real
-            buff3 = buff3 .* buff1;                                      % F{Y} . conj(F{X})                    complex
+            buff1 = F_Y .* buff1;                                        % F{Y} . conj(F{X})                    complex
             otf_buff = buff3 ./ buff2;                                   % otf_new                              complex
             otf_buff = otf_buff / otf_buff(1,1,1);                       % normalize to unit energy             complex
 
