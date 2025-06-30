@@ -68,15 +68,42 @@ function bl = deconSpatial(bl, psf, psf_inv, niter, lambda, stop_criterion, regu
 
             if lambda > 0
                 reg = convn(bl, R, 'same');
-                bl = bl .* buf .* (1 - lambda) + reg .* lambda;
+                buf = bl .* buf .* (1 - lambda) + reg .* lambda;
             else
-                bl = bl .* buf;
+                buf = bl .* buf;
             end
         else
-            bl = bl .* buf;
+            buf = bl .* buf;
         end
 
-        bl = abs(bl);
+        bl = abs(buf);
+
+        % % ----------- Wiener PSF update ---------------
+        % % Y: observed image (blurred, bl)
+        % % X: current object estimate (sharpened)
+        % % otf_new = (F{Y} . conj(F{X})) ./ (F{X} . conj(F{X}) + epsilon)
+        % if i<niter
+        %     otf_buff = conj(otf_buff);                                   % otf                                  complex
+        %     % convFFT start
+        %     buff1 = fftn(bl);                                            % F{X}                                 complex TODO: calculate before bl = abs(buf);
+        %     buff3 = buff1 .* otf_buff;                                   % F{X} .* otf                          complex
+        %     buff3 = ifftn(buff3);                                        % Y                                    complex
+        %     buff2 = real(buff3);                                         % Y                                    real
+        %     % convFFT end
+        %     buff3 = conj(buff1);                                         % conj(F{X})                           complex
+        %     otf_buff = fftn(buff2);                                      % F{Y}                                 complex
+        %     otf_buff = otf_buff .* buff3;                                % F{Y} . conj(F{X})                    complex
+        %     buff2 = buff1 .* buff3;                                      % F{X} . conj(F{X})                    real
+        %     buff2 = max(buff2, single(eps('single')));                   % F{X} . conj(F{X}) + epsilon          real
+        %     otf_buff = otf_buff ./ buff2;                                % otf_new                              complex
+        %     buff3 = ifftn(otf_buff);                                     % psf                                  complex
+        %     buff2 = real(buff3);                                         % psf                                  real
+        %     psf = buff2(center(1):center(1)+psf_sz(1)-1, ...
+        %                 center(2):center(2)+psf_sz(2)-1, ...
+        %                 center(3):center(3)+psf_sz(3)-1);
+        %     psf = max(psf, 0);            % clamp negatives
+        %     psf = psf / sum(psf(:));      % normalize to unit energy
+        % end
 
         if stop_criterion > 0
             delta_current = norm(bl(:));
