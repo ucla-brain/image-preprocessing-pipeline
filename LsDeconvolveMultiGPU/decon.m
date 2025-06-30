@@ -100,7 +100,7 @@ end
 function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regularize_interval, device_id)
     use_gpu = isgpuarray(bl);
 
-    if use_gpu, psf = gpuArray; end
+    if use_gpu, psf = gpuArray(psf); end
     [buf_otf, ~, ~] = pad_block_to_fft_shape(psf, fft_shape, 0);
     buf_otf = ifftshift(buf_otf);
     buf_otf = fftn(buf_otf);
