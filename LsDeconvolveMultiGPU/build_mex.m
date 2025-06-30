@@ -309,7 +309,7 @@ function build_mex(debug)
         if debug
             nvccflags = 'NVCCFLAGS="$NVCCFLAGS -G"';
         else
-            nvccflags = sprintf('NVCCFLAGS="$NVCCFLAGS -Xcompiler -march=native -Xcompiler -flto=%d"', ncores);
+            nvccflags = sprintf('NVCCFLAGS="$NVCCFLAGS -O3 -use_fast_math -Xcompiler -march=native -Xcompiler -flto=%d"', ncores);
         end
     end
 

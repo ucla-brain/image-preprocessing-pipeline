@@ -50,7 +50,8 @@ for s = 1:length(sigmas)
         % --- MEX timing (repeat, ignore first run) ---
         t_mex_all = zeros(1, Nrep, 'gpuArray'); % <--- Keep as gpuArray for true GPU timing
         for rr = 1:Nrep
-            g = gpuDevice; wait(g); % make sure GPU is idle before timing
+            g = gpuDevice;
+            wait(g); % make sure GPU is idle before timing
             t0 = tic;
             otf_mex = otf_gpu(psf_gpu, sz); % test mex function (gpuArray in, out)
             wait(g); % ensure finished
