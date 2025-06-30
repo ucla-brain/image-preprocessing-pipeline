@@ -78,7 +78,7 @@ for s = 1:length(sigmas)
 
         pf = relErr < 2e-6; % relax to 2e-6 for roundoff
         pfmark = pass_symbol(pf);
-        speedup = 100*(t_mat-t_mex)/t_mat;
+        speedup = 200*(t_mat - t_mex)/(t_mat + t_mex);
 
         % Print table row
         fprintf('%-3s  %-4d  %-7s %-18s %-13s %-15s %8.2e %8.2e %8.2e %7.3f %+7.0f%%\n', ...
