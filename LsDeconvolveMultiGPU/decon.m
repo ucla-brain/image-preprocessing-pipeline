@@ -185,13 +185,13 @@ function bl = deconFFT_Weiner(bl, psf, fft_shape, niter, lambda, stop_criterion,
 
     if stop_criterion>0, delta_prev = norm(bl(:)); end
 
-    F_Y = fftn(bl);
     buff2 = zeros(fft_shape, 'single');
     if use_gpu
         buff2 = gpuArray(buff2);
     end
     buff1 = complex(buff2, buff2);  % complex(single) zeros
     buff3 = complex(buff2, buff2);  % complex(single) zeros
+    otf_buff = complex(buff2, buff2);  % complex(single) zeros
 
     for i = 1:niter
         if i > 1 && regularize_interval>0 && mod(i, regularize_interval)==0
@@ -202,28 +202,30 @@ function bl = deconFFT_Weiner(bl, psf, fft_shape, niter, lambda, stop_criterion,
 
         % ----------- Richardson–Lucy core ------------
         if i == 1
-            buff1 = F_Y;
-        else
-            buff1 = fftn(bl);                                            % buff1: fft(bl)                       complex
+            % otf_buff = otf_gpu(psf, fft_shape, otf_buff);
+            [otf_buff, ~, ~] = pad_block_to_fft_shape(psf, fft_shape, 0);
+            otf_buff = ifftshift(otf_buff);
+            otf_buff = fftn(otf_buff);
+            buff1 = fftn(bl);                                            % F{Y}
         end
-        % buff3 = otf_gpu(psf, fft_shape, buff3);
-        [buff3, ~, ~] = pad_block_to_fft_shape(psf, fft_shape, 0);
-        buff3 = ifftshift(buff3);
-        buff3 = fftn(buff3);
-        buff1 = buff1 .* buff3;                                          % buff1: fft(x) .* otf                 complex
-        buff1 = ifftn(buff1);                                            % buff1: inverse fft                   complex
-        buff2 = real(buff1);                                             % buff2: convFFT                       real
-        buff2 = max(buff2, single(eps('single')));                       % buff2: avoid /0                      real
-        buff2 = bl ./ buff2;                                             % buff2: ratio                         real
-        buff3 = conj(buff3);                                             % buff3: otf_conj                      complex
-        buff1 = fftn(buff2);                                             % buff1: holds fft(x)                  complex
-        buff1 = buff1 .* buff3;                                          % buff1: fft(x) .* otf_conj            complex
-        buff1 = ifftn(buff1);                                            % buff1: inverse fft                   complex
-        buff2 = real(buff1);                                             % convFFT                              real
+        % convFFT start
+        buff1 = buff1 .* otf_buff;                                       % F{Y} .* otf                          complex
+        buff1 = ifftn(buff1);                                            % X                                    complex
+        buff2 = real(buff1);                                             % X                                    real
+        % convFFT end
+        buff2 = max(buff2, single(eps('single')));                       % X + epsilon                          real
+        buff2 = bl ./ buff2;                                             % Y/X                                  real
+        % convFFT start
+        buff1 = fftn(buff2);                                             % F{X}                                 complex
+        otf_buff = conj(otf_buff);                                       % otf_conj                             complex
+        buff1 = buff1 .* otf_buff;                                       % F{X} .* otf_conj                     complex
+        buff1 = ifftn(buff1);                                            % Y                                    complex
+        buff2 = real(buff1);                                             % Y                                    real
+        % convFFT end
 
         if regularize_interval>0 && mod(i,regularize_interval)==0 && lambda>0 && i<niter
-            buff1 = convn(bl, R, 'same');                                % buff1: reused as Laplacian           real
-            buff2 = bl .* buff2 .* (1-lambda) + buff1 .* lambda;         % buff2: decon requalized X            real
+            buff1 = convn(bl, R, 'same');                                % Laplacian                            real
+            buff2 = bl .* buff2 .* (1-lambda) + buff1 .* lambda;         % decon requalized X                   real
         else
             buff2 = bl .* buff2;                                         % buff2: decon X                       real
         end
@@ -235,19 +237,26 @@ function bl = deconFFT_Weiner(bl, psf, fft_shape, niter, lambda, stop_criterion,
         % X: current object estimate (sharpened)
         % otf_new = (F{Y} . conj(F{X})) ./ (F{X} . conj(F{X}) + epsilon)
         if i<niter
-            buff1 = fftn(bl);                                            % buff1: F{X}                          complex
-            buff3 = conj(buff1);                                         % buff3: conj(F{X})                    complex
-            buff2 = buff1 .* buff3;                                      % buff2: F{X} . conj(F{X})             real
-            buff2 = max(buff2, single(eps('single')));                   % buff2: (F{X} . conj(F{X}) + epsilon  real
-            buff3 = F_Y .* buff3;                                        % buff3: F{Y} . conj(F{X})             complex
-            buff3 = buff3 ./ buff2;                                      % buff3: otf_new                       complex
-            buff3 = ifftn(buff3);                                        % buff3: psf                           complex
-            buff2 = real(buff3);                                         % buff2: psf                           real
-            psf = buff2(center(1):center(1)+psf_sz(1)-1, ...
-                        center(2):center(2)+psf_sz(2)-1, ...
-                        center(3):center(3)+psf_sz(3)-1);
-            psf = max(psf, 0);            % clamp negatives
-            psf = psf / sum(psf(:));      % normalize to unit energy
+            otf_buff = conj(otf_buff);                                   % otf                                  complex
+            % convFFT start
+            buff1 = fftn(bl);                                            % F{X}                                 complex
+            buff3 = buff1 .* otf_buff;                                   % F{X} .* otf                          complex
+            buff3 = ifftn(buff3);                                        % Y                                    complex
+            buff2 = real(buff3);                                         % Y                                    real
+            % convFFT end
+            buff3 = conj(buff1);                                         % conj(F{X})                           complex
+            otf_buff = fftn(buff2);                                      % F{Y}                                 complex
+            otf_buff = otf_buff .* buff3;                                % F{Y} . conj(F{X})                    complex
+            buff2 = buff1 .* buff3;                                      % F{X} . conj(F{X})                    real
+            buff2 = max(buff2, single(eps('single')));                   % F{X} . conj(F{X}) + epsilon          real
+            otf_buff = otf_buff ./ buff2;                                % otf_new                              complex
+            % buff1 = ifftn(otf_buff);                                     % psf                                  complex
+            % buff2 = real(buff1);                                         % psf                                  real
+            % psf = buff2(center(1):center(1)+psf_sz(1)-1, ...
+            %             center(2):center(2)+psf_sz(2)-1, ...
+            %             center(3):center(3)+psf_sz(3)-1);
+            % psf = max(psf, 0);            % clamp negatives
+            % psf = psf / sum(psf(:));      % normalize to unit energy
         end
 
         % ------------- stopping test -----------------
