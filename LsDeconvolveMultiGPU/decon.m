@@ -312,6 +312,7 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
     buff3 = complex(buff2, buff2);
     otf_buff = complex(buff2, buff2);
 
+    epsilon = single(eps('single'));
     for i = 1:niter
         if i > 1 && regularize_interval>0 && mod(i, regularize_interval)==0
             if use_gpu, bl =  gauss3d_gpu(bl,0.5);
@@ -334,7 +335,7 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
         buff2 = real(buff3);                                             % H{Y}                                 real
         % convFFT end
 
-        buff2 = max(buff2, single(eps('single')));                       % H{Y} + epsilon                       real
+        buff2 = max(buff2, epsilon);                                     % H{Y} + epsilon                       real
         buff2 = bl ./ buff2;                                             % Y/H{Y}                               real
         % convFFT start
         buff3 = fftn(buff2);                                             % F{Y/H{Y}} = F{Y}/F{H{Y}}             complex
@@ -359,10 +360,12 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
             buff3 = fftn(bl);                                           % F{X}                                 complex
             otf_buff = conj(buff3);                                     % conj(F{X})                           complex
             buff2 = buff3 .* otf_buff;                                  % |F{X}|^2                             real
-            buff2 = max(buff2, single(eps('single')));                  % + epsilon                            real
+            buff2 = max(buff2, epsilon);                  % + epsilon                            real
             buff3 = buff1 .* otf_buff;                                  % F{Y} .* conj(F{X})                  complex
             otf_buff = buff3 ./ buff2;                                  % new OTF                              complex
-            otf_buff = otf_buff / otf_buff(1,1,1);                     % normalize to unit energy (optional)
+            if abs(otf_buff(1,1,1)) > epsilon
+                otf_buff = otf_buff / abs(otf_buff(1,1,1));                  % normalize to unit energy (optional)
+            end
         end
 
         % ------------- stopping test -----------------
