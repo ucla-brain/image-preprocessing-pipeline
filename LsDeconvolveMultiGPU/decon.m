@@ -261,14 +261,13 @@ function bl = deconFFT_Weiner_slow(bl, psf, fft_shape, niter, lambda, stop_crite
             buff2 = buff1 .* buff3;                                      % F{X} . conj(F{X})                    real
             buff2 = max(buff2, single(eps('single')));                   % F{X} . conj(F{X}) + epsilon          real
             otf_buff = otf_buff ./ buff2;                                % otf_new                              complex
-            otf_buff = otf_buff / otf_buff(1,1,1);                       % normalize to unit energy             complex
-            % buff3 = ifftn(otf_buff);                                     % psf                                  complex
-            % buff2 = real(buff3);                                         % psf                                  real
-            % psf = buff2(center(1):center(1)+psf_sz(1)-1, ...
-            %             center(2):center(2)+psf_sz(2)-1, ...
-            %             center(3):center(3)+psf_sz(3)-1);
-            % psf = max(psf, 0);            % clamp negatives
-            % psf = psf / sum(psf(:));      % normalize to unit energy
+            buff3 = ifftn(otf_buff);                                     % psf                                  complex
+            buff2 = real(buff3);                                         % psf                                  real
+            psf = buff2(center(1):center(1)+psf_sz(1)-1, ...
+                        center(2):center(2)+psf_sz(2)-1, ...
+                        center(3):center(3)+psf_sz(3)-1);
+            psf = max(psf, 0);            % clamp negatives
+            psf = psf / sum(psf(:));      % normalize to unit energy
         end
 
         % ------------- stopping test -----------------
@@ -314,22 +313,21 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
 
     epsilon = single(eps('single'));
     for i = 1:niter
-        if i > 1 && regularize_interval>0 && mod(i, regularize_interval)==0
-            if use_gpu, bl =  gauss3d_gpu(bl,0.5);
-            else        bl = imgaussfilt3(bl,0.5);
-            end
-        end
-
         % ----------- Richardson–Lucy core ------------
         % Y: observed image (blurred, bl)
         % X: current object estimate (sharpened)
-        if i == 1
-            [otf_buff, ~, ~] = pad_block_to_fft_shape(psf, fft_shape, 0);
-            otf_buff = ifftshift(otf_buff);
-            otf_buff = fftn(otf_buff);
-            buff1 = fftn(bl);                                            % F{Y}                                 complex
-        end
+        [otf_buff, ~, ~] = pad_block_to_fft_shape(psf, fft_shape, 0);
+        otf_buff = ifftshift(otf_buff);
+        otf_buff = fftn(otf_buff);
         % convFFT start
+        if i == 1
+            buff1 = fftn(bl);                                            % F{Y}                                 complex
+        elseif regularize_interval>0 && mod(i, regularize_interval)==0
+            if use_gpu, bl =  gauss3d_gpu(bl,0.5);
+            else        bl = imgaussfilt3(bl,0.5);
+            end
+            buff1 = fftn(bl);
+        end
         buff3 = buff1 .* otf_buff;                                       % H{F{Y}}                              complex
         buff3 = ifftn(buff3);                                            % H{Y}                                 complex
         buff2 = real(buff3);                                             % H{Y}                                 real
@@ -364,7 +362,14 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
             otf_buff = buff1 .* otf_buff;                                % F{Y} .* conj(F{X})                   complex
             buff1 = buff3;                                               % store F{X} for next iteration
             otf_buff = otf_buff ./ buff2;                                % otf_new                              complex
-            otf_buff = otf_buff / otf_buff(1,1,1);            % normalize to unit energy (optional)
+
+            buff3 = ifftn(otf_buff);                                     % psf                                  complex
+            buff2 = real(buff3);                                         % psf                                  real
+            psf = buff2(center(1):center(1)+psf_sz(1)-1, ...
+                        center(2):center(2)+psf_sz(2)-1, ...
+                        center(3):center(3)+psf_sz(3)-1);
+            psf = max(psf, 0);                                           % clamp negatives
+            psf = psf / sum(psf(:));                                     % normalize to unit energy
         end
 
 
