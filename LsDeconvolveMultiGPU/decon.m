@@ -235,7 +235,7 @@ function bl = deconFFT_Weiner(bl, psf, fft_shape, niter, lambda, stop_criterion,
         % X: current object estimate (sharpened)
         % otf_new = (F{Y} . conj(F{X})) ./ (F{X} . conj(F{X}) + epsilon)
         if i<niter
-            buff1 = fftn(buff2);                                         % buff1: F{X}                          complex
+            buff1 = fftn(bl);                                            % buff1: F{X}                          complex
             buff3 = conj(buff1);                                         % buff3: conj(F{X})                    complex
             buff2 = buff1 .* buff3;                                      % buff2: F{X} . conj(F{X})             real
             buff2 = max(buff2, single(eps('single')));                   % buff2: (F{X} . conj(F{X}) + epsilon  real
