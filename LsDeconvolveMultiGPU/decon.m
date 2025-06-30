@@ -338,7 +338,7 @@ function bl = deconFFT_Weiner(bl, psf, fft_shape, niter, lambda, stop_criterion,
         % convFFT start
         buff3 = fftn(buff2);                                             % F{Y/H{Y}} = F{Y}/F{H{Y}}             complex
         otf_buff = conj(otf_buff);                                       % otf_conj                             complex
-        buff3 = buf3 .* otf_buff;                                       % H'[F{X}/{F{H{Y}}]                    complex
+        buff3 = buff3 .* otf_buff;                                       % H'[F{X}/{F{H{Y}}]                    complex
         buff3 = ifftn(buff3);                                            % X/Y                                  complex
         buff2 = real(buff3);                                             % X/Y                                  real
         % convFFT end
