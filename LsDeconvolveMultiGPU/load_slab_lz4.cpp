@@ -5,8 +5,7 @@
 
   USAGE
   -----
-    vol = load_slab_lz4(filenames, p1, p2, dims,
-                        scal, ampl, dmin, dmax, maxThreads)
+    vol = load_slab_lz4(filenames, p1, p2, dims, scal, ampl, dmin, dmax, maxThreads)
 
   FEATURES
   --------
@@ -98,7 +97,7 @@ inline uint64_t idx3d(uint64_t x, uint64_t y, uint64_t z,
 template<typename OUT_T>
 struct BrickJob {
     std::string file;
-    uint64_t x0,y0,z0,x1,y1,z1, dimX,dimY,dimZ;
+    uint64_t x0, y0, z0, x1, y1, z1, dimX, dimY, dimZ;
     OUT_T* dst;
     float scal, ampl, dmin, dmax;
 
@@ -133,7 +132,7 @@ struct BrickJob {
             throw std::runtime_error(file + ": size mismatch");
 
         const float kLinear = scal * ampl / dmax;
-        const float kMinMax = scal * ampl / (dmax - dmin);
+        const float kMinMax = (dmin > 0.f) ? scal * ampl / (dmax - dmin) : kLinear;
         const bool useMinMax = (dmin > 0.f);
 
         const float* src = bufferFloat.data();
@@ -189,8 +188,7 @@ void run_atomic_thread_pool(const std::vector<JobT>& jobs, int nThreads) {
 /*============================= MEX Entry Point ================================*/
 void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     auto now = std::chrono::high_resolution_clock::now();
-    if (nrhs < 8 || nrhs > 9)
-        mexErrMsgTxt("Expected 8-9 input arguments. The 9th argument is optional thread count.");
+    if (nrhs < 8 || nrhs > 9) mexErrMsgTxt("Expected 8 or 9 input arguments. The 9th argument is optional thread count.");
     if (!mxIsCell(prhs[0])) mexErrMsgTxt("filenames must be a cell array.");
 
     const mwSize nFiles = mxGetNumberOfElements(prhs[0]);
