@@ -316,10 +316,13 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
         % ----------- Richardson–Lucy core ------------
         % Y: observed image (blurred, bl)
         % X: current object estimate (sharpened)
+
+        % prepare OTF from PSF
         [otf_buff, ~, ~] = pad_block_to_fft_shape(psf, fft_shape, 0);
         otf_buff = ifftshift(otf_buff);
         otf_buff = fftn(otf_buff);
-        % convFFT start
+
+        % only recompute F{Y} initially or after regularization
         if i == 1
             buff1 = fftn(bl);                                            % F{Y}                                 complex
         elseif regularize_interval>0 && mod(i, regularize_interval)==0
@@ -328,20 +331,22 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
             end
             buff1 = fftn(bl);
         end
+
+        % apply PSF: H{Y}
         buff3 = buff1 .* otf_buff;                                       % H{F{Y}}                              complex
         buff3 = ifftn(buff3);                                            % H{Y}                                 complex
         buff2 = real(buff3);                                             % H{Y}                                 real
-        % convFFT end
 
         buff2 = max(buff2, epsilon);                                     % H{Y} + epsilon                       real
         buff2 = bl ./ buff2;                                             % Y/H{Y}                               real
-        % convFFT start
-        buff3 = fftn(buff2);                                             % F{Y/H{Y}} = F{Y}/F{H{Y}}             complex
-        buff3 = buff3 .* conj(otf_buff);                                 % H'{F{X}/{F{H{Y}}]}                   complex
+
+        % apply adjoint filter: H'{Y/H{Y}}
+        buff3 = fftn(buff2);                                             % F{Y/H{Y}}                            complex
+        buff3 = buff3 .* conj(otf_buff);                                 % H'{F{Y/H{Y}}}                        complex
         buff3 = ifftn(buff3);                                            % X/Y                                  complex
         buff2 = real(buff3);                                             % X/Y                                  real
-        % convFFT end
 
+        % optional regularization
         if regularize_interval>0 && mod(i,regularize_interval)==0 && lambda>0 && i<niter
             buff3 = convn(bl, R, 'same');                                % Laplacian                            real
             buff2 = bl .* buff2 .* (1-lambda) + buff3 .* lambda;         % re-equalized X                       real
@@ -352,17 +357,18 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
         bl = abs(buff2);                                                 % X                                    real
 
         % ----------- Wiener PSF update ---------------
+        % Wiener update to improve PSF estimate on each iteration
         % otf_new = (F{Y} . conj(F{X})) ./ (F{X} . conj(F{X}) + epsilon)
         if i < niter
-            % Compute spectrum of current estimate
             buff3 = fftn(bl);                                            % F{X}                                 complex
             otf_buff = conj(buff3);                                      % conj(F{X})                           complex
             buff2 = buff3 .* otf_buff;                                   % |F{X}|^2                             real
-            buff2 = max(buff2, epsilon);                                 % |F{X}|^2 + epsilon                   real (avoid /0)
+            buff2 = max(buff2, epsilon);                                 % |F{X}|^2 + epsilon                   real
             otf_buff = buff1 .* otf_buff;                                % F{Y} .* conj(F{X})                   complex
             buff1 = buff3;                                               % store F{X} for next iteration
             otf_buff = otf_buff ./ buff2;                                % otf_new                              complex
 
+            % inverse FFT to get new PSF
             buff3 = ifftn(otf_buff);                                     % psf                                  complex
             buff2 = real(buff3);                                         % psf                                  real
             psf = buff2(center(1):center(1)+psf_sz(1)-1, ...
@@ -371,7 +377,6 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
             psf = max(psf, 0);                                           % clamp negatives
             psf = psf / sum(psf(:));                                     % normalize to unit energy
         end
-
 
         % ------------- stopping test -----------------
         if stop_criterion > 0
