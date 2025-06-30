@@ -250,6 +250,7 @@ function bl = deconFFT_Weiner(bl, psf, fft_shape, niter, lambda, stop_criterion,
             buff2 = buff1 .* buff3;                                      % F{X} . conj(F{X})                    real
             buff2 = max(buff2, single(eps('single')));                   % F{X} . conj(F{X}) + epsilon          real
             otf_buff = otf_buff ./ buff2;                                % otf_new                              complex
+            otf_buff = otf_buff / otf_buff(1, 1, 1);
             % buff1 = ifftn(otf_buff);                                     % psf                                  complex
             % buff2 = real(buff1);                                         % psf                                  real
             % psf = buff2(center(1):center(1)+psf_sz(1)-1, ...
