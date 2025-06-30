@@ -301,7 +301,7 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
             if sum_psf > 0
                 psf = psf / sum(psf(:));                                 % normalize to unit energy
             end
-            if use_gpu && ~isa(psf, 'gpuArray')
+            if use_gpu && ~isgpuarray(psf)
                 psf = gpuArray(psf);
             end
         end
