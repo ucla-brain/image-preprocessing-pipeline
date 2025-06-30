@@ -1117,7 +1117,7 @@ function postprocess_save(outpath, cache_drive, min_max_path, log_file, stack_in
         % ---- Parallel load + assemble (inside C++) -------------------------
         [R, elapsed] = load_slab_lz4( ...
             blocklist(block_inds), p1_slab, p2_slab, slabSize, ...
-            clipval, scal, amplification, deconvmin, deconvmax, low_clip, high_clip, feature('numCores'));
+            0, scal, amplification, deconvmin, deconvmax, 0, 0, feature('numCores'));
 
         fprintf('   slab assembled + scaled in %.1fs.\n', elapsed);
 
