@@ -943,7 +943,7 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
         reset(gpu_device);  % to free 2 extra copies of bl in gpu
         semaphore('p', semkey_gpu_base + gpu);
 
-        send( dQueue, sprintf('%s %f.1', logging_string, toc(block_processing_start)) );
+        send( dQueue, sprintf('%s %.2f', logging_string, toc(block_processing_start)) );
         [lb, ub] = deconvolved_stats(bl, clipval);
     else
         [lb, ub] = deconvolved_stats(bl, clipval);
