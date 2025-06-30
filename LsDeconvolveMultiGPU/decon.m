@@ -292,9 +292,6 @@ function bl = deconFFT_Weiner(bl, psf, fft_shape, niter, lambda, stop_criterion,
 
     use_gpu = isgpuarray(bl);
 
-    psf_sz = size(psf);
-    center = floor((fft_shape - psf_sz) / 2) + 1;
-
     % Laplacian-like regulariser (only allocated if used)
     if regularize_interval < niter && lambda > 0
         R = single(1/26 * ones(3,3,3));
@@ -366,16 +363,8 @@ function bl = deconFFT_Weiner(bl, psf, fft_shape, niter, lambda, stop_criterion,
             buff2 = otf_buff .* buff1;                                   % F{X} . conj(F{X})                    real
             buff2 = max(buff2, single(eps('single')));                   % F{X} . conj(F{X}) + epsilon          real
             buff1 = F_Y .* buff1;                                        % F{Y} . conj(F{X})                    complex
-            otf_buff = buff3 ./ buff2;                                   % otf_new                              complex
+            otf_buff = buff1 ./ buff2;                                   % otf_new                              complex
             otf_buff = otf_buff / otf_buff(1,1,1);                       % normalize to unit energy             complex
-
-            % buff3 = ifftn(otf_buff);                                     % psf                                  complex
-            % buff2 = real(buff3);                                         % psf                                  real
-            % psf = buff2(center(1):center(1)+psf_sz(1)-1, ...
-            %             center(2):center(2)+psf_sz(2)-1, ...
-            %             center(3):center(3)+psf_sz(3)-1);
-            % psf = max(psf, 0);            % clamp negatives
-            % psf = psf / sum(psf(:));      % normalize to unit energy
         end
 
         % ------------- stopping test -----------------
