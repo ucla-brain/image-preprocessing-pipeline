@@ -654,9 +654,7 @@ function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
 
     % postprocess and write tif files
     if need_post_processing
-        postprocess_save(...
-            outpath, cache_drive, min_max_path, log_file, clipval, ...
-            stack_info, resume, block, amplification);
+        postprocess_save(outpath, cache_drive, min_max_path, log_file, stack_info, resume, block, amplification);
     end
 
     try
