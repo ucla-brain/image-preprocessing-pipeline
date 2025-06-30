@@ -361,7 +361,7 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
         bl = abs(buff2);                                                 % X                                    real
 
         % ----------- Wiener PSF update ---------------
-        % Wiener update to improve PSF estimate on each iteration
+        % Wiener update: improves PSF estimate based on current object (bl) and blurred image spectrum
         % otf_new = (F{Y} . conj(F{X})) ./ (F{X} . conj(F{X}) + epsilon)
         if i < niter
             buff3 = fftn(bl);                                            % F{X}                                 complex
@@ -379,7 +379,13 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
                         center(2):center(2)+psf_sz(2)-1, ...
                         center(3):center(3)+psf_sz(3)-1);
             psf = max(psf, 0);                                           % clamp negatives
-            psf = psf / sum(psf(:));                                     % normalize to unit energy
+            sum_psf = sum(psf(:));
+            if sum_psf > 0
+                psf = psf / sum(psf(:));                                 % normalize to unit energy
+            end
+            if use_gpu && ~isa(psf, 'gpuArray')
+                psf = gpuArray(psf);
+            end
         end
 
         % ------------- stopping test -----------------
