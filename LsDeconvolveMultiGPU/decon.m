@@ -314,14 +314,15 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
     buff2 = zeros(fft_shape,'single');                           % real scratch (ratio / update)
     if use_gpu, buff2 = gpuArray(buff2); end
     buff3 = complex(buff2,buff2);                                % complex scratch (F{x}, etc.)
-    % otf_buff already declared (complex)
 
     for i = 1:niter
         % ------------- Richardson–Lucy core (FIXED) ----------------------
         buff3 = fftn(bl);                                        % F{x_k}                      complex
         buff2 = buff3 .* otf_buff;                               % F{x_k}·H  (=F{Hx})          complex
-        buff2 = buff1 ./ max(buff2, single(eps('single')));      % F{Y} ./ F{Hx}               complex
-        buff2 = buff2 .* conj(otf_buff);                         % conj(H)·(F{Y}/F{Hx})        complex
+        buff2 = max(buff2, single(eps('single')));               % avoid /0
+        buff2 = buff1 ./ buff2;                                  % F{Y} ./ F{Hx}               complex
+        otf_buff = conj(otf_buff);                               % otf_conj
+        buff2 = buff2 .* otf_buff;                               % conj(H)·(F{Y}/F{Hx})        complex
         buff2 = ifftn(buff2);                                    % update factor (spatial)     complex
         buff2 = real(buff2);                                     % update factor               real
 
@@ -342,6 +343,7 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
             buff3 = max(buff3, single(eps('single')));           % avoid /0                    real
             buff2 = buff1 .* buff2;                              % F{Y}·conj(F{x})             complex
             otf_buff = buff2 ./ buff3;                           % new Wiener OTF              complex
+            otf_buff = otf_buff / otf_buff(1,1,1);
             % otf_buff is already ready for next iteration       (NEW)
         end
 
