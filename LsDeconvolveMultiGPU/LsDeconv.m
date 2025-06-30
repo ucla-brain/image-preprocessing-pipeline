@@ -714,9 +714,9 @@ function deconvolve(filelist, psf, numit, damping, ...
         % decon_step_is_slower_than_loading = numit > 1; % then load slower to prevent RAM overload
         % if decon_step_is_slower_than_loading, semaphore('wait', semkey_loading); end
         % send(dQueue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' is loading ...']);
-        loading_start = tic;
+        % loading_start = tic;
         bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info);
-        send(dQueue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' is loaded in ' num2str(round(toc(loading_start), 1))]);
+        % send(dQueue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' is loaded in ' num2str(round(toc(loading_start), 1))]);
         % if decon_step_is_slower_than_loading, semaphore('post', semkey_loading); end
 
         % get min-max of raw data stack
@@ -746,7 +746,7 @@ function deconvolve(filelist, psf, numit, damping, ...
                     block.p1(blnr,3), block.p2(blnr,3)));
 
         % === Remove padding before saving ===
-        save_start = tic;
+        % save_start = tic;
         bl = bl(1 + block.x_pad : end - block.x_pad, ...
                 1 + block.y_pad : end - block.y_pad, ...
                 1 + block.z_pad : end - block.z_pad);
@@ -804,11 +804,10 @@ function deconvolve(filelist, psf, numit, damping, ...
             try
                 save_lz4(block_path_tmp, bl);
                 movefile(block_path_tmp, block_path, 'f');
-                send(dQueue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' saved in ' num2str(round(toc(save_start), 1))]);
+                % send(dQueue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' saved in ' num2str(round(toc(save_start), 1))]);
                 could_not_save = false;
             catch ME
-                send(dQueue, sprintf('could not save %s! Retrying ... %s: %s', ...
-                    block_path, ME.identifier, ME.message));
+                send(dQueue, sprintf('could not save %s! Retrying ... %s: %s', block_path, ME.identifier, ME.message));
                 pause(1);
             end
         end
