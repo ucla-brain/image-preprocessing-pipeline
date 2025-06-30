@@ -328,14 +328,13 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
 
         % only recompute F{Y} initially or after regularization
         if i == 1
-            buff1 = fftn(bl);                                            % F{Y}                                 complex
-        elseif regularize_interval>0 && mod(i, regularize_interval)==0
-            if use_gpu, bl =  gauss3d_gpu(bl,0.5);
-            else        bl = imgaussfilt3(bl,0.5);
-            end
             buff1 = fftn(bl);
+        elseif regularize_interval>0 && mod(i, regularize_interval)==0
+            % Apply spatial regularization to object before FFT
+            if use_gpu, bl =  gauss3d_gpu(bl,0.5);
+            else,       bl = imgaussfilt3(bl,0.5); end
+            buff1 = fftn(bl);                                            % F{Y}                                 complex
         end
-
         % apply PSF: H{Y}
         buff3 = buff1 .* otf_buff;                                       % H{F{Y}}                              complex
         buff3 = ifftn(buff3);                                            % H{Y}                                 complex
