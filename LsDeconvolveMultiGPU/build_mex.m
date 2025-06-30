@@ -310,8 +310,7 @@ function build_mex(debug)
             nvccflags = 'NVCCFLAGS="$NVCCFLAGS -G"';
         else
             nvccflags = sprintf([...
-                'NVCCFLAGS="$NVCCFLAGS -O3 -use_fast_math -Xcompiler -march=native -Xcompiler -flto=%d ' ...
-                '-arch=sm_75 ' ...                        % For RTX 2080 (minimum arch for all)
+                'NVCCFLAGS="$NVCCFLAGS -use_fast_math -Xcompiler -O3 -Xcompiler -march=native -Xcompiler -flto=%d ' ...
                 '-gencode=arch=compute_75,code=sm_75 ' ...% RTX 2080
                 '-gencode=arch=compute_80,code=sm_80 ' ...% A100
                 '-gencode=arch=compute_86,code=sm_86 ' ...% 3090
