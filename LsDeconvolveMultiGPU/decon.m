@@ -119,6 +119,7 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regula
     if use_gpu
         buf = gpuArray(buf);
     end
+    buf = complex(buf, buf);
     for i = 1:niter
         % start_time = tic;
         apply_regularization = (regularize_interval > 0) && (regularize_interval < niter);
