@@ -364,9 +364,7 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
             otf_buff = buff1 .* otf_buff;                                % F{Y} .* conj(F{X})                   complex
             buff1 = buff3;                                               % store F{X} for next iteration
             otf_buff = otf_buff ./ buff2;                                % otf_new                              complex
-            % if abs(otf_buff(1,1,1)) > epsilon
-            %     otf_buff = otf_buff / abs(otf_buff(1,1,1));            % normalize to unit energy (optional)
-            % end
+            otf_buff = otf_buff / otf_buff(1,1,1);            % normalize to unit energy (optional)
         end
 
 
