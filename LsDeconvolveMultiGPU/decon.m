@@ -288,7 +288,7 @@ end
 function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion, regularize_interval, device_id)
 
     % Richardson–Lucy + on-the-fly Wiener PSF refinement
-    % RAM-minimal version
+    % RAM-minimal version  (buff1-3 + otf_buff only)
 
     use_gpu = isgpuarray(bl);
 
@@ -299,73 +299,53 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
         if use_gpu, R = gpuArray(R); end
     end
 
-    bl = edgetaper_3d(bl, psf);
+    bl = edgetaper_3d(bl, psf);                                 % pre-taper to reduce ringing
     [bl, pad_pre, pad_post] = pad_block_to_fft_shape(bl, fft_shape, 0);
 
-    if stop_criterion>0, delta_prev = norm(bl(:)); end
+    % --- immutable data --------------------------------------------------
+    buff1 = fftn(bl);                                            % F{Y}  (FIX: kept constant!)
+    [otf_buff, ~, ~] = pad_block_to_fft_shape(psf, fft_shape, 0);% initial PSF → OTF
+    otf_buff = ifftshift(otf_buff);
+    otf_buff = fftn(otf_buff);                                   % H      (complex)
 
-    buff2 = zeros(fft_shape, 'single');
-    if use_gpu
-        buff2 = gpuArray(buff2);
-    end
-    buff1 = complex(buff2, buff2);  % complex(single) zeros
-    buff3 = complex(buff2, buff2);
-    otf_buff = complex(buff2, buff2);
+    if stop_criterion > 0, delta_prev = norm(bl(:)); end
+
+    % workspace buffers ---------------------------------------------------
+    buff2 = zeros(fft_shape,'single');                           % real scratch (ratio / update)
+    if use_gpu, buff2 = gpuArray(buff2); end
+    buff3 = complex(buff2,buff2);                                % complex scratch (F{x}, etc.)
+    % otf_buff already declared (complex)
 
     for i = 1:niter
-        if i > 1 && regularize_interval>0 && mod(i, regularize_interval)==0
-            if use_gpu, bl =  gauss3d_gpu(bl,0.5);
-            else        bl = imgaussfilt3(bl,0.5);
-            end
-        end
+        % ------------- Richardson–Lucy core (FIXED) ----------------------
+        buff3 = fftn(bl);                                        % F{x_k}                      complex
+        buff2 = buff3 .* otf_buff;                               % F{x_k}·H  (=F{Hx})          complex
+        buff2 = buff1 ./ max(buff2, single(eps('single')));      % F{Y} ./ F{Hx}               complex
+        buff2 = buff2 .* conj(otf_buff);                         % conj(H)·(F{Y}/F{Hx})        complex
+        buff2 = ifftn(buff2);                                    % update factor (spatial)     complex
+        buff2 = real(buff2);                                     % update factor               real
 
-        % ----------- Richardson–Lucy core ------------
-        % Y: observed image (blurred, bl)
-        % X: current object estimate (sharpened)
-        if i == 1
-            [otf_buff, ~, ~] = pad_block_to_fft_shape(psf, fft_shape, 0);
-            otf_buff = ifftshift(otf_buff);
-            otf_buff = fftn(otf_buff);
-            buff1 = fftn(bl);                                            % F{Y}                                 complex
-        end
-        % convFFT start
-        buff3 = buff1 .* otf_buff;                                       % H{F{Y}}                              complex
-        buff3 = ifftn(buff3);                                            % H{Y}                                 complex
-        buff2 = real(buff1);                                             % H{Y}                                 real
-        % convFFT end
-        buff2 = max(buff2, single(eps('single')));                       % H{Y} + epsilon                       real
-        buff2 = bl ./ buff2;                                             % Y/H{Y}                               real
-        % convFFT start
-        buff3 = fftn(buff2);                                             % F{Y/H{Y}} = F{Y}/F{H{Y}}             complex
-        otf_buff = conj(otf_buff);                                       % otf_conj                             complex
-        buff3 = buff3 .* otf_buff;                                       % H'[F{X}/{F{H{Y}}]                    complex
-        buff3 = ifftn(buff3);                                            % X/Y                                  complex
-        buff2 = real(buff3);                                             % X/Y                                  real
-        % convFFT end
-
-        if regularize_interval>0 && mod(i,regularize_interval)==0 && lambda>0 && i<niter
-            buff1 = convn(bl, R, 'same');                                % Laplacian                            real
-            buff2 = bl .* buff2 .* (1-lambda) + buff1 .* lambda;         % requalized X                   real
+        % ------------- regularisation (unchanged) -----------------------
+        if regularize_interval > 0 && mod(i,regularize_interval) == 0 && lambda > 0 && i < niter
+            buff3 = convn(bl, R, 'same');                        % Laplacian term              real
+            bl    = bl .* buff2 .* (1-lambda) + buff3 .* lambda; % RL + Tikhonov blend         real
         else
-            buff2 = bl .* buff2;                                         % X                                    real
+            bl = bl .* buff2;                                    % plain RL update             real
+        end
+        bl = abs(bl);                                            % enforce non-negativity      real
+
+        % ------------- Wiener PSF update (unchanged alg, safer order) ---
+        if i < niter
+            buff3 = fftn(bl);                                    % F{x_{k+1}}                  complex
+            buff2 = conj(buff3);                                 % conj(F{x})                  complex
+            buff3 = buff3 .* buff2;                              % |F{x}|^2                    complex→real
+            buff3 = max(buff3, single(eps('single')));           % avoid /0                    real
+            buff2 = buff1 .* buff2;                              % F{Y}·conj(F{x})             complex
+            otf_buff = buff2 ./ buff3;                           % new Wiener OTF              complex
+            % otf_buff is already ready for next iteration       (NEW)
         end
 
-        bl = abs(buff2);                                              % X                                    real
-
-        % ----------- Wiener PSF update ---------------
-        % otf_new = (F{Y} . conj(F{X})) ./ (F{X} . conj(F{X}) + epsilon)
-        if i<niter
-            otf_buff = fftn(bl);                                         % F{X}                                 complex
-            buff3 = conj(otf_buff);                                      % conj(F{X})                           complex
-            buff2 = otf_buff .* buff3;                                   % F{X} . conj(F{X})                    real
-            buff2 = max(buff2, single(eps('single')));                   % F{X} . conj(F{X}) + epsilon          real
-            buff3 = buff1 .* buff3;                                      % F{Y} . conj(F{X})                    complex
-            buff1 = otf_buff;                                            % Future F{Y}
-            otf_buff = buff3 ./ buff2;                                   % otf_new                              complex
-            %otf_buff = otf_buff / otf_buff(1,1,1);                       % normalize to unit energy             complex
-        end
-
-        % ------------- stopping test -----------------
+        % ------------- stopping test (unchanged) ------------------------
         if stop_criterion > 0
             delta_cur = norm(bl(:));
             if abs(delta_prev - delta_cur)/delta_prev*100 <= stop_criterion
@@ -376,8 +356,9 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
         end
     end
 
-    bl = unpad_block(bl, pad_pre, pad_post);
+    bl = unpad_block(bl, pad_pre, pad_post);                      % remove FFT padding
 end
+
 
 function [bl, pad_pre, pad_post] = pad_block_to_fft_shape(bl, fft_shape, mode)
     % Ensure 3 dimensions for both bl and fft_shape
