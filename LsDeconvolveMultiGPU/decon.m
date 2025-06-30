@@ -13,7 +13,7 @@ function bl = decon(bl, psf, niter, lambda, stop_criterion, regularize_interval,
 
     if use_fft
         if adaptive_psf
-            bl = deconFFT_Weiner(bl, psf.psf, fft_shape, niter, lambda, stop_criterion, regularize_interval, device_id);
+            bl = deconFFT_Wiener(bl, psf.psf, fft_shape, niter, lambda, stop_criterion, regularize_interval, device_id);
         else
             bl = deconFFT       (bl, psf.psf, fft_shape, niter, lambda, stop_criterion, regularize_interval, device_id);
         end
@@ -285,7 +285,7 @@ function bl = deconFFT_Weiner_slow(bl, psf, fft_shape, niter, lambda, stop_crite
     bl = unpad_block(bl, pad_pre, pad_post);
 end
 
-function bl = deconFFT_Weiner(bl, psf, fft_shape, niter, lambda, stop_criterion, regularize_interval, device_id)
+function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion, regularize_interval, device_id)
 
     % Richardson–Lucy + on-the-fly Wiener PSF refinement
     % RAM-minimal version

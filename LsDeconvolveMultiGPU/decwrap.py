@@ -203,7 +203,7 @@ def main():
     parser.add_argument('--use-fft', action='store_true', default=False,
                         help='use FFT-based convolution, which is faster but uses more memory.')
     parser.add_argument('--adaptive-psf', action='store_true', default=False,
-                        help='use Weiner method to adaptively update the PSF at every step.')
+                        help='use Wiener method to adaptively update the PSF at every step.')
     parser.add_argument('--cache-drive', type=str, default=None,
                         help='Optional brain name for cache path construction')
     parser.add_argument('-it', '--numit', type=int, default=6,
