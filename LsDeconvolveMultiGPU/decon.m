@@ -99,7 +99,12 @@ end
 %=== Frequency-domain version ===
 function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regularize_interval, device_id)
     use_gpu = isgpuarray(bl);
-    buf_otf = calculate_otf(psf, fft_shape, device_id);
+
+    if use_gpu, psf = gpuArray; end
+    [buf_otf, ~, ~] = pad_block_to_fft_shape(psf, fft_shape, 0);
+    buf_otf = ifftshift(buf_otf);
+    buf_otf = fftn(buf_otf);
+
     if regularize_interval < niter && lambda > 0
         R = single(1/26 * ones(3,3,3)); R(2,2,2) = 0;
         if use_gpu, R = gpuArray(R); end
@@ -111,7 +116,9 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regula
     end
 
     buf = zeros(fft_shape, 'single');
-    buf = complex(buf, buf);
+    if use_gpu
+        buf = gpuArray(buf);
+    end
     for i = 1:niter
         % start_time = tic;
         apply_regularization = (regularize_interval > 0) && (regularize_interval < niter);
