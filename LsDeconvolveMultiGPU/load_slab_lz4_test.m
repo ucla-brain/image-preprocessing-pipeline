@@ -1,7 +1,7 @@
 function load_slab_lz4_fulltest(varargin)
 % Exhaustive test-bench for save_lz4_mex ↔ load_slab_lz4.
 % Generates a random stack, splits into LZ4 bricks, reloads with every
-% clip / scale branch, and compares against a MATLAB reference
+% scale branch, and compares against a MATLAB reference
 % that uses *exactly* the user-supplied formula.
 
 % ─────────── geometry ───────────
@@ -18,10 +18,8 @@ brick.nz = ceil(stack.z/brick.z);
 
 % ─────────── sweep parameters (single) ───────────
 scalS = single([255 65535]);          % → uint8 / uint16
-clipS = single([0 1]);                % clip off / on
+clipS = single([0 1]);                % clip off / on (no effect now)
 dminS = single([0 0.1]);              % deconvmin
-low_clip  = single(0.1);
-high_clip = single(0.9);
 amplification = single(1);
 deconvmax = single(1);
 
@@ -52,8 +50,8 @@ for scal = scalS
                 [V_mex, t_mex] = load_slab_lz4( ...
                     fn, uint64(p1d), uint64(p2d), ...
                     uint64([stack.x stack.y stack.z]), ...
-                    clipval, scal, amplification, ...
-                    deconvmin, deconvmax, low_clip, high_clip, ...
+                    scal, amplification, ...
+                    deconvmin, deconvmax, ...
                     feature('numCores'));
             catch ME
                 fprintf('❌  MEX error (scal=%g clip=%g dmin=%g): %s\n', ...
@@ -62,18 +60,12 @@ for scal = scalS
             end
 
             % ---- MATLAB reference (uses EXACT formula) ----
-            R = R0;                                   %#ok<NASGU> base name must be R
-            if clipval > 0
-                R = R - low_clip;
-                R = min(R, high_clip - low_clip);
-                R = R .* (scal .* amplification ./ (high_clip - low_clip));
+            R = R0;
+            if deconvmin > 0
+                R = (R - deconvmin) .* (scal .* amplification ./ ...
+                                        (deconvmax - deconvmin));
             else
-                if deconvmin > 0
-                    R = (R - deconvmin) .* (scal .* amplification ./ ...
-                                              (deconvmax - deconvmin));
-                else
-                    R = R .* (scal .* amplification ./ deconvmax);
-                end
+                R = R .* (scal .* amplification ./ deconvmax);
             end
             R = round(R - amplification);
             R = min(max(R,0),scal);
@@ -82,7 +74,7 @@ for scal = scalS
             elseif scal <= 65535
                 R = uint16(R);
             end
-            V_ref = R;    %#ok<NASGU> keep name consistent
+            V_ref = R;
 
             % ---- strict type check ----
             if ~strcmp(class(V_mex), class(V_ref))

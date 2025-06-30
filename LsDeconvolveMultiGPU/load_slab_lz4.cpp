@@ -5,8 +5,8 @@
 
   USAGE
   -----
-    vol = load_slab_lz4(filenames, p1, p2, dims, clipOn,
-                        scal, ampl, dmin, dmax, lowClip, highClip, maxThreads)
+    vol = load_slab_lz4(filenames, p1, p2, dims,
+                        scal, ampl, dmin, dmax, maxThreads)
 
   FEATURES
   --------
@@ -26,7 +26,7 @@
 
   AUTHOR  : Keivan Moradi (with ChatGPT-4o assistance)
   LICENSE : GNU GPL v3
-  DATE    : 2025-06-22
+  DATE    : 2025-06-29
 ==============================================================================*/
 
 #include "mex.h"
@@ -100,8 +100,7 @@ struct BrickJob {
     std::string file;
     uint64_t x0,y0,z0,x1,y1,z1, dimX,dimY,dimZ;
     OUT_T* dst;
-    float scal, ampl, lowClip, highClip, dmin, dmax;
-    bool clip;
+    float scal, ampl, dmin, dmax;
 
     void operator()() const {
         auto& bufferFloat = ThreadScratch<float>::uncompressed;
@@ -133,11 +132,9 @@ struct BrickJob {
         if (offset != header.totalBytes)
             throw std::runtime_error(file + ": size mismatch");
 
-        const float span = highClip - lowClip;
-        const float kClip = clip ? scal * ampl / span : 0.f;
         const float kLinear = scal * ampl / dmax;
         const float kMinMax = scal * ampl / (dmax - dmin);
-        const bool useMinMax = (!clip && dmin > 0.f);
+        const bool useMinMax = (dmin > 0.f);
 
         const float* src = bufferFloat.data();
         for (uint64_t z = 0; z < bz; ++z)
@@ -145,9 +142,7 @@ struct BrickJob {
             const uint64_t base = idx3d(x0, y0 + y, z0 + z, dimX, dimY);
             for (uint64_t x = 0; x < bx; ++x) {
                 float val = src[(z * by + y) * bx + x];
-                if (clip)
-                    val = std::clamp(val - lowClip, 0.f, span) * kClip;
-                else if (useMinMax)
+                if (useMinMax)
                     val = (val - dmin) * kMinMax;
                 else
                     val = val * kLinear;
@@ -194,7 +189,8 @@ void run_atomic_thread_pool(const std::vector<JobT>& jobs, int nThreads) {
 /*============================= MEX Entry Point ================================*/
 void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     auto now = std::chrono::high_resolution_clock::now();
-    if (11 > nrhs || nrhs > 12) mexErrMsgTxt("Expected 11-12 input arguments. The 12th argument is optional thread count.");
+    if (nrhs < 8 || nrhs > 9)
+        mexErrMsgTxt("Expected 8-9 input arguments. The 9th argument is optional thread count.");
     if (!mxIsCell(prhs[0])) mexErrMsgTxt("filenames must be a cell array.");
 
     const mwSize nFiles = mxGetNumberOfElements(prhs[0]);
@@ -206,14 +202,11 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     };
     uint64_t dimX = dimAt(prhs[3], 0), dimY = dimAt(prhs[3], 1), dimZ = dimAt(prhs[3], 2);
 
-    const bool clip = mxGetScalar(prhs[4]) > 0;
-    float scal = float(mxGetScalar(prhs[5]));
-    float ampl = float(mxGetScalar(prhs[6]));
-    float dmin = float(mxGetScalar(prhs[7]));
-    float dmax = float(mxGetScalar(prhs[8]));
-    float lowClip = float(mxGetScalar(prhs[9]));
-    float highClip = float(mxGetScalar(prhs[10]));
-    int maxThreads = (nrhs > 11) ? int(mxGetScalar(prhs[11])) : int(std::thread::hardware_concurrency());
+    float scal = float(mxGetScalar(prhs[4]));
+    float ampl = float(mxGetScalar(prhs[5]));
+    float dmin = float(mxGetScalar(prhs[6]));
+    float dmax = float(mxGetScalar(prhs[7]));
+    int maxThreads = (nrhs > 8) ? int(mxGetScalar(prhs[8])) : int(std::thread::hardware_concurrency());
     if (maxThreads < 1) maxThreads = 1;
 
     const mwSize outDims[3] = { mwSize(dimX), mwSize(dimY), mwSize(dimZ) };
@@ -239,7 +232,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
                 getCoord(p1,i)-1, getCoord(p1,i+nFiles)-1, getCoord(p1,i+2*nFiles)-1,
                 getCoord(p2,i)-1, getCoord(p2,i+nFiles)-1, getCoord(p2,i+2*nFiles)-1,
                 dimX, dimY, dimZ, static_cast<uint8_t*>(vol),
-                scal, ampl, lowClip, highClip, dmin, dmax, clip });
+                scal, ampl, dmin, dmax });
         }
         try {
             run_atomic_thread_pool(jobs, maxThreads);
@@ -257,7 +250,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
                 getCoord(p1,i)-1, getCoord(p1,i+nFiles)-1, getCoord(p1,i+2*nFiles)-1,
                 getCoord(p2,i)-1, getCoord(p2,i+nFiles)-1, getCoord(p2,i+2*nFiles)-1,
                 dimX, dimY, dimZ, static_cast<uint16_t*>(vol),
-                scal, ampl, lowClip, highClip, dmin, dmax, clip });
+                scal, ampl, dmin, dmax });
         }
         try {
             run_atomic_thread_pool(jobs, maxThreads);
