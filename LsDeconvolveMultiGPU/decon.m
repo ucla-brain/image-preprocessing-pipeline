@@ -312,6 +312,8 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
     otf_buff = complex(buff2, buff2);
 
     epsilon = single(eps('single'));
+    psf_sz = size(psf);
+    center = floor((fft_shape - psf_sz) / 2) + 1;
     for i = 1:niter
         % ----------- Richardson–Lucy core ------------
         % Y: observed image (blurred, bl)
