@@ -201,11 +201,11 @@ function bl = deconFFT_Weiner(bl, psf, fft_shape, niter, lambda, stop_criterion,
         end
 
         % ----------- Richardson–Lucy core ------------
+        % otf_buff = otf_gpu(psf, fft_shape, otf_buff);
+        [otf_buff, ~, ~] = pad_block_to_fft_shape(psf, fft_shape, 0);
+        otf_buff = ifftshift(otf_buff);
+        otf_buff = fftn(otf_buff);
         if i == 1
-            % otf_buff = otf_gpu(psf, fft_shape, otf_buff);
-            [otf_buff, ~, ~] = pad_block_to_fft_shape(psf, fft_shape, 0);
-            otf_buff = ifftshift(otf_buff);
-            otf_buff = fftn(otf_buff);
             buff1 = fftn(bl);                                            % F{Y}
         end
         % convFFT start
@@ -250,14 +250,13 @@ function bl = deconFFT_Weiner(bl, psf, fft_shape, niter, lambda, stop_criterion,
             buff2 = buff1 .* buff3;                                      % F{X} . conj(F{X})                    real
             buff2 = max(buff2, single(eps('single')));                   % F{X} . conj(F{X}) + epsilon          real
             otf_buff = otf_buff ./ buff2;                                % otf_new                              complex
-            otf_buff = otf_buff / otf_buff(1, 1, 1);
-            % buff1 = ifftn(otf_buff);                                     % psf                                  complex
-            % buff2 = real(buff1);                                         % psf                                  real
-            % psf = buff2(center(1):center(1)+psf_sz(1)-1, ...
-            %             center(2):center(2)+psf_sz(2)-1, ...
-            %             center(3):center(3)+psf_sz(3)-1);
-            % psf = max(psf, 0);            % clamp negatives
-            % psf = psf / sum(psf(:));      % normalize to unit energy
+            buff3 = ifftn(otf_buff);                                     % psf                                  complex
+            buff2 = real(buff3);                                         % psf                                  real
+            psf = buff2(center(1):center(1)+psf_sz(1)-1, ...
+                        center(2):center(2)+psf_sz(2)-1, ...
+                        center(3):center(3)+psf_sz(3)-1);
+            psf = max(psf, 0);            % clamp negatives
+            psf = psf / sum(psf(:));      % normalize to unit energy
         end
 
         % ------------- stopping test -----------------
