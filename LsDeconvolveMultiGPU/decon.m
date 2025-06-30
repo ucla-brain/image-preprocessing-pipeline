@@ -357,17 +357,18 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
         % otf_new = (F{Y} . conj(F{X})) ./ (F{X} . conj(F{X}) + epsilon)
         if i < niter
             % Compute spectrum of current estimate
-            buff3 = fftn(bl);                                           % F{X}                                 complex
-            otf_buff = conj(buff3);                                     % conj(F{X})                           complex
-            buff2 = buff3 .* otf_buff;                                  % |F{X}|^2                             real
-            buff2 = max(buff2, epsilon);                                % + epsilon                            real
-            otf_buff = buff1 .* otf_buff;                               % F{Y} .* conj(F{X})                   complex
-            buff1 = buff3;
-            otf_buff = otf_buff ./ buff2;                               % new OTF                              complex
+            buff3 = fftn(bl);                                            % F{X}                                 complex
+            otf_buff = conj(buff3);                                      % conj(F{X})                           complex
+            buff2 = buff3 .* otf_buff;                                   % |F{X}|^2                             real
+            buff2 = max(buff2, epsilon);                                 % |F{X}|^2 + epsilon                   real (avoid /0)
+            otf_buff = buff1 .* otf_buff;                                % F{Y} .* conj(F{X})                   complex
+            buff1 = buff3;                                               % store F{X} for next iteration
+            otf_buff = otf_buff ./ buff2;                                % otf_new                              complex
             % if abs(otf_buff(1,1,1)) > epsilon
-            %     otf_buff = otf_buff / abs(otf_buff(1,1,1));           % normalize to unit energy (optional)
+            %     otf_buff = otf_buff / abs(otf_buff(1,1,1));            % normalize to unit energy (optional)
             % end
         end
+
 
         % ------------- stopping test -----------------
         if stop_criterion > 0
@@ -382,8 +383,6 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
 
     bl = unpad_block(bl, pad_pre, pad_post);
 end
-
-
 
 function [bl, pad_pre, pad_post] = pad_block_to_fft_shape(bl, fft_shape, mode)
     % Ensure 3 dimensions for both bl and fft_shape
