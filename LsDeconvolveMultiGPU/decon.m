@@ -362,7 +362,7 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
             buff3 = buff1 .* buff3;                                      % F{Y} . conj(F{X})                    complex
             buff1 = otf_buff;                                            % Future F{Y}
             otf_buff = buff3 ./ buff2;                                   % otf_new                              complex
-            otf_buff = otf_buff / otf_buff(1,1,1);                       % normalize to unit energy             complex
+            %otf_buff = otf_buff / otf_buff(1,1,1);                       % normalize to unit energy             complex
         end
 
         % ------------- stopping test -----------------
