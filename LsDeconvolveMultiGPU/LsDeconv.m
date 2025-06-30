@@ -637,7 +637,7 @@ function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
             parfor idx = 1 : numel(gpus)
                 deconvolve( ...
                     filelist, psf, numit, damping, ...
-                    block, stack_info, min_max_path, ...
+                    block, stack_info, min_max_path, clipval, ...
                     stop_criterion, gpus(idx), semkey_gpu_base, ...
                     cache_drive, filter, starting_block + idx - 1, dQueue);
             end
@@ -677,7 +677,7 @@ function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
 end
 
 function deconvolve(filelist, psf, numit, damping, ...
-    block, stack_info, min_max_path, ...
+    block, stack_info, min_max_path, clipval, ...
     stop_criterion, gpu, semkey_gpu_base, cache_drive, ...
     filter, starting_block, dQueue)
     
@@ -738,7 +738,7 @@ function deconvolve(filelist, psf, numit, damping, ...
         end
         block_processing_start = tic;
         expected_size = size(bl);  % Store size before processing
-        [bl, lb, ub] = process_block(bl, block, psf, numit, damping, stop_criterion, filter, gpu, semkey_gpu_base);
+        [bl, lb, ub] = process_block(bl, block, psf, numit, damping, stop_criterion, filter, clipval, gpu, semkey_gpu_base);
         % === Check padded block size is unchanged by process_block ===
         actual_size = size(bl);
         assert(isequal(actual_size, expected_size), ...
@@ -914,7 +914,7 @@ function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
         num2str(size(bl)), num2str(block_target_size)));
 end
 
-function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criterion, filter, gpu, semkey_gpu_base)
+function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criterion, filter, clipval, gpu, semkey_gpu_base)
     bl_size = size(bl);
     if gpu && (min(filter.gaussian_sigma(:)) > 0 || niter > 0)
         % get the next available gpu
@@ -959,7 +959,7 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
         end
     end
 
-    [lb, ub] = deconvolved_stats(bl);
+    [lb, ub] = deconvolved_stats(bl, clipval);
 
     if gpu && isgpuarray(bl)
         bl = gather(bl);
@@ -971,9 +971,7 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
     assert(all(size(bl) == bl_size), '[process_block]: block size mismatch!');
 end
 
-function postprocess_save( ...
-    outpath, cache_drive, min_max_path, log_file, clipval, ...
-    stack_info, resume, block, amplification)
+function postprocess_save(outpath, cache_drive, min_max_path, log_file, stack_info, resume, block, amplification)
 
     %POSTPROCESS_SAVE   Final stage: re-assembles cached LZ4 blocks into TIFFs.
     %
@@ -991,7 +989,6 @@ function postprocess_save( ...
     %     cache_drive    – folder containing the *.lz4 brick cache
     %     min_max_path   – path to min_max.mat produced earlier (optional)
     %     log_file       – file handle or path for p_log()
-    %     clipval        – symmetric clip %, 0 disables
     %     stack_info     – struct with fields:
     %                         x,y,z, convert_to_8bit, convert_to_16bit,
     %                         flip_upside_down   (see caller)
@@ -1060,33 +1057,6 @@ function postprocess_save( ...
     % 3.  Global histogram for symmetric clip (optional)
     % -------------------------------------------------------------------------
     low_clip = 0; high_clip = 0;
-    if clipval > 0
-        % == Semaphore guarding low-level load_bl_lz4 in histogram step ===========
-        SEM_MULTI = 10000;
-        semaphore_create(SEM_MULTI, 2);
-
-        num_workers = feature('numcores');
-        if isempty(gcp('nocreate'))
-            parpool('local', num_workers, 'IdleTimeout', Inf);
-        end
-
-        nbins    = 1e6;
-        binwidth = deconvmax / nbins;
-        bins     = 0:binwidth:deconvmax;
-        chist    = zeros(1, nbins, 'double');
-
-        disp('Calculating global histogram …');
-        parfor i = 1:numBlocks
-            tmp = histcounts(load_bl_lz4(blocklist{i}, SEM_MULTI), bins);
-            chist = chist + tmp;   %#ok<PFBNS> (reduction)
-        end
-        chist     = cumsum(chist) / max(chist) * 100;
-        low_clip  = findClosest(chist,       clipval) * binwidth;
-        high_clip = findClosest(chist, 100 - clipval) * binwidth;
-
-        semaphore_destroy(SEM_MULTI);
-        delete(gcp('nocreate'));
-    end
 
     % -------------------------------------------------------------------------
     % 4.  Detect already-written TIFFs (resume mode)
@@ -1355,8 +1325,8 @@ function index = findClosest(data, x)
     [~,index] = min(abs(data-x));
 end
 
-function [lb, ub] = deconvolved_stats(deconvolved)
-    stats = prctile(deconvolved, [0.1 99.99], "all");
+function [lb, ub] = deconvolved_stats(deconvolved, clipval)
+    stats = prctile(deconvolved, [(100 - clipval) clipval], "all");
     if isgpuarray(stats)
         stats = gather(stats);
     end

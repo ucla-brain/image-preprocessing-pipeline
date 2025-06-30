@@ -194,19 +194,21 @@ function bl = deconFFT_Weiner(bl, psf, fft_shape, niter, lambda, stop_criterion,
     otf_buff = complex(buff2, buff2);  % complex(single) zeros
 
     for i = 1:niter
+        [otf_buff, ~, ~] = pad_block_to_fft_shape(psf, fft_shape, 0);
+        otf_buff = ifftshift(otf_buff);
+        otf_buff = fftn(otf_buff);
+
         if i > 1 && regularize_interval>0 && mod(i, regularize_interval)==0
             if use_gpu, bl =  gauss3d_gpu(bl,0.5);
             else        bl = imgaussfilt3(bl,0.5);
             end
+            buff1 = fftn(bl);                                            % F{Y}                                 complex
         end
 
         % ----------- Richardson–Lucy core ------------
         % otf_buff = otf_gpu(psf, fft_shape, otf_buff);
-        [otf_buff, ~, ~] = pad_block_to_fft_shape(psf, fft_shape, 0);
-        otf_buff = ifftshift(otf_buff);
-        otf_buff = fftn(otf_buff);
         if i == 1
-            buff1 = fftn(bl);                                            % F{Y}
+            buff1 = fftn(bl);                                            % F{Y}                                 complex
         end
         % convFFT start
         buff1 = buff1 .* otf_buff;                                       % F{Y} .* otf                          complex
