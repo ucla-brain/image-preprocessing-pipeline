@@ -314,6 +314,7 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
     buff2 = zeros(fft_shape,'single');                           % real scratch (ratio / update)
     if use_gpu, buff2 = gpuArray(buff2); end
     buff3 = complex(buff2,buff2);                                % complex scratch (F{x}, etc.)
+    buff2 = complex(buff2,buff2);                                % complex scratch (F{x}, etc.)
 
     for i = 1:niter
         % ------------- Richardson–Lucy core (FIXED) ----------------------
