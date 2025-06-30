@@ -319,13 +319,16 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
     for i = 1:niter
         % ------------- Richardson–Lucy core (FIXED) ----------------------
         buff3 = fftn(bl);                                        % F{x_k}                      complex
-        buff2 = buff3 .* otf_buff;                               % F{x_k}·H  (=F{Hx})          complex
+        buff3 = buff3 .* otf_buff;                               % F{x_k}·H  (=F{Hx})          complex
+        buff3 = ifftn(buff3);
+        buff2 = real(buff3);
         buff2 = max(buff2, single(eps('single')));               % avoid /0
-        buff2 = buff1 ./ buff2;                                  % F{Y} ./ F{Hx}               complex
+        buff2 = bl ./ buff2;                                     % F{Y} ./ F{Hx}               complex
+        buff3 = fftn(buff2);
         otf_buff = conj(otf_buff);                               % otf_conj
-        buff2 = buff2 .* otf_buff;                               % conj(H)·(F{Y}/F{Hx})        complex
-        buff2 = ifftn(buff2);                                    % update factor (spatial)     complex
-        buff2 = real(buff2);                                     % update factor               real
+        buff3 = buff2 .* otf_buff;                               % conj(H)·(F{Y}/F{Hx})        complex
+        buff3 = ifftn(buff3);                                    % update factor (spatial)     complex
+        buff2 = real(buff3);                                     % update factor               real
 
         % ------------- regularisation (unchanged) -----------------------
         if regularize_interval > 0 && mod(i,regularize_interval) == 0 && lambda > 0 && i < niter
