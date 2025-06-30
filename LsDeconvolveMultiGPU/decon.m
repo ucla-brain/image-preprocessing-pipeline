@@ -313,53 +313,51 @@ function bl = deconFFT_Weiner(bl, psf, fft_shape, niter, lambda, stop_criterion,
     end
     buff1 = complex(buff2, buff2);  % complex(single) zeros
     F_Y = fftn(bl);
+    buff1 = F_Y;
     otf_buff = complex(buff2, buff2);  % complex(single) zeros
 
     for i = 1:niter
-
         if i > 1 && regularize_interval>0 && mod(i, regularize_interval)==0
             if use_gpu, bl =  gauss3d_gpu(bl,0.5);
             else        bl = imgaussfilt3(bl,0.5);
             end
-            buff1 = fftn(bl);                                            % F{Y}                                 complex
         end
 
         % ----------- Richardson–Lucy core ------------
-        % otf_buff = otf_gpu(psf, fft_shape, otf_buff);
+        % Y: observed image (blurred, bl)
+        % X: current object estimate (sharpened)
         if i == 1
             [otf_buff, ~, ~] = pad_block_to_fft_shape(psf, fft_shape, 0);
             otf_buff = ifftshift(otf_buff);
             otf_buff = fftn(otf_buff);
-
+        else
             buff1 = fftn(bl);                                            % F{Y}                                 complex
         end
         % convFFT start
         buff1 = buff1 .* otf_buff;                                       % F{Y} .* otf                          complex
-        buff1 = ifftn(buff1);                                            % Y                                    complex
-        buff2 = real(buff1);                                             % Y                                    real
+        buff1 = ifftn(buff1);                                            % H{Y}                                 complex
+        buff2 = real(buff1);                                             % H{Y}                                 real
         % convFFT end
-        buff2 = max(buff2, single(eps('single')));                       % X + epsilon                          real
-        buff2 = bl ./ buff2;                                             % Y/X                                  real
+        buff2 = max(buff2, single(eps('single')));                       % H{Y} + epsilon                       real
+        buff2 = bl ./ buff2;                                             % Y/H{Y}                               real
         % convFFT start
-        buff1 = fftn(buff2);                                             % F{X}                                 complex
+        buff1 = fftn(buff2);                                             % F{Y/H{Y}} = F{Y}/F{H{Y}}             complex
         otf_buff = conj(otf_buff);                                       % otf_conj                             complex
-        buff1 = buff1 .* otf_buff;                                       % F{X} .* otf_conj                     complex
-        buff1 = ifftn(buff1);                                            % Y                                    complex
-        buff2 = real(buff1);                                             % Y                                    real
+        buff1 = buff1 .* otf_buff;                                       % H^-1F{X}/H^-1{F{H{Y}}}=F{X}/F{Y}     complex
+        buff1 = ifftn(buff1);                                            % X/Y                                  complex
+        buff2 = real(buff1);                                             % X/Y                                  real
         % convFFT end
 
         if regularize_interval>0 && mod(i,regularize_interval)==0 && lambda>0 && i<niter
             buff1 = convn(bl, R, 'same');                                % Laplacian                            real
-            buff2 = bl .* buff2 .* (1-lambda) + buff1 .* lambda;         % decon requalized X                   real
+            buff2 = bl .* buff2 .* (1-lambda) + buff1 .* lambda;         % requalized X                   real
         else
-            buff2 = bl .* buff2;                                         % buff2: decon X                       real
+            buff2 = bl .* buff2;                                         % X                                    real
         end
 
-        bl = abs(buff2);                                                 % bl   : decon X                       real
+        bl = abs(buff2);                                                 % X                                    real
 
         % ----------- Wiener PSF update ---------------
-        % Y: observed image (blurred, bl)
-        % X: current object estimate (sharpened)
         % otf_new = (F{Y} . conj(F{X})) ./ (F{X} . conj(F{X}) + epsilon)
         if i<niter
             % convFFT end
