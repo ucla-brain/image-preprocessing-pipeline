@@ -275,12 +275,26 @@ function [] = LsDeconv(varargin)
         p_log(log_file, ['   logs: ' char(log_file_path)]);
         p_log(log_file, ' ');
 
+        start_time = datetime('now');
         process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
             damping, clipval, stop_criterion, gpus, cache_drive, ...
             amplification, filter, resume, starting_block);
 
+        p_log(log_file, ['deconvolution finished at ' char(datetime)]);
+        p_log(log_file, ['elapsed time: ' char(duration(datetime('now') - start_time, 'Format', 'dd:hh:mm:ss'))]);
+        disp('----------------------------------------------------------------------------------------');
+        delete(gcp('nocreate'));
+        try
+            status = rmdir(cache_drive, 's');
+            if status
+                p_log(log_file, sprintf('[Cache folder deleting]: succeeded for "%s"!', cache_drive));
+            else
+                p_log(log_file, sprintf('[Cache folder deleting]: failed for "%s"!', cache_drive));
+            end
+        catch ME
+            p_log(log_file, sprintf('[Cache folder deleting]: failed for "%s": %s', cache_drive, ME.message));
+        end
         fclose(log_file);
-        % open(log_file_path);
     catch ME
         % error handling
         disp(ME);
@@ -562,8 +576,6 @@ function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
     damping, clipval, stop_criterion, gpus, cache_drive, amplification, ...
     filter, resume, starting_block)
 
-    start_time = datetime('now');
-
     need_post_processing = false;
     if starting_block == 1
         need_post_processing = true;
@@ -656,22 +668,6 @@ function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
     if need_post_processing
         postprocess_save(outpath, cache_drive, min_max_path, log_file, stack_info, resume, block, amplification);
     end
-
-    try
-        status = rmdir(cache_drive, 's');
-        if status
-            p_log(log_file, sprintf('[Cache folder deleting]: succeeded for "%s"!', cache_drive));
-        else
-            p_log(log_file, sprintf('[Cache folder deleting]: failed for "%s"!', cache_drive));
-        end
-    catch ME
-        p_log(log_file, sprintf('[Cache folder deleting]: failed for "%s": %s', cache_drive, ME.message));
-    end
-    
-    p_log(log_file, ['deconvolution finished at ' char(datetime)]);
-    p_log(log_file, ['elapsed time: ' char(duration(datetime('now') - start_time, 'Format', 'dd:hh:mm:ss'))]);
-    disp('----------------------------------------------------------------------------------------');
-    delete(gcp('nocreate'));
 end
 
 function deconvolve(filelist, psf, numit, damping, ...
@@ -734,9 +730,10 @@ function deconvolve(filelist, psf, numit, damping, ...
         if exist(block_path_tmp, "file") || (exist(block_path, "file") && dir(block_path).bytes > 0)
             continue
         end
-        block_processing_start = tic;
+
         expected_size = size(bl);  % Store size before processing
-        [bl, lb, ub] = process_block(bl, block, psf, numit, damping, stop_criterion, filter, clipval, gpu, semkey_gpu_base);
+        logging_string = sprintf('%s: block %d from %d filters applied in', current_device(gpu), blnr, num_blocks);
+        [bl, lb, ub] = process_block(bl, block, psf, numit, damping, stop_criterion, filter, clipval, gpu, semkey_gpu_base, dQueue, logging_string);
         % === Check padded block size is unchanged by process_block ===
         actual_size = size(bl);
         assert(isequal(actual_size, expected_size), ...
@@ -747,11 +744,6 @@ function deconvolve(filelist, psf, numit, damping, ...
                     block.p1(blnr,1), block.p2(blnr,1), ...
                     block.p1(blnr,2), block.p2(blnr,2), ...
                     block.p1(blnr,3), block.p2(blnr,3)));
-
-        % Report status
-        send(dQueue, [current_device(gpu) ': block ' num2str(blnr) ...
-            ' from ' num_blocks_str ' filters applied in ' ...
-            num2str(round(toc(block_processing_start), 1))]);
 
         % === Remove padding before saving ===
         save_start = tic;
@@ -912,7 +904,8 @@ function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
         num2str(size(bl)), num2str(block_target_size)));
 end
 
-function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criterion, filter, clipval, gpu, semkey_gpu_base)
+function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criterion, filter, clipval, gpu, semkey_gpu_base, dQueue, logging_string)
+    block_processing_start = tic;
     bl_size = size(bl);
     if gpu && (min(filter.gaussian_sigma(:)) > 0 || niter > 0)
         % get the next available gpu
@@ -943,27 +936,18 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
         bl = filter_subband_3d_z(bl, filter.destripe_sigma, 0, "db9");
     end
 
-    % since prctile function needs high vram usage gather it to avoid low
-    % memory error
-    if gpu && isgpuarray(bl) && free_GPU_vRAM(gpu, gpu_device) < 60
+    % since prctile function needs high vram usage gather it to avoid low memory error
+    if gpu && isgpuarray(bl)
         % Reseting the GPU
         bl = gather(bl);
         reset(gpu_device);  % to free 2 extra copies of bl in gpu
-        if free_GPU_vRAM(gpu, gpu_device) > 43
-            bl = gpuArray(bl);
-        else
-            % queue('post', semkey_gpu_base, gpu);
-            semaphore('p', semkey_gpu_base + gpu);
-        end
-    end
-
-    [lb, ub] = deconvolved_stats(bl, clipval);
-
-    if gpu && isgpuarray(bl)
-        bl = gather(bl);
-        reset(gpu_device);  % to free gpu memory
-        % queue('post', semkey_gpu_base, gpu);
         semaphore('p', semkey_gpu_base + gpu);
+
+        send( dQueue, sprintf('%s %f.1', logging_string, toc(block_processing_start)) );
+        [lb, ub] = deconvolved_stats(bl, clipval);
+    else
+        [lb, ub] = deconvolved_stats(bl, clipval);
+        send( dQueue, sprintf('%s %f.1', logging_string, toc(block_processing_start)) );
     end
 
     assert(all(size(bl) == bl_size), '[process_block]: block size mismatch!');
@@ -1006,7 +990,7 @@ function postprocess_save(outpath, cache_drive, min_max_path, log_file, stack_in
     missingMask = ~cellfun(@isfile, blocklist);
 
     if any(missingMask)
-        fprintf(2,'ERROR: %d block files are missing – aborting.\n', nnz(missingMask));
+        p_log(log_file, sprintf(2,'ERROR: %d block files are missing – aborting.', nnz(missingMask)));
         disp(find(missingMask));
         error('postprocess_save:MissingBlocks','Block cache incomplete.');
     end
@@ -1052,12 +1036,7 @@ function postprocess_save(outpath, cache_drive, min_max_path, log_file, stack_in
     p_log(log_file,sprintf('   global min after  deconv  : %g\n', deconvmin));
 
     % -------------------------------------------------------------------------
-    % 3.  Global histogram for symmetric clip (optional)
-    % -------------------------------------------------------------------------
-    low_clip = 0; high_clip = 0;
-
-    % -------------------------------------------------------------------------
-    % 4.  Detect already-written TIFFs (resume mode)
+    % 3.  Detect already-written TIFFs (resume mode)
     % -------------------------------------------------------------------------
     blocksPerSlab = block.nx * block.ny;
     if resume
@@ -1073,21 +1052,21 @@ function postprocess_save(outpath, cache_drive, min_max_path, log_file, stack_in
 
         % first slab whose end-Z ≥ nextFileIdx
         starting_z_block = find(block.p2(1:blocksPerSlab:end, z) >= nextFileIdx, 1);
-        fprintf('Resuming: last slice = %d ➜ continue at %d (slab %d)\n', ...
-                lastDone, nextFileIdx, starting_z_block);
+        p_log(log_file, sprintf('Resuming: last slice = %d ➜ continue at %d (slab %d)', ...
+                                lastDone, nextFileIdx, starting_z_block));
     else
         nextFileIdx      = 1;
         starting_z_block = 1;
     end
 
     % -------------------------------------------------------------------------
-    % 5.  Re-assemble z-slabs (float32), re-scale to 8-bit or 16-bit, and save as 2D tif series
+    % 4.  Re-assemble z-slabs (float32), re-scale to 8-bit or 16-bit, and save as 2D tif series
     % -------------------------------------------------------------------------
     for nz = starting_z_block : block.nz
         % -------------------------------------------------------------------------
-        % 5a.  Process each slab – all bricks (bls) loaded in one MEX call
+        % 4a.  Process each slab – all bricks (bls) loaded in one MEX call
         % -------------------------------------------------------------------------
-        fprintf('Slab %d / %d – mounting %d blocks …\n', nz, block.nz, blocksPerSlab);
+        p_log(log_file, sprintf('Slab %d / %d – mounting %d blocks …', nz, block.nz, blocksPerSlab));
 
         block_inds = ((nz-1)*blocksPerSlab + 1) : (nz*blocksPerSlab);
 
@@ -1119,22 +1098,22 @@ function postprocess_save(outpath, cache_drive, min_max_path, log_file, stack_in
             blocklist(block_inds), p1_slab, p2_slab, slabSize, ...
             scal, amplification, deconvmin, deconvmax, feature('numCores'));
 
-        fprintf('   slab assembled + scaled in %.1fs.\n', elapsed);
+        p_log(log_file, sprintf('   slab assembled + scaled in %.1fs.', elapsed));
 
         if stack_info.flip_upside_down
             R = flip(R, 2);
         end
 
         % ---------------------------------------------------------------------
-        % 5c.  Write slab slices as TIFFs
+        % 4b.  Write slab slices as TIFFs
         % ---------------------------------------------------------------------
         file_z1 = nextFileIdx;
-        fprintf('   saving %d slices starting at %06d …\n', size(R,3), file_z1);
+        p_log(log_file, sprintf('   saving %d slices starting at %06d …', size(R,3), file_z1));
         save_slices_with_bl_tif(R, outpath, file_z1);
         nextFileIdx = nextFileIdx + size(R,3);
     end
 
-    fprintf('postprocess_save completed successfully.\n');
+    p_log(log_file, 'postprocess_save completed successfully.');
 end
 
 function save_slices_with_bl_tif(R, outpath, slab_z1)
