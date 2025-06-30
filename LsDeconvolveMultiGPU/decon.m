@@ -285,48 +285,6 @@ function bl = deconFFT_Weiner(bl, psf, fft_shape, niter, lambda, stop_criterion,
     bl = unpad_block(bl, pad_pre, pad_post);
 end
 
-function x = convFFT(x, otf)
-    % CONVFFT  Frequency–domain convolution with fixed precision.
-    %
-    %   x = convFFT(x, otf)
-    %
-    %   Arguments
-    %   ---------
-    %     x   – real volume (single or gpuArray/single)
-    %     otf – complex pre-computed OTF (single or gpuArray/single)
-    %
-    %   The result x is real(single) and on the same device (CPU vs GPU) as the input.
-    buf = fftn(x);        % x now holds fft(x)             complex
-    buf = buf .* otf;     % x now holds fft(x) .* otf      complex
-    buf = ifftn(buf);     % inverse fft                    complex
-    x = real(buf);        % final output                   single
-end
-
-function otf = calculate_otf(psf, fft_shape, device_id)
-    %CALCULATE_OTF  Build an OTF in single precision (CPU or GPU).
-    %
-    %   otf = calculate_otf(psf, fft_shape, device_id)
-    %
-    %   • psf         – real PSF, any numeric class
-    %   • fft_shape   – 3-element vector, power-of-2 friendly
-    %   • device_id   – >0 ⇒ use GPU via otf_gpu
-    %
-    %   Both outputs are single (CPU) or gpuArray/single (GPU).
-
-    % t_compute = tic;
-    if ~isa(psf, 'single'), psf = single(psf); end
-    if device_id > 0
-        if ~isgpuarray(psf), psf = gpuArray(psf); end
-        otf = otf_gpu(psf, fft_shape);
-    else
-        [otf, ~, ~] = pad_block_to_fft_shape(psf, fft_shape, 0);
-        otf = ifftshift(otf);
-        otf = fftn(otf);
-    end
-    % fprintf('%s: OTF computed for size %s in %.2fs\n', ...
-    %     current_device(device_id), mat2str(fft_shape), toc(t_compute));
-end
-
 function [bl, pad_pre, pad_post] = pad_block_to_fft_shape(bl, fft_shape, mode)
     % Ensure 3 dimensions for both bl and fft_shape
     sz = size(bl);

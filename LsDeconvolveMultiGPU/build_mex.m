@@ -321,7 +321,7 @@ function build_mex(debug)
 
     mexcuda(cuda_mex_flags{:}, '-R2018a', nvccflags, 'gauss3d_gpu.cu');
     mexcuda(cuda_mex_flags{:}, '-R2018a', nvccflags, 'conv3d_gpu.cu' );
-    mexcuda(cuda_mex_flags{:}, '-R2018a', nvccflags, 'otf_gpu.cu'    , mexcuda_libflags{:});
+    % mexcuda(cuda_mex_flags{:}, '-R2018a', nvccflags, 'otf_gpu.cu'    , mexcuda_libflags{:});
 
     fprintf('\n✅  All MEX files built successfully.\n');
 end
