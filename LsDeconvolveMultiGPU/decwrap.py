@@ -292,7 +292,7 @@ def main():
         n_blocks_on_gpu = 5
         if args.adaptive_psf:
             n_blocks_on_gpu = 8
-    elif args.lambda_damping:
+    if args.lambda_damping and not args.adaptive_psf:
         n_blocks_on_gpu += 1
     if user_specified_subset or not user_overrode_block_size:
         args.block_size_max = estimate_block_size_max(
