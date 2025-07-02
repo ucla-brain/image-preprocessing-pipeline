@@ -301,7 +301,7 @@ function build_mex(debug)
         if debug
             nvccflags = 'NVCCFLAGS="$NVCCFLAGS -allow-unsupported-compiler -G"';
         else
-            nvccflags = 'NVCCFLAGS="$NVCCFLAGS -allow-unsupported-compiler -Xcompiler /O2 /arch:AVX2 /GL"';
+            nvccflags = 'NVCCFLAGS="$NVCCFLAGS -allow-unsupported-compiler -Xcompiler=/O2,/arch:AVX2,/GL,-D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH"';
         end
     else
         cuda_mex_flags = {};
@@ -375,4 +375,3 @@ function status = cmake_build(src, bld, inst, cmake_gen, cmake_arch, args, msvc)
 
     status = 0;
 end
-
