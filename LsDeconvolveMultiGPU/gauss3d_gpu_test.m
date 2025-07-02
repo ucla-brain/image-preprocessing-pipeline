@@ -73,11 +73,13 @@ function gauss3d_gpu_test()
                                 rethrow(ME1);
                             end
                         end
+                        wait(gpuDevice);   % <--- GPU SYNC FOR BENCHMARK
                         t_ref = toc(t1);
 
                         % gauss3d_gpu single (standard)
                         t2 = tic;
                         y_mex_gpu = gauss3d_gpu(x_pad_gpu, sigma, kernel_sz);
+                        wait(gpuDevice);   % <--- GPU SYNC FOR BENCHMARK
                         t_mex = toc(t2);
 
                         % Output checks and stats
