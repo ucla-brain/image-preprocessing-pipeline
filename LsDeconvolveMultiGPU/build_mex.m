@@ -252,23 +252,26 @@ function build_mex(debug)
         sm_list = strsplit(archs_env,';');
     end
     gencode = cellfun(@(sm) sprintf('-gencode=arch=compute_%s,code=sm_%s',sm,sm), sm_list, 'UniformOutput',false);
+
     if isWin
         if debug
-            nvccflags = 'NVCCFLAGS="$NVCCFLAGS -allow-unsupported-compiler -G -Xcompiler=/O2,/arch:%s,/GL,-D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH"';
+            nvccflags = {'NVCCFLAGS="$NVCCFLAGS -allow-unsupported-compiler -G"'};
         else
-            % allow-unsupported-compiler silences CUDA vs MSVC mismatch warnings
-            nvccflags = sprintf('NVCCFLAGS="$NVCCFLAGS -allow-unsupported-compiler -Xcompiler=/O2,/arch:%s,/GL,-D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH"',instr);
+            nvccflags = {sprintf(['NVCCFLAGS="$NVCCFLAGS -allow-unsupported-compiler -Xcompiler=/O2,/arch:%s,/GL,-D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH"'], instr)};
         end
+        nvccargs = [nvccflags, gencode];
     else
         if debug
-            nvccflags = 'NVCCFLAGS="$NVCCFLAGS -G"';
+            nvccflags = {'NVCCFLAGS="$NVCCFLAGS -G"'};
         else
-            nvcc_base = sprintf('NVCCFLAGS="$NVCCFLAGS -use_fast_math -Xcompiler=-Ofast,-flto=%d"',ncores);
-            nvccflags = strjoin([{nvcc_base}, gencode], ' ');
+            nvccflags = {sprintf('NVCCFLAGS="$NVCCFLAGS -use_fast_math -Xcompiler=-Ofast,-flto=%d"', ncores)};
         end
+        nvccargs = [nvccflags, gencode];
     end
-    mexcuda('-R2018a', nvccflags, 'gauss3d_gpu.cu');
-    mexcuda('-R2018a', nvccflags, 'conv3d_gpu.cu');
+
+    % Use this for both Windows and Linux:
+    mexcuda('-R2018a', nvccargs{:}, 'gauss3d_gpu.cu');
+    mexcuda('-R2018a', nvccargs{:}, 'conv3d_gpu.cu');
 
     fprintf('\n✅  All MEX files built successfully.\n');
 end
