@@ -22,10 +22,10 @@ function build_mex(debug)
 
     %---- helper for build-stamp files ----
     function stamp = getStamp(dir, tag)
-        if isWin
-            stamp = fullfile(dir, ['.built_' tag]);
-        else
+        if nargin < 2 || isempty(tag)
             stamp = fullfile(dir, '.built');
+        else
+            stamp = fullfile(dir, ['.built_' tag]);
         end
     end
 
@@ -129,7 +129,11 @@ function build_mex(debug)
     end
 
     %% --------- 3) Build zlib-ng (all original flags restored) ---------
-    z_stamp = getStamp(zlibng_inst, msvc.tag);
+    if isWin
+        z_stamp = getStamp(zlibng_inst, msvc.tag);
+    else
+        z_stamp = getStamp(zlibng_inst, '');
+    end
     if ~isfile(z_stamp)
         if ~exist(zlibng_src,'dir')
             tgz = fullfile(thirdparty,sprintf('zlib-ng-%s.tar.gz',zlibng_v));
