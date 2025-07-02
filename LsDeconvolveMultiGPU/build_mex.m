@@ -247,31 +247,29 @@ function build_mex(debug)
     %% --------- 7) Build CUDA MEX files ---------
     archs_env = getenv('BUILD_SM_ARCHS');
     if isempty(archs_env)
-        sm_list = {'75','80','86','89'};  % default SM architectures
+        sm_list = {'75','80','86','89'};
     else
         sm_list = strsplit(archs_env,';');
     end
-    gencode = cellfun(@(sm) {'-gencode', sprintf('arch=compute_%s,code=sm_%s',sm,sm)}, sm_list, 'UniformOutput', false);
-    gencode = [gencode{:}];  % flatten
+    gencode_flags = strjoin(cellfun(@(sm) ...
+        sprintf('-gencode=arch=compute_%s,code=sm_%s', sm, sm), sm_list, 'UniformOutput', false), ' ');
 
     if isWin
         if debug
-            nvccflags = {'NVCCFLAGS="$NVCCFLAGS -allow-unsupported-compiler -G"'};
+            nvccflags = sprintf('NVCCFLAGS="$NVCCFLAGS -allow-unsupported-compiler -G %s"', gencode_flags);
         else
-            nvccflags = {sprintf(['NVCCFLAGS="$NVCCFLAGS -allow-unsupported-compiler -Xcompiler=/O2,/arch:%s,/GL,-D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH"'], instr)};
+            nvccflags = sprintf('NVCCFLAGS="$NVCCFLAGS -allow-unsupported-compiler -Xcompiler=/O2,/arch:%s,/GL,-D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH %s"', instr, gencode_flags);
         end
-        nvccargs = [nvccflags, gencode];
     else
         if debug
-            nvccflags = {'NVCCFLAGS="$NVCCFLAGS -G"'};
+            nvccflags = sprintf('NVCCFLAGS="$NVCCFLAGS -G %s"', gencode_flags);
         else
-            nvccflags = {sprintf('NVCCFLAGS="$NVCCFLAGS -use_fast_math -Xcompiler=-Ofast,-flto=%d"', ncores)};
+            nvccflags = sprintf('NVCCFLAGS="$NVCCFLAGS -use_fast_math -Xcompiler=-Ofast,-flto=%d %s"', ncores, gencode_flags);
         end
-        nvccargs = [nvccflags, gencode];
     end
 
-    mexcuda('-R2018a', nvccargs{:}, 'gauss3d_gpu.cu');
-    mexcuda('-R2018a', nvccargs{:}, 'conv3d_gpu.cu');
+    mexcuda('-R2018a', nvccflags, 'gauss3d_gpu.cu');
+    mexcuda('-R2018a', nvccflags, 'conv3d_gpu.cu');
 
     fprintf('\n✅  All MEX files built successfully.\n');
 end
