@@ -173,7 +173,11 @@ function build_mex(debug)
     end
 
     %% --------- 4) Build libtiff (all original flags restored) ---------
-    t_stamp = getStamp(libtiff_inst, msvc.tag);
+    if isWin
+        t_stamp = getStamp(libtiff_inst, msvc.tag);
+    else
+        t_stamp = getStamp(libtiff_inst, '');
+    end
     if ~isfile(t_stamp)
         if ~exist(libtiff_src,'dir')
             tgz = fullfile(thirdparty,sprintf('tiff-%s.tar.gz',libtiff_v));
