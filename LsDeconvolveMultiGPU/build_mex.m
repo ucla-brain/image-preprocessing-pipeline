@@ -33,9 +33,9 @@ function build_mex(debug)
     if isWin
         mex('cpuid_mex.cpp');  % must exist in path
         f = cpuid_mex();
-        if f.AVX512, instr = 'AVX512';
+        if f.AVX512,   instr = 'AVX512';
         elseif f.AVX2, instr = 'AVX2';
-        else instr = 'SSE'; end
+        else           instr = 'SSE'; end
     else
         instr = 'native';  % Linux flags will use -march=native
     end
@@ -237,17 +237,17 @@ function build_mex(debug)
 
     %% --------- 6) Build CPU MEX files ---------
     fprintf('\n[MEX] Compiling CPU modules …\n');
-    mex(mex_cpu{:}, 'semaphore.c');
-    mex(mex_cpu{:}, 'save_lz4_mex.c',    fullfile(lz4_src,'lz4.c'), ['-I"' unixify(lz4_src) '"']);
-    mex(mex_cpu{:}, 'load_lz4_mex.c',    fullfile(lz4_src,'lz4.c'), ['-I"' unixify(lz4_src) '"']);
-    mex(mex_cpu{:}, 'load_slab_lz4.cpp', fullfile(lz4_src,'lz4.c'), ['-I"' unixify(lz4_src) '"']);
-    mex(mex_cpu{:}, inc_tiff, 'load_bl_tif.cpp', link_tiff{:});
-    mex(mex_cpu{:}, inc_tiff, 'save_bl_tif.cpp', link_tiff{:});
+    % mex(mex_cpu{:}, 'semaphore.c');
+    % mex(mex_cpu{:}, 'save_lz4_mex.c',    fullfile(lz4_src,'lz4.c'), ['-I"' unixify(lz4_src) '"']);
+    % mex(mex_cpu{:}, 'load_lz4_mex.c',    fullfile(lz4_src,'lz4.c'), ['-I"' unixify(lz4_src) '"']);
+    % mex(mex_cpu{:}, 'load_slab_lz4.cpp', fullfile(lz4_src,'lz4.c'), ['-I"' unixify(lz4_src) '"']);
+    % mex(mex_cpu{:}, inc_tiff, 'load_bl_tif.cpp', link_tiff{:});
+    % mex(mex_cpu{:}, inc_tiff, 'save_bl_tif.cpp', link_tiff{:});
 
     %% --------- 7) Build CUDA MEX files ---------
     archs_env = getenv('BUILD_SM_ARCHS');
     if isempty(archs_env)
-        sm_list = {'75','80','86','89'};
+        sm_list = detect_sm_archs();
     else
         sm_list = strsplit(archs_env,';');
     end
@@ -258,7 +258,7 @@ function build_mex(debug)
         if debug
             nvccflags = sprintf('NVCCFLAGS="$NVCCFLAGS -allow-unsupported-compiler -G %s"', gencode_flags);
         else
-            nvccflags = sprintf('NVCCFLAGS="$NVCCFLAGS -allow-unsupported-compiler -Xcompiler=/O2,/arch:%s,/GL,-D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH %s"', instr, gencode_flags);
+            nvccflags = sprintf('NVCCFLAGS="$NVCCFLAGS -allow-unsupported-compiler -Xcompiler=/O2,/arch:%s,-D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH %s"', instr, gencode_flags);
         end
     else
         if debug
@@ -267,7 +267,7 @@ function build_mex(debug)
             nvccflags = sprintf('NVCCFLAGS="$NVCCFLAGS -use_fast_math -Xcompiler=-Ofast,-flto=%d %s"', ncores, gencode_flags);
         end
     end
-
+    
     mexcuda('-R2018a', nvccflags, 'gauss3d_gpu.cu');
     mexcuda('-R2018a', nvccflags, 'conv3d_gpu.cu');
 
@@ -304,3 +304,79 @@ function status = cmake_build(src,bld,inst,gen,arch,args,msvc)
         status = system(buildcmd);
     end
 end
+
+function sm_list = detect_sm_archs()
+% Robustly detect which SM archs should be built for nvcc/mexcuda.
+%
+% - Uses CUDA version from nvcc to pick supported archs.
+% - Always includes all physical GPUs installed.
+% - Honors BUILD_SM_ARCHS if set in the environment.
+
+    % User override (for reproducibility/debugging):
+    sm_env = getenv('BUILD_SM_ARCHS');
+    if ~isempty(sm_env)
+        sm_list = strsplit(strtrim(sm_env), {';',','});
+        sm_list = cellfun(@strtrim, sm_list, 'UniformOutput', false);
+        sm_list = unique(sm_list, 'stable');
+        return;
+    end
+
+    % 1. Try to parse CUDA version from nvcc
+    [nvcc_status, nvcc_out] = system('nvcc --version');
+    cuda_ver = [];
+    if nvcc_status==0
+        m = regexp(nvcc_out, 'release (\d+)\.(\d+)', 'tokens', 'once');
+        if ~isempty(m)
+            cuda_ver = str2double([m{1}, '.', m{2}]);
+        end
+    end
+
+    % 2. Build up arch support table (extendable)
+    % (keep only unique and known archs for all modern CUDA)
+    arch_table = {
+        11.0, {'52','60','61','70','75','80'};
+        11.1, {'52','60','61','70','75','80'};
+        11.2, {'52','60','61','70','75','80','86'};
+        12.0, {'52','60','61','70','75','80','86','89'};
+        12.1, {'52','60','61','70','75','80','86','89'};
+        12.2, {'52','60','61','70','75','80','86','89'};
+        12.3, {'52','60','61','70','75','80','86','89'};
+        12.4, {'52','60','61','70','75','80','86','89'};
+        12.5, {'52','60','61','70','75','80','86','89'};
+    };
+
+    % Default
+    sm_list = {'75','80','86'}; % safe for CUDA 11.2+
+
+    % Try to pick best from table:
+    if ~isempty(cuda_ver)
+        for i = size(arch_table,1):-1:1
+            if cuda_ver >= arch_table{i,1}
+                sm_list = arch_table{i,2};
+                break;
+            end
+        end
+    end
+
+    % 3. Include all installed GPUs' compute capability
+    try
+        ngpus = gpuDeviceCount;
+        for idx = 1:ngpus
+            g = gpuDevice(idx);
+            cc = g.ComputeCapabilityMajor*10 + g.ComputeCapabilityMinor;
+            cc_str = num2str(cc);
+            if ~ismember(cc_str, sm_list)
+                sm_list{end+1} = cc_str;
+            end
+        end
+    catch
+        % No GPU, or GPU driver not set up
+    end
+
+    % Remove duplicates, sort as numbers (lowest to highest, but keep as cellstr)
+    sm_list = unique(sm_list, 'stable');
+    sm_list_num = cellfun(@str2double, sm_list);
+    [~, idx] = sort(sm_list_num);
+    sm_list = sm_list(idx);
+end
+
