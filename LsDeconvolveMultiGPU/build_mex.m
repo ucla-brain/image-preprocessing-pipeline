@@ -251,7 +251,8 @@ function build_mex(debug)
     else
         sm_list = strsplit(archs_env,';');
     end
-    gencode = cellfun(@(sm) sprintf('-gencode=arch=compute_%s,code=sm_%s',sm,sm), sm_list, 'UniformOutput',false);
+    gencode = cellfun(@(sm) {'-gencode', sprintf('arch=compute_%s,code=sm_%s',sm,sm)}, sm_list, 'UniformOutput', false);
+    gencode = [gencode{:}];  % flatten
 
     if isWin
         if debug
@@ -269,7 +270,6 @@ function build_mex(debug)
         nvccargs = [nvccflags, gencode];
     end
 
-    % Use this for both Windows and Linux:
     mexcuda('-R2018a', nvccargs{:}, 'gauss3d_gpu.cu');
     mexcuda('-R2018a', nvccargs{:}, 'conv3d_gpu.cu');
 
