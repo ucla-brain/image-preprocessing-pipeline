@@ -289,7 +289,7 @@ def process_cube(
                 clip(img, iinfo(dtype).min, iinfo(dtype).max, out=img)
                 img = img.astype(dtype)
             tmp_file = output_file.parent / (output_file.name + ".tmp")
-            write(file=tmp_file.__str__(), data=img, header=header, compression_level=1)
+            write(file=tmp_file.__str__(), data=img, header=header, compression_level=9)
             tmp_file.rename(output_file)
     return return_code
 
