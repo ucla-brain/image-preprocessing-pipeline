@@ -944,7 +944,6 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
     end
     [lb, ub] = deconvolved_stats(bl, clipval);
     send( dQueue, sprintf('%s %.1f', logging_string, toc(block_processing_start)) );
-
     assert(all(size(bl) == bl_size), '[process_block]: block size mismatch!');
 end
 
