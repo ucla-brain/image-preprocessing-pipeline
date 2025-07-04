@@ -155,7 +155,8 @@ def estimate_block_size_max(gpu_indices, workers_per_gpu, use_fft,
 
         usable_bytes = usable_mib * 1024 ** 2
         if use_fft:
-            num_blocks_on_gpu = get_safe_num_blocks(min_vram_mib, num_blocks_on_gpu-2) + 2
+            num_complex_buffers = num_blocks_on_gpu - 2
+            num_blocks_on_gpu = get_safe_num_blocks(min_vram_mib, num_complex_buffers) + 2
 
         estimated = int(usable_bytes / bytes_per_element / num_blocks_on_gpu)
         return min(estimated, max_allowed)
