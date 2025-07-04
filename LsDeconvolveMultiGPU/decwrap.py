@@ -291,7 +291,7 @@ def main():
     if args.use_fft:
         n_blocks_on_gpu = 5
         if args.adaptive_psf:
-            n_blocks_on_gpu = 10
+            n_blocks_on_gpu = 11
     if args.lambda_damping and not args.adaptive_psf:
         n_blocks_on_gpu += 1
     if user_specified_subset or not user_overrode_block_size:
