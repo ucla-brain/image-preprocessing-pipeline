@@ -448,7 +448,7 @@ def main():
         # Use numactl for better memory distribution on NUMA systems
         # Wrap the matlab command with numactl only on Linux
         matlab_cmd = [
-            "numactl", "--interleave=all",
+            # "numactl", "--interleave=all",
             matlab_exec,
             "-batch",
             f"run('{tmp_script_path.stem}')"
