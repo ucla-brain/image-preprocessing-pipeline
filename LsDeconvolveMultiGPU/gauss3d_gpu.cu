@@ -203,7 +203,6 @@ extern "C" void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* 
     float* buffer = nullptr;
     bool error_flag = false;
     mxGPUArray* img_gpu = nullptr;
-    mxGPUArray* out_gpu = nullptr;
 
     try {
         if (nrhs < 2)
@@ -253,7 +252,7 @@ extern "C" void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* 
                 ksize[i] = 2 * (int)ceil(3.0 * sigma_double[i]) + 1;
         }
 
-        // --------- Now that all validation is done, allocate GPU buffer --------
+        // --------- Allocate workspace buffer only ---------
         int max_retries = 2;
         int retries = 0;
         cudaError_t alloc_err;
@@ -278,19 +277,16 @@ extern "C" void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* 
                 N * sizeof(float) / 1024.0 / 1024.0, max_retries);
         }
 
-        // --------- Allocate a fresh output gpuArray (in-place copy is unsafe) ---------
-        out_gpu = mxGPUCreateGPUArray(3, sz, mxSINGLE_CLASS, mxREAL, MX_GPU_DO_NOT_INITIALIZE);
-        float* dst_ptr = static_cast<float*>(mxGPUGetData(out_gpu));
-        CUDA_CHECK(cudaMemcpy(dst_ptr, ptr, N * sizeof(float), cudaMemcpyDeviceToDevice));
-
         float sigma[3] = { (float)sigma_double[0], (float)sigma_double[1], (float)sigma_double[2] };
-        gauss3d_separable_float(dst_ptr, buffer, nx, ny, nz, sigma, ksize, &error_flag);
 
-        // Final sync before returning
+        // --------- In-place filtering! ---------
+        float* data_ptr = static_cast<float*>(ptr);
+        gauss3d_separable_float(data_ptr, buffer, nx, ny, nz, sigma, ksize, &error_flag);
+
         CUDA_CHECK(cudaDeviceSynchronize());
 
-        // Return as mxArray
-        plhs[0] = mxGPUCreateMxArrayOnGPU(out_gpu);
+        // Return the (modified) input gpuArray as output
+        plhs[0] = mxGPUCreateMxArrayOnGPU(img_gpu);
 
     } catch (...) {
         mexPrintf("gauss3d_gpu: Unknown error! Possible OOM or kernel failure.\n");
@@ -300,8 +296,8 @@ extern "C" void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* 
     // ----------- CLEANUP (always reached) --------------
     if (buffer)
         cudaFree(buffer);
-    if (img_gpu)
+    // Only destroy img_gpu if NOT returned to MATLAB
+    // This is robust: if plhs[0] has been set, MATLAB owns it.
+    if (img_gpu && (nlhs == 0 || (plhs[0] != mxGPUCreateMxArrayOnGPU(img_gpu))))
         mxGPUDestroyGPUArray(img_gpu);
-    if (out_gpu)
-        mxGPUDestroyGPUArray(out_gpu);
 }
