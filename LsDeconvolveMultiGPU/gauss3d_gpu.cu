@@ -1,7 +1,7 @@
 /*
     gauss3d_gpu.cu
 
-    High-performance 3D Gaussian filtering for MATLAB gpuArray inputs.
+    High-performance, in-place 3D Gaussian filtering for MATLAB gpuArray inputs.
 
     ----------------------------------------------------------------------------
     Author:       Keivan Moradi (with assistance from ChatGPT v4.1, 2025)
@@ -15,31 +15,38 @@
     It is **API-compatible** with MATLAB's `imgaussfilt3`, but is highly optimized
     for batch processing and large volumes, and designed to be integrated into GPU deconvolution pipelines.
 
+    **IMPORTANT: This version performs filtering IN-PLACE. The input gpuArray is
+    overwritten and returned as output. The original input data will be destroyed.**
+
     Key Features:
     -------------
-      - **Heavy CUDA optimization**: Performs separable convolution along all 3 axes using constant-memory kernels, and launches tuned CUDA kernels for maximum performance.
-      - **Workspace control**: Accepts user-provided block padding and kernel size to allow batch-wise processing (important for large volumes or integration in multi-step GPU workflows).
-      - **OOM-resilient**: Attempts memory allocation with automatic retries and helpful warnings when out-of-memory occurs.
-      - **MATLAB gpuArray interface**: Input and output are both MATLAB `gpuArray(single)` objects, fully compatible with native MATLAB workflows.
-      - **Flexible sigma and kernel size**: Accepts scalar or vector `sigma` and kernel size for anisotropic filtering.
+      - **In-place destructive filtering:** Minimizes VRAM usage by modifying the input array directly.
+        Only a single workspace buffer (same size as the array) is allocated in addition to the input.
+      - **Heavy CUDA optimization:** Performs separable convolution along all 3 axes using constant-memory kernels, and launches tuned CUDA kernels for maximum performance.
+      - **Workspace control:** Accepts user-provided block padding and kernel size to allow batch-wise processing (important for large volumes or integration in multi-step GPU workflows).
+      - **OOM-resilient:** Attempts memory allocation with automatic retries and helpful warnings when out-of-memory occurs.
+      - **MATLAB gpuArray interface:** Input and output are both MATLAB `gpuArray(single)` objects, fully compatible with native MATLAB workflows.
+      - **Flexible sigma and kernel size:** Accepts scalar or vector `sigma` and kernel size for anisotropic filtering.
       - **Open source, GPL v3**.
 
-    Differences from MATLAB's `imgaussfilt3`:
+    Differences from MATLAB's imgaussfilt3:
     -----------------------------------------
       1. **Much faster** on large data: Algorithm is hand-optimized for GPU with memory reuse and minimal transfers.
-      2. **External workspace control**: Padding/batching is managed outside the function, making it suitable for tiled processing during deconvolution or large-scale pipelines.
-      3. **Separable convolution**: Uses 1D convolutions in 3 passes, exploiting constant memory for kernel coefficients.
-      4. **Direct gpuArray support**: Does not require conversion or intermediate CPU copies.
+      2. **Destructive in-place operation:** The input gpuArray is modified and returned. This avoids allocating a second full-size array and reduces VRAM requirements by up to 33%.
+      3. **External workspace control:** Padding/batching is managed outside the function, making it suitable for tiled processing during deconvolution or large-scale pipelines.
+      4. **Separable convolution:** Uses 1D convolutions in 3 passes, exploiting constant memory for kernel coefficients.
+      5. **Direct gpuArray support:** Does not require conversion or intermediate CPU copies.
 
     Usage Example (in MATLAB):
     --------------------------
         x = gpuArray(single(randn(128,128,64)));
-        y = gauss3d_gpu(x, 2.0);               % Isotropic sigma
+        y = gauss3d_gpu(x, 2.0);               % x is destroyed/overwritten; y is the filtered result
         y = gauss3d_gpu(x, [2 1 4], [9 5 15]); % Anisotropic sigma & kernel size
 
     Notes:
     ------
       - Input must be a 3D `gpuArray` of single precision.
+      - The function is **destructive**: the input will be overwritten.
       - Designed for block-wise and pipelined use, e.g., in deconvolution, denoising, or pre-processing.
       - All main computation is performed on the GPU with minimal synchronization overhead.
 
@@ -49,6 +56,7 @@
       - ChatGPT (OpenAI GPT-4.1, 2025) provided structural and code review assistance.
 
 */
+
 
 #include "mex.h"
 #include "gpu/mxGPUArray.h"
