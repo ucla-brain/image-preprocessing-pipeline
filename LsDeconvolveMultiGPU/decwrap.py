@@ -125,7 +125,7 @@ def get_safe_num_blocks(min_vram_mib, num_blocks_on_gpu):
     elif min_vram_mib >= 39 * 1024: # 40GB–79GB
         return num_blocks_on_gpu * 2
     elif min_vram_mib >= 23 * 1024: # 24GB–39GB
-        return int(num_blocks_on_gpu * 2)
+        return num_blocks_on_gpu * 3
     else:
         return num_blocks_on_gpu  # Safe for 12GB/16GB/24GB cards
 
@@ -333,7 +333,7 @@ def main():
     if args.use_fft:
         n_blocks_on_gpu = 5
         if args.adaptive_psf:
-            n_blocks_on_gpu = 11
+            n_blocks_on_gpu = 8
     if args.lambda_damping and not args.adaptive_psf:
         n_blocks_on_gpu += 1
     if user_specified_subset or not user_overrode_block_size:
