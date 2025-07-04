@@ -91,6 +91,15 @@ def get_all_gpu_indices():
         return []
 
 
+def get_safe_num_blocks(min_vram_mib, num_blocks_on_gpu):
+    if min_vram_mib >= 40 * 1024:  # 40GB and up
+        return num_blocks_on_gpu * 2
+    elif min_vram_mib >= 24 * 1024:
+        return int(num_blocks_on_gpu * 1.5)
+    else:
+        return num_blocks_on_gpu
+
+
 def estimate_block_size_max(gpu_indices, workers_per_gpu,
                             bytes_per_element=4, base_reserve_gb=0.75, per_worker_mib=844, num_blocks_on_gpu=2):
     max_allowed = 2 ** 31 - 1
@@ -115,7 +124,7 @@ def estimate_block_size_max(gpu_indices, workers_per_gpu,
             return max_allowed
 
         usable_bytes = usable_mib * 1024 ** 2
-        estimated = int(usable_bytes / bytes_per_element / num_blocks_on_gpu)
+        estimated = int(usable_bytes / bytes_per_element / get_safe_num_blocks(min_vram_mib, num_blocks_on_gpu))
         return min(estimated, max_allowed)
 
     except (CalledProcessError, FileNotFoundError) as e:
@@ -291,7 +300,7 @@ def main():
     if args.use_fft:
         n_blocks_on_gpu = 5
         if args.adaptive_psf:
-            n_blocks_on_gpu = 16 # 8 on RTX 2080
+            n_blocks_on_gpu = 8
     if args.lambda_damping and not args.adaptive_psf:
         n_blocks_on_gpu += 1
     if user_specified_subset or not user_overrode_block_size:
