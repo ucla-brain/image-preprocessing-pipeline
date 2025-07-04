@@ -120,11 +120,11 @@ def get_safe_num_blocks(min_vram_mib, num_blocks_on_gpu):
         int: Adjusted (safer) number of blocks per GPU.
     """
     # On ultra-large GPUs, cuFFT/Matlab can use up to 2x visible memory for FFT workspaces.
-    if min_vram_mib >= 80 * 1024:   # 80GB+
+    if min_vram_mib >= 79 * 1024:   # 80GB+
         return num_blocks_on_gpu * 2
-    elif min_vram_mib >= 40 * 1024: # 40GB–79GB
+    elif min_vram_mib >= 39 * 1024: # 40GB–79GB
         return num_blocks_on_gpu * 2
-    elif min_vram_mib >= 24 * 1024: # 24GB–39GB
+    elif min_vram_mib >= 23 * 1024: # 24GB–39GB
         return int(num_blocks_on_gpu * 1.5)
     else:
         return num_blocks_on_gpu  # Safe for 12GB/16GB/24GB cards
