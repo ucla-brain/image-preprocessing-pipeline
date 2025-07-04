@@ -220,7 +220,7 @@ def main():
         default_cores // len(default_gpu_indices)
         if len(default_gpu_indices) > 0 else 0
     )
-    default_workers_per_gpu = min(12, default_workers_per_gpu)
+    # default_workers_per_gpu = min(12, default_workers_per_gpu)
     block_size_default = estimate_block_size_max(default_gpu_indices, default_workers_per_gpu, False)
 
     parser = argparse.ArgumentParser(
