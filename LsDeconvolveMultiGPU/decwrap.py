@@ -92,15 +92,45 @@ def get_all_gpu_indices():
 
 
 def get_safe_num_blocks(min_vram_mib, num_blocks_on_gpu):
-    if min_vram_mib >= 40 * 1024:  # 40GB and up
+    """
+    Heuristically selects a conservative safety factor for the number of blocks that can
+    be processed on a GPU, given its available vRAM.
+
+    Rationale:
+    ----------
+    - On small GPUs (<24 GB vRAM), FFT-based GPU algorithms (e.g., MATLAB, cuFFT) typically
+      use minimal temporary workspace, so the default block count is safe.
+    - On larger GPUs (24–39 GB), FFT libraries may internally allocate more temporary buffers
+      for performance, which can increase actual memory usage beyond what is visible in code.
+      We reduce the per-GPU workload by increasing the denominator by 1.5× for safety.
+    - On very large GPUs (>=40 GB), FFT libraries (especially MATLAB/cuFFT) aggressively use
+      extra workspace, sometimes nearly doubling peak vRAM usage for the same visible operation.
+      We double the denominator to prevent out-of-memory errors, even if the GPU appears to
+      have ample headroom.
+    - There is a separate check for 80 GB+ vRAM for future-proofing/clarity, but currently,
+      both >=40 GB and >=80 GB use the same safety margin.
+    - This function helps ensure robust operation across machines with different GPU memory sizes,
+      avoiding OOM errors due to hidden workspace allocations that scale with available vRAM.
+
+    Args:
+        min_vram_mib (int): The minimum free vRAM (in MiB) among selected GPUs.
+        num_blocks_on_gpu (int): The default number of blocks to allocate/process per GPU.
+
+    Returns:
+        int: Adjusted (safer) number of blocks per GPU.
+    """
+    # On ultra-large GPUs, cuFFT/Matlab can use up to 2x visible memory for FFT workspaces.
+    if min_vram_mib >= 80 * 1024:   # 80GB+
         return num_blocks_on_gpu * 2
-    elif min_vram_mib >= 24 * 1024:
+    elif min_vram_mib >= 40 * 1024: # 40GB–79GB
+        return num_blocks_on_gpu * 2
+    elif min_vram_mib >= 24 * 1024: # 24GB–39GB
         return int(num_blocks_on_gpu * 1.5)
     else:
-        return num_blocks_on_gpu
+        return num_blocks_on_gpu  # Safe for 12GB/16GB/24GB cards
 
 
-def estimate_block_size_max(gpu_indices, workers_per_gpu,
+def estimate_block_size_max(gpu_indices, workers_per_gpu, use_fft,
                             bytes_per_element=4, base_reserve_gb=0.75, per_worker_mib=844, num_blocks_on_gpu=2):
     max_allowed = 2 ** 31 - 1
     try:
@@ -124,7 +154,9 @@ def estimate_block_size_max(gpu_indices, workers_per_gpu,
             return max_allowed
 
         usable_bytes = usable_mib * 1024 ** 2
-        estimated = int(usable_bytes / bytes_per_element / get_safe_num_blocks(min_vram_mib, num_blocks_on_gpu))
+        if use_fft:
+            num_blocks_on_gpu = get_safe_num_blocks(min_vram_mib, num_blocks_on_gpu)
+        estimated = int(usable_bytes / bytes_per_element / num_blocks_on_gpu)
         return min(estimated, max_allowed)
 
     except (CalledProcessError, FileNotFoundError) as e:
@@ -187,7 +219,7 @@ def main():
         if len(default_gpu_indices) > 0 else 0
     )
     default_workers_per_gpu = min(7, default_workers_per_gpu)
-    block_size_default = estimate_block_size_max(default_gpu_indices, default_workers_per_gpu)
+    block_size_default = estimate_block_size_max(default_gpu_indices, default_workers_per_gpu, False)
 
     parser = argparse.ArgumentParser(
         description='Python wrapper for MATLAB deconvolution.',
@@ -307,6 +339,7 @@ def main():
         args.block_size_max = estimate_block_size_max(
             args.gpu_indices,
             args.gpu_workers_per_gpu,
+            args.use_fft,
             num_blocks_on_gpu=n_blocks_on_gpu
         )
         log.info(f"Re-estimated block_size_max: {args.block_size_max}")
