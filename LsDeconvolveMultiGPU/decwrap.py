@@ -131,7 +131,7 @@ def get_safe_num_blocks(min_vram_mib, num_blocks_on_gpu):
 
 
 def estimate_block_size_max(gpu_indices, workers_per_gpu, use_fft,
-                            bytes_per_element=4, base_reserve_gb=0.75, per_worker_mib=400, num_blocks_on_gpu=2): # 844
+                            bytes_per_element=4, base_reserve_gb=0.75, per_worker_mib=700, num_blocks_on_gpu=2): # 844
     max_allowed = 2 ** 31 - 1
     try:
         result = subprocess.run(
@@ -155,8 +155,8 @@ def estimate_block_size_max(gpu_indices, workers_per_gpu, use_fft,
 
         usable_bytes = usable_mib * 1024 ** 2
         if use_fft:
-            num_blocks_on_gpu = get_safe_num_blocks(min_vram_mib, num_blocks_on_gpu)
-        num_blocks_on_gpu += 1  # +1 for hidden buffers
+            num_blocks_on_gpu = get_safe_num_blocks(min_vram_mib, num_blocks_on_gpu-2)
+
         estimated = int(usable_bytes / bytes_per_element / num_blocks_on_gpu)
         return min(estimated, max_allowed)
 
