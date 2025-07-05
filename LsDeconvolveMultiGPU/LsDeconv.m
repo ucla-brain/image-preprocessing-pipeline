@@ -646,13 +646,16 @@ function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
             pool = parpool('local', numel(gpus), 'IdleTimeout', Inf);
             dQueue = parallel.pool.DataQueue;
             afterEach(dQueue, @disp);
+            deconvolution_start_time = tic;
             parfor idx = 1 : numel(gpus)
+
                 deconvolve( ...
                     filelist, psf, numit, damping, ...
                     block, stack_info, min_max_path, clipval, ...
                     stop_criterion, gpus(idx), semkey_gpu_base, ...
                     cache_drive, filter, starting_block + idx - 1, dQueue);
             end
+            p_log(log_file, sprintf('deconvolution time: %d', toc(deconvolution_start_time)));
             delete(pool);
         end
         starting_block = 1;
