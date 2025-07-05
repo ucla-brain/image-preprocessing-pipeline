@@ -128,7 +128,7 @@ def get_safe_num_blocks(min_vram_mib, num_blocks_on_gpu):
         return num_blocks_on_gpu * 2
     elif min_vram_mib >= 16 * 1024: # 24GB–39GB
         log.info("16-40 GB vRAM detected!")
-        return int(num_blocks_on_gpu * 1.7)
+        return num_blocks_on_gpu * 2
     else:
         log.info("<16 GB vRAM detected!")
         return num_blocks_on_gpu  # Safe for 12GB/16GB/24GB cards
@@ -159,7 +159,7 @@ def estimate_block_size_max(gpu_indices, workers_per_gpu, use_fft,
 
         usable_bytes = usable_mib * 1024 ** 2
         if use_fft:
-            num_blocks_on_gpu = get_safe_num_blocks(min_vram_mib, num_blocks_on_gpu)
+            num_blocks_on_gpu = get_safe_num_blocks(min_vram_mib, num_blocks_on_gpu - 2) + 2
 
         estimated = int(usable_bytes / bytes_per_element / num_blocks_on_gpu)
         return min(estimated, max_allowed)
