@@ -121,13 +121,13 @@ def get_safe_num_blocks(min_vram_mib, num_blocks_on_gpu):
     """
     # On ultra-large GPUs, cuFFT/Matlab can use up to 2x visible memory for FFT workspaces.
     if min_vram_mib >= 79 * 1024:   # 80GB+
-        log.info("80 GB vRAM detected!")
+        log.info(">80 GB vRAM detected!")
         return num_blocks_on_gpu * 2
     elif min_vram_mib >= 39 * 1024: # 40GB–79GB
-        log.info("40 GB vRAM detected!")
+        log.info("40-80 GB vRAM detected!")
         return num_blocks_on_gpu * 2
     elif min_vram_mib >= 16 * 1024: # 24GB–39GB
-        log.info("24 GB vRAM detected!")
+        log.info("16-40 GB vRAM detected!")
         return num_blocks_on_gpu * 2
     else:
         log.info("<16 GB vRAM detected!")
@@ -135,7 +135,7 @@ def get_safe_num_blocks(min_vram_mib, num_blocks_on_gpu):
 
 
 def estimate_block_size_max(gpu_indices, workers_per_gpu, use_fft,
-                            bytes_per_element=4, base_reserve_gb=1.0, per_worker_mib=844, num_blocks_on_gpu=2): # 844
+                            bytes_per_element=4, base_reserve_gb=1.0, per_worker_mib=655, num_blocks_on_gpu=2): # 844
     max_allowed = 2 ** 31 - 1
     try:
         result = subprocess.run(
