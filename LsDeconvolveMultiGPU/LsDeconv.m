@@ -666,7 +666,7 @@ function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
 
     % postprocess and write tif files
     if need_post_processing
-        postprocess_save(outpath, cache_drive, min_max_path, log_file, stack_info, resume, block, amplification);
+        postprocess_save(outpath, cache_drive, min_max_path, clipval, log_file, stack_info, resume, block, amplification);
     end
 end
 
@@ -947,7 +947,7 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
     assert(all(size(bl) == bl_size), '[process_block]: block size mismatch!');
 end
 
-function postprocess_save(outpath, cache_drive, min_max_path, log_file, stack_info, resume, block, amplification)
+function postprocess_save(outpath, cache_drive, min_max_path, clipval, log_file, stack_info, resume, block, amplification)
 
     %POSTPROCESS_SAVE   Final stage: re-assembles cached LZ4 blocks into TIFFs.
     %
@@ -1025,9 +1025,9 @@ function postprocess_save(outpath, cache_drive, min_max_path, log_file, stack_in
 
     p_log(log_file,'image stats …');
     p_log(log_file,sprintf('   target data type max value: %g', scal));
-    p_log(log_file,sprintf('   99.99%% max before deconv  : %g', rawmax));
-    p_log(log_file,sprintf('   99.99%% max after  deconv  : %g', deconvmax));
-    p_log(log_file,sprintf('   global min after  deconv  : %g\n', deconvmin));
+    p_log(log_file,sprintf('   %d%% max before deconv  : %g', clipval, rawmax));
+    p_log(log_file,sprintf('   %d%% max after  deconv  : %g', clipval, deconvmax));
+    p_log(log_file,sprintf('   %d%% min after  deconv  : %g\n', 100 - clipval, deconvmin));
 
     % -------------------------------------------------------------------------
     % 3.  Detect already-written TIFFs (resume mode)
