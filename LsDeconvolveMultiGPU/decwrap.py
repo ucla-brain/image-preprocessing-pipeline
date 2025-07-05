@@ -117,17 +117,17 @@ def get_safe_num_blocks(min_vram_mib, num_complex_blocks_on_gpu):
         int: Adjusted number of complex blocks per GPU (rounded down).
     """
     if min_vram_mib >= 79 * 1024:
-        factor = 2
         vram_class = ">80 GB"
-    elif min_vram_mib >= 39 * 1024:
         factor = 2
+    elif min_vram_mib >= 39 * 1024:
         vram_class = "40-80 GB"
+        factor = 2
     elif min_vram_mib >= 16 * 1024:
-        factor = 2.4
         vram_class = "16-40 GB"
+        factor = 2.5
     else:
-        factor = 1
         vram_class = "<16 GB"
+        factor = 1
 
     adjusted = int(num_complex_blocks_on_gpu * factor)
     log.info(f"vRAM class {vram_class} detected: Number of complex blocks on GPU set to {adjusted}")
