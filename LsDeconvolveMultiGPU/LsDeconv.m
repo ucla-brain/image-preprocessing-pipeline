@@ -655,7 +655,7 @@ function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
                     stop_criterion, gpus(idx), semkey_gpu_base, ...
                     cache_drive, filter, starting_block + idx - 1, dQueue);
             end
-            p_log(log_file, sprintf('deconvolution time: %d', toc(deconvolution_start_time)));
+            p_log(log_file, sprintf('deconvolution time: %.2ds', toc(deconvolution_start_time)));
             delete(pool);
         end
         starting_block = 1;
