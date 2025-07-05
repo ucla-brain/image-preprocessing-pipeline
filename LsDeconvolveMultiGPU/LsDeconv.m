@@ -1028,9 +1028,9 @@ function postprocess_save(outpath, cache_drive, min_max_path, clipval, log_file,
 
     p_log(log_file,'image stats …');
     p_log(log_file,sprintf('   target data type max value: %g', scal));
-    p_log(log_file,sprintf('   %d%% max before deconv  : %g', clipval, rawmax));
-    p_log(log_file,sprintf('   %d%% max after  deconv  : %g', clipval, deconvmax));
-    p_log(log_file,sprintf('   %d%% min after  deconv  : %g\n', 100 - clipval, deconvmin));
+    p_log(log_file,sprintf('   %.2d%% max before deconv  : %g', clipval, rawmax));
+    p_log(log_file,sprintf('   %.2d%% max after  deconv  : %g', clipval, deconvmax));
+    p_log(log_file,sprintf('   %.2d%% min after  deconv  : %g\n', 100 - clipval, deconvmin));
 
     % -------------------------------------------------------------------------
     % 3.  Detect already-written TIFFs (resume mode)
