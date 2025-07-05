@@ -100,12 +100,7 @@ def get_safe_num_blocks(min_vram_mib, num_complex_blocks_on_gpu):
     The function adjusts the number of concurrent complex data blocks processed on each GPU
     to avoid out-of-memory errors caused by invisible workspace allocations in FFT-based GPU pipelines
     (e.g., MATLAB, cuFFT). On GPUs with higher vRAM, libraries often allocate more hidden buffers
-    for performance, so the safety margin is increased accordingly:
-
-      - For vRAM < 16 GB:       No change
-      - For 16–39 GB vRAM:      ×2.4 safety margin
-      - For 40–79 GB vRAM:      ×2 safety margin
-      - For 80+ GB vRAM:        ×2 safety margin
+    for performance, so the safety margin is increased accordingly.
 
     Only the minimum detected vRAM across all selected GPUs is considered.
 
@@ -118,7 +113,7 @@ def get_safe_num_blocks(min_vram_mib, num_complex_blocks_on_gpu):
     """
     if min_vram_mib >= 79 * 1024:
         vram_class = ">80 GB"
-        factor = 3.5
+        factor = 3.0
     elif min_vram_mib >= 39 * 1024:
         vram_class = "40-80 GB"
         factor = 3.0
