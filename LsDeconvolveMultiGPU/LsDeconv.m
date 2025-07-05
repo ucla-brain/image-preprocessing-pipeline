@@ -366,7 +366,7 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(...
             else
                 if ~isempty(fieldnames(best))
                     num_failed = num_failed + 1;
-                    if num_failed > 100, break; end
+                    if num_failed > 200, break; end
                 end
             end
         end
