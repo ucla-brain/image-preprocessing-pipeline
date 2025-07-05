@@ -91,47 +91,48 @@ def get_all_gpu_indices():
         return []
 
 
-def get_safe_num_blocks(min_vram_mib, num_blocks_on_gpu):
+def get_safe_num_blocks(min_vram_mib, num_complex_blocks_on_gpu):
     """
-    Heuristically selects a conservative safety factor for the number of blocks that can
-    be processed on a GPU, given its available vRAM.
+    Calculates a safe number of complex blocks per GPU based on the minimum available GPU vRAM.
 
-    Rationale:
+    Algorithm:
     ----------
-    - On small GPUs (<24 GB vRAM), FFT-based GPU algorithms (e.g., MATLAB, cuFFT) typically
-      use minimal temporary workspace, so the default block count is safe.
-    - On larger GPUs (24–39 GB), FFT libraries may internally allocate more temporary buffers
-      for performance, which can increase actual memory usage beyond what is visible in code.
-      We reduce the per-GPU workload by increasing the denominator by 1.5× for safety.
-    - On very large GPUs (>=40 GB), FFT libraries (especially MATLAB/cuFFT) aggressively use
-      extra workspace, sometimes nearly doubling peak vRAM usage for the same visible operation.
-      We double the denominator to prevent out-of-memory errors, even if the GPU appears to
-      have ample headroom.
-    - There is a separate check for 80 GB+ vRAM for future-proofing/clarity, but currently,
-      both >=40 GB and >=80 GB use the same safety margin.
-    - This function helps ensure robust operation across machines with different GPU memory sizes,
-      avoiding OOM errors due to hidden workspace allocations that scale with available vRAM.
+    The function adjusts the number of concurrent complex data blocks processed on each GPU
+    to avoid out-of-memory errors caused by invisible workspace allocations in FFT-based GPU pipelines
+    (e.g., MATLAB, cuFFT). On GPUs with higher vRAM, libraries often allocate more hidden buffers
+    for performance, so the safety margin is increased accordingly:
+
+      - For vRAM < 16 GB:       No change
+      - For 16–39 GB vRAM:      ×2.4 safety margin
+      - For 40–79 GB vRAM:      ×2 safety margin
+      - For 80+ GB vRAM:        ×2 safety margin
+
+    Only the minimum detected vRAM across all selected GPUs is considered.
 
     Args:
-        min_vram_mib (int): The minimum free vRAM (in MiB) among selected GPUs.
-        num_blocks_on_gpu (int): The default number of blocks to allocate/process per GPU.
+        min_vram_mib (int): Minimum free vRAM (in MiB) across the GPUs to be used.
+        num_complex_blocks_on_gpu (int): Default number of blocks per GPU.
 
     Returns:
-        int: Adjusted (safer) number of blocks per GPU.
+        int: Adjusted number of complex blocks per GPU (rounded down).
     """
-    # On ultra-large GPUs, cuFFT/Matlab can use up to 2x visible memory for FFT workspaces.
-    if min_vram_mib >= 79 * 1024:   # 80GB+
-        log.info(">80 GB vRAM detected!")
-        return int(num_blocks_on_gpu * 2)
-    elif min_vram_mib >= 39 * 1024: # 40GB–79GB
-        log.info("40-80 GB vRAM detected!")
-        return int(num_blocks_on_gpu * 2)
-    elif min_vram_mib >= 16 * 1024: # 24GB–39GB
-        log.info("16-40 GB vRAM detected!")
-        return int(num_blocks_on_gpu * 2.4)
+    if min_vram_mib >= 79 * 1024:
+        factor = 2
+        vram_class = ">80 GB"
+    elif min_vram_mib >= 39 * 1024:
+        factor = 2
+        vram_class = "40-80 GB"
+    elif min_vram_mib >= 16 * 1024:
+        factor = 2.4
+        vram_class = "16-40 GB"
     else:
-        log.info("<16 GB vRAM detected!")
-        return num_blocks_on_gpu  # Safe for 12GB/16GB/24GB cards
+        factor = 1
+        vram_class = "<16 GB"
+
+    adjusted = int(num_complex_blocks_on_gpu * factor)
+    log.info(f"vRAM class {vram_class} detected: Number of complex blocks on GPU set to {adjusted}")
+    return adjusted
+
 
 
 def estimate_block_size_max(gpu_indices, workers_per_gpu, use_fft,
