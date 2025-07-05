@@ -126,11 +126,11 @@ def get_safe_num_blocks(min_vram_mib, num_blocks_on_gpu):
     elif min_vram_mib >= 39 * 1024: # 40GB–79GB
         log.info("40 GB vRAM detected!")
         return num_blocks_on_gpu * 2
-    elif min_vram_mib >= 23 * 1024: # 24GB–39GB
+    elif min_vram_mib >= 16 * 1024: # 24GB–39GB
         log.info("24 GB vRAM detected!")
         return num_blocks_on_gpu * 2
     else:
-        log.info("<24 GB vRAM detected!")
+        log.info("<16 GB vRAM detected!")
         return num_blocks_on_gpu  # Safe for 12GB/16GB/24GB cards
 
 
