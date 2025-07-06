@@ -116,10 +116,10 @@ def get_safe_num_blocks(min_vram_mib, num_complex_blocks_on_gpu):
         factor = 3.1
     elif min_vram_mib >= 39 * 1024:
         vram_class = "40-80 GB"
-        factor = 2.9
+        factor = 3.0
     elif min_vram_mib >= 16 * 1024:
         vram_class = "16-40 GB"
-        factor = 2.9
+        factor = 3.0
     else:
         vram_class = "<16 GB"
         factor = 1.0
@@ -327,6 +327,7 @@ def main():
                         help='Use tcmalloc allocator (Linux only)')
 
     args = parser.parse_args()
+    validate_args(args)
 
     # Re-estimate block size if user selected subset of GPUs and did not override block size
     user_specified_subset = (
@@ -353,8 +354,6 @@ def main():
             num_complex_blocks_on_gpu=n_complex_blocks_on_gpu
         )
         log.info(f"Re-estimated block_size_max: {args.block_size_max}")
-
-    validate_args(args)
 
     gpu_worker_list = sum([[gpu] * args.gpu_workers_per_gpu for gpu in args.gpu_indices], [])
     cpu_worker_list = [0] * args.cpu_workers
