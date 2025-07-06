@@ -131,7 +131,8 @@ def get_safe_num_blocks(min_vram_mib, num_complex_blocks_on_gpu):
 
 
 def estimate_block_size_max(gpu_indices, workers_per_gpu, use_fft,
-                            bytes_per_element=4, base_reserve_gb=0.75, per_worker_mib=665, num_blocks_on_gpu=2): # 844
+                            bytes_per_element=4, base_reserve_gb=0.75, per_worker_mib=665,
+                            num_real_blocks_on_gpu=2, num_complex_blocks_on_gpu=0): # 844
     max_allowed = 2 ** 31 - 1
     try:
         result = subprocess.run(
@@ -155,9 +156,9 @@ def estimate_block_size_max(gpu_indices, workers_per_gpu, use_fft,
 
         usable_bytes = usable_mib * 1024 ** 2
         if use_fft:
-            num_blocks_on_gpu = get_safe_num_blocks(min_vram_mib, num_blocks_on_gpu - 2) + 2
+            num_complex_blocks_on_gpu = get_safe_num_blocks(min_vram_mib, num_complex_blocks_on_gpu)
 
-        estimated = int(usable_bytes / bytes_per_element / num_blocks_on_gpu)
+        estimated = int(usable_bytes / bytes_per_element / (num_real_blocks_on_gpu + num_complex_blocks_on_gpu * 2))
         return min(estimated, max_allowed)
 
     except (CalledProcessError, FileNotFoundError) as e:
@@ -211,6 +212,10 @@ def validate_args(args):
 
     if len(args.gaussian_filter_size) != 3:
         raise ValueError("Gaussian filter size must be a triplet, e.g., --gaussian-filter-size 5 5 15")
+
+    if args.adaptive_psf and not args.use_fft:
+        raise RuntimeError("--adaptive-psf and --use-fft should be used simultaneously.")
+
 
 def main():
     default_gpu_indices = get_all_gpu_indices()
@@ -329,19 +334,23 @@ def main():
             and set(args.gpu_indices).issubset(set(default_gpu_indices))
     )
     user_overrode_block_size = args.block_size_max != block_size_default
-    n_blocks_on_gpu = 2
+    n_real_blocks_on_gpu = 2
+    n_complex_blocks_on_gpu = 0
     if args.use_fft:
-        n_blocks_on_gpu = 5
+        n_real_blocks_on_gpu = 1
+        n_complex_blocks_on_gpu = 2
         if args.adaptive_psf:
-            n_blocks_on_gpu = 8
+            n_real_blocks_on_gpu = 2
+            n_complex_blocks_on_gpu = 3
     if args.lambda_damping and not args.adaptive_psf:
-        n_blocks_on_gpu += 1
+        n_real_blocks_on_gpu += 1
     if user_specified_subset or not user_overrode_block_size:
         args.block_size_max = estimate_block_size_max(
             args.gpu_indices,
             args.gpu_workers_per_gpu,
             args.use_fft,
-            num_blocks_on_gpu=n_blocks_on_gpu
+            num_real_blocks_on_gpu=n_real_blocks_on_gpu,
+            num_complex_blocks_on_gpu=n_complex_blocks_on_gpu
         )
         log.info(f"Re-estimated block_size_max: {args.block_size_max}")
 
