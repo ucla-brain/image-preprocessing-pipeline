@@ -116,10 +116,10 @@ def get_safe_num_blocks(min_vram_mib, num_complex_blocks_on_gpu):
         factor = 3.1
     elif min_vram_mib >= 39 * 1024:
         vram_class = "40-80 GB"
-        factor = 3.0
+        factor = 2.9
     elif min_vram_mib >= 16 * 1024:
         vram_class = "16-40 GB"
-        factor = 3.0
+        factor = 2.9
     else:
         vram_class = "<16 GB"
         factor = 1.0
