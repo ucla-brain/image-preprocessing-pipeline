@@ -247,8 +247,8 @@ static void writeSliceToTiff(
                         uint32_t rowsToWrite = std::min(tileLength, imageHeight - rowStart);
                         uint32_t colStart    = tileColumnIndex * tileWidth;
                         uint32_t colsToWrite = std::min(tileWidth,  imageWidth  - colStart);
-                        std::vector<uint8_t> tileBuffer(tileBytes, 0);
 
+                        std::vector<uint8_t> tileBuffer(tileBytes, 0);
                         for (uint32_t rowInTile = 0; rowInTile < rowsToWrite; ++rowInTile) {
                             size_t srcOffset = (size_t(rowStart) + size_t(rowInTile)) * size_t(imageWidth) * size_t(bytesPerPixel)
                                              + size_t(colStart) * size_t(bytesPerPixel);
