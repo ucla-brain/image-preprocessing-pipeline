@@ -227,24 +227,33 @@ struct SliceWriteTask {
 // RAII wrapper for TIFF* with advanced I/O flags
 struct TiffWriterDirect {
     TIFF* tif = nullptr;
+
+#if defined(_WIN32)
+    // No custom handle needed
+#elif defined(__linux__)
+    int fd = -1;
+#endif
     std::string path;
 
     explicit TiffWriterDirect(const std::string& path_, const char* /*modeIgnored*/)
         : path(path_)
     {
 #if defined(_WIN32)
-        // Use standard TIFFOpen, NOT custom procs
+        // Use libtiff's built-in TIFFOpen. No direct/async flags!
         tif = TIFFOpen(path.c_str(), "w");
         if (!tif)
             throw std::runtime_error("TIFFOpen failed: " + path);
+
 #elif defined(__linux__)
+        // Use O_DIRECT if desired for async, but it's optional.
         fd = ::open(path.c_str(), O_RDWR | O_CREAT | O_TRUNC | O_DIRECT, 0666);
         if (fd < 0)
             throw std::runtime_error("open(O_DIRECT) failed for: " + path);
 
         tif = TIFFFdOpen(fd, path.c_str(), "w");
         if (!tif)
-            throw std::runtime_error("TIFFOpen failed: " + path);
+            throw std::runtime_error("TIFFFdOpen failed: " + path);
+
 #else
         tif = TIFFOpen(path.c_str(), "w");
         if (!tif)
@@ -252,15 +261,10 @@ struct TiffWriterDirect {
 #endif
     }
 
-#if defined(__linux__)
-    int fd = -1;
-#endif
-
     ~TiffWriterDirect()
     {
         if (tif)
             TIFFClose(tif);
-
 #if defined(__linux__)
         if (fd != -1) {
             ::close(fd);
