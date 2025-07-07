@@ -203,7 +203,6 @@ static void writeSliceToTiff(
     const std::string&   outputPath,
     bool                 useTiles
 ) {
-    // widthDim = pixels per row, heightDim = number of rows
     const uint32_t imageWidth  = widthDim;
     const uint32_t imageHeight = heightDim;
     const size_t   sliceSize   = size_t(widthDim) * size_t(heightDim) * size_t(bytesPerPixel);
@@ -223,7 +222,6 @@ static void writeSliceToTiff(
         TIFFSetField(tif, TIFFTAG_PHOTOMETRIC,     PHOTOMETRIC_MINISBLACK);
         TIFFSetField(tif, TIFFTAG_PLANARCONFIG,    PLANARCONFIG_CONTIG);
 
-        // DEFLATE: modest compression level (1–9)
         if (compressionType == COMPRESSION_ADOBE_DEFLATE) {
             const int zipLevel = 1;
             TIFFSetField(tif, TIFFTAG_ZIPQUALITY, zipLevel);
@@ -231,7 +229,6 @@ static void writeSliceToTiff(
         }
 
         if (useTiles) {
-            // ----------- TILED MODE -----------
             uint32_t tileWidth, tileLength;
             select_tile_size(imageWidth, imageHeight, tileWidth, tileLength);
             TIFFSetField(tif, TIFFTAG_TILEWIDTH, tileWidth);
@@ -314,7 +311,6 @@ static void writeSliceToTiff(
                 }
             }
         } else {
-            // ----------- STRIPED MODE -----------
             TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP, std::min(rowsPerStrip, imageHeight));
             const uint32_t numStrips = (imageHeight + rowsPerStrip - 1) / rowsPerStrip;
             if (isXYZ) {
@@ -368,6 +364,7 @@ static void writeSliceToTiff(
                 }
             }
         }
+    }
 
     // Atomic replace
     std::error_code ec;
