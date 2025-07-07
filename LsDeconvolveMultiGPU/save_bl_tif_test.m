@@ -278,7 +278,7 @@ end
 %     end
 % end
 
-function result = generateTestData(targetShape, dataTypeName)
+function outputVolume = generateTestData(targetShape, dataTypeName)
     %GENERATE_SPARSE_GAMMA_3D Generates a 3D matrix of specified size using
     %sparse gamma distributed 2D planes and broadcasts them into 3D.
     % The 6 edges are also multiplied by sparse gamma random vectors.
@@ -287,39 +287,50 @@ function result = generateTestData(targetShape, dataTypeName)
     [a, b, c] = deal(targetShape(1), targetShape(2), targetShape(3));
 
     % === Parameters ===
-    shapeParam = 2;    % gamma shape
-    scaleParam = 0.5;  % gamma scale
-    sparsity   = 0.998;  % proportion of zeros
+    shapeParam = 2;
+    scaleParam = 0.5;
+    sparsity   = 0.998;
 
-    % === Generate sparse gamma matrices in single ===
-    A = single(gamrnd(shapeParam, scaleParam, a, b)) .* ...
-        single(rand(a, b) > sparsity);
+    % === Prepare scale factors for direct scaling ===
+    switch dataTypeName
+        case 'uint8'
+            scaleFactor = 255;
+            castFunc = @uint8;
+        case 'uint16'
+            scaleFactor = 65535;
+            castFunc = @uint16;
+        otherwise
+            error("Unsupported dtype '%s'", dataTypeName);
+    end
 
-    B = single(gamrnd(shapeParam, scaleParam, b, c)) .* ...
-        single(rand(b, c) > sparsity);
+    % === Generate sparse gamma matrices, scaled & converted early ===
+    A = castFunc(scaleFactor * ...
+        (gamrnd(shapeParam, scaleParam, a, b) .* (rand(a, b) > sparsity)));
+    B = castFunc(scaleFactor * ...
+        (gamrnd(shapeParam, scaleParam, b, c) .* (rand(b, c) > sparsity)));
 
-    % === Compute broadcasted outer product in single ===
-    A3 = repmat(A, 1, 1, c);         % [a b c]
-    B3 = permute(B, [3 1 2]);         % [1 b c]
-    result = A3 .* B3;                % [a b c]
+    % === Broadcasted outer product in integer ===
+    A3 = repmat(A, 1, 1, c);
+    B3 = permute(B, [3 1 2]);
+    result = A3 .* B3;
 
-    % === Modify 6 edges with random sparse gamma vectors in single ===
-    edgeX1 = single(gamrnd(shapeParam, scaleParam, [a 1 1])) .* ...
-             single(rand(a,1,1) > sparsity);
-    edgeX2 = single(gamrnd(shapeParam, scaleParam, [a 1 1])) .* ...
-             single(rand(a,1,1) > sparsity);
+    % === Generate edge vectors, scaled & converted early ===
+    edgeX1 = castFunc(scaleFactor * ...
+        (gamrnd(shapeParam, scaleParam, [a 1 1]) .* (rand(a,1,1) > sparsity)));
+    edgeX2 = castFunc(scaleFactor * ...
+        (gamrnd(shapeParam, scaleParam, [a 1 1]) .* (rand(a,1,1) > sparsity)));
 
-    edgeY1 = single(gamrnd(shapeParam, scaleParam, [1 b 1])) .* ...
-             single(rand(1,b,1) > sparsity);
-    edgeY2 = single(gamrnd(shapeParam, scaleParam, [1 b 1])) .* ...
-             single(rand(1,b,1) > sparsity);
+    edgeY1 = castFunc(scaleFactor * ...
+        (gamrnd(shapeParam, scaleParam, [1 b 1]) .* (rand(1,b,1) > sparsity)));
+    edgeY2 = castFunc(scaleFactor * ...
+        (gamrnd(shapeParam, scaleParam, [1 b 1]) .* (rand(1,b,1) > sparsity)));
 
-    edgeZ1 = single(gamrnd(shapeParam, scaleParam, [1 1 c])) .* ...
-             single(rand(1,1,c) > sparsity);
-    edgeZ2 = single(gamrnd(shapeParam, scaleParam, [1 1 c])) .* ...
-             single(rand(1,1,c) > sparsity);
+    edgeZ1 = castFunc(scaleFactor * ...
+        (gamrnd(shapeParam, scaleParam, [1 1 c]) .* (rand(1,1,c) > sparsity)));
+    edgeZ2 = castFunc(scaleFactor * ...
+        (gamrnd(shapeParam, scaleParam, [1 1 c]) .* (rand(1,1,c) > sparsity)));
 
-    % Apply multiplicative edge perturbations
+    % === Apply edges multiplicatively ===
     result(1,:,:)   = result(1,:,:)   .* edgeX1(1,:,:);
     result(end,:,:) = result(end,:,:) .* edgeX2(end,:,:);
 
@@ -329,17 +340,11 @@ function result = generateTestData(targetShape, dataTypeName)
     result(:,:,1)   = result(:,:,1)   .* edgeZ1(:,:,1);
     result(:,:,end) = result(:,:,end) .* edgeZ2(:,:,end);
 
-    % === Final conversion to requested integer data type ===
-    switch dataTypeName
-        case 'uint8'
-            result = result * single(255);
-            result = uint8(result);
-        case 'uint16'
-            result = result * single(65535);
-            result = uint16(result);
-        otherwise
-            error("Unsupported dtype '%s'", dataTypeName);
-    end
+    % Clip in case of overflows
+    maxVal = intmax(dataTypeName);
+    result(result > maxVal) = maxVal;
+
+    outputVolume = result;
 end
 
 function sandbox_cleanup(folderPath)
