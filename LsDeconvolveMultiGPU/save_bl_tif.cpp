@@ -69,6 +69,9 @@
 #include <chrono>
 #include <cassert>
 #include <memory>
+#include <cstdio>
+#include <fstream>
+#include <sstream>
 
 #if defined(_WIN32)
   #ifndef NOMINMAX
@@ -350,8 +353,122 @@ struct TiffWriterDirect {
 };
 
 
+inline void robustSync(const fs::path& file) {
+#if defined(_WIN32)
+    HANDLE h = CreateFileW(file.wstring().c_str(),
+                           GENERIC_READ | GENERIC_WRITE,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE,
+                           nullptr,
+                           OPEN_EXISTING,
+                           FILE_ATTRIBUTE_NORMAL,
+                           nullptr);
+    if (h != INVALID_HANDLE_VALUE) {
+        FlushFileBuffers(h);
+        CloseHandle(h);
+    }
+#elif defined(__linux__)
+    int fd = ::open(file.c_str(), O_RDWR);
+    if (fd != -1) {
+        ::fsync(fd);
+        ::close(fd);
+    }
+#endif
+}
+
+inline void setWritable(const fs::path& file) {
+#if defined(_WIN32)
+    SetFileAttributesW(file.wstring().c_str(), FILE_ATTRIBUTE_NORMAL);
+#else
+    ::chmod(file.c_str(), 0666);
+#endif
+}
+
+inline bool copyAndDelete(const fs::path& src, const fs::path& dst, std::string& errMsg) {
+    std::error_code ec;
+    fs::copy_file(src, dst, fs::copy_options::overwrite_existing, ec);
+    if (ec) {
+        errMsg = "copy_file failed: " + ec.message();
+        return false;
+    }
+    fs::remove(src, ec);
+    if (ec) {
+        errMsg = "remove(src) after copy failed: " + ec.message();
+        // But the move is still logically done, just noisy.
+    }
+    return true;
+}
+
+// Returns true if success; false otherwise and fills errMsg
+inline bool robustMoveOrReplace(const fs::path& src, const fs::path& dst, std::string& errMsg) {
+    using namespace std::chrono_literals;
+    std::error_code ec;
+    setWritable(src);
+    setWritable(dst);
+
+    // Ensure all buffers are flushed
+    robustSync(src);
+
+    // Sleep to let FS "catch up"
+    std::this_thread::sleep_for(20ms);
+
+#if defined(_WIN32)
+    for (int attempt = 0; attempt < 5; ++attempt) {
+        setWritable(src);
+        setWritable(dst);
+        if (ReplaceFileW(
+                dst.wstring().c_str(),
+                src.wstring().c_str(),
+                nullptr,
+                REPLACEFILE_WRITE_THROUGH,
+                nullptr,
+                nullptr)) {
+            return true;
+        }
+        DWORD err = GetLastError();
+        if (err == ERROR_SHARING_VIOLATION || err == ERROR_ACCESS_DENIED) {
+            std::this_thread::sleep_for(10ms * (attempt + 1));
+            continue;
+        }
+        std::ostringstream oss;
+        oss << "ReplaceFileW failed with error " << err;
+        errMsg = oss.str();
+        break;
+    }
+    // Fallback: try MoveFileEx
+    if (MoveFileExW(src.wstring().c_str(), dst.wstring().c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        return true;
+    }
+    DWORD err = GetLastError();
+    std::ostringstream oss;
+    oss << "MoveFileExW fallback failed with error " << err;
+    errMsg = oss.str();
+
+#elif defined(__linux__)
+    for (int attempt = 0; attempt < 5; ++attempt) {
+        fs::rename(src, dst, ec);
+        if (!ec) return true;
+        if (fs::exists(dst)) {
+            fs::remove(dst, ec);
+            fs::rename(src, dst, ec);
+            if (!ec) return true;
+        }
+        std::this_thread::sleep_for(10ms * (attempt + 1));
+    }
+    errMsg = "rename failed: " + ec.message();
+#endif
+
+    // Ultimate fallback: copy-then-delete
+    std::string fallbackMsg;
+    if (copyAndDelete(src, dst, fallbackMsg))
+        return true;
+    errMsg += " | copy-delete fallback: " + fallbackMsg;
+    return false;
+}
+
+
 // The actual TIFF write logic (unchanged for correctness)
 static void writeSliceToTiffTask(const SliceWriteTask& task) {
+    using namespace std::chrono_literals;
     fs::path tempFile = fs::path(task.outPath).concat(".tmp");
     TiffWriterDirect writer(tempFile.string(), "w");
     TIFF* tif = writer.tif;
@@ -459,66 +576,16 @@ static void writeSliceToTiffTask(const SliceWriteTask& task) {
         }
     }
 
-#ifdef _WIN32
-    // Clear R/O on temp (in case) so ReplaceFile can open it
-    SetFileAttributesW(tempFile.wstring().c_str(), FILE_ATTRIBUTE_NORMAL);
+    // --- Robust atomic move to destination ---
+    if (!fs::exists(tempFile))
+        throw std::runtime_error("Temp file does not exist: " + tempFile.string());
 
-    // Also clear R/O on destination (if it exists)
-    SetFileAttributesW(task.outPath.wstring().c_str(), FILE_ATTRIBUTE_NORMAL);
-
-    auto robustReplace = [&](const fs::path& src, const fs::path& dst) -> bool {
-        for (int attempt = 0; attempt < 5; ++attempt) {
-            // First arg = destination, second = replacement
-            if (ReplaceFileW(
-                    dst.wstring().c_str(),
-                    src.wstring().c_str(),
-                    nullptr,
-                    REPLACEFILE_WRITE_THROUGH,  // flush directory entry
-                    nullptr,
-                    nullptr))
-            {
-                return true;  // success
-            }
-            DWORD err = GetLastError();
-            if (err == ERROR_SHARING_VIOLATION || err == ERROR_ACCESS_DENIED) {
-                // Wait and retry if file is momentarily locked
-                std::this_thread::sleep_for(std::chrono::milliseconds(10 * (attempt + 1)));
-                continue;
-            }
-            break;  // any other error is fatal
-        }
-        return false;
-    };
-
-    if (!robustReplace(tempFile, task.outPath))
-        throw std::runtime_error(
-            "Failed to replace " + task.outPath.string() +
-            " with " + tempFile.string());
-#else
-    auto robustMove = [](const fs::path& src, const fs::path& dst) -> bool {
-        std::error_code ec;
-        for (int attempt = 0; attempt < 5; ++attempt) {
-            fs::rename(src, dst, ec);
-            if (!ec) return true;
-            if (fs::exists(dst)) {
-                fs::remove(dst, ec);
-                fs::rename(src, dst, ec);
-                if (!ec) return true;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(10 * (attempt + 1)));
-        }
-        return false;
-    };
-
-    if (!robustMove(tempFile, task.outPath))
-        throw std::runtime_error(
-            "Failed to rename " + tempFile.string() +
-            " → " + task.outPath);
-#endif
-
-    if (!robustMove(tempFile, task.outPath))
-        throw std::runtime_error("Failed to rename " + tempFile.string() + " → " + task.outPath);
-
+    std::string moveErrMsg;
+    if (!robustMoveOrReplace(tempFile, task.outPath, moveErrMsg)) {
+        std::ostringstream oss;
+        oss << "Failed to move/replace " << tempFile << " → " << task.outPath << " : " << moveErrMsg;
+        throw std::runtime_error(oss.str());
+    }
 }
 
 // ----------------------- MEX ENTRY POINT ----------------------------------------
