@@ -224,7 +224,7 @@ function build_mex(debug)
         if debug
             mex_cpu = {'-R2018a', 'COMPFLAGS="$COMPFLAGS /std:c++17 /Od /Zi"', 'LINKFLAGS="$LINKFLAGS /DEBUG"'};
         else
-            mex_cpu = {'-R2018a', sprintf('COMPFLAGS="$COMPFLAGS /std:c++17 /O2 /arch:%s /GL"',instr), 'LINKFLAGS="$LINKFLAGS /LTCG"'};
+            mex_cpu = {'-R2018a', sprintf('COMPFLAGS="$COMPFLAGS /std:c++17 /O2 /arch:%s /GL"',instr), sprintf('CXXFLAGS="$CXXFLAGS /std:c++17 /O2 /arch:%s /GL"',instr), 'LINKFLAGS="$LINKFLAGS /LTCG"'};
         end
     else
         link_tiff = {fullfile(libtiff_inst,'lib','libtiffxx.a'), fullfile(libtiff_inst,'lib','libtiff.a'), fullfile(zlibng_inst,'lib','libz.a')};

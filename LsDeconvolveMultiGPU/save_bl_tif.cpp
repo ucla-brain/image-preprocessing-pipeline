@@ -2,34 +2,43 @@
   save_bl_tif.cpp
 
   High-throughput multi-threaded TIFF Z-slice saver for 3D MATLAB volumes.
+  Supports both STRIP (default) and TILE (optional) TIFF writing modes.
 
   USAGE:
-    save_bl_tif(volume, fileList, isXYZ, compression[, nThreads]);
+    save_bl_tif(volume, fileList, isXYZ, compression[, nThreads, useTiles]);
 
   INPUTS:
-    • volume        : 3D MATLAB array (uint8 or uint16).
-    • fileList      : 1×Z cell array of output filenames.
-    • isXYZ         : scalar logical/numeric. True if array is [X Y Z].
-    • compression   : "none", "lzw", or "deflate".
-    • nThreads      : (opt) max threads (default = half hardware_concurrency).
+    • volume      : 3D MATLAB array (uint8 or uint16), or 2D for single slice.
+    • fileList    : 1×Z cell array of output filenames, one per Z-slice.
+    • isXYZ       : Scalar logical/numeric. True if 'volume' is [X Y Z], false if [Y X Z].
+    • compression : String. "none", "lzw", or "deflate".
+    • nThreads    : (Optional) Number of threads to use. Default = half hardware concurrency. Pass [] to auto-select.
+    • useTiles    : (Optional) true to use tiled TIFF output (TIFFWriteEncodedTile), false for classic strip mode (TIFFWriteEncodedStrip, default).
 
   FEATURES:
-    • Guard-clauses on invalid/read-only output paths.
-    • Atomic slice-index dispatch (chunks of slices).
-    • Direct strip-write when input is XYZ (row-major) to avoid buffers.
-    • Per-thread lazy strip buffer for YX inputs.
-    • Multi-row strips (64 rows) tuned for deflate compression.
-    • Deflate predictor & quality tuned for best libtiff 4.7 compression.
-    • Safe temp-file → rename to avoid NUMA lockups.
-    • C++17 <filesystem>, RAII for TIFF handles.
-    • Exception aggregation/reporting in main thread.
+    • Multi-threaded, atomic slice dispatch for maximum throughput.
+    • Direct strip/tile write when input is row-major (isXYZ==true); efficient buffer conversion otherwise.
+    • Automatic tile size selection (1024×1024 for large images, 256×256 for small).
+    • Guard-clauses on invalid or read-only output paths.
+    • Per-thread affinity setting for improved NUMA balancing on multi-socket systems.
+    • Safe temp-file → rename to prevent partial writes or NUMA lockups.
+    • Exception aggregation and robust error reporting to MATLAB.
 
-  LIMITATIONS:
-    • Grayscale only (single channel).
-    • Single-strip file per strip group.
+  NOTES:
+    • Grayscale only (single channel per slice).
+    • Writes each Z-slice to a separate TIFF file; does NOT create multi-page TIFFs.
+    • "useTiles" is for performance/compatibility; for most scientific image stacks, STRIP mode is usually faster.
+    • Compression "deflate" uses predictor and modest quality for best libtiff performance.
+
+  EXAMPLE:
+    % Save a 3D [X Y Z] volume as LZW-compressed TIFFs, auto threads, STRIP mode:
+    save_bl_tif(vol, fileList, true, 'lzw');
+
+    % Save with explicit 8 threads, in TILE mode:
+    save_bl_tif(vol, fileList, true, 'deflate', 8, true);
 
   DEPENDENCIES:
-    • libtiff ≥ 4.7, MATLAB MEX API, C++17 <filesystem>.
+    • libtiff ≥ 4.7, MATLAB MEX API, C++17 <filesystem>, POSIX/Windows threading.
 
   AUTHOR:
     Keivan Moradi (with ChatGPT-4o assistance)
