@@ -225,7 +225,8 @@ static void writeSliceToTiff(
         if (compressionType == COMPRESSION_ADOBE_DEFLATE) {
             const int zipLevel = 1;
             TIFFSetField(tif, TIFFTAG_ZIPQUALITY, zipLevel);
-            TIFFSetField(tif, TIFFTAG_PREDICTOR, PREDICTOR_HORIZONTAL);
+            //TIFFSetField(tif, TIFFTAG_PREDICTOR, PREDICTOR_HORIZONTAL);
+            TIFFSetField(tif, TIFFTAG_PREDICTOR, 1);
         }
 
         if (useTiles) {
