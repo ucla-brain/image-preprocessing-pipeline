@@ -166,17 +166,17 @@ inline void set_thread_affinity(size_t thread_idx) {
 }
 
 // Number of rows per TIFF strip (for RAM vs compression balance)
-static constexpr uint32_t rowsPerStrip = 16;
+static constexpr uint32_t rowsPerStrip = 8;
 // Number of slices claimed per atomic dispatch
 static constexpr size_t slicesPerDispatch = 4;
 
 // New: tile size selection logic (called only for tile mode)
 inline void select_tile_size(uint32_t width, uint32_t height, uint32_t &tileWidth, uint32_t &tileLength) {
-    const uint32_t long_length = 256;
+    const uint32_t long_length = 128;
     if (width >= long_length && height >= long_length) {
         tileWidth = long_length; tileLength = long_length;
     } else {
-        tileWidth = 256; tileLength = 256;
+        tileWidth = 64; tileLength = 64;
     }
 }
 
