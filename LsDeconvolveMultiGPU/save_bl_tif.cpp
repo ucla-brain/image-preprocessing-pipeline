@@ -239,7 +239,6 @@ static void writeSliceToTiff(
             const uint32_t tilesDown    = (imageHeight + tileLength - 1) / tileLength;
             const size_t   tileBytes    = size_t(tileWidth) * size_t(tileLength) * size_t(bytesPerPixel);
 
-            thread_local std::vector<uint8_t> tileBuffer;
             if (isXYZ) {
                 // ----------- TILE XYZ -----------
                 for (uint32_t tileRowIndex = 0; tileRowIndex < tilesDown; ++tileRowIndex) {
@@ -248,9 +247,7 @@ static void writeSliceToTiff(
                         uint32_t rowsToWrite = std::min(tileLength, imageHeight - rowStart);
                         uint32_t colStart    = tileColumnIndex * tileWidth;
                         uint32_t colsToWrite = std::min(tileWidth,  imageWidth  - colStart);
-                        if (tileBuffer.size() < tileBytes)
-                            tileBuffer.resize(tileBytes, 0);
-                        //std::fill(tileBuffer.begin(), tileBuffer.end(), 0);
+                        std::vector<uint8_t> tileBuffer(tileBytes, 0);
 
                         for (uint32_t rowInTile = 0; rowInTile < rowsToWrite; ++rowInTile) {
                             size_t srcOffset = (size_t(rowStart) + size_t(rowInTile)) * size_t(imageWidth) * size_t(bytesPerPixel)
@@ -265,6 +262,7 @@ static void writeSliceToTiff(
                 }
             } else {
                 // ----------- TILE YXZ -----------
+                thread_local std::vector<uint8_t> tileBuffer;
                 for (uint32_t tileRowIndex = 0; tileRowIndex < tilesDown; ++tileRowIndex) {
                     for (uint32_t tileColumnIndex = 0; tileColumnIndex < tilesAcross; ++tileColumnIndex) {
                         uint32_t rowStart    = tileRowIndex * tileLength;
