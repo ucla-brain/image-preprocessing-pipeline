@@ -226,22 +226,21 @@ struct TiffWriterDirect {
     TIFF* tif = nullptr;
 
 #if defined(_WIN32)
-    HANDLE fileHandle = INVALID_HANDLE_VALUE;   // only valid until we hand it to CRT
+    HANDLE fileHandle = INVALID_HANDLE_VALUE;   // we hand ownership to CRT
 #elif defined(__linux__)
     int fd = -1;
 #endif
-
     std::string path;
 
-    TiffWriterDirect(const std::string& path_, const char* /*modeIgnored*/)
+    explicit TiffWriterDirect(const std::string& path_, const char* /*modeIgnored*/)
         : path(path_)
     {
 #if defined(_WIN32)
-        // Create file with direct-durability flags but let OS buffer alignments work.
+        // Open with read+write so libtiff can reopen/seek/read its own header.
         fileHandle = CreateFileA(
             path.c_str(),
-            GENERIC_WRITE,
-            FILE_SHARE_READ | FILE_SHARE_WRITE,          // allow read/write sharing
+            GENERIC_READ | GENERIC_WRITE,                // <-- read + write
+            FILE_SHARE_READ,                             // allow others to read while we write
             nullptr,
             CREATE_ALWAYS,
             FILE_ATTRIBUTE_NORMAL
@@ -252,31 +251,31 @@ struct TiffWriterDirect {
         if (fileHandle == INVALID_HANDLE_VALUE)
             throw std::runtime_error("CreateFileA failed for: " + path);
 
-        // Wrap the Win32 handle in a CRT fd; give CRT ownership.
-        int crtFlags = _O_WRONLY | _O_BINARY;
+        // Wrap Win32 handle in CRT descriptor, give CRT ownership.
+        int crtFlags = _O_RDWR | _O_BINARY;              // <-- R/W fd
         int crtFd    = _open_osfhandle(reinterpret_cast<intptr_t>(fileHandle), crtFlags);
         if (crtFd == -1) {
             CloseHandle(fileHandle);
             throw std::runtime_error("_open_osfhandle failed for: " + path);
         }
-        // Ownership transferred -> don't close twice.
-        fileHandle = INVALID_HANDLE_VALUE;
+        fileHandle = INVALID_HANDLE_VALUE;               // ownership transferred
 
-        // Open TIFF on that fd in binary write mode.
-        tif = TIFFFdOpen(crtFd, path.c_str(), "wb");
+        // Open TIFF on that fd.  "w" = write (read allowed if fd permits).
+        tif = TIFFFdOpen(crtFd, path.c_str(), "w");
         if (!tif)
             throw std::runtime_error("TIFFOpen failed: " + path);
 
 #elif defined(__linux__)
-        fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_DIRECT, 0666);
+        fd = ::open(path.c_str(), O_RDWR | O_CREAT | O_TRUNC | O_DIRECT, 0666);
         if (fd < 0)
             throw std::runtime_error("open(O_DIRECT) failed for: " + path);
 
-        tif = TIFFFdOpen(fd, path.c_str(), "wb");
+        tif = TIFFFdOpen(fd, path.c_str(), "w");
         if (!tif)
             throw std::runtime_error("TIFFOpen failed: " + path);
+
 #else
-        tif = TIFFOpen(path.c_str(), "wb");
+        tif = TIFFOpen(path.c_str(), "w");
         if (!tif)
             throw std::runtime_error("TIFFOpen failed: " + path);
 #endif
@@ -284,12 +283,10 @@ struct TiffWriterDirect {
 
     ~TiffWriterDirect() {
         if (tif)
-            TIFFClose(tif);                  // also closes the CRT fd
-
+            TIFFClose(tif);                 // closes the CRT fd as well
 #if defined(_WIN32)
-        // Only close if we still own it (error paths).
         if (fileHandle != INVALID_HANDLE_VALUE)
-            CloseHandle(fileHandle);
+            CloseHandle(fileHandle);        // only if ownership never transferred
 #elif defined(__linux__)
         if (fd != -1)
             ::close(fd);
