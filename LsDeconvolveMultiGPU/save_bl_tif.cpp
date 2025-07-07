@@ -325,7 +325,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
         const size_t hwCores     = std::thread::hardware_concurrency();
         const size_t safeCores   = hwCores ? hwCores : 1;
         const size_t defaultTh   = std::max(safeCores / 2, size_t(1));
-        const size_t reqTh       = (nrhs >= 5 ? static_cast<size_t>(mxGetScalar(prhs[4])) : defaultTh);
+        const size_t reqTh       = (nrhs >= 5 && !mxIsEmpty(prhs[4])? static_cast<size_t>(mxGetScalar(prhs[4])) : defaultTh);
         const size_t threadCount = std::min(reqTh, numSlices);
 
         // Tiled mode (new): default off
