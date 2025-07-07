@@ -83,7 +83,7 @@
   #include <unistd.h>
 #endif
 
-#define DEBUG_TIMING
+//#define DEBUG_TIMING
 #ifdef DEBUG_TIMING
     #include <chrono>
     #define DBG_TIMING_START(t) auto t = std::chrono::high_resolution_clock::now()
