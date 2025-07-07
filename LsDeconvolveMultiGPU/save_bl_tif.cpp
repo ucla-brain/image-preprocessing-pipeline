@@ -137,10 +137,10 @@ static void writeSliceToTiff(
     bool                 useTiles
 ) {
     // widthDim = pixels per row, heightDim = number of rows
-    const uint32_t imageWidth  = static_cast<uint32_t>(widthDim);
-    const uint32_t imageHeight = static_cast<uint32_t>(heightDim);
-    const size_t   sliceSize   = widthDim * heightDim * bytesPerPixel;
-    const uint8_t* basePtr     = volumeData + sliceIdx * sliceSize;
+    const uint32_t imageWidth  = widthDim;
+    const uint32_t imageHeight = heightDim;
+    const size_t   sliceSize   = size_t(widthDim) * size_t(heightDim) * size_t(bytesPerPixel);
+    const uint8_t* basePtr     = volumeData + size_t(sliceIdx) * sliceSize;
 
     fs::path tempFile = fs::path(outputPath).concat(".tmp");
 
@@ -172,35 +172,30 @@ static void writeSliceToTiff(
 
             const uint32_t tilesAcross  = (imageWidth  + tileWidth  - 1) / tileWidth;
             const uint32_t tilesDown    = (imageHeight + tileLength - 1) / tileLength;
-            const size_t   tileBytes    = size_t(tileWidth) * tileLength * bytesPerPixel;
+            const size_t   tileBytes    = size_t(tileWidth) * size_t(tileLength) * size_t(bytesPerPixel);
 
-            // No change to buffer logic: isXYZ / else
             if (isXYZ) {
                 for (uint32_t td = 0; td < tilesDown; ++td) {
                     for (uint32_t ta = 0; ta < tilesAcross; ++ta) {
-                        // Determine region bounds
                         uint32_t rowStart    = td * tileLength;
                         uint32_t rowsToWrite = std::min(tileLength, imageHeight - rowStart);
                         uint32_t colStart    = ta * tileWidth;
                         uint32_t colsToWrite = std::min(tileWidth,  imageWidth  - colStart);
 
-                        // Allocate tile buffer
                         std::vector<uint8_t> tileBuffer(tileBytes, 0);
 
-                        // Copy region into tileBuffer
                         for (uint32_t r = 0; r < rowsToWrite; ++r) {
-                            size_t srcOffset = (rowStart + r) * imageWidth * bytesPerPixel + colStart * bytesPerPixel;
-                            size_t dstOffset = r * tileWidth * bytesPerPixel;
-                            std::memcpy(&tileBuffer[dstOffset], basePtr + srcOffset, colsToWrite * bytesPerPixel);
+                            size_t srcOffset = (size_t(rowStart) + size_t(r)) * size_t(imageWidth) * size_t(bytesPerPixel)
+                                             + size_t(colStart) * size_t(bytesPerPixel);
+                            size_t dstOffset = size_t(r) * size_t(tileWidth) * size_t(bytesPerPixel);
+                            std::memcpy(&tileBuffer[dstOffset], basePtr + srcOffset, size_t(colsToWrite) * size_t(bytesPerPixel));
                         }
-                        // Write tile (incomplete tiles are zero-padded)
                         tstrip_t tileIdx = TIFFComputeTile(tif, colStart, rowStart, 0, 0);
                         if (TIFFWriteEncodedTile(tif, tileIdx, tileBuffer.data(), tileBytes) < 0)
                             throw std::runtime_error("TIFF tile write failed at (" + std::to_string(ta) + "," + std::to_string(td) + ")");
                     }
                 }
             } else {
-                // column-major to row-major tile
                 thread_local std::vector<uint8_t> tileBuffer;
                 if (tileBuffer.size() < tileBytes) tileBuffer.resize(tileBytes, 0);
                 for (uint32_t td = 0; td < tilesDown; ++td) {
@@ -212,9 +207,9 @@ static void writeSliceToTiff(
                         std::fill(tileBuffer.begin(), tileBuffer.end(), 0);
                         for (uint32_t r = 0; r < rowsToWrite; ++r) {
                             for (uint32_t c = 0; c < colsToWrite; ++c) {
-                                size_t srcOffset = ((rowStart + r) + (colStart + c)*heightDim) * bytesPerPixel;
-                                size_t dstOffset = (r * tileWidth + c) * bytesPerPixel;
-                                std::memcpy(&tileBuffer[dstOffset], basePtr + srcOffset, bytesPerPixel);
+                                size_t srcOffset = (size_t(rowStart + r) + size_t(colStart + c) * size_t(heightDim)) * size_t(bytesPerPixel);
+                                size_t dstOffset = (size_t(r) * size_t(tileWidth) + size_t(c)) * size_t(bytesPerPixel);
+                                std::memcpy(&tileBuffer[dstOffset], basePtr + srcOffset, size_t(bytesPerPixel));
                             }
                         }
                         tstrip_t tileIdx = TIFFComputeTile(tif, colStart, rowStart, 0, 0);
@@ -230,9 +225,9 @@ static void writeSliceToTiff(
             if (isXYZ) {
                 for (uint32_t s = 0; s < numStrips; ++s) {
                     uint32_t rowStart    = s * rowsPerStrip;
-                    uint32_t rowsToWrite = std::min<uint32_t>(rowsPerStrip, imageHeight - rowStart);
-                    size_t   byteCount   = size_t(imageWidth) * rowsToWrite * bytesPerPixel;
-                    const uint8_t* dataPtr = basePtr + size_t(rowStart) * imageWidth * bytesPerPixel;
+                    uint32_t rowsToWrite = std::min(rowsPerStrip, imageHeight - rowStart);
+                    size_t   byteCount   = size_t(imageWidth) * size_t(rowsToWrite) * size_t(bytesPerPixel);
+                    const uint8_t* dataPtr = basePtr + size_t(rowStart) * size_t(imageWidth) * size_t(bytesPerPixel);
                     void* buf = const_cast<void*>(static_cast<const void*>(dataPtr));
                     if (TIFFWriteEncodedStrip(tif, s, buf, byteCount) < 0)
                         throw std::runtime_error("TIFF write failed on strip " + std::to_string(s));
@@ -241,15 +236,15 @@ static void writeSliceToTiff(
                 thread_local std::vector<uint8_t> stripBuffer;
                 for (uint32_t s = 0; s < numStrips; ++s) {
                     uint32_t rowStart    = s * rowsPerStrip;
-                    uint32_t rowsToWrite = std::min<uint32_t>(rowsPerStrip, imageHeight - rowStart);
-                    size_t   byteCount   = size_t(imageWidth) * rowsToWrite * bytesPerPixel;
+                    uint32_t rowsToWrite = std::min(rowsPerStrip, imageHeight - rowStart);
+                    size_t   byteCount   = size_t(imageWidth) * size_t(rowsToWrite) * size_t(bytesPerPixel);
                     if (stripBuffer.size() < byteCount)
                         stripBuffer.resize(byteCount);
                     for (uint32_t r = 0; r < rowsToWrite; ++r) {
                         for (uint32_t c = 0; c < imageWidth; ++c) {
-                            size_t srcOff = ((rowStart + r) + c*heightDim) * bytesPerPixel;
-                            size_t dstOff = (r*imageWidth  + c)      * bytesPerPixel;
-                            std::memcpy(&stripBuffer[dstOff], basePtr + srcOff, bytesPerPixel);
+                            size_t srcOff = (size_t(rowStart + r) + size_t(c) * size_t(heightDim)) * size_t(bytesPerPixel);
+                            size_t dstOff = (size_t(r) * size_t(imageWidth)  + size_t(c)) * size_t(bytesPerPixel);
+                            std::memcpy(&stripBuffer[dstOff], basePtr + srcOff, size_t(bytesPerPixel));
                         }
                     }
                     if (TIFFWriteEncodedStrip(tif, s, stripBuffer.data(), byteCount) < 0)
@@ -271,7 +266,6 @@ static void writeSliceToTiff(
 }
 
 // MATLAB MEX entry point
-// save_bl_tif(volume, fileList, isXYZ, compression[, nThreads, useTiles])
 void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     try {
         if (nrhs < 4 || nrhs > 6)
@@ -283,9 +277,9 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
 
         // Raw dims from array
         const mwSize*  rawDims   = mxGetDimensions(prhs[0]);
-        const uint32_t rawRows   = rawDims[0];
-        const uint32_t rawCols   = rawDims[1];
-        const uint32_t numSlices = (mxGetNumberOfDimensions(prhs[0]) == 3 ? rawDims[2] : 1);
+        const uint32_t rawRows   = static_cast<uint32_t>(rawDims[0]);
+        const uint32_t rawCols   = static_cast<uint32_t>(rawDims[1]);
+        const uint32_t numSlices = (mxGetNumberOfDimensions(prhs[0]) == 3 ? static_cast<uint32_t>(rawDims[2]) : 1);
 
         // isXYZ flag
         const bool isXYZ = mxIsLogicalScalarTrue(prhs[2]) || (mxIsNumeric(prhs[2]) && mxGetScalar(prhs[2]) != 0);
@@ -309,7 +303,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
             mexErrMsgIdAndTxt("save_bl_tif:files",
                 "fileList must be a cell-array of length = number of slices.");
         std::vector<std::string> outputPaths(numSlices);
-        for (size_t i = 0; i < numSlices; ++i) {
+        for (uint32_t i = 0; i < numSlices; ++i) {
             char* s = mxArrayToUTF8String(mxGetCell(prhs[1], i));
             outputPaths[i] = s;
             mxFree(s);
@@ -328,14 +322,14 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
 
         // Data pointer & sample size
         const uint8_t* volumeData    = static_cast<const uint8_t*>(mxGetData(prhs[0]));
-        const size_t   bytesPerPixel = (mxGetClassID(prhs[0]) == mxUINT16_CLASS ? 2 : 1);
+        const uint32_t bytesPerPixel = (mxGetClassID(prhs[0]) == mxUINT16_CLASS ? 2u : 1u);
 
         // Thread count
         const size_t hwCores     = std::thread::hardware_concurrency();
         const size_t safeCores   = hwCores ? hwCores : 1;
-        const size_t defaultTh   = std::max(safeCores / 2, static_cast<size_t>(1));
+        const size_t defaultTh   = std::max(safeCores / 2, size_t(1));
         const size_t reqTh       = (nrhs >= 5 && !mxIsEmpty(prhs[4])? static_cast<size_t>(mxGetScalar(prhs[4])) : defaultTh);
-        const size_t threadCount = std::min(reqTh, numSlices);
+        const size_t threadCount = std::min(reqTh, static_cast<size_t>(numSlices));
 
         // Tiled mode (new): default off
         const bool useTiles = (nrhs >= 6) ? (mxIsLogicalScalarTrue(prhs[5]) || (mxIsNumeric(prhs[5]) && mxGetScalar(prhs[5]) != 0)) : false;
@@ -343,7 +337,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
         // Error collection
         std::vector<std::string> errors;
         std::mutex              errorMutex;
-        std::atomic<size_t>     nextSlice{0};
+        std::atomic<uint32_t>     nextSlice{0};
 
         // Launch workers
         std::vector<std::thread> workers;
@@ -352,10 +346,10 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
             workers.emplace_back([&, thread_idx]() {
                 set_thread_affinity(thread_idx);
                 while (true) {
-                    size_t start = nextSlice.fetch_add(slicesPerDispatch, std::memory_order_relaxed);
+                    uint32_t start = nextSlice.fetch_add(static_cast<uint32_t>(slicesPerDispatch), std::memory_order_relaxed);
                     if (start >= numSlices) break;
-                    size_t end = std::min(numSlices, start + slicesPerDispatch);
-                    for (size_t idx = start; idx < end; ++idx) {
+                    uint32_t end = std::min<uint32_t>(numSlices, start + static_cast<uint32_t>(slicesPerDispatch));
+                    for (uint32_t idx = start; idx < end; ++idx) {
                         try {
                             writeSliceToTiff(volumeData, idx, widthDim, heightDim, bytesPerPixel, isXYZ, compressionType, outputPaths[idx], useTiles);
                         } catch (const std::exception& ex) {
