@@ -63,6 +63,10 @@
 #include <algorithm>
 
 #if defined(_WIN32)
+  // prevent <windows.h> from defining min/max as macros
+  #ifndef NOMINMAX
+  #  define NOMINMAX
+  #endif
   #include <windows.h>
   #include <io.h>
   #ifndef W_OK
@@ -348,7 +352,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
                 while (true) {
                     uint32_t start = nextSlice.fetch_add(static_cast<uint32_t>(slicesPerDispatch), std::memory_order_relaxed);
                     if (start >= numSlices) break;
-                    uint32_t end = std::min<uint32_t>(numSlices, start + static_cast<uint32_t>(slicesPerDispatch));
+                    uint32_t end = std::min(numSlices, start + static_cast<uint32_t>(slicesPerDispatch));
                     for (uint32_t idx = start; idx < end; ++idx) {
                         try {
                             writeSliceToTiff(volumeData, idx, widthDim, heightDim, bytesPerPixel, isXYZ, compressionType, outputPaths[idx], useTiles);
