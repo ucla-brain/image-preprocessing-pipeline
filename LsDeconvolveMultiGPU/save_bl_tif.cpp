@@ -222,25 +222,71 @@ struct SliceWriteTask {
 
 // --------- Async TIFF Writer with O_DIRECT/NO_BUFFERING file open -------------
 // RAII wrapper for TIFF* with advanced I/O flags
+// RAII wrapper for TIFF* with advanced I/O flags
 struct TiffWriterDirect {
     TIFF* tif = nullptr;
 
 #if defined(_WIN32)
-    HANDLE fileHandle = INVALID_HANDLE_VALUE;   // we hand ownership to CRT
+    HANDLE hFile = INVALID_HANDLE_VALUE;
 #elif defined(__linux__)
     int fd = -1;
 #endif
     std::string path;
 
+// ---------- Win32 custom I/O procs (only built on Windows) -------------------
+#if defined(_WIN32)
+    // thandle_t is void* on Windows builds of libtiff, so we can cast HANDLE
+    static tsize_t tiffReadProc(thandle_t handle, void* buf, tsize_t size)
+    {
+        DWORD dwRead = 0;
+        if (!ReadFile(static_cast<HANDLE>(handle), buf, static_cast<DWORD>(size), &dwRead, nullptr))
+            return -1;
+        return static_cast<tsize_t>(dwRead);
+    }
+    static tsize_t tiffWriteProc(thandle_t handle, void* buf, tsize_t size)
+    {
+        DWORD dwWritten = 0;
+        if (!WriteFile(static_cast<HANDLE>(handle), buf, static_cast<DWORD>(size), &dwWritten, nullptr))
+            return -1;
+        return static_cast<tsize_t>(dwWritten);
+    }
+    static toff_t tiffSeekProc(thandle_t handle, toff_t off, int whence)
+    {
+        LARGE_INTEGER li;
+        li.QuadPart = static_cast<LONGLONG>(off);
+        DWORD method =
+            whence == SEEK_SET ? FILE_BEGIN  :
+            whence == SEEK_CUR ? FILE_CURRENT:
+                                 FILE_END;
+        if (!SetFilePointerEx(static_cast<HANDLE>(handle), li, &li, method))
+            return static_cast<toff_t>(-1);
+        return static_cast<toff_t>(li.QuadPart);
+    }
+    static int tiffCloseProc(thandle_t handle)
+    {
+        return CloseHandle(static_cast<HANDLE>(handle)) ? 0 : -1;
+    }
+    static toff_t tiffSizeProc(thandle_t handle)
+    {
+        LARGE_INTEGER li;
+        if (!GetFileSizeEx(static_cast<HANDLE>(handle), &li))
+            return static_cast<toff_t>(0);
+        return static_cast<toff_t>(li.QuadPart);
+    }
+    static int  tiffMapProc(thandle_t, void**, toff_t*)   { return 0; }
+    static void tiffUnmapProc(thandle_t, void*, toff_t)   {}
+#endif
+// ---------------------------------------------------------------------------
+
     explicit TiffWriterDirect(const std::string& path_, const char* /*modeIgnored*/)
         : path(path_)
     {
 #if defined(_WIN32)
-        // Open with read+write so libtiff can reopen/seek/read its own header.
-        fileHandle = CreateFileA(
+        // Create file with read+write access (libtiff reads its own header)
+        hFile = CreateFileA(
             path.c_str(),
-            GENERIC_READ | GENERIC_WRITE,                // <-- read + write
-            FILE_SHARE_READ,                             // allow others to read while we write
+            GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ,
             nullptr,
             CREATE_ALWAYS,
             FILE_ATTRIBUTE_NORMAL
@@ -248,22 +294,24 @@ struct TiffWriterDirect {
           | FILE_FLAG_SEQUENTIAL_SCAN,
             nullptr
         );
-        if (fileHandle == INVALID_HANDLE_VALUE)
+        if (hFile == INVALID_HANDLE_VALUE)
             throw std::runtime_error("CreateFileA failed for: " + path);
 
-        // Wrap Win32 handle in CRT descriptor, give CRT ownership.
-        int crtFlags = _O_RDWR | _O_BINARY;              // <-- R/W fd
-        int crtFd    = _open_osfhandle(reinterpret_cast<intptr_t>(fileHandle), crtFlags);
-        if (crtFd == -1) {
-            CloseHandle(fileHandle);
-            throw std::runtime_error("_open_osfhandle failed for: " + path);
-        }
-        fileHandle = INVALID_HANDLE_VALUE;               // ownership transferred
-
-        // Open TIFF on that fd.  "w" = write (read allowed if fd permits).
-        tif = TIFFFdOpen(crtFd, path.c_str(), "w");
+        // Use TIFFClientOpen with custom Win32 procs
+        tif = TIFFClientOpen(
+            path.c_str(),        // name (for error msgs)
+            "w",                 // mode
+            static_cast<thandle_t>(hFile),
+            tiffReadProc,
+            tiffWriteProc,
+            tiffSeekProc,
+            tiffCloseProc,
+            tiffSizeProc,
+            tiffMapProc,
+            tiffUnmapProc
+        );
         if (!tif)
-            throw std::runtime_error("TIFFOpen failed: " + path);
+            throw std::runtime_error("TIFFClientOpen failed: " + path);
 
 #elif defined(__linux__)
         fd = ::open(path.c_str(), O_RDWR | O_CREAT | O_TRUNC | O_DIRECT, 0666);
@@ -281,15 +329,22 @@ struct TiffWriterDirect {
 #endif
     }
 
-    ~TiffWriterDirect() {
+    ~TiffWriterDirect()
+    {
+        // Closing TIFF also closes underlying descriptor / HANDLE via our closeProc
         if (tif)
-            TIFFClose(tif);                 // closes the CRT fd as well
+            TIFFClose(tif);
+
 #if defined(_WIN32)
-        if (fileHandle != INVALID_HANDLE_VALUE)
-            CloseHandle(fileHandle);        // only if ownership never transferred
+        if (hFile != INVALID_HANDLE_VALUE) {
+            CloseHandle(hFile);  // only if TIFF creation threw before client open
+            hFile = INVALID_HANDLE_VALUE;
+        }
 #elif defined(__linux__)
-        if (fd != -1)
+        if (fd != -1) {
             ::close(fd);
+            fd = -1;
+        }
 #endif
     }
 };
