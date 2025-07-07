@@ -278,7 +278,7 @@ end
 %     end
 % end
 
-function outputVolume = generateTestData(targetShape, dataTypeName)
+function result = generateTestData(targetShape, dataTypeName)
     %GENERATE_SPARSE_GAMMA_3D Generates a 3D matrix of specified size using
     %sparse gamma distributed 2D planes and broadcasts them into 3D.
     % The 6 edges are also multiplied by sparse gamma random vectors.
