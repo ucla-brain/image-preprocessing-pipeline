@@ -127,10 +127,10 @@ struct TiffWriter {
 // Write a single Z-slice to TIFF: strip or tile mode based on flag
 static void writeSliceToTiff(
     const uint8_t*       volumeData,
-    size_t               sliceIdx,
-    size_t               widthDim,
-    size_t               heightDim,
-    size_t               bytesPerPixel,
+    uint32_t             sliceIdx,
+    uint32_t             widthDim,
+    uint32_t             heightDim,
+    uint32_t             bytesPerPixel,
     bool                 isXYZ,
     uint16_t             compressionType,
     const std::string&   outputPath,
@@ -282,17 +282,17 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
             mexErrMsgIdAndTxt("save_bl_tif:type", "Volume must be uint8 or uint16.");
 
         // Raw dims from array
-        const mwSize* rawDims = mxGetDimensions(prhs[0]);
-        const size_t   rawRows = rawDims[0];
-        const size_t   rawCols = rawDims[1];
-        const size_t   numSlices = (mxGetNumberOfDimensions(prhs[0]) == 3 ? rawDims[2] : 1);
+        const mwSize*  rawDims   = mxGetDimensions(prhs[0]);
+        const uint32_t rawRows   = rawDims[0];
+        const uint32_t rawCols   = rawDims[1];
+        const uint32_t numSlices = (mxGetNumberOfDimensions(prhs[0]) == 3 ? rawDims[2] : 1);
 
         // isXYZ flag
         const bool isXYZ = mxIsLogicalScalarTrue(prhs[2]) || (mxIsNumeric(prhs[2]) && mxGetScalar(prhs[2]) != 0);
 
         // Determine width (X) and height (Y) consistently
-        const size_t widthDim  = isXYZ ? rawRows : rawCols;
-        const size_t heightDim = isXYZ ? rawCols : rawRows;
+        const uint32_t widthDim  = isXYZ ? rawRows : rawCols;
+        const uint32_t heightDim = isXYZ ? rawCols : rawRows;
 
         // Compression
         char* compCStr = mxArrayToUTF8String(prhs[3]);
@@ -333,7 +333,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
         // Thread count
         const size_t hwCores     = std::thread::hardware_concurrency();
         const size_t safeCores   = hwCores ? hwCores : 1;
-        const size_t defaultTh   = std::max(safeCores / 2, size_t(1));
+        const size_t defaultTh   = std::max(safeCores / 2, static_cast<size_t>(1));
         const size_t reqTh       = (nrhs >= 5 && !mxIsEmpty(prhs[4])? static_cast<size_t>(mxGetScalar(prhs[4])) : defaultTh);
         const size_t threadCount = std::min(reqTh, numSlices);
 
