@@ -117,27 +117,40 @@ for tileModeIndex = 1:nTileModes
 end
 
 % ---- Print STRIP vs TILE summary comparison table ----
-fprintf("\n   📊 STRIP vs TILE comparison (Time and Sizes, Section B):\n");
+% ---- Print STRIP vs TILE summary comparison table ----
+fprintf("\n   📊 STRIP vs TILE comparison (Speedup, Section B):\n");
 summaryRows = {};
-for layoutIndex = 1:nLayouts
-    for typeIndex = 1:nTypes
-        for compIndex = 1:nComps
-            timeStrip   = saveTimesSeconds(layoutIndex,typeIndex,compIndex,1);
-            timeTile    = saveTimesSeconds(layoutIndex,typeIndex,compIndex,2);
-            speedup     = timeStrip / timeTile;
-            logicStrip  = logicalSizesMiB(layoutIndex,typeIndex,compIndex,1);
-            logicTile   = logicalSizesMiB(layoutIndex,typeIndex,compIndex,2);
-            physStrip   = physicalSizesMiB(layoutIndex,typeIndex,compIndex,1);
-            physTile    = physicalSizesMiB(layoutIndex,typeIndex,compIndex,2);
-            summaryRows(end+1,:) = {volumeLayouts{layoutIndex,1}, volumeDataTypes{typeIndex,1}, ...
-                compressionTypes{compIndex}, timeStrip, timeTile, speedup, logicStrip, logicTile, physStrip, physTile};
-        end
+for typeIndex = 1:nTypes
+    for compIndex = 1:nComps
+        % Find row indices for YXZ (layoutIndex=1) and XYZ (layoutIndex=2)
+        % Strip vs Tile for YXZ:
+        tstrip_yxz = saveTimesSeconds(1,typeIndex,compIndex,1);
+        ttile_yxz  = saveTimesSeconds(1,typeIndex,compIndex,2);
+        % Strip vs Tile for XYZ:
+        tstrip_xyz = saveTimesSeconds(2,typeIndex,compIndex,1);
+        ttile_xyz  = saveTimesSeconds(2,typeIndex,compIndex,2);
+        % Speedup: Strip vs Tile for YXZ and XYZ
+        speedup_strip_tile_yxz = tstrip_yxz / ttile_yxz;
+        speedup_strip_tile_xyz = tstrip_xyz / ttile_xyz;
+        % Speedup: XYZ vs YXZ (strip mode)
+        speedup_xyz_vs_yxz_strip = tstrip_yxz / tstrip_xyz;
+        % Speedup: XYZ vs YXZ (tile mode)
+        speedup_xyz_vs_yxz_tile  = ttile_yxz  / ttile_xyz;
+        % Store table (you can show both, or just strip)
+        summaryRows(end+1,:) = {volumeDataTypes{typeIndex,1}, compressionTypes{compIndex}, ...
+            tstrip_yxz,   tstrip_xyz,   ttile_yxz,   ttile_xyz, ...
+            speedup_strip_tile_yxz, speedup_strip_tile_xyz, ...
+            speedup_xyz_vs_yxz_strip, speedup_xyz_vs_yxz_tile};
     end
 end
 comparisonTable = cell2table(summaryRows, 'VariableNames', ...
-    {'Layout','DataType','Compression', 'Time_STRIP_s', 'Time_TILE_s', 'Speedup', ...
-     'Logical_STRIP_MiB','Logical_TILE_MiB','Physical_STRIP_MiB','Physical_TILE_MiB'});
+    {'DataType','Compression', ...
+     'Time_STRIP_YXZ_s', 'Time_STRIP_XYZ_s', ...
+     'Time_TILE_YXZ_s',  'Time_TILE_XYZ_s', ...
+     'Speedup_StripVsTile_YXZ', 'Speedup_StripVsTile_XYZ', ...
+     'Speedup_XYZvsYXZ_Strip', 'Speedup_XYZvsYXZ_Tile'});
 disp(comparisonTable);
+
 
 %% ========== C. Large Block Test: 100 Big Slices, Compare Strip vs Tile ==========
 largeBlockSize = [8192 8192 100];
