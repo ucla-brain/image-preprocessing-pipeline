@@ -54,20 +54,44 @@
 #include <algorithm>
 
 #if defined(_WIN32)
+  #include <windows.h>
   #include <io.h>
   #ifndef W_OK
     #define W_OK 2
   #endif
   #define access _access
+#elif defined(__linux__)
+  #include <sched.h>
+  #include <pthread.h>
+  #include <unistd.h>
 #else
   #include <unistd.h>
 #endif
 
-
 namespace fs = std::filesystem;
 
+// Set thread affinity for best NUMA/core balancing
+inline void set_thread_affinity(size_t thread_idx) {
+#if defined(_WIN32)
+    DWORD num_cores = std::thread::hardware_concurrency();
+    if (num_cores == 0) num_cores = 1; // fallback
+    DWORD_PTR mask = (1ull << (thread_idx % num_cores));
+    HANDLE hThread = GetCurrentThread();
+    SetThreadAffinityMask(hThread, mask);
+#elif defined(__linux__)
+    unsigned num_cores = std::thread::hardware_concurrency();
+    if (num_cores == 0) num_cores = 1;
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    CPU_SET(thread_idx % num_cores, &cpuset);
+    pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
+#else
+    (void)thread_idx;
+#endif
+}
+
 // Number of rows per TIFF strip (for balance of RAM vs compression)
-static constexpr uint32_t rowsPerStrip      = 64;
+static constexpr uint32_t rowsPerStrip      = 256;
 // Number of slices claimed per atomic dispatch
 static constexpr size_t   slicesPerDispatch = 4;
 
@@ -118,6 +142,10 @@ static void writeSliceToTiff(
         TIFFSetField(tif, TIFFTAG_PHOTOMETRIC,     PHOTOMETRIC_MINISBLACK);
         TIFFSetField(tif, TIFFTAG_PLANARCONFIG,    PLANARCONFIG_CONTIG);
         TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP,    rowsPerStrip);
+        // to switch to tiled TIFF.
+        // This can give major speedups for large images but changes the internal layout (and requires tiled reads).
+        //TIFFSetField(tif, TIFFTAG_TILEWIDTH,  1024);
+        //TIFFSetField(tif, TIFFTAG_TILELENGTH, 1024);
 
         // DEFLATE: set a modest compression level (1–9)
         if (compressionType == COMPRESSION_ADOBE_DEFLATE) {
@@ -265,8 +293,9 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     // Launch workers
     std::vector<std::thread> workers;
     workers.reserve(threadCount);
-    for (size_t t = 0; t < threadCount; ++t) {
-        workers.emplace_back([&]() {
+    for (size_t thread_idx = 0; thread_idx < threadCount; ++thread_idx) {
+        workers.emplace_back([&, thread_idx]() {
+            set_thread_affinity(thread_idx);
             while (true) {
                 size_t start = nextSlice.fetch_add(slicesPerDispatch, std::memory_order_relaxed);
                 if (start >= numSlices) break;
