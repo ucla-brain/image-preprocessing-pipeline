@@ -177,15 +177,24 @@ inline uint32_t largest_square_tile_size(uint32_t imageWidth, uint32_t imageHeig
     }
     return imageWidth;
 }
-// New: tile size selection logic (called only for tile mode)
+inline uint32_t clamp_to_multiple_of_16(uint32_t v) {
+    return v & ~15u; // equivalent to (v / 16) * 16
+}
 inline void select_tile_size(uint32_t width, uint32_t height, uint32_t &tileWidth, uint32_t &tileLength) {
     uint32_t tileSize = largest_square_tile_size(width, height);
+    tileSize = clamp_to_multiple_of_16(tileSize);
+    // Clamp to at least 16
+    if (tileSize < 16) tileSize = 16;
     // Use the largest tile that fits, but not greater than the image size
     if (tileSize >= 256)
         tileWidth = tileLength = tileSize;
     else
-        tileWidth = tileLength = std::min({256u, width, height});
+        tileWidth = tileLength = std::min({256u, width, height}) & ~15u;
+    // Final safety: tile size must not exceed image size
+    tileWidth  = std::min(tileWidth, width);
+    tileLength = std::min(tileLength, height);
 }
+
 
 // RAII wrapper for TIFF*
 struct TiffWriter {
