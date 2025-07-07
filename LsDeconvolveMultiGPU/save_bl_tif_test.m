@@ -208,7 +208,7 @@ largeBlockVolume = generateTestData(largeBlockSize, 'uint16');
 largeBlockFileList = arrayfun(@(k) fullfile(temporaryTestRoot, sprintf('bigblock_%03d.tif',k)), 1:largeBlockSize(3), 'UniformOutput', false);
 
 % --- TILE mode (XYZ)
-fprintf('\n   🏁 Saving %s large slices (TILE mode, XYZ)...\n', largeBlockSize(3));
+fprintf('\n   🏁 Saving %d large slices (TILE mode, XYZ)...\n', largeBlockSize(3));
 tileSaveTimeSec = tic;
 save_bl_tif(largeBlockVolume, largeBlockFileList, true, 'deflate', feature('numCores'), true);  % isXYZ = true
 tileElapsedSec = toc(tileSaveTimeSec);
