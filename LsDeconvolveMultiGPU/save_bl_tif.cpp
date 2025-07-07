@@ -388,126 +388,152 @@ inline bool robustMoveOrReplace(const fs::path& src, const fs::path& dst, std::s
 }
 
 
-// The actual TIFF write logic (unchanged for correctness)
-static void writeSliceToTiffTask(const SliceWriteTask& task) {
-    using namespace std::chrono_literals;
-    fs::path tempFile = fs::path(task.outPath).concat(".tmp");
-    TiffWriterDirect writer(tempFile.string(), "w");
-    TIFF* tif = writer.tif;
+// -----------------------------------------------------------------------------
+// 100 % drop-in replacement for **writeSliceToTiffTask**.
+// - Fully closes the TIFF (and underlying file handle) **before** the rename/
+//   replace step — this fixes the Windows-only “TIFF unreadable” bug.
+// - Relies on your existing robustMoveOrReplace(src,dst,errMsg) helper.
+// -----------------------------------------------------------------------------
+static void writeSliceToTiffTask(const SliceWriteTask& task)
+{
+    namespace fs = std::filesystem;
 
-    TIFFSetField(tif, TIFFTAG_IMAGEWIDTH,      task.width);
-    TIFFSetField(tif, TIFFTAG_IMAGELENGTH,     task.height);
-    TIFFSetField(tif, TIFFTAG_BITSPERSAMPLE,   static_cast<uint16_t>(task.bytesPerPixel * 8));
-    TIFFSetField(tif, TIFFTAG_SAMPLESPERPIXEL, static_cast<uint16_t>(1));
-    TIFFSetField(tif, TIFFTAG_COMPRESSION,     task.compressionType);
-    TIFFSetField(tif, TIFFTAG_PHOTOMETRIC,     PHOTOMETRIC_MINISBLACK);
-    TIFFSetField(tif, TIFFTAG_PLANARCONFIG,    PLANARCONFIG_CONTIG);
+    const fs::path tempFile = fs::path(task.outPath).concat(".tmp");
 
-    if (task.compressionType == COMPRESSION_ADOBE_DEFLATE) {
-        const int zipLevel = 1;
-        TIFFSetField(tif, TIFFTAG_ZIPQUALITY, zipLevel);
-        TIFFSetField(tif, TIFFTAG_PREDICTOR, 1);
-    }
+    /* ==== 1. WRITE TIFF TO TEMP FILE (scope ends before rename) ============= */
+    {
+        TiffWriterDirect writer(tempFile.string(), "w");   // RAII
+        TIFF* tif = writer.tif;
 
-    if (task.useTiles) {
-        uint32_t tileWidth, tileLength;
-        select_tile_size(task.width, task.height, tileWidth, tileLength);
-        TIFFSetField(tif, TIFFTAG_TILEWIDTH, tileWidth);
-        TIFFSetField(tif, TIFFTAG_TILELENGTH, tileLength);
+        /* — TIFF directory fields — */
+        TIFFSetField(tif, TIFFTAG_IMAGEWIDTH,      task.width);
+        TIFFSetField(tif, TIFFTAG_IMAGELENGTH,     task.height);
+        TIFFSetField(tif, TIFFTAG_BITSPERSAMPLE,   static_cast<uint16_t>(task.bytesPerPixel * 8));
+        TIFFSetField(tif, TIFFTAG_SAMPLESPERPIXEL, static_cast<uint16_t>(1));
+        TIFFSetField(tif, TIFFTAG_COMPRESSION,     task.compressionType);
+        TIFFSetField(tif, TIFFTAG_PHOTOMETRIC,     PHOTOMETRIC_MINISBLACK);
+        TIFFSetField(tif, TIFFTAG_PLANARCONFIG,    PLANARCONFIG_CONTIG);
 
-        const uint32_t tilesAcross  = (task.width  + tileWidth  - 1) / tileWidth;
-        const uint32_t tilesDown    = (task.height + tileLength - 1) / tileLength;
-        const size_t   tileBytes    = size_t(tileWidth) * size_t(tileLength) * size_t(task.bytesPerPixel);
+        if (task.compressionType == COMPRESSION_ADOBE_DEFLATE) {
+            TIFFSetField(tif, TIFFTAG_ZIPQUALITY, 1);
+            TIFFSetField(tif, TIFFTAG_PREDICTOR,  1);
+        }
 
-        if (task.isXYZ) {
-            for (uint32_t tileRowIndex = 0; tileRowIndex < tilesDown; ++tileRowIndex) {
-                for (uint32_t tileColumnIndex = 0; tileColumnIndex < tilesAcross; ++tileColumnIndex) {
-                    uint32_t rowStart    = tileRowIndex * tileLength;
-                    uint32_t rowsToWrite = std::min(tileLength, task.height - rowStart);
-                    uint32_t colStart    = tileColumnIndex * tileWidth;
-                    uint32_t colsToWrite = std::min(tileWidth,  task.width  - colStart);
+        /* — TILE MODE — */
+        if (task.useTiles) {
+            uint32_t tileW, tileH;
+            select_tile_size(task.width, task.height, tileW, tileH);
+            TIFFSetField(tif, TIFFTAG_TILEWIDTH,  tileW);
+            TIFFSetField(tif, TIFFTAG_TILELENGTH, tileH);
 
-                    std::vector<uint8_t> tileBuffer(tileBytes, 0);
-                    for (uint32_t rowInTile = 0; rowInTile < rowsToWrite; ++rowInTile) {
-                        size_t srcOffset = (size_t(rowStart) + size_t(rowInTile)) * size_t(task.width) * size_t(task.bytesPerPixel)
-                                         + size_t(colStart) * size_t(task.bytesPerPixel);
-                        size_t dstOffset = size_t(rowInTile) * size_t(tileWidth) * size_t(task.bytesPerPixel);
-                        std::memcpy(&tileBuffer[dstOffset], task.data.data() + srcOffset, size_t(colsToWrite) * size_t(task.bytesPerPixel));
-                    }
-                    tstrip_t tileIdx = TIFFComputeTile(tif, colStart, rowStart, 0, 0);
-                    if (TIFFWriteEncodedTile(tif, tileIdx, tileBuffer.data(), tileBytes) < 0)
-                        throw std::runtime_error("TIFF tile write failed at (" + std::to_string(tileColumnIndex) + "," + std::to_string(tileRowIndex) + ")");
-                }
-            }
-        } else {
-            thread_local std::vector<uint8_t> tileBuffer;
-            for (uint32_t tileRowIndex = 0; tileRowIndex < tilesDown; ++tileRowIndex) {
-                for (uint32_t tileColumnIndex = 0; tileColumnIndex < tilesAcross; ++tileColumnIndex) {
-                    uint32_t rowStart    = tileRowIndex * tileLength;
-                    uint32_t rowsToWrite = std::min(tileLength, task.height - rowStart);
-                    uint32_t colStart    = tileColumnIndex * tileWidth;
-                    uint32_t colsToWrite = std::min(tileWidth,  task.width  - colStart);
+            const uint32_t tilesX = (task.width  + tileW - 1) / tileW;
+            const uint32_t tilesY = (task.height + tileH - 1) / tileH;
+            const size_t   tileBytes = size_t(tileW) * size_t(tileH) * size_t(task.bytesPerPixel);
 
-                    if (tileBuffer.size() < tileBytes)
-                        tileBuffer.resize(tileBytes, 0);
-                    std::fill(tileBuffer.begin(), tileBuffer.end(), 0);
-                    for (uint32_t rowInTile = 0; rowInTile < rowsToWrite; ++rowInTile) {
-                        for (uint32_t columnInTile = 0; columnInTile < colsToWrite; ++columnInTile) {
-                            size_t srcOffset = (size_t(rowStart + rowInTile) + size_t(colStart + columnInTile) * size_t(task.height)) * size_t(task.bytesPerPixel);
-                            size_t dstOffset = (size_t(rowInTile) * size_t(tileWidth) + size_t(columnInTile)) * size_t(task.bytesPerPixel);
-                            std::memcpy(&tileBuffer[dstOffset], task.data.data() + srcOffset, size_t(task.bytesPerPixel));
+            if (task.isXYZ) {
+                for (uint32_t ty = 0; ty < tilesY; ++ty)
+                    for (uint32_t tx = 0; tx < tilesX; ++tx) {
+                        const uint32_t y0 = ty * tileH;
+                        const uint32_t rows = std::min(tileH, task.height - y0);
+                        const uint32_t x0 = tx * tileW;
+                        const uint32_t cols = std::min(tileW, task.width  - x0);
+
+                        std::vector<uint8_t> tile(tileBytes, 0);
+                        for (uint32_t r = 0; r < rows; ++r) {
+                            const size_t srcOff = (size_t(y0 + r) * task.width + x0) * task.bytesPerPixel;
+                            const size_t dstOff = size_t(r) * tileW * task.bytesPerPixel;
+                            std::memcpy(&tile[dstOff],
+                                        task.data.data() + srcOff,
+                                        size_t(cols) * task.bytesPerPixel);
                         }
+                        tstrip_t tileIdx = TIFFComputeTile(tif, x0, y0, 0, 0);
+                        if (TIFFWriteEncodedTile(tif, tileIdx, tile.data(), tileBytes) < 0)
+                            throw std::runtime_error("TIFF tile write failed");
                     }
-                    tstrip_t tileIdx = TIFFComputeTile(tif, colStart, rowStart, 0, 0);
-                    if (TIFFWriteEncodedTile(tif, tileIdx, tileBuffer.data(), tileBytes) < 0)
-                        throw std::runtime_error("TIFF tile write failed at (" + std::to_string(tileColumnIndex) + "," + std::to_string(tileRowIndex) + ")");
-                }
-            }
-        }
-    } else {
-        TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP, std::min(rowsPerStrip, task.height));
-        const uint32_t numStrips = (task.height + rowsPerStrip - 1) / rowsPerStrip;
-        if (task.isXYZ) {
-            for (uint32_t stripIndex = 0; stripIndex < numStrips; ++stripIndex) {
-                uint32_t rowStart    = stripIndex * rowsPerStrip;
-                uint32_t rowsToWrite = std::min(rowsPerStrip, task.height - rowStart);
-                size_t   byteCount   = size_t(task.width) * size_t(rowsToWrite) * size_t(task.bytesPerPixel);
-                const uint8_t* dataPtr = task.data.data() + size_t(rowStart) * size_t(task.width) * size_t(task.bytesPerPixel);
-                void* buf = const_cast<void*>(static_cast<const void*>(dataPtr));
-                if (TIFFWriteEncodedStrip(tif, stripIndex, buf, byteCount) < 0)
-                    throw std::runtime_error("TIFF write failed on strip " + std::to_string(stripIndex));
-            }
-        } else {
-            thread_local std::vector<uint8_t> stripBuffer;
-            for (uint32_t stripIndex = 0; stripIndex < numStrips; ++stripIndex) {
-                uint32_t rowStart    = stripIndex * rowsPerStrip;
-                uint32_t rowsToWrite = std::min(rowsPerStrip, task.height - rowStart);
-                size_t   byteCount   = size_t(task.width) * size_t(rowsToWrite) * size_t(task.bytesPerPixel);
-                if (stripBuffer.size() < byteCount)
-                    stripBuffer.resize(byteCount);
-                for (uint32_t rowWithinStrip = 0; rowWithinStrip < rowsToWrite; ++rowWithinStrip) {
-                    for (uint32_t column = 0; column < task.width; ++column) {
-                        size_t srcOff = (size_t(rowStart + rowWithinStrip) + size_t(column) * size_t(task.height)) * size_t(task.bytesPerPixel);
-                        size_t dstOff = (size_t(rowWithinStrip) * size_t(task.width)  + size_t(column)) * size_t(task.bytesPerPixel);
-                        std::memcpy(&stripBuffer[dstOff], task.data.data() + srcOff, size_t(task.bytesPerPixel));
-                    }
-                }
-                if (TIFFWriteEncodedStrip(tif, stripIndex, stripBuffer.data(), byteCount) < 0)
-                    throw std::runtime_error("TIFF write failed on strip " + std::to_string(stripIndex));
-            }
-        }
-    }
+            } else {
+                thread_local std::vector<uint8_t> tile;
+                for (uint32_t ty = 0; ty < tilesY; ++ty)
+                    for (uint32_t tx = 0; tx < tilesX; ++tx) {
+                        const uint32_t y0 = ty * tileH;
+                        const uint32_t rows = std::min(tileH, task.height - y0);
+                        const uint32_t x0 = tx * tileW;
+                        const uint32_t cols = std::min(tileW, task.width  - x0);
 
-    // --- Robust atomic move to destination ---
+                        if (tile.size() < tileBytes) tile.resize(tileBytes, 0);
+                        std::fill(tile.begin(), tile.end(), 0);
+
+                        for (uint32_t r = 0; r < rows; ++r)
+                            for (uint32_t c = 0; c < cols; ++c) {
+                                const size_t srcOff =
+                                    (size_t(y0 + r) + size_t(x0 + c) * task.height) * task.bytesPerPixel;
+                                const size_t dstOff =
+                                    (size_t(r) * tileW + c) * task.bytesPerPixel;
+                                std::memcpy(&tile[dstOff],
+                                            task.data.data() + srcOff,
+                                            task.bytesPerPixel);
+                            }
+                        tstrip_t tileIdx = TIFFComputeTile(tif, x0, y0, 0, 0);
+                        if (TIFFWriteEncodedTile(tif, tileIdx, tile.data(), tileBytes) < 0)
+                            throw std::runtime_error("TIFF tile write failed");
+                    }
+            }
+        }
+        /* — STRIP MODE — */
+        else {
+            TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP,
+                         std::min(rowsPerStrip, task.height));
+
+            const uint32_t nStrips = (task.height + rowsPerStrip - 1) / rowsPerStrip;
+
+            if (task.isXYZ) {
+                for (uint32_t s = 0; s < nStrips; ++s) {
+                    const uint32_t y0   = s * rowsPerStrip;
+                    const uint32_t rows = std::min(rowsPerStrip, task.height - y0);
+                    const size_t bytes  = size_t(task.width) * rows * task.bytesPerPixel;
+
+                    const uint8_t* src =
+                        task.data.data() + size_t(y0) * task.width * task.bytesPerPixel;
+
+                    if (TIFFWriteEncodedStrip(tif, s,
+                                              const_cast<uint8_t*>(src),
+                                              bytes) < 0)
+                        throw std::runtime_error("TIFF strip write failed");
+                }
+            } else {
+                thread_local std::vector<uint8_t> strip;
+                for (uint32_t s = 0; s < nStrips; ++s) {
+                    const uint32_t y0   = s * rowsPerStrip;
+                    const uint32_t rows = std::min(rowsPerStrip, task.height - y0);
+                    const size_t bytes  = size_t(task.width) * rows * task.bytesPerPixel;
+
+                    if (strip.size() < bytes) strip.resize(bytes);
+                    for (uint32_t r = 0; r < rows; ++r)
+                        for (uint32_t c = 0; c < task.width; ++c) {
+                            const size_t srcOff =
+                                (size_t(y0 + r) + size_t(c) * task.height) * task.bytesPerPixel;
+                            const size_t dstOff =
+                                (size_t(r) * task.width + c) * task.bytesPerPixel;
+                            std::memcpy(&strip[dstOff],
+                                        task.data.data() + srcOff,
+                                        task.bytesPerPixel);
+                        }
+                    if (TIFFWriteEncodedStrip(tif, s, strip.data(), bytes) < 0)
+                        throw std::runtime_error("TIFF strip write failed");
+                }
+            }
+        }
+
+        /* Ensure data pushed through libtiff buffers */
+        TIFFFlush(tif);
+    }   // <- writer goes out of scope here, TIFFClose() + handle close completed
+
+    /* ==== 2. ATOMICALLY MOVE/REPLACE TO FINAL PATH ========================= */
     if (!fs::exists(tempFile))
-        throw std::runtime_error("Temp file does not exist: " + tempFile.string());
+        throw std::runtime_error("Temp file vanished: " + tempFile.string());
 
-    std::string moveErrMsg;
-    if (!robustMoveOrReplace(tempFile, task.outPath, moveErrMsg)) {
-        std::ostringstream oss;
-        oss << "Failed to move/replace " << tempFile << " → " << task.outPath << " : " << moveErrMsg;
-        throw std::runtime_error(oss.str());
-    }
+    std::string errMsg;
+    if (!robustMoveOrReplace(tempFile, task.outPath, errMsg))
+        throw std::runtime_error("Atomic move failed: " + errMsg);
 }
 
 // ----------------------- MEX ENTRY POINT ----------------------------------------
