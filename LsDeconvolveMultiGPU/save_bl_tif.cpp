@@ -458,23 +458,50 @@ static void writeSliceToTiffTask(const SliceWriteTask& task) {
             }
         }
     }
-    std::error_code ec;
-    for (int attempt = 0; attempt < 5; ++attempt) {
-        fs::rename(tempFile, task.outPath, ec);
-        if (!ec)
-            break;
-        if (fs::exists(task.outPath)) {
-            fs::remove(task.outPath, ec);
-            // Try again immediately
-            fs::rename(tempFile, task.outPath, ec);
-            if (!ec)
+
+#ifdef _WIN32
+    // Remove R/O bit from temp file in case of previous interrupted runs
+    SetFileAttributesW(tempFile.wstring().c_str(), FILE_ATTRIBUTE_NORMAL);
+
+    auto robustMove = [](const fs::path& src, const fs::path& dst) -> bool {
+        // Remove R/O bit from dest (existing) if needed
+        SetFileAttributesW(dst.wstring().c_str(), FILE_ATTRIBUTE_NORMAL);
+
+        for (int attempt = 0; attempt < 5; ++attempt) {
+            if (MoveFileExW(src.wstring().c_str(),
+                            dst.wstring().c_str(),
+                            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+                return true;
+            DWORD err = GetLastError();
+            if (err == ERROR_ACCESS_DENIED || err == ERROR_SHARING_VIOLATION)
+                std::this_thread::sleep_for(std::chrono::milliseconds(10 * (attempt + 1)));
+            else
                 break;
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-    if (ec) {
+        return false;
+    };
+#else
+    auto robustMove = [](const fs::path& src, const fs::path& dst) -> bool {
+        std::error_code ec;
+        for (int attempt = 0; attempt < 5; ++attempt) {
+            fs::rename(src, dst, ec);
+            if (!ec)
+                return true;
+            if (fs::exists(dst)) {
+                fs::remove(dst, ec);
+                fs::rename(src, dst, ec);
+                if (!ec)
+                    return true;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10 * (attempt + 1)));
+        }
+        return false;
+    };
+#endif
+
+    if (!robustMove(tempFile, task.outPath))
         throw std::runtime_error("Failed to rename " + tempFile.string() + " → " + task.outPath);
-    }
+
 }
 
 // ----------------------- MEX ENTRY POINT ----------------------------------------
