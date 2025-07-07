@@ -155,7 +155,7 @@ disp(comparisonTable);
 %% ========== C. Large Block Test: 100 Big Slices, Compare Strip vs Tile (XYZ) ==========
 
 largeBlockSize = [8192 8192 100];
-largeBlockVolume = generateTestData(largeBlockSize, 'uint16');
+largeBlockVolume = uint16(randi([0 65535], volumeSize));
 largeBlockFileList = arrayfun(@(k) fullfile(temporaryTestRoot, sprintf('bigblock_%03d.tif',k)), 1:largeBlockSize(3), 'UniformOutput', false);
 
 % --- TILE mode (XYZ)
