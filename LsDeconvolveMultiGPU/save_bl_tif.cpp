@@ -229,85 +229,69 @@ static void writeSliceToTiff(
         }
 
         if (useTiles) {
-            uint32_t tileWidth, tileLength;
-            select_tile_size(imageWidth, imageHeight, tileWidth, tileLength);
-            TIFFSetField(tif, TIFFTAG_TILEWIDTH, tileWidth);
-            TIFFSetField(tif, TIFFTAG_TILELENGTH, tileLength);
+            // ── choose one big tile per slice ──
+            TIFFSetField(tif, TIFFTAG_TILEWIDTH,  imageWidth);
+            TIFFSetField(tif, TIFFTAG_TILELENGTH, imageHeight);
 
-            const uint32_t tilesAcross  = (imageWidth  + tileWidth  - 1) / tileWidth;
-            const uint32_t tilesDown    = (imageHeight + tileLength - 1) / tileLength;
-            const size_t   tileBytes    = size_t(tileWidth) * size_t(tileLength) * size_t(bytesPerPixel);
+            // precompute sizes
+            const size_t sliceSize = size_t(imageWidth) * size_t(imageHeight) * bytesPerPixel;
+            const size_t tileBytes = sliceSize;  // whole‐slice tile
+
+            // compute the tile index at (0,0)
+            tstrip_t tileIndex = TIFFComputeTile(tif, 0, 0, 0, 0);
 
             if (isXYZ) {
-                // ----------- TILE XYZ -----------
-                for (uint32_t tileRowIndex = 0; tileRowIndex < tilesDown; ++tileRowIndex) {
-                    for (uint32_t tileColumnIndex = 0; tileColumnIndex < tilesAcross; ++tileColumnIndex) {
-                        uint32_t rowStart    = tileRowIndex * tileLength;
-                        uint32_t rowsToWrite = std::min(tileLength, imageHeight - rowStart);
-                        uint32_t colStart    = tileColumnIndex * tileWidth;
-                        uint32_t colsToWrite = std::min(tileWidth,  imageWidth  - colStart);
+                // ── ZERO-COPY: hand libtiff the slice pointer directly ──
+                if (TIFFWriteEncodedTile(
+                        tif,
+                        tileIndex,
+                        const_cast<void*>(static_cast<const void*>(basePtr)),
+                        sliceSize
+                    ) < 0)
+                {
+                    throw std::runtime_error(
+                        "TIFF tile write failed for full-slice zero-copy mode"
+                    );
+                }
+            }
+            else {
+                // ── YXZ: must transpose into a temporary buffer ──
+                thread_local std::vector<uint8_t> tileBuffer;
+                if (tileBuffer.size() < tileBytes)
+                    tileBuffer.resize(tileBytes);
 
-#ifdef DEBUG_TIMING
-                        DBG_TIMING_START(t_start_alloc);
-#endif
-                        std::vector<uint8_t> tileBuffer(tileBytes, 0);
+                // clear once
+                std::memset(tileBuffer.data(), 0, tileBytes);
 
-                        for (uint32_t rowInTile = 0; rowInTile < rowsToWrite; ++rowInTile) {
-                            size_t srcOffset = (size_t(rowStart) + size_t(rowInTile)) * size_t(imageWidth) * size_t(bytesPerPixel)
-                                             + size_t(colStart) * size_t(bytesPerPixel);
-                            size_t dstOffset = size_t(rowInTile) * size_t(tileWidth) * size_t(bytesPerPixel);
-                            std::memcpy(&tileBuffer[dstOffset], basePtr + srcOffset, size_t(colsToWrite) * size_t(bytesPerPixel));
-                        }
-#ifdef DEBUG_TIMING
-                        double elapsed_alloc_ms = DBG_TIMING_ELAPSED_MS(t_start_alloc);
-                        DBG_TIMING_START(t_start_write);
-#endif
-                        tstrip_t tileIdx = TIFFComputeTile(tif, colStart, rowStart, 0, 0);
-                        if (TIFFWriteEncodedTile(tif, tileIdx, tileBuffer.data(), tileBytes) < 0)
-                            throw std::runtime_error("TIFF tile write failed at (" + std::to_string(tileColumnIndex) + "," + std::to_string(tileRowIndex) + ")");
-#ifdef DEBUG_TIMING
-                        double elapsed_write_ms = DBG_TIMING_ELAPSED_MS(t_start_write);
-                        printf("[DEBUG][Tile XYZ] Alloc/Copy: %.3f ms, TIFFWrite: %.3f ms (tileRow %u, tileCol %u)\n",
-                               elapsed_alloc_ms, elapsed_write_ms, tileRowIndex, tileColumnIndex);
-#endif
+                // fill in transposed data: output rows = imageWidth, columns = imageHeight
+                for (uint32_t y = 0; y < imageHeight; ++y) {
+                    for (uint32_t x = 0; x < imageWidth; ++x) {
+                        // source offset in YXZ layout:
+                        //   index = (x + y*width)*bytesPerPixel  if volumeData is [Y X Z]
+                        size_t srcOffset = ( size_t(y) * size_t(widthDim)
+                                           + size_t(x) ) * bytesPerPixel;
+                        // dest offset in row-major tileBuffer:
+                        //   index = (x + y*tileWidth)*bytesPerPixel
+                        size_t dstOffset = ( size_t(x) * size_t(tileLength)
+                                           + size_t(y) ) * bytesPerPixel;
+                        std::memcpy(
+                            tileBuffer.data() + dstOffset,
+                            basePtr + srcOffset,
+                            bytesPerPixel
+                        );
                     }
                 }
-            } else {
-                // ----------- TILE YXZ -----------
-                thread_local std::vector<uint8_t> tileBuffer;
-                for (uint32_t tileRowIndex = 0; tileRowIndex < tilesDown; ++tileRowIndex) {
-                    for (uint32_t tileColumnIndex = 0; tileColumnIndex < tilesAcross; ++tileColumnIndex) {
-                        uint32_t rowStart    = tileRowIndex * tileLength;
-                        uint32_t rowsToWrite = std::min(tileLength, imageHeight - rowStart);
-                        uint32_t colStart    = tileColumnIndex * tileWidth;
-                        uint32_t colsToWrite = std::min(tileWidth,  imageWidth  - colStart);
 
-#ifdef DEBUG_TIMING
-                        DBG_TIMING_START(t_start_alloc);
-#endif
-                        if (tileBuffer.size() < tileBytes)
-                            tileBuffer.resize(tileBytes, 0);
-                        std::fill(tileBuffer.begin(), tileBuffer.end(), 0);
-                        for (uint32_t rowInTile = 0; rowInTile < rowsToWrite; ++rowInTile) {
-                            for (uint32_t columnInTile = 0; columnInTile < colsToWrite; ++columnInTile) {
-                                size_t srcOffset = (size_t(rowStart + rowInTile) + size_t(colStart + columnInTile) * size_t(heightDim)) * size_t(bytesPerPixel);
-                                size_t dstOffset = (size_t(rowInTile) * size_t(tileWidth) + size_t(columnInTile)) * size_t(bytesPerPixel);
-                                std::memcpy(&tileBuffer[dstOffset], basePtr + srcOffset, size_t(bytesPerPixel));
-                            }
-                        }
-#ifdef DEBUG_TIMING
-                        double elapsed_alloc_ms = DBG_TIMING_ELAPSED_MS(t_start_alloc);
-                        DBG_TIMING_START(t_start_write);
-#endif
-                        tstrip_t tileIdx = TIFFComputeTile(tif, colStart, rowStart, 0, 0);
-                        if (TIFFWriteEncodedTile(tif, tileIdx, tileBuffer.data(), tileBytes) < 0)
-                            throw std::runtime_error("TIFF tile write failed at (" + std::to_string(tileColumnIndex) + "," + std::to_string(tileRowIndex) + ")");
-#ifdef DEBUG_TIMING
-                        double elapsed_write_ms = DBG_TIMING_ELAPSED_MS(t_start_write);
-                        printf("[DEBUG][Tile YXZ] Alloc/Copy: %.3f ms, TIFFWrite: %.3f ms (tileRow %u, tileCol %u)\n",
-                               elapsed_alloc_ms, elapsed_write_ms, tileRowIndex, tileColumnIndex);
-#endif
-                    }
+                if (TIFFWriteEncodedTile(
+                        tif,
+                        tileIndex,
+                        tileBuffer.data(),
+                        tileBytes
+                    ) < 0)
+                {
+                    throw std::runtime_error(
+                        "TIFF tile write failed for YXZ transposed full-slice tile"
+                    );
                 }
             }
         } else {
@@ -321,15 +305,8 @@ static void writeSliceToTiff(
                     size_t   byteCount   = size_t(imageWidth) * size_t(rowsToWrite) * size_t(bytesPerPixel);
                     const uint8_t* dataPtr = basePtr + size_t(rowStart) * size_t(imageWidth) * size_t(bytesPerPixel);
                     void* buf = const_cast<void*>(static_cast<const void*>(dataPtr));
-#ifdef DEBUG_TIMING
-                    DBG_TIMING_START(t_start_write);
-#endif
                     if (TIFFWriteEncodedStrip(tif, stripIndex, buf, byteCount) < 0)
                         throw std::runtime_error("TIFF write failed on strip " + std::to_string(stripIndex));
-#ifdef DEBUG_TIMING
-                    double elapsed_write_ms = DBG_TIMING_ELAPSED_MS(t_start_write);
-                    printf("[DEBUG][Strip XYZ] TIFFWrite: %.3f ms (strip %u)\n", elapsed_write_ms, stripIndex);
-#endif
                 }
             } else {
                 // ----------- STRIP YXZ -----------
@@ -338,9 +315,6 @@ static void writeSliceToTiff(
                     uint32_t rowStart    = stripIndex * rowsPerStrip;
                     uint32_t rowsToWrite = std::min(rowsPerStrip, imageHeight - rowStart);
                     size_t   byteCount   = size_t(imageWidth) * size_t(rowsToWrite) * size_t(bytesPerPixel);
-#ifdef DEBUG_TIMING
-                    DBG_TIMING_START(t_start_alloc);
-#endif
                     if (stripBuffer.size() < byteCount)
                         stripBuffer.resize(byteCount);
                     for (uint32_t rowWithinStrip = 0; rowWithinStrip < rowsToWrite; ++rowWithinStrip) {
@@ -350,17 +324,8 @@ static void writeSliceToTiff(
                             std::memcpy(&stripBuffer[dstOff], basePtr + srcOff, size_t(bytesPerPixel));
                         }
                     }
-#ifdef DEBUG_TIMING
-                    double elapsed_alloc_ms = DBG_TIMING_ELAPSED_MS(t_start_alloc);
-                    DBG_TIMING_START(t_start_write);
-#endif
                     if (TIFFWriteEncodedStrip(tif, stripIndex, stripBuffer.data(), byteCount) < 0)
                         throw std::runtime_error("TIFF write failed on strip " + std::to_string(stripIndex));
-#ifdef DEBUG_TIMING
-                    double elapsed_write_ms = DBG_TIMING_ELAPSED_MS(t_start_write);
-                    printf("[DEBUG][Strip YXZ] Alloc/Copy: %.3f ms, TIFFWrite: %.3f ms (strip %u)\n",
-                           elapsed_alloc_ms, elapsed_write_ms, stripIndex);
-#endif
                 }
             }
         }
