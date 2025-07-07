@@ -289,7 +289,7 @@ function result = generateTestData(targetShape, dataTypeName)
     % === Parameters ===
     shapeParam = 2;    % gamma shape
     scaleParam = 0.5;  % gamma scale
-    sparsity   = 0.9;  % proportion of zeros
+    sparsity   = 0.5;  % proportion of zeros
 
     % === Generate sparse gamma matrices in single ===
     A = single(gamrnd(shapeParam, scaleParam, a, b)) .* ...
