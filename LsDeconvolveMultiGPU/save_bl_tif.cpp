@@ -264,105 +264,113 @@ static void writeSliceToTiff(
 // MATLAB MEX entry point
 // save_bl_tif(volume, fileList, isXYZ, compression[, nThreads, useTiles])
 void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
-    if (nrhs < 4 || nrhs > 6)
-        mexErrMsgIdAndTxt("save_bl_tif:usage",
-            "Usage: save_bl_tif(vol, fileList, isXYZ, compression[, nThreads, useTiles]);");
+    try {
+        if (nrhs < 4 || nrhs > 6)
+            mexErrMsgIdAndTxt("save_bl_tif:usage",
+                "Usage: save_bl_tif(vol, fileList, isXYZ, compression[, nThreads, useTiles]);");
 
-    if (!mxIsUint8(prhs[0]) && !mxIsUint16(prhs[0]))
-        mexErrMsgIdAndTxt("save_bl_tif:type", "Volume must be uint8 or uint16.");
+        if (!mxIsUint8(prhs[0]) && !mxIsUint16(prhs[0]))
+            mexErrMsgIdAndTxt("save_bl_tif:type", "Volume must be uint8 or uint16.");
 
-    // Raw dims from array
-    const mwSize* rawDims = mxGetDimensions(prhs[0]);
-    const size_t   rawRows = rawDims[0];
-    const size_t   rawCols = rawDims[1];
-    const size_t   numSlices = (mxGetNumberOfDimensions(prhs[0]) == 3 ? rawDims[2] : 1);
+        // Raw dims from array
+        const mwSize* rawDims = mxGetDimensions(prhs[0]);
+        const size_t   rawRows = rawDims[0];
+        const size_t   rawCols = rawDims[1];
+        const size_t   numSlices = (mxGetNumberOfDimensions(prhs[0]) == 3 ? rawDims[2] : 1);
 
-    // isXYZ flag
-    const bool isXYZ = mxIsLogicalScalarTrue(prhs[2]) || (mxIsNumeric(prhs[2]) && mxGetScalar(prhs[2]) != 0);
+        // isXYZ flag
+        const bool isXYZ = mxIsLogicalScalarTrue(prhs[2]) || (mxIsNumeric(prhs[2]) && mxGetScalar(prhs[2]) != 0);
 
-    // Determine width (X) and height (Y) consistently
-    const size_t widthDim  = isXYZ ? rawRows : rawCols;
-    const size_t heightDim = isXYZ ? rawCols : rawRows;
+        // Determine width (X) and height (Y) consistently
+        const size_t widthDim  = isXYZ ? rawRows : rawCols;
+        const size_t heightDim = isXYZ ? rawCols : rawRows;
 
-    // Compression
-    char* compCStr = mxArrayToUTF8String(prhs[3]);
-    std::string compressionStr(compCStr);
-    mxFree(compCStr);
-    uint16_t compressionType =
-           compressionStr == "none"    ? COMPRESSION_NONE
-         : compressionStr == "lzw"     ? COMPRESSION_LZW
-         : compressionStr == "deflate" ? COMPRESSION_ADOBE_DEFLATE
-         : throw std::runtime_error("Invalid compression: " + compressionStr);
+        // Compression
+        char* compCStr = mxArrayToUTF8String(prhs[3]);
+        std::string compressionStr(compCStr);
+        mxFree(compCStr);
+        uint16_t compressionType =
+               compressionStr == "none"    ? COMPRESSION_NONE
+             : compressionStr == "lzw"     ? COMPRESSION_LZW
+             : compressionStr == "deflate" ? COMPRESSION_ADOBE_DEFLATE
+             : throw std::runtime_error("Invalid compression: " + compressionStr);
 
-    // fileList validation
-    if (!mxIsCell(prhs[1]) || mxGetNumberOfElements(prhs[1]) != numSlices)
-        mexErrMsgIdAndTxt("save_bl_tif:files",
-            "fileList must be a cell-array of length = number of slices.");
-    std::vector<std::string> outputPaths(numSlices);
-    for (size_t i = 0; i < numSlices; ++i) {
-        char* s = mxArrayToUTF8String(mxGetCell(prhs[1], i));
-        outputPaths[i] = s;
-        mxFree(s);
-    }
+        // fileList validation
+        if (!mxIsCell(prhs[1]) || mxGetNumberOfElements(prhs[1]) != numSlices)
+            mexErrMsgIdAndTxt("save_bl_tif:files",
+                "fileList must be a cell-array of length = number of slices.");
+        std::vector<std::string> outputPaths(numSlices);
+        for (size_t i = 0; i < numSlices; ++i) {
+            char* s = mxArrayToUTF8String(mxGetCell(prhs[1], i));
+            outputPaths[i] = s;
+            mxFree(s);
+        }
 
-    // Guard-clauses
-    for (auto& path : outputPaths) {
-        fs::path dir = fs::path(path).parent_path();
-        if (!dir.empty() && !fs::exists(dir))
-            mexErrMsgIdAndTxt("save_bl_tif:invalidPath",
-                "Directory does not exist: %s", dir.string().c_str());
-        if (fs::exists(path) && access(path.c_str(), W_OK) != 0)
-            mexErrMsgIdAndTxt("save_bl_tif:readonly",
-                "Cannot overwrite read-only file: %s", path.c_str());
-    }
+        // Guard-clauses
+        for (auto& path : outputPaths) {
+            fs::path dir = fs::path(path).parent_path();
+            if (!dir.empty() && !fs::exists(dir))
+                mexErrMsgIdAndTxt("save_bl_tif:invalidPath",
+                    "Directory does not exist: %s", dir.string().c_str());
+            if (fs::exists(path) && access(path.c_str(), W_OK) != 0)
+                mexErrMsgIdAndTxt("save_bl_tif:readonly",
+                    "Cannot overwrite read-only file: %s", path.c_str());
+        }
 
-    // Data pointer & sample size
-    const uint8_t* volumeData    = static_cast<const uint8_t*>(mxGetData(prhs[0]));
-    const size_t   bytesPerPixel = (mxGetClassID(prhs[0]) == mxUINT16_CLASS ? 2 : 1);
+        // Data pointer & sample size
+        const uint8_t* volumeData    = static_cast<const uint8_t*>(mxGetData(prhs[0]));
+        const size_t   bytesPerPixel = (mxGetClassID(prhs[0]) == mxUINT16_CLASS ? 2 : 1);
 
-    // Thread count
-    const size_t hwCores     = std::thread::hardware_concurrency();
-    const size_t safeCores   = hwCores ? hwCores : 1;
-    const size_t defaultTh   = std::max(safeCores / 2, size_t(1));
-    const size_t reqTh       = (nrhs >= 5 ? static_cast<size_t>(mxGetScalar(prhs[4])) : defaultTh);
-    const size_t threadCount = std::min(reqTh, numSlices);
+        // Thread count
+        const size_t hwCores     = std::thread::hardware_concurrency();
+        const size_t safeCores   = hwCores ? hwCores : 1;
+        const size_t defaultTh   = std::max(safeCores / 2, size_t(1));
+        const size_t reqTh       = (nrhs >= 5 ? static_cast<size_t>(mxGetScalar(prhs[4])) : defaultTh);
+        const size_t threadCount = std::min(reqTh, numSlices);
 
-    // Tiled mode (new): default off
-    const bool useTiles = (nrhs >= 6) ? (mxIsLogicalScalarTrue(prhs[5]) || (mxIsNumeric(prhs[5]) && mxGetScalar(prhs[5]) != 0)) : false;
+        // Tiled mode (new): default off
+        const bool useTiles = (nrhs >= 6) ? (mxIsLogicalScalarTrue(prhs[5]) || (mxIsNumeric(prhs[5]) && mxGetScalar(prhs[5]) != 0)) : false;
 
-    // Error collection
-    std::vector<std::string> errors;
-    std::mutex              errorMutex;
-    std::atomic<size_t>     nextSlice{0};
+        // Error collection
+        std::vector<std::string> errors;
+        std::mutex              errorMutex;
+        std::atomic<size_t>     nextSlice{0};
 
-    // Launch workers
-    std::vector<std::thread> workers;
-    workers.reserve(threadCount);
-    for (size_t thread_idx = 0; thread_idx < threadCount; ++thread_idx) {
-        workers.emplace_back([&, thread_idx]() {
-            set_thread_affinity(thread_idx);
-            while (true) {
-                size_t start = nextSlice.fetch_add(slicesPerDispatch, std::memory_order_relaxed);
-                if (start >= numSlices) break;
-                size_t end = std::min(numSlices, start + slicesPerDispatch);
-                for (size_t idx = start; idx < end; ++idx) {
-                    try {
-                        writeSliceToTiff(volumeData, idx, widthDim, heightDim, bytesPerPixel, isXYZ, compressionType, outputPaths[idx], useTiles);
-                    } catch (const std::exception& ex) {
-                        std::lock_guard<std::mutex> lg(errorMutex);
-                        errors.push_back(ex.what());
-                        return;
+        // Launch workers
+        std::vector<std::thread> workers;
+        workers.reserve(threadCount);
+        for (size_t thread_idx = 0; thread_idx < threadCount; ++thread_idx) {
+            workers.emplace_back([&, thread_idx]() {
+                set_thread_affinity(thread_idx);
+                while (true) {
+                    size_t start = nextSlice.fetch_add(slicesPerDispatch, std::memory_order_relaxed);
+                    if (start >= numSlices) break;
+                    size_t end = std::min(numSlices, start + slicesPerDispatch);
+                    for (size_t idx = start; idx < end; ++idx) {
+                        try {
+                            writeSliceToTiff(volumeData, idx, widthDim, heightDim, bytesPerPixel, isXYZ, compressionType, outputPaths[idx], useTiles);
+                        } catch (const std::exception& ex) {
+                            std::lock_guard<std::mutex> lg(errorMutex);
+                            errors.push_back(ex.what());
+                            return;
+                        }
                     }
                 }
-            }
-        });
+            });
+        }
+
+        for (auto& th : workers) th.join();
+
+        if (!errors.empty())
+            mexErrMsgIdAndTxt("save_bl_tif:runtime", errors.front().c_str());
+
+        if (nlhs > 0)
+            plhs[0] = const_cast<mxArray*>(prhs[0]);
     }
-
-    for (auto& th : workers) th.join();
-
-    if (!errors.empty())
-        mexErrMsgIdAndTxt("save_bl_tif:runtime", errors.front().c_str());
-
-    if (nlhs > 0)
-        plhs[0] = const_cast<mxArray*>(prhs[0]);
+    catch (const std::exception& ex) {
+        mexErrMsgIdAndTxt("save_bl_tif:runtime", ex.what());
+    }
+    catch (...) {
+        mexErrMsgIdAndTxt("save_bl_tif:unknown", "Unknown error in save_bl_tif");
+    }
 }
