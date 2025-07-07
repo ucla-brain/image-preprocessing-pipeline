@@ -166,7 +166,7 @@ inline void set_thread_affinity(size_t thread_idx) {
 }
 
 // Number of rows per TIFF strip (for RAM vs compression balance)
-static constexpr uint32_t rowsPerStrip = 64;
+static constexpr uint32_t rowsPerStrip = 32;
 // Number of slices claimed per atomic dispatch
 static constexpr size_t slicesPerDispatch = 4;
 
