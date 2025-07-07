@@ -249,11 +249,11 @@ function build_mex(debug)
 
     %% --------- 6) Build CPU MEX files ---------
     fprintf('\n[MEX] Compiling CPU modules …\n');
-    %mex(mex_cpu{:}, 'semaphore.c');
-    %mex(mex_cpu{:}, 'save_lz4_mex.c',    fullfile(lz4_src,'lz4.c'), ['-I"' unixify(lz4_src) '"']);
-    %mex(mex_cpu{:}, 'load_lz4_mex.c',    fullfile(lz4_src,'lz4.c'), ['-I"' unixify(lz4_src) '"']);
-    %mex(mex_cpu{:}, 'load_slab_lz4.cpp', fullfile(lz4_src,'lz4.c'), ['-I"' unixify(lz4_src) '"']);
-    %mex(mex_cpu{:}, inc_tiff, 'load_bl_tif.cpp', link_tiff{:});
+    mex(mex_cpu{:}, 'semaphore.c');
+    mex(mex_cpu{:}, 'save_lz4_mex.c',    fullfile(lz4_src,'lz4.c'), ['-I"' unixify(lz4_src) '"']);
+    mex(mex_cpu{:}, 'load_lz4_mex.c',    fullfile(lz4_src,'lz4.c'), ['-I"' unixify(lz4_src) '"']);
+    mex(mex_cpu{:}, 'load_slab_lz4.cpp', fullfile(lz4_src,'lz4.c'), ['-I"' unixify(lz4_src) '"']);
+    mex(mex_cpu{:}, inc_tiff, 'load_bl_tif.cpp', link_tiff{:});
     mex(mex_cpu{:}, inc_tiff, 'save_bl_tif.cpp', link_tiff{:});
 
     %% --------- 7) Build CUDA MEX files ---------
@@ -280,8 +280,8 @@ function build_mex(debug)
         end
     end
     
-    %mexcuda('-R2018a', nvccflags, 'gauss3d_gpu.cu');
-    %mexcuda('-R2018a', nvccflags, 'conv3d_gpu.cu');
+    mexcuda('-R2018a', nvccflags, 'gauss3d_gpu.cu');
+    mexcuda('-R2018a', nvccflags, 'conv3d_gpu.cu');
 
     fprintf('\n✅  All MEX files built successfully.\n');
 end
