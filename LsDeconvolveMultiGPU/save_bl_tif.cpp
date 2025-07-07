@@ -229,37 +229,26 @@ static void writeSliceToTiff(
         }
 
         if (useTiles) {
-            // Select tile size
-            uint32_t tileWidth, tileLength;
             if (isXYZ) {
-                // One-tile-per-slice, zero-copy
-                tileWidth = imageWidth;
-                tileLength = imageHeight;
-            } else {
-                // Keep your old tile size logic for YXZ
-                select_tile_size(imageWidth, imageHeight, tileWidth, tileLength);
-            }
-            TIFFSetField(tif, TIFFTAG_TILEWIDTH, tileWidth);
-            TIFFSetField(tif, TIFFTAG_TILELENGTH, tileLength);
+                // ----------- TILE XYZ: ZERO-COPY SINGLE TILE -----------
+                TIFFSetField(tif, TIFFTAG_TILEWIDTH, imageWidth);
+                TIFFSetField(tif, TIFFTAG_TILELENGTH, imageHeight);
 
-            const uint32_t tilesAcross = (imageWidth + tileWidth - 1) / tileWidth;
-            const uint32_t tilesDown   = (imageHeight + tileLength - 1) / tileLength;
-            const size_t   tileBytes   = size_t(tileWidth) * size_t(tileLength) * size_t(bytesPerPixel);
-
-            if (isXYZ) {
-                // ─── True Zero-Copy: One tile covers whole image ───
                 tstrip_t tileIdx = TIFFComputeTile(tif, 0, 0, 0, 0);
-                if (TIFFWriteEncodedTile(
-                        tif,
-                        tileIdx,
-                        const_cast<void*>(static_cast<const void*>(basePtr)),
-                        sliceSize
-                    ) < 0)
-                {
-                    throw std::runtime_error("TIFF tile write failed for full-slice tile");
-                }
+                // Write the whole slice as a single tile (zero copy)
+                if (TIFFWriteEncodedTile(tif, tileIdx, basePtr, sliceSize) < 0)
+                    throw std::runtime_error("TIFF tile write failed for single-tile whole image.");
             } else {
-                // ─── YXZ: Transpose each tile ───
+                // ----------- TILE YXZ -----------
+                uint32_t tileWidth, tileLength;
+                select_tile_size(imageWidth, imageHeight, tileWidth, tileLength);
+                TIFFSetField(tif, TIFFTAG_TILEWIDTH, tileWidth);
+                TIFFSetField(tif, TIFFTAG_TILELENGTH, tileLength);
+
+                const uint32_t tilesAcross  = (imageWidth  + tileWidth  - 1) / tileWidth;
+                const uint32_t tilesDown    = (imageHeight + tileLength - 1) / tileLength;
+                const size_t   tileBytes    = size_t(tileWidth) * size_t(tileLength) * size_t(bytesPerPixel);
+
                 thread_local std::vector<uint8_t> tileBuffer;
                 for (uint32_t tileRowIndex = 0; tileRowIndex < tilesDown; ++tileRowIndex) {
                     for (uint32_t tileColumnIndex = 0; tileColumnIndex < tilesAcross; ++tileColumnIndex) {
@@ -271,13 +260,11 @@ static void writeSliceToTiff(
                         if (tileBuffer.size() < tileBytes)
                             tileBuffer.resize(tileBytes, 0);
                         std::fill(tileBuffer.begin(), tileBuffer.end(), 0);
+
                         for (uint32_t rowInTile = 0; rowInTile < rowsToWrite; ++rowInTile) {
                             for (uint32_t columnInTile = 0; columnInTile < colsToWrite; ++columnInTile) {
-                                size_t srcOffset = (size_t(rowStart + rowInTile)
-                                                 + size_t(colStart + columnInTile) * size_t(heightDim))
-                                                 * size_t(bytesPerPixel);
-                                size_t dstOffset = (size_t(rowInTile) * size_t(tileWidth)
-                                                 + size_t(columnInTile)) * size_t(bytesPerPixel);
+                                size_t srcOffset = (size_t(rowStart + rowInTile) + size_t(colStart + columnInTile) * size_t(heightDim)) * size_t(bytesPerPixel);
+                                size_t dstOffset = (size_t(rowInTile) * size_t(tileWidth) + size_t(columnInTile)) * size_t(bytesPerPixel);
                                 std::memcpy(&tileBuffer[dstOffset], basePtr + srcOffset, size_t(bytesPerPixel));
                             }
                         }
@@ -334,6 +321,7 @@ static void writeSliceToTiff(
             throw std::runtime_error("Failed to rename " + tempFile.string() + " → " + outputPath);
     }
 }
+
 
 // MATLAB MEX entry point
 void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
