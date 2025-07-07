@@ -1,161 +1,188 @@
 function save_bl_tif_test
-% Extended regression + benchmark for save_bl_tif MEX with TILED mode test
+% Extended regression and performance benchmark for save_bl_tif MEX (tiles and strips)
+%
+% This test suite:
+%   - Validates data integrity for basic and large TIFF volumes
+%   - Benchmarks and compares STRIP and TILE mode for multiple layouts, types, compressions
+%   - Measures both logical and physical disk file sizes
+%   - Includes robust file/folder cleanup and guard-clause validation
 
-fprintf("🧪  save_bl_tif extended test-suite (with tiles)\n");
+fprintf("🧪  save_bl_tif extended test-suite (with tiles vs strips)\n");
 
-tmpRoot = tempname;
-mkdir(tmpRoot);
-cSandbox = onCleanup(@() sandbox_cleanup(tmpRoot));
+% Temporary test folder (auto-removed)
+temporaryTestRoot = tempname;
+mkdir(temporaryTestRoot);
+cleanupObj = onCleanup(@() sandbox_cleanup(temporaryTestRoot));
 
-%% ---------- A. basic 2-D / 3-D-singleton ----------
-rng(42);
-vol2d = uint8(randi(255,[256 256]));
-fn2d  = fullfile(tmpRoot,'basic_2d.tif');
-save_bl_tif(vol2d,{fn2d},false,'none',[],false); % strips
-assert(isequal(readTiff(fn2d), vol2d));
+%% ========== A. Basic 2D/3D Single-Slice Validation ==========
+rng(42);  % Reproducibility
 
-vol3d = reshape(vol2d,256,256,1);
-fn3d  = fullfile(tmpRoot,'basic_3d.tif');
-save_bl_tif(vol3d,{fn3d},false,'none',[],false); % strips
-assert(isequal(readTiff(fn3d), vol3d(:,:,1)));
-fprintf("   ✅ basic 2-D / 3-D paths ok\n");
+singleSliceImage = uint8(randi(255,[256 256]));
+singleSliceFilename = fullfile(temporaryTestRoot,'basic_2d.tif');
+save_bl_tif(singleSliceImage,{singleSliceFilename},false,'none',[],false); % strip mode
+assert(isequal(readTiff(singleSliceFilename), singleSliceImage));
 
-%% ---------- B. full matrix: {layout × dtype × compression} + timing & sizes ----------
-cfg.order = {'YXZ',false; 'XYZ',true};
-cfg.dtype = {'uint8',@uint8; 'uint16',@uint16};
-cfg.comp  = {'none','lzw','deflate'};
-sz        = [2048 1024 4];
+singleSliceVolume = reshape(singleSliceImage,256,256,1);
+singleSliceVolumeFilename = fullfile(temporaryTestRoot,'basic_3d.tif');
+save_bl_tif(singleSliceVolume,{singleSliceVolumeFilename},false,'none',[],false); % strip mode
+assert(isequal(readTiff(singleSliceVolumeFilename), singleSliceVolume(:,:,1)));
 
-tileModes = [false true];
-nLayouts   = size(cfg.order,1);
-nTypes     = size(cfg.dtype,1);
-nComps     = numel(cfg.comp);
-nTiles     = numel(tileModes);
+fprintf("   ✅ basic 2D/3D single-slice paths OK\n");
 
-times        = zeros(nLayouts,nTypes,nComps,nTiles);
-logicalMiB   = zeros(nLayouts,nTypes,nComps,nTiles);
-physicalMiB  = zeros(nLayouts,nTypes,nComps,nTiles);
+%% ========== B. Full Matrix: {layout × type × compression} + Strip/Tile Benchmark ==========
 
-for t = 1:nTiles
-    tilemode = tileModes(t);
-    tileMsg = {'STRIP','TILE'}{t};
-    for o = 1:nLayouts
-        fprintf("\n   🏁 Testing layout: %s (%s)\n", cfg.order{o,1}, tileMsg);
-        for d = 1:nTypes
-            for c = 1:nComps
-                comp = cfg.comp{c};
-                V = generateTestData(sz, cfg.dtype{d,1});
-                if cfg.order{o,2}
-                    V = permute(V,[2 1 3]);
+% Configurations for benchmarking
+volumeLayouts = {'YXZ',false; 'XYZ',true};  % Name, isXYZ flag
+volumeDataTypes = {'uint8',@uint8; 'uint16',@uint16};
+compressionTypes = {'none','lzw','deflate'};
+testVolumeSize = [2048 1024 4];    % [Height Width Depth]
+tileModeFlags = [false true];
+tileModeNames = {'STRIP','TILE'};
+
+nLayouts   = size(volumeLayouts,1);
+nTypes     = size(volumeDataTypes,1);
+nComps     = numel(compressionTypes);
+nTileModes = numel(tileModeFlags);
+
+% Preallocate results
+saveTimesSeconds     = zeros(nLayouts,nTypes,nComps,nTileModes);
+logicalSizesMiB      = zeros(nLayouts,nTypes,nComps,nTileModes);
+physicalSizesMiB     = zeros(nLayouts,nTypes,nComps,nTileModes);
+
+% --- Main matrix benchmark: Each config is tested with strip and tile
+for tileModeIndex = 1:nTileModes
+    useTiles = tileModeFlags(tileModeIndex);
+    tileModeDescription = tileModeNames{tileModeIndex};
+    for layoutIndex = 1:nLayouts
+        layoutName = volumeLayouts{layoutIndex,1};
+        isXYZ = volumeLayouts{layoutIndex,2};
+        fprintf("\n   🏁 Testing layout: %s (%s)\n", layoutName, tileModeDescription);
+        for typeIndex = 1:nTypes
+            dataTypeName = volumeDataTypes{typeIndex,1};
+            dataTypeFunc = volumeDataTypes{typeIndex,2};
+            for compIndex = 1:nComps
+                compressionType = compressionTypes{compIndex};
+                % --- Generate volume data
+                testVolume = generateTestData(testVolumeSize, dataTypeName);
+                if isXYZ
+                    testVolume = permute(testVolume,[2 1 3]);
                 end
-                tagSafe = regexprep(sprintf('%s_%s_%s_%s',cfg.order{o,1},...
-                              cfg.dtype{d,1},comp,tileMsg), '[^A-Za-z0-9]','_');
-                files = arrayfun(@(k) fullfile(tmpRoot, ...
-                           sprintf('t_%s_%02d.tif',tagSafe,k)), ...
-                           1:sz(3), 'Uni',false);
+                tagSafe = regexprep(sprintf('%s_%s_%s_%s', ...
+                    layoutName,dataTypeName,compressionType,tileModeDescription), '[^A-Za-z0-9]','_');
+                fileList = arrayfun(@(k) fullfile(temporaryTestRoot, ...
+                    sprintf('t_%s_%02d.tif',tagSafe,k)), ...
+                    1:testVolumeSize(3), 'UniformOutput',false);
 
-                t0 = tic;
-                save_bl_tif(V, files, cfg.order{o,2}, comp, [], tilemode);
-                tElapsed = toc(t0);
+                % --- Save and time
+                ticID = tic;
+                save_bl_tif(testVolume, fileList, isXYZ, compressionType, [], useTiles);
+                elapsedSeconds = toc(ticID);
 
-                bytesLogical  = 0;
-                bytesPhysical = 0;
-                for k = 1:sz(3)
-                    ref = V(:,:,k);
-                    if cfg.order{o,2}, ref = ref.'; end
-                    data = readTiff(files{k});
-                    assert(isequal(data, ref), ...
-                           'Mismatch %s slice %d via Tiff', tagSafe, k);
-                    info = dir(files{k});
-                    bytesLogical = bytesLogical + info.bytes;
-                    [~,bcount] = system(sprintf('stat -c "%%b" "%s"', files{k}));
-                    [~,bsize ] = system(sprintf('stat -c "%%B" "%s"', files{k}));
-                    bytesPhysical = bytesPhysical + ...
-                        str2double(strtrim(bcount)) * str2double(strtrim(bsize));
+                % --- Size/accounting + data integrity
+                totalLogicalBytes  = 0;
+                totalPhysicalBytes = 0;
+                for sliceIdx = 1:testVolumeSize(3)
+                    referenceSlice = testVolume(:,:,sliceIdx);
+                    if isXYZ, referenceSlice = referenceSlice.'; end
+                    loadedSlice = readTiff(fileList{sliceIdx});
+                    assert(isequal(loadedSlice, referenceSlice), ...
+                        'Mismatch %s slice %d via Tiff', tagSafe, sliceIdx);
+                    fileInfo = dir(fileList{sliceIdx});
+                    totalLogicalBytes = totalLogicalBytes + fileInfo.bytes;
+                    % Get physical size in bytes (platform: Linux, otherwise returns logical)
+                    [~,blockCount] = system(sprintf('stat -c "%%b" "%s"', fileList{sliceIdx}));
+                    [~,blockSize ] = system(sprintf('stat -c "%%B" "%s"', fileList{sliceIdx}));
+                    totalPhysicalBytes = totalPhysicalBytes + ...
+                        str2double(strtrim(blockCount)) * str2double(strtrim(blockSize));
                 end
 
-                times(o,d,c,t)        = tElapsed;
-                logicalMiB(o,d,c,t)   = bytesLogical  / 2^20;
-                physicalMiB(o,d,c,t)  = bytesPhysical / 2^20;
+                saveTimesSeconds(layoutIndex,typeIndex,compIndex,tileModeIndex) = elapsedSeconds;
+                logicalSizesMiB(layoutIndex,typeIndex,compIndex,tileModeIndex) = totalLogicalBytes  / 2^20;
+                physicalSizesMiB(layoutIndex,typeIndex,compIndex,tileModeIndex)= totalPhysicalBytes / 2^20;
 
                 fprintf("      ✅ %-40s in %.2f s, logical %.1f MiB, physical %.1f MiB\n", ...
-                    strrep(sprintf('%s_%s_%s_%s',cfg.order{o,1},...
-                    cfg.dtype{d,1},comp,tileMsg),'_',' | '), ...
-                    tElapsed, logicalMiB(o,d,c,t), physicalMiB(o,d,c,t));
+                    strrep(sprintf('%s_%s_%s_%s',layoutName,dataTypeName,compressionType,tileModeDescription),'_',' | '), ...
+                    elapsedSeconds, logicalSizesMiB(layoutIndex,typeIndex,compIndex,tileModeIndex), physicalSizesMiB(layoutIndex,typeIndex,compIndex,tileModeIndex));
             end
         end
     end
 end
 
-%% Comparison table: STRIP vs TILE (Section B)
+% ---- Print STRIP vs TILE summary comparison table ----
 fprintf("\n   📊 STRIP vs TILE comparison (Time and Sizes, Section B):\n");
-rows = {};
-for o = 1:nLayouts
-    for d = 1:nTypes
-        for c = 1:nComps
-            tStrip   = times(o,d,c,1);
-            tTile    = times(o,d,c,2);
-            sp       = tStrip / tTile;
-            lStrip   = logicalMiB(o,d,c,1);
-            lTile    = logicalMiB(o,d,c,2);
-            pStrip   = physicalMiB(o,d,c,1);
-            pTile    = physicalMiB(o,d,c,2);
-            rows(end+1,:) = {cfg.order{o,1},cfg.dtype{d,1},cfg.comp{c}, tStrip, tTile, sp, lStrip, lTile, pStrip, pTile};
+summaryRows = {};
+for layoutIndex = 1:nLayouts
+    for typeIndex = 1:nTypes
+        for compIndex = 1:nComps
+            timeStrip   = saveTimesSeconds(layoutIndex,typeIndex,compIndex,1);
+            timeTile    = saveTimesSeconds(layoutIndex,typeIndex,compIndex,2);
+            speedup     = timeStrip / timeTile;
+            logicStrip  = logicalSizesMiB(layoutIndex,typeIndex,compIndex,1);
+            logicTile   = logicalSizesMiB(layoutIndex,typeIndex,compIndex,2);
+            physStrip   = physicalSizesMiB(layoutIndex,typeIndex,compIndex,1);
+            physTile    = physicalSizesMiB(layoutIndex,typeIndex,compIndex,2);
+            summaryRows(end+1,:) = {volumeLayouts{layoutIndex,1}, volumeDataTypes{typeIndex,1}, ...
+                compressionTypes{compIndex}, timeStrip, timeTile, speedup, logicStrip, logicTile, physStrip, physTile};
         end
     end
 end
-T = cell2table(rows, 'VariableNames', ...
+comparisonTable = cell2table(summaryRows, 'VariableNames', ...
     {'Layout','DataType','Compression', 'Time_STRIP_s', 'Time_TILE_s', 'Speedup', ...
      'Logical_STRIP_MiB','Logical_TILE_MiB','Physical_STRIP_MiB','Physical_TILE_MiB'});
-disp(T);
+disp(comparisonTable);
 
-%% ---------- C. Large block test: 100 big slices, compare strip vs tile ----------
-szBig = [2048 2048 100];
-Vbig = generateTestData(szBig, 'uint8');
-files = arrayfun(@(k) fullfile(tmpRoot, sprintf('bigblock_%03d.tif',k)), 1:szBig(3), 'Uni', false);
+%% ========== C. Large Block Test: 100 Big Slices, Compare Strip vs Tile ==========
+largeBlockSize = [2048 2048 100];
+largeBlockVolume = generateTestData(largeBlockSize, 'uint8');
+largeBlockFileList = arrayfun(@(k) fullfile(temporaryTestRoot, sprintf('bigblock_%03d.tif',k)), 1:largeBlockSize(3), 'UniformOutput', false);
 
+% --- STRIP mode
 fprintf('\n   🏁 Saving 100 large slices (STRIP mode)...\n');
-t0 = tic;
-save_bl_tif(Vbig, files, false, 'deflate', [], false); % STRIP
-tStrip = toc(t0);
-for k = 1:szBig(3)
-    data = readTiff(files{k});
-    assert(isequal(data, Vbig(:,:,k)), 'Big block mismatch at slice %d (strip mode)', k);
+stripSaveTimeSec = tic;
+save_bl_tif(largeBlockVolume, largeBlockFileList, false, 'deflate', [], false);
+stripElapsedSec = toc(stripSaveTimeSec);
+for sliceIdx = 1:largeBlockSize(3)
+    data = readTiff(largeBlockFileList{sliceIdx});
+    assert(isequal(data, largeBlockVolume(:,:,sliceIdx)), ...
+        'Big block mismatch at slice %d (strip mode)', sliceIdx);
 end
-fprintf('      ✅ 100 large slices (STRIP mode) ok (%.2f s)\n', tStrip);
+fprintf('      ✅ 100 large slices (STRIP mode) ok (%.2f s)\n', stripElapsedSec);
 
+% --- TILE mode
 fprintf('\n   🏁 Saving 100 large slices (TILE mode)...\n');
-t0 = tic;
-save_bl_tif(Vbig, files, false, 'deflate', [], true); % TILE
-tTile = toc(t0);
-for k = 1:szBig(3)
-    data = readTiff(files{k});
-    assert(isequal(data, Vbig(:,:,k)), 'Big block mismatch at slice %d (tile mode)', k);
+tileSaveTimeSec = tic;
+save_bl_tif(largeBlockVolume, largeBlockFileList, false, 'deflate', [], true);
+tileElapsedSec = toc(tileSaveTimeSec);
+for sliceIdx = 1:largeBlockSize(3)
+    data = readTiff(largeBlockFileList{sliceIdx});
+    assert(isequal(data, largeBlockVolume(:,:,sliceIdx)), ...
+        'Big block mismatch at slice %d (tile mode)', sliceIdx);
 end
-fprintf('      ✅ 100 large slices (TILE mode) ok (%.2f s)\n', tTile);
+fprintf('      ✅ 100 large slices (TILE mode) ok (%.2f s)\n', tileElapsedSec);
 
-fprintf('\n   🚦  [Performance] Tiles vs Strips (100x %dx%d slices):\n', szBig(1), szBig(2));
-fprintf('         STRIP: %.2f s\n', tStrip);
-fprintf('         TILE : %.2f s\n', tTile);
-
-if tTile < tStrip
-    fprintf('      🟢 Tiles are FASTER (%.1fx speedup)\n', tStrip/tTile);
+% --- Print block test summary
+fprintf('\n   🚦  [Performance] Tiles vs Strips (100x %dx%d slices):\n', largeBlockSize(1), largeBlockSize(2));
+fprintf('         STRIP: %.2f s\n', stripElapsedSec);
+fprintf('         TILE : %.2f s\n', tileElapsedSec);
+if tileElapsedSec < stripElapsedSec
+    fprintf('      🟢 Tiles are FASTER (%.1fx speedup)\n', stripElapsedSec/tileElapsedSec);
 else
-    fprintf('      🟡 Strips are FASTER (%.1fx speedup)\n', tTile/tStrip);
+    fprintf('      🟡 Strips are FASTER (%.1fx speedup)\n', tileElapsedSec/stripElapsedSec);
 end
 
-%% ---------- D. guard-clause checks ----------
+%% ========== D. Guard-Clause Error Handling ==========
 fprintf("\n   🛡  guard-clause checks\n");
 try
     save_bl_tif(uint8(0), {'/no/way/out.tif'}, false,'lzw',[],false);
     error('invalid-path accepted');
 catch, fprintf('      ✅ invalid path rejected\n'); end
 
-roFile = fullfile(tmpRoot,'readonly.tif');
-imwrite(uint8(1),roFile);  fileattrib(roFile,'-w');
-cRO = onCleanup(@() restore_rw(roFile));
+readOnlyFilename = fullfile(temporaryTestRoot,'readonly.tif');
+imwrite(uint8(1),readOnlyFilename);
+fileattrib(readOnlyFilename,'-w');
+readOnlyCleanupObj = onCleanup(@() restore_rw(readOnlyFilename));
 try
-    save_bl_tif(uint8(0), {roFile}, false,'none',[],false);
+    save_bl_tif(uint8(0), {readOnlyFilename}, false,'none',[],false);
     error('read-only overwrite accepted');
 catch, fprintf('      ✅ read-only overwrite rejected\n'); end
 
@@ -164,42 +191,48 @@ fprintf("\n🎉  all save_bl_tif tests passed (TILES + STRIPS)\n");
 end
 
 % ------- Helper functions as local functions below --------
-function data = readTiff(fname)
-    % Try MATLAB Tiff class (cross-platform)
+
+function data = readTiff(filename)
+    % Robust TIFF reader, works with both 'Tiff' and 'imread'
     try
-        t = Tiff(fname,'r');
-        data = read(t);
-        t.close();
-        return;
+        tiffObj = Tiff(filename,'r');
+        data = read(tiffObj);
+        tiffObj.close();
     catch
-        % fallback
-        data = imread(fname);
+        data = imread(filename);
     end
 end
 
-function out = generateTestData(sz, dtype)
+function outputVolume = generateTestData(volumeSize, dataTypeName)
+    % Generate synthetic gamma-distributed, sparse 3D/2D test volume
     alpha = 2; beta = 50;
-    X = gamrnd(alpha, beta, sz);
-    mask = rand(sz) > 0.10;
-    X(~mask) = 0;
-    X = X / max(X(:));
-    switch dtype
-        case 'uint8',  out = uint8(X * 255);
-        case 'uint16', out = uint16(X * 65535);
-        otherwise,     error("Unsupported dtype '%s'",dtype);
+    randomData = gamrnd(alpha, beta, volumeSize);
+    mask = rand(volumeSize) > 0.10;
+    randomData(~mask) = 0;
+    randomData = randomData / max(randomData(:));
+    switch dataTypeName
+        case 'uint8',  outputVolume = uint8(randomData * 255);
+        case 'uint16', outputVolume = uint16(randomData * 65535);
+        otherwise,     error("Unsupported dtype '%s'",dataTypeName);
     end
 end
 
-function sandbox_cleanup(dirPath)
-    fclose('all'); safe_rmdir(dirPath);
+function sandbox_cleanup(folderPath)
+    % Cleanup function to close files and remove folder
+    fclose('all'); safe_rmdir(folderPath);
 end
 
-function restore_rw(p)
-    if exist(p,'file'), fileattrib(p,'+w'); end
+function restore_rw(filePath)
+    % Restore write permissions to a file
+    if exist(filePath,'file'), fileattrib(filePath,'+w'); end
 end
 
-function safe_rmdir(p)
-    if exist(p,'dir')
-        try rmdir(p,'s'); catch, pause(0.1); if exist(p,'dir'), rmdir(p,'s'); end; end
+function safe_rmdir(folderPath)
+    % Remove directory and its contents robustly
+    if exist(folderPath,'dir')
+        try rmdir(folderPath,'s');
+        catch, pause(0.1);
+            if exist(folderPath,'dir'), rmdir(folderPath,'s'); end
+        end
     end
 end
