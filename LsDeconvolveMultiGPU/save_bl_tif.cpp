@@ -349,7 +349,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
         workers.reserve(threadCount);
         for (size_t thread_idx = 0; thread_idx < threadCount; ++thread_idx) {
             workers.emplace_back([&, thread_idx]() {
-                set_thread_affinity(thread_idx);
+                //set_thread_affinity(thread_idx);
                 while (true) {
                     uint32_t start = nextSlice.fetch_add(static_cast<uint32_t>(slicesPerDispatch), std::memory_order_relaxed);
                     if (start >= numSlices) break;
