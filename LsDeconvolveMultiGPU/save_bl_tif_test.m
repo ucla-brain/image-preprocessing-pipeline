@@ -117,7 +117,6 @@ for tileModeIndex = 1:nTileModes
 end
 
 % ---- Print STRIP vs TILE summary comparison table ----
-% ---- Print STRIP vs TILE summary comparison table ----
 fprintf("\n   📊 STRIP vs TILE comparison (Speedup, Section B):\n");
 summaryRows = {};
 for typeIndex = 1:nTypes
@@ -163,6 +162,7 @@ fprintf('\n   🏁 Saving 100 large slices (TILE mode, XYZ)...\n');
 tileSaveTimeSec = tic;
 save_bl_tif(largeBlockVolume, largeBlockFileList, true, 'deflate', [], true);  % isXYZ = true
 tileElapsedSec = toc(tileSaveTimeSec);
+fprintf('\n   🏁 Validating 100 large slices (TILE mode, XYZ)...\n');
 for sliceIdx = 1:largeBlockSize(3)
     data = readTiff(largeBlockFileList{sliceIdx});
     referenceSlice = largeBlockVolume(:,:,sliceIdx).'; % <---- Transpose for XYZ
@@ -176,6 +176,7 @@ fprintf('\n   🏁 Saving 100 large slices (STRIP mode, XYZ)...\n');
 stripSaveTimeSec = tic;
 save_bl_tif(largeBlockVolume, largeBlockFileList, true, 'deflate', [], false);  % isXYZ = true
 stripElapsedSec = toc(stripSaveTimeSec);
+fprintf('\n   🏁 Validating 100 large slices (STRIP mode, XYZ)...\n');
 for sliceIdx = 1:largeBlockSize(3)
     data = readTiff(largeBlockFileList{sliceIdx});
     referenceSlice = largeBlockVolume(:,:,sliceIdx).'; % <---- Transpose for XYZ
