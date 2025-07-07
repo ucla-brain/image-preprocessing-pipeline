@@ -140,7 +140,7 @@ comparisonTable = cell2table(summaryRows, 'VariableNames', ...
 disp(comparisonTable);
 
 %% ========== C. Large Block Test: 100 Big Slices, Compare Strip vs Tile ==========
-largeBlockSize = [20480 20480 100];
+largeBlockSize = [4096 4096 100];
 largeBlockVolume = generateTestData(largeBlockSize, 'uint8');
 largeBlockFileList = arrayfun(@(k) fullfile(temporaryTestRoot, sprintf('bigblock_%03d.tif',k)), 1:largeBlockSize(3), 'UniformOutput', false);
 
