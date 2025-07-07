@@ -77,6 +77,7 @@
   #include <windows.h>
   #include <bitset>
   #include <io.h>
+  #include <fcntl.h>
   #ifndef W_OK
     #define W_OK 2
   #endif
@@ -220,45 +221,82 @@ struct SliceWriteTask {
 };
 
 // --------- Async TIFF Writer with O_DIRECT/NO_BUFFERING file open -------------
+// RAII wrapper for TIFF* with advanced I/O flags
 struct TiffWriterDirect {
     TIFF* tif = nullptr;
-#if defined(__linux__)
+
+#if defined(_WIN32)
+    HANDLE fileHandle = INVALID_HANDLE_VALUE;   // only valid until we hand it to CRT
+#elif defined(__linux__)
     int fd = -1;
 #endif
+
     std::string path;
 
-    TiffWriterDirect(const std::string& path_, const char* mode)
+    TiffWriterDirect(const std::string& path_, const char* /*modeIgnored*/)
         : path(path_)
     {
-#if defined(__linux__)
+#if defined(_WIN32)
+        // Create file with direct-durability flags but let OS buffer alignments work.
+        fileHandle = CreateFileA(
+            path.c_str(),
+            GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,          // allow read/write sharing
+            nullptr,
+            CREATE_ALWAYS,
+            FILE_ATTRIBUTE_NORMAL
+          | FILE_FLAG_WRITE_THROUGH
+          | FILE_FLAG_SEQUENTIAL_SCAN,
+            nullptr
+        );
+        if (fileHandle == INVALID_HANDLE_VALUE)
+            throw std::runtime_error("CreateFileA failed for: " + path);
+
+        // Wrap the Win32 handle in a CRT fd; give CRT ownership.
+        int crtFlags = _O_WRONLY | _O_BINARY;
+        int crtFd    = _open_osfhandle(reinterpret_cast<intptr_t>(fileHandle), crtFlags);
+        if (crtFd == -1) {
+            CloseHandle(fileHandle);
+            throw std::runtime_error("_open_osfhandle failed for: " + path);
+        }
+        // Ownership transferred -> don't close twice.
+        fileHandle = INVALID_HANDLE_VALUE;
+
+        // Open TIFF on that fd in binary write mode.
+        tif = TIFFFdOpen(crtFd, path.c_str(), "wb");
+        if (!tif)
+            throw std::runtime_error("TIFFOpen failed: " + path);
+
+#elif defined(__linux__)
         fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_DIRECT, 0666);
         if (fd < 0)
-            throw std::runtime_error("Cannot open TIFF for writing (O_DIRECT): " + path);
-        tif = TIFFFdOpen(fd, path.c_str(), mode);
-        if (!tif) {
-            ::close(fd);
-            fd = -1;
+            throw std::runtime_error("open(O_DIRECT) failed for: " + path);
+
+        tif = TIFFFdOpen(fd, path.c_str(), "wb");
+        if (!tif)
             throw std::runtime_error("TIFFOpen failed: " + path);
-        }
 #else
-        tif = TIFFOpen(path.c_str(), mode);
+        tif = TIFFOpen(path.c_str(), "wb");
         if (!tif)
             throw std::runtime_error("TIFFOpen failed: " + path);
 #endif
     }
+
     ~TiffWriterDirect() {
-        if (tif) {
-            TIFFClose(tif);
-            tif = nullptr;
-        }
-#if defined(__linux__)
-        if (fd != -1) {
+        if (tif)
+            TIFFClose(tif);                  // also closes the CRT fd
+
+#if defined(_WIN32)
+        // Only close if we still own it (error paths).
+        if (fileHandle != INVALID_HANDLE_VALUE)
+            CloseHandle(fileHandle);
+#elif defined(__linux__)
+        if (fd != -1)
             ::close(fd);
-            fd = -1;
-        }
 #endif
     }
 };
+
 
 // The actual TIFF write logic (unchanged for correctness)
 static void writeSliceToTiffTask(const SliceWriteTask& task) {
