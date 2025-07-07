@@ -86,20 +86,50 @@ namespace fs = std::filesystem;
 // Set thread affinity for best NUMA/core balancing
 inline void set_thread_affinity(size_t thread_idx) {
 #if defined(_WIN32)
-    DWORD num_cores = std::thread::hardware_concurrency();
-    if (num_cores == 0) num_cores = 1;
-    DWORD_PTR mask = (1ull << (thread_idx % num_cores));
-    HANDLE hThread = GetCurrentThread();
-    SetThreadAffinityMask(hThread, mask);
+    // 1) Get the process affinity mask
+    DWORD_PTR processMask = 0, systemMask = 0;
+    if (!GetProcessAffinityMask(GetCurrentProcess(), &processMask, &systemMask)) {
+        // fallback or log:
+        return;
+    }
+
+    // 2) Collect all allowed CPUs
+    std::vector<DWORD> cpus;
+    for (DWORD i = 0; i < sizeof(processMask) * 8; ++i) {
+        if (processMask & (DWORD_PTR(1) << i))
+            cpus.push_back(i);
+    }
+    if (cpus.empty()) {
+        cpus.push_back(0);
+    }
+
+    // 3) Pick one based on thread_idx
+    DWORD core = cpus[ thread_idx % cpus.size() ];
+    DWORD_PTR mask = (DWORD_PTR(1) << core);
+
+    // 4) Apply it
+    if (SetThreadAffinityMask(GetCurrentThread(), mask) == 0) {
+        // handle error
+    }
+
 #elif defined(__linux__)
-    unsigned num_cores = std::thread::hardware_concurrency();
-    if (num_cores == 0) num_cores = 1;
+    long num_cpus = sysconf(_SC_NPROCESSORS_ONLN);
+    if (num_cpus < 1) num_cpus = 1;
+
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
-    CPU_SET(thread_idx % num_cores, &cpuset);
-    pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
+
+    // bind to (thread_idx % num_cpus)
+    CPU_SET(thread_idx % num_cpus, &cpuset);
+
+    int err = pthread_setaffinity_np(pthread_self(),
+                                     sizeof(cpu_set_t),
+                                     &cpuset);
+    if (err != 0) {
+        // handle error, e.g. log strerror(err)
+    }
 #else
-    (void)thread_idx;
+    (void)thread_idx;  // no-op on other platforms
 #endif
 }
 
