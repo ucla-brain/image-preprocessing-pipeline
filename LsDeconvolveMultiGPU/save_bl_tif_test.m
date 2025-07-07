@@ -332,10 +332,10 @@ function result = generateTestData(targetShape, dataTypeName)
     % === Final conversion to requested integer data type ===
     switch dataTypeName
         case 'uint8'
-            result = result * 255;
+            result = result * single(255);
             result = uint8(result);
         case 'uint16'
-            result = result * 65535;
+            result = result * single(65535);
             result = uint16(result);
         otherwise
             error("Unsupported dtype '%s'", dataTypeName);
