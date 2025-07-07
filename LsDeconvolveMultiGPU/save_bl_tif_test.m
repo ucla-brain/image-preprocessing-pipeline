@@ -35,6 +35,18 @@ singleSliceVolumeFilename = fullfile(temporaryTestRoot,'basic_3d.tif');
 save_bl_tif(singleSliceVolume,{singleSliceVolumeFilename},false,'none',[],false); % strip mode
 assert(isequal(readTiff(singleSliceVolumeFilename), singleSliceVolume(:,:,1)));
 
+sz = [129, 129, 1];  % not a multiple of 128
+im = uint8(100 * ones(sz));
+save_bl_tif(im, {singleSliceFilename}, true, 'none', [], true); % YXZ or XYZ, as needed
+loaded = imread(singleSliceFilename);
+assert(all(loaded(1:129,1:129) == 100), 'Main region mismatch');
+if size(loaded,1) > 129
+    disp('Padding row(s):'); disp(loaded(130:end,:));
+end
+if size(loaded,2) > 129
+    disp('Padding col(s):'); disp(loaded(:,130:end));
+end
+
 fprintf("   ✅ basic 2D/3D single-slice paths OK\n");
 
 %% ========== B. Full Matrix: {layout × type × compression} + Strip/Tile Benchmark ==========
