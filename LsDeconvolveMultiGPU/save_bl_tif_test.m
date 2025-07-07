@@ -263,17 +263,79 @@ function data = readTiff(filename)
     end
 end
 
-function outputVolume = generateTestData(volumeSize, dataTypeName)
-    % Generate synthetic gamma-distributed, sparse 3D/2D test volume
-    alpha = 2; beta = 50;
-    randomData = gamrnd(alpha, beta, volumeSize);
-    mask = rand(volumeSize) > 0.10;
-    randomData(~mask) = 0;
-    randomData = randomData / max(randomData(:));
+% function outputVolume = generateTestData(volumeSize, dataTypeName)
+%     % Generate synthetic gamma-distributed, sparse 3D/2D test volume
+%     alpha = 2; beta = 50;
+%     randomData = gamrnd(alpha, beta, volumeSize);
+%     mask = rand(volumeSize) > 0.10;
+%     randomData(~mask) = 0;
+%     randomData = randomData / max(randomData(:));
+%     switch dataTypeName
+%         case 'uint8',  outputVolume = uint8(randomData * 255);
+%         case 'uint16', outputVolume = uint16(randomData * 65535);
+%         otherwise,     error("Unsupported dtype '%s'",dataTypeName);
+%     end
+% end
+
+function outputVolume = generateTestData(targetShape, dataTypeName)
+    %GENERATE_SPARSE_GAMMA_3D Generates a 3D matrix of specified size using
+    %sparse gamma distributed 2D planes and broadcasts them into 3D.
+    % The 6 edges are also multiplied by sparse gamma random vectors.
+
+    assert(numel(targetShape) == 3, 'targetShape must be a vector of length 3');
+    [a, b, c] = deal(targetShape(1), targetShape(2), targetShape(3));
+
+    % === Parameters ===
+    shapeParam = 2;    % gamma shape
+    scaleParam = 0.5;  % gamma scale
+    sparsity   = 0.1;  % proportion of zeros
+
+    % === Generate sparse gamma matrices in single ===
+    A = single(gamrnd(shapeParam, scaleParam, a, b)) .* ...
+        single(rand(a, b) > sparsity);
+
+    B = single(gamrnd(shapeParam, scaleParam, b, c)) .* ...
+        single(rand(b, c) > sparsity);
+
+    % === Compute broadcasted outer product in single ===
+    A3 = repmat(A, 1, 1, c);         % [a b c]
+    B3 = permute(B, [3 1 2]);         % [1 b c]
+    result = A3 .* B3;                % [a b c]
+
+    % === Modify 6 edges with random sparse gamma vectors in single ===
+    edgeX1 = single(gamrnd(shapeParam, scaleParam, [a 1 1])) .* ...
+             single(rand(a,1,1) > sparsity);
+    edgeX2 = single(gamrnd(shapeParam, scaleParam, [a 1 1])) .* ...
+             single(rand(a,1,1) > sparsity);
+
+    edgeY1 = single(gamrnd(shapeParam, scaleParam, [1 b 1])) .* ...
+             single(rand(1,b,1) > sparsity);
+    edgeY2 = single(gamrnd(shapeParam, scaleParam, [1 b 1])) .* ...
+             single(rand(1,b,1) > sparsity);
+
+    edgeZ1 = single(gamrnd(shapeParam, scaleParam, [1 1 c])) .* ...
+             single(rand(1,1,c) > sparsity);
+    edgeZ2 = single(gamrnd(shapeParam, scaleParam, [1 1 c])) .* ...
+             single(rand(1,1,c) > sparsity);
+
+    % Apply multiplicative edge perturbations
+    result(1,:,:)   = result(1,:,:)   .* edgeX1(1,:,:);
+    result(end,:,:) = result(end,:,:) .* edgeX2(end,:,:);
+
+    result(:,1,:)   = result(:,1,:)   .* edgeY1(:,1,:);
+    result(:,end,:) = result(:,end,:) .* edgeY2(:,end,:);
+
+    result(:,:,1)   = result(:,:,1)   .* edgeZ1(:,:,1);
+    result(:,:,end) = result(:,:,end) .* edgeZ2(:,:,end);
+
+    % === Final conversion to requested integer data type ===
     switch dataTypeName
-        case 'uint8',  outputVolume = uint8(randomData * 255);
-        case 'uint16', outputVolume = uint16(randomData * 65535);
-        otherwise,     error("Unsupported dtype '%s'",dataTypeName);
+        case 'uint8'
+            outputVolume = uint8(result * 255);
+        case 'uint16'
+            outputVolume = uint16(result * 65535);
+        otherwise
+            error("Unsupported dtype '%s'", dataTypeName);
     end
 end
 
