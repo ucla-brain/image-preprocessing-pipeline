@@ -369,12 +369,21 @@ static void writeSliceToTiffTask(const SliceWriteTask& task) {
         }
     }
     std::error_code ec;
-    fs::rename(tempFile, task.outPath, ec);
-    if (ec) {
-        if (fs::exists(task.outPath)) fs::remove(task.outPath);
+    for (int attempt = 0; attempt < 5; ++attempt) {
         fs::rename(tempFile, task.outPath, ec);
-        if (ec)
-            throw std::runtime_error("Failed to rename " + tempFile.string() + " → " + task.outPath);
+        if (!ec)
+            break;
+        if (fs::exists(task.outPath)) {
+            fs::remove(task.outPath, ec);
+            // Try again immediately
+            fs::rename(tempFile, task.outPath, ec);
+            if (!ec)
+                break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    if (ec) {
+        throw std::runtime_error("Failed to rename " + tempFile.string() + " → " + task.outPath);
     }
 }
 
