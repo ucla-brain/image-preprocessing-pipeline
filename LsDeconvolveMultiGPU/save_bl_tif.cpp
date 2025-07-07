@@ -236,7 +236,7 @@ static void writeSliceToTiff(
 
                 tstrip_t tileIdx = TIFFComputeTile(tif, 0, 0, 0, 0);
                 // Write the whole slice as a single tile (zero copy)
-                if (TIFFWriteEncodedTile(tif, tileIdx, basePtr, sliceSize) < 0)
+                if (TIFFWriteEncodedTile(tif, tileIdx, const_cast<void*>(static_cast<const void*>(basePtr)), sliceSize) < 0)
                     throw std::runtime_error("TIFF tile write failed for single-tile whole image.");
             } else {
                 // ----------- TILE YXZ -----------
