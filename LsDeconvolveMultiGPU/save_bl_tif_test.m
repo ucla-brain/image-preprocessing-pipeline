@@ -144,22 +144,10 @@ largeBlockSize = [8192 8192 100];
 largeBlockVolume = generateTestData(largeBlockSize, 'uint8');
 largeBlockFileList = arrayfun(@(k) fullfile(temporaryTestRoot, sprintf('bigblock_%03d.tif',k)), 1:largeBlockSize(3), 'UniformOutput', false);
 
-% --- STRIP mode
-fprintf('\n   🏁 Saving 100 large slices (STRIP mode)...\n');
-stripSaveTimeSec = tic;
-save_bl_tif(largeBlockVolume, largeBlockFileList, false, 'deflate', [], false);
-stripElapsedSec = toc(stripSaveTimeSec);
-for sliceIdx = 1:largeBlockSize(3)
-    data = readTiff(largeBlockFileList{sliceIdx});
-    assert(isequal(data, largeBlockVolume(:,:,sliceIdx)), ...
-        'Big block mismatch at slice %d (strip mode)', sliceIdx);
-end
-fprintf('      ✅ 100 large slices (STRIP mode) ok (%.2f s)\n', stripElapsedSec);
-
 % --- TILE mode
 fprintf('\n   🏁 Saving 100 large slices (TILE mode)...\n');
 tileSaveTimeSec = tic;
-save_bl_tif(largeBlockVolume, largeBlockFileList, false, 'deflate', [], true);
+save_bl_tif(largeBlockVolume, largeBlockFileList, true, 'deflate', [], true);
 tileElapsedSec = toc(tileSaveTimeSec);
 for sliceIdx = 1:largeBlockSize(3)
     data = readTiff(largeBlockFileList{sliceIdx});
@@ -167,6 +155,18 @@ for sliceIdx = 1:largeBlockSize(3)
         'Big block mismatch at slice %d (tile mode)', sliceIdx);
 end
 fprintf('      ✅ 100 large slices (TILE mode) ok (%.2f s)\n', tileElapsedSec);
+
+% --- STRIP mode
+fprintf('\n   🏁 Saving 100 large slices (STRIP mode)...\n');
+stripSaveTimeSec = tic;
+save_bl_tif(largeBlockVolume, largeBlockFileList, true, 'deflate', [], false);
+stripElapsedSec = toc(stripSaveTimeSec);
+for sliceIdx = 1:largeBlockSize(3)
+    data = readTiff(largeBlockFileList{sliceIdx});
+    assert(isequal(data, largeBlockVolume(:,:,sliceIdx)), ...
+        'Big block mismatch at slice %d (strip mode)', sliceIdx);
+end
+fprintf('      ✅ 100 large slices (STRIP mode) ok (%.2f s)\n', stripElapsedSec);
 
 % --- Print block test summary
 fprintf('\n   🚦  [Performance] Tiles vs Strips (100x %dx%d slices):\n', largeBlockSize(1), largeBlockSize(2));
