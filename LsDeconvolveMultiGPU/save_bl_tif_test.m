@@ -25,14 +25,14 @@ end
 imwrite(uint8(zeros(10)), singleSliceFilename);
 assert(exist(singleSliceFilename,'file')==2, 'imwrite failed to create file.');
 delete(singleSliceFilename);
-save_bl_tif(singleSliceImage,{singleSliceFilename},false,'none',[],false); % strip mode
+fprintf('Calling save_bl_tif for: %s\n', singleSliceFilename);
+save_bl_tif(singleSliceImage,{singleSliceFilename},false,'none',[],false);
+fprintf('Finished save_bl_tif for: %s\n', singleSliceFilename);
 assert(isequal(readTiff(singleSliceFilename), singleSliceImage));
 
 singleSliceVolume = reshape(singleSliceImage,256,256,1);
 singleSliceVolumeFilename = fullfile(temporaryTestRoot,'basic_3d.tif');
-fprintf('Calling save_bl_tif for: %s\n', singleSliceFilename);
-save_bl_tif(singleSliceImage,{singleSliceFilename},false,'none',[],false);
-fprintf('Finished save_bl_tif for: %s\n', singleSliceFilename);
+save_bl_tif(singleSliceVolume,{singleSliceVolumeFilename},false,'none',[],false); % strip mode
 assert(isequal(readTiff(singleSliceVolumeFilename), singleSliceVolume(:,:,1)));
 
 fprintf("   ✅ basic 2D/3D single-slice paths OK\n");
