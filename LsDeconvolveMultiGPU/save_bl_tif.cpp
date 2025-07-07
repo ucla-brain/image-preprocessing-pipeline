@@ -61,6 +61,7 @@
 #include <cstdint>
 #include <cstring>
 #include <algorithm>
+#include <system_error>
 
 #if defined(_WIN32)
   // prevent <windows.h> from defining min/max as macros
@@ -86,30 +87,32 @@ namespace fs = std::filesystem;
 // Set thread affinity for best NUMA/core balancing
 inline void set_thread_affinity(size_t thread_idx) {
 #if defined(_WIN32)
-    // 1) Get the process affinity mask
     DWORD_PTR processMask = 0, systemMask = 0;
     if (!GetProcessAffinityMask(GetCurrentProcess(), &processMask, &systemMask)) {
-        // fallback or log:
-        return;
+        throw std::system_error(
+            static_cast<int>(GetLastError()),
+            std::system_category(),
+            "GetProcessAffinityMask failed"
+        );
     }
 
-    // 2) Collect all allowed CPUs
     std::vector<DWORD> cpus;
     for (DWORD i = 0; i < sizeof(processMask) * 8; ++i) {
         if (processMask & (DWORD_PTR(1) << i))
             cpus.push_back(i);
     }
-    if (cpus.empty()) {
+    if (cpus.empty())
         cpus.push_back(0);
-    }
 
-    // 3) Pick one based on thread_idx
     DWORD core = cpus[ thread_idx % cpus.size() ];
     DWORD_PTR mask = (DWORD_PTR(1) << core);
 
-    // 4) Apply it
     if (SetThreadAffinityMask(GetCurrentThread(), mask) == 0) {
-        // handle error
+        throw std::system_error(
+            static_cast<int>(GetLastError()),
+            std::system_category(),
+            "SetThreadAffinityMask failed"
+        );
     }
 
 #elif defined(__linux__)
@@ -118,18 +121,20 @@ inline void set_thread_affinity(size_t thread_idx) {
 
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
-
-    // bind to (thread_idx % num_cpus)
     CPU_SET(thread_idx % num_cpus, &cpuset);
 
     int err = pthread_setaffinity_np(pthread_self(),
                                      sizeof(cpu_set_t),
                                      &cpuset);
     if (err != 0) {
-        // handle error, e.g. log strerror(err)
+        throw std::system_error(
+            err,
+            std::generic_category(),
+            "pthread_setaffinity_np failed"
+        );
     }
 #else
-    (void)thread_idx;  // no-op on other platforms
+    (void)thread_idx;
 #endif
 }
 
@@ -371,26 +376,48 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
 
         // Error collection
         std::vector<std::string> errors;
-        std::mutex              errorMutex;
-        std::atomic<uint32_t>     nextSlice{0};
+        std::mutex               errorMutex;
+        std::atomic<uint32_t>    nextSlice{0};
 
         // Launch workers
         std::vector<std::thread> workers;
         workers.reserve(threadCount);
         for (size_t thread_idx = 0; thread_idx < threadCount; ++thread_idx) {
             workers.emplace_back([&, thread_idx]() {
-                set_thread_affinity(thread_idx);
+                // catch affinity errors here
+                try {
+                    set_thread_affinity(thread_idx);
+                }
+                catch (const std::system_error& ex) {
+                    std::lock_guard<std::mutex> lg(errorMutex);
+                    errors.push_back(ex.what());
+                    return;                  // this thread bails out
+                }
+
+                // slice‐writing loop remains unchanged
                 while (true) {
-                    uint32_t start = nextSlice.fetch_add(static_cast<uint32_t>(slicesPerDispatch), std::memory_order_relaxed);
+                    uint32_t start = nextSlice.fetch_add(
+                        static_cast<uint32_t>(slicesPerDispatch),
+                        std::memory_order_relaxed
+                    );
                     if (start >= numSlices) break;
                     uint32_t end = std::min(numSlices, start + static_cast<uint32_t>(slicesPerDispatch));
                     for (uint32_t idx = start; idx < end; ++idx) {
                         try {
-                            writeSliceToTiff(volumeData, idx, widthDim, heightDim, bytesPerPixel, isXYZ, compressionType, outputPaths[idx], useTiles);
-                        } catch (const std::exception& ex) {
+                            writeSliceToTiff(
+                                volumeData, idx,
+                                widthDim, heightDim,
+                                bytesPerPixel,
+                                isXYZ,
+                                compressionType,
+                                outputPaths[idx],
+                                useTiles
+                            );
+                        }
+                        catch (const std::exception& ex) {
                             std::lock_guard<std::mutex> lg(errorMutex);
                             errors.push_back(ex.what());
-                            return;
+                            return;  // bail out on write error
                         }
                     }
                 }
