@@ -202,24 +202,24 @@ disp(comparisonTable);
 
 %% ========== C. Large Block Test: 100 Big Slices, Compare Strip vs Tile (XYZ) ==========
 
-largeBlockSize = [25555 16531 150];
+largeBlockSize = [25555 16531 200];
 %largeBlockVolume = uint16(randi([0 65535], largeBlockSize));
 largeBlockVolume = generateTestData(largeBlockSize, 'uint16');
 largeBlockFileList = arrayfun(@(k) fullfile(temporaryTestRoot, sprintf('bigblock_%03d.tif',k)), 1:largeBlockSize(3), 'UniformOutput', false);
 
 % --- TILE mode (XYZ)
-fprintf('\n   🏁 Saving 100 large slices (TILE mode, XYZ)...\n');
+fprintf('\n   🏁 Saving %s large slices (TILE mode, XYZ)...\n', largeBlockSize(3));
 tileSaveTimeSec = tic;
 save_bl_tif(largeBlockVolume, largeBlockFileList, true, 'deflate', feature('numCores'), true);  % isXYZ = true
 tileElapsedSec = toc(tileSaveTimeSec);
-fprintf('      ✅ 100 large slices (TILE mode, XYZ) ok (%.2f s)\n', tileElapsedSec);
+fprintf('      ✅ %d large slices (TILE mode, XYZ) ok (%.2f s)\n', largeBlockSize(3), tileElapsedSec);
 
 % --- STRIP mode (XYZ)
-fprintf('\n   🏁 Saving 100 large slices (STRIP mode, XYZ)...\n');
+fprintf('\n   🏁 Saving %d large slices (STRIP mode, XYZ)...\n', largeBlockSize(3));
 stripSaveTimeSec = tic;
 save_bl_tif(largeBlockVolume, largeBlockFileList, true, 'deflate', feature('numCores'), false);  % isXYZ = true
 stripElapsedSec = toc(stripSaveTimeSec);
-fprintf('      ✅ 100 large slices (STRIP mode, XYZ) ok (%.2f s)\n', stripElapsedSec);
+fprintf('      ✅ %d large slices (STRIP mode, XYZ) ok (%.2f s)\n', stripElapsedSec);
 
 % --- Print block test summary
 fprintf('\n   🚦  [Performance] Tiles vs Strips (100x %dx%d slices, XYZ):\n', largeBlockSize(1), largeBlockSize(2));
