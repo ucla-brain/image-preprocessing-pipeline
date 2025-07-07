@@ -14,7 +14,7 @@ temporaryTestRoot = tempname;
 mkdir(temporaryTestRoot);
 cleanupObj = onCleanup(@() sandbox_cleanup(temporaryTestRoot));
 
-%% ========== A. Basic 2D/3D Single-Slice Validation ==========
+%% ========== A.1. Basic 2D/3D Single-Slice Validation ==========
 rng(42);  % Reproducibility
 
 singleSliceImage = uint8(randi(255,[256 256]));
@@ -35,19 +35,56 @@ singleSliceVolumeFilename = fullfile(temporaryTestRoot,'basic_3d.tif');
 save_bl_tif(singleSliceVolume,{singleSliceVolumeFilename},false,'none',[],false); % strip mode
 assert(isequal(readTiff(singleSliceVolumeFilename), singleSliceVolume(:,:,1)));
 
-sz = [129, 129, 1];  % not a multiple of 128
-im = uint8(100 * ones(sz));
-save_bl_tif(im, {singleSliceFilename}, true, 'none', [], true); % YXZ or XYZ, as needed
-loaded = imread(singleSliceFilename);
-assert(all(loaded(1:129,1:129) == 100), 'Main region mismatch');
-if size(loaded,1) > 129
-    disp('Padding row(s):'); disp(loaded(130:end,:));
-end
-if size(loaded,2) > 129
-    disp('Padding col(s):'); disp(loaded(:,130:end));
-end
-
 fprintf("   ✅ basic 2D/3D single-slice paths OK\n");
+
+%% ========== A.2. Edge Tile Zero-Padding Validation (Tile Mode, XYZ) ==========
+edgeTileSize = [129 129 1];  % Not a multiple of default tile (128x128)
+edgeTileValue = 100;
+edgeTileVol = uint8(edgeTileValue * ones(edgeTileSize));
+edgeTileFilename = fullfile(temporaryTestRoot, 'tile_edge_xyz.tif');
+try
+    save_bl_tif(edgeTileVol, {edgeTileFilename}, true, 'none', [], true); % XYZ, tile mode
+    loaded = readTiff(edgeTileFilename);
+
+    % Check main region
+    if ~isequal(loaded(1:129,1:129), edgeTileVol(:,:,1))
+        error('❌ Edge tile main region does not match input values!');
+    end
+
+    % Check padding rows/cols if present (should be zero)
+    padding_ok = true;
+    if size(loaded,1) > 129
+        padding_rows = loaded(130:end, 1:129);
+        if any(padding_rows(:) ~= 0)
+            fprintf('❌ Edge tile test: Nonzero padding in bottom rows!\n');
+            padding_ok = false;
+        end
+    end
+    if size(loaded,2) > 129
+        padding_cols = loaded(1:129, 130:end);
+        if any(padding_cols(:) ~= 0)
+            fprintf('❌ Edge tile test: Nonzero padding in right columns!\n');
+            padding_ok = false;
+        end
+    end
+    if size(loaded,1) > 129 && size(loaded,2) > 129
+        padding_corner = loaded(130:end,130:end);
+        if any(padding_corner(:) ~= 0)
+            fprintf('❌ Edge tile test: Nonzero padding in corner!\n');
+            padding_ok = false;
+        end
+    end
+
+    if padding_ok
+        fprintf('   ✅ tile edge zero-padding (tile mode, XYZ) OK\n');
+    else
+        error('❌ tile edge zero-padding (tile mode, XYZ) FAILED');
+    end
+
+catch ex
+    fprintf('❌ tile edge zero-padding (tile mode, XYZ) error: %s\n', ex.message);
+    rethrow(ex)
+end
 
 %% ========== B. Full Matrix: {layout × type × compression} + Strip/Tile Benchmark ==========
 
