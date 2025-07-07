@@ -83,7 +83,7 @@ for tileModeIndex = 1:nTileModes
 
                 % --- Save and time
                 ticID = tic;
-                save_bl_tif(testVolume, fileList, isXYZ, compressionType, [], useTiles);
+                save_bl_tif(testVolume, fileList, isXYZ, compressionType, feature('numCores'), useTiles);
                 elapsedSeconds = toc(ticID);
 
                 % --- Size/accounting + data integrity
@@ -197,7 +197,7 @@ end
 %% ========== D. Guard-Clause Error Handling ==========
 fprintf("\n   🛡  guard-clause checks\n");
 try
-    save_bl_tif(uint8(0), {'/no/way/out.tif'}, false,'lzw',[],false);
+    save_bl_tif(uint8(0), {'/no/way/out.tif'}, false,'lzw',feature('numCores'),false);
     error('invalid-path accepted');
 catch, fprintf('      ✅ invalid path rejected\n'); end
 
@@ -206,7 +206,7 @@ imwrite(uint8(1),readOnlyFilename);
 fileattrib(readOnlyFilename,'-w');
 readOnlyCleanupObj = onCleanup(@() restore_rw(readOnlyFilename));
 try
-    save_bl_tif(uint8(0), {readOnlyFilename}, false,'none',[],false);
+    save_bl_tif(uint8(0), {readOnlyFilename}, false,'none',feature('numCores'),false);
     error('read-only overwrite accepted');
 catch, fprintf('      ✅ read-only overwrite rejected\n'); end
 
