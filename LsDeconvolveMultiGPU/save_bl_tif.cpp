@@ -110,8 +110,9 @@ static constexpr size_t slicesPerDispatch = 4;
 
 // New: tile size selection logic (called only for tile mode)
 inline void select_tile_size(uint32_t width, uint32_t height, uint32_t &tileWidth, uint32_t &tileLength) {
-    if (width >= 1024 && height >= 1024) {
-        tileWidth = 1024; tileLength = 1024;
+    const uint32_t long_length = 2048;
+    if (width >= long_length && height >= long_length) {
+        tileWidth = long_length; tileLength = long_length;
     } else {
         tileWidth = 256; tileLength = 256;
     }
