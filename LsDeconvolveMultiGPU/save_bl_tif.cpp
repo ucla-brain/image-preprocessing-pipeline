@@ -453,27 +453,8 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
         producers.reserve(threadCount);
         consumers.reserve(threadCount);
 
-        // -- CONSUMER threads: TIFF writers
         for (size_t t = 0; t < threadCount; ++t) {
-            consumers.emplace_back([&, t]() {
-                try { set_thread_affinity(t); } catch (...) {}
-                while (true) {
-                    std::shared_ptr<SliceWriteTask> task;
-                    taskQueue.wait_and_pop(task);
-                    if (!task) break; // nullptr task means finish
-                    try {
-                        writeSliceToTiffTask(*task);
-                    } catch (const std::exception& ex) {
-                        std::lock_guard<std::mutex> lg(errorMutex);
-                        errors.push_back(ex.what());
-                        return;
-                    }
-                }
-            });
-        }
-
-        // -- PRODUCER threads: prepare slices and enqueue them
-        for (size_t t = 0; t < threadCount; ++t) {
+            // Launch producer first, then consumer for this thread index
             producers.emplace_back([&, t]() {
                 try { set_thread_affinity(t); } catch (...) {}
                 while (true) {
@@ -490,10 +471,25 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
                     task->isXYZ           = isXYZ;
                     task->compressionType = compressionType;
                     task->useTiles        = useTiles;
-                    // Data extraction, minimal copy: for MATLAB, no decompression needed
                     const uint8_t* basePtr = volumeData + sliceIdx * sliceBytes;
                     std::memcpy(task->data.data(), basePtr, sliceBytes);
                     taskQueue.push(std::move(task));
+                }
+            });
+
+            consumers.emplace_back([&, t]() {
+                try { set_thread_affinity(t); } catch (...) {}
+                while (true) {
+                    std::shared_ptr<SliceWriteTask> task;
+                    taskQueue.wait_and_pop(task);
+                    if (!task) break;
+                    try {
+                        writeSliceToTiffTask(*task);
+                    } catch (const std::exception& ex) {
+                        std::lock_guard<std::mutex> lg(errorMutex);
+                        errors.push_back(ex.what());
+                        return;
+                    }
                 }
             });
         }
