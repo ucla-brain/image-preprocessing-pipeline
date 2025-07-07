@@ -227,50 +227,78 @@ struct SliceWriteTask {
 // RAII wrapper for TIFF* with advanced I/O flags
 struct TiffWriterDirect {
     TIFF* tif = nullptr;
-
-#if defined(_WIN32)
-    // No custom handle needed
-#elif defined(__linux__)
+#if defined(__linux__)
     int fd = -1;
 #endif
     std::string path;
 
-    explicit TiffWriterDirect(const std::string& path_, const char* /*modeIgnored*/)
+    explicit TiffWriterDirect(const std::string& path_, const char* /*modeIgnored*/ = nullptr)
         : path(path_)
     {
-#if defined(_WIN32)
-        // Use libtiff's built-in TIFFOpen. No direct/async flags!
-        tif = TIFFOpen(path.c_str(), "w");
-        if (!tif)
-            throw std::runtime_error("TIFFOpen failed: " + path);
-
-#elif defined(__linux__)
-        // Use O_DIRECT if desired for async, but it's optional.
+#if defined(__linux__)
+        // Optional: Use O_DIRECT for async performance if desired
         fd = ::open(path.c_str(), O_RDWR | O_CREAT | O_TRUNC | O_DIRECT, 0666);
         if (fd < 0)
-            throw std::runtime_error("open(O_DIRECT) failed for: " + path);
-
+            throw std::runtime_error("open(O_DIRECT) failed for: " + path + ", errno=" + std::to_string(errno));
         tif = TIFFFdOpen(fd, path.c_str(), "w");
-        if (!tif)
-            throw std::runtime_error("TIFFFdOpen failed: " + path);
-
+        if (!tif) {
+            ::close(fd);
+            fd = -1;
+            throw std::runtime_error("TIFFFdOpen failed for: " + path);
+        }
 #else
+        // All other platforms (including Windows, macOS, BSD, etc.)
         tif = TIFFOpen(path.c_str(), "w");
         if (!tif)
-            throw std::runtime_error("TIFFOpen failed: " + path);
+            throw std::runtime_error("TIFFOpen failed for: " + path);
 #endif
     }
 
     ~TiffWriterDirect()
     {
-        if (tif)
+        if (tif) {
             TIFFClose(tif);
+            tif = nullptr;
+        }
 #if defined(__linux__)
         if (fd != -1) {
             ::close(fd);
             fd = -1;
         }
 #endif
+    }
+
+    TiffWriterDirect(const TiffWriterDirect&) = delete;
+    TiffWriterDirect& operator=(const TiffWriterDirect&) = delete;
+    TiffWriterDirect(TiffWriterDirect&& other) noexcept
+        : tif(other.tif)
+#if defined(__linux__)
+        , fd(other.fd)
+#endif
+        , path(std::move(other.path))
+    {
+        other.tif = nullptr;
+#if defined(__linux__)
+        other.fd = -1;
+#endif
+    }
+    TiffWriterDirect& operator=(TiffWriterDirect&& other) noexcept {
+        if (this != &other) {
+            if (tif) TIFFClose(tif);
+#if defined(__linux__)
+            if (fd != -1) ::close(fd);
+#endif
+            tif = other.tif;
+#if defined(__linux__)
+            fd = other.fd;
+#endif
+            path = std::move(other.path);
+            other.tif = nullptr;
+#if defined(__linux__)
+            other.fd = -1;
+#endif
+        }
+        return *this;
     }
 };
 
