@@ -460,43 +460,60 @@ static void writeSliceToTiffTask(const SliceWriteTask& task) {
     }
 
 #ifdef _WIN32
-    // Remove R/O bit from temp file in case of previous interrupted runs
+    // Clear R/O on temp (in case) so ReplaceFile can open it
     SetFileAttributesW(tempFile.wstring().c_str(), FILE_ATTRIBUTE_NORMAL);
 
-    auto robustMove = [](const fs::path& src, const fs::path& dst) -> bool {
-        // Remove R/O bit from dest (existing) if needed
-        SetFileAttributesW(dst.wstring().c_str(), FILE_ATTRIBUTE_NORMAL);
+    // Also clear R/O on destination (if it exists)
+    SetFileAttributesW(task.outPath.wstring().c_str(), FILE_ATTRIBUTE_NORMAL);
 
+    auto robustReplace = [&](const fs::path& src, const fs::path& dst) -> bool {
         for (int attempt = 0; attempt < 5; ++attempt) {
-            if (MoveFileExW(src.wstring().c_str(),
-                            dst.wstring().c_str(),
-                            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
-                return true;
+            // First arg = destination, second = replacement
+            if (ReplaceFileW(
+                    dst.wstring().c_str(),
+                    src.wstring().c_str(),
+                    nullptr,
+                    REPLACEFILE_WRITE_THROUGH,  // flush directory entry
+                    nullptr,
+                    nullptr))
+            {
+                return true;  // success
+            }
             DWORD err = GetLastError();
-            if (err == ERROR_ACCESS_DENIED || err == ERROR_SHARING_VIOLATION)
+            if (err == ERROR_SHARING_VIOLATION || err == ERROR_ACCESS_DENIED) {
+                // Wait and retry if file is momentarily locked
                 std::this_thread::sleep_for(std::chrono::milliseconds(10 * (attempt + 1)));
-            else
-                break;
+                continue;
+            }
+            break;  // any other error is fatal
         }
         return false;
     };
+
+    if (!robustReplace(tempFile, task.outPath))
+        throw std::runtime_error(
+            "Failed to replace " + task.outPath.string() +
+            " with " + tempFile.string());
 #else
     auto robustMove = [](const fs::path& src, const fs::path& dst) -> bool {
         std::error_code ec;
         for (int attempt = 0; attempt < 5; ++attempt) {
             fs::rename(src, dst, ec);
-            if (!ec)
-                return true;
+            if (!ec) return true;
             if (fs::exists(dst)) {
                 fs::remove(dst, ec);
                 fs::rename(src, dst, ec);
-                if (!ec)
-                    return true;
+                if (!ec) return true;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(10 * (attempt + 1)));
         }
         return false;
     };
+
+    if (!robustMove(tempFile, task.outPath))
+        throw std::runtime_error(
+            "Failed to rename " + tempFile.string() +
+            " → " + task.outPath);
 #endif
 
     if (!robustMove(tempFile, task.outPath))
