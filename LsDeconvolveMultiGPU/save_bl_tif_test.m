@@ -19,6 +19,12 @@ rng(42);  % Reproducibility
 
 singleSliceImage = uint8(randi(255,[256 256]));
 singleSliceFilename = fullfile(temporaryTestRoot,'basic_2d.tif');
+if ~exist(temporaryTestRoot, 'dir')
+    error('Temporary directory does not exist: %s', temporaryTestRoot);
+end
+imwrite(uint8(zeros(10)), singleSliceFilename);
+assert(exist(singleSliceFilename,'file')==2, 'imwrite failed to create file.');
+delete(singleSliceFilename);
 save_bl_tif(singleSliceImage,{singleSliceFilename},false,'none',[],false); % strip mode
 assert(isequal(readTiff(singleSliceFilename), singleSliceImage));
 
