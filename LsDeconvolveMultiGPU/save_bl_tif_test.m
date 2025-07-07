@@ -289,7 +289,7 @@ function outputVolume = generateTestData(targetShape, dataTypeName)
     % === Parameters ===
     shapeParam = 2;
     scaleParam = 0.5;
-    sparsity   = 0.998;
+    sparsity   = 0.99;
 
     % === Prepare scale factors for direct scaling ===
     switch dataTypeName
