@@ -229,69 +229,62 @@ static void writeSliceToTiff(
         }
 
         if (useTiles) {
-            // ── choose one big tile per slice ──
-            TIFFSetField(tif, TIFFTAG_TILEWIDTH,  imageWidth);
-            TIFFSetField(tif, TIFFTAG_TILELENGTH, imageHeight);
+            // Select tile size
+            uint32_t tileWidth, tileLength;
+            if (isXYZ) {
+                // One-tile-per-slice, zero-copy
+                tileWidth = imageWidth;
+                tileLength = imageHeight;
+            } else {
+                // Keep your old tile size logic for YXZ
+                select_tile_size(imageWidth, imageHeight, tileWidth, tileLength);
+            }
+            TIFFSetField(tif, TIFFTAG_TILEWIDTH, tileWidth);
+            TIFFSetField(tif, TIFFTAG_TILELENGTH, tileLength);
 
-            // precompute sizes
-            const size_t sliceSize = size_t(imageWidth) * size_t(imageHeight) * bytesPerPixel;
-            const size_t tileBytes = sliceSize;  // whole‐slice tile
-
-            // compute the tile index at (0,0)
-            tstrip_t tileIndex = TIFFComputeTile(tif, 0, 0, 0, 0);
+            const uint32_t tilesAcross = (imageWidth + tileWidth - 1) / tileWidth;
+            const uint32_t tilesDown   = (imageHeight + tileLength - 1) / tileLength;
+            const size_t   tileBytes   = size_t(tileWidth) * size_t(tileLength) * size_t(bytesPerPixel);
 
             if (isXYZ) {
-                // ── ZERO-COPY: hand libtiff the slice pointer directly ──
+                // ─── True Zero-Copy: One tile covers whole image ───
+                tstrip_t tileIdx = TIFFComputeTile(tif, 0, 0, 0, 0);
                 if (TIFFWriteEncodedTile(
                         tif,
-                        tileIndex,
+                        tileIdx,
                         const_cast<void*>(static_cast<const void*>(basePtr)),
                         sliceSize
                     ) < 0)
                 {
-                    throw std::runtime_error(
-                        "TIFF tile write failed for full-slice zero-copy mode"
-                    );
+                    throw std::runtime_error("TIFF tile write failed for full-slice tile");
                 }
-            }
-            else {
-                // ── YXZ: must transpose into a temporary buffer ──
+            } else {
+                // ─── YXZ: Transpose each tile ───
                 thread_local std::vector<uint8_t> tileBuffer;
-                if (tileBuffer.size() < tileBytes)
-                    tileBuffer.resize(tileBytes);
+                for (uint32_t tileRowIndex = 0; tileRowIndex < tilesDown; ++tileRowIndex) {
+                    for (uint32_t tileColumnIndex = 0; tileColumnIndex < tilesAcross; ++tileColumnIndex) {
+                        uint32_t rowStart    = tileRowIndex * tileLength;
+                        uint32_t rowsToWrite = std::min(tileLength, imageHeight - rowStart);
+                        uint32_t colStart    = tileColumnIndex * tileWidth;
+                        uint32_t colsToWrite = std::min(tileWidth,  imageWidth  - colStart);
 
-                // clear once
-                std::memset(tileBuffer.data(), 0, tileBytes);
-
-                // fill in transposed data: output rows = imageWidth, columns = imageHeight
-                for (uint32_t y = 0; y < imageHeight; ++y) {
-                    for (uint32_t x = 0; x < imageWidth; ++x) {
-                        // source offset in YXZ layout:
-                        //   index = (x + y*width)*bytesPerPixel  if volumeData is [Y X Z]
-                        size_t srcOffset = ( size_t(y) * size_t(widthDim)
-                                           + size_t(x) ) * bytesPerPixel;
-                        // dest offset in row-major tileBuffer:
-                        //   index = (x + y*tileWidth)*bytesPerPixel
-                        size_t dstOffset = ( size_t(x) * size_t(tileLength)
-                                           + size_t(y) ) * bytesPerPixel;
-                        std::memcpy(
-                            tileBuffer.data() + dstOffset,
-                            basePtr + srcOffset,
-                            bytesPerPixel
-                        );
+                        if (tileBuffer.size() < tileBytes)
+                            tileBuffer.resize(tileBytes, 0);
+                        std::fill(tileBuffer.begin(), tileBuffer.end(), 0);
+                        for (uint32_t rowInTile = 0; rowInTile < rowsToWrite; ++rowInTile) {
+                            for (uint32_t columnInTile = 0; columnInTile < colsToWrite; ++columnInTile) {
+                                size_t srcOffset = (size_t(rowStart + rowInTile)
+                                                 + size_t(colStart + columnInTile) * size_t(heightDim))
+                                                 * size_t(bytesPerPixel);
+                                size_t dstOffset = (size_t(rowInTile) * size_t(tileWidth)
+                                                 + size_t(columnInTile)) * size_t(bytesPerPixel);
+                                std::memcpy(&tileBuffer[dstOffset], basePtr + srcOffset, size_t(bytesPerPixel));
+                            }
+                        }
+                        tstrip_t tileIdx = TIFFComputeTile(tif, colStart, rowStart, 0, 0);
+                        if (TIFFWriteEncodedTile(tif, tileIdx, tileBuffer.data(), tileBytes) < 0)
+                            throw std::runtime_error("TIFF tile write failed at (" + std::to_string(tileColumnIndex) + "," + std::to_string(tileRowIndex) + ")");
                     }
-                }
-
-                if (TIFFWriteEncodedTile(
-                        tif,
-                        tileIndex,
-                        tileBuffer.data(),
-                        tileBytes
-                    ) < 0)
-                {
-                    throw std::runtime_error(
-                        "TIFF tile write failed for YXZ transposed full-slice tile"
-                    );
                 }
             }
         } else {
