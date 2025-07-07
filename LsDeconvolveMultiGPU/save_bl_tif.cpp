@@ -222,34 +222,24 @@ struct SliceWriteTask {
 // --------- Async TIFF Writer with O_DIRECT/NO_BUFFERING file open -------------
 struct TiffWriterDirect {
     TIFF* tif = nullptr;
-#if defined(_WIN32)
-    HANDLE fileHandle = INVALID_HANDLE_VALUE;
-#elif defined(__linux__)
+#if defined(__linux__)
     int fd = -1;
 #endif
     std::string path;
 
-    // Opens the file for TIFF writing, with advanced buffering flags
     TiffWriterDirect(const std::string& path_, const char* mode)
         : path(path_)
     {
-#if defined(_WIN32)
-        fileHandle = CreateFileA(path.c_str(), GENERIC_WRITE, 0, NULL,
-                                 CREATE_ALWAYS,
-                                 FILE_ATTRIBUTE_NORMAL, // | FILE_FLAG_NO_BUFFERING,
-                                 NULL);
-        if (fileHandle == INVALID_HANDLE_VALUE)
-            throw std::runtime_error("Cannot open TIFF for writing: " + path);
-        tif = TIFFFdOpen((int)_open_osfhandle((intptr_t)fileHandle, 0), path.c_str(), mode);
-        if (!tif)
-            throw std::runtime_error("TIFFOpen failed: " + path);
-#elif defined(__linux__)
+#if defined(__linux__)
         fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_DIRECT, 0666);
         if (fd < 0)
             throw std::runtime_error("Cannot open TIFF for writing (O_DIRECT): " + path);
         tif = TIFFFdOpen(fd, path.c_str(), mode);
-        if (!tif)
+        if (!tif) {
+            ::close(fd);
+            fd = -1;
             throw std::runtime_error("TIFFOpen failed: " + path);
+        }
 #else
         tif = TIFFOpen(path.c_str(), mode);
         if (!tif)
@@ -257,11 +247,15 @@ struct TiffWriterDirect {
 #endif
     }
     ~TiffWriterDirect() {
-        if (tif) TIFFClose(tif);
-#if defined(_WIN32)
-        if (fileHandle != INVALID_HANDLE_VALUE) CloseHandle(fileHandle);
-#elif defined(__linux__)
-        if (fd != -1) ::close(fd);
+        if (tif) {
+            TIFFClose(tif);
+            tif = nullptr;
+        }
+#if defined(__linux__)
+        if (fd != -1) {
+            ::close(fd);
+            fd = -1;
+        }
 #endif
     }
 };
