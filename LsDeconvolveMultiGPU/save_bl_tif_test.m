@@ -219,7 +219,7 @@ fprintf('\n   🏁 Saving %d large slices (STRIP mode, XYZ)...\n', largeBlockSiz
 stripSaveTimeSec = tic;
 save_bl_tif(largeBlockVolume, largeBlockFileList, true, 'deflate', feature('numCores'), false);  % isXYZ = true
 stripElapsedSec = toc(stripSaveTimeSec);
-fprintf('      ✅ %d large slices (STRIP mode, XYZ) ok (%.2f s)\n', stripElapsedSec);
+fprintf('      ✅ %d large slices (STRIP mode, XYZ) ok (%.2f s)\n', largeBlockSize(3), stripElapsedSec);
 
 % --- Print block test summary
 fprintf('\n   🚦  [Performance] Tiles vs Strips (100x %dx%d slices, XYZ):\n', largeBlockSize(1), largeBlockSize(2));
