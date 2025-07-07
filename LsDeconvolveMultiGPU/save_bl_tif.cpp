@@ -125,7 +125,7 @@ static void writeSliceToTiff(
     bool                 isXYZ,
     uint16_t             compressionType,
     const std::string&   outputPath,
-    bool                 useTiles             // <--- new
+    bool                 useTiles
 ) {
     // widthDim = pixels per row, heightDim = number of rows
     const uint32_t imageWidth  = static_cast<uint32_t>(widthDim);
