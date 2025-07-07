@@ -69,6 +69,7 @@
   #  define NOMINMAX
   #endif
   #include <windows.h>
+  #include <bitset>
   #include <io.h>
   #ifndef W_OK
     #define W_OK 2
@@ -83,6 +84,22 @@
 #endif
 
 namespace fs = std::filesystem;
+
+inline size_t get_available_cores() {
+#if defined(__linux__)
+    long n = sysconf(_SC_NPROCESSORS_ONLN);
+    if (n > 0) return static_cast<size_t>(n);
+#elif defined(_WIN32)
+    DWORD_PTR processMask = 0, systemMask = 0;
+    if (GetProcessAffinityMask(GetCurrentProcess(), &processMask, &systemMask)) {
+        // count bits in processMask:
+        return static_cast<size_t>(std::bitset<sizeof(processMask)*8>(processMask).count());
+    }
+#endif
+    // fallback: std::thread hint (may be 0)
+    auto hint = std::thread::hardware_concurrency();
+    return hint > 0 ? static_cast<size_t>(hint) : 1;
+}
 
 // Set thread affinity for best NUMA/core balancing
 inline void set_thread_affinity(size_t thread_idx) {
@@ -365,7 +382,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
         const uint32_t bytesPerPixel = (mxGetClassID(prhs[0]) == mxUINT16_CLASS ? 2u : 1u);
 
         // Thread count
-        const size_t hwCores     = std::thread::hardware_concurrency();
+        const size_t hwCores     = get_available_cores();
         const size_t safeCores   = hwCores ? hwCores : 1;
         const size_t defaultTh   = std::max(safeCores / 2, size_t(1));
         const size_t reqTh       = (nrhs >= 5 && !mxIsEmpty(prhs[4])? static_cast<size_t>(mxGetScalar(prhs[4])) : defaultTh);
