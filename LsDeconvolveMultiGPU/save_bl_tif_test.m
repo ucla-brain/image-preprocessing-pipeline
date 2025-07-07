@@ -152,37 +152,40 @@ comparisonTable = cell2table(summaryRows, 'VariableNames', ...
 disp(comparisonTable);
 
 
-%% ========== C. Large Block Test: 100 Big Slices, Compare Strip vs Tile ==========
+%% ========== C. Large Block Test: 100 Big Slices, Compare Strip vs Tile (XYZ) ==========
+
 largeBlockSize = [8192 8192 100];
 largeBlockVolume = generateTestData(largeBlockSize, 'uint16');
 largeBlockFileList = arrayfun(@(k) fullfile(temporaryTestRoot, sprintf('bigblock_%03d.tif',k)), 1:largeBlockSize(3), 'UniformOutput', false);
 
-% --- TILE mode
-fprintf('\n   🏁 Saving 100 large slices (TILE mode)...\n');
+% --- TILE mode (XYZ)
+fprintf('\n   🏁 Saving 100 large slices (TILE mode, XYZ)...\n');
 tileSaveTimeSec = tic;
-save_bl_tif(largeBlockVolume, largeBlockFileList, false, 'deflate', [], true);
+save_bl_tif(largeBlockVolume, largeBlockFileList, true, 'deflate', [], true);  % isXYZ = true
 tileElapsedSec = toc(tileSaveTimeSec);
 for sliceIdx = 1:largeBlockSize(3)
     data = readTiff(largeBlockFileList{sliceIdx});
-    assert(isequal(data, largeBlockVolume(:,:,sliceIdx)), ...
-        'Big block mismatch at slice %d (tile mode)', sliceIdx);
+    referenceSlice = largeBlockVolume(:,:,sliceIdx).'; % <---- Transpose for XYZ
+    assert(isequal(data, referenceSlice), ...
+        'Big block mismatch at slice %d (tile mode, XYZ)', sliceIdx);
 end
-fprintf('      ✅ 100 large slices (TILE mode) ok (%.2f s)\n', tileElapsedSec);
+fprintf('      ✅ 100 large slices (TILE mode, XYZ) ok (%.2f s)\n', tileElapsedSec);
 
-% --- STRIP mode
-fprintf('\n   🏁 Saving 100 large slices (STRIP mode)...\n');
+% --- STRIP mode (XYZ)
+fprintf('\n   🏁 Saving 100 large slices (STRIP mode, XYZ)...\n');
 stripSaveTimeSec = tic;
-save_bl_tif(largeBlockVolume, largeBlockFileList, false, 'deflate', [], false);
+save_bl_tif(largeBlockVolume, largeBlockFileList, true, 'deflate', [], false);  % isXYZ = true
 stripElapsedSec = toc(stripSaveTimeSec);
 for sliceIdx = 1:largeBlockSize(3)
     data = readTiff(largeBlockFileList{sliceIdx});
-    assert(isequal(data, largeBlockVolume(:,:,sliceIdx)), ...
-        'Big block mismatch at slice %d (strip mode)', sliceIdx);
+    referenceSlice = largeBlockVolume(:,:,sliceIdx).'; % <---- Transpose for XYZ
+    assert(isequal(data, referenceSlice), ...
+        'Big block mismatch at slice %d (strip mode, XYZ)', sliceIdx);
 end
-fprintf('      ✅ 100 large slices (STRIP mode) ok (%.2f s)\n', stripElapsedSec);
+fprintf('      ✅ 100 large slices (STRIP mode, XYZ) ok (%.2f s)\n', stripElapsedSec);
 
 % --- Print block test summary
-fprintf('\n   🚦  [Performance] Tiles vs Strips (100x %dx%d slices):\n', largeBlockSize(1), largeBlockSize(2));
+fprintf('\n   🚦  [Performance] Tiles vs Strips (100x %dx%d slices, XYZ):\n', largeBlockSize(1), largeBlockSize(2));
 fprintf('         STRIP: %.2f s\n', stripElapsedSec);
 fprintf('         TILE : %.2f s\n', tileElapsedSec);
 if tileElapsedSec < stripElapsedSec
