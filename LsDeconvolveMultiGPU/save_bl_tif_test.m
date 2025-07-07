@@ -55,7 +55,7 @@ fprintf("   ✅ basic 2D/3D single-slice paths OK\n");
 volumeLayouts = {'YXZ',false; 'XYZ',true};  % Name, isXYZ flag
 volumeDataTypes = {'uint8',@uint8; 'uint16',@uint16};
 compressionTypes = {'none','lzw','deflate'};
-testVolumeSize = [129 129 4];    % [Height Width Depth]
+testVolumeSize = [3000 1500 4];    % [Height Width Depth]
 tileModeFlags = [false true];
 tileModeNames = {'STRIP','TILE'};
 
