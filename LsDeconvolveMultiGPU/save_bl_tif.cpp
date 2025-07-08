@@ -335,7 +335,6 @@ struct TiffWriterDirect
         : filePath(filePath_)
     {
 #if defined(_WIN32)
-        // --- Robust Unicode + Long Path Support ---
         auto utf8_to_utf16 = [](const std::string& s) {
             std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> cvt;
             return cvt.from_bytes(s);
@@ -346,7 +345,7 @@ struct TiffWriterDirect
             wPath.rfind(LR"(\\?\)", 0) == std::wstring::npos)
             wPath.insert(0, LR"(\\?\)");
 
-        tiffHandle = TIFFOpenW(wPath.c_str(), L"w");
+        tiffHandle = TIFFOpenW(wPath.c_str(), "w");
         if (!tiffHandle)
             throw std::runtime_error("TIFFOpenW failed for: " + filePath);
 
@@ -372,7 +371,7 @@ struct TiffWriterDirect
     {
         if (!tiffHandle) return;
 #if defined(_WIN32)
-        // LibTIFF closes the file and flushes buffers.
+        // No flush needed; TIFFClose will flush and close.
 #elif defined(__linux__) || defined(__APPLE__)
         ::fsync(TIFFFileno(tiffHandle));
         std::vector<char> dirbuf(filePath.c_str(), filePath.c_str() + filePath.size() + 1);
@@ -387,7 +386,6 @@ struct TiffWriterDirect
     TiffWriterDirect(const TiffWriterDirect&)            = delete;
     TiffWriterDirect& operator=(const TiffWriterDirect&) = delete;
 };
-
 
 // --------- Platform sync helpers -----------
 inline void robustSyncFile(const fs::path& filePath) {
