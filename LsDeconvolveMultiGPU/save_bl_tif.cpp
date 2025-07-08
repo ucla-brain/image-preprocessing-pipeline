@@ -66,6 +66,7 @@
 
 #include "mex.h"
 #include "tiffio.h"
+#include <hwloc.h>
 
 #include <filesystem>
 #include <vector>
@@ -82,8 +83,8 @@
 #include <algorithm>
 #include <chrono>
 #include <memory>
-#include <sstream>
-#include <iostream>
+#include <map>
+#include <set>
 
 #if defined(_WIN32)
     #ifndef NOMINMAX
@@ -93,7 +94,7 @@
     #include <io.h>
     #include <fcntl.h>
     #include <bitset>
-    #include <codecvt>     // for std::wstring_convert
+    #include <codecvt>
     #ifndef W_OK
         #define W_OK 2
     #endif
@@ -109,7 +110,7 @@
 
 namespace fs = std::filesystem;
 
-static constexpr uint32_t kRowsPerStripDefault = 256;
+static constexpr uint32_t kRowsPerStripDefault = 1;
 static constexpr uint32_t kOptimalTileEdge     = 128;
 
 // --------- Bounded MPMC Queue (unchanged) ----------
@@ -152,17 +153,135 @@ inline size_t get_available_cores() {
     return hint ? static_cast<size_t>(hint) : 1;
 }
 
-inline void set_thread_affinity(size_t targetCore) {
-#if defined(_WIN32)
-    DWORD_PTR mask = (1ull << targetCore);
-    SetThreadAffinityMask(GetCurrentThread(), mask); // best-effort
-#elif defined(__linux__)
-    cpu_set_t cpuSet;
-    CPU_ZERO(&cpuSet);
-    CPU_SET(targetCore, &cpuSet);
-    int err = pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuSet);
-    if (err == EINVAL) return; // inside cpuset
-#endif
+// -------------------- NUMA/Socket Core Assignment (hwloc) ----------------------
+
+struct ThreadPair {
+    unsigned pu1;    // Producer PU (logical core)
+    unsigned pu2;    // Consumer PU (SMT sibling, or next core on same NUMA node if no SMT)
+    unsigned numaNode;
+    unsigned socket;
+};
+
+#include <map>
+#include <set>
+
+std::vector<ThreadPair> assign_thread_pairs_hwloc(size_t pairCount) {
+    std::vector<ThreadPair> pairs;
+    std::set<unsigned> usedPUs;
+    hwloc_topology_t topology;
+    hwloc_topology_init(&topology);
+    hwloc_topology_load(topology);
+
+    int totalCores = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_CORE);
+
+    // First, try pairing SMT siblings (two PUs per core)
+    for (int i = 0; i < totalCores && pairs.size() < pairCount; ++i) {
+        hwloc_obj_t core = hwloc_get_obj_by_type(topology, HWLOC_OBJ_CORE, i);
+
+        // Get NUMA node for this core
+        unsigned nodeId = 0, socketId = 0;
+        hwloc_obj_t node = hwloc_get_ancestor_obj_by_type(topology, HWLOC_OBJ_NUMANODE, core);
+        if (node) nodeId = node->os_index;
+        hwloc_obj_t sock = hwloc_get_ancestor_obj_by_type(topology, HWLOC_OBJ_PACKAGE, core);
+        if (sock) socketId = sock->os_index;
+
+        // Find all PUs for this core
+        std::vector<unsigned> pus;
+        for (unsigned j = 0; j < core->arity; ++j) {
+            hwloc_obj_t child = core->children[j];
+            if (child->type == HWLOC_OBJ_PU)
+                pus.push_back(child->os_index);
+        }
+        // If not found, fallback to bitmap
+        if (pus.empty()) {
+            hwloc_bitmap_t cpuset = hwloc_bitmap_dup(core->cpuset);
+            hwloc_bitmap_singlify(cpuset);
+            int puIdx = hwloc_bitmap_first(cpuset);
+            if (puIdx >= 0)
+                pus.push_back(static_cast<unsigned>(puIdx));
+            hwloc_bitmap_free(cpuset);
+        }
+        // Pair up SMT siblings, mark as used
+        if (pus.size() >= 2 && usedPUs.count(pus[0]) == 0 && usedPUs.count(pus[1]) == 0) {
+            pairs.push_back({pus[0], pus[1], nodeId, socketId});
+            usedPUs.insert(pus[0]);
+            usedPUs.insert(pus[1]);
+        } else if (pus.size() == 1 && usedPUs.count(pus[0]) == 0) {
+            pairs.push_back({pus[0], pus[0], nodeId, socketId});
+            usedPUs.insert(pus[0]);
+        }
+    }
+
+    // Second, pair remaining unused PUs within each NUMA node
+    if (pairs.size() < pairCount) {
+        int totalPU = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_PU);
+        std::map<unsigned, std::vector<unsigned>> numaToPU;
+        std::map<unsigned, std::vector<unsigned>> numaToSocket;
+        for (int i = 0; i < totalPU; ++i) {
+            hwloc_obj_t pu = hwloc_get_obj_by_type(topology, HWLOC_OBJ_PU, i);
+            if (usedPUs.count(pu->os_index)) continue;
+            unsigned nodeId = 0, socketId = 0;
+            hwloc_obj_t node = hwloc_get_ancestor_obj_by_type(topology, HWLOC_OBJ_NUMANODE, pu);
+            if (node) nodeId = node->os_index;
+            hwloc_obj_t sock = hwloc_get_ancestor_obj_by_type(topology, HWLOC_OBJ_PACKAGE, pu);
+            if (sock) socketId = sock->os_index;
+            numaToPU[nodeId].push_back(pu->os_index);
+            numaToSocket[nodeId].push_back(socketId);
+        }
+        // Pair PUs within each NUMA node
+        for (auto& entry : numaToPU) {
+            auto& pus = entry.second;
+            auto& sockets = numaToSocket[entry.first];
+            for (size_t i = 0; i + 1 < pus.size() && pairs.size() < pairCount; i += 2) {
+                pairs.push_back({pus[i], pus[i + 1], entry.first, sockets[i]});
+                usedPUs.insert(pus[i]);
+                usedPUs.insert(pus[i + 1]);
+            }
+        }
+        // Collect leftovers for cross-node pairing
+        std::vector<std::pair<unsigned, unsigned>> leftovers; // (PU, socket)
+        for (auto& entry : numaToPU) {
+            auto& pus = entry.second;
+            auto& sockets = numaToSocket[entry.first];
+            if (pus.size() % 2) leftovers.emplace_back(pus.back(), sockets.back());
+        }
+        // Pair leftovers
+        for (size_t i = 0; i + 1 < leftovers.size() && pairs.size() < pairCount; i += 2) {
+            pairs.push_back({leftovers[i].first, leftovers[i + 1].first, 0, leftovers[i].second});
+            usedPUs.insert(leftovers[i].first);
+            usedPUs.insert(leftovers[i + 1].first);
+        }
+    }
+
+    // Last resort: round-robin all remaining unused PUs
+    if (pairs.size() < pairCount) {
+        int totalPU = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_PU);
+        std::vector<unsigned> allUnused;
+        for (int i = 0; i < totalPU; ++i) {
+            hwloc_obj_t pu = hwloc_get_obj_by_type(topology, HWLOC_OBJ_PU, i);
+            if (!usedPUs.count(pu->os_index)) allUnused.push_back(pu->os_index);
+        }
+        for (size_t i = 0; i + 1 < allUnused.size() && pairs.size() < pairCount; i += 2) {
+            // No NUMA/socket info, set to 0
+            pairs.push_back({allUnused[i], allUnused[i + 1], 0, 0});
+        }
+    }
+
+    hwloc_topology_destroy(topology);
+    return pairs;
+}
+
+// --------- HWLOC-based thread affinity set (portable for Windows/Linux) ----------
+inline void set_thread_affinity_hwloc(unsigned logicalCoreId) {
+    hwloc_topology_t topology;
+    hwloc_topology_init(&topology);
+    hwloc_topology_load(topology);
+    hwloc_cpuset_t cpuset = hwloc_bitmap_alloc();
+    hwloc_bitmap_zero(cpuset);
+    hwloc_bitmap_set(cpuset, logicalCoreId);
+    hwloc_set_cpubind(topology, cpuset, HWLOC_CPUBIND_THREAD);
+    hwloc_bitmap_free(cpuset);
+    hwloc_topology_destroy(topology);
 }
 
 // --------- Tile size helper ---------
@@ -253,14 +372,11 @@ struct TiffWriterDirect {
         if (tiffHandle) {
             TIFFClose(tiffHandle);
             tiffHandle = nullptr;
-#if defined(_WIN32)
-            // ✨ PATCH: Do NOT call CloseHandle here; TIFFClose closes both the FD and the HANDLE.
-            winHandle = INVALID_HANDLE_VALUE;
-#endif
+            // On Windows, TIFFClose closes both the FD and HANDLE.
         }
-#if defined(__linux__)
+    #if defined(__linux__)
         linuxFd = -1;
-#endif
+    #endif
     }
 
     TiffWriterDirect(const TiffWriterDirect&)            = delete;
@@ -595,12 +711,13 @@ void mexFunction(int nlhs, mxArray* plhs[],
         std::atomic<uint32_t> nextSliceIndex{0};
         std::vector<std::string> runtimeErrors;
         std::mutex              errorMutex;
-        std::atomic<bool>       abortFlag{false}; // ✨ PATCH
+        std::atomic<bool>       abortFlag{false};
+        auto threadPairs = assign_thread_pairs_hwloc(threadCount);
 
-        // Producers
+        // ---- Launch threads with hwloc-based pinning ----
         for (size_t t = 0; t < threadCount; ++t) {
             producerThreads.emplace_back([&, t] {
-                set_thread_affinity((t * 2) % totalCores); // even core
+                set_thread_affinity_hwloc(threadPairs[t].pu1);
                 while (true) {
                     if (abortFlag.load()) break; // ✨ PATCH: Early exit if error
                     uint32_t idx = nextSliceIndex.fetch_add(1);
@@ -629,7 +746,7 @@ void mexFunction(int nlhs, mxArray* plhs[],
             });
 
             consumerThreads.emplace_back([&, t] {
-                set_thread_affinity((t * 2 + 1) % totalCores); // odd core
+                set_thread_affinity_hwloc(threadPairs[t].pu2);
                 while (true) {
                     if (abortFlag.load()) break; // ✨ PATCH: Early exit if error
                     std::shared_ptr<SliceWriteTask> task;
