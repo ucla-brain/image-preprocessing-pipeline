@@ -329,27 +329,25 @@ struct TiffWriterDirect {
     explicit TiffWriterDirect(const std::string& filePath_)
         : filePath(filePath_) {
 #if defined(_WIN32)
-        // Convert UTF-8 to UTF-16 for Win32 API calls
         std::wstring widePath = utf8_to_utf16(filePath_);
         winHandle = CreateFileW(
-            widePath.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ,
+            widePath.c_str(), GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
             nullptr, CREATE_ALWAYS,
             FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN | FILE_FLAG_WRITE_THROUGH,
             nullptr);
         if (winHandle == INVALID_HANDLE_VALUE)
             throw std::runtime_error("CreateFileW failed for: " + filePath_);
-
-        // Create a CRT file descriptor from HANDLE
-        int winFd = _open_osfhandle(reinterpret_cast<intptr_t>(winHandle), _O_BINARY);
+        // Use O_RDWR so the CRT fd is writable!
+        int winFd = _open_osfhandle(reinterpret_cast<intptr_t>(winHandle), _O_RDWR | _O_BINARY);
         if (winFd == -1) {
             CloseHandle(winHandle);
             throw std::runtime_error("_open_osfhandle failed for: " + filePath_);
         }
-        winHandle = INVALID_HANDLE_VALUE; // Ownership transferred to CRT FD
-
+        winHandle = INVALID_HANDLE_VALUE; // CRT now owns it
         tiffHandle = TIFFFdOpen(winFd, filePath_.c_str(), "w");
         if (!tiffHandle) {
-            _close(winFd); // This closes the underlying HANDLE as well
+            _close(winFd); // closes CRT fd and HANDLE
             throw std::runtime_error("TIFFFdOpen failed for: " + filePath_);
         }
 #elif defined(__linux__)
