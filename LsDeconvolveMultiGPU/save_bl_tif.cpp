@@ -63,6 +63,7 @@
 
   All public behaviour and MEX signature remain identical.
 ==============================================================================*/
+#define _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
 
 #include "mex.h"
 #include "tiffio.h"
@@ -95,6 +96,7 @@
     #include <fcntl.h>
     #include <bitset>
     #include <codecvt>
+    #include <algorithm>
     #ifndef W_OK
         #define W_OK 2
     #endif
@@ -106,6 +108,13 @@
     #include <fcntl.h>
     #include <sys/stat.h>
     #include <sys/types.h>
+#endif
+
+#ifdef min
+#pragma message("min is a macro!")
+#endif
+#ifdef max
+#pragma message("max is a macro!")
 #endif
 
 namespace fs = std::filesystem;
@@ -472,15 +481,14 @@ static void writeSliceToTiffTask(const SliceWriteTask& task) {
 
     const fs::path temporaryFilePath = fs::path(task.outputPath).concat(".tmp");
 
-    /* === 1. Write TIFF into a temp file (closed before rename) ============== */
+    // 1. Write TIFF into a temp file (closed before rename)
     {
         TiffWriterDirect tiffWriter(temporaryFilePath.string());
         TIFF* tiffHandle = tiffWriter.tiffHandle;
 
-        TIFFSetField(tiffHandle, TIFFTAG_IMAGEWIDTH,  std::max(1u, task.widthPixels));   // ✨ PATCH
-        TIFFSetField(tiffHandle, TIFFTAG_IMAGELENGTH, std::max(1u, task.heightPixels));  // ✨ PATCH
-        TIFFSetField(tiffHandle, TIFFTAG_BITSPERSAMPLE,
-                     static_cast<uint16_t>(task.bytesPerPixel * 8));
+        TIFFSetField(tiffHandle, TIFFTAG_IMAGEWIDTH,  (std::max)(1u, task.widthPixels));
+        TIFFSetField(tiffHandle, TIFFTAG_IMAGELENGTH, (std::max)(1u, task.heightPixels));
+        TIFFSetField(tiffHandle, TIFFTAG_BITSPERSAMPLE, static_cast<uint16_t>(task.bytesPerPixel * 8));
         TIFFSetField(tiffHandle, TIFFTAG_SAMPLESPERPIXEL, static_cast<uint16_t>(1));
         TIFFSetField(tiffHandle, TIFFTAG_COMPRESSION, task.compressionTag);
         TIFFSetField(tiffHandle, TIFFTAG_PHOTOMETRIC, PHOTOMETRIC_MINISBLACK);
@@ -494,8 +502,8 @@ static void writeSliceToTiffTask(const SliceWriteTask& task) {
         if (task.useTiles) {
             uint32_t tileW, tileH;
             pick_tile_size(task.widthPixels, task.heightPixels, tileW, tileH);
-            tileW = std::max(1u, tileW);   // ✨ PATCH
-            tileH = std::max(1u, tileH);   // ✨ PATCH
+            tileW = (std::max)(1u, tileW);
+            tileH = (std::max)(1u, tileH);
             TIFFSetField(tiffHandle, TIFFTAG_TILEWIDTH,  tileW);
             TIFFSetField(tiffHandle, TIFFTAG_TILELENGTH, tileH);
 
@@ -508,9 +516,9 @@ static void writeSliceToTiffTask(const SliceWriteTask& task) {
                 for (uint32_t ty = 0; ty < tilesY; ++ty)
                     for (uint32_t tx = 0; tx < tilesX; ++tx) {
                         const uint32_t y0   = ty * tileH;
-                        const uint32_t rows = std::min(tileH, task.heightPixels - y0);
+                        const uint32_t rows = (std::min)(tileH, task.heightPixels - y0);
                         const uint32_t x0   = tx * tileW;
-                        const uint32_t cols = std::min(tileW, task.widthPixels  - x0);
+                        const uint32_t cols = (std::min)(tileW, task.widthPixels  - x0);
 
                         std::fill(tile.begin(), tile.end(), 0);
 
@@ -532,9 +540,9 @@ static void writeSliceToTiffTask(const SliceWriteTask& task) {
                 for (uint32_t ty = 0; ty < tilesY; ++ty)
                     for (uint32_t tx = 0; tx < tilesX; ++tx) {
                         const uint32_t y0 = ty * tileH;
-                        const uint32_t rows = std::min(tileH, task.heightPixels - y0);
+                        const uint32_t rows = (std::min)(tileH, task.heightPixels - y0);
                         const uint32_t x0 = tx * tileW;
-                        const uint32_t cols = std::min(tileW, task.widthPixels - x0);
+                        const uint32_t cols = (std::min)(tileW, task.widthPixels - x0);
 
                         std::fill(tile.begin(), tile.begin() + rows*tileW*task.bytesPerPixel, 0);
 
@@ -559,7 +567,7 @@ static void writeSliceToTiffTask(const SliceWriteTask& task) {
         else {
             // Guard for minimum rowsPerStrip = 1
             const uint32_t rowsPerStrip =
-                std::max(1u, std::min<uint32_t>(kRowsPerStripDefault, task.heightPixels)); // ✨ PATCH
+                (std::max)(1u, (std::min)(kRowsPerStripDefault, task.heightPixels));
             TIFFSetField(tiffHandle, TIFFTAG_ROWSPERSTRIP, rowsPerStrip);
 
             const uint32_t totalStrips =
@@ -568,8 +576,8 @@ static void writeSliceToTiffTask(const SliceWriteTask& task) {
             if (task.isXYZLayout) {
                 for (uint32_t strip = 0; strip < totalStrips; ++strip) {
                     const uint32_t y0   = strip * rowsPerStrip;
-                    const uint32_t rows = std::min(rowsPerStrip,
-                                                   task.heightPixels - y0);
+                    const uint32_t rows = (std::min)(rowsPerStrip,
+                                                     task.heightPixels - y0);
                     const size_t bytesThisStrip =
                         size_t(task.widthPixels) * rows * task.bytesPerPixel;
                     const uint8_t* src =
@@ -590,8 +598,8 @@ static void writeSliceToTiffTask(const SliceWriteTask& task) {
 
                 for (uint32_t strip = 0; strip < totalStrips; ++strip) {
                     const uint32_t y0   = strip * rowsPerStrip;
-                    const uint32_t rows = std::min(rowsPerStrip,
-                                                   task.heightPixels - y0);
+                    const uint32_t rows = (std::min)(rowsPerStrip,
+                                                     task.heightPixels - y0);
                     for (uint32_t row = 0; row < rows; ++row) {
                         const uint8_t* src = task.sliceBuffer.data() +
                             ((size_t(y0 + row)) * task.bytesPerPixel);
