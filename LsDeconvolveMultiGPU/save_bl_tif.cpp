@@ -59,6 +59,23 @@
     GNU GPL v3 — https://www.gnu.org/licenses/gpl-3.0.html
 ==============================================================================*/
 
+/*==============================================================================
+  save_bl_tif.cpp
+
+  Ultra-high-throughput, NUMA- and socket-aware, multi-threaded TIFF Z-slice saver
+  for 3D MATLAB volumes. Uses explicit async producer-consumer I/O, advanced file
+  flags, and hwloc-driven thread pairing for maximum locality and throughput.
+
+  USAGE:
+    save_bl_tif(volume, fileList, isXYZ, compression[, nThreads, useTiles]);
+
+  AUTHOR:
+    Keivan Moradi (with ChatGPT assistance), 2025
+
+  LICENSE:
+    GNU GPL v3 — https://www.gnu.org/licenses/gpl-3.0.html
+==============================================================================*/
+
 #define _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
 
 #include "mex.h"
@@ -78,10 +95,10 @@
 #include <cstdint>
 #include <cstring>
 #include <algorithm>
-#include <chrono>
 #include <memory>
-#include <map>
-#include <set>
+#include <optional>
+#include <cassert>
+#include <bitset>
 
 #if defined(_WIN32)
     #define WIN32_LEAN_AND_MEAN
@@ -95,7 +112,7 @@
         #define W_OK 2
     #endif
     #define access _access
-#elif defined(__linux__)
+#elif defined(__linux__) || defined(__APPLE__)
     #include <sched.h>
     #include <pthread.h>
     #include <unistd.h>
@@ -107,37 +124,57 @@
 
 namespace fs = std::filesystem;
 
+// Compile-time parameters for TIFF
 static constexpr uint32_t kRowsPerStripDefault = 1;
 static constexpr uint32_t kOptimalTileEdge     = 128;
 
-// Anonymous namespace for file-scope helpers (prevents ODR violation)
-namespace {
+namespace platform {
 #if defined(_WIN32)
-inline std::wstring utf8_to_utf16(const std::string& utf8) {
-    std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> conv;
-    return conv.from_bytes(utf8);
-}
+    inline std::wstring utf8_to_utf16(const std::string& utf8)
+    {
+        int size_needed = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(),
+                                              static_cast<int>(utf8.size()), nullptr, 0);
+        std::wstring wstr(size_needed, 0);
+        MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), static_cast<int>(utf8.size()),
+                            &wstr[0], size_needed);
+        return wstr;
+    }
+    inline fs::path toPlatformPath(const std::string& utf8) {
+        return fs::path(utf8);
+    }
+#else
+    inline const std::string& toPlatformPath(const std::string& utf8) { return utf8; }
 #endif
 }
 
-// --------- Bounded multi-producer/multi-consumer queue -----------
+//=========================
+//     BoundedQueue
+//=========================
+/**
+ * @brief Thread-safe, bounded-size queue for producer-consumer model.
+ *
+ * @tparam T Task type.
+ */
 template <typename T>
 class BoundedQueue {
 public:
-    explicit BoundedQueue(size_t maximumSize) : maximumSize_(maximumSize) {}
+    explicit BoundedQueue(size_t maxSize) : maximumSize_(maxSize) {}
+
     void push(T item) {
         std::unique_lock<std::mutex> lock(queueMutex_);
-        queueNotFull_.wait(lock, [&] { return queue_.size() < maximumSize_; });
+        queueNotFull_.wait(lock, [this] { return queue_.size() < maximumSize_; });
         queue_.emplace(std::move(item));
         queueNotEmpty_.notify_one();
     }
+
     void wait_and_pop(T& item) {
         std::unique_lock<std::mutex> lock(queueMutex_);
-        queueNotEmpty_.wait(lock, [&] { return !queue_.empty(); });
+        queueNotEmpty_.wait(lock, [this] { return !queue_.empty(); });
         item = std::move(queue_.front());
         queue_.pop();
         queueNotFull_.notify_one();
     }
+
 private:
     mutable std::mutex            queueMutex_;
     std::condition_variable       queueNotFull_;
@@ -146,13 +183,37 @@ private:
     size_t                        maximumSize_;
 };
 
-// --------- Returns available logical core count (platform-safe) --------
+//=========================
+//    HwlocTopologyRAII
+//=========================
+/**
+ * @brief RAII wrapper to cache a loaded hwloc topology.
+ */
+class HwlocTopologyRAII {
+public:
+    HwlocTopologyRAII() {
+        hwloc_topology_init(&topology_);
+        hwloc_topology_load(topology_);
+    }
+    ~HwlocTopologyRAII() {
+        hwloc_topology_destroy(topology_);
+    }
+    hwloc_topology_t get() const noexcept { return topology_; }
+private:
+    hwloc_topology_t topology_;
+};
+
+static std::unique_ptr<HwlocTopologyRAII> g_hwlocTopo;
+
+/**
+ * @brief Returns available logical core count (platform-safe).
+ */
 inline size_t get_available_cores() {
 #if defined(_WIN32)
     DWORD_PTR processMask = 0, systemMask = 0;
     if (GetProcessAffinityMask(GetCurrentProcess(), &processMask, &systemMask))
         return static_cast<size_t>(std::bitset<sizeof(processMask)*8>(processMask).count());
-#elif defined(__linux__)
+#elif defined(__linux__) || defined(__APPLE__)
     long n = sysconf(_SC_NPROCESSORS_ONLN);
     if (n > 0) return static_cast<size_t>(n);
 #endif
@@ -160,25 +221,29 @@ inline size_t get_available_cores() {
     return hint ? static_cast<size_t>(hint) : 1;
 }
 
-// --------- NUMA/socket-aware thread pairing using hwloc ---------------
-struct ThreadPair {
-    unsigned pu1;      // Producer PU (logical core)
-    unsigned pu2;      // Consumer PU (SMT sibling, or next core on same NUMA node)
+/**
+ * @brief Structure to hold a producer-consumer thread pair mapped to specific cores.
+ */
+struct ThreadAffinityPair {
+    unsigned producerLogicalCore;
+    unsigned consumerLogicalCore;
     unsigned numaNode;
     unsigned socket;
 };
 
-// Returns a vector of thread pairs for NUMA locality and SMT affinity
-std::vector<ThreadPair> assign_thread_pairs_hwloc(size_t pairCount) {
-    std::vector<ThreadPair> pairs;
+/**
+ * @brief Returns NUMA/socket/locality optimized thread pairs for core affinity.
+ */
+std::vector<ThreadAffinityPair> assign_thread_affinity_pairs(size_t pairCount)
+{
+    std::vector<ThreadAffinityPair> pairs;
     std::set<unsigned> usedPUs;
-    hwloc_topology_t topology;
-    hwloc_topology_init(&topology);
-    hwloc_topology_load(topology);
+    assert(g_hwlocTopo && "Hwloc topology must be initialized");
+    hwloc_topology_t topology = g_hwlocTopo->get();
 
     int totalCores = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_CORE);
 
-    // Pair SMT siblings (2 PUs per core) first
+    // SMT siblings first
     for (int i = 0; i < totalCores && pairs.size() < pairCount; ++i) {
         hwloc_obj_t core = hwloc_get_obj_by_type(topology, HWLOC_OBJ_CORE, i);
         unsigned nodeId = 0, socketId = 0;
@@ -187,14 +252,12 @@ std::vector<ThreadPair> assign_thread_pairs_hwloc(size_t pairCount) {
         hwloc_obj_t sock = hwloc_get_ancestor_obj_by_type(topology, HWLOC_OBJ_PACKAGE, core);
         if (sock) socketId = sock->os_index;
 
-        // Find all PUs for this core
         std::vector<unsigned> pus;
         for (unsigned j = 0; j < core->arity; ++j) {
             hwloc_obj_t child = core->children[j];
             if (child->type == HWLOC_OBJ_PU)
                 pus.push_back(child->os_index);
         }
-        // Fallback to bitmap if not found
         if (pus.empty()) {
             hwloc_bitmap_t cpuset = hwloc_bitmap_dup(core->cpuset);
             hwloc_bitmap_singlify(cpuset);
@@ -203,17 +266,15 @@ std::vector<ThreadPair> assign_thread_pairs_hwloc(size_t pairCount) {
                 pus.push_back(static_cast<unsigned>(puIdx));
             hwloc_bitmap_free(cpuset);
         }
-        // Pair up SMT siblings, mark as used
-        if (pus.size() >= 2 && usedPUs.count(pus[0]) == 0 && usedPUs.count(pus[1]) == 0) {
+        if (pus.size() >= 2 && !usedPUs.count(pus[0]) && !usedPUs.count(pus[1])) {
             pairs.push_back({pus[0], pus[1], nodeId, socketId});
             usedPUs.insert(pus[0]);
             usedPUs.insert(pus[1]);
-        } else if (pus.size() == 1 && usedPUs.count(pus[0]) == 0) {
+        } else if (pus.size() == 1 && !usedPUs.count(pus[0])) {
             pairs.push_back({pus[0], pus[0], nodeId, socketId});
             usedPUs.insert(pus[0]);
         }
     }
-
     // Second, pair remaining unused PUs within each NUMA node
     if (pairs.size() < pairCount) {
         int totalPU = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_PU);
@@ -230,32 +291,26 @@ std::vector<ThreadPair> assign_thread_pairs_hwloc(size_t pairCount) {
             numaToPU[nodeId].push_back(pu->os_index);
             numaToSocket[nodeId].push_back(socketId);
         }
-        // Pair PUs within each NUMA node
-        for (auto& entry : numaToPU) {
-            auto& pus = entry.second;
-            auto& sockets = numaToSocket[entry.first];
+        for (auto& [numaNode, pus] : numaToPU) {
+            auto& sockets = numaToSocket[numaNode];
             for (size_t i = 0; i + 1 < pus.size() && pairs.size() < pairCount; i += 2) {
-                pairs.push_back({pus[i], pus[i + 1], entry.first, sockets[i]});
+                pairs.push_back({pus[i], pus[i + 1], numaNode, sockets[i]});
                 usedPUs.insert(pus[i]);
                 usedPUs.insert(pus[i + 1]);
             }
         }
-        // Collect leftovers for cross-node pairing
-        std::vector<std::pair<unsigned, unsigned>> leftovers; // (PU, socket)
-        for (auto& entry : numaToPU) {
-            auto& pus = entry.second;
-            auto& sockets = numaToSocket[entry.first];
-            if (pus.size() % 2) leftovers.emplace_back(pus.back(), sockets.back());
+        std::vector<std::pair<unsigned, unsigned>> leftovers;
+        for (auto& [numaNode, pus] : numaToPU) {
+            auto& sockets = numaToSocket[numaNode];
+            if (pus.size() % 2)
+                leftovers.emplace_back(pus.back(), sockets.back());
         }
-        // Pair leftovers
         for (size_t i = 0; i + 1 < leftovers.size() && pairs.size() < pairCount; i += 2) {
             pairs.push_back({leftovers[i].first, leftovers[i + 1].first, 0, leftovers[i].second});
             usedPUs.insert(leftovers[i].first);
             usedPUs.insert(leftovers[i + 1].first);
         }
     }
-
-    // Last resort: round-robin all remaining unused PUs
     if (pairs.size() < pairCount) {
         int totalPU = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_PU);
         std::vector<unsigned> allUnused;
@@ -267,25 +322,26 @@ std::vector<ThreadPair> assign_thread_pairs_hwloc(size_t pairCount) {
             pairs.push_back({allUnused[i], allUnused[i + 1], 0, 0});
         }
     }
-
-    hwloc_topology_destroy(topology);
     return pairs;
 }
 
-// --------- HWLOC-based thread affinity set (Windows/Linux portable) ----------
-inline void set_thread_affinity_hwloc(unsigned logicalCoreId) {
-    hwloc_topology_t topology;
-    hwloc_topology_init(&topology);
-    hwloc_topology_load(topology);
+/**
+ * @brief Set thread affinity to a logical core using cached hwloc topology.
+ */
+inline void set_thread_affinity(unsigned logicalCoreId)
+{
+    assert(g_hwlocTopo && "Hwloc topology must be initialized");
+    hwloc_topology_t topology = g_hwlocTopo->get();
     hwloc_cpuset_t cpuset = hwloc_bitmap_alloc();
     hwloc_bitmap_zero(cpuset);
     hwloc_bitmap_set(cpuset, logicalCoreId);
     hwloc_set_cpubind(topology, cpuset, HWLOC_CPUBIND_THREAD);
     hwloc_bitmap_free(cpuset);
-    hwloc_topology_destroy(topology);
 }
 
-// --------- Tile size helper ---------
+/**
+ * @brief Pick a good tile size for TIFF tiling.
+ */
 inline void pick_tile_size(uint32_t width, uint32_t height,
                            uint32_t& tileWidth, uint32_t& tileLength) {
     if (width >= kOptimalTileEdge && height >= kOptimalTileEdge) {
@@ -296,7 +352,12 @@ inline void pick_tile_size(uint32_t width, uint32_t height,
     }
 }
 
-// --------- Per-slice TIFF writing task structure ----------
+//=========================
+//    SliceWriteTask
+//=========================
+/**
+ * @brief Structure representing all info needed to write a single TIFF slice.
+ */
 struct SliceWriteTask {
     std::vector<uint8_t> sliceBuffer;
     uint32_t             sliceIndex;
@@ -309,52 +370,68 @@ struct SliceWriteTask {
     bool                 useTiles;
 };
 
-// --------- Cross-platform, RAII-safe TIFF file writer ------------
+//=========================
+//    TemporaryFileGuard
+//=========================
+/**
+ * @brief RAII guard for a temporary file.
+ */
+class TemporaryFileGuard {
+public:
+    TemporaryFileGuard(const fs::path& path) : tempPath_(path) {}
+    ~TemporaryFileGuard() {
+        if (fs::exists(tempPath_))
+            std::error_code ec; fs::remove(tempPath_, ec);
+    }
+    const fs::path& get() const { return tempPath_; }
+private:
+    fs::path tempPath_;
+};
+
+//=========================
+//   TiffWriterDirect
+//=========================
+/**
+ * @brief RAII-safe cross-platform TIFF writer.
+ */
 struct TiffWriterDirect
 {
     TIFF*       tiffHandle = nullptr;
     std::string filePath;
 #if defined(__linux__) || defined(__APPLE__)
-    int fd = -1;
+    int fileDescriptor = -1;
 #endif
 
     explicit TiffWriterDirect(const std::string& filePath_)
         : filePath(filePath_)
     {
 #if defined(_WIN32)
-        std::wstring wPath = utf8_to_utf16(filePath);
+        std::wstring wPath = platform::utf8_to_utf16(filePath_);
         constexpr size_t kLimit = 248;
         if (wPath.size() >= kLimit && wPath.rfind(LR"(\\?\)", 0) == std::wstring::npos)
             wPath.insert(0, LR"(\\?\)");
-
         tiffHandle = TIFFOpenW(wPath.c_str(), "w");
         if (!tiffHandle)
-            throw std::runtime_error("TIFFOpenW failed for: " + filePath);
-
+            throw std::runtime_error("TIFFOpenW failed for: " + filePath_);
 #elif defined(__linux__) || defined(__APPLE__)
-        fd = ::open(filePath_.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0666);
-        if (fd == -1)
-            throw std::runtime_error("open() failed for: " + filePath +
-                                     " errno=" + std::to_string(errno));
-
-        tiffHandle = TIFFFdOpen(fd, filePath_.c_str(), "w");
+        fileDescriptor = ::open(filePath_.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0666);
+        if (fileDescriptor == -1)
+            throw std::runtime_error("open() failed for: " + filePath_ + " errno=" + std::to_string(errno));
+        tiffHandle = TIFFFdOpen(fileDescriptor, filePath_.c_str(), "w");
         if (!tiffHandle) {
-            ::close(fd);
-            throw std::runtime_error("TIFFFdOpen failed for: " + filePath);
+            ::close(fileDescriptor);
+            throw std::runtime_error("TIFFFdOpen failed for: " + filePath_);
         }
 #else
         tiffHandle = TIFFOpen(filePath_.c_str(), "w");
         if (!tiffHandle)
-            throw std::runtime_error("TIFFOpen failed for: " + filePath);
+            throw std::runtime_error("TIFFOpen failed for: " + filePath_);
 #endif
     }
-
     ~TiffWriterDirect() noexcept
     {
         if (!tiffHandle) return;
-#if defined(_WIN32)
-        // No flush needed; TIFFClose will flush and close.
-#elif defined(__linux__) || defined(__APPLE__)
+#if defined(__linux__) || defined(__APPLE__)
         ::fsync(TIFFFileno(tiffHandle));
         std::vector<char> dirbuf(filePath.c_str(), filePath.c_str() + filePath.size() + 1);
         char* dir = dirname(dirbuf.data());
@@ -364,21 +441,25 @@ struct TiffWriterDirect
         TIFFClose(tiffHandle);
         tiffHandle = nullptr;
     }
-
     TiffWriterDirect(const TiffWriterDirect&)            = delete;
     TiffWriterDirect& operator=(const TiffWriterDirect&) = delete;
 };
 
-// --------- Robust atomic move/replace with copy-delete fallback ----------
-inline void makeWritable(const fs::path& path) {
+//=========================
+//      File Helpers
+//=========================
+inline void make_writable(const fs::path& path) {
 #if defined(_WIN32)
-    SetFileAttributesW(utf8_to_utf16(path.string()).c_str(), FILE_ATTRIBUTE_NORMAL);
+    SetFileAttributesW(platform::utf8_to_utf16(path.string()).c_str(), FILE_ATTRIBUTE_NORMAL);
 #else
     ::chmod(path.c_str(), 0666);
 #endif
 }
 
-inline bool copyAndDelete(const fs::path& src, const fs::path& dst, std::string& errorMessage) {
+/**
+ * @brief Copy src to dst, then delete src. Used as fallback if rename fails.
+ */
+inline bool copy_and_delete(const fs::path& src, const fs::path& dst, std::string& errorMessage) {
     std::error_code ec;
     fs::copy_file(src, dst, fs::copy_options::overwrite_existing, ec);
     if (ec) {
@@ -392,23 +473,26 @@ inline bool copyAndDelete(const fs::path& src, const fs::path& dst, std::string&
     return true;
 }
 
-inline bool robustMoveOrReplace(const fs::path& src,
-                                const fs::path& dst,
-                                std::string&    errorMessage) {
-    using namespace std::chrono_literals;
-    makeWritable(src);
-    makeWritable(dst);
-
+/**
+ * @brief Atomically move/replace file; fallback to copy-delete if needed.
+ */
+inline bool robust_move_or_replace(const fs::path& src,
+                                   const fs::path& dst,
+                                   std::string&    errorMessage) {
+    make_writable(src);
+    make_writable(dst);
 #if defined(_WIN32)
-    std::wstring wideSrc = utf8_to_utf16(src.string());
-    std::wstring wideDst = utf8_to_utf16(dst.string());
+    std::wstring wideSrc = platform::utf8_to_utf16(src.string());
+    std::wstring wideDst = platform::utf8_to_utf16(dst.string());
     for (int attempt = 0; attempt < 5; ++attempt) {
         if (ReplaceFileW(wideDst.c_str(), wideSrc.c_str(),
                          nullptr, REPLACEFILE_WRITE_THROUGH, nullptr, nullptr))
             return true;
         DWORD err = GetLastError();
-        if (err == ERROR_SHARING_VIOLATION || err == ERROR_ACCESS_DENIED)
-            { std::this_thread::sleep_for(10ms * (attempt + 1)); continue; }
+        if (err == ERROR_SHARING_VIOLATION || err == ERROR_ACCESS_DENIED) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10 * (attempt + 1)));
+            continue;
+        }
         errorMessage = "ReplaceFileW error: " + std::to_string(err);
         break;
     }
@@ -416,13 +500,13 @@ inline bool robustMoveOrReplace(const fs::path& src,
                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
         return true;
     errorMessage = "MoveFileExW failed: " + std::to_string(GetLastError());
-#elif defined(__linux__)
+#elif defined(__linux__) || defined(__APPLE__)
     std::error_code ec;
     for (int attempt = 0; attempt < 5; ++attempt) {
         fs::rename(src, dst, ec);
         if (!ec) return true;
         if (fs::exists(dst)) fs::remove(dst, ec);
-        std::this_thread::sleep_for(10ms * (attempt + 1));
+        std::this_thread::sleep_for(std::chrono::milliseconds(10 * (attempt + 1)));
     }
     errorMessage = "rename failed: " + ec.message();
 #else
@@ -431,22 +515,24 @@ inline bool robustMoveOrReplace(const fs::path& src,
     if (!ec) return true;
     errorMessage = "rename failed";
 #endif
-    // Fallback to copy-delete if all else failed
     std::string copyDeleteMsg;
-    if (copyAndDelete(src, dst, copyDeleteMsg))
+    if (copy_and_delete(src, dst, copyDeleteMsg))
         return true;
     errorMessage += " | copy-delete fallback: " + copyDeleteMsg;
     return false;
 }
 
-// --------- Core slice-to-TIFF writing routine -------------
-static void writeSliceToTiffTask(const SliceWriteTask& task) {
-
-    const fs::path temporaryFilePath = fs::path(task.outputFilePath).concat(".tmp");
+//=========================
+//  Slice TIFF Writer
+//=========================
+static void write_slice_to_tiff(const SliceWriteTask& task)
+{
+    const fs::path tempPath = fs::path(task.outputFilePath).concat(".tmp");
+    TemporaryFileGuard tempGuard(tempPath);
 
     // Write TIFF into a temp file (closed before rename)
     {
-        TiffWriterDirect tiffWriter(temporaryFilePath.string());
+        TiffWriterDirect tiffWriter(tempPath.string());
         TIFF* tiffHandle = tiffWriter.tiffHandle;
 
         TIFFSetField(tiffHandle, TIFFTAG_IMAGEWIDTH,  (std::max)(1u, task.widthPixels));
@@ -477,70 +563,67 @@ static void writeSliceToTiffTask(const SliceWriteTask& task) {
             if (task.isXYZLayout) {
                 std::vector<uint8_t> tile(tileBytes);
                 for (uint32_t ty = 0; ty < tilesY; ++ty)
-                    for (uint32_t tx = 0; tx < tilesX; ++tx) {
-                        const uint32_t y0   = ty * tileH;
-                        const uint32_t rows = (std::min)(tileH, task.heightPixels - y0);
-                        const uint32_t x0   = tx * tileW;
-                        const uint32_t cols = (std::min)(tileW, task.widthPixels  - x0);
+                for (uint32_t tx = 0; tx < tilesX; ++tx) {
+                    const uint32_t y0   = ty * tileH;
+                    const uint32_t rows = (std::min)(tileH, task.heightPixels - y0);
+                    const uint32_t x0   = tx * tileW;
+                    const uint32_t cols = (std::min)(tileW, task.widthPixels  - x0);
 
-                        std::fill(tile.begin(), tile.end(), 0);
+                    std::fill(tile.begin(), tile.end(), 0);
 
-                        for (uint32_t r = 0; r < rows; ++r)
-                            std::memcpy(&tile[(r * tileW) * task.bytesPerPixel],
-                                        task.sliceBuffer.data() +
-                                         ((size_t(y0 + r) * task.widthPixels + x0) *
-                                          task.bytesPerPixel),
-                                        size_t(cols) * task.bytesPerPixel);
+                    for (uint32_t r = 0; r < rows; ++r)
+                        std::memcpy(&tile[(r * tileW) * task.bytesPerPixel],
+                                    task.sliceBuffer.data() +
+                                        ((size_t(y0 + r) * task.widthPixels + x0) *
+                                        task.bytesPerPixel),
+                                    size_t(cols) * task.bytesPerPixel);
 
-                        tstrip_t tileIdx = TIFFComputeTile(tiffHandle, x0, y0, 0, 0);
-                        if (TIFFWriteEncodedTile(tiffHandle, tileIdx,
-                                                 tile.data(), tileBytes) < 0)
-                            throw std::runtime_error("Tile write failed");
-                    }
+                    tstrip_t tileIdx = TIFFComputeTile(tiffHandle, x0, y0, 0, 0);
+                    if (TIFFWriteEncodedTile(tiffHandle, tileIdx,
+                                             tile.data(), tileBytes) < 0)
+                        throw std::runtime_error("Tile write failed");
+                }
             } else {
                 thread_local std::vector<uint8_t> tile;
                 if (tile.size() < tileBytes) tile.resize(tileBytes);
                 for (uint32_t ty = 0; ty < tilesY; ++ty)
-                    for (uint32_t tx = 0; tx < tilesX; ++tx) {
-                        const uint32_t y0 = ty * tileH;
-                        const uint32_t rows = (std::min)(tileH, task.heightPixels - y0);
-                        const uint32_t x0 = tx * tileW;
-                        const uint32_t cols = (std::min)(tileW, task.widthPixels - x0);
+                for (uint32_t tx = 0; tx < tilesX; ++tx) {
+                    const uint32_t y0 = ty * tileH;
+                    const uint32_t rows = (std::min)(tileH, task.heightPixels - y0);
+                    const uint32_t x0 = tx * tileW;
+                    const uint32_t cols = (std::min)(tileW, task.widthPixels - x0);
 
-                        std::fill(tile.begin(), tile.begin() + rows*tileW*task.bytesPerPixel, 0);
+                    std::fill(tile.begin(), tile.begin() + rows*tileW*task.bytesPerPixel, 0);
 
-                        for (uint32_t row = 0; row < rows; ++row) {
-                            const uint8_t* src = task.sliceBuffer.data() +
-                                ((size_t(y0 + row) + size_t(x0) * task.heightPixels) *
-                                  task.bytesPerPixel);
-                            uint8_t* dst = tile.data() + row * tileW * task.bytesPerPixel;
-                            for (uint32_t col = 0; col < cols; ++col) {
-                                std::memcpy(dst + col * task.bytesPerPixel,
-                                            src + col * task.heightPixels * task.bytesPerPixel,
-                                            task.bytesPerPixel);
-                            }
+                    for (uint32_t row = 0; row < rows; ++row) {
+                        const uint8_t* src = task.sliceBuffer.data() +
+                            ((size_t(y0 + row) + size_t(x0) * task.heightPixels) *
+                              task.bytesPerPixel);
+                        uint8_t* dst = tile.data() + row * tileW * task.bytesPerPixel;
+                        for (uint32_t col = 0; col < cols; ++col) {
+                            std::memcpy(dst + col * task.bytesPerPixel,
+                                        src + col * task.heightPixels * task.bytesPerPixel,
+                                        task.bytesPerPixel);
                         }
-                        tstrip_t tileIdx = TIFFComputeTile(tiffHandle, x0, y0, 0, 0);
-                        if (TIFFWriteEncodedTile(tiffHandle, tileIdx,
-                                                 tile.data(), tileBytes) < 0)
-                            throw std::runtime_error("Tile write failed");
                     }
+                    tstrip_t tileIdx = TIFFComputeTile(tiffHandle, x0, y0, 0, 0);
+                    if (TIFFWriteEncodedTile(tiffHandle, tileIdx,
+                                             tile.data(), tileBytes) < 0)
+                        throw std::runtime_error("Tile write failed");
+                }
             }
-        }
-        else {
-            // Guard for minimum rowsPerStrip = 1
+        } else {
+            // Use strip mode with minimum rowsPerStrip = 1
             const uint32_t rowsPerStrip =
                 (std::max)(1u, (std::min)(kRowsPerStripDefault, task.heightPixels));
             TIFFSetField(tiffHandle, TIFFTAG_ROWSPERSTRIP, rowsPerStrip);
-
             const uint32_t totalStrips =
                 (task.heightPixels + rowsPerStrip - 1) / rowsPerStrip;
 
             if (task.isXYZLayout) {
                 for (uint32_t strip = 0; strip < totalStrips; ++strip) {
                     const uint32_t y0   = strip * rowsPerStrip;
-                    const uint32_t rows = (std::min)(rowsPerStrip,
-                                                     task.heightPixels - y0);
+                    const uint32_t rows = (std::min)(rowsPerStrip, task.heightPixels - y0);
                     const size_t bytesThisStrip =
                         size_t(task.widthPixels) * rows * task.bytesPerPixel;
                     const uint8_t* src =
@@ -561,8 +644,7 @@ static void writeSliceToTiffTask(const SliceWriteTask& task) {
 
                 for (uint32_t strip = 0; strip < totalStrips; ++strip) {
                     const uint32_t y0   = strip * rowsPerStrip;
-                    const uint32_t rows = (std::min)(rowsPerStrip,
-                                                     task.heightPixels - y0);
+                    const uint32_t rows = (std::min)(rowsPerStrip, task.heightPixels - y0);
                     for (uint32_t row = 0; row < rows; ++row) {
                         const uint8_t* src = task.sliceBuffer.data() +
                             ((size_t(y0 + row)) * task.bytesPerPixel);
@@ -586,19 +668,24 @@ static void writeSliceToTiffTask(const SliceWriteTask& task) {
 
         TIFFFlush(tiffHandle);
     }
-
-    if (!fs::exists(temporaryFilePath))
-        throw std::runtime_error("Temp file vanished: " + temporaryFilePath.string());
+    if (!fs::exists(tempPath))
+        throw std::runtime_error("Temp file vanished: " + tempPath.string());
 
     std::string moveError;
-    if (!robustMoveOrReplace(temporaryFilePath, task.outputFilePath, moveError))
+    if (!robust_move_or_replace(tempPath, task.outputFilePath, moveError))
         throw std::runtime_error("Atomic move failed: " + moveError);
 }
 
-// --------- MEX entry point (unchanged, but with improved naming) ----------
+//=========================
+//        mexFunction
+//=========================
 void mexFunction(int nlhs, mxArray* plhs[],
                  int nrhs, const mxArray* prhs[]) {
     try {
+        // Initialize hwloc topology once per mex invocation
+        if (!g_hwlocTopo)
+            g_hwlocTopo = std::make_unique<HwlocTopologyRAII>();
+
         if (nrhs < 4 || nrhs > 6)
             mexErrMsgIdAndTxt("save_bl_tif:usage",
                 "Usage: save_bl_tif(volume, fileList, isXYZ, compression[, nThreads, useTiles]);");
@@ -683,26 +770,23 @@ void mexFunction(int nlhs, mxArray* plhs[],
         std::vector<std::string> runtimeErrors;
         std::mutex              errorMutex;
         std::atomic<bool>       abortFlag{false};
-        auto threadPairs = assign_thread_pairs_hwloc(threadCount);
+        auto threadPairs = assign_thread_affinity_pairs(threadCount);
 
         // ---- Launch threads with hwloc-based pinning ----
         for (size_t t = 0; t < threadCount; ++t) {
             producerThreads.emplace_back([&, t] {
-                set_thread_affinity_hwloc(threadPairs[t].pu1);
+                set_thread_affinity(threadPairs[t].producerLogicalCore);
                 while (true) {
-                    if (abortFlag.load()) break;
-                    uint32_t idx = nextSliceIndex.fetch_add(1);
+                    if (abortFlag.load(std::memory_order_acquire)) break;
+                    uint32_t idx = nextSliceIndex.fetch_add(1, std::memory_order_relaxed);
                     if (idx >= numSlices) break;
 
-                    size_t sliceBytes =
-                        size_t(widthPixels) * heightPixels * bytesPerPixel;
-
+                    size_t sliceBytes = size_t(widthPixels) * heightPixels * bytesPerPixel;
                     auto task = std::make_shared<SliceWriteTask>();
                     task->sliceBuffer.resize(sliceBytes);
                     std::memcpy(task->sliceBuffer.data(),
                                 volumePtr + idx * sliceBytes,
                                 sliceBytes);
-
                     task->sliceIndex     = idx;
                     task->widthPixels    = widthPixels;
                     task->heightPixels   = heightPixels;
@@ -711,22 +795,20 @@ void mexFunction(int nlhs, mxArray* plhs[],
                     task->isXYZLayout    = isXYZ;
                     task->compressionTag = compressionTag;
                     task->useTiles       = useTiles;
-
                     taskQueue.push(std::move(task));
                 }
             });
-
             consumerThreads.emplace_back([&, t] {
-                set_thread_affinity_hwloc(threadPairs[t].pu2);
+                set_thread_affinity(threadPairs[t].consumerLogicalCore);
                 while (true) {
-                    if (abortFlag.load()) break;
+                    if (abortFlag.load(std::memory_order_acquire)) break;
                     std::shared_ptr<SliceWriteTask> task;
                     taskQueue.wait_and_pop(task);
                     if (!task) break; // sentinel
                     try {
-                        writeSliceToTiffTask(*task);
+                        write_slice_to_tiff(*task);
                     } catch (const std::exception& ex) {
-                        abortFlag.store(true);
+                        abortFlag.store(true, std::memory_order_release);
                         std::lock_guard<std::mutex> lock(errorMutex);
                         runtimeErrors.emplace_back(ex.what());
                         break;
