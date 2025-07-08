@@ -207,19 +207,19 @@ largeBlockSize = [25555 16531 200];
 largeBlockVolume = generateTestData(largeBlockSize, 'uint16');
 largeBlockFileList = arrayfun(@(k) fullfile(temporaryTestRoot, sprintf('bigblock_%03d.tif',k)), 1:largeBlockSize(3), 'UniformOutput', false);
 
-% --- TILE mode (XYZ)
-fprintf('\n   🏁 Saving %d large slices (TILE mode, XYZ)...\n', largeBlockSize(3));
-tileSaveTimeSec = tic;
-save_bl_tif(largeBlockVolume, largeBlockFileList, true, 'deflate', feature('numCores'), true);  % isXYZ = true
-tileElapsedSec = toc(tileSaveTimeSec);
-fprintf('      ✅ %d large slices (TILE mode, XYZ) ok (%.2f s)\n', largeBlockSize(3), tileElapsedSec);
-
 % --- STRIP mode (XYZ)
 fprintf('\n   🏁 Saving %d large slices (STRIP mode, XYZ)...\n', largeBlockSize(3));
 stripSaveTimeSec = tic;
 save_bl_tif(largeBlockVolume, largeBlockFileList, true, 'deflate', feature('numCores'), false);  % isXYZ = true
 stripElapsedSec = toc(stripSaveTimeSec);
 fprintf('      ✅ %d large slices (STRIP mode, XYZ) ok (%.2f s)\n', largeBlockSize(3), stripElapsedSec);
+
+% --- TILE mode (XYZ)
+fprintf('\n   🏁 Saving %d large slices (TILE mode, XYZ)...\n', largeBlockSize(3));
+tileSaveTimeSec = tic;
+save_bl_tif(largeBlockVolume, largeBlockFileList, true, 'deflate', feature('numCores'), true);  % isXYZ = true
+tileElapsedSec = toc(tileSaveTimeSec);
+fprintf('      ✅ %d large slices (TILE mode, XYZ) ok (%.2f s)\n', largeBlockSize(3), tileElapsedSec);
 
 % --- Print block test summary
 fprintf('\n   🚦  [Performance] Tiles vs Strips (100x %dx%d slices, XYZ):\n', largeBlockSize(1), largeBlockSize(2));
@@ -263,20 +263,6 @@ function data = readTiff(filename)
         data = imread(filename);
     end
 end
-
-% function outputVolume = generateTestData(volumeSize, dataTypeName)
-%     % Generate synthetic gamma-distributed, sparse 3D/2D test volume
-%     alpha = 2; beta = 50;
-%     randomData = gamrnd(alpha, beta, volumeSize);
-%     mask = rand(volumeSize) > 0.10;
-%     randomData(~mask) = 0;
-%     randomData = randomData / max(randomData(:));
-%     switch dataTypeName
-%         case 'uint8',  outputVolume = uint8(randomData * 255);
-%         case 'uint16', outputVolume = uint16(randomData * 65535);
-%         otherwise,     error("Unsupported dtype '%s'",dataTypeName);
-%     end
-% end
 
 function outputVolume = generateTestData(targetShape, dataTypeName)
     %GENERATE_SPARSE_GAMMA_3D Generates a 3D matrix of specified size using
