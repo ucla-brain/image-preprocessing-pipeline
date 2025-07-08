@@ -53,7 +53,7 @@
     save_bl_tif(vol, fileList, true, 'deflate', 8, true);
 
   AUTHOR:
-    Keivan Moradi (with ChatGPT-4o assistance), 2024–2025
+    Keivan Moradi (with ChatGPT assistance), 2025
 
   LICENSE:
     GNU GPL v3 — https://www.gnu.org/licenses/gpl-3.0.html
@@ -91,10 +91,6 @@
     #undef max
     #include <io.h>
     #include <fcntl.h>
-    #include <bitset>
-    #include <codecvt>
-    #include <algorithm>
-    #include <string>
     #ifndef W_OK
         #define W_OK 2
     #endif
@@ -114,7 +110,17 @@ namespace fs = std::filesystem;
 static constexpr uint32_t kRowsPerStripDefault = 1;
 static constexpr uint32_t kOptimalTileEdge     = 128;
 
-// --------- Bounded MPMC Queue (unchanged) ----------
+// Anonymous namespace for file-scope helpers (prevents ODR violation)
+namespace {
+#if defined(_WIN32)
+inline std::wstring utf8_to_utf16(const std::string& utf8) {
+    std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> conv;
+    return conv.from_bytes(utf8);
+}
+#endif
+}
+
+// --------- Bounded multi-producer/multi-consumer queue -----------
 template <typename T>
 class BoundedQueue {
 public:
@@ -140,7 +146,7 @@ private:
     size_t                        maximumSize_;
 };
 
-// --------- Affinity ---------
+// --------- Returns available logical core count (platform-safe) --------
 inline size_t get_available_cores() {
 #if defined(_WIN32)
     DWORD_PTR processMask = 0, systemMask = 0;
@@ -154,18 +160,15 @@ inline size_t get_available_cores() {
     return hint ? static_cast<size_t>(hint) : 1;
 }
 
-// -------------------- NUMA/Socket Core Assignment (hwloc) ----------------------
-
+// --------- NUMA/socket-aware thread pairing using hwloc ---------------
 struct ThreadPair {
-    unsigned pu1;    // Producer PU (logical core)
-    unsigned pu2;    // Consumer PU (SMT sibling, or next core on same NUMA node if no SMT)
+    unsigned pu1;      // Producer PU (logical core)
+    unsigned pu2;      // Consumer PU (SMT sibling, or next core on same NUMA node)
     unsigned numaNode;
     unsigned socket;
 };
 
-#include <map>
-#include <set>
-
+// Returns a vector of thread pairs for NUMA locality and SMT affinity
 std::vector<ThreadPair> assign_thread_pairs_hwloc(size_t pairCount) {
     std::vector<ThreadPair> pairs;
     std::set<unsigned> usedPUs;
@@ -175,11 +178,9 @@ std::vector<ThreadPair> assign_thread_pairs_hwloc(size_t pairCount) {
 
     int totalCores = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_CORE);
 
-    // First, try pairing SMT siblings (two PUs per core)
+    // Pair SMT siblings (2 PUs per core) first
     for (int i = 0; i < totalCores && pairs.size() < pairCount; ++i) {
         hwloc_obj_t core = hwloc_get_obj_by_type(topology, HWLOC_OBJ_CORE, i);
-
-        // Get NUMA node for this core
         unsigned nodeId = 0, socketId = 0;
         hwloc_obj_t node = hwloc_get_ancestor_obj_by_type(topology, HWLOC_OBJ_NUMANODE, core);
         if (node) nodeId = node->os_index;
@@ -193,7 +194,7 @@ std::vector<ThreadPair> assign_thread_pairs_hwloc(size_t pairCount) {
             if (child->type == HWLOC_OBJ_PU)
                 pus.push_back(child->os_index);
         }
-        // If not found, fallback to bitmap
+        // Fallback to bitmap if not found
         if (pus.empty()) {
             hwloc_bitmap_t cpuset = hwloc_bitmap_dup(core->cpuset);
             hwloc_bitmap_singlify(cpuset);
@@ -263,7 +264,6 @@ std::vector<ThreadPair> assign_thread_pairs_hwloc(size_t pairCount) {
             if (!usedPUs.count(pu->os_index)) allUnused.push_back(pu->os_index);
         }
         for (size_t i = 0; i + 1 < allUnused.size() && pairs.size() < pairCount; i += 2) {
-            // No NUMA/socket info, set to 0
             pairs.push_back({allUnused[i], allUnused[i + 1], 0, 0});
         }
     }
@@ -272,7 +272,7 @@ std::vector<ThreadPair> assign_thread_pairs_hwloc(size_t pairCount) {
     return pairs;
 }
 
-// --------- HWLOC-based thread affinity set (portable for Windows/Linux) ----------
+// --------- HWLOC-based thread affinity set (Windows/Linux portable) ----------
 inline void set_thread_affinity_hwloc(unsigned logicalCoreId) {
     hwloc_topology_t topology;
     hwloc_topology_init(&topology);
@@ -296,33 +296,20 @@ inline void pick_tile_size(uint32_t width, uint32_t height,
     }
 }
 
-// --------- Slice Task ---------
+// --------- Per-slice TIFF writing task structure ----------
 struct SliceWriteTask {
     std::vector<uint8_t> sliceBuffer;
     uint32_t             sliceIndex;
     uint32_t             widthPixels;
     uint32_t             heightPixels;
     uint32_t             bytesPerPixel;
-    std::string          outputPath;
+    std::string          outputFilePath;
     bool                 isXYZLayout;
     uint16_t             compressionTag;
     bool                 useTiles;
 };
 
-#if defined(_WIN32)
-// --------- UTF-8 → UTF-16 conversion for Windows file APIs ---------
-inline std::wstring utf8_to_utf16(const std::string& utf8) {
-    // C++17: recommend using std::wstring_convert
-    std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> conv;
-    return conv.from_bytes(utf8);
-}
-#endif
-
-// -----------------------------------------------------------------------------
-//  Smart, cross-platform TIFF writer that opens the file *once* through a
-//  native descriptor, hands that descriptor to libtiff via TIFFFdOpen(), and
-//  guarantees a durable flush before close.
-// -----------------------------------------------------------------------------
+// --------- Cross-platform, RAII-safe TIFF file writer ------------
 struct TiffWriterDirect
 {
     TIFF*       tiffHandle = nullptr;
@@ -335,14 +322,9 @@ struct TiffWriterDirect
         : filePath(filePath_)
     {
 #if defined(_WIN32)
-        auto utf8_to_utf16 = [](const std::string& s) {
-            std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> cvt;
-            return cvt.from_bytes(s);
-        };
         std::wstring wPath = utf8_to_utf16(filePath);
         constexpr size_t kLimit = 248;
-        if (wPath.size() >= kLimit &&
-            wPath.rfind(LR"(\\?\)", 0) == std::wstring::npos)
+        if (wPath.size() >= kLimit && wPath.rfind(LR"(\\?\)", 0) == std::wstring::npos)
             wPath.insert(0, LR"(\\?\)");
 
         tiffHandle = TIFFOpenW(wPath.c_str(), "w");
@@ -387,18 +369,7 @@ struct TiffWriterDirect
     TiffWriterDirect& operator=(const TiffWriterDirect&) = delete;
 };
 
-// --------- Platform sync helpers -----------
-inline void robustSyncFile(const fs::path& filePath) {
-#if defined(_WIN32)
-    (void)filePath; // No-op, handled by FILE_FLAG_WRITE_THROUGH
-#elif defined(__linux__)
-    int fd = ::open(filePath.c_str(), O_RDONLY);
-    if (fd != -1) { ::fsync(fd); ::close(fd); }
-    int dirfd = ::open(filePath.parent_path().c_str(), O_RDONLY);
-    if (dirfd != -1) { ::fsync(dirfd); ::close(dirfd); }
-#endif
-}
-
+// --------- Robust atomic move/replace with copy-delete fallback ----------
 inline void makeWritable(const fs::path& path) {
 #if defined(_WIN32)
     SetFileAttributesW(utf8_to_utf16(path.string()).c_str(), FILE_ATTRIBUTE_NORMAL);
@@ -407,7 +378,6 @@ inline void makeWritable(const fs::path& path) {
 #endif
 }
 
-// --------- Copy-delete fallback ---------
 inline bool copyAndDelete(const fs::path& src, const fs::path& dst, std::string& errorMessage) {
     std::error_code ec;
     fs::copy_file(src, dst, fs::copy_options::overwrite_existing, ec);
@@ -422,14 +392,12 @@ inline bool copyAndDelete(const fs::path& src, const fs::path& dst, std::string&
     return true;
 }
 
-// --------- Robust move/replace with fallback ---------
 inline bool robustMoveOrReplace(const fs::path& src,
                                 const fs::path& dst,
                                 std::string&    errorMessage) {
     using namespace std::chrono_literals;
     makeWritable(src);
     makeWritable(dst);
-    robustSyncFile(src);
 
 #if defined(_WIN32)
     std::wstring wideSrc = utf8_to_utf16(src.string());
@@ -463,7 +431,7 @@ inline bool robustMoveOrReplace(const fs::path& src,
     if (!ec) return true;
     errorMessage = "rename failed";
 #endif
-    // ✨ PATCH: Fallback to copy-delete if all else failed
+    // Fallback to copy-delete if all else failed
     std::string copyDeleteMsg;
     if (copyAndDelete(src, dst, copyDeleteMsg))
         return true;
@@ -471,12 +439,12 @@ inline bool robustMoveOrReplace(const fs::path& src,
     return false;
 }
 
-// --------- Core slice-to-TIFF routine ---------
+// --------- Core slice-to-TIFF writing routine -------------
 static void writeSliceToTiffTask(const SliceWriteTask& task) {
 
-    const fs::path temporaryFilePath = fs::path(task.outputPath).concat(".tmp");
+    const fs::path temporaryFilePath = fs::path(task.outputFilePath).concat(".tmp");
 
-    // 1. Write TIFF into a temp file (closed before rename)
+    // Write TIFF into a temp file (closed before rename)
     {
         TiffWriterDirect tiffWriter(temporaryFilePath.string());
         TIFF* tiffHandle = tiffWriter.tiffHandle;
@@ -623,11 +591,11 @@ static void writeSliceToTiffTask(const SliceWriteTask& task) {
         throw std::runtime_error("Temp file vanished: " + temporaryFilePath.string());
 
     std::string moveError;
-    if (!robustMoveOrReplace(temporaryFilePath, task.outputPath, moveError))
+    if (!robustMoveOrReplace(temporaryFilePath, task.outputFilePath, moveError))
         throw std::runtime_error("Atomic move failed: " + moveError);
 }
 
-// --------- MEX entry point ---------
+// --------- MEX entry point (unchanged, but with improved naming) ----------
 void mexFunction(int nlhs, mxArray* plhs[],
                  int nrhs, const mxArray* prhs[]) {
     try {
@@ -722,7 +690,7 @@ void mexFunction(int nlhs, mxArray* plhs[],
             producerThreads.emplace_back([&, t] {
                 set_thread_affinity_hwloc(threadPairs[t].pu1);
                 while (true) {
-                    if (abortFlag.load()) break; // ✨ PATCH: Early exit if error
+                    if (abortFlag.load()) break;
                     uint32_t idx = nextSliceIndex.fetch_add(1);
                     if (idx >= numSlices) break;
 
@@ -739,7 +707,7 @@ void mexFunction(int nlhs, mxArray* plhs[],
                     task->widthPixels    = widthPixels;
                     task->heightPixels   = heightPixels;
                     task->bytesPerPixel  = bytesPerPixel;
-                    task->outputPath     = outputPaths[idx];
+                    task->outputFilePath = outputPaths[idx];
                     task->isXYZLayout    = isXYZ;
                     task->compressionTag = compressionTag;
                     task->useTiles       = useTiles;
@@ -751,17 +719,17 @@ void mexFunction(int nlhs, mxArray* plhs[],
             consumerThreads.emplace_back([&, t] {
                 set_thread_affinity_hwloc(threadPairs[t].pu2);
                 while (true) {
-                    if (abortFlag.load()) break; // ✨ PATCH: Early exit if error
+                    if (abortFlag.load()) break;
                     std::shared_ptr<SliceWriteTask> task;
                     taskQueue.wait_and_pop(task);
                     if (!task) break; // sentinel
                     try {
                         writeSliceToTiffTask(*task);
                     } catch (const std::exception& ex) {
-                        abortFlag.store(true); // ✨ PATCH
+                        abortFlag.store(true);
                         std::lock_guard<std::mutex> lock(errorMutex);
                         runtimeErrors.emplace_back(ex.what());
-                        break; // stop on first error
+                        break;
                     }
                 }
             });
