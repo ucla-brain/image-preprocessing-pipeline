@@ -334,11 +334,11 @@ function build_mex(debug)
 
     %% --------- 7) Build CPU MEX files ---------
     fprintf('\n[MEX] Compiling CPU modules …\n');
-    % mex(mex_cpu{:}, 'semaphore.c');
-    % mex(mex_cpu{:}, 'save_lz4_mex.c',    fullfile(lz4_src,'lz4.c'), ['-I"' unixify(lz4_src) '"']);
-    % mex(mex_cpu{:}, 'load_lz4_mex.c',    fullfile(lz4_src,'lz4.c'), ['-I"' unixify(lz4_src) '"']);
-    % mex(mex_cpu{:}, 'load_slab_lz4.cpp', fullfile(lz4_src,'lz4.c'), ['-I"' unixify(lz4_src) '"']);
-    % mex(mex_cpu{:}, inc_tiff, 'load_bl_tif.cpp', link_tiff{:});
+    mex(mex_cpu{:}, 'semaphore.c');
+    mex(mex_cpu{:}, 'save_lz4_mex.c',    fullfile(lz4_src,'lz4.c'), ['-I"' unixify(lz4_src) '"']);
+    mex(mex_cpu{:}, 'load_lz4_mex.c',    fullfile(lz4_src,'lz4.c'), ['-I"' unixify(lz4_src) '"']);
+    mex(mex_cpu{:}, 'load_slab_lz4.cpp', fullfile(lz4_src,'lz4.c'), ['-I"' unixify(lz4_src) '"']);
+    mex(mex_cpu{:}, inc_tiff, 'load_bl_tif.cpp', link_tiff{:});
     mex(mex_cpu{:}, inc_tiff, inc_hwloc, 'save_bl_tif.cpp', link_tiff{:}, link_hwloc{:});
 
     %% --------- 8) Build CUDA MEX files ---------
@@ -365,8 +365,8 @@ function build_mex(debug)
         end
     end
     
-    % mexcuda('-R2018a', nvccflags, 'gauss3d_gpu.cu');
-    % mexcuda('-R2018a', nvccflags, 'conv3d_gpu.cu');
+    mexcuda('-R2018a', nvccflags, 'gauss3d_gpu.cu');
+    mexcuda('-R2018a', nvccflags, 'conv3d_gpu.cu');
 
     fprintf('\n✅  All MEX files built successfully.\n');
 end
@@ -437,13 +437,17 @@ function sm_list = detect_sm_archs()
         12.0, {'52','60','61','70','75','80','86','89'};
         12.1, {'52','60','61','70','75','80','86','89'};
         12.2, {'52','60','61','70','75','80','86','89'};
-        12.3, {'52','60','61','70','75','80','86','89'};
-        12.4, {'52','60','61','70','75','80','86','89'};
-        12.5, {'52','60','61','70','75','80','86','89'};
+        12.3, {'52','60','61','70','75','80','86','89','90'};
+        12.4, {'52','60','61','70','75','80','86','89','90'};
+        12.5, {'52','60','61','70','75','80','86','89','90'};
+        12.9, {'52','60','61','70','75','80','86','89','90','100','102'}; % add SM90, SM100, SM102 for Blackwell
     };
 
     % Default
     sm_list = {'75','80','86'}; % safe for CUDA 11.2+
+    if cuda_ver >= 12.9
+        sm_list = {'52','60','61','70','75','80','86','89','90','100','102'};
+    end
 
     % Try to pick best from table:
     if ~isempty(cuda_ver)
