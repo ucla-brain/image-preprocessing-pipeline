@@ -82,6 +82,8 @@
 #include <optional>
 #include <cassert>
 #include <bitset>
+#include <set>
+#include <map>
 
 #if defined(_WIN32)
     #define WIN32_LEAN_AND_MEAN
@@ -363,8 +365,10 @@ class TemporaryFileGuard {
 public:
     TemporaryFileGuard(const fs::path& path) : tempPath_(path) {}
     ~TemporaryFileGuard() {
-        if (fs::exists(tempPath_))
-            std::error_code ec; fs::remove(tempPath_, ec);
+        if (fs::exists(tempPath_)) {
+            std::error_code ec;
+            fs::remove(tempPath_, ec);
+        }
     }
     const fs::path& get() const { return tempPath_; }
 private:
