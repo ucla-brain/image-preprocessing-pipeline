@@ -1,9 +1,9 @@
 /*==============================================================================
   save_bl_tif.cpp
 
-  Ultra-high-throughput, NUMA-optimized, multi-threaded TIFF Z-slice saver for 3D MATLAB volumes.
-  Now using explicit multi-file async I/O (producer-consumer model), advanced buffering flags,
-  and paired thread affinity for 10x throughput on modern SSDs or RAID arrays.
+  Ultra-high-throughput, NUMA- and socket-aware, multi-threaded TIFF Z-slice saver
+  for 3D MATLAB volumes. Uses explicit async producer-consumer I/O, advanced file
+  flags, and hwloc-driven thread pairing for maximum locality and throughput.
 
   USAGE:
     save_bl_tif(volume, fileList, isXYZ, compression[, nThreads, useTiles]);
@@ -11,58 +11,54 @@
   INPUTS:
     • volume      : 3D MATLAB array (uint8 or uint16), or 2D for single slice.
     • fileList    : 1×Z cell array of output filenames, one per Z-slice.
-    • isXYZ       : Scalar logical/numeric. True if 'volume' is [X Y Z], false if [Y X Z].
+    • isXYZ       : Scalar logical/numeric. True if 'volume' is [X Y Z], false
+                    if [Y X Z].
     • compression : String. "none", "lzw", or "deflate".
-    • nThreads    : (Optional) Number of thread pairs to use. Default = half hardware concurrency. Pass [] to auto-select.
-    • useTiles    : (Optional) true to use tiled TIFF output (TIFFWriteEncodedTile), false for classic strip mode (TIFFWriteEncodedStrip, default).
+    • nThreads    : (Optional) Number of thread-pairs. Default = half of
+                    available cores. Pass [] to auto-select.
+    • useTiles    : (Optional) true for tiled TIFF, false for strip mode.
 
-  FEATURES:
-    • **Explicit async producer-consumer design**: Producer threads decompress/prepare slices and enqueue them; paired consumer threads perform asynchronous file I/O and TIFF writing.
-    • **Direct I/O / no OS cache**: Uses O_DIRECT (Linux) or FILE_FLAG_NO_BUFFERING (Windows) for direct writes, bypassing the OS buffer cache for optimal disk throughput.
-    • **NUMA- and core-aware**: Producers and consumers are launched in matched pairs with identical thread affinity for maximum memory locality and balanced throughput.
-    • **Fully tunable**: Tile size, rows per strip, queue depth, and slices per dispatch are all constexpr, making performance tuning simple.
-    • **Robust, lock-free slice dispatch**: Bounded queue ensures memory safety and smooth pipelining between decompression and file I/O.
-    • **RAII and modern C++17 best practices**: Zero memory/resource leaks even on exceptions.
-    • **Compression**: "deflate" uses modest zip quality and horizontal predictor for fast, lossless scientific imaging.
-    • **Guarded, atomic output**: Uses temp-file + rename for safe overwrites, avoiding partial files.
-    • **2x speedup**: Typical throughput is doubled versus previous versions, especially on fast NVMe or RAID volumes.
-
-  NOTES:
-    • Grayscale only (single channel per slice).
-    • Each Z-slice is saved to a separate file; no multipage TIFFs.
-    • Tile/strip logic is **unchanged** for full compatibility and can be tuned via top-of-file constexprs.
-    • Works on Linux and Windows with MATLAB MEX.
-
-  EXAMPLE:
-    % Save a 3D [X Y Z] volume as LZW-compressed TIFFs, async, STRIP mode:
-    save_bl_tif(vol, fileList, true, 'lzw');
-
-    % Save with explicit 8 thread-pairs, in TILE mode:
-    save_bl_tif(vol, fileList, true, 'deflate', 8, true);
+  HIGHLIGHTS:
+    • **Async producer-consumer** with lock-limited bounded queue sized at
+      2×threadCount for smooth pipelining.
+    • **NUMA- and socket-aware affinity** via hwloc: each producer/consumer pair
+      is bound to sibling PUs on the same core or node.
+    • **Direct I/O flags**: FILE_FLAG_WRITE_THROUGH on Windows replaces
+      double FlushFileBuffers; buffered I/O on Linux (no O_DIRECT) avoids
+      misaligned-syscall overhead.
+    • **UTF-8 → UTF-16** on Windows via MultiByteToWideChar (no deprecated
+      <codecvt> usage).
+    • **Robust atomic output**: write to “.tmp”, flush/close, then rename with
+      copy-delete fallback for maximum atomicity.
+    • **Guarded strip/tile sizes**: default rowsPerStrip = 1; all dimensions
+      clamped to ≥1.
+    • **Macro-safe std::min/max**: calls wrapped as (std::min)/(std::max) to
+      avoid Windows min/max macro collisions.
+    • **Early-abort on error**: atomic<bool> flag stops all threads on first
+      exception.
+    • **RAII + C++17 best practices**: no resource leaks, clear ownership.
+    • **Extensible tuning**: compile-time constants for tile edge, queue
+      capacity, etc.
+    • **Build integration**: prebuilt hwloc on Windows; autotools-driven hwloc
+      on Linux.
 
   DEPENDENCIES:
-    • libtiff ≥ 4.7, MATLAB MEX API, C++17 <filesystem>, POSIX/Windows threading.
+    • libtiff ≥ 4.7, hwloc ≥ 2.12 (prebuilt on Windows, autotools on Linux)
+    • MATLAB MEX API, C++17, <filesystem>, POSIX/Windows threading, hwloc.h.
+
+  EXAMPLES:
+    % Async strip-mode LZW on [X Y Z] volume with default threads
+    save_bl_tif(vol, fileList, true, 'lzw');
+    % Async tile-mode deflate with 8 pairs
+    save_bl_tif(vol, fileList, true, 'deflate', 8, true);
 
   AUTHOR:
-    Keivan Moradi (with ChatGPT-4o assistance)
+    Keivan Moradi (with ChatGPT-4o assistance), 2024–2025
 
   LICENSE:
     GNU GPL v3 — https://www.gnu.org/licenses/gpl-3.0.html
 ==============================================================================*/
 
-/*==============================================================================
-  save_bl_tif.cpp               (2025-07-07 patch-B)
-
-  Minimal-diff replacement that fixes:
-    • Windows double-buffering            → use FILE_FLAG_WRITE_THROUGH
-    • Linux O_DIRECT syscall overhead     → normal buffered open()
-    • Same-core producer/consumer pinning → alternate cores
-    • Tiny queue capacity                 → size = 2 × threadCount
-    • Strip explosion (rowsPerStrip = 1)  → sensible default (256)
-    • Slow YXZ shuffle loops              → memcpy-per-row
-
-  All public behaviour and MEX signature remain identical.
-==============================================================================*/
 #define _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
 
 #include "mex.h"

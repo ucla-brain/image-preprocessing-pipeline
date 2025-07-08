@@ -220,53 +220,61 @@ function build_mex(debug)
         fid = fopen(t_stamp, 'w'); if fid < 0, error('Cannot write stamp file: %s', t_stamp); end; fclose(fid);
     end
 
-    %% --------- 5) Download & build hwloc (for NUMA affinity) ---------
-    % === hwloc cross-platform setup: Windows (prebuilt) & Linux (autotools) ===
+        %% --------- 5) Download & build hwloc (for NUMA affinity) ---------
     hwloc_v_major = '2.12';   % Major.minor
     hwloc_v_patch = '1';      % Patch
     hwloc_v       = sprintf('%s.%s', hwloc_v_major, hwloc_v_patch);
     hwloc_src     = fullfile(thirdparty, ['hwloc-' hwloc_v]);
     hwloc_inst    = fullfile(build_root, 'hwloc');
-    hwloc_stamp   = getStamp(hwloc_inst, '');
+    hwloc_stamp   = getStamp(hwloc_inst, isWin * msvc.tag);
 
     if ~isfile(hwloc_stamp)
-        if ispc
-            % ---- Windows: download & extract prebuilt ZIP ----
-            hwloc_zip_url = sprintf('https://download.open-mpi.org/release/hwloc/v%s/hwloc-win64-build-%s.zip', ...
-                                    hwloc_v_major, hwloc_v);
-            hwloc_zip = fullfile(thirdparty, sprintf('hwloc-win64-build-%s.zip', hwloc_v));
-            if ~exist(hwloc_zip, 'file')
-                fprintf('Downloading hwloc Windows prebuilt binary...\n');
-                websave(hwloc_zip, hwloc_zip_url);
+        % Download hwloc source if missing
+        if ~exist(hwloc_src, 'dir')
+            tgz_url = sprintf('https://download.open-mpi.org/release/hwloc/v%s/hwloc-%s.tar.gz', ...
+                hwloc_v_major, hwloc_v);
+            tgz = fullfile(thirdparty, sprintf('hwloc-%s.tar.gz', hwloc_v));
+            fprintf('Downloading hwloc source...\n');
+            websave(tgz, tgz_url);
+            untar(tgz, thirdparty); delete(tgz);
+        end
+
+        if isWin
+            % Download CMakeLists.txt for Windows build
+            cmake_dir = fullfile(hwloc_src, 'contrib', 'windows-cmake');
+            cmake_txt = fullfile(cmake_dir, 'CMakeLists.txt');
+            if ~exist(cmake_dir, 'dir'), mkdir(cmake_dir); end
+            if ~exist(cmake_txt, 'file')
+                fprintf('Downloading hwloc Windows CMakeLists.txt...\n');
+                urlwrite( ...
+                  'https://raw.githubusercontent.com/open-mpi/hwloc/refs/heads/master/contrib/windows-cmake/CMakeLists.txt', ...
+                  cmake_txt);
             end
-            if ~exist(hwloc_inst, 'dir')
-                unzip(hwloc_zip, hwloc_inst);
-            end
-            % Find the deepest subdir with include/ and lib/
-            possible_roots = dir(fullfile(hwloc_inst, '**', 'include'));
-            if ~isempty(possible_roots)
-                hwloc_deep = fileparts(possible_roots(1).folder);
-                % If not already at root, move contents up
-                if ~strcmp(hwloc_deep, hwloc_inst)
-                    fprintf('Moving hwloc files from %s to %s\n', hwloc_deep, hwloc_inst);
-                    movefile(fullfile(hwloc_deep, '*'), hwloc_inst, 'f');
-                    % Optionally delete the now-empty subfolder tree
-                    rmdir(hwloc_deep, 's');
-                end
-            end
-        else
-            % ---- Linux: download source and build with configure, using custom flags ----
-            if ~exist(hwloc_src, 'dir')
-                tgz_url = sprintf('https://download.open-mpi.org/release/hwloc/v%s/hwloc-%s.tar.gz', ...
-                                  hwloc_v_major, hwloc_v);
-                tgz = fullfile(thirdparty, sprintf('hwloc-%s.tar.gz', hwloc_v));
-                fprintf('Downloading hwloc source...\n');
-                websave(tgz, tgz_url);
-                untar(tgz, thirdparty); delete(tgz);
-            end
+
+            % Use CMake to build/install static lib
+            builddir = fullfile(hwloc_src, 'build'); if ~exist(builddir,'dir'), mkdir(builddir); end
             if ~exist(hwloc_inst, 'dir'), mkdir(hwloc_inst); end
 
-            % Build and install statically (autotools) with custom flags
+            args = {policy_flag, ...
+                '-DBUILD_SHARED_LIBS=OFF', ...
+                '-DHWLOC_BUILD_STANDALONE=ON', ...
+                '-DCMAKE_POSITION_INDEPENDENT_CODE=ON', ...
+                '-DHWLOC_INSTALL_HEADERS=ON', ... % ensures include install
+                '-DHWLOC_ENABLE_OPENCL=OFF', '-DHWLOC_ENABLE_CUDA=OFF', '-DHWLOC_ENABLE_NVML=OFF', ...
+                '-DHWLOC_ENABLE_LIBXML2=OFF', '-DHWLOC_ENABLE_PCI=OFF', '-DHWLOC_ENABLE_TOOLS=OFF', ...
+                '-DHWLOC_ENABLE_TESTING=OFF', '-DHWLOC_ENABLE_DOCS=OFF', ...
+                sprintf('-DCMAKE_C_FLAGS_RELEASE="/O2 /GL /arch:%s"', instr), ...
+                sprintf('-DCMAKE_CXX_FLAGS_RELEASE="/O2 /GL /arch:%s"', instr), ...
+                '-DCMAKE_STATIC_LINKER_FLAGS_RELEASE="/LTCG" ', ...
+                '-DCMAKE_EXE_LINKER_FLAGS_RELEASE="/LTCG" ', ...
+                '-DCMAKE_SHARED_LINKER_FLAGS_RELEASE="/LTCG" ' ...
+            };
+            % Use the windows-cmake dir as the source for CMake!
+            status = cmake_build(cmake_dir, builddir, hwloc_inst, cmake_gen, cmake_arch, args, msvc);
+            if status ~= 0, error('hwloc build failed (code %d)', status); end
+        else
+            % Linux: Use autotools, as before
+            if ~exist(hwloc_inst, 'dir'), mkdir(hwloc_inst); end
             ncores = feature('numcores');
             cflags = sprintf('-O3 -march=native -flto=%d -fPIC', ncores);
             cxxflags = sprintf('-O3 -march=native -flto=%d -fPIC', ncores);
@@ -288,7 +296,7 @@ function build_mex(debug)
     % Set include and link flags
     inc_hwloc  = ['-I"' unixify(fullfile(hwloc_inst, 'include')) '"'];
     if ispc
-        link_hwloc = {fullfile(hwloc_inst, 'lib', 'libhwloc.lib')};
+        link_hwloc = {fullfile(hwloc_inst, 'lib', 'hwloc.lib')};
     else
         link_hwloc = {fullfile(hwloc_inst, 'lib', 'libhwloc.a')};
     end
