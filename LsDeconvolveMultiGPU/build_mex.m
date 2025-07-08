@@ -245,7 +245,14 @@ function build_mex(debug)
             % Find the deepest subdir with include/ and lib/
             possible_roots = dir(fullfile(hwloc_inst, '**', 'include'));
             if ~isempty(possible_roots)
-                hwloc_inst = fileparts(possible_roots(1).folder);
+                hwloc_deep = fileparts(possible_roots(1).folder);
+                % If not already at root, move contents up
+                if ~strcmp(hwloc_deep, hwloc_inst)
+                    fprintf('Moving hwloc files from %s to %s\n', hwloc_deep, hwloc_inst);
+                    movefile(fullfile(hwloc_deep, '*'), hwloc_inst, 'f');
+                    % Optionally delete the now-empty subfolder tree
+                    rmdir(hwloc_deep, 's');
+                end
             end
         else
             % ---- Linux: download source and build with configure, using custom flags ----
