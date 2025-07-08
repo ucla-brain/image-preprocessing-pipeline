@@ -94,6 +94,7 @@
     #include <bitset>
     #include <codecvt>
     #include <algorithm>
+    #include <string>
     #ifndef W_OK
         #define W_OK 2
     #endif
@@ -315,19 +316,6 @@ inline std::wstring utf8_to_utf16(const std::string& utf8) {
     std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> conv;
     return conv.from_bytes(utf8);
 }
-
-inline std::wstring win_extend_path(std::wstring w)
-{
-    /*  Win32 “MAX_PATH” is still 260 bytes for CRT APIs.
-        If the user’s temp-folder sits deep in the tree we can cross that
-        limit very easily (especially after adding “.tmp”).  Prefixing the
-        path with  \\?\  switches the API to the long-path variant *and*
-        works fine with both _wopen() and ReplaceFileW / MoveFileExW.        */
-    constexpr size_t kLimit = 248;                 // Microsoft recommendation
-    if (w.size() >= kLimit && w.rfind(LR"(\\?\)", 0) == std::wstring::npos)
-        w.insert(0, LR"(\\?\)");
-    return w;
-}
 #endif
 
 // -----------------------------------------------------------------------------
@@ -335,10 +323,6 @@ inline std::wstring win_extend_path(std::wstring w)
 //  native descriptor, hands that descriptor to libtiff via TIFFFdOpen(), and
 //  guarantees a durable flush before close.
 // -----------------------------------------------------------------------------
-#if defined(__linux__) || defined(__APPLE__)
-#include <libgen.h>
-#endif
-
 struct TiffWriterDirect
 {
     TIFF*       tiffHandle = nullptr;
@@ -351,30 +335,20 @@ struct TiffWriterDirect
         : filePath(filePath_)
     {
 #if defined(_WIN32)
+        // --- Robust Unicode + Long Path Support ---
         auto utf8_to_utf16 = [](const std::string& s) {
             std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> cvt;
             return cvt.from_bytes(s);
         };
-        auto win_extend_path = [](std::wstring w) {
-            constexpr size_t kLimit = 248;
-            if (w.size() >= kLimit &&
-                w.rfind(LR"(\\?\)", 0) == std::wstring::npos)
-                w.insert(0, LR"(\\?\)");
-            return w;
-        };
+        std::wstring wPath = utf8_to_utf16(filePath);
+        constexpr size_t kLimit = 248;
+        if (wPath.size() >= kLimit &&
+            wPath.rfind(LR"(\\?\)", 0) == std::wstring::npos)
+            wPath.insert(0, LR"(\\?\)");
 
-        std::wstring wPath = win_extend_path(utf8_to_utf16(filePath));
-        int fd = _wopen(wPath.c_str(),
-                        _O_RDWR | _O_BINARY | _O_CREAT | _O_TRUNC,
-                        _S_IREAD | _S_IWRITE);
-        if (fd == -1)
-            throw std::runtime_error("_wopen failed for: " + filePath);
-
-        tiffHandle = TIFFFdOpen(fd, filePath.c_str(), "w");
-        if (!tiffHandle) {
-            _close(fd);
-            throw std::runtime_error("TIFFFdOpen failed for: " + filePath);
-        }
+        tiffHandle = TIFFOpenW(wPath.c_str(), L"w");
+        if (!tiffHandle)
+            throw std::runtime_error("TIFFOpenW failed for: " + filePath);
 
 #elif defined(__linux__) || defined(__APPLE__)
         fd = ::open(filePath_.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0666);
@@ -398,14 +372,9 @@ struct TiffWriterDirect
     {
         if (!tiffHandle) return;
 #if defined(_WIN32)
-        int fd = TIFFFileno(tiffHandle);
-        _commit(fd);
-        HANDLE h = reinterpret_cast<HANDLE>(_get_osfhandle(fd));
-        if (h != INVALID_HANDLE_VALUE) FlushFileBuffers(h);
-
+        // LibTIFF closes the file and flushes buffers.
 #elif defined(__linux__) || defined(__APPLE__)
         ::fsync(TIFFFileno(tiffHandle));
-        // fsync parent dir for durability
         std::vector<char> dirbuf(filePath.c_str(), filePath.c_str() + filePath.size() + 1);
         char* dir = dirname(dirbuf.data());
         int dirfd = ::open(dir, O_RDONLY);
