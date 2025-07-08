@@ -1140,12 +1140,12 @@ function save_slices_with_bl_tif(R, outpath, slab_z1)
     fileList = fileList(~existing);
 
     % Determine array class and orientation flag
-    orderFlag = true;  % R is in [X Y Z] format
+    xyzOrder  = true;  % R is in [X Y Z] format --> ~30% faster save time
     tiledTiff = true;
     compression = 'deflate'; % 'deflate' use char '' not string ""
 
     % Save using compiled multithreaded MEX
-    save_bl_tif(R, fileList, orderFlag, compression, feature('numCores'), tiledTiff);
+    save_bl_tif(R, fileList, xyzOrder, compression, feature('numCores'), tiledTiff);
 
     fprintf('   Saved %d slices in %.1fs.\n', numel(fileList), toc(start_t));
 end
