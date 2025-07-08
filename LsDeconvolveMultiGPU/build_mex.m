@@ -226,7 +226,7 @@ function build_mex(debug)
     hwloc_v       = sprintf('%s.%s', hwloc_v_major, hwloc_v_patch);
     hwloc_src     = fullfile(thirdparty, ['hwloc-' hwloc_v]);
     hwloc_inst    = fullfile(build_root, 'hwloc');
-    hwloc_stamp   = getStamp(hwloc_inst, isWin * msvc.tag);
+    hwloc_stamp = getStamp(hwloc_inst, iff(isWin, msvc.tag, ''));
 
     if ~isfile(hwloc_stamp)
         % Download hwloc source if missing
