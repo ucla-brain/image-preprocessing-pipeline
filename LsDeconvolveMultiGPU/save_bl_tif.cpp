@@ -314,70 +314,126 @@ inline std::wstring utf8_to_utf16(const std::string& utf8) {
     std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> conv;
     return conv.from_bytes(utf8);
 }
+
+inline std::wstring win_extend_path(std::wstring w)
+{
+    /*  Win32 “MAX_PATH” is still 260 bytes for CRT APIs.
+        If the user’s temp-folder sits deep in the tree we can cross that
+        limit very easily (especially after adding “.tmp”).  Prefixing the
+        path with  \\?\  switches the API to the long-path variant *and*
+        works fine with both _wopen() and ReplaceFileW / MoveFileExW.        */
+    constexpr size_t kLimit = 248;                 // Microsoft recommendation
+    if (w.size() >= kLimit && w.rfind(LR"(\\?\)", 0) == std::wstring::npos)
+        w.insert(0, LR"(\\?\)");
+    return w;
+}
 #endif
 
-// --------- Smart TIFF Writer ---------
-struct TiffWriterDirect {
-    TIFF*  tiffHandle   = nullptr;
+// -----------------------------------------------------------------------------
+//  Smart, cross-platform TIFF writer that opens the file *once* through a
+//  native descriptor, hands that descriptor to libtiff via TIFFFdOpen(), and
+//  guarantees a durable flush before close.
+// -----------------------------------------------------------------------------
+struct TiffWriterDirect
+{
+    TIFF*       tiffHandle = nullptr;     // owned by libtiff
+    std::string filePath;                 // UTF-8 copy kept alive for libtiff
+
 #if defined(_WIN32)
-    HANDLE winHandle    = INVALID_HANDLE_VALUE;
-#elif defined(__linux__)
-    int    linuxFd      = -1;
+    // Nothing else needed – libtiff closes the CRT fd, which closes the HANDLE.
+#elif defined(__linux__) || defined(__APPLE__)
+    int fd = -1;                          // POSIX file descriptor
 #endif
-    std::string filePath;
 
+    // ---------- ctor ---------------------------------------------------------
     explicit TiffWriterDirect(const std::string& filePath_)
-        : filePath(filePath_) {
-#if defined(_WIN32)
-        std::wstring widePath = utf8_to_utf16(filePath_);
-        winHandle = CreateFileW(
-            widePath.c_str(), GENERIC_READ | GENERIC_WRITE,
-            FILE_SHARE_READ | FILE_SHARE_WRITE,
-            nullptr, CREATE_ALWAYS,
-            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN | FILE_FLAG_WRITE_THROUGH,
-            nullptr);
-        if (winHandle == INVALID_HANDLE_VALUE)
-            throw std::runtime_error("CreateFileW failed for: " + filePath_);
-        // Use O_RDWR so the CRT fd is writable!
-        int winFd = _open_osfhandle(reinterpret_cast<intptr_t>(winHandle), _O_RDWR | _O_BINARY);
-        if (winFd == -1) {
-            CloseHandle(winHandle);
-            throw std::runtime_error("_open_osfhandle failed for: " + filePath_);
-        }
-        winHandle = INVALID_HANDLE_VALUE; // CRT now owns it
-        tiffHandle = TIFFFdOpen(winFd, filePath_.c_str(), "w");
+        : filePath(filePath_)
+    {
+    #if defined(_WIN32)
+        //----------------------------------------------------------------------
+        // 1)  Wide-char path   → long-path prefix (\\?\) if necessary
+        // 2)  _wopen()         → single CRT descriptor (no HANDLE juggling)
+        // 3)  TIFFFdOpen()     → "w" mode
+        //----------------------------------------------------------------------
+        auto utf8_to_utf16 = [](const std::string& s) {
+            std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> cvt;
+            return cvt.from_bytes(s);
+        };
+        auto win_extend_path = [](std::wstring w) {
+            constexpr size_t kLimit = 248;          // MS long-path guidance
+            if (w.size() >= kLimit &&
+                w.rfind(LR"(\\?\)", 0) == std::wstring::npos)
+                w.insert(0, LR"(\\?\)");
+            return w;
+        };
+
+        std::wstring wPath = win_extend_path(utf8_to_utf16(filePath_));
+        int fd = _wopen(wPath.c_str(),
+                        _O_BINARY | _O_RDWR | _O_CREAT | _O_TRUNC,
+                        _S_IREAD | _S_IWRITE);
+        if (fd == -1)
+            throw std::runtime_error("_wopen failed for: " + filePath);
+
+        _setmode(fd, _O_BINARY);           // paranoia
+
+        tiffHandle = TIFFFdOpen(fd, filePath.c_str(), "w");
         if (!tiffHandle) {
-            _close(winFd); // closes CRT fd and HANDLE
-            throw std::runtime_error("TIFFFdOpen failed for: " + filePath_);
+            _close(fd);
+            throw std::runtime_error("TIFFFdOpen failed for: " + filePath);
         }
-#elif defined(__linux__)
-        linuxFd = ::open(filePath_.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0666);
-        if (linuxFd < 0)
-            throw std::runtime_error("open() failed for: " + filePath_ + " errno=" +
-                                     std::to_string(errno));
-        tiffHandle = TIFFFdOpen(linuxFd, filePath_.c_str(), "w");
+
+    #elif defined(__linux__) || defined(__APPLE__)
+        //----------------------------------------------------------------------
+        // POSIX: open() → descriptor → TIFFFdOpen()
+        //----------------------------------------------------------------------
+        fd = ::open(filePath_.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0666);
+        if (fd == -1)
+            throw std::runtime_error("open() failed for: " + filePath +
+                                     " errno=" + std::to_string(errno));
+
+        tiffHandle = TIFFFdOpen(fd, filePath_.c_str(), "w");
         if (!tiffHandle) {
-            ::close(linuxFd);
-            throw std::runtime_error("TIFFFdOpen failed for: " + filePath_);
+            ::close(fd);
+            throw std::runtime_error("TIFFFdOpen failed for: " + filePath);
         }
-#else
+    #else
+        // Fallback: let libtiff open the file itself.
         tiffHandle = TIFFOpen(filePath_.c_str(), "w");
         if (!tiffHandle)
-            throw std::runtime_error("TIFF open failed: " + filePath_);
-#endif
-    }
-
-    ~TiffWriterDirect() noexcept {
-        if (tiffHandle) {
-            TIFFClose(tiffHandle);
-            tiffHandle = nullptr;
-            // On Windows, TIFFClose closes both the FD and HANDLE.
-        }
-    #if defined(__linux__)
-        linuxFd = -1;
+            throw std::runtime_error("TIFFOpen failed for: " + filePath);
     #endif
     }
 
+    // ---------- dtor ---------------------------------------------------------
+    ~TiffWriterDirect() noexcept
+    {
+        if (!tiffHandle) return;
+
+    #if defined(_WIN32)
+        // Flush CRT buffer → kernel, then kernel → disk
+        int fd = TIFFFileno(tiffHandle);
+        _commit(fd);
+        HANDLE h = reinterpret_cast<HANDLE>(_get_osfhandle(fd));
+        if (h != INVALID_HANDLE_VALUE) FlushFileBuffers(h);
+
+    #elif defined(__linux__) || defined(__APPLE__)
+        // POSIX durable flush
+        ::fsync(TIFFFileno(tiffHandle));
+
+        // Also fsync parent dir so the rename (if any) is durable
+        {
+            int dirfd = ::open(::dirname(const_cast<char*>(filePath.c_str())),
+                               O_RDONLY);
+            if (dirfd != -1) { ::fsync(dirfd); ::close(dirfd); }
+        }
+    #endif
+
+        // LibTIFF closes fd / handle inside TIFFClose()
+        TIFFClose(tiffHandle);
+        tiffHandle = nullptr;
+    }
+
+    // non-copyable
     TiffWriterDirect(const TiffWriterDirect&)            = delete;
     TiffWriterDirect& operator=(const TiffWriterDirect&) = delete;
 };
