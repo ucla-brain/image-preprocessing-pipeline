@@ -111,13 +111,6 @@
     #include <sys/types.h>
 #endif
 
-#ifdef min
-#undef min
-#endif
-#ifdef max
-#undef max
-#endif
-
 namespace fs = std::filesystem;
 
 static constexpr uint32_t kRowsPerStripDefault = 1;
