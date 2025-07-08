@@ -88,10 +88,11 @@
 #include <set>
 
 #if defined(_WIN32)
-    #ifndef NOMINMAX
-        #define NOMINMAX
-    #endif
+    #define WIN32_LEAN_AND_MEAN
+    #define NOMINMAX
     #include <windows.h>
+    #undef min
+    #undef max
     #include <io.h>
     #include <fcntl.h>
     #include <bitset>
@@ -111,10 +112,10 @@
 #endif
 
 #ifdef min
-#pragma message("min is a macro!")
+#undef min
 #endif
 #ifdef max
-#pragma message("max is a macro!")
+#undef max
 #endif
 
 namespace fs = std::filesystem;
