@@ -59,23 +59,6 @@
     GNU GPL v3 — https://www.gnu.org/licenses/gpl-3.0.html
 ==============================================================================*/
 
-/*==============================================================================
-  save_bl_tif.cpp
-
-  Ultra-high-throughput, NUMA- and socket-aware, multi-threaded TIFF Z-slice saver
-  for 3D MATLAB volumes. Uses explicit async producer-consumer I/O, advanced file
-  flags, and hwloc-driven thread pairing for maximum locality and throughput.
-
-  USAGE:
-    save_bl_tif(volume, fileList, isXYZ, compression[, nThreads, useTiles]);
-
-  AUTHOR:
-    Keivan Moradi (with ChatGPT assistance), 2025
-
-  LICENSE:
-    GNU GPL v3 — https://www.gnu.org/licenses/gpl-3.0.html
-==============================================================================*/
-
 #define _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
 
 #include "mex.h"
