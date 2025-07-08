@@ -248,7 +248,7 @@ function build_mex(debug)
                 hwloc_inst = fileparts(possible_roots(1).folder);
             end
         else
-            % ---- Linux: download source and build with configure ----
+            % ---- Linux: download source and build with configure, using custom flags ----
             if ~exist(hwloc_src, 'dir')
                 tgz_url = sprintf('https://download.open-mpi.org/release/hwloc/v%s/hwloc-%s.tar.gz', ...
                                   hwloc_v_major, hwloc_v);
@@ -259,13 +259,18 @@ function build_mex(debug)
             end
             if ~exist(hwloc_inst, 'dir'), mkdir(hwloc_inst); end
 
-            % Build and install statically (autotools)
+            % Build and install statically (autotools) with custom flags
+            ncores = feature('numcores');
+            cflags = sprintf('-O3 -march=native -flto=%d -fPIC', ncores);
+            cxxflags = sprintf('-O3 -march=native -flto=%d -fPIC', ncores);
             build_cmd = sprintf([...
-                'cd "%s" && ./configure --prefix="%s" --enable-static --disable-shared ' ...
+                'cd "%s" && ' ...
+                'CFLAGS="%s" CXXFLAGS="%s" ' ...
+                './configure --prefix="%s" --enable-static --disable-shared ' ...
                 '--disable-libxml2 --disable-pci --disable-cuda --disable-opencl ' ...
                 '--disable-libudev --disable-tools --disable-testing --disable-docs && ' ...
                 'make -j%d && make install'], ...
-                hwloc_src, hwloc_inst, feature('numcores'));
+                hwloc_src, cflags, cxxflags, hwloc_inst, ncores);
             status = system(build_cmd);
             if status ~= 0, error('hwloc build failed (code %d)', status); end
         end
