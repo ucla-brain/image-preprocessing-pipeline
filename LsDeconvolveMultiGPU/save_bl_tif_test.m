@@ -222,7 +222,7 @@ tileElapsedSec = toc(tileSaveTimeSec);
 fprintf('      ✅ %d large slices (TILE mode, XYZ) ok (%.2f s)\n', largeBlockSize(3), tileElapsedSec);
 
 % --- Print block test summary
-fprintf('\n   🚦  [Performance] Tiles vs Strips (100x %dx%d slices, XYZ):\n', largeBlockSize(1), largeBlockSize(2));
+fprintf('\n   🚦  [Performance] Tiles vs Strips (%dx %dx%d slices, XYZ):\n', largeBlockSize(3), largeBlockSize(1), largeBlockSize(2));
 fprintf('         STRIP: %.2f s\n', stripElapsedSec);
 fprintf('         TILE : %.2f s\n', tileElapsedSec);
 if tileElapsedSec < stripElapsedSec
