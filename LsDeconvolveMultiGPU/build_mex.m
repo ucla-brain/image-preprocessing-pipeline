@@ -288,7 +288,7 @@ function build_mex(debug)
     % Set include and link flags
     inc_hwloc  = ['-I"' unixify(fullfile(hwloc_inst, 'include')) '"'];
     if ispc
-        link_hwloc = {fullfile(hwloc_inst, 'lib', 'hwloc.lib')};
+        link_hwloc = {fullfile(hwloc_inst, 'lib', 'libhwloc.lib')};
     else
         link_hwloc = {fullfile(hwloc_inst, 'lib', 'libhwloc.a')};
     end
