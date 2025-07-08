@@ -96,7 +96,7 @@ namespace fs = std::filesystem;
 // Tunables for TIFF writing — easy to change!
 static constexpr uint32_t rowsPerStrip = 1;
 static constexpr uint32_t optimalTileSize = 128;
-static constexpr size_t   sliceQueueCapacity = 8; // Number of slices buffered between producer and consumer
+static constexpr size_t   sliceQueueCapacity = 4; // Number of slices buffered between producer and consumer
 
 // -------------------- Producer-Consumer Bounded Queue --------------------------
 template <typename T>
