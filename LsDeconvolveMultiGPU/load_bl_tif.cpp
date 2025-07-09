@@ -87,24 +87,6 @@
 
 /*==============================================================================
   load_bl_tif.cpp
-  ---------------------------------------------------------------------------
-  High-throughput sub-region loader for 3-D TIFF stacks (one TIFF per Z-slice)
-  Author:       Keivan Moradi
-  Code review:  ChatGPT (4-o, o3, 4.1)
-  License:      GNU General Public License v3.0 (https://www.gnu.org/licenses/)
-==============================================================================*/
-
-/*==============================================================================
-  load_bl_tif.cpp
-  ---------------------------------------------------------------------------
-  High-throughput sub-region loader for 3-D TIFF stacks (one TIFF per Z-slice)
-  Author:       Keivan Moradi
-  Code review:  ChatGPT (4-o, o3, 4.1)
-  License:      GNU GPL v3.0 (https://www.gnu.org/licenses/)
-==============================================================================*/
-
-/*==============================================================================
-  load_bl_tif.cpp
   ------------------------------------------------------------------------------
   High-throughput sub-region loader for 3-D TIFF stacks (one TIFF per Z-slice)
   (C) Keivan Moradi, 2025 | License: GPLv3
@@ -157,7 +139,6 @@ struct MatlabString {
     operator const char*() const { return ptr; }
 };
 
-// Task for a single slice load
 struct LoadTask {
     uint32_t roiY0, roiX0, roiH, roiW;
     size_t zIndex;
@@ -167,7 +148,6 @@ struct LoadTask {
         : roiY0(y0), roiX0(x0), roiH(h), roiW(w), zIndex(z), path(std::move(p)), transpose(tr) {}
 };
 
-// Helper: Check and parse inputs, assemble file list and ROI, check transpose flag
 void parse_inputs(
     int nrhs, const mxArray* prhs[],
     std::vector<std::string>& fileList,
@@ -177,7 +157,6 @@ void parse_inputs(
     if (nrhs < 5 || nrhs > 6)
         mexErrMsgIdAndTxt("load_bl_tif:usage", "Usage: img = load_bl_tif(files, y, x, height, width[, transposeFlag])");
 
-    // File list
     if (!mxIsCell(prhs[0]))
         mexErrMsgIdAndTxt("load_bl_tif:args", "First argument must be a cell array of filenames");
     size_t numSlices = mxGetNumberOfElements(prhs[0]);
@@ -188,8 +167,6 @@ void parse_inputs(
         MatlabString mstr(cell);
         fileList[i] = mstr.get();
     }
-
-    // ROI params
     for (int i = 1; i <= 4; ++i) {
         if (!mxIsDouble(prhs[i]) || mxIsComplex(prhs[i]) || mxGetNumberOfElements(prhs[i]) != 1)
             mexErrMsgIdAndTxt("load_bl_tif:args", "Input argument %d must be a real double scalar.", i+1);
@@ -219,7 +196,6 @@ void parse_inputs(
     }
 }
 
-// Helper: Check TIFF metadata for all slices; enforce shape, bitdepth, and ROI constraints
 void check_tiff_metadata(
     const std::vector<std::string>& fileList,
     uint32_t roiY0, uint32_t roiX0, uint32_t roiH, uint32_t roiW,
@@ -252,9 +228,8 @@ void check_tiff_metadata(
     outBitsPerSample = globalBitsPerSample;
 }
 
-// Helper: Output allocation. XYZ mode is always [Y X Z]; YXZ mode is [X Y Z]
 void* create_output_array(mxArray*& plhs0, mxClassID outType, size_t roiH, size_t roiW, size_t numSlices, bool transpose) {
-    // Preserve invariant: N mode (XYZ) = [Y X Z], T mode (YXZ) = [X Y Z]
+    // N mode (transpose=false): [Y X Z], T mode (transpose=true): [X Y Z]
     size_t outH = transpose ? roiW : roiH;
     size_t outW = transpose ? roiH : roiW;
     size_t dims[3] = { outH, outW, numSlices };
@@ -263,7 +238,6 @@ void* create_output_array(mxArray*& plhs0, mxClassID outType, size_t roiH, size_
     return mxGetData(plhs0);
 }
 
-// Helper: Decodes a subregion from TIFF, into a temporary 2D block buffer
 void decode_subregion_to_buffer(
     const LoadTask& task,
     TIFF* tif,
@@ -355,8 +329,7 @@ void decode_subregion_to_buffer(
     }
 }
 
-// Helper: For output stride (no-transpose), output is always [Y X Z] (N mode, XYZ)
-// For transpose, copy per-element to [X Y Z] (T mode, YXZ)
+// Output stride logic for N (XYZ) or T (YXZ) mode
 void copy_block_to_output(
     const LoadTask& task,
     const std::vector<uint8_t>& block_buffer,
@@ -366,12 +339,12 @@ void copy_block_to_output(
     size_t pixelsPerSlice
 ) {
     if (!task.transpose) {
-        // XYZ: [Y X Z], contiguous memory for each slice (fast bulk copy)
+        // [Y X Z], contiguous memory for each slice (fast bulk copy)
         size_t dstByte = task.zIndex * pixelsPerSlice * bytes_per_pixel;
         size_t sliceBytes = pixelsPerSlice * bytes_per_pixel;
         ::memcpy(static_cast<uint8_t*>(out_data) + dstByte, block_buffer.data(), sliceBytes);
     } else {
-        // YXZ: [X Y Z], per-element copy
+        // [X Y Z], per-element copy
         for (uint32_t row = 0; row < roiH; ++row) {
             for (uint32_t col = 0; col < roiW; ++col) {
                 size_t dstElem = col + row * roiW + task.zIndex * pixelsPerSlice;
@@ -380,6 +353,88 @@ void copy_block_to_output(
                 ::memcpy(static_cast<uint8_t*>(out_data) + dstByte, block_buffer.data() + srcByte, bytes_per_pixel);
             }
         }
+    }
+}
+
+// Producer-consumer parallel decode and output logic (NUMA/affinity aware)
+void parallel_decode_and_copy(
+    const std::vector<LoadTask>& tasks,
+    void* out_data,
+    size_t bytes_per_pixel,
+    size_t roiH, size_t roiW,
+    size_t pixelsPerSlice
+) {
+    const size_t numSlices = tasks.size();
+    const size_t max_threads = get_available_cores();
+    const size_t nThreads = std::min(numSlices, max_threads);
+    auto threadPairs = assign_thread_affinity_pairs(nThreads);
+    using TaskPtr = std::shared_ptr<std::vector<uint8_t>>;
+    std::vector<std::unique_ptr<BoundedQueue<std::pair<size_t, TaskPtr>>>> queues(nThreads);
+    for (auto& q : queues) q = std::make_unique<BoundedQueue<std::pair<size_t, TaskPtr>>>(2);
+
+    std::atomic<size_t> nextIdx{0};
+    std::vector<std::string> errors;
+    std::mutex errMutex;
+    std::atomic<bool> abortFlag{false};
+
+    // Producer threads
+    std::vector<std::thread> producers(nThreads);
+    for (size_t t = 0; t < nThreads; ++t) {
+        producers[t] = std::thread([&, t] {
+            set_thread_affinity(threadPairs[t].producerLogicalCore);
+            std::vector<uint8_t> temp_buffer;
+            while (true) {
+                if (abortFlag.load(std::memory_order_acquire)) break;
+                size_t idx = nextIdx.fetch_add(1, std::memory_order_relaxed);
+                if (idx >= numSlices) break;
+                const auto& task = tasks[idx];
+                TIFF* tif = TIFFOpen(task.path.c_str(), "r");
+                if (!tif) {
+                    std::lock_guard<std::mutex> lck(errMutex);
+                    errors.emplace_back("Slice " + std::to_string(idx+1) + ": Cannot open file " + task.path);
+                    abortFlag.store(true, std::memory_order_release);
+                    break;
+                }
+                try {
+                    auto buffer = std::make_shared<std::vector<uint8_t>>(task.roiH * task.roiW * bytes_per_pixel);
+                    decode_subregion_to_buffer(task, tif, bytes_per_pixel, *buffer, temp_buffer);
+                    TIFFClose(tif);
+                    queues[t]->push({idx, buffer});
+                } catch (const std::exception& ex) {
+                    TIFFClose(tif);
+                    std::lock_guard<std::mutex> lck(errMutex);
+                    errors.emplace_back("Slice " + std::to_string(idx+1) + ": " + ex.what());
+                    abortFlag.store(true, std::memory_order_release);
+                    break;
+                }
+            }
+            queues[t]->push({numSlices, nullptr}); // End-of-tasks
+        });
+    }
+
+    // Consumer threads
+    std::vector<std::thread> consumers(nThreads);
+    for (size_t t = 0; t < nThreads; ++t) {
+        consumers[t] = std::thread([&, t] {
+            set_thread_affinity(threadPairs[t].consumerLogicalCore);
+            while (true) {
+                std::pair<size_t, TaskPtr> item;
+                queues[t]->wait_and_pop(item);
+                if (!item.second) break; // End-of-tasks
+                const LoadTask& task = tasks[item.first];
+                copy_block_to_output(task, *item.second, out_data, bytes_per_pixel, roiH, roiW, pixelsPerSlice);
+            }
+        });
+    }
+
+    for (auto& p : producers) p.join();
+    for (auto& c : consumers) c.join();
+
+    if (!errors.empty()) {
+        std::ostringstream allerr;
+        allerr << "Errors during load_bl_tif (producer/consumer):\n";
+        for (const auto& s : errors) allerr << "  - " << s << "\n";
+        mexErrMsgIdAndTxt("load_bl_tif:Error", "%s", allerr.str().c_str());
     }
 }
 
@@ -396,7 +451,6 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
 
         uint16_t bitsPerSample = 0;
         check_tiff_metadata(fileList, roiY0, roiX0, roiH, roiW, bitsPerSample);
-
         const mxClassID outType = (bitsPerSample == 8) ? mxUINT8_CLASS : mxUINT16_CLASS;
         const uint8_t bytesPerPixel = (bitsPerSample == 16) ? 2 : 1;
         size_t numSlices = fileList.size();
@@ -407,24 +461,13 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
             mexErrMsgIdAndTxt("load_bl_tif:Error", "Requested ROI too large (>2^31 elements).");
         void* outData = create_output_array(plhs[0], outType, roiH, roiW, numSlices, transpose);
 
-        // --- Main decode loop: per-slice, in parallel if desired ---
-        // (single-threaded version for clarity; you can parallelize if needed)
-        for (size_t z = 0; z < numSlices; ++z) {
-            LoadTask task(roiY0, roiX0, roiH, roiW, z, fileList[z], transpose);
-            std::vector<uint8_t> block_buffer(roiH * roiW * bytesPerPixel);
-            std::vector<uint8_t> temp_buffer;
-            TIFF* tif = TIFFOpen(task.path.c_str(), "r");
-            if (!tif)
-                mexErrMsgIdAndTxt("load_bl_tif:file", "Cannot open file %s (slice %zu)", task.path.c_str(), z+1);
-            try {
-                decode_subregion_to_buffer(task, tif, bytesPerPixel, block_buffer, temp_buffer);
-                TIFFClose(tif);
-                copy_block_to_output(task, block_buffer, outData, bytesPerPixel, roiH, roiW, pixelsPerSlice);
-            } catch (...) {
-                TIFFClose(tif);
-                throw;
-            }
-        }
+        // Prepare tasks
+        std::vector<LoadTask> tasks;
+        tasks.reserve(numSlices);
+        for (size_t z = 0; z < numSlices; ++z)
+            tasks.emplace_back(roiY0, roiX0, roiH, roiW, z, fileList[z], transpose);
+
+        parallel_decode_and_copy(tasks, outData, bytesPerPixel, roiH, roiW, pixelsPerSlice);
     }
     catch (const std::exception& ex) {
         mexErrMsgIdAndTxt("load_bl_tif:Error", "%s", ex.what());
