@@ -786,9 +786,7 @@ void mexFunction(int nlhs, mxArray* plhs[],
                     size_t sliceBytes = size_t(widthPixels) * heightPixels * bytesPerPixel;
                     auto task = std::make_shared<SliceWriteTask>();
                     task->sliceBuffer.resize(sliceBytes);
-                    std::memcpy(task->sliceBuffer.data(),
-                                volumePtr + idx * sliceBytes,
-                                sliceBytes);
+                    std::memcpy(task->sliceBuffer.data(), volumePtr + idx * sliceBytes, sliceBytes);
                     task->sliceIndex     = idx;
                     task->widthPixels    = widthPixels;
                     task->heightPixels   = heightPixels;
