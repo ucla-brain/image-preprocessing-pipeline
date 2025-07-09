@@ -109,7 +109,8 @@
 static constexpr uint16_t kSupportedBitDepth8  = 8;
 static constexpr uint16_t kSupportedBitDepth16 = 16;
 static constexpr size_t   kMaxPixelsPerSlice   = static_cast<size_t>(std::numeric_limits<int>::max());
-static constexpr size_t   kWires = 16;
+static constexpr size_t   kWires = 1;
+static constexpr size_t kQueueDepth = 64;
 
 // --- RAII wrapper for mxArrayToUTF8String() ---
 struct MatlabString {
@@ -375,7 +376,7 @@ void parallel_decode_and_copy(const std::vector<LoadTask>& tasks, void* outData,
     std::vector<std::unique_ptr<BoundedQueue<TaskPtr>>> queuesForWires;
     queuesForWires.reserve(numWires);
     for (size_t w = 0; w < numWires; ++w)
-        queuesForWires.emplace_back(std::make_unique<BoundedQueue<TaskPtr>>(2 * kWires));
+        queuesForWires.emplace_back(std::make_unique<BoundedQueue<TaskPtr>>(kQueueDepth));
 
     std::vector<std::thread> producerThreads, consumerThreads;
     producerThreads.reserve(threadPairCount);
