@@ -122,6 +122,7 @@
 #include <atomic>
 #include <sstream>
 #include <limits>
+#include <cstring>
 
 // Supported bit depths and MATLAB limits
 static constexpr uint16_t kSupportedBitDepth8  = 8;
