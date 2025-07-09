@@ -117,7 +117,8 @@ function build_mex(debug)
             untar(tgz,thirdparty); delete(tgz);
         end
 
-        builddir = fullfile(lz4_src, 'build'); if ~exist(builddir,'dir'), mkdir(builddir); end
+        lz4_cmake_src = fullfile(lz4_src, 'build', 'cmake');
+        builddir = fullfile(lz4_src, 'build_dir'); if ~exist(builddir,'dir'), mkdir(builddir); end
         if ~exist(lz4_inst, 'dir'), mkdir(lz4_inst); end
 
         % Common CMake flags for LZ4
@@ -136,7 +137,7 @@ function build_mex(debug)
                 sprintf('-DCMAKE_C_FLAGS_RELEASE="-O3 -march=native -flto=%d -fPIC"', ncores), ...
                 sprintf('-DCMAKE_CXX_FLAGS_RELEASE="-O3 -march=native -flto=%d -fPIC"', ncores)];
         end
-        status = cmake_build(lz4_src, builddir, lz4_inst, cmake_gen, cmake_arch, args, msvc);
+        status = cmake_build(lz4_cmake_src, builddir, lz4_inst, cmake_gen, cmake_arch, args, msvc);
         if status~=0, error('lz4 build failed (code %d)',status); end
         fid = fopen(lz4_stamp, 'w'); if fid < 0, error('Cannot write stamp file: %s', lz4_stamp); end; fclose(fid);
     end
