@@ -321,6 +321,13 @@ function build_mex(debug)
         fid = fopen(hwloc_stamp, 'w'); if fid < 0, error('Cannot write stamp file: %s', hwloc_stamp); end; fclose(fid);
     end
 
+    inc_hwloc  = ['-I"' unixify(fullfile(hwloc_inst, 'include')) '"'];
+    if ispc
+        link_hwloc = {fullfile(hwloc_inst, 'lib', 'hwloc.lib')};
+    else
+        link_hwloc = {fullfile(hwloc_inst, 'lib', 'libhwloc.a')};
+    end
+
     %% --------- 7) Prepare MEX flags (link both zlib-ng and libdeflate) ---------
     inc_tiff   = ['-I"' unixify(fullfile(libtiff_inst,'include')) '"'];
     if isWin
