@@ -370,59 +370,58 @@ void parallel_decode_and_copy(const std::vector<LoadTask>& tasks, void* outData,
 {
     const size_t numSlices = tasks.size();
     const size_t nThreads = std::min(numSlices, get_available_cores());
-    auto thread_affinity = assign_thread_affinity(nThreads); // your own hwloc helper
-
     std::atomic<uint32_t> nextIdx{0};
     std::vector<std::string> errors;
     std::mutex err_mutex;
 
-    auto thread_func = [&](size_t t) {
-        set_thread_affinity(thread_affinity[t]);
-        std::vector<uint8_t> tempBuf; // Per-thread temp buffer
-
-        while (true) {
-            uint32_t idx = nextIdx.fetch_add(1, std::memory_order_relaxed);
-            if (idx >= numSlices) break;
-            const auto& task = tasks[idx];
-
-            try {
-                TiffHandle tif(TIFFOpen(task.path.c_str(), "r"));
-                if (!tif) {
-                    std::lock_guard<std::mutex> lock(err_mutex);
-                    errors.emplace_back("Slice " + std::to_string(task.zIndex + 1) +
-                                       ": Cannot open file " + task.path);
-                    continue;
-                }
-
-                // Allocate buffer for this slice
-                std::vector<uint8_t> data(task.cropH * task.cropW * bytesPerPixel);
-
-                readSubRegionToBuffer(task, tif.get(), bytesPerPixel, data, tempBuf);
-
-                // Copy directly to the output
-                for (uint32_t row = 0; row < task.cropH; ++row) {
-                    for (uint32_t col = 0; col < task.cropW; ++col) {
-                        size_t dstElem = computeDstIndex(task, row, col);
-                        size_t dstByte = dstElem * bytesPerPixel;
-                        size_t srcByte = (row * task.cropW + col) * bytesPerPixel;
-                        std::memcpy(static_cast<uint8_t*>(outData) + dstByte,
-                                    data.data() + srcByte,
-                                    bytesPerPixel);
-                    }
-                }
-            } catch (const std::exception& ex) {
-                std::lock_guard<std::mutex> lock(err_mutex);
-                errors.emplace_back("Slice " + std::to_string(task.zIndex + 1) + ": " + ex.what());
-            } catch (...) {
-                std::lock_guard<std::mutex> lock(err_mutex);
-                errors.emplace_back("Slice " + std::to_string(task.zIndex + 1) + ": Unknown exception");
-            }
-        }
-    };
-
     std::vector<std::thread> threads;
-    for (size_t t = 0; t < nThreads; ++t)
-        threads.emplace_back(thread_func, t);
+
+    for (size_t t = 0; t < nThreads; ++t) {
+        threads.emplace_back([&, t] {
+            set_thread_affinity(t); // Just use thread index as logical core id
+            std::vector<uint8_t> tempBuf; // Per-thread temp buffer
+
+            while (true) {
+                uint32_t idx = nextIdx.fetch_add(1, std::memory_order_relaxed);
+                if (idx >= numSlices) break;
+                const auto& task = tasks[idx];
+
+                try {
+                    TiffHandle tif(TIFFOpen(task.path.c_str(), "r"));
+                    if (!tif) {
+                        std::lock_guard<std::mutex> lock(err_mutex);
+                        errors.emplace_back("Slice " + std::to_string(task.zIndex + 1) +
+                                           ": Cannot open file " + task.path);
+                        continue;
+                    }
+
+                    // Allocate buffer for this slice
+                    std::vector<uint8_t> data(task.cropH * task.cropW * bytesPerPixel);
+
+                    readSubRegionToBuffer(task, tif.get(), bytesPerPixel, data, tempBuf);
+
+                    // Copy directly to the output
+                    for (uint32_t row = 0; row < task.cropH; ++row) {
+                        for (uint32_t col = 0; col < task.cropW; ++col) {
+                            size_t dstElem = computeDstIndex(task, row, col);
+                            size_t dstByte = dstElem * bytesPerPixel;
+                            size_t srcByte = (row * task.cropW + col) * bytesPerPixel;
+                            std::memcpy(static_cast<uint8_t*>(outData) + dstByte,
+                                        data.data() + srcByte,
+                                        bytesPerPixel);
+                        }
+                    }
+                } catch (const std::exception& ex) {
+                    std::lock_guard<std::mutex> lock(err_mutex);
+                    errors.emplace_back("Slice " + std::to_string(task.zIndex + 1) + ": " + ex.what());
+                } catch (...) {
+                    std::lock_guard<std::mutex> lock(err_mutex);
+                    errors.emplace_back("Slice " + std::to_string(task.zIndex + 1) + ": Unknown exception");
+                }
+            }
+        });
+    }
+
     for (auto& th : threads)
         th.join();
 
