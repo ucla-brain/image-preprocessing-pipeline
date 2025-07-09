@@ -455,6 +455,7 @@ void parallel_decode_and_copy(const std::vector<LoadTask>& tasks, void* outData,
                                 res->data.data(),
                                 sliceBytes);
                 } else {
+                    // Transpose [Y X] => [X Y] per slice
                     for (uint32_t row = 0; row < task.cropH; ++row) {
                         for (uint32_t col = 0; col < task.cropW; ++col) {
                             size_t dstElem = computeDstIndex(task, row, col);
