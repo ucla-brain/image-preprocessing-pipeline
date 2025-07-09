@@ -569,23 +569,14 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
 
                     const auto& task = tasks[res->block_id];
                     // Output is contiguous by Z, so we can bulk memcpy for non-transpose.
-                    if (!task.transpose) {
-                        size_t dstByte = task.zIndex * task.pixelsPerSlice * bytesPerPixel;
-                        size_t sliceBytes = task.pixelsPerSlice * bytesPerPixel;
-                        std::memcpy(static_cast<uint8_t*>(outData) + dstByte,
-                                    res->data.data(),
-                                    sliceBytes);
-                    } else {
-                        // Transpose [Y X] => [X Y] per slice
-                        for (uint32_t row = 0; row < task.cropH; ++row) {
-                            for (uint32_t col = 0; col < task.cropW; ++col) {
-                                size_t dstElem = computeDstIndex(task, row, col);
-                                size_t dstByte = dstElem * bytesPerPixel;
-                                size_t srcByte = (row * task.cropW + col) * bytesPerPixel;
-                                std::memcpy(static_cast<uint8_t*>(outData) + dstByte,
-                                            res->data.data() + srcByte,
-                                            bytesPerPixel);
-                            }
+                    for (uint32_t row = 0; row < task.cropH; ++row) {
+                        for (uint32_t col = 0; col < task.cropW; ++col) {
+                            size_t dstElem = computeDstIndex(task, row, col);
+                            size_t dstByte = dstElem * bytesPerPixel;
+                            size_t srcByte = (row * task.cropW + col) * bytesPerPixel;
+                            std::memcpy(static_cast<uint8_t*>(outData) + dstByte,
+                                        res->data.data() + srcByte,
+                                        bytesPerPixel);
                         }
                     }
                 }
