@@ -356,26 +356,45 @@ function restoreEnv(orig)
 end
 
 %%-------- CMake build wrapper --------
-function status = cmake_build(src,bld,inst,gen,arch,args,msvc)
-    if ~exist(bld,'dir'), mkdir(bld); end
-    if ~exist(inst,'dir'), mkdir(inst); end
+function status = cmake_build(src, bld, inst, gen, arch, args, msvc)
+    % Ensure build/install directories exist
+    if ~exist(bld, 'dir'), mkdir(bld); end
+    if ~exist(inst, 'dir'), mkdir(inst); end
     oldp = cd(bld); onCleanup(@() cd(oldp));
-    ncores = feature('numCores'); isWin = ispc;
-    args_str = strjoin(args,' ');
+    ncores = feature('numCores');
+    isWin = ispc;
+
+    % --- Robustly flatten args to a single cell array of char vectors
+    flat_args = {};
+    for k = 1:numel(args)
+        a = args{k};
+        if iscell(a)
+            for j = 1:numel(a)
+                flat_args{end+1} = char(a{j});
+            end
+        else
+            flat_args{end+1} = char(a);
+        end
+    end
+    args_str = strjoin(flat_args, ' ');
+
     if isWin
         [cl_dir,~,~] = fileparts(msvc.cl);
-        setenv('PATH',[cl_dir ';' getenv('PATH')]);
-        setenv('CC',msvc.cl); setenv('CXX',msvc.cl);
-        cfg = sprintf('call "%s" && cmake %s %s "%s" -DCMAKE_INSTALL_PREFIX="%s" %s && cmake --build . --config Release --target INSTALL -- /m:%d', ...
-                      msvc.vcvars, gen, arch, src, inst, args_str, ncores);
+        setenv('PATH', [cl_dir ';' getenv('PATH')]);
+        setenv('CC', msvc.cl); setenv('CXX', msvc.cl);
+        cfg = sprintf(['call "%s" && cmake %s %s "%s" -DCMAKE_INSTALL_PREFIX="%s" %s && cmake --build . --config Release --target INSTALL -- /m:%d'], ...
+            msvc.vcvars, gen, arch, src, inst, args_str, ncores);
         status = system(cfg);
     else
         cfg = sprintf('cmake "%s" -DCMAKE_INSTALL_PREFIX="%s" %s', src, inst, args_str);
-        if system(cfg)~=0, status=1; return; end
+        if system(cfg) ~= 0
+            status = 1; return;
+        end
         buildcmd = sprintf('cmake --build . -- -j%d install', ncores);
         status = system(buildcmd);
     end
 end
+
 
 function sm_list = detect_sm_archs()
     sm_env = getenv('BUILD_SM_ARCHS');
