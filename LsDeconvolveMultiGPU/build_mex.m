@@ -29,7 +29,7 @@ function build_mex(debug)
         end
     end
 
-    %% --------- 0) CPU feature detection ---------
+    %% --------- 1) CPU feature detection ---------
     if isWin
         mex('cpuid_mex.cpp');  % must exist in path
         f = cpuid_mex();
@@ -122,24 +122,21 @@ function build_mex(debug)
         };
     end
 
-    %% --------- 1) Paths & Versions ---------
+    %% --------- 2) Paths & Versions ---------
     root       = pwd;
     thirdparty = fullfile(root,'thirdparty');    if ~exist(thirdparty,'dir'), mkdir(thirdparty); end
     build_root = fullfile(root,'tiff_build');    if ~exist(build_root,'dir'), mkdir(build_root); end
 
     zlibng_v    = '2.2.4';
     libtiff_v   = '4.7.0';
-    libdeflate_v= '1.24';
 
     zlibng_src    = fullfile(thirdparty,['zlib-ng-' zlibng_v]);
     libtiff_src   = fullfile(thirdparty,['tiff-'    libtiff_v]);
-    libdeflate_src= fullfile(thirdparty,['libdeflate-' libdeflate_v]);
 
     zlibng_inst    = fullfile(build_root,'zlib-ng');
     libtiff_inst   = fullfile(build_root,'libtiff');
-    libdeflate_inst= fullfile(build_root,'libdeflate');
 
-    %% --------- 2) Download & build LZ4 ---------
+    %% --------- 3) Download & build LZ4 ---------
     lz4_src = fullfile(thirdparty,'lz4');
     if ~exist(fullfile(lz4_src,'lz4.c'),'file')
         try
@@ -151,7 +148,7 @@ function build_mex(debug)
         end
     end
 
-    %% --------- 3) Build zlib-ng (all original flags restored) ---------
+    %% --------- 4) Build zlib-ng (all original flags restored) ---------
     if isWin
         z_stamp = getStamp(zlibng_inst, msvc.tag);
     else
@@ -178,40 +175,15 @@ function build_mex(debug)
         fid = fopen(z_stamp, 'w'); if fid < 0, error('Cannot write stamp file: %s', z_stamp); end; fclose(fid);
     end
 
-    %% --------- 4) Download & build libdeflate ---------
-    % if isWin
-    %     ld_stamp = getStamp(libdeflate_inst, msvc.tag);
-    % else
-    %     ld_stamp = getStamp(libdeflate_inst, '');
-    % end
-    % if ~isfile(ld_stamp)
-    %     if ~exist(libdeflate_src,'dir')
-    %         tgz = fullfile(thirdparty, sprintf('libdeflate-%s.tar.gz',libdeflate_v));
-    %
-    %         websave(tgz, sprintf('https://github.com/ebiggers/libdeflate/archive/refs/tags/v%s.tar.gz',libdeflate_v));
-    %         untar(tgz, thirdparty); delete(tgz);
-    %     end
-    %     builddir = fullfile(libdeflate_src,'build'); if ~exist(builddir,'dir'), mkdir(builddir); end
-    %     if ~exist(libdeflate_inst,'dir'), mkdir(libdeflate_inst); end
-    %     args = [ ...
-    %         policy_flag, ...
-    %         cmake_flags_release ...
-    %     ];
-    %     status = cmake_build(libdeflate_src, builddir, libdeflate_inst, cmake_gen, cmake_arch, args, msvc);
-    %     if status~=0, error('libdeflate build failed (code %d)',status); end
-    %     fid = fopen(ld_stamp, 'w'); if fid < 0, error('Cannot write stamp file: %s', ld_stamp); end; fclose(fid);
-    % end
-
-    %% --------- 5) Build libtiff (with zlib-ng & libdeflate as backends) ---------
+    %% --------- 5) Build libtiff (with zlib-ng as backends) ---------
     if isWin
         t_stamp = getStamp(libtiff_inst, msvc.tag);
         zlib_lib = unixify(fullfile(zlibng_inst,'lib','zlibstatic.lib'));
-        ld_lib   = unixify(fullfile(libdeflate_inst,'lib','libdeflate_static.lib'));
     else
         t_stamp = getStamp(libtiff_inst, '');
         zlib_lib = unixify(fullfile(zlibng_inst,'lib','libz.a'));
-        ld_lib   = unixify(fullfile(libdeflate_inst,'lib','libdeflate.a'));
     end
+
     if ~isfile(t_stamp)
         if ~exist(libtiff_src,'dir')
             tgz = fullfile(thirdparty,sprintf('tiff-%s.tar.gz',libtiff_v));
@@ -323,14 +295,13 @@ function build_mex(debug)
         link_hwloc = {fullfile(hwloc_inst, 'lib', 'libhwloc.a')};
     end
 
-    %% --------- 7) Prepare MEX flags (link both zlib-ng and libdeflate) ---------
+    %% --------- 7) Prepare MEX flags (link both zlib-ng) ---------
     inc_tiff   = ['-I"' unixify(fullfile(libtiff_inst,'include')) '"'];
     if isWin
         link_tiff = {
             fullfile(libtiff_inst,'lib','tiffxx.lib'), ...
             fullfile(libtiff_inst,'lib','tiff.lib'), ...
             fullfile(zlibng_inst,'lib','zlibstatic.lib'), ...
-            fullfile(libdeflate_inst,'lib','libdeflate_static.lib')};
         if debug
             mex_cpu = {'-R2018a', ...
                        'COMPFLAGS="$COMPFLAGS /std:c++17 /Od /Zi"', ...
@@ -347,7 +318,6 @@ function build_mex(debug)
             fullfile(libtiff_inst,'lib','libtiffxx.a'), ...
             fullfile(libtiff_inst,'lib','libtiff.a'), ...
             fullfile(zlibng_inst,'lib','libz.a'), ...
-            fullfile(libdeflate_inst,'lib','libdeflate.a')};
         if debug
             mex_cpu = {'-R2018a','CFLAGS="$CFLAGS -O0 -g"','CXXFLAGS="$CXXFLAGS -O0 -g"','LDFLAGS="$LDFLAGS -g"'};
         else
