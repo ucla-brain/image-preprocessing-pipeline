@@ -436,15 +436,24 @@ void parallel_decode_and_copy(const std::vector<LoadTask>& tasks, void* outData,
                 queueForPair.wait_and_pop(res);
                 if (!res) break;
                 const auto& task = tasks[res->block_id];
-                for (uint32_t row = 0; row < task.cropH; ++row) {
-                    for (uint32_t col = 0; col < task.cropW; ++col) {
-                        size_t dstElem = computeDstIndex(task, row, col);
-                        size_t dstByte = dstElem * bytesPerPixel;
-                        size_t srcByte = (row * task.cropW + col) * bytesPerPixel;
-                        std::memcpy(static_cast<uint8_t*>(outData) + dstByte,
-                                    res->data.data() + srcByte,
-                                    bytesPerPixel);
-                    }
+                auto copy_pixel = [&](uint32_t r, uint32_t c) {
+                    size_t dstElem = computeDstIndex(task, r, c);
+                    size_t dstByte = dstElem * bytesPerPixel;
+                    size_t srcByte = (size_t(r) * task.cropW + c) * bytesPerPixel;
+                    std::memcpy(static_cast<uint8_t*>(outData) + dstByte,
+                                res->data.data() + srcByte,
+                                bytesPerPixel);
+                };
+                if (task.transpose) {
+                    // unchanged: rows outer, cols inner
+                    for (uint32_t row = 0; row < task.cropH; ++row)
+                        for (uint32_t col = 0; col < task.cropW; ++col)
+                            copy_pixel(row, col);
+                } else {
+                    // optimise for column-major layout
+                    for (uint32_t col = 0; col < task.cropW; ++col)
+                        for (uint32_t row = 0; row < task.cropH; ++row)
+                            copy_pixel(row, col);
                 }
             }
         });
