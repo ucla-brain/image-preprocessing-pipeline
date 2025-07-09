@@ -143,7 +143,11 @@ function build_mex(debug)
     end
 
     %% --------- 3) Build zlib-ng (as before, with static flags) ---------
-    z_stamp = getStamp(zlibng_inst, iff(isWin, msvc.tag, ''));
+    if isWin
+        z_stamp = getStamp(zlibng_inst, msvc.tag);
+    else
+        z_stamp = getStamp(zlibng_inst, '');
+    end
     cmake_common_flags_zlib = {policy_flag, '-DBUILD_SHARED_LIBS=OFF', '-DZLIB_COMPAT=ON', ...
         '-DZLIB_ENABLE_TESTS=OFF', '-DZLIBNG_ENABLE_TESTS=OFF', '-DWITH_GTEST=OFF', ...
         '-DWITH_BENCHMARKS=OFF', '-DWITH_BENCHMARK_APPS=OFF', ...
