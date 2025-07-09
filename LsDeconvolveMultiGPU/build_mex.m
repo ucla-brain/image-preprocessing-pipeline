@@ -285,10 +285,13 @@ function build_mex(debug)
     end
 
     % Set include and link flags
+    lz4_incflag = ['-I"' unixify(fullfile(lz4_inst, 'include')) '"'];
     inc_hwloc  = ['-I"' unixify(fullfile(hwloc_inst, 'include')) '"'];
     if ispc
+        lz4_libfile = fullfile(lz4_inst, 'lib', 'lz4.lib');
         link_hwloc = {fullfile(hwloc_inst, 'lib', 'hwloc.lib')};
     else
+        lz4_libfile = fullfile(lz4_inst, 'lib', 'liblz4.a');
         link_hwloc = {fullfile(hwloc_inst, 'lib', 'libhwloc.a')};
     end
 
@@ -327,9 +330,9 @@ function build_mex(debug)
     %% --------- 7) Build CPU MEX files ---------
     fprintf('\n[MEX] Compiling CPU modules …\n');
     mex(mex_cpu{:}, 'semaphore.c');
-    mex(mex_cpu{:}, 'save_lz4_mex.c',    fullfile(lz4_src,'lz4.c'), ['-I"' unixify(lz4_src) '"']);
-    mex(mex_cpu{:}, 'load_lz4_mex.c',    fullfile(lz4_src,'lz4.c'), ['-I"' unixify(lz4_src) '"']);
-    mex(mex_cpu{:}, 'load_slab_lz4.cpp', fullfile(lz4_src,'lz4.c'), ['-I"' unixify(lz4_src) '"']);
+    mex(mex_cpu{:}, 'save_lz4_mex.c', lz4_incflag, lz4_libfile);
+    mex(mex_cpu{:}, 'load_lz4_mex.c', lz4_incflag, lz4_libfile);
+    mex(mex_cpu{:}, 'load_slab_lz4.cpp', lz4_incflag, lz4_libfile);
     mex(mex_cpu{:}, inc_tiff, 'load_bl_tif.cpp', link_tiff{:});
     mex(mex_cpu{:}, inc_tiff, inc_hwloc, 'save_bl_tif.cpp', link_tiff{:}, link_hwloc{:});
 
