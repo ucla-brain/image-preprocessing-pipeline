@@ -430,42 +430,53 @@ void parallel_decode_and_copy(const std::vector<LoadTask>& tasks, void* outData,
         BoundedQueue<TaskPtr>& queueForPair = *queuesForWires[t / kWires];
         consumerThreads.emplace_back([&, t] {
             set_thread_affinity(threadPairs[t].consumerLogicalCore);
+
             while (true) {
                 if (abortFlag.load(std::memory_order_acquire)) break;
                 TaskPtr res;
                 queueForPair.wait_and_pop(res);
                 if (!res) break;
+
                 const auto& task = tasks[res->block_id];
-                // --- inside the consumer thread --------------------------------
+                const uint8_t*  srcBase = res->data.data();
+                uint8_t*        dstBase = static_cast<uint8_t*>(outData) +
+                                          task.zIndex * task.pixelsPerSlice * bytesPerPixel;
+
                 if (!task.transpose) {
-                    // Write pattern: contiguous in Y (row), strided in X (col).
-                    // Flip the loops so that the *write* becomes contiguous.
-                    const size_t dstColStride = static_cast<size_t>(task.roiH) * bytesPerPixel;
-                    const size_t srcColStride = static_cast<size_t>(task.cropW) * bytesPerPixel;
+                    // ----------- HEURISTIC: choose fastest access pattern -----------
+                    const size_t colStride = static_cast<size_t>(task.cropW) * bytesPerPixel;
+                    const size_t rowStride = static_cast<size_t>(task.roiH ) * bytesPerPixel;
+                    const bool   colMajor  = (colStride <= rowStride);
 
-                    uint8_t* dstBase = static_cast<uint8_t*>(outData) +
-                                       task.zIndex * task.pixelsPerSlice * bytesPerPixel;
-
-                    for (uint32_t col = 0; col < task.cropW; ++col) {
-                        uint8_t*       dst = dstBase + col * dstColStride;
-                        const uint8_t* src = res->data.data() + col * bytesPerPixel;
-
-                        // Walk *rows* inside the column – contiguous writes, strided reads
+                    if (colMajor) {
+                        // Current Milan-friendly path (good for square / tall ROIs)
+                        for (uint32_t col = 0; col < task.cropW; ++col) {
+                            const uint8_t* src = srcBase + col * bytesPerPixel;
+                            uint8_t*       dst = dstBase + col * rowStride;
+                            for (uint32_t row = 0; row < task.cropH; ++row) {
+                                std::memcpy(dst + row * bytesPerPixel,
+                                            src + row * colStride,
+                                            bytesPerPixel);
+                            }
+                        }
+                    } else {
+                        // Original row-major path (better for ultra-wide ROIs)
                         for (uint32_t row = 0; row < task.cropH; ++row) {
-                            *reinterpret_cast<uint16_t*>(dst + row*bytesPerPixel) =
-                            *reinterpret_cast<const uint16_t*>(src + row*srcColStride);
-                            // use 8-bit version when bytesPerPixel == 1
+                            const uint8_t* src = srcBase + row * colStride;
+                            for (uint32_t col = 0; col < task.cropW; ++col) {
+                                std::memcpy(dstBase + (row + col * task.roiH) * bytesPerPixel,
+                                            src + col * bytesPerPixel,
+                                            bytesPerPixel);
+                            }
                         }
                     }
-                } else {
-                    // Transpose path was already optimal – just copy whole rows
+                }
+                else {
+                    // ---------- transpose case (unchanged) ----------
                     const size_t rowBytes = static_cast<size_t>(task.cropW) * bytesPerPixel;
-                    uint8_t* dstBase = static_cast<uint8_t*>(outData) +
-                                       task.zIndex * task.pixelsPerSlice * bytesPerPixel;
-
                     for (uint32_t row = 0; row < task.cropH; ++row) {
                         std::memcpy(dstBase + row * rowBytes,
-                                    res->data.data() + row * rowBytes,
+                                    srcBase + row * rowBytes,
                                     rowBytes);
                     }
                 }
