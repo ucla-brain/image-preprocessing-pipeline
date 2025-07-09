@@ -4,7 +4,7 @@
   High-throughput sub-region loader for 3-D TIFF stacks (one TIFF per Z-slice)
 
   Author:       Keivan Moradi
-  Code review:  ChatGPT (4-o, o3, 4-1)
+  Code review:  ChatGPT (4-o, o3, 4.1)
   License:      GNU General Public License v3.0 (https://www.gnu.org/licenses/)
 
   ──────────────────────────────────────────────────────────────────────────────

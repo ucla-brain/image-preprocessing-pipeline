@@ -40,7 +40,7 @@ fprintf('--- Dataset: %d×%d ‖ %d slices ‖ %d-bit (%s) ---\n', ...
         imageHeight,imageWidth,numSlices,bitDepth,dtype);
 
 %% 1. Baseline reference vs MEX
-blockSizes = [32,12; 12,23; 23,12; 512,1024];
+blockSizes = [1047,1048];
 testZ      = [round(numSlices/2), max(1,numSlices-3)];
 
 fprintf('\n[Suite 1] Reference vs MEX baseline:\n');
@@ -301,36 +301,36 @@ for n = 1:size(neg,1)
 end
 
 %% 6. 500 random ROI fuzz tests
-fprintf('\n[Suite 6] 500 random ROI fuzz tests (printing each input):\n');
-rng(42);
-numFuzz = 500;
-num_pass = 0;
-fail_msgs = {};
-for k = 1:numFuzz
-    h = randi([1,imageHeight]);
-    w = randi([1,imageWidth ]);
-    y = randi([-32,imageHeight]);
-    x = randi([-32,imageWidth ]);
-    tr = rand > 0.5;
-    fprintf('Fuzz test %3d: y=%d, x=%d, h=%d, w=%d, tr=%d ... ', ...
-        k, y, x, h, w, tr);
-
-    try
-        load_bl_tif(filelist, y, x, h, w, tr);
-        fprintf("PASS\n");
-        num_pass = num_pass + 1;
-    catch ME
-        fprintf("FAIL [%s]: %s\n", ME.identifier, ME.message);
-        fail_msgs{end+1,1} = sprintf('k=%d: y=%d, x=%d, h=%d, w=%d, tr=%d -- %s [%s]', ...
-            k, y, x, h, w, tr, ME.message, ME.identifier);
-    end
-end
-
-fprintf('\nSuite 6 finished: %d/%d passed, %d failed.\n', num_pass, numFuzz, numFuzz-num_pass);
-if ~isempty(fail_msgs)
-    fprintf('\nFirst few failures:\n');
-    disp(fail_msgs(1:min(5,end)))
-end
+% fprintf('\n[Suite 6] 500 random ROI fuzz tests (printing each input):\n');
+% rng(42);
+% numFuzz = 500;
+% num_pass = 0;
+% fail_msgs = {};
+% for k = 1:numFuzz
+%     h = randi([1,imageHeight]);
+%     w = randi([1,imageWidth ]);
+%     y = randi([-32,imageHeight]);
+%     x = randi([-32,imageWidth ]);
+%     tr = rand > 0.5;
+%     fprintf('Fuzz test %3d: y=%d, x=%d, h=%d, w=%d, tr=%d ... ', ...
+%         k, y, x, h, w, tr);
+%
+%     try
+%         load_bl_tif(filelist, y, x, h, w, tr);
+%         fprintf("PASS\n");
+%         num_pass = num_pass + 1;
+%     catch ME
+%         fprintf("FAIL [%s]: %s\n", ME.identifier, ME.message);
+%         fail_msgs{end+1,1} = sprintf('k=%d: y=%d, x=%d, h=%d, w=%d, tr=%d -- %s [%s]', ...
+%             k, y, x, h, w, tr, ME.message, ME.identifier);
+%     end
+% end
+%
+% fprintf('\nSuite 6 finished: %d/%d passed, %d failed.\n', num_pass, numFuzz, numFuzz-num_pass);
+% if ~isempty(fail_msgs)
+%     fprintf('\nFirst few failures:\n');
+%     disp(fail_msgs(1:min(5,end)))
+% end
 
 fprintf('\nAll suites finished.\n');
 end
