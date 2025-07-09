@@ -189,6 +189,9 @@ function build_mex(debug)
         '-Dtiff-tests=OFF', '-Dtiff-opengl=OFF', '-Dtiff-contrib=OFF', '-Dtiff-tools=OFF', ...
         '-Dzstd=OFF', '-Dlibdeflate=OFF'}; % LZ4 and zlib enabled below
 
+    setenv('CMAKE_INCLUDE_PATH', fullfile(lz4_inst, 'include'));
+    setenv('CMAKE_LIBRARY_PATH', fullfile(lz4_inst, 'lib'));
+
     if ~isfile(t_stamp)
         if ~exist(libtiff_src,'dir')
             tgz = fullfile(thirdparty,sprintf('tiff-%s.tar.gz',libtiff_v));
