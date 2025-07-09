@@ -110,7 +110,6 @@ static constexpr uint16_t kSupportedBitDepth8  = 8;
 static constexpr uint16_t kSupportedBitDepth16 = 16;
 static constexpr size_t   kMaxPixelsPerSlice   = static_cast<size_t>(std::numeric_limits<int>::max());
 static constexpr size_t   kWires = 1;
-static constexpr size_t kQueueDepth = 64;
 
 // --- RAII wrapper for mxArrayToUTF8String() ---
 struct MatlabString {
@@ -376,7 +375,7 @@ void parallel_decode_and_copy(const std::vector<LoadTask>& tasks, void* outData,
     std::vector<std::unique_ptr<BoundedQueue<TaskPtr>>> queuesForWires;
     queuesForWires.reserve(numWires);
     for (size_t w = 0; w < numWires; ++w)
-        queuesForWires.emplace_back(std::make_unique<BoundedQueue<TaskPtr>>(kQueueDepth));
+        queuesForWires.emplace_back(std::make_unique<BoundedQueue<TaskPtr>>(2 * kWires));
 
     std::vector<std::thread> producerThreads, consumerThreads;
     producerThreads.reserve(threadPairCount);
@@ -446,14 +445,14 @@ void parallel_decode_and_copy(const std::vector<LoadTask>& tasks, void* outData,
                                 bytesPerPixel);
                 };
                 if (task.transpose) {
-                    // unchanged: rows outer, cols inner
+                    // transpose==true   — row-outer / col-inner is already optimal
                     for (uint32_t row = 0; row < task.cropH; ++row)
                         for (uint32_t col = 0; col < task.cropW; ++col)
                             copy_pixel(row, col);
                 } else {
-                    // optimise for column-major layout
-                    for (uint32_t col = 0; col < task.cropW; ++col)
-                        for (uint32_t row = 0; row < task.cropH; ++row)
+                    // transpose==false  — KEEP row-outer / col-inner
+                    for (uint32_t row = 0; row < task.cropH; ++row)
+                        for (uint32_t col = 0; col < task.cropW; ++col)
                             copy_pixel(row, col);
                 }
             }
