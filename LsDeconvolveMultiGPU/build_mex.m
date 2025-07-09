@@ -1,8 +1,8 @@
 function build_mex(debug)
 % build_mex  Compile all C/C++/CUDA MEX files and static libraries.
-% Static LZ4 & zlib-ng, libtiff with LZ4/zlib-ng, hwloc, all with common flags.
 % Robust, cross-platform, production ready.
-% Keivan Moradi, 2024-2025 (with ChatGPT-4o assistance)
+% Centralized compile flags (edit ONCE for all libs).
+% Keivan Moradi, 2025 (with ChatGPT-4o assistance)
 
     if nargin < 1, debug = false; end
     if verLessThan('matlab','9.4')
@@ -16,6 +16,20 @@ function build_mex(debug)
     ncores       = feature('numCores');
     isWin        = ispc;
 
+    % === [0] Centralized CMake/Configure flags (EDIT HERE) ===
+    cmake_flags_win = { ...
+        '-DCMAKE_POSITION_INDEPENDENT_CODE=ON', ...
+        '-DCMAKE_BUILD_TYPE=Release', ...
+        '-DCMAKE_STATIC_LINKER_FLAGS_RELEASE="/LTCG"', ...
+        '-DCMAKE_EXE_LINKER_FLAGS_RELEASE="/LTCG"', ...
+        '-DCMAKE_SHARED_LINKER_FLAGS_RELEASE="/LTCG"'};
+    cmake_flags_lin = { ...
+        '-DCMAKE_POSITION_INDEPENDENT_CODE=ON', ...
+        '-DCMAKE_BUILD_TYPE=Release'};
+    win_c_flags  = '/O2 /GL'; % add arch below
+    lin_c_flags  = sprintf('-O3 -march=native -flto=%d -fPIC', ncores);
+
+    % === [1] Utility fns ===
     function p = unixify(path), p = strrep(path,'\','/'); end
     function stamp = getStamp(dir, tag)
         if nargin < 2 || isempty(tag)
@@ -25,7 +39,7 @@ function build_mex(debug)
         end
     end
 
-    %% --------- 0) CPU feature detection ---------
+    % === [2] CPU feature detection ===
     if isWin
         mex('cpuid_mex.cpp');
         f = cpuid_mex();
@@ -36,7 +50,7 @@ function build_mex(debug)
         instr = 'native';
     end
 
-    %% --------- Compiler Toolchain Discovery ---------
+    % === [3] Compiler Toolchain Discovery ===
     if isWin
         cc = mex.getCompilerConfigurations('C++','Selected');
         if isempty(cc), error('No C++ compiler configured for MEX. Run "mex -setup".'); end
@@ -88,14 +102,14 @@ function build_mex(debug)
         msvc = [];
     end
 
-    %% --------- 1) Paths & Versions ---------
+    % === [4] Paths & Versions ===
     root       = pwd;
     thirdparty = fullfile(root,'thirdparty');    if ~exist(thirdparty,'dir'), mkdir(thirdparty); end
     build_root = fullfile(root,'tiff_build');    if ~exist(build_root,'dir'), mkdir(build_root); end
 
     zlibng_v   = '2.2.4';
     libtiff_v  = '4.7.0';
-    lz4_v      = '1.9.4'; % latest stable
+    lz4_v      = '1.9.4';
 
     zlibng_src  = fullfile(thirdparty,['zlib-ng-' zlibng_v]);
     libtiff_src = fullfile(thirdparty,['tiff-'    libtiff_v]);
@@ -105,54 +119,42 @@ function build_mex(debug)
     libtiff_inst = fullfile(build_root,'libtiff');
     lz4_inst     = fullfile(build_root, 'lz4');
 
-    %% --------- 2) Download & build LZ4 (static, with unified flags) ---------
+    % =========== 5) Build LZ4 (static) ==========
     if isWin, lz4_stamp = getStamp(lz4_inst, msvc.tag);
     else,     lz4_stamp = getStamp(lz4_inst, ''); end
 
     if ~isfile(lz4_stamp)
-        % Download LZ4 release if missing
         if ~exist(lz4_src,'dir')
             tgz = fullfile(thirdparty,sprintf('lz4-%s.tar.gz',lz4_v));
             websave(tgz,sprintf('https://github.com/lz4/lz4/archive/refs/tags/v%s.tar.gz',lz4_v));
             untar(tgz,thirdparty); delete(tgz);
         end
-
         lz4_cmake_src = fullfile(lz4_src, 'build', 'cmake');
         builddir = fullfile(lz4_src, 'build_dir'); if ~exist(builddir,'dir'), mkdir(builddir); end
         if ~exist(lz4_inst, 'dir'), mkdir(lz4_inst); end
-
-        % Common CMake flags for LZ4
-        lz4_common_flags = {policy_flag, '-DBUILD_SHARED_LIBS=OFF', '-DCMAKE_BUILD_TYPE=Release'};
         if isWin
-            args = [lz4_common_flags, ...
-                '-DCMAKE_POSITION_INDEPENDENT_CODE=ON', ...
-                sprintf('-DCMAKE_C_FLAGS_RELEASE="/O2 /GL /arch:%s"', instr), ...
-                sprintf('-DCMAKE_CXX_FLAGS_RELEASE="/O2 /GL /arch:%s"', instr), ...
-                '-DCMAKE_STATIC_LINKER_FLAGS_RELEASE="/LTCG" ', ...
-                '-DCMAKE_EXE_LINKER_FLAGS_RELEASE="/LTCG" ', ...
-                '-DCMAKE_SHARED_LINKER_FLAGS_RELEASE="/LTCG" '];
+            args = [policy_flag, '-DBUILD_SHARED_LIBS=OFF', ...
+                    cmake_flags_win, ...
+                    sprintf('-DCMAKE_C_FLAGS_RELEASE="%s /arch:%s"', win_c_flags, instr), ...
+                    sprintf('-DCMAKE_CXX_FLAGS_RELEASE="%s /arch:%s"', win_c_flags, instr)];
         else
-            args = [lz4_common_flags, ...
-                '-DCMAKE_POSITION_INDEPENDENT_CODE=ON', ...
-                sprintf('-DCMAKE_C_FLAGS_RELEASE="-O3 -march=native -flto=%d -fPIC"', ncores), ...
-                sprintf('-DCMAKE_CXX_FLAGS_RELEASE="-O3 -march=native -flto=%d -fPIC"', ncores)];
+            args = [policy_flag, '-DBUILD_SHARED_LIBS=OFF', ...
+                    cmake_flags_lin, ...
+                    sprintf('-DCMAKE_C_FLAGS_RELEASE="%s"', lin_c_flags), ...
+                    sprintf('-DCMAKE_CXX_FLAGS_RELEASE="%s"', lin_c_flags)];
         end
         status = cmake_build(lz4_cmake_src, builddir, lz4_inst, cmake_gen, cmake_arch, args, msvc);
         if status~=0, error('lz4 build failed (code %d)',status); end
         fid = fopen(lz4_stamp, 'w'); if fid < 0, error('Cannot write stamp file: %s', lz4_stamp); end; fclose(fid);
     end
 
-    %% --------- 3) Build zlib-ng (as before, with static flags) ---------
-    if isWin
-        z_stamp = getStamp(zlibng_inst, msvc.tag);
-    else
-        z_stamp = getStamp(zlibng_inst, '');
-    end
+    % =========== 6) Build zlib-ng (static) ==========
+    if isWin, z_stamp = getStamp(zlibng_inst, msvc.tag);
+    else,     z_stamp = getStamp(zlibng_inst, ''); end
     cmake_common_flags_zlib = {policy_flag, '-DBUILD_SHARED_LIBS=OFF', '-DZLIB_COMPAT=ON', ...
         '-DZLIB_ENABLE_TESTS=OFF', '-DZLIBNG_ENABLE_TESTS=OFF', '-DWITH_GTEST=OFF', ...
         '-DWITH_BENCHMARKS=OFF', '-DWITH_BENCHMARK_APPS=OFF', ...
-        '-DWITH_NATIVE_INSTRUCTIONS=ON', '-DWITH_NEW_STRATEGIES=ON', '-DWITH_OPTIM=ON', '-DWITH_AVX2=ON', ...
-        '-DCMAKE_POSITION_INDEPENDENT_CODE=ON', '-DCMAKE_BUILD_TYPE=Release'};
+        '-DWITH_NATIVE_INSTRUCTIONS=ON', '-DWITH_NEW_STRATEGIES=ON', '-DWITH_OPTIM=ON', '-DWITH_AVX2=ON'};
     if ~isfile(z_stamp)
         if ~exist(zlibng_src,'dir')
             tgz = fullfile(thirdparty,sprintf('zlib-ng-%s.tar.gz',zlibng_v));
@@ -163,35 +165,28 @@ function build_mex(debug)
         if ~exist(zlibng_inst,'dir'), mkdir(zlibng_inst); end
         if isWin
             args = [cmake_common_flags_zlib, ...
-                sprintf('-DCMAKE_C_FLAGS_RELEASE="/O2 /GL /arch:%s" ', instr), ...
-                sprintf('-DCMAKE_CXX_FLAGS_RELEASE="/O2 /GL /arch:%s" ', instr), ...
-                '-DCMAKE_STATIC_LINKER_FLAGS_RELEASE="/LTCG" ', ...
-                '-DCMAKE_EXE_LINKER_FLAGS_RELEASE="/LTCG" ', ...
-                '-DCMAKE_SHARED_LINKER_FLAGS_RELEASE="/LTCG" '];
+                    cmake_flags_win, ...
+                    sprintf('-DCMAKE_C_FLAGS_RELEASE="%s /arch:%s"', win_c_flags, instr), ...
+                    sprintf('-DCMAKE_CXX_FLAGS_RELEASE="%s /arch:%s"', win_c_flags, instr)];
         else
             args = [cmake_common_flags_zlib, ...
-                sprintf('-DCMAKE_C_FLAGS_RELEASE="-O3 -march=native -flto=%d -fPIC"', ncores), ...
-                sprintf('-DCMAKE_CXX_FLAGS_RELEASE="-O3 -march=native -flto=%d -fPIC"', ncores)];
+                    cmake_flags_lin, ...
+                    sprintf('-DCMAKE_C_FLAGS_RELEASE="%s"', lin_c_flags), ...
+                    sprintf('-DCMAKE_CXX_FLAGS_RELEASE="%s"', lin_c_flags)];
         end
         status = cmake_build(zlibng_src, builddir, zlibng_inst, cmake_gen, cmake_arch, args, msvc);
         if status~=0, error('zlib-ng build failed (code %d)',status); end
         fid = fopen(z_stamp, 'w'); if fid < 0, error('Cannot write stamp file: %s', z_stamp); end; fclose(fid);
     end
 
-    %% --------- 4) Build libtiff (STATIC, with LZ4+zlib-ng; unified flags) ---------
+    % =========== 7) Build libtiff (STATIC) ==========
     if isWin, t_stamp = getStamp(libtiff_inst, msvc.tag);
     else,     t_stamp = getStamp(libtiff_inst, ''); end
     cmake_common_flags_tiff = {policy_flag, '-DBUILD_SHARED_LIBS=OFF', ...
-        '-DCMAKE_POSITION_INDEPENDENT_CODE=ON', ...
-        '-DCMAKE_BUILD_TYPE=Release', ...
         '-Djbig=OFF', '-Djpeg=OFF', '-Dold-jpeg=OFF', '-Dlzma=OFF', '-Dwebp=OFF', ...
         '-Dlerc=OFF', '-Dpixarlog=OFF', ...
         '-Dtiff-tests=OFF', '-Dtiff-opengl=OFF', '-Dtiff-contrib=OFF', '-Dtiff-tools=OFF', ...
-        '-Dzstd=OFF', '-Dlibdeflate=OFF'}; % LZ4 and zlib enabled below
-
-    setenv('CMAKE_INCLUDE_PATH', fullfile(lz4_inst, 'include'));
-    setenv('CMAKE_LIBRARY_PATH', fullfile(lz4_inst, 'lib'));
-
+        '-Dzstd=OFF', '-Dlibdeflate=OFF'};
     if ~isfile(t_stamp)
         if ~exist(libtiff_src,'dir')
             tgz = fullfile(thirdparty,sprintf('tiff-%s.tar.gz',libtiff_v));
@@ -200,41 +195,28 @@ function build_mex(debug)
         end
         builddir = fullfile(libtiff_src,'build'); if ~exist(builddir,'dir'), mkdir(builddir); end
         if ~exist(libtiff_inst,'dir'), mkdir(libtiff_inst); end
-
-        cmake_lz4_path_args = { ...
-            sprintf('-DCMAKE_INCLUDE_PATH=%s', unixify(fullfile(lz4_inst,'include'))), ...
-            sprintf('-DCMAKE_LIBRARY_PATH=%s', unixify(fullfile(lz4_inst,'lib'))) ...
-        };
-
         if isWin
             args = [cmake_common_flags_tiff, ...
-                '-Dzstd=OFF', '-Dlibdeflate=OFF', ...
+                cmake_flags_win, ...
                 sprintf('-DZLIB_LIBRARY=%s',   unixify(fullfile(zlibng_inst,'lib','zlibstatic.lib'))), ...
                 sprintf('-DZLIB_INCLUDE_DIR=%s',unixify(fullfile(zlibng_inst,'include'))), ...
                 '-DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded$<$<CONFIG:Debug>:Debug>" ', ...
-                sprintf('-DCMAKE_C_FLAGS_RELEASE="/O2 /GL /arch:%s" ', instr), ...
-                sprintf('-DCMAKE_CXX_FLAGS_RELEASE="/O2 /GL /arch:%s" ', instr), ...
-                '-DCMAKE_STATIC_LINKER_FLAGS_RELEASE="/LTCG" ', ...
-                '-DCMAKE_EXE_LINKER_FLAGS_RELEASE="/LTCG" ', ...
-                '-DCMAKE_SHARED_LINKER_FLAGS_RELEASE="/LTCG" ', ...
-                cmake_lz4_path_args{:} ...
-            ];
+                sprintf('-DCMAKE_C_FLAGS_RELEASE="%s /arch:%s"', win_c_flags, instr), ...
+                sprintf('-DCMAKE_CXX_FLAGS_RELEASE="%s /arch:%s"', win_c_flags, instr)];
         else
             args = [cmake_common_flags_tiff, ...
-                '-Dzstd=OFF', '-Dlibdeflate=OFF', ...
+                cmake_flags_lin, ...
                 sprintf('-DZLIB_LIBRARY=%s',    unixify(fullfile(zlibng_inst,'lib','libz.a'))), ...
                 sprintf('-DZLIB_INCLUDE_DIR=%s',unixify(fullfile(zlibng_inst,'include'))), ...
-                sprintf('-DCMAKE_C_FLAGS_RELEASE="-O3 -march=native -flto=%d -fPIC" ', ncores), ...
-                sprintf('-DCMAKE_CXX_FLAGS_RELEASE="-O3 -march=native -flto=%d -fPIC" ', ncores), ...
-                cmake_lz4_path_args{:} ...
-            ];
+                sprintf('-DCMAKE_C_FLAGS_RELEASE="%s"', lin_c_flags), ...
+                sprintf('-DCMAKE_CXX_FLAGS_RELEASE="%s"', lin_c_flags)];
         end
         status = cmake_build(libtiff_src, builddir, libtiff_inst, cmake_gen, cmake_arch, args, msvc);
         if status~=0, error('libtiff build failed (code %d)',status); end
         fid = fopen(t_stamp, 'w'); if fid < 0, error('Cannot write stamp file: %s', t_stamp); end; fclose(fid);
     end
 
-    %% --------- 5) Download & build hwloc (NUMA, consolidated flags) ---------
+    % =========== 8) Build hwloc (STATIC) ==========
     hwloc_v_major = '2.12'; hwloc_v_patch = '1'; hwloc_v = sprintf('%s.%s', hwloc_v_major, hwloc_v_patch);
     hwloc_src     = fullfile(thirdparty, ['hwloc-' hwloc_v]);
     hwloc_inst    = fullfile(build_root, 'hwloc');
@@ -259,21 +241,19 @@ function build_mex(debug)
             builddir = fullfile(hwloc_src, 'build'); if ~exist(builddir,'dir'), mkdir(builddir); end
             if ~exist(hwloc_inst, 'dir'), mkdir(hwloc_inst); end
             args = {policy_flag, '-DBUILD_SHARED_LIBS=OFF', '-DHWLOC_BUILD_STANDALONE=ON', ...
-                '-DCMAKE_POSITION_INDEPENDENT_CODE=ON', '-DHWLOC_INSTALL_HEADERS=ON', ...
+                '-DHWLOC_INSTALL_HEADERS=ON', ...
                 '-DHWLOC_ENABLE_OPENCL=OFF', '-DHWLOC_ENABLE_CUDA=OFF', '-DHWLOC_ENABLE_NVML=OFF', ...
                 '-DHWLOC_ENABLE_LIBXML2=OFF', '-DHWLOC_ENABLE_PCI=OFF', '-DHWLOC_ENABLE_TOOLS=OFF', ...
-                '-DHWLOC_ENABLE_TESTING=OFF', '-DHWLOC_ENABLE_DOCS=OFF', '-DCMAKE_BUILD_TYPE=Release', ...
-                sprintf('-DCMAKE_C_FLAGS_RELEASE="/O2 /GL /arch:%s"', instr), ...
-                sprintf('-DCMAKE_CXX_FLAGS_RELEASE="/O2 /GL /arch:%s"', instr), ...
-                '-DCMAKE_STATIC_LINKER_FLAGS_RELEASE="/LTCG" ', ...
-                '-DCMAKE_EXE_LINKER_FLAGS_RELEASE="/LTCG" ', ...
-                '-DCMAKE_SHARED_LINKER_FLAGS_RELEASE="/LTCG" '};
+                '-DHWLOC_ENABLE_TESTING=OFF', '-DHWLOC_ENABLE_DOCS=OFF', ...
+                cmake_flags_win, ...
+                sprintf('-DCMAKE_C_FLAGS_RELEASE="%s /arch:%s"', win_c_flags, instr), ...
+                sprintf('-DCMAKE_CXX_FLAGS_RELEASE="%s /arch:%s"', win_c_flags, instr)};
             status = cmake_build(cmake_dir, builddir, hwloc_inst, cmake_gen, cmake_arch, args, msvc);
             if status ~= 0, error('hwloc build failed (code %d)', status); end
         else
             if ~exist(hwloc_inst, 'dir'), mkdir(hwloc_inst); end
-            cflags = sprintf('-O3 -march=native -flto=%d -fPIC', ncores);
-            cxxflags = sprintf('-O3 -march=native -flto=%d -fPIC', ncores);
+            cflags = lin_c_flags;
+            cxxflags = lin_c_flags;
             build_cmd = sprintf(['cd "%s" && ' ...
                 'CFLAGS="%s" CXXFLAGS="%s" ' ...
                 './configure --prefix="%s" --enable-static --disable-shared ' ...
@@ -298,11 +278,10 @@ function build_mex(debug)
         link_hwloc = {fullfile(hwloc_inst, 'lib', 'libhwloc.a')};
     end
 
-    %% --------- 6) Prepare MEX flags (consolidated) ---------
+    %% --------- Build CPU MEX files ---------
     inc_tiff   = ['-I"' unixify(fullfile(libtiff_inst,'include')) '"'];
     mex_cpu_win = {'-R2018a'};
     mex_cpu_linux = {'-R2018a'};
-
     if isWin
         link_tiff = {fullfile(libtiff_inst,'lib','tiffxx.lib'), fullfile(libtiff_inst,'lib','tiff.lib'), fullfile(zlibng_inst,'lib','zlibstatic.lib')};
         if debug
@@ -330,7 +309,6 @@ function build_mex(debug)
         mex_cpu = mex_cpu_linux;
     end
 
-    %% --------- 7) Build CPU MEX files ---------
     fprintf('\n[MEX] Compiling CPU modules …\n');
     mex(mex_cpu{:}, 'semaphore.c');
     mex(mex_cpu{:}, 'save_lz4_mex.c', lz4_incflag, lz4_libfile);
@@ -339,7 +317,7 @@ function build_mex(debug)
     mex(mex_cpu{:}, inc_tiff, 'load_bl_tif.cpp', link_tiff{:});
     mex(mex_cpu{:}, inc_tiff, inc_hwloc, 'save_bl_tif.cpp', link_tiff{:}, link_hwloc{:});
 
-    %% --------- 8) Build CUDA MEX files ---------
+    %% --------- Build CUDA MEX files ---------
     archs_env = getenv('BUILD_SM_ARCHS');
     if isempty(archs_env)
         sm_list = detect_sm_archs();
@@ -428,9 +406,6 @@ function sm_list = detect_sm_archs()
         12.9, {'52','60','61','70','75','80','86','89','90'};
     };
     sm_list = {'75','80','86'};
-    if cuda_ver >= 12.9
-        sm_list = {'52','60','61','70','75','80','86','89','90'};
-    end
     if ~isempty(cuda_ver)
         for i = size(arch_table,1):-1:1
             if cuda_ver >= arch_table{i,1}
