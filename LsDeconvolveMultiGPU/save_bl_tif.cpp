@@ -112,6 +112,8 @@ namespace fs = std::filesystem;
 // Compile-time parameters for TIFF
 static constexpr uint32_t kRowsPerStripDefault = 1;
 static constexpr uint32_t kOptimalTileEdge     = 128;
+// How many logical producer-consumer pairs to group together per queue (set to 1 for 1:1 mapping)
+static constexpr size_t kWires = 1;
 
 namespace platform {
 #if defined(_WIN32)
@@ -732,14 +734,13 @@ void mexFunction(int nlhs, mxArray* plhs[],
         const uint32_t bytesPerPixel =
             (mxGetClassID(prhs[0]) == mxUINT16_CLASS ? 2u : 1u);
 
-        const size_t totalCores = get_available_cores();
-        const size_t defaultThreads =
-            std::max(totalCores / 2, size_t(1));
+        const size_t totalLogicalCores = get_available_cores();
+        const size_t defaultThreads = std::max(totalLogicalCores / 2, size_t(1));
         const size_t requestedThreads =
             (nrhs >= 5 && !mxIsEmpty(prhs[4]))
                 ? static_cast<size_t>(mxGetScalar(prhs[4]))
                 : defaultThreads;
-        const size_t threadCount =
+        const size_t threadPairCount =
             std::min(requestedThreads, static_cast<size_t>(numSlices));
 
         const bool useTiles =
@@ -747,20 +748,34 @@ void mexFunction(int nlhs, mxArray* plhs[],
                            (mxIsNumeric(prhs[5]) && mxGetScalar(prhs[5]) != 0))
                         : false;
 
-        BoundedQueue<std::shared_ptr<SliceWriteTask>> taskQueue(threadCount * 2);
+        // ==========================================================================
+        //      Main producer-consumer queue tuning: set to 1 for maximal locality
+        // ==========================================================================
+        static_assert(kWires >= 1, "kWires must be at least 1.");
+        const size_t numWires = threadPairCount / kWires + ((threadPairCount % kWires) ? 1 : 0);
+
+        // Vector of per-wire (per-pair) queues. Each wire is a producer-consumer pair sharing a dedicated queue.
+        std::vector<std::unique_ptr<BoundedQueue<std::shared_ptr<SliceWriteTask>>>> queuesForWires;
+        queuesForWires.reserve(numWires);
+        for (size_t w = 0; w < numWires; ++w)
+            queuesForWires.emplace_back(std::make_unique<BoundedQueue<std::shared_ptr<SliceWriteTask>>>(2 * kWires)); // Bounded to 2×pair size for pipelining
 
         std::vector<std::thread> producerThreads, consumerThreads;
-        producerThreads.reserve(threadCount);
-        consumerThreads.reserve(threadCount);
+        producerThreads.reserve(threadPairCount);
+        consumerThreads.reserve(threadPairCount);
 
         std::atomic<uint32_t> nextSliceIndex{0};
         std::vector<std::string> runtimeErrors;
         std::mutex              errorMutex;
         std::atomic<bool>       abortFlag{false};
-        auto threadPairs = assign_thread_affinity_pairs(threadCount);
+        auto threadPairs = assign_thread_affinity_pairs(threadPairCount);
 
-        // ---- Launch threads with hwloc-based pinning ----
-        for (size_t t = 0; t < threadCount; ++t) {
+        // ---- Launch threads: each pair uses its own queue ("wire") ----
+        for (size_t t = 0; t < threadPairCount; ++t) {
+            // Each pair t uses queuesForWires[t / kWires]
+            BoundedQueue<std::shared_ptr<SliceWriteTask>>& queueForPair = *queuesForWires[t / kWires];
+
+            // Producer: allocates memory (NUMA-local), prepares slice, pushes to queue
             producerThreads.emplace_back([&, t] {
                 set_thread_affinity(threadPairs[t].producerLogicalCore);
                 while (true) {
@@ -782,16 +797,20 @@ void mexFunction(int nlhs, mxArray* plhs[],
                     task->isXYZLayout    = isXYZ;
                     task->compressionTag = compressionTag;
                     task->useTiles       = useTiles;
-                    taskQueue.push(std::move(task));
+                    queueForPair.push(std::move(task));
                 }
+                // Signal end-of-tasks to consumer(s)
+                queueForPair.push(nullptr);
             });
+
+            // Consumer: pops tasks from queue, writes to disk, aborts on error
             consumerThreads.emplace_back([&, t] {
                 set_thread_affinity(threadPairs[t].consumerLogicalCore);
                 while (true) {
                     if (abortFlag.load(std::memory_order_acquire)) break;
                     std::shared_ptr<SliceWriteTask> task;
-                    taskQueue.wait_and_pop(task);
-                    if (!task) break; // sentinel
+                    queueForPair.wait_and_pop(task);
+                    if (!task) break; // End-of-tasks signal
                     try {
                         write_slice_to_tiff(*task);
                     } catch (const std::exception& ex) {
@@ -804,9 +823,8 @@ void mexFunction(int nlhs, mxArray* plhs[],
             });
         }
 
+        // Wait for all producers and consumers to finish
         for (auto& p : producerThreads) p.join();
-        for (size_t i = 0; i < consumerThreads.size(); ++i)
-            taskQueue.push(nullptr);
         for (auto& c : consumerThreads) c.join();
 
         if (!runtimeErrors.empty())
