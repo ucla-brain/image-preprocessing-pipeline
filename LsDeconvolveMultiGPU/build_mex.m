@@ -183,7 +183,6 @@ function build_mex(debug)
         t_stamp = getStamp(libtiff_inst, '');
         zlib_lib = unixify(fullfile(zlibng_inst,'lib','libz.a'));
     end
-
     if ~isfile(t_stamp)
         if ~exist(libtiff_src,'dir')
             tgz = fullfile(thirdparty,sprintf('tiff-%s.tar.gz',libtiff_v));
