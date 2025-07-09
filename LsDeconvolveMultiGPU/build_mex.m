@@ -310,12 +310,12 @@ function build_mex(debug)
     end
 
     fprintf('\n[MEX] Compiling CPU modules …\n');
-    mex(mex_cpu{:}, 'semaphore.c');
-    mex(mex_cpu{:}, 'save_lz4_mex.c', lz4_incflag, lz4_libfile);
-    mex(mex_cpu{:}, 'load_lz4_mex.c', lz4_incflag, lz4_libfile);
-    mex(mex_cpu{:}, 'load_slab_lz4.cpp', lz4_incflag, lz4_libfile);
+    % mex(mex_cpu{:}, 'semaphore.c');
+    % mex(mex_cpu{:}, 'save_lz4_mex.c', lz4_incflag, lz4_libfile);
+    % mex(mex_cpu{:}, 'load_lz4_mex.c', lz4_incflag, lz4_libfile);
+    % mex(mex_cpu{:}, 'load_slab_lz4.cpp', lz4_incflag, lz4_libfile);
     mex(mex_cpu{:}, inc_tiff, inc_hwloc, 'load_bl_tif.cpp', 'mex_thread_utils.cpp', link_tiff{:}, link_hwloc{:});
-    mex(mex_cpu{:}, inc_tiff, inc_hwloc, 'save_bl_tif.cpp', 'mex_thread_utils.cpp', link_tiff{:}, link_hwloc{:});
+    % mex(mex_cpu{:}, inc_tiff, inc_hwloc, 'save_bl_tif.cpp', 'mex_thread_utils.cpp', link_tiff{:}, link_hwloc{:});
 
     %% --------- Build CUDA MEX files ---------
     archs_env = getenv('BUILD_SM_ARCHS');
@@ -341,8 +341,8 @@ function build_mex(debug)
         end
     end
 
-    mexcuda('-R2018a', nvccflags, 'gauss3d_gpu.cu');
-    mexcuda('-R2018a', nvccflags, 'conv3d_gpu.cu');
+    % mexcuda('-R2018a', nvccflags, 'gauss3d_gpu.cu');
+    % mexcuda('-R2018a', nvccflags, 'conv3d_gpu.cu');
 
     fprintf('\n✅  All MEX files built successfully.\n');
 end
