@@ -568,15 +568,28 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
                     if (!res) break; // End-of-tasks signal
 
                     const auto& task = tasks[res->block_id];
-                    // Output is contiguous by Z, so we can bulk memcpy for non-transpose.
-                    for (uint32_t row = 0; row < task.cropH; ++row) {
-                        for (uint32_t col = 0; col < task.cropW; ++col) {
-                            size_t dstElem = computeDstIndex(task, row, col);
-                            size_t dstByte = dstElem * bytesPerPixel;
-                            size_t srcByte = (row * task.cropW + col) * bytesPerPixel;
-                            std::memcpy(static_cast<uint8_t*>(outData) + dstByte,
-                                        res->data.data() + srcByte,
-                                        bytesPerPixel);
+                    bool is_full_frame = !task.transpose &&
+                                         task.in_row0 == 0 && task.in_col0 == 0 &&
+                                         task.cropH == task.roiH && task.cropW == task.roiW;
+
+                    if (is_full_frame) {
+                        // Fast: entire slice is contiguous, just copy block
+                        size_t dstByte = task.zIndex * task.pixelsPerSlice * bytesPerPixel;
+                        size_t sliceBytes = task.pixelsPerSlice * bytesPerPixel;
+                        std::memcpy(static_cast<uint8_t*>(outData) + dstByte,
+                                    res->data.data(),
+                                    sliceBytes);
+                    } else {
+                        // General case (slower, but always correct)
+                        for (uint32_t row = 0; row < task.cropH; ++row) {
+                            for (uint32_t col = 0; col < task.cropW; ++col) {
+                                size_t dstElem = computeDstIndex(task, row, col);
+                                size_t dstByte = dstElem * bytesPerPixel;
+                                size_t srcByte = (row * task.cropW + col) * bytesPerPixel;
+                                std::memcpy(static_cast<uint8_t*>(outData) + dstByte,
+                                            res->data.data() + srcByte,
+                                            bytesPerPixel);
+                            }
                         }
                     }
                 }
