@@ -396,7 +396,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
             });
         }
 
-        // --- Consumers: copy to output buffer, with or without transpose ---
+        // --- Consumers: copy to output buffer, always per-element (match MATLAB layout) ---
         for (size_t t = 0; t < threadPairCount; ++t) {
             BoundedQueue<TaskPtr>& queueForPair = *queuesForWires[t / kWires];
             consumerThreads.emplace_back([&, t] {
@@ -407,22 +407,17 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
                     queueForPair.wait_and_pop(res);
                     if (!res) break;
                     const auto& task = tasks[res->block_id];
-                    if (!transpose) {
-                        // XYZ mode: [Y, X, Z] (MATLAB default order), each slice is [roiH, roiW]
-                        size_t dstByte = task.zIndex * task.cropH * task.cropW * bytesPerPixel;
-                        size_t sliceBytes = task.cropH * task.cropW * bytesPerPixel;
-                        std::memcpy(static_cast<uint8_t*>(outData) + dstByte, res->data.data(), sliceBytes);
-                    } else {
-                        // YXZ mode: [X, Y, Z] - per-pixel transpose
-                        for (uint32_t row = 0; row < task.cropH; ++row) {
-                            for (uint32_t col = 0; col < task.cropW; ++col) {
-                                // Output dims: [roiW, roiH, numSlices]
-                                size_t dstElem = col + row * task.cropW + task.zIndex * (task.cropH * task.cropW);
-                                size_t srcElem = row * task.cropW + col;
-                                size_t dstByte = dstElem * bytesPerPixel;
-                                size_t srcByte = srcElem * bytesPerPixel;
-                                std::memcpy(static_cast<uint8_t*>(outData) + dstByte, res->data.data() + srcByte, bytesPerPixel);
+                    for (uint32_t row = 0; row < task.cropH; ++row) {
+                        for (uint32_t col = 0; col < task.cropW; ++col) {
+                            size_t dstIdx;
+                            if (!transpose) {
+                                dstIdx = row + col * task.cropH + task.zIndex * (task.cropH * task.cropW);
+                            } else {
+                                dstIdx = col + row * task.cropW + task.zIndex * (task.cropH * task.cropW);
                             }
+                            size_t dstByte = dstIdx * bytesPerPixel;
+                            size_t srcByte = (row * task.cropW + col) * bytesPerPixel;
+                            memcpy(static_cast<uint8_t*>(outData) + dstByte, res->data.data() + srcByte, bytesPerPixel);
                         }
                     }
                 }
