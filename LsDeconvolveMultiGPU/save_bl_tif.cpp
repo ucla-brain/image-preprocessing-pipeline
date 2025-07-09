@@ -63,7 +63,7 @@
 
 #include "mex.h"
 #include "tiffio.h"
-#include <hwloc.h>
+#include "mex_thread_utils.hpp"
 
 #include <filesystem>
 #include <vector>
@@ -132,198 +132,6 @@ namespace platform {
 #else
     inline const std::string& toPlatformPath(const std::string& utf8) { return utf8; }
 #endif
-}
-
-//=========================
-//     BoundedQueue
-//=========================
-/**
- * @brief Thread-safe, bounded-size queue for producer-consumer model.
- *
- * @tparam T Task type.
- */
-template <typename T>
-class BoundedQueue {
-public:
-    explicit BoundedQueue(size_t maxSize) : maximumSize_(maxSize) {}
-
-    void push(T item) {
-        std::unique_lock<std::mutex> lock(queueMutex_);
-        queueNotFull_.wait(lock, [this] { return queue_.size() < maximumSize_; });
-        queue_.emplace(std::move(item));
-        queueNotEmpty_.notify_one();
-    }
-
-    void wait_and_pop(T& item) {
-        std::unique_lock<std::mutex> lock(queueMutex_);
-        queueNotEmpty_.wait(lock, [this] { return !queue_.empty(); });
-        item = std::move(queue_.front());
-        queue_.pop();
-        queueNotFull_.notify_one();
-    }
-
-private:
-    mutable std::mutex            queueMutex_;
-    std::condition_variable       queueNotFull_;
-    std::condition_variable       queueNotEmpty_;
-    std::queue<T>                 queue_;
-    size_t                        maximumSize_;
-};
-
-//=========================
-//    HwlocTopologyRAII
-//=========================
-/**
- * @brief RAII wrapper to cache a loaded hwloc topology.
- */
-class HwlocTopologyRAII {
-public:
-    HwlocTopologyRAII() {
-        hwloc_topology_init(&topology_);
-        hwloc_topology_load(topology_);
-    }
-    ~HwlocTopologyRAII() {
-        hwloc_topology_destroy(topology_);
-    }
-    hwloc_topology_t get() const noexcept { return topology_; }
-private:
-    hwloc_topology_t topology_;
-};
-
-static std::unique_ptr<HwlocTopologyRAII> g_hwlocTopo;
-
-/**
- * @brief Returns available logical core count (platform-safe).
- */
-inline size_t get_available_cores() {
-#if defined(_WIN32)
-    DWORD_PTR processMask = 0, systemMask = 0;
-    if (GetProcessAffinityMask(GetCurrentProcess(), &processMask, &systemMask))
-        return static_cast<size_t>(std::bitset<sizeof(processMask)*8>(processMask).count());
-#elif defined(__linux__) || defined(__APPLE__)
-    long n = sysconf(_SC_NPROCESSORS_ONLN);
-    if (n > 0) return static_cast<size_t>(n);
-#endif
-    auto hint = std::thread::hardware_concurrency();
-    return hint ? static_cast<size_t>(hint) : 1;
-}
-
-/**
- * @brief Structure to hold a producer-consumer thread pair mapped to specific cores.
- */
-struct ThreadAffinityPair {
-    unsigned producerLogicalCore;
-    unsigned consumerLogicalCore;
-    unsigned numaNode;
-    unsigned socket;
-};
-
-/**
- * @brief Returns NUMA/socket/locality optimized thread pairs for core affinity.
- */
-std::vector<ThreadAffinityPair> assign_thread_affinity_pairs(size_t pairCount)
-{
-    std::vector<ThreadAffinityPair> pairs;
-    std::set<unsigned> usedPUs;
-    assert(g_hwlocTopo && "Hwloc topology must be initialized");
-    hwloc_topology_t topology = g_hwlocTopo->get();
-
-    int totalCores = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_CORE);
-
-    // SMT siblings first
-    for (int i = 0; i < totalCores && pairs.size() < pairCount; ++i) {
-        hwloc_obj_t core = hwloc_get_obj_by_type(topology, HWLOC_OBJ_CORE, i);
-        unsigned nodeId = 0, socketId = 0;
-        hwloc_obj_t node = hwloc_get_ancestor_obj_by_type(topology, HWLOC_OBJ_NUMANODE, core);
-        if (node) nodeId = node->os_index;
-        hwloc_obj_t sock = hwloc_get_ancestor_obj_by_type(topology, HWLOC_OBJ_PACKAGE, core);
-        if (sock) socketId = sock->os_index;
-
-        std::vector<unsigned> pus;
-        for (unsigned j = 0; j < core->arity; ++j) {
-            hwloc_obj_t child = core->children[j];
-            if (child->type == HWLOC_OBJ_PU)
-                pus.push_back(child->os_index);
-        }
-        if (pus.empty()) {
-            hwloc_bitmap_t cpuset = hwloc_bitmap_dup(core->cpuset);
-            hwloc_bitmap_singlify(cpuset);
-            int puIdx = hwloc_bitmap_first(cpuset);
-            if (puIdx >= 0)
-                pus.push_back(static_cast<unsigned>(puIdx));
-            hwloc_bitmap_free(cpuset);
-        }
-        if (pus.size() >= 2 && !usedPUs.count(pus[0]) && !usedPUs.count(pus[1])) {
-            pairs.push_back({pus[0], pus[1], nodeId, socketId});
-            usedPUs.insert(pus[0]);
-            usedPUs.insert(pus[1]);
-        } else if (pus.size() == 1 && !usedPUs.count(pus[0])) {
-            pairs.push_back({pus[0], pus[0], nodeId, socketId});
-            usedPUs.insert(pus[0]);
-        }
-    }
-    // Second, pair remaining unused PUs within each NUMA node
-    if (pairs.size() < pairCount) {
-        int totalPU = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_PU);
-        std::map<unsigned, std::vector<unsigned>> numaToPU;
-        std::map<unsigned, std::vector<unsigned>> numaToSocket;
-        for (int i = 0; i < totalPU; ++i) {
-            hwloc_obj_t pu = hwloc_get_obj_by_type(topology, HWLOC_OBJ_PU, i);
-            if (usedPUs.count(pu->os_index)) continue;
-            unsigned nodeId = 0, socketId = 0;
-            hwloc_obj_t node = hwloc_get_ancestor_obj_by_type(topology, HWLOC_OBJ_NUMANODE, pu);
-            if (node) nodeId = node->os_index;
-            hwloc_obj_t sock = hwloc_get_ancestor_obj_by_type(topology, HWLOC_OBJ_PACKAGE, pu);
-            if (sock) socketId = sock->os_index;
-            numaToPU[nodeId].push_back(pu->os_index);
-            numaToSocket[nodeId].push_back(socketId);
-        }
-        for (auto& [numaNode, pus] : numaToPU) {
-            auto& sockets = numaToSocket[numaNode];
-            for (size_t i = 0; i + 1 < pus.size() && pairs.size() < pairCount; i += 2) {
-                pairs.push_back({pus[i], pus[i + 1], numaNode, sockets[i]});
-                usedPUs.insert(pus[i]);
-                usedPUs.insert(pus[i + 1]);
-            }
-        }
-        std::vector<std::pair<unsigned, unsigned>> leftovers;
-        for (auto& [numaNode, pus] : numaToPU) {
-            auto& sockets = numaToSocket[numaNode];
-            if (pus.size() % 2)
-                leftovers.emplace_back(pus.back(), sockets.back());
-        }
-        for (size_t i = 0; i + 1 < leftovers.size() && pairs.size() < pairCount; i += 2) {
-            pairs.push_back({leftovers[i].first, leftovers[i + 1].first, 0, leftovers[i].second});
-            usedPUs.insert(leftovers[i].first);
-            usedPUs.insert(leftovers[i + 1].first);
-        }
-    }
-    if (pairs.size() < pairCount) {
-        int totalPU = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_PU);
-        std::vector<unsigned> allUnused;
-        for (int i = 0; i < totalPU; ++i) {
-            hwloc_obj_t pu = hwloc_get_obj_by_type(topology, HWLOC_OBJ_PU, i);
-            if (!usedPUs.count(pu->os_index)) allUnused.push_back(pu->os_index);
-        }
-        for (size_t i = 0; i + 1 < allUnused.size() && pairs.size() < pairCount; i += 2) {
-            pairs.push_back({allUnused[i], allUnused[i + 1], 0, 0});
-        }
-    }
-    return pairs;
-}
-
-/**
- * @brief Set thread affinity to a logical core using cached hwloc topology.
- */
-inline void set_thread_affinity(unsigned logicalCoreId)
-{
-    assert(g_hwlocTopo && "Hwloc topology must be initialized");
-    hwloc_topology_t topology = g_hwlocTopo->get();
-    hwloc_cpuset_t cpuset = hwloc_bitmap_alloc();
-    hwloc_bitmap_zero(cpuset);
-    hwloc_bitmap_set(cpuset, logicalCoreId);
-    hwloc_set_cpubind(topology, cpuset, HWLOC_CPUBIND_THREAD);
-    hwloc_bitmap_free(cpuset);
 }
 
 /**
@@ -670,11 +478,9 @@ static void write_slice_to_tiff(const SliceWriteTask& task)
 //=========================
 void mexFunction(int nlhs, mxArray* plhs[],
                  int nrhs, const mxArray* prhs[]) {
-    try {
-        // Initialize hwloc topology once per mex invocation
-        if (!g_hwlocTopo)
-            g_hwlocTopo = std::make_unique<HwlocTopologyRAII>();
 
+    ensure_hwloc_initialized();
+    try {
         if (nrhs < 4 || nrhs > 6)
             mexErrMsgIdAndTxt("save_bl_tif:usage",
                 "Usage: save_bl_tif(volume, fileList, isXYZ, compression[, nThreads, useTiles]);");

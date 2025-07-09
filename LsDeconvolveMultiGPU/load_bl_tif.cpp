@@ -86,10 +86,12 @@
 ==============================================================================*/
 
 
-#define NOMINMAX  // prevents Windows min/max macro pollution
+#define NOMINMAX
 #include "mex.h"
 #include "matrix.h"
 #include "tiffio.h"
+#include "mex_thread_utils.hpp"
+
 #include <vector>
 #include <string>
 #include <cstdint>
@@ -106,9 +108,10 @@
 #include <sstream>
 
 // --- Config ---
-constexpr uint16_t kSupportedBitDepth8  = 8;
-constexpr uint16_t kSupportedBitDepth16 = 16;
-constexpr size_t kMaxPixelsPerSlice = static_cast<size_t>(std::numeric_limits<int>::max());
+static constexpr uint16_t kSupportedBitDepth8  = 8;
+static constexpr uint16_t kSupportedBitDepth16 = 16;
+static constexpr size_t kMaxPixelsPerSlice = static_cast<size_t>(std::numeric_limits<int>::max());
+static constexpr size_t kWires = 1;  // Set to 1 for maximal locality, or >1 for more queues per NUMA node
 
 // RAII wrapper for mxArrayToUTF8String()
 struct MatlabString {
@@ -373,6 +376,7 @@ void worker_main(
 // ==============================
 void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
 {
+    ensure_hwloc_initialized();
     try {
         if (nrhs < 5 || nrhs > 6)
             throw std::runtime_error("Usage: img = load_bl_tif(files, y, x, height, width[, transposeFlag])");
@@ -476,63 +480,129 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         if (pixelsPerSlice > kMaxPixelsPerSlice)
             throw std::runtime_error("Requested ROI too large (>2^31 elements).");
 
+        // ---- Prepare all tasks ----
         std::vector<LoadTask> tasks;
         tasks.reserve(numSlices);
-        std::vector<TaskResult> results;
-        results.reserve(numSlices);
-        std::vector<std::string> errors;
-        std::mutex err_mutex;
-
         for (size_t z = 0; z < numSlices; ++z) {
             tasks.emplace_back(roiY0, roiX0, 0, 0, roiH, roiW, roiH, roiW,
                                static_cast<uint32_t>(z), pixelsPerSlice, fileList[z], transpose);
-            results.emplace_back(results.size(), static_cast<size_t>(roiH * roiW * bytesPerPixel), roiH, roiW);
         }
 
-        unsigned numThreads = std::max(1u, std::min(
-            std::thread::hardware_concurrency(),
-            static_cast<unsigned>(std::min<size_t>(numSlices, std::numeric_limits<unsigned>::max()))
-        ));
-        std::vector<std::thread> workers;
-        std::atomic<size_t> nextTask{0};
-        std::atomic<size_t> error_count{0};
+        // ==============================
+        //       PRODUCER-CONSUMER DISPATCH
+        // ==============================
+        const size_t threadPairCount = std::min(numSlices, get_available_cores());
+        const size_t numWires = threadPairCount / kWires + ((threadPairCount % kWires) ? 1 : 0);
 
-        for (unsigned t = 0; t < numThreads; ++t) {
-            workers.emplace_back(worker_main,
-                std::cref(tasks),
-                std::ref(results),
-                bytesPerPixel,
-                std::ref(err_mutex),
-                std::ref(errors),
-                std::ref(error_count),
-                std::ref(nextTask));
-        }
-        for (auto& w : workers) {
-            w.join();
+        using TaskPtr = std::shared_ptr<TaskResult>;
+        std::vector<std::unique_ptr<BoundedQueue<TaskPtr>>> queuesForWires;
+        queuesForWires.reserve(numWires);
+        for (size_t w = 0; w < numWires; ++w)
+            queuesForWires.emplace_back(std::make_unique<BoundedQueue<TaskPtr>>(2 * kWires));
+
+        std::vector<std::thread> producerThreads, consumerThreads;
+        producerThreads.reserve(threadPairCount);
+        consumerThreads.reserve(threadPairCount);
+
+        std::atomic<uint32_t> nextSliceIndex{0};
+        std::vector<std::string> runtimeErrors;
+        std::mutex              errorMutex;
+        std::atomic<bool>       abortFlag{false};
+        auto threadPairs = assign_thread_affinity_pairs(threadPairCount);
+
+        // ---- Producers: read and decode TIFF slices ----
+        for (size_t t = 0; t < threadPairCount; ++t) {
+            BoundedQueue<TaskPtr>& queueForPair = *queuesForWires[t / kWires];
+
+            producerThreads.emplace_back([&, t] {
+                set_thread_affinity(threadPairs[t].producerLogicalCore);
+                std::vector<uint8_t> tempBuf;  // Thread-local decode buffer
+
+                while (true) {
+                    if (abortFlag.load(std::memory_order_acquire)) break;
+                    uint32_t idx = nextSliceIndex.fetch_add(1, std::memory_order_relaxed);
+                    if (idx >= numSlices) break;
+
+                    const auto& task = tasks[idx];
+                    try {
+                        TiffHandle tif(TIFFOpen(task.path.c_str(), "r"));
+                        if (!tif) {
+                            std::lock_guard<std::mutex> lck(errorMutex);
+                            runtimeErrors.emplace_back("Slice " + std::to_string(task.zIndex + 1) +
+                                                      ": Cannot open file " + task.path);
+                            abortFlag.store(true, std::memory_order_release);
+                            break;
+                        }
+                        // Create a TaskResult with decoded data
+                        auto res = std::make_shared<TaskResult>(idx, static_cast<size_t>(task.cropH * task.cropW * bytesPerPixel), task.cropH, task.cropW);
+                        readSubRegionToBuffer(task, tif.get(), bytesPerPixel, res->data, tempBuf);
+                        queueForPair.push(res);
+
+                    } catch (const std::exception& ex) {
+                        std::lock_guard<std::mutex> lck(errorMutex);
+                        runtimeErrors.emplace_back("Slice " + std::to_string(task.zIndex + 1) + ": " + ex.what());
+                        abortFlag.store(true, std::memory_order_release);
+                        break;
+                    } catch (...) {
+                        std::lock_guard<std::mutex> lck(errorMutex);
+                        runtimeErrors.emplace_back("Slice " + std::to_string(task.zIndex + 1) + ": Unknown exception");
+                        abortFlag.store(true, std::memory_order_release);
+                        break;
+                    }
+                }
+                // Signal end-of-tasks to consumer(s)
+                queueForPair.push(nullptr);
+            });
         }
 
-        if (error_count > 0) {
+        // ---- Consumers: copy into output buffer (with optional transpose) ----
+        for (size_t t = 0; t < threadPairCount; ++t) {
+            BoundedQueue<TaskPtr>& queueForPair = *queuesForWires[t / kWires];
+
+            consumerThreads.emplace_back([&, t] {
+                set_thread_affinity(threadPairs[t].consumerLogicalCore);
+                while (true) {
+                    if (abortFlag.load(std::memory_order_acquire)) break;
+                    TaskPtr res;
+                    queueForPair.wait_and_pop(res);
+                    if (!res) break; // End-of-tasks signal
+
+                    const auto& task = tasks[res->block_id];
+                    // Output is contiguous by Z, so we can bulk memcpy for non-transpose.
+                    if (!task.transpose) {
+                        size_t dstByte = task.zIndex * task.pixelsPerSlice * bytesPerPixel;
+                        size_t sliceBytes = task.pixelsPerSlice * bytesPerPixel;
+                        std::memcpy(static_cast<uint8_t*>(outData) + dstByte,
+                                    res->data.data(),
+                                    sliceBytes);
+                    } else {
+                        // Transpose [Y X] => [X Y] per slice
+                        for (uint32_t row = 0; row < task.cropH; ++row) {
+                            for (uint32_t col = 0; col < task.cropW; ++col) {
+                                size_t dstElem = computeDstIndex(task, row, col);
+                                size_t dstByte = dstElem * bytesPerPixel;
+                                size_t srcByte = (row * task.cropW + col) * bytesPerPixel;
+                                std::memcpy(static_cast<uint8_t*>(outData) + dstByte,
+                                            res->data.data() + srcByte,
+                                            bytesPerPixel);
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // ---- Wait for all threads ----
+        for (auto& p : producerThreads) p.join();
+        for (auto& c : consumerThreads) c.join();
+
+        if (!runtimeErrors.empty()) {
             std::ostringstream allerr;
-            allerr << "Errors during load_bl_tif:\n";
-            for (const auto& s : errors) {
+            allerr << "Errors during load_bl_tif (producer/consumer):\n";
+            for (const auto& s : runtimeErrors) {
                 allerr << "  - " << s << "\n";
             }
-            throw std::runtime_error(allerr.str());
-        }
-
-        for (size_t i = 0; i < tasks.size(); ++i) {
-            const auto& task = tasks[i];
-            const auto& res  = results[i];
-            for (uint32_t row = 0; row < task.cropH; ++row) {
-                for (uint32_t col = 0; col < task.cropW; ++col) {
-                    size_t dstElem = computeDstIndex(task, row, col);
-                    size_t dstByte = dstElem * bytesPerPixel;
-                    size_t srcByte = (row * task.cropW + col) * bytesPerPixel;
-                    std::memcpy(static_cast<uint8_t*>(outData) + dstByte,
-                                res.data.data() + srcByte,
-                                bytesPerPixel);
-                }
-            }
+            mexErrMsgIdAndTxt("load_bl_tif:Error", "%s", allerr.str().c_str());
         }
     }
     catch (const std::exception& ex) {
