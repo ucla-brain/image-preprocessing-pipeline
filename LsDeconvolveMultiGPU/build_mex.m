@@ -116,6 +116,10 @@ function build_mex(debug)
             websave(tgz,sprintf('https://github.com/lz4/lz4/archive/refs/tags/v%s.tar.gz',lz4_v));
             untar(tgz,thirdparty); delete(tgz);
         end
+        if ~exist(fullfile(lz4_src, 'CMakeLists.txt'), 'file')
+            websave(fullfile(lz4_src, 'CMakeLists.txt'), ...
+                'https://raw.githubusercontent.com/lz4/lz4/dev/CMakeLists.txt');
+        end
         builddir = fullfile(lz4_src, 'build'); if ~exist(builddir,'dir'), mkdir(builddir); end
         if ~exist(lz4_inst, 'dir'), mkdir(lz4_inst); end
 
