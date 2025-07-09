@@ -118,7 +118,7 @@ function build_mex(debug)
         end
         if ~exist(fullfile(lz4_src, 'CMakeLists.txt'), 'file')
             websave(fullfile(lz4_src, 'CMakeLists.txt'), ...
-                'https://raw.githubusercontent.com/lz4/lz4/dev/CMakeLists.txt');
+                'https://raw.githubusercontent.com/lz4/lz4/refs/heads/dev/build/cmake/CMakeLists.txt');
         end
         builddir = fullfile(lz4_src, 'build'); if ~exist(builddir,'dir'), mkdir(builddir); end
         if ~exist(lz4_inst, 'dir'), mkdir(lz4_inst); end
