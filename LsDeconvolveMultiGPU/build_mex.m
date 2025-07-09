@@ -179,28 +179,28 @@ function build_mex(debug)
     end
 
     %% --------- 4) Download & build libdeflate ---------
-    if isWin
-        ld_stamp = getStamp(libdeflate_inst, msvc.tag);
-    else
-        ld_stamp = getStamp(libdeflate_inst, '');
-    end
-    if ~isfile(ld_stamp)
-        if ~exist(libdeflate_src,'dir')
-            tgz = fullfile(thirdparty, sprintf('libdeflate-%s.tar.gz',libdeflate_v));
-
-            websave(tgz, sprintf('https://github.com/ebiggers/libdeflate/archive/refs/tags/v%s.tar.gz',libdeflate_v));
-            untar(tgz, thirdparty); delete(tgz);
-        end
-        builddir = fullfile(libdeflate_src,'build'); if ~exist(builddir,'dir'), mkdir(builddir); end
-        if ~exist(libdeflate_inst,'dir'), mkdir(libdeflate_inst); end
-        args = [ ...
-            policy_flag, ...
-            cmake_flags_release ...
-        ];
-        status = cmake_build(libdeflate_src, builddir, libdeflate_inst, cmake_gen, cmake_arch, args, msvc);
-        if status~=0, error('libdeflate build failed (code %d)',status); end
-        fid = fopen(ld_stamp, 'w'); if fid < 0, error('Cannot write stamp file: %s', ld_stamp); end; fclose(fid);
-    end
+    % if isWin
+    %     ld_stamp = getStamp(libdeflate_inst, msvc.tag);
+    % else
+    %     ld_stamp = getStamp(libdeflate_inst, '');
+    % end
+    % if ~isfile(ld_stamp)
+    %     if ~exist(libdeflate_src,'dir')
+    %         tgz = fullfile(thirdparty, sprintf('libdeflate-%s.tar.gz',libdeflate_v));
+    %
+    %         websave(tgz, sprintf('https://github.com/ebiggers/libdeflate/archive/refs/tags/v%s.tar.gz',libdeflate_v));
+    %         untar(tgz, thirdparty); delete(tgz);
+    %     end
+    %     builddir = fullfile(libdeflate_src,'build'); if ~exist(builddir,'dir'), mkdir(builddir); end
+    %     if ~exist(libdeflate_inst,'dir'), mkdir(libdeflate_inst); end
+    %     args = [ ...
+    %         policy_flag, ...
+    %         cmake_flags_release ...
+    %     ];
+    %     status = cmake_build(libdeflate_src, builddir, libdeflate_inst, cmake_gen, cmake_arch, args, msvc);
+    %     if status~=0, error('libdeflate build failed (code %d)',status); end
+    %     fid = fopen(ld_stamp, 'w'); if fid < 0, error('Cannot write stamp file: %s', ld_stamp); end; fclose(fid);
+    % end
 
     %% --------- 5) Build libtiff (with zlib-ng & libdeflate as backends) ---------
     if isWin
@@ -226,8 +226,8 @@ function build_mex(debug)
             '-Dtiff-tests=OFF', '-Dtiff-opengl=OFF', ...
             sprintf('-DZLIB_LIBRARY=%s', zlib_lib), ...
             sprintf('-DZLIB_INCLUDE_DIR=%s', unixify(fullfile(zlibng_inst,'include'))), ...
-            sprintf('-DLIBDEFLATE_LIBRARY=%s', ld_lib), ...
-            sprintf('-DLIBDEFLATE_INCLUDE_DIR=%s', unixify(fullfile(libdeflate_inst,'include'))), ...
+            % sprintf('-DLIBDEFLATE_LIBRARY=%s', ld_lib), ...
+            % sprintf('-DLIBDEFLATE_INCLUDE_DIR=%s', unixify(fullfile(libdeflate_inst,'include'))), ...
             cmake_flags_release{:} ...
         };
         if isWin
