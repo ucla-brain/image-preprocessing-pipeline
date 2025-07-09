@@ -113,7 +113,7 @@ namespace fs = std::filesystem;
 static constexpr uint32_t kRowsPerStripDefault = 1;
 static constexpr uint32_t kOptimalTileEdge     = 128;
 // How many logical producer-consumer pairs to group together per queue (set to 1 for 1:1 mapping)
-static constexpr size_t kWires = 1;
+static constexpr size_t kWires = 2;
 
 namespace platform {
 #if defined(_WIN32)
