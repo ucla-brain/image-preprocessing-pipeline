@@ -374,8 +374,8 @@ void parallel_decode_and_copy(
     void* outData,
     size_t bytesPerPixel)
 {
-    auto coreIds = get_cores_on_numa_node();
-    const size_t numThreads = std::min(tasks.size(), coreIds.size());
+    //auto coreIds = get_cores_on_numa_node();
+    const size_t numThreads = std::min(tasks.size(), get_available_cores());
 
     std::atomic<uint32_t> nextSliceIndex{0};
     std::atomic<bool> abortFlag{false};
