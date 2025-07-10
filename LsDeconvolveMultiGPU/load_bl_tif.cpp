@@ -372,31 +372,32 @@ void readSubRegionToBuffer(const LoadTask& task, TIFF* tif, uint8_t bytesPerPixe
 void parallel_decode_and_copy(
     const std::vector<LoadTask>& tasks,
     void* outData,
-    size_t bytesPerPixel)
+    size_t bytesPerPixel,
+    unsigned chosenNumaNode)
 {
     const size_t numSlices = tasks.size();
-    const size_t maxRequestedPairs = std::min(numSlices, get_available_cores());
-    auto threadPairs = assign_thread_affinity_pairs(maxRequestedPairs);
+
+    // Get NUMA-local thread pairs
+    auto threadPairs = assign_thread_affinity_pairs_single_numa(
+        std::min(numSlices, get_available_cores()), chosenNumaNode);
     const size_t threadPairCount = threadPairs.size();
+    const size_t numWires = threadPairCount / kWires + ((threadPairCount % kWires) ? 1 : 0);
 
-    const size_t numWires = threadPairCount;
-
-    using TaskPtr = std::shared_ptr<TaskResult>;
+    using TaskPtr  = std::shared_ptr<TaskResult>;
     using QueuePtr = std::unique_ptr<BoundedQueue<TaskPtr>>;
 
-    std::vector<QueuePtr> queuesForWires;
-    queuesForWires.reserve(numWires);
+    std::vector<QueuePtr> queuesForWires(numWires);
     for (size_t w = 0; w < numWires; ++w)
-        queuesForWires.emplace_back(std::make_unique<BoundedQueue<TaskPtr>>(8));
+        queuesForWires[w] = std::make_unique<BoundedQueue<TaskPtr>>(8 * kWires);
 
     std::vector<std::thread> producerThreads, consumerThreads;
     producerThreads.reserve(threadPairCount);
     consumerThreads.reserve(threadPairCount);
 
-    std::atomic<uint32_t> nextSliceIndex{0};
-    std::atomic<bool> abortFlag{false};
+    std::atomic<uint32_t>   nextSliceIndex{0};
+    std::atomic<bool>       abortFlag{false};
     std::vector<std::string> runtimeErrors;
-    std::mutex errorMutex;
+    std::mutex               errorMutex;
 
     // PRODUCERS
     for (size_t t = 0; t < threadPairCount; ++t)
@@ -545,26 +546,15 @@ void parallel_decode_and_copy(
 // ==============================
 void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     ensure_hwloc_initialized();
-    hwloc_topology_t topology = g_hwlocTopo->get();
-
-    // 1. Find the least busy NUMA node
-    unsigned chosenNumaNode = find_least_busy_numa_node(topology);
-
-    // 2. Find first PU (logical core) on this node robustly
-    int logicalCoreOnNode = get_first_core_on_numa_node(topology, chosenNumaNode);
-    if (logicalCoreOnNode < 0) {
-        // fallback: try ANY available core on ANY node
-        int totalPU = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_PU);
-        if (totalPU > 0) {
-            logicalCoreOnNode = hwloc_get_obj_by_type(topology, HWLOC_OBJ_PU, 0)->os_index;
-        } else {
-            mexErrMsgIdAndTxt("load_bl_tif:Error", "No logical core found on NUMA node %u (and no PUs available at all)", chosenNumaNode);
-        }
-    }
-
-    set_thread_affinity(logicalCoreOnNode);
-
     try {
+        // NUMA-aware: bind this thread to the least busy NUMA node
+        hwloc_topology_t topology = g_hwlocTopo->get();
+        unsigned chosenNumaNode = find_least_busy_numa_node(topology);
+        int logicalCoreOnNode = get_first_core_on_numa_node(topology, chosenNumaNode);
+        if (logicalCoreOnNode < 0)
+            mexErrMsgIdAndTxt("load_bl_tif:Error", "No logical core found on NUMA node %u", chosenNumaNode);
+        set_thread_affinity(logicalCoreOnNode);
+
         ParsedInputs args = parse_inputs(nrhs, prhs);
         uint16_t bitsPerSample = 0;
         check_tiff_metadata(args.fileList, args.roiY0, args.roiX0, args.roiH, args.roiW, bitsPerSample);
@@ -576,11 +566,12 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
         size_t pixelsPerSlice = outH * outW;
         if (pixelsPerSlice > kMaxPixelsPerSlice)
             mexErrMsgIdAndTxt("load_bl_tif:Error", "Requested ROI too large (>2^31 elements).");
-        void* outData = create_output_array(plhs[0], outType, outH, outW, args.fileList.size());
 
+        void* outData = create_output_array(plhs[0], outType, outH, outW, args.fileList.size());
         auto tasks = create_tasks(args.fileList, args.roiY0, args.roiX0, args.roiH, args.roiW, pixelsPerSlice, args.transpose);
 
-        parallel_decode_and_copy(tasks, outData, bytesPerPixel);
+        // Pass chosenNumaNode down
+        parallel_decode_and_copy(tasks, outData, bytesPerPixel, chosenNumaNode);
     }
     catch (const std::exception& ex) {
         mexErrMsgIdAndTxt("load_bl_tif:Error", "%s", ex.what());
