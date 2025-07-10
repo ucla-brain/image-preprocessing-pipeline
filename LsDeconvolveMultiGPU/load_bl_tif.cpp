@@ -377,6 +377,7 @@ void parallel_decode_and_copy(
     const size_t numSlices = tasks.size();
 
     // Get NUMA-local thread pairs
+    hwloc_topology_t topology = g_hwlocTopo->get();
     unsigned chosenNumaNode = find_least_busy_numa_node(topology);
     auto threadPairs = assign_thread_affinity_pairs_single_numa(
         std::min(numSlices, get_available_cores()), chosenNumaNode);
@@ -546,7 +547,6 @@ void parallel_decode_and_copy(
 // ==============================
 void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     ensure_hwloc_initialized();
-    hwloc_topology_t topology = g_hwlocTopo->get();
     try {
         ParsedInputs args = parse_inputs(nrhs, prhs);
         uint16_t bitsPerSample = 0;
