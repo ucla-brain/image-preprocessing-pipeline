@@ -273,3 +273,14 @@ void free_numa_local_buffer(hwloc_topology_t topology, void* buf, size_t bytes)
 {
     hwloc_free(topology, buf, bytes);
 }
+
+int get_first_core_on_numa_node(hwloc_topology_t topology, unsigned numaNode) {
+    int totalPU = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_PU);
+    for (int i = 0; i < totalPU; ++i) {
+        hwloc_obj_t pu = hwloc_get_obj_by_type(topology, HWLOC_OBJ_PU, i);
+        hwloc_obj_t node = hwloc_get_ancestor_obj_by_type(topology, HWLOC_OBJ_NUMANODE, pu);
+        if (node && node->os_index == numaNode)
+            return static_cast<int>(pu->os_index);
+    }
+    return -1;
+}

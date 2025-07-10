@@ -94,4 +94,7 @@ void ensure_hwloc_initialized();
 void* allocate_numa_local_buffer(hwloc_topology_t topology, size_t bytes, unsigned numaNode);
 void  free_numa_local_buffer(hwloc_topology_t topology, void* buf, size_t bytes);
 
+// Returns first logical core (PU) on a given NUMA node, or -1 if none found
+int get_first_core_on_numa_node(hwloc_topology_t topology, unsigned numaNode);
+
 #endif // MEX_THREAD_UTILS_HPP
