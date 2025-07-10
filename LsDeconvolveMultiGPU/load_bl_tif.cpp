@@ -374,7 +374,12 @@ void parallel_decode_and_copy(const std::vector<LoadTask>& tasks,
                               size_t                       bytesPerPixel)
 {
     const size_t numSlices       = tasks.size();
-    const size_t threadPairCount = std::min(numSlices, get_available_cores());
+    // Ask for enough pairs for your workload, but use only what the NUMA node can provide.
+    const size_t maxRequestedPairs = std::min(numSlices, get_available_cores());
+    // Let the function return as many as are available on a single NUMA node
+    auto threadPairs = assign_thread_affinity_pairs_single_numa(maxRequestedPairs);
+    const size_t threadPairCount = threadPairs.size();  // always safe to use exactly what is available
+
     const size_t numWires        = threadPairCount / kWires + ((threadPairCount % kWires) ? 1 : 0);
 
     using TaskPtr  = std::shared_ptr<TaskResult>;
@@ -395,7 +400,7 @@ void parallel_decode_and_copy(const std::vector<LoadTask>& tasks,
     std::vector<std::string> runtimeErrors;
     std::mutex               errorMutex;
 
-    const auto threadPairs = assign_thread_affinity_pairs_single_numa(threadPairCount);
+
 
     // --- PRODUCERS: decode TIFF → TaskResult
     for (size_t t = 0; t < threadPairCount; ++t)
