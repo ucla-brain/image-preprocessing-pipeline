@@ -372,31 +372,32 @@ void readSubRegionToBuffer(const LoadTask& task, TIFF* tif, uint8_t bytesPerPixe
 void parallel_decode_and_copy(
     const std::vector<LoadTask>& tasks,
     void* outData,
-    size_t bytesPerPixel)
+    size_t bytesPerPixel,
+    unsigned chosenNumaNode)
 {
     const size_t numSlices = tasks.size();
-    const size_t maxRequestedPairs = std::min(numSlices, get_available_cores());
-    auto threadPairs = assign_thread_affinity_pairs(maxRequestedPairs);
+
+    // Get NUMA-local thread pairs
+    auto threadPairs = assign_thread_affinity_pairs_single_numa(
+        std::min(numSlices, get_available_cores()), chosenNumaNode);
     const size_t threadPairCount = threadPairs.size();
+    const size_t numWires = threadPairCount / kWires + ((threadPairCount % kWires) ? 1 : 0);
 
-    const size_t numWires = threadPairCount;
-
-    using TaskPtr = std::shared_ptr<TaskResult>;
+    using TaskPtr  = std::shared_ptr<TaskResult>;
     using QueuePtr = std::unique_ptr<BoundedQueue<TaskPtr>>;
 
-    std::vector<QueuePtr> queuesForWires;
-    queuesForWires.reserve(numWires);
+    std::vector<QueuePtr> queuesForWires(numWires);
     for (size_t w = 0; w < numWires; ++w)
-        queuesForWires.emplace_back(std::make_unique<BoundedQueue<TaskPtr>>(8));
+        queuesForWires[w] = std::make_unique<BoundedQueue<TaskPtr>>(8 * kWires);
 
     std::vector<std::thread> producerThreads, consumerThreads;
     producerThreads.reserve(threadPairCount);
     consumerThreads.reserve(threadPairCount);
 
-    std::atomic<uint32_t> nextSliceIndex{0};
-    std::atomic<bool> abortFlag{false};
+    std::atomic<uint32_t>   nextSliceIndex{0};
+    std::atomic<bool>       abortFlag{false};
     std::vector<std::string> runtimeErrors;
-    std::mutex errorMutex;
+    std::mutex               errorMutex;
 
     // PRODUCERS
     for (size_t t = 0; t < threadPairCount; ++t)
@@ -573,7 +574,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
 
         auto tasks = create_tasks(args.fileList, args.roiY0, args.roiX0, args.roiH, args.roiW, pixelsPerSlice, args.transpose);
 
-        parallel_decode_and_copy(tasks, outData, bytesPerPixel);
+        parallel_decode_and_copy(tasks, outData, bytesPerPixel, chosenNumaNode);
     }
     catch (const std::exception& ex) {
         mexErrMsgIdAndTxt("load_bl_tif:Error", "%s", ex.what());
