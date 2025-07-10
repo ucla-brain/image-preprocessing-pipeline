@@ -534,6 +534,176 @@ void parallel_decode_and_copy(const std::vector<LoadTask>& tasks,
         mexErrMsgIdAndTxt("load_bl_tif:Error", "%s", oss.str().c_str());
     }
 }
+void parallel_decode_and_copy(const std::vector<LoadTask>& tasks,
+                              void*                        outData,
+                              size_t                       bytesPerPixel)
+{
+    const size_t numSlices       = tasks.size();
+    const size_t threadPairCount = std::min(numSlices, get_available_cores());
+    const size_t numWires        = threadPairCount / kWires + ((threadPairCount % kWires) ? 1 : 0);
+
+    using TaskPtr  = std::shared_ptr<TaskResult>;
+    using QueuePtr = std::unique_ptr<BoundedQueue<TaskPtr>>;
+
+    // One bounded queue per wire (producer/consumer pair)
+    std::vector<QueuePtr> queuesForWires;
+    queuesForWires.reserve(numWires);
+    for (size_t w = 0; w < numWires; ++w)
+        queuesForWires.emplace_back(std::make_unique<BoundedQueue<TaskPtr>>(8 * kWires));
+
+    std::vector<std::thread> producerThreads, consumerThreads;
+    producerThreads.reserve(threadPairCount);
+    consumerThreads.reserve(threadPairCount);
+
+    std::atomic<uint32_t>   nextSliceIndex{0};
+    std::atomic<bool>       abortFlag{false};
+    std::vector<std::string> runtimeErrors;
+    std::mutex               errorMutex;
+
+    const auto threadPairs = assign_thread_affinity_pairs(threadPairCount);
+
+    // PRODUCERS
+    for (size_t t = 0; t < threadPairCount; ++t) {
+        BoundedQueue<TaskPtr>& queueForPair = *queuesForWires[t / kWires];
+        producerThreads.emplace_back([&, t] {
+            set_thread_affinity(threadPairs[t].producerLogicalCore);
+            std::vector<uint8_t> tempBuf; // per-thread scratch
+
+            while (true) {
+                if (abortFlag.load(std::memory_order_acquire)) break;
+
+                const uint32_t idx = nextSliceIndex.fetch_add(1, std::memory_order_relaxed);
+                if (idx >= numSlices) break;
+
+                const LoadTask& task = tasks[idx];
+                try {
+                    TiffHandle tif(TIFFOpen(task.path.c_str(), "r"));
+                    if (!tif)
+                        throw std::runtime_error("Cannot open file " + task.path);
+
+                    auto result = std::make_shared<TaskResult>(
+                        idx,
+                        static_cast<size_t>(task.cropH * task.cropW * bytesPerPixel),
+                        task.cropH,
+                        task.cropW
+                    );
+
+                    readSubRegionToBuffer(task, tif.get(),
+                                          static_cast<uint8_t>(bytesPerPixel),
+                                          result->data, tempBuf);
+
+                    queueForPair.push(result);
+                }
+                catch (const std::exception& ex) {
+                    std::lock_guard<std::mutex> lk(errorMutex);
+                    runtimeErrors.emplace_back("Slice " + std::to_string(task.zIndex + 1) +
+                                               ": " + ex.what());
+                    abortFlag.store(true, std::memory_order_release);
+                    break;
+                }
+            }
+            queueForPair.push(nullptr);
+        });
+    }
+
+    // CONSUMERS
+    for (size_t t = 0; t < threadPairCount; ++t) {
+        BoundedQueue<TaskPtr>& queueForPair = *queuesForWires[t / kWires];
+        consumerThreads.emplace_back([&, t] {
+            set_thread_affinity(threadPairs[t].consumerLogicalCore);
+
+            while (true) {
+                if (abortFlag.load(std::memory_order_acquire)) break;
+
+                TaskPtr res;
+                queueForPair.wait_and_pop(res);
+                if (!res) break;
+
+                const LoadTask& task   = tasks[res->block_id];
+                const uint8_t*  src    = res->data.data();
+                uint8_t*        dst    = static_cast<uint8_t*>(outData)
+                                      + task.zIndex * task.pixelsPerSlice * bytesPerPixel;
+
+                if (!task.transpose)
+                {
+                    const size_t colStrideBytes = static_cast<size_t>(task.cropW) * bytesPerPixel;
+                    const size_t rowStrideBytes = static_cast<size_t>(task.roiH ) * bytesPerPixel;
+
+                    // --- Adaptive memory access pattern ---
+                    // If block is *very tall*, prefer row-wise copy for cache
+                    // If block is wide or square, prefer col-major (DST contiguous)
+                    // TUNE threshold (here: "ultra-tall" if cropH > 2*cropW)
+                    if (task.cropH > 2 * task.cropW) // ultra-tall: row-wise
+                    {
+                        if (bytesPerPixel == 2)
+                        {
+                            for (uint32_t row = 0; row < task.cropH; ++row)
+                            {
+                                const uint16_t* srcRow = reinterpret_cast<const uint16_t*>(src + row * colStrideBytes);
+                                for (uint32_t col = 0; col < task.cropW; ++col)
+                                    reinterpret_cast<uint16_t*>(dst)[row + col * task.roiH] = srcRow[col];
+                            }
+                        }
+                        else // bytesPerPixel == 1
+                        {
+                            for (uint32_t row = 0; row < task.cropH; ++row)
+                            {
+                                const uint8_t* srcRow = src + row * colStrideBytes;
+                                for (uint32_t col = 0; col < task.cropW; ++col)
+                                    dst[row + col * task.roiH] = srcRow[col];
+                            }
+                        }
+                    }
+                    else // wide or square: column-major write
+                    {
+                        const size_t dstColStride = rowStrideBytes;
+                        if (bytesPerPixel == 2)
+                        {
+                            for (uint32_t col = 0; col < task.cropW; ++col)
+                            {
+                                const uint16_t* srcCol = reinterpret_cast<const uint16_t*>(src + col * bytesPerPixel);
+                                uint16_t*       dstCol = reinterpret_cast<uint16_t*>(dst + col * dstColStride);
+                                for (uint32_t row = 0; row < task.cropH; ++row)
+                                    dstCol[row] = srcCol[row * task.cropW];
+                            }
+                        }
+                        else // bytesPerPixel == 1
+                        {
+                            for (uint32_t col = 0; col < task.cropW; ++col)
+                            {
+                                const uint8_t* srcCol = src + col;
+                                uint8_t*       dstCol = dst + col * dstColStride;
+                                for (uint32_t row = 0; row < task.cropH; ++row)
+                                    dstCol[row] = srcCol[row * task.cropW];
+                            }
+                        }
+                    }
+                }
+                else
+                {
+                    // Transposed: copy rows (already contiguous)
+                    const size_t rowBytes = static_cast<size_t>(task.cropW) * bytesPerPixel;
+                    for (uint32_t row = 0; row < task.cropH; ++row)
+                        std::memcpy(dst + row * rowBytes,
+                                    src + row * rowBytes,
+                                    rowBytes);
+                }
+            }
+        });
+    }
+
+    // JOIN
+    for (auto& th : producerThreads) th.join();
+    for (auto& th : consumerThreads) th.join();
+
+    if (!runtimeErrors.empty())
+    {
+        std::ostringstream oss;
+        oss << "Errors during load_bl_tif (producer/consumer):\n";
+        for (const auto& e : runtimeErrors) oss << "  - " << e << '\n';
+        mexErrMsgIdAndTxt("load_bl_tif:Error", "%s", oss.str().c_str());
+    }
+}
 
 
 // ==============================
