@@ -589,9 +589,6 @@ function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
     filelist = natsortfiles(filelist);
     filelist = fullfile(char(inpath), {filelist.name});
 
-
-    %gpus = gpus(:)';
-    
     % intermediate variables needed for interprocess communication
     % NOTE: semaphore keys should be a more than zero values.
     % all the existing processes should be killed first before creating a
