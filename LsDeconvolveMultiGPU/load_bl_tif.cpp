@@ -490,7 +490,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
             results.emplace_back(results.size(), static_cast<size_t>(roiH * roiW * bytesPerPixel), roiH, roiW);
         }
 
-        auto coreIds = get_cores_on_numa_node(topology, chosenNumaNode);
+        auto coreIds = get_cores_on_numa_node();
         const size_t numThreads = std::min(tasks.size(), coreIds.size());
 
         std::vector<std::thread> workers;
