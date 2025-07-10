@@ -83,6 +83,9 @@ std::vector<unsigned> get_cores_on_numa_node();
 // Returns all SMT (hyperthread) sibling pairs on a NUMA node, for atomic producer-consumer threading
 std::vector<ThreadAffinityPair> assign_thread_affinity_pairs_single_numa(std::size_t maxPairs);
 
+// Returns up to `pairCount` pairs of logical core IDs (PU indices), preferring SMT siblings.
+std::vector<ThreadAffinityPair> assign_thread_affinity_pairs(size_t pairCount)
+
 // Bind current thread to logical core ID
 void set_thread_affinity(unsigned logicalCoreId);
 
