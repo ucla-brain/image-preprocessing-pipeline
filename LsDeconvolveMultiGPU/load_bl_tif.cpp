@@ -489,12 +489,12 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
             results.emplace_back(results.size(), static_cast<size_t>(roiH * roiW * bytesPerPixel), roiH, roiW);
         }
 
-        auto coreIds = get_cores_on_numa_node();
-        const size_t numThreads = std::min(tasks.size(), coreIds.size());
-        //unsigned numThreads = std::max(1u, std::min(
-        //    std::thread::hardware_concurrency(),
-        //    static_cast<unsigned>(std::min<size_t>(tasks.size(), std::numeric_limits<unsigned>::max()))
-        //));
+        //auto coreIds = get_cores_on_numa_node();
+        //const size_t numThreads = std::min(tasks.size(), coreIds.size());
+        unsigned numThreads = std::max(1u, std::min(
+            std::thread::hardware_concurrency(),
+            static_cast<unsigned>(std::min<size_t>(tasks.size(), std::numeric_limits<unsigned>::max()))
+        ));
 
         std::vector<std::thread> workers;
         std::atomic<size_t> nextTask{0};
@@ -502,7 +502,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
 
         for (size_t t = 0; t < numThreads; ++t) {
             workers.emplace_back([&, t]() {
-                set_thread_affinity(coreIds[t]);
+                //set_thread_affinity(coreIds[t]);
                 worker_main(tasks, results, bytesPerPixel, err_mutex, errors, error_count, nextTask);
             });
         }
