@@ -589,8 +589,8 @@ function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
     filelist = natsortfiles(filelist);
     filelist = fullfile(char(inpath), {filelist.name});
 
-    % flatten the gpus array
-    gpus = gpus(:)';
+
+    %gpus = gpus(:)';
     
     % intermediate variables needed for interprocess communication
     % NOTE: semaphore keys should be a more than zero values.
@@ -602,8 +602,8 @@ function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
     min_max_path = fullfile(cache_drive, "min_max.mat");
     [unique_gpus, ~, ~] = unique(gpus(:));
     unique_gpus = sort(unique_gpus, 'descend').';
-
     gpus = repmat(unique_gpus, 1, numel(gpus)/numel(unique_gpus));
+    % flatten the gpus array
     gpus = gpus(:)';
     
     % initiate locks and semaphors
