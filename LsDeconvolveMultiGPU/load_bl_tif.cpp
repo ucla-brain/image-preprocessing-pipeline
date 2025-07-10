@@ -379,7 +379,7 @@ void parallel_decode_and_copy(
     // Ask for enough pairs for your workload, but use only what the NUMA node can provide.
     const size_t maxRequestedPairs = std::min(numSlices, get_available_cores());
     // Let the function return as many as are available on a single NUMA node
-    auto threadPairs = assign_thread_affinity_pairs_single_numa(maxPairs, chosenNumaNode);
+    auto threadPairs = assign_thread_affinity_pairs_single_numa(maxRequestedPairs, chosenNumaNode);
     const size_t threadPairCount = threadPairs.size();  // always safe to use exactly what is available
 
     const size_t numWires        = threadPairCount / kWires + ((threadPairCount % kWires) ? 1 : 0);
