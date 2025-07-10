@@ -567,28 +567,14 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
 
         size_t outH = args.transpose ? args.roiW : args.roiH;
         size_t outW = args.transpose ? args.roiH : args.roiW;
-        size_t numSlices = args.fileList.size();
         size_t pixelsPerSlice = outH * outW;
-        size_t outBytes = outH * outW * numSlices * bytesPerPixel;
-
         if (pixelsPerSlice > kMaxPixelsPerSlice)
             mexErrMsgIdAndTxt("load_bl_tif:Error", "Requested ROI too large (>2^31 elements).");
+        void* outData = create_output_array(plhs[0], outType, outH, outW, args.fileList.size());
 
-        // Allocate NUMA-local scratch buffer
-        void* outDataNumaLocal = allocate_numa_local_buffer(topology, outBytes, chosenNumaNode);
-        if (!outDataNumaLocal)
-            mexErrMsgIdAndTxt("load_bl_tif:Error", "Failed to allocate NUMA-local buffer of size %zu bytes", outBytes);
-
-        // Create tasks, do the parallel decode/copy into scratch buffer
         auto tasks = create_tasks(args.fileList, args.roiY0, args.roiX0, args.roiH, args.roiW, pixelsPerSlice, args.transpose);
-        parallel_decode_and_copy(tasks, outDataNumaLocal, bytesPerPixel, chosenNumaNode);
 
-        // Now create MATLAB output and copy in
-        void* outData = create_output_array(plhs[0], outType, outH, outW, numSlices);
-        std::memcpy(outData, outDataNumaLocal, outBytes);
-
-        // Free NUMA-local buffer
-        free_numa_local_buffer(topology, outDataNumaLocal, outBytes);
+        parallel_decode_and_copy(tasks, outData, bytesPerPixel, chosenNumaNode);
     }
     catch (const std::exception& ex) {
         mexErrMsgIdAndTxt("load_bl_tif:Error", "%s", ex.what());
