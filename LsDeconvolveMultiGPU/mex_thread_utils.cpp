@@ -49,6 +49,77 @@ size_t get_available_cores() {
     return hint ? static_cast<size_t>(hint) : 1;
 }
 
+// Returns up to `pairCount` pairs of logical core IDs (PU indices), preferring SMT siblings.
+std::vector<ThreadAffinityPair> assign_thread_affinity_pairs(size_t pairCount)
+{
+    // Ensure topology is initialized, lazily
+    ensure_hwloc_initialized();
+    hwloc_topology_t topology = g_hwlocTopo->get();
+
+    std::vector<ThreadAffinityPair> pairs;
+    std::set<unsigned> usedPUs;
+    int totalCores = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_CORE);
+
+    // 1. Pair SMT siblings (from the same core) where possible
+    for (int i = 0; i < totalCores && pairs.size() < pairCount; ++i) {
+        hwloc_obj_t core = hwloc_get_obj_by_type(topology, HWLOC_OBJ_CORE, i);
+        unsigned nodeId = 0, socketId = 0;
+        hwloc_obj_t node = hwloc_get_ancestor_obj_by_type(topology, HWLOC_OBJ_NUMANODE, core);
+        if (node) nodeId = node->os_index;
+        hwloc_obj_t sock = hwloc_get_ancestor_obj_by_type(topology, HWLOC_OBJ_PACKAGE, core);
+        if (sock) socketId = sock->os_index;
+
+        // Find all PUs under this core (SMT siblings)
+        std::vector<unsigned> pus;
+        for (unsigned j = 0; j < core->arity; ++j) {
+            hwloc_obj_t child = core->children[j];
+            if (child->type == HWLOC_OBJ_PU)
+                pus.push_back(child->os_index);
+        }
+        // Fallback: try cpuset if children not present
+        if (pus.empty()) {
+            hwloc_bitmap_t cpuset = hwloc_bitmap_dup(core->cpuset);
+            hwloc_bitmap_singlify(cpuset);
+            int puIdx = hwloc_bitmap_first(cpuset);
+            if (puIdx >= 0)
+                pus.push_back(static_cast<unsigned>(puIdx));
+            hwloc_bitmap_free(cpuset);
+        }
+        // Assign only unused PUs
+        if (pus.size() >= 2 && !usedPUs.count(pus[0]) && !usedPUs.count(pus[1])) {
+            pairs.push_back({pus[0], pus[1], nodeId, socketId});
+            usedPUs.insert(pus[0]);
+            usedPUs.insert(pus[1]);
+        } else if (pus.size() == 1 && !usedPUs.count(pus[0])) {
+            pairs.push_back({pus[0], pus[0], nodeId, socketId});
+            usedPUs.insert(pus[0]);
+        }
+    }
+
+    // 2. Fallback: Pair up remaining unused PUs arbitrarily
+    if (pairs.size() < pairCount) {
+        int totalPU = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_PU);
+        std::vector<unsigned> allUnused;
+        for (int i = 0; i < totalPU; ++i) {
+            hwloc_obj_t pu = hwloc_get_obj_by_type(topology, HWLOC_OBJ_PU, i);
+            if (!usedPUs.count(pu->os_index))
+                allUnused.push_back(pu->os_index);
+        }
+        for (size_t i = 0; i + 1 < allUnused.size() && pairs.size() < pairCount; i += 2) {
+            pairs.push_back({allUnused[i], allUnused[i + 1], 0, 0});
+            usedPUs.insert(allUnused[i]);
+            usedPUs.insert(allUnused[i + 1]);
+        }
+        // If odd PU left, pair it with itself
+        if ((pairs.size() < pairCount) && (allUnused.size() % 2 == 1)) {
+            unsigned last = allUnused.back();
+            pairs.push_back({last, last, 0, 0});
+            usedPUs.insert(last);
+        }
+    }
+    return pairs;
+}
+
 // Return vector of all logical PUs (core IDs) on the least-busy NUMA node
 std::vector<unsigned> get_cores_on_numa_node() {
     ensure_hwloc_initialized();
@@ -119,6 +190,77 @@ assign_thread_affinity_pairs_single_numa(std::size_t maxPairs)
         pairs.push_back({pus[0], pus[0], numaNode, sockets[0]});
     }
 
+    return pairs;
+}
+
+// Returns up to `pairCount` pairs of logical core IDs (PU indices), preferring SMT siblings.
+std::vector<ThreadAffinityPair> assign_thread_affinity_pairs(size_t pairCount)
+{
+    // Ensure topology is initialized, lazily
+    ensure_hwloc_initialized();
+    hwloc_topology_t topology = g_hwlocTopo->get();
+
+    std::vector<ThreadAffinityPair> pairs;
+    std::set<unsigned> usedPUs;
+    int totalCores = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_CORE);
+
+    // 1. Pair SMT siblings (from the same core) where possible
+    for (int i = 0; i < totalCores && pairs.size() < pairCount; ++i) {
+        hwloc_obj_t core = hwloc_get_obj_by_type(topology, HWLOC_OBJ_CORE, i);
+        unsigned nodeId = 0, socketId = 0;
+        hwloc_obj_t node = hwloc_get_ancestor_obj_by_type(topology, HWLOC_OBJ_NUMANODE, core);
+        if (node) nodeId = node->os_index;
+        hwloc_obj_t sock = hwloc_get_ancestor_obj_by_type(topology, HWLOC_OBJ_PACKAGE, core);
+        if (sock) socketId = sock->os_index;
+
+        // Find all PUs under this core (SMT siblings)
+        std::vector<unsigned> pus;
+        for (unsigned j = 0; j < core->arity; ++j) {
+            hwloc_obj_t child = core->children[j];
+            if (child->type == HWLOC_OBJ_PU)
+                pus.push_back(child->os_index);
+        }
+        // Fallback: try cpuset if children not present
+        if (pus.empty()) {
+            hwloc_bitmap_t cpuset = hwloc_bitmap_dup(core->cpuset);
+            hwloc_bitmap_singlify(cpuset);
+            int puIdx = hwloc_bitmap_first(cpuset);
+            if (puIdx >= 0)
+                pus.push_back(static_cast<unsigned>(puIdx));
+            hwloc_bitmap_free(cpuset);
+        }
+        // Assign only unused PUs
+        if (pus.size() >= 2 && !usedPUs.count(pus[0]) && !usedPUs.count(pus[1])) {
+            pairs.push_back({pus[0], pus[1], nodeId, socketId});
+            usedPUs.insert(pus[0]);
+            usedPUs.insert(pus[1]);
+        } else if (pus.size() == 1 && !usedPUs.count(pus[0])) {
+            pairs.push_back({pus[0], pus[0], nodeId, socketId});
+            usedPUs.insert(pus[0]);
+        }
+    }
+
+    // 2. Fallback: Pair up remaining unused PUs arbitrarily
+    if (pairs.size() < pairCount) {
+        int totalPU = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_PU);
+        std::vector<unsigned> allUnused;
+        for (int i = 0; i < totalPU; ++i) {
+            hwloc_obj_t pu = hwloc_get_obj_by_type(topology, HWLOC_OBJ_PU, i);
+            if (!usedPUs.count(pu->os_index))
+                allUnused.push_back(pu->os_index);
+        }
+        for (size_t i = 0; i + 1 < allUnused.size() && pairs.size() < pairCount; i += 2) {
+            pairs.push_back({allUnused[i], allUnused[i + 1], 0, 0});
+            usedPUs.insert(allUnused[i]);
+            usedPUs.insert(allUnused[i + 1]);
+        }
+        // If odd PU left, pair it with itself
+        if ((pairs.size() < pairCount) && (allUnused.size() % 2 == 1)) {
+            unsigned last = allUnused.back();
+            pairs.push_back({last, last, 0, 0});
+            usedPUs.insert(last);
+        }
+    }
     return pairs;
 }
 
