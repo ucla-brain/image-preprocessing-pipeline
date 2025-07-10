@@ -82,7 +82,7 @@ std::vector<ThreadAffinityPair> assign_thread_affinity_pairs(size_t pairCount);
 unsigned find_least_busy_numa_node(hwloc_topology_t topology);
 
 // Assign all pairs within a single NUMA node
-std::vector<ThreadAffinityPair> assign_thread_affinity_pairs_single_numa(size_t maxPairs);
+std::vector<ThreadAffinityPair> assign_thread_affinity_pairs_single_numa(size_t maxPairs, unsigned numaNode);
 
 // Set thread affinity using hwloc
 void set_thread_affinity(unsigned logicalCoreId);
