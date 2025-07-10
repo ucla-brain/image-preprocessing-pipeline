@@ -598,10 +598,10 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
         void* outData = create_output_array(plhs[0], outType, outH, outW, numSlices);
 
         // Touch each page to trigger OS first-touch
-        volatile char* p = reinterpret_cast<volatile char*>(outData);
-        size_t pageSize = 4096;
-        for (size_t i = 0; i < outBytes; i += pageSize) p[i] = 0;
-        if (outBytes > 0) p[outBytes - 1] = 0; // touch last byte
+        //volatile char* p = reinterpret_cast<volatile char*>(outData);
+        //size_t pageSize = 4096;
+        //for (size_t i = 0; i < outBytes; i += pageSize) p[i] = 0;
+        //if (outBytes > 0) p[outBytes - 1] = 0; // touch last byte
 
         // Prepare tasks as before
         auto tasks = create_tasks(args.fileList, args.roiY0, args.roiX0, args.roiH, args.roiW, outH * outW, args.transpose);
