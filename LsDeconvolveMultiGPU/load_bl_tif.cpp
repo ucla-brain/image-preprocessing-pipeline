@@ -369,7 +369,7 @@ void readSubRegionToBuffer(const LoadTask& task, TIFF* tif, uint8_t bytesPerPixe
 //  parallel_decode_and_copy  –  NUMA-aware producer/consumer with
 //                               *always* contiguous writes into MATLAB array
 // -----------------------------------------------------------------------------
-void parallel_decode_and_copy_simple_numa(
+void parallel_decode_and_copy(
     const std::vector<LoadTask>& tasks,
     void* outData,
     size_t bytesPerPixel)
