@@ -373,7 +373,6 @@ void worker_main(
 // ==============================
 void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
 {
-    //ensure_hwloc_initialized();
     try {
         if (nrhs < 5 || nrhs > 6)
             throw std::runtime_error("Usage: img = load_bl_tif(files, y, x, height, width[, transposeFlag])");

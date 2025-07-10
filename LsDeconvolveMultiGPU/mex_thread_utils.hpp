@@ -8,10 +8,8 @@
 #include <map>
 #include <memory>
 #include <thread>
-#include <cassert>
 #include <vector>
 #include <string>
-#include <algorithm>
 #include <stdexcept>
 #include <cstddef>
 
@@ -19,9 +17,9 @@ extern "C" {
 #include <hwloc.h>
 }
 
-// =========================
-//   BoundedQueue Template
-// =========================
+// ===========================================
+//       BoundedQueue Template
+// ===========================================
 template <typename T>
 class BoundedQueue {
 public:
@@ -50,9 +48,9 @@ private:
     size_t maximumSize_;
 };
 
-// ===============================
-//   HWLOC NUMA/Topology Helpers
-// ===============================
+// ===========================================
+//     HWLOC NUMA/Topology Helpers
+// ===========================================
 class HwlocTopologyRAII {
 public:
     HwlocTopologyRAII();
@@ -62,12 +60,6 @@ private:
     hwloc_topology_t topology_;
 };
 
-// Global topology pointer (define in one .cpp)
-extern std::unique_ptr<HwlocTopologyRAII> g_hwlocTopo;
-
-// Platform-safe logical core count
-size_t get_available_cores();
-
 // Thread affinity helpers
 struct ThreadAffinityPair {
     unsigned producerLogicalCore;
@@ -76,22 +68,28 @@ struct ThreadAffinityPair {
     unsigned socket;
 };
 
-std::vector<ThreadAffinityPair> assign_thread_affinity_pairs(size_t pairCount);
+// Global topology pointer (defined in cpp, declared extern here)
+extern std::unique_ptr<HwlocTopologyRAII> g_hwlocTopo;
 
-// Choose NUMA node (returns os_index); on Windows picks first available node
-unsigned find_least_busy_numa_node(hwloc_topology_t topology);
-
-// Assign all pairs within a single NUMA node
-std::vector<unsigned> get_cores_on_numa_node();
-std::vector<ThreadAffinityPair> assign_thread_affinity_pairs_single_numa(size_t maxPairs);
-
-// Set thread affinity using hwloc
-void set_thread_affinity(unsigned logicalCoreId);
-
-// One-time safe topology initialization
+// --- Main utility functions ---
 void ensure_hwloc_initialized();
 
-// Allocate/frees NUMA-local memory (hwloc, cross-platform)
+// Returns total logical cores
+size_t get_available_cores();
+
+// Returns a vector of all logical PUs on the least busy NUMA node
+std::vector<unsigned> get_cores_on_numa_node();
+
+// Returns all SMT (hyperthread) sibling pairs on a NUMA node, for atomic producer-consumer threading
+std::vector<ThreadAffinityPair> assign_thread_affinity_pairs_single_numa(std::size_t maxPairs);
+
+// Bind current thread to logical core ID
+void set_thread_affinity(unsigned logicalCoreId);
+
+// Find least busy NUMA node (Linux: by jiffies, Windows/macOS: first available)
+unsigned find_least_busy_numa_node(hwloc_topology_t topology);
+
+// Allocate/free NUMA-local memory
 void* allocate_numa_local_buffer(hwloc_topology_t topology, size_t bytes, unsigned numaNode);
 void  free_numa_local_buffer(hwloc_topology_t topology, void* buf, size_t bytes);
 
