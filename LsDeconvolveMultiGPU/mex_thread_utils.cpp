@@ -205,9 +205,10 @@ unsigned find_least_busy_numa_node(hwloc_topology_t topology)
 
 // --- MAIN FUNCTION: assign all pairs on one NUMA node ---
 std::vector<ThreadAffinityPair>
-assign_thread_affinity_pairs_single_numa(std::size_t maxPairs, unsigned    numaNode)
+assign_thread_affinity_pairs_single_numa(std::size_t maxPairs)
 {
     hwloc_topology_t topology = g_hwlocTopo->get();
+    unsigned numaNode = find_least_busy_numa_node(topology);
 
     // Does the topology expose any NUMA objects at all?
     const int nbNumaObjs = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_NUMANODE);
