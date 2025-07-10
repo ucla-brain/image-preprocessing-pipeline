@@ -573,6 +573,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
         // NUMA logic:
         unsigned chosenNumaNode = find_least_busy_numa_node(g_hwlocTopo->get());
         void* outDataNUMA = allocate_numa_local_buffer(g_hwlocTopo->get(), outBytes, chosenNumaNode);
+        std::memset(outDataNUMA, 0, outBytes);
         if (!outDataNUMA)
             mexErrMsgIdAndTxt("load_bl_tif:Error", "Failed to allocate NUMA-local output buffer");
 
