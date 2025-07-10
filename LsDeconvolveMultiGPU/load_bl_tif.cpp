@@ -365,7 +365,6 @@ void readSubRegionToBuffer(const LoadTask& task, TIFF* tif, uint8_t bytesPerPixe
     }
 }
 
-// --- Parallel decode/copy ---
 // -----------------------------------------------------------------------------
 //  parallel_decode_and_copy  –  NUMA-aware producer/consumer with
 //                               *always* contiguous writes into MATLAB array
@@ -376,21 +375,21 @@ void parallel_decode_and_copy(const std::vector<LoadTask>& tasks,
 {
     const size_t numSlices       = tasks.size();
     const size_t threadPairCount = std::min(numSlices, get_available_cores());
-    const size_t numWires        = threadPairCount / kWire + ((threadPairCount % kWire) ? 1 : 0);
+    const size_t numWires        = threadPairCount / kWires + ((threadPairCount % kWires) ? 1 : 0);
 
     using TaskPtr  = std::shared_ptr<TaskResult>;
     using QueuePtr = std::unique_ptr<BoundedQueue<TaskPtr>>;
 
     // -------------------------------------------------------------------------
     // 1) One bounded queue per “wire” (producer / consumer pair)
-    //    Depth = 8 × kWire  →  large enough to absorb jitter without
+    //    Depth = 8 × kWires  →  large enough to absorb jitter without
     //    excessive RAM usage (≈ 400 MB for 16-bit, 9 356 × 5 312 ROIs).
     // -------------------------------------------------------------------------
     std::vector<QueuePtr> queuesForWires;
     queuesForWires.reserve(numWires);
     for (size_t w = 0; w < numWires; ++w)
         queuesForWires.emplace_back(
-            std::make_unique<BoundedQueue<TaskPtr>>(8 * kWire));
+            std::make_unique<BoundedQueue<TaskPtr>>(8 * kWires));
 
     std::vector<std::thread> producerThreads, consumerThreads;
     producerThreads.reserve(threadPairCount);
@@ -409,7 +408,7 @@ void parallel_decode_and_copy(const std::vector<LoadTask>& tasks,
     // =========================================================================
     for (size_t t = 0; t < threadPairCount; ++t)
     {
-        auto& queueForPair = *queuesForWires[t / kWire];
+        auto& queueForPair = *queuesForWires[t / kWires];
 
         producerThreads.emplace_back([&, t]
         {
@@ -469,7 +468,7 @@ void parallel_decode_and_copy(const std::vector<LoadTask>& tasks,
     // =========================================================================
     for (size_t t = 0; t < threadPairCount; ++t)
     {
-        auto& queueForPair = *queuesForWires[t / kWire];
+        auto& queueForPair = *queuesForWires[t / kWires];
 
         consumerThreads.emplace_back([&, t]
         {
@@ -551,8 +550,6 @@ void parallel_decode_and_copy(const std::vector<LoadTask>& tasks,
         mexErrMsgIdAndTxt("load_bl_tif:Error", "%s", oss.str().c_str());
     }
 }
-
-
 
 // ==============================
 //       ENTRY POINT
