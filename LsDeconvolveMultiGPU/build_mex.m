@@ -314,7 +314,8 @@ function build_mex(debug)
     % mex(mex_cpu{:}, 'save_lz4_mex.c', lz4_incflag, lz4_libfile);
     % mex(mex_cpu{:}, 'load_lz4_mex.c', lz4_incflag, lz4_libfile);
     % mex(mex_cpu{:}, 'load_slab_lz4.cpp', lz4_incflag, lz4_libfile);
-    mex(mex_cpu{:}, inc_tiff, inc_hwloc, 'load_bl_tif.cpp', 'mex_thread_utils.cpp', link_tiff{:}, link_hwloc{:});
+    mex(mex_cpu{:}, inc_tiff, inc_hwloc, 'load_bl_tif.cpp', link_tiff{:});
+    % mex(mex_cpu{:}, inc_tiff, inc_hwloc, 'load_bl_tif.cpp', 'mex_thread_utils.cpp', link_tiff{:}, link_hwloc{:});
     % mex(mex_cpu{:}, inc_tiff, inc_hwloc, 'save_bl_tif.cpp', 'mex_thread_utils.cpp', link_tiff{:}, link_hwloc{:});
 
     %% --------- Build CUDA MEX files ---------
