@@ -146,6 +146,61 @@ std::vector<ThreadAffinityPair> assign_thread_affinity_pairs(size_t pairCount)
     return pairs;
 }
 
+std::vector<ThreadAffinityPair>
+assign_thread_affinity_pairs_single_numa(size_t pairCount)
+{
+    ensure_hwloc_initialized();
+    hwloc_topology_t topology = g_hwlocTopo->get();
+
+    // Step 1: Count PUs per NUMA node
+    std::map<unsigned, std::vector<unsigned>> nodeToPUs;
+    std::map<unsigned, std::vector<unsigned>> nodeToSockets;
+    int totalPU = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_PU);
+
+    for (int i = 0; i < totalPU; ++i) {
+        hwloc_obj_t pu = hwloc_get_obj_by_type(topology, HWLOC_OBJ_PU, i);
+        if (!pu) continue;
+        unsigned nodeId = 0, socketId = 0;
+        hwloc_obj_t node = hwloc_get_ancestor_obj_by_type(topology, HWLOC_OBJ_NUMANODE, pu);
+        if (node) nodeId = node->os_index;
+        hwloc_obj_t sock = hwloc_get_ancestor_obj_by_type(topology, HWLOC_OBJ_PACKAGE, pu);
+        if (sock) socketId = sock->os_index;
+        nodeToPUs[nodeId].push_back(pu->os_index);
+        nodeToSockets[nodeId].push_back(socketId);
+    }
+
+    // Step 2: Choose the NUMA node with most available PUs
+    unsigned bestNode = 0;
+    size_t   maxPU = 0;
+    for (const auto& [node, pus] : nodeToPUs) {
+        if (pus.size() > maxPU) { bestNode = node; maxPU = pus.size(); }
+    }
+    if (maxPU < 2 * pairCount)
+        throw std::runtime_error("Not enough cores on a single NUMA node to launch all pairs");
+
+    // Step 3: Build producer-consumer pairs on the chosen NUMA node
+    std::vector<unsigned>& pus = nodeToPUs[bestNode];
+    std::vector<unsigned>& sockets = nodeToSockets[bestNode];
+    std::vector<ThreadAffinityPair> pairs;
+    pairs.reserve(pairCount);
+
+    for (size_t i = 0; i + 1 < pus.size() && pairs.size() < pairCount; i += 2) {
+        pairs.push_back({pus[i], pus[i+1], bestNode, sockets[i]});
+    }
+
+    // Edge case: if not enough pairs from pure even pairing, fill using single PUs (producer==consumer)
+    if (pairs.size() < pairCount && pus.size() % 2) {
+        unsigned pu = pus.back();
+        unsigned socketId = sockets.back();
+        pairs.push_back({pu, pu, bestNode, socketId});
+    }
+    // Final check
+    if (pairs.size() < pairCount)
+        throw std::runtime_error("Could not assign enough pairs from a single NUMA node");
+
+    return pairs;
+}
+
 // ==============================
 //   set_thread_affinity
 // ==============================

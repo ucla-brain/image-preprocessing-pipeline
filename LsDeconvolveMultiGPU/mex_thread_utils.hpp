@@ -82,6 +82,8 @@ struct ThreadAffinityPair {
 
 std::vector<ThreadAffinityPair> assign_thread_affinity_pairs(size_t pairCount);
 
+std::vector<ThreadAffinityPair> assign_thread_affinity_pairs_single_numa(size_t pairCount);
+
 // Set thread affinity to a logical core using hwloc
 void set_thread_affinity(unsigned logicalCoreId);
 

@@ -395,7 +395,7 @@ void parallel_decode_and_copy(const std::vector<LoadTask>& tasks,
     std::vector<std::string> runtimeErrors;
     std::mutex               errorMutex;
 
-    const auto threadPairs = assign_thread_affinity_pairs(threadPairCount);
+    const auto threadPairs = assign_thread_affinity_pairs_single_numa(threadPairCount);
 
     // --- PRODUCERS: decode TIFF → TaskResult
     for (size_t t = 0; t < threadPairCount; ++t)
