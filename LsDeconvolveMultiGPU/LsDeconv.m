@@ -601,9 +601,10 @@ function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
     delete(gcp("nocreate"));
     min_max_path = fullfile(cache_drive, "min_max.mat");
     [unique_gpus, ~, ~] = unique(gpus(:));
-    unique_gpus = sort(unique_gpus, 'descend').';
-    % [unique_gpus, ~, gpus_vertical] = unique(sort(gpus(gpus>0)));
-    % gpu_count = accumarray(gpus_vertical, 1).';
+    unique_gpus = sort(unique_gpus, 'descend'); % no need for .'
+    gpus = repmat(unique_gpus, 1, numel(gpus)/numel(unique_gpus));
+    gpus = gpus(:).';
+
     clear gpus_vertical;
     
     % initiate locks and semaphors
