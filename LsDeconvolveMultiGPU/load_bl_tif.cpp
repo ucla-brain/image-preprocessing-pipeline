@@ -371,7 +371,7 @@ void readSubRegionToBuffer(const LoadTask& task, TIFF* tif, uint8_t bytesPerPixe
 
 void parallel_decode_and_copy(const std::vector<LoadTask>& tasks,
                               void*                        outData,
-                              const size_t                 bytesPerPixel)
+                              size_t                       bytesPerPixel)
 {
     const size_t numSlices       = tasks.size();
     const size_t threadPairCount = std::min(numSlices, get_available_cores());
@@ -380,16 +380,11 @@ void parallel_decode_and_copy(const std::vector<LoadTask>& tasks,
     using TaskPtr  = std::shared_ptr<TaskResult>;
     using QueuePtr = std::unique_ptr<BoundedQueue<TaskPtr>>;
 
-    // -------------------------------------------------------------------------
-    // 1) One bounded queue per “wire” (producer / consumer pair)
-    //    Depth = 8 × kWires  →  large enough to absorb jitter without
-    //    excessive RAM usage (≈ 400 MB for 16-bit, 9 356 × 5 312 ROIs).
-    // -------------------------------------------------------------------------
+    // 1) One bounded queue per wire; depth = 8*kWires for NUMA-friendly prefetch
     std::vector<QueuePtr> queuesForWires;
     queuesForWires.reserve(numWires);
     for (size_t w = 0; w < numWires; ++w)
-        queuesForWires.emplace_back(
-            std::make_unique<BoundedQueue<TaskPtr>>(8 * kWires));
+        queuesForWires.emplace_back(std::make_unique<BoundedQueue<TaskPtr>>(8 * kWires));
 
     std::vector<std::thread> producerThreads, consumerThreads;
     producerThreads.reserve(threadPairCount);
@@ -400,76 +395,56 @@ void parallel_decode_and_copy(const std::vector<LoadTask>& tasks,
     std::vector<std::string> runtimeErrors;
     std::mutex               errorMutex;
 
-    // Pre-compute NUMA-friendly PU pairs (siblings on same core / CCD whenever possible)
     const auto threadPairs = assign_thread_affinity_pairs(threadPairCount);
 
-    // =========================================================================
-    // 2) PRODUCERS  –  decode TIFF ROI → TaskResult  (no MATLAB writes here)
-    // =========================================================================
+    // --- PRODUCERS: decode TIFF → TaskResult
     for (size_t t = 0; t < threadPairCount; ++t)
     {
-        auto& queueForPair = *queuesForWires[t / kWires];
-
+        BoundedQueue<TaskPtr>& queueForPair = *queuesForWires[t / kWires];
         producerThreads.emplace_back([&, t]
         {
             set_thread_affinity(threadPairs[t].producerLogicalCore);
-
-            std::vector<uint8_t> tempTileOrStripBuffer;
+            std::vector<uint8_t> tempBuf;
 
             while (true)
             {
                 if (abortFlag.load(std::memory_order_acquire)) break;
+                const uint32_t idx = nextSliceIndex.fetch_add(1, std::memory_order_relaxed);
+                if (idx >= numSlices) break;
 
-                const uint32_t sliceIdx = nextSliceIndex.fetch_add(1, std::memory_order_relaxed);
-                if (sliceIdx >= numSlices) break;
-
-                const LoadTask& task = tasks[sliceIdx];
-
+                const LoadTask& task = tasks[idx];
                 try
                 {
-                    // -- Open TIFF ---------------------------------------------------
                     TiffHandle tif(TIFFOpen(task.path.c_str(), "r"));
                     if (!tif)
                         throw std::runtime_error("Cannot open file " + task.path);
 
-                    // -- Decode ROI into a slice-local buffer -----------------------
-                    auto sliceResult = std::make_shared<TaskResult>(
-                        sliceIdx,
-                        static_cast<size_t>(task.cropH) * task.cropW * bytesPerPixel,
+                    auto result = std::make_shared<TaskResult>(
+                        idx,
+                        static_cast<size_t>(task.cropH * task.cropW * bytesPerPixel),
                         task.cropH,
-                        task.cropW);
-
-                    readSubRegionToBuffer(task,
-                                          tif.get(),
-                                          static_cast<uint8_t>(bytesPerPixel),
-                                          sliceResult->data,
-                                          tempTileOrStripBuffer);
-
-                    queueForPair.push(sliceResult);        // hand off to consumer
+                        task.cropW
+                    );
+                    readSubRegionToBuffer(task, tif.get(), static_cast<uint8_t>(bytesPerPixel), result->data, tempBuf);
+                    queueForPair.push(result); // pass to consumer
                 }
                 catch (const std::exception& ex)
                 {
                     std::lock_guard<std::mutex> lk(errorMutex);
-                    runtimeErrors.emplace_back("Slice "
-                                               + std::to_string(task.zIndex + 1)
-                                               + ": " + ex.what());
+                    runtimeErrors.emplace_back("Slice " + std::to_string(task.zIndex + 1) +
+                                               ": " + ex.what());
                     abortFlag.store(true, std::memory_order_release);
                     break;
                 }
             }
-
-            queueForPair.push(nullptr);   // end-of-stream marker for this wire
+            queueForPair.push(nullptr); // End-of-stream
         });
     }
 
-    // =========================================================================
-    // 3) CONSUMERS  –  copy / transpose slice buffer → MATLAB gpuArray
-    //                 *** ALWAYS use column-major writes ***
-    // =========================================================================
+    // --- CONSUMERS: write TaskResult to output (optimized for Milan)
     for (size_t t = 0; t < threadPairCount; ++t)
     {
-        auto& queueForPair = *queuesForWires[t / kWires];
-
+        BoundedQueue<TaskPtr>& queueForPair = *queuesForWires[t / kWires];
         consumerThreads.emplace_back([&, t]
         {
             set_thread_affinity(threadPairs[t].consumerLogicalCore);
@@ -478,78 +453,39 @@ void parallel_decode_and_copy(const std::vector<LoadTask>& tasks,
             {
                 if (abortFlag.load(std::memory_order_acquire)) break;
 
-                TaskPtr sliceResult;
-                queueForPair.wait_and_pop(sliceResult);
-                if (!sliceResult) break;                 // end-of-stream
+                TaskPtr res;
+                queueForPair.wait_and_pop(res);
+                if (!res) break; // EOS
 
-                const LoadTask&  task     = tasks[sliceResult->block_id];
-                const uint8_t*   srcBase  = sliceResult->data.data();
-                uint8_t*         dstBase  = static_cast<uint8_t*>(outData) +
-                                            task.zIndex * task.pixelsPerSlice * bytesPerPixel;
+                const LoadTask& task   = tasks[res->block_id];
+                const uint8_t*  src    = res->data.data();
+                uint8_t*        dst    = static_cast<uint8_t*>(outData) +
+                                          task.zIndex * task.pixelsPerSlice * bytesPerPixel;
 
-                // -----------------------------------------------------------------
-                // 3a) Non-transposed copy  →  write down each column (contiguous)
-                // -----------------------------------------------------------------
                 if (!task.transpose)
                 {
-                    const size_t dstColStrideBytes = static_cast<size_t>(task.roiH) * bytesPerPixel;
-
-                    if (bytesPerPixel == 2)
+                    // New heuristic: Only use column-major copy for extremely wide ROIs
+                    // Otherwise, always use row-major copy (safe for tall/square)
+                    if (task.cropW > 4 * task.cropH)
                     {
-                        const uint16_t* src16 = reinterpret_cast<const uint16_t*>(srcBase);
-                        uint16_t*       dst16 = reinterpret_cast<uint16_t*>(dstBase);
-
-                        for (uint32_t col = 0; col < task.cropW; ++col)
+                        // --- Column-major copy (contiguous writes) ---
+                        const size_t dstColStride = static_cast<size_t>(task.roiH) * bytesPerPixel;
+                        if (bytesPerPixel == 2)
                         {
-                            const uint16_t* srcCol = src16 + col;                    // first element in column
-                            uint16_t*       dstCol = dst16 + static_cast<size_t>(col) * task.roiH;
-
-                            for (uint32_t row = 0; row < task.cropH; ++row)
-                                dstCol[row] = srcCol[row * task.cropW];
+                            for (uint32_t col = 0; col < task.cropW; ++col)
+                            {
+                                const uint16_t* srcCol = reinterpret_cast<const uint16_t*>(src + col * bytesPerPixel);
+                                uint16_t*       dstCol = reinterpret_cast<uint16_t*>(dst + col * dstColStride);
+                                for (uint32_t row = 0; row < task.cropH; ++row)
+                                    dstCol[row] = srcCol[row * task.cropW];
+                            }
                         }
-                    }
-                    else   // bytesPerPixel == 1
-                    {
-                        for (uint32_t col = 0; col < task.cropW; ++col)
+                        else // bytesPerPixel == 1
                         {
-                            const uint8_t* srcCol = srcBase + col;
-                            uint8_t*       dstCol = dstBase + col * dstColStrideBytes;
-
-                            for (uint32_t row = 0; row < task.cropH; ++row)
-                                dstCol[row] = srcCol[row * task.cropW];
-                        }
-                    }
-                }
-                // -----------------------------------------------------------------
-                // 3b) Transposed copy  →  ROI is already in transposed order
-                //     → just memcpy whole rows
-                // -----------------------------------------------------------------
-                else
-                {
-                    const size_t rowBytes = static_cast<size_t>(task.cropW) * bytesPerPixel;
-                    for (uint32_t row = 0; row < task.cropH; ++row)
-                        std::memcpy(dstBase + row * rowBytes,
-                                    srcBase + row * rowBytes,
-                                    rowBytes);
-                }
-            }
-        });
-    }
-
-    // -------------------------------------------------------------------------
-    // 4) JOIN + propagate any runtime errors
-    // -------------------------------------------------------------------------
-    for (auto& th : producerThreads)  th.join();
-    for (auto& th : consumerThreads)  th.join();
-
-    if (!runtimeErrors.empty())
-    {
-        std::ostringstream oss;
-        oss << "Errors during load_bl_tif (producer/consumer):\n";
-        for (const auto& e : runtimeErrors) oss << "  - " << e << '\n';
-        mexErrMsgIdAndTxt("load_bl_tif:Error", "%s", oss.str().c_str());
-    }
-}
+                            for (uint32_t col = 0; col < task.cropW; ++col)
+                            {
+                                const uint8_t* srcCol = src + col;
+                                uint8_t*       dstCol = dst + col * dstColStride;
 
 
 // ==============================
