@@ -263,7 +263,7 @@ void* allocate_numa_local_buffer(hwloc_topology_t topology, size_t bytes, unsign
     }
     if (!node) return nullptr;
     hwloc_nodeset_t nodeset = hwloc_bitmap_dup(node->nodeset);
-    void* buf = hwloc_alloc_membind_nodeset(
+    void* buf = hwloc_alloc_membind(
         topology, bytes, nodeset, HWLOC_MEMBIND_BIND, HWLOC_MEMBIND_THREAD);
     hwloc_bitmap_free(nodeset);
     return buf;
