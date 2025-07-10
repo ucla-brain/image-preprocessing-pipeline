@@ -544,39 +544,74 @@ void parallel_decode_and_copy(
 // ==============================
 //       ENTRY POINT
 // ==============================
-void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
+void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
+{
     ensure_hwloc_initialized();
     hwloc_topology_t topology = g_hwlocTopo->get();
-    unsigned chosenNumaNode = find_least_busy_numa_node(topology);
-    int logicalCoreOnNode = get_first_core_on_numa_node(topology, chosenNumaNode);
+    unsigned chosenNumaNode   = find_least_busy_numa_node(topology);
+    int logicalCoreOnNode     = get_first_core_on_numa_node(topology, chosenNumaNode);
+
     if (logicalCoreOnNode < 0) {
         int totalPU = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_PU);
         if (totalPU > 0) {
             logicalCoreOnNode = hwloc_get_obj_by_type(topology, HWLOC_OBJ_PU, 0)->os_index;
         } else {
-            mexErrMsgIdAndTxt("load_bl_tif:Error", "No logical core found on NUMA node %u (and no PUs available at all)", chosenNumaNode);
+            mexErrMsgIdAndTxt("load_bl_tif:Error",
+                "No logical core found on NUMA node %u (and no PUs available at all)",
+                chosenNumaNode);
         }
     }
-    set_thread_affinity(logicalCoreOnNode);
-    try {
-        ParsedInputs args = parse_inputs(nrhs, prhs);
-        uint16_t bitsPerSample = 0;
-        check_tiff_metadata(args.fileList, args.roiY0, args.roiX0, args.roiH, args.roiW, bitsPerSample);
-        const mxClassID outType = (bitsPerSample == 8) ? mxUINT8_CLASS : mxUINT16_CLASS;
-        const uint8_t bytesPerPixel = (bitsPerSample == 16) ? 2 : 1;
 
-        size_t outH = args.transpose ? args.roiW : args.roiH;
-        size_t outW = args.transpose ? args.roiH : args.roiW;
-        size_t pixelsPerSlice = outH * outW;
-        if (pixelsPerSlice > kMaxPixelsPerSlice)
-            mexErrMsgIdAndTxt("load_bl_tif:Error", "Requested ROI too large (>2^31 elements).");
-        void* outData = create_output_array(plhs[0], outType, outH, outW, args.fileList.size());
+    // Exception communication
+    std::exception_ptr threadException;
+    std::atomic<mxArray*> outResult{nullptr};
 
-        auto tasks = create_tasks(args.fileList, args.roiY0, args.roiX0, args.roiH, args.roiW, pixelsPerSlice, args.transpose);
+    std::thread worker([&]() {
+        try {
+            set_thread_affinity(logicalCoreOnNode);
 
-        parallel_decode_and_copy(tasks, outData, bytesPerPixel, chosenNumaNode);
+            ParsedInputs args = parse_inputs(nrhs, prhs);
+            uint16_t bitsPerSample = 0;
+            check_tiff_metadata(args.fileList, args.roiY0, args.roiX0, args.roiH, args.roiW, bitsPerSample);
+            const mxClassID outType = (bitsPerSample == 8) ? mxUINT8_CLASS : mxUINT16_CLASS;
+            const uint8_t bytesPerPixel = (bitsPerSample == 16) ? 2 : 1;
+
+            size_t outH = args.transpose ? args.roiW : args.roiH;
+            size_t outW = args.transpose ? args.roiH : args.roiW;
+            size_t pixelsPerSlice = outH * outW;
+            if (pixelsPerSlice > kMaxPixelsPerSlice)
+                mexErrMsgIdAndTxt("load_bl_tif:Error", "Requested ROI too large (>2^31 elements).");
+
+            // Allocate output in worker thread
+            mxArray* result = nullptr;
+            void* outData = create_output_array(result, outType, outH, outW, args.fileList.size());
+
+            auto tasks = create_tasks(args.fileList, args.roiY0, args.roiX0, args.roiH, args.roiW, pixelsPerSlice, args.transpose);
+            parallel_decode_and_copy(tasks, outData, bytesPerPixel, chosenNumaNode);
+
+            // Assign output to outer scope
+            outResult.store(result, std::memory_order_release);
+        }
+        catch (...) {
+            threadException = std::current_exception();
+        }
+    });
+
+    worker.join();
+
+    // Propagate any exceptions from worker
+    if (threadException) {
+        try {
+            std::rethrow_exception(threadException);
+        }
+        catch (const std::exception& ex) {
+            mexErrMsgIdAndTxt("load_bl_tif:Error", "%s", ex.what());
+        }
+        catch (...) {
+            mexErrMsgIdAndTxt("load_bl_tif:Error", "Unknown exception in worker thread");
+        }
     }
-    catch (const std::exception& ex) {
-        mexErrMsgIdAndTxt("load_bl_tif:Error", "%s", ex.what());
-    }
+
+    // Set MATLAB output (thread-safe: worker always created output in MATLAB API)
+    plhs[0] = outResult.load(std::memory_order_acquire);
 }
