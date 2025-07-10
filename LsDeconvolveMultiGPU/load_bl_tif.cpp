@@ -576,22 +576,22 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
         // NUMA logic: choose NUMA node, pick a core, and bind this thread.
         unsigned chosenNumaNode = find_least_busy_numa_node(g_hwlocTopo->get());
 
-        // Pick a logical core from chosen NUMA node (first available)
-        unsigned logicalCoreOnNode = 0;
-        {
-            hwloc_topology_t topology = g_hwlocTopo->get();
-            int totalPU = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_PU);
-            for (int i = 0; i < totalPU; ++i) {
-                hwloc_obj_t pu = hwloc_get_obj_by_type(topology, HWLOC_OBJ_PU, i);
-                if (pu) {
-                    hwloc_obj_t node = hwloc_get_ancestor_obj_by_type(topology, HWLOC_OBJ_NUMANODE, pu);
-                    if (node && node->os_index == chosenNumaNode) {
-                        logicalCoreOnNode = pu->os_index;
-                        break;
-                    }
-                }
-            }
-        }
+        //// Pick a logical core from chosen NUMA node (first available)
+        //unsigned logicalCoreOnNode = 0;
+        //{
+        //    hwloc_topology_t topology = g_hwlocTopo->get();
+        //    int totalPU = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_PU);
+        //    for (int i = 0; i < totalPU; ++i) {
+        //        hwloc_obj_t pu = hwloc_get_obj_by_type(topology, HWLOC_OBJ_PU, i);
+        //        if (pu) {
+        //            hwloc_obj_t node = hwloc_get_ancestor_obj_by_type(topology, HWLOC_OBJ_NUMANODE, pu);
+        //            if (node && node->os_index == chosenNumaNode) {
+        //                logicalCoreOnNode = pu->os_index;
+        //                break;
+        //            }
+        //        }
+        //    }
+        //}
         //set_thread_affinity(logicalCoreOnNode);
 
         // Allocate output array (try to get NUMA-local memory)
