@@ -603,9 +603,7 @@ function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
     [unique_gpus, ~, ~] = unique(gpus(:));
     unique_gpus = sort(unique_gpus, 'descend'); % no need for .'
     gpus = repmat(unique_gpus, 1, numel(gpus)/numel(unique_gpus));
-    gpus = gpus(:).';
-
-    clear gpus_vertical;
+    gpus = gpus(:);
     
     % initiate locks and semaphors
     % semkeys are arbitrary non-zero values
