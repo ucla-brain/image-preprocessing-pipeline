@@ -365,10 +365,7 @@ void readSubRegionToBuffer(const LoadTask& task, TIFF* tif, uint8_t bytesPerPixe
     }
 }
 
-// ==============================
-//       PARALELLIZATION
-// ==============================
-
+// --- Parallel decode/copy ---
 void parallel_decode_and_copy(const std::vector<LoadTask>& tasks,
                               void*                        outData,
                               size_t                       bytesPerPixel)
@@ -486,6 +483,59 @@ void parallel_decode_and_copy(const std::vector<LoadTask>& tasks,
                             {
                                 const uint8_t* srcCol = src + col;
                                 uint8_t*       dstCol = dst + col * dstColStride;
+                                for (uint32_t row = 0; row < task.cropH; ++row)
+                                    dstCol[row] = srcCol[row * task.cropW];
+                            }
+                        }
+                    }
+                    else
+                    {
+                        // --- Row-major copy (default for tall/square ROIs) ---
+                        const size_t srcRowStride = static_cast<size_t>(task.cropW) * bytesPerPixel;
+                        if (bytesPerPixel == 2)
+                        {
+                            for (uint32_t row = 0; row < task.cropH; ++row)
+                            {
+                                const uint16_t* srcRow = reinterpret_cast<const uint16_t*>(src + row * srcRowStride);
+                                for (uint32_t col = 0; col < task.cropW; ++col)
+                                    reinterpret_cast<uint16_t*>(dst)[row + col * task.roiH] = srcRow[col];
+                            }
+                        }
+                        else // bytesPerPixel == 1
+                        {
+                            for (uint32_t row = 0; row < task.cropH; ++row)
+                            {
+                                const uint8_t* srcRow = src + row * srcRowStride;
+                                for (uint32_t col = 0; col < task.cropW; ++col)
+                                    dst[row + col * task.roiH] = srcRow[col];
+                            }
+                        }
+                    }
+                }
+                else
+                {
+                    // Transposed: copy full rows, always fast
+                    const size_t rowBytes = static_cast<size_t>(task.cropW) * bytesPerPixel;
+                    for (uint32_t row = 0; row < task.cropH; ++row)
+                        std::memcpy(dst + row * rowBytes,
+                                    src + row * rowBytes,
+                                    rowBytes);
+                }
+            }
+        });
+    }
+
+    for (auto& th : producerThreads) th.join();
+    for (auto& th : consumerThreads) th.join();
+
+    if (!runtimeErrors.empty())
+    {
+        std::ostringstream oss;
+        oss << "Errors during load_bl_tif (producer/consumer):\n";
+        for (const auto& e : runtimeErrors) oss << "  - " << e << '\n';
+        mexErrMsgIdAndTxt("load_bl_tif:Error", "%s", oss.str().c_str());
+    }
+}
 
 
 // ==============================
@@ -514,4 +564,10 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     catch (const std::exception& ex) {
         mexErrMsgIdAndTxt("load_bl_tif:Error", "%s", ex.what());
     }
+}
+
+    hwloc_bitmap_zero(cpuset);
+    hwloc_bitmap_set(cpuset, logicalCoreId);
+    hwloc_set_cpubind(topology, cpuset, HWLOC_CPUBIND_THREAD);
+    hwloc_bitmap_free(cpuset);
 }
