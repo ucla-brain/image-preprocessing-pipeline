@@ -377,10 +377,8 @@ void parallel_decode_and_copy(
     const size_t numSlices = tasks.size();
 
     // Get NUMA-local thread pairs
-    hwloc_topology_t topology = g_hwlocTopo->get();
-    unsigned chosenNumaNode = find_least_busy_numa_node(topology);
     auto threadPairs = assign_thread_affinity_pairs_single_numa(
-        std::min(numSlices, get_available_cores()), chosenNumaNode);
+        std::min(numSlices, get_available_cores()));
     const size_t threadPairCount = threadPairs.size();
     const size_t numWires = threadPairCount / kWires + ((threadPairCount % kWires) ? 1 : 0);
 
