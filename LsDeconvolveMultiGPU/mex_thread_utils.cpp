@@ -205,31 +205,66 @@ unsigned find_least_busy_numa_node(hwloc_topology_t topology)
 
 // --- MAIN FUNCTION: assign all pairs on one NUMA node ---
 std::vector<ThreadAffinityPair>
-assign_thread_affinity_pairs_single_numa(size_t maxPairs, unsigned numaNode)
+assign_thread_affinity_pairs_single_numa(std::size_t maxPairs, unsigned    numaNode)
 {
-    ensure_hwloc_initialized();
     hwloc_topology_t topology = g_hwlocTopo->get();
 
-    std::vector<unsigned> pus, sockets;
-    int totalPU = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_PU);
+    // Does the topology expose any NUMA objects at all?
+    const int nbNumaObjs = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_NUMANODE);
+    const bool hasRealNuma = (nbNumaObjs > 0);
+
+    // ---------------------------------------------------------------------
+    // 1. Collect all PU indices that belong to the requested NUMA node
+    //    • If there are no NUMA objects, treat the entire machine as node 0.
+    // ---------------------------------------------------------------------
+    std::vector<unsigned> pus;       // logical PU indices
+    std::vector<unsigned> sockets;   // their package (socket) indices
+
+    const int totalPU = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_PU);
+
     for (int i = 0; i < totalPU; ++i) {
         hwloc_obj_t pu = hwloc_get_obj_by_type(topology, HWLOC_OBJ_PU, i);
         if (!pu) continue;
+
         hwloc_obj_t node = hwloc_get_ancestor_obj_by_type(topology, HWLOC_OBJ_NUMANODE, pu);
-        if (node && node->os_index == numaNode) {
+
+        unsigned nodeId = (node ? node->os_index : 0u);   // synthetic node 0
+        if (!hasRealNuma) nodeId = 0;                     // whole machine = node 0
+
+        if (nodeId == numaNode) {
             pus.push_back(pu->os_index);
+
             hwloc_obj_t sock = hwloc_get_ancestor_obj_by_type(topology, HWLOC_OBJ_PACKAGE, pu);
-            unsigned socketId = sock ? sock->os_index : 0;
-            sockets.push_back(socketId);
+            sockets.push_back(sock ? sock->os_index : 0u);
         }
+    }
+
+    // ---------------------------------------------------------------------
+    // 2. Build PU pairs (SMT siblings in-order)
+    // ---------------------------------------------------------------------
+    std::size_t maxPossiblePairs = pus.size() / 2;
+    if (maxPairs > maxPossiblePairs) {
+#ifdef MEX_FILE
+        mexWarnMsgIdAndTxt("assign_thread_affinity_pairs_single_numa:oversub",
+            "Requested %zu pairs but NUMA node %u only has %zu pairs; "
+            "returning the maximum available.",
+            maxPairs, numaNode, maxPossiblePairs);
+#endif
+        maxPairs = maxPossiblePairs;
     }
 
     std::vector<ThreadAffinityPair> pairs;
     pairs.reserve(maxPairs);
-    for (size_t i = 0; i + 1 < pus.size() && pairs.size() < maxPairs; i += 2)
+
+    for (std::size_t i = 0; i + 1 < pus.size() && pairs.size() < maxPairs; i += 2) {
         pairs.push_back({pus[i], pus[i + 1], numaNode, sockets[i]});
-    if (pairs.size() < maxPairs && pus.size() % 2)
-        pairs.push_back({pus.back(), pus.back(), numaNode, sockets.back()});
+    }
+
+    // Fallback for extreme edge-case: only one PU on the node
+    if (pairs.empty() && !pus.empty() && maxPairs > 0) {
+        pairs.push_back({pus[0], pus[0], numaNode, sockets[0]});
+    }
+
     return pairs;
 }
 
