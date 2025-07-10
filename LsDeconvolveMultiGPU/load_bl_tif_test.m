@@ -131,8 +131,9 @@ run_external_endian_tests();
 [EMOJI_PASS, EMOJI_FAIL] = emoji_checkmarks();
 fprintf('\n[Suite 4] Tile/strip + compression (using external tools if available):\n');
 
-tmpdir4 = 'test4'; % or use tempname() in future
-if ~isfolder(tmpdir4), mkdir(tmpdir4); end
+tmpdir4 = tempname;           % Use unique temp folder
+mkdir(tmpdir4);
+cleanupObj4 = onCleanup(@() cleanupTempDir(tmpdir4)); % auto-cleanup
 
 cfgs = [ ...
   struct("tiled",false,"comp",'None'   ,"name","strip-none"   )
@@ -151,15 +152,15 @@ y0 = 20; x0 = 20; h = 100; w = 100;
 for idx = 1:numel(cfgs)
     c = cfgs(idx);
 
-    % Sanitize name to prevent malformed paths
+    % Always ensure the temp directory exists
+    if ~isfolder(tmpdir4), mkdir(tmpdir4); end
+
+    % Sanitize name for filename
     cname = matlab.lang.makeValidName(strtrim(string(c.name)));
     assert(isempty(strfind(cname, filesep)), 'c.name must not contain path separators!');
 
     fname   = fullfile(tmpdir4, sprintf('tile_%s.tif', cname));
     src_tif = fullfile(tmpdir4, sprintf('tile_%s_src.tif', cname));
-
-    % DEBUG: show constructed file names
-    % fprintf('  [%s] fname: %s\n', cname, fname);
 
     img      = cast(magic(257), dtype);
     created  = false;
@@ -167,6 +168,7 @@ for idx = 1:numel(cfgs)
 
     % MATLAB attempt
     try
+        if ~isfolder(tmpdir4), mkdir(tmpdir4); end
         t = Tiff(char(fname),'w');
         tag.ImageWidth         = size(img,2);
         tag.ImageLength        = size(img,1);
@@ -193,9 +195,10 @@ for idx = 1:numel(cfgs)
         if exist(char(fname),'file'), delete(char(fname)); end
     end
 
-    % Use external tools if MATLAB attempt fails
+    % Use external tools if MATLAB attempt fails (and needed)
     if ~created && (c.tiled || ~strcmpi(c.comp,'none'))
         try
+            if ~isfolder(tmpdir4), mkdir(tmpdir4); end
             t = Tiff(char(src_tif),'w');
             t.setTag('ImageWidth', size(img,2));
             t.setTag('ImageLength', size(img,1));
@@ -222,6 +225,7 @@ for idx = 1:numel(cfgs)
                     otherwise
                         args = [args {'-c', 'none'}];
                 end
+                if ~isfolder(tmpdir4), mkdir(tmpdir4); end
                 cmd = sprintf('"%s" %s "%s" "%s"', ...
                     tools.tiffcp, strjoin(args, ' '), char(src_tif), char(fname));
                 [status, out] = system(cmd);
@@ -243,6 +247,7 @@ for idx = 1:numel(cfgs)
                     otherwise
                         args = [args {'-compress', 'none'}];
                 end
+                if ~isfolder(tmpdir4), mkdir(tmpdir4); end
                 cmd = sprintf('"%s" "%s" %s "%s"', ...
                     tools.convert, char(src_tif), strjoin(args, ' '), char(fname));
                 [status, out] = system(cmd);
@@ -262,6 +267,8 @@ for idx = 1:numel(cfgs)
 
     if ~created
         fprintf('  %-13s → skipped (could not create test TIFF: %s)\n', cname, errstr);
+        if exist(char(src_tif),'file'), delete(char(src_tif)); end
+        if exist(char(fname),'file'), delete(char(fname)); end
         continue
     end
 
@@ -278,7 +285,9 @@ for idx = 1:numel(cfgs)
     catch ME
         fprintf('  %-13s → %s (%s) [%s]\n', cname, EMOJI_FAIL, ME.message, ME.identifier);
     end
-    cleanupTempDir(tmpdir4);
+    % Clean up files for this config
+    if exist(char(fname),'file'), delete(char(fname)); end
+    if exist(char(src_tif),'file'), delete(char(src_tif)); end
 end
 
 %% 5. Expected-error paths
