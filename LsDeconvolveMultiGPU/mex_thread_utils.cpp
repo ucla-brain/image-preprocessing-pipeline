@@ -152,19 +152,11 @@ std::vector<ThreadAffinityPair> assign_thread_affinity_pairs(size_t pairCount)
 void set_thread_affinity(unsigned logicalCoreId)
 {
     ensure_hwloc_initialized();
-
     hwloc_topology_t topology = g_hwlocTopo->get();
-    hwloc_cpuset_t   cpuset   = hwloc_bitmap_alloc();
-    if (!cpuset)
-        throw std::runtime_error("hwloc_bitmap_alloc failed");
-
+    hwloc_cpuset_t cpuset = hwloc_bitmap_alloc();
     hwloc_bitmap_zero(cpuset);
-    hwloc_bitmap_set (cpuset, logicalCoreId);
-
-    // bind the *calling* thread
-    if (hwloc_set_cpubind(topology, cpuset, HWLOC_CPUBIND_THREAD))
-        std::cerr << "Warning: hwloc_set_cpubind failed for PU "
-                  << logicalCoreId << '\n';
-
+    hwloc_bitmap_set(cpuset, logicalCoreId);
+    hwloc_set_cpubind(topology, cpuset, HWLOC_CPUBIND_THREAD);
     hwloc_bitmap_free(cpuset);
 }
+
