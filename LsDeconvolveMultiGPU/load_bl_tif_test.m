@@ -41,7 +41,7 @@ fprintf('--- Dataset: %d×%d ‖ %d slices ‖ %d-bit (%s) ---\n', ...
         imageHeight,imageWidth,numSlices,bitDepth,dtype);
 
 %% 1. Baseline reference vs MEX
-blockSizes = [1047,1048];
+blockSizes = [340,250];
 testZ      = [round(numSlices/2), max(1,numSlices-3)];
 
 fprintf('\n[Suite 1] Reference vs MEX baseline:\n');
