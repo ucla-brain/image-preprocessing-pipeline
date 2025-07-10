@@ -488,9 +488,3 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
         mexErrMsgIdAndTxt("load_bl_tif:Error", "%s", ex.what());
     }
 }
-
-    hwloc_bitmap_zero(cpuset);
-    hwloc_bitmap_set(cpuset, logicalCoreId);
-    hwloc_set_cpubind(topology, cpuset, HWLOC_CPUBIND_THREAD);
-    hwloc_bitmap_free(cpuset);
-}
