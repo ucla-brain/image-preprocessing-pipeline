@@ -366,28 +366,43 @@ void readSubRegionToBuffer(const LoadTask& task, TIFF* tif, uint8_t bytesPerPixe
 }
 
 // -----------------------------------------------------------------------------
-//  parallel_decode_and_copy  –  single-stage, one thread per physical core
+//  parallel_decode_and_copy  –  single-stage, one worker per physical core
 // -----------------------------------------------------------------------------
 void parallel_decode_and_copy(const std::vector<LoadTask>& tasks,
                               void*                        outData,
                               size_t                       bytesPerPixel)
 {
-    // --- 1. decide thread count ------------------------------------------------
-    const size_t   numSlices        = tasks.size();
+    const size_t numSlices = tasks.size();
 
-    unsigned       logicalPUs       = get_available_cores();              // hwloc PU count
-    unsigned       physCoreCount    = hwloc_get_nbobjs_by_type(get_hwloc_topology(),
-                                                               HWLOC_OBJ_CORE);
-    if (!physCoreCount)                     // hwloc not available?  Fallback.
-        physCoreCount = std::max(1u, logicalPUs / 2u);
+    // -------------------------------------------------------------------------
+    // 1) How many threads?  -> nb physical cores if hwloc is present,
+    //                         else half the logical PUs (crude SMT-2 guess)
+    // -------------------------------------------------------------------------
+    const unsigned logicalPUs = get_available_cores();     // already in utils
+
+    unsigned physCoreCount = std::max(1u, logicalPUs / 2u);   // pessimistic fall-back
+
+#if defined(HWLOC_API_VERSION)
+    {
+        hwloc_topology_t topo = nullptr;
+        if (   hwloc_topology_init(&topo)  == 0
+            && hwloc_topology_load(topo)   == 0)
+        {
+            unsigned cores = hwloc_get_nbobjs_by_type(topo, HWLOC_OBJ_CORE);
+            if (cores) physCoreCount = cores;               // trust hwloc if it worked
+            hwloc_topology_destroy(topo);
+        }
+    }
+#endif
 
     const unsigned nThreads = static_cast<unsigned>(
         std::min<size_t>(numSlices, physCoreCount));
 
-    // We’ll bind to PU #0 of every physical core → stride = SMT width (2 on Milan)
     const unsigned smtStride = (logicalPUs >= physCoreCount * 2) ? 2u : 1u;
 
-    // --- 2. thread pool --------------------------------------------------------
+    // -------------------------------------------------------------------------
+    // 2) Simple static thread pool – each worker decodes + copies one slice
+    // -------------------------------------------------------------------------
     std::atomic<uint32_t> nextIdx{0};
     std::vector<std::string> errors;
     std::mutex              errMtx;
@@ -396,33 +411,39 @@ void parallel_decode_and_copy(const std::vector<LoadTask>& tasks,
 
     for (unsigned t = 0; t < nThreads; ++t)
     {
-        const unsigned pu = t * smtStride;        // first sibling of core t
-        workers.emplace_back([&, pu]{
-            set_thread_affinity(pu);              // one PU per core
+        const unsigned pu = t * smtStride;          // PU #0 of core t
+        workers.emplace_back([&, pu]()
+        {
+            set_thread_affinity(pu);                // helper from utils
 
-            std::vector<uint8_t> tempBuf;         // per-thread scratch buffer
+            std::vector<uint8_t> tempBuf;           // per-thread tile/strip buffer
+
             while (true)
             {
-                uint32_t idx = nextIdx.fetch_add(1, std::memory_order_relaxed);
+                const uint32_t idx = nextIdx.fetch_add(1, std::memory_order_relaxed);
                 if (idx >= tasks.size()) break;
 
                 const LoadTask& task = tasks[idx];
                 try
                 {
-                    // ---- TIFF decode -------------------------------------------------
+                    //------------------------------------------------------------------
+                    // Decode ROI of slice idx
+                    //------------------------------------------------------------------
                     TiffHandle tif(TIFFOpen(task.path.c_str(), "r"));
                     if (!tif)
                         throw std::runtime_error("Cannot open file " + task.path);
 
-                    const size_t sliceBytes = static_cast<size_t>(task.cropH) *
-                                               task.cropW * bytesPerPixel;
+                    const size_t sliceBytes =
+                        static_cast<size_t>(task.cropH) * task.cropW * bytesPerPixel;
                     std::vector<uint8_t> sliceBuf(sliceBytes);
 
                     readSubRegionToBuffer(task, tif.get(),
                                           static_cast<uint8_t>(bytesPerPixel),
                                           sliceBuf, tempBuf);
 
-                    // ---- copy (and optional transpose) -------------------------------
+                    //------------------------------------------------------------------
+                    // Copy / transpose into MATLAB output
+                    //------------------------------------------------------------------
                     uint8_t*       dstBase = static_cast<uint8_t*>(outData) +
                                              task.zIndex * task.pixelsPerSlice *
                                              bytesPerPixel;
@@ -430,42 +451,41 @@ void parallel_decode_and_copy(const std::vector<LoadTask>& tasks,
 
                     if (!task.transpose)
                     {
-                        // Heuristic: contiguous writes beat contiguous reads
-                        const bool useColMajor = (task.cropW < task.cropH);
-
-                        if (useColMajor)
+                        const bool colMajor = (task.cropW < task.cropH);
+                        if (colMajor)      // contiguous writes (dst)
                         {
-                            const size_t dstColStride = static_cast<size_t>(task.roiH) * bytesPerPixel;
-                            const size_t srcColStride = static_cast<size_t>(task.cropW) * bytesPerPixel;
+                            const size_t dstColStride =
+                                static_cast<size_t>(task.roiH) * bytesPerPixel;
 
                             if (bytesPerPixel == 2)
                             {
                                 for (uint32_t col = 0; col < task.cropW; ++col)
                                 {
-                                    const uint16_t* srcCol = reinterpret_cast<const uint16_t*>(srcBase) + col;
-                                    uint16_t*       dstCol = reinterpret_cast<uint16_t*>(dstBase) + col * task.roiH;
+                                    const uint16_t* src = reinterpret_cast<const uint16_t*>(srcBase) + col;
+                                    uint16_t*       dst = reinterpret_cast<uint16_t*>(dstBase) + col * task.roiH;
                                     for (uint32_t row = 0; row < task.cropH; ++row)
-                                        dstCol[row] = srcCol[row * task.cropW];
+                                        dst[row] = src[row * task.cropW];
                                 }
                             }
-                            else // 8-bit
+                            else
                             {
                                 for (uint32_t col = 0; col < task.cropW; ++col)
                                 {
-                                    const uint8_t* srcCol = srcBase + col;
-                                    uint8_t*       dstCol = dstBase + col * dstColStride;
+                                    const uint8_t* src = srcBase + col;
+                                    uint8_t*       dst = dstBase + col * dstColStride;
                                     for (uint32_t row = 0; row < task.cropH; ++row)
-                                        dstCol[row] = srcCol[row * task.cropW];
+                                        dst[row] = src[row * task.cropW];
                                 }
                             }
                         }
-                        else  // row-major copy: contiguous reads
+                        else               // contiguous reads (src)
                         {
-                            const size_t srcRowStride = static_cast<size_t>(task.cropW) * bytesPerPixel;
+                            const size_t srcRowStride =
+                                static_cast<size_t>(task.cropW) * bytesPerPixel;
 
                             if (bytesPerPixel == 2)
                             {
-                                uint16_t* dst16 = reinterpret_cast<uint16_t*>(dstBase);
+                                uint16_t*       dst16 = reinterpret_cast<uint16_t*>(dstBase);
                                 const uint16_t* src16 = reinterpret_cast<const uint16_t*>(srcBase);
                                 for (uint32_t row = 0; row < task.cropH; ++row)
                                 {
@@ -485,7 +505,7 @@ void parallel_decode_and_copy(const std::vector<LoadTask>& tasks,
                             }
                         }
                     }
-                    else  // ---------- transpose path: already row-major -------------
+                    else  // transpose path
                     {
                         const size_t rowBytes = static_cast<size_t>(task.cropW) * bytesPerPixel;
                         for (uint32_t row = 0; row < task.cropH; ++row)
@@ -496,7 +516,7 @@ void parallel_decode_and_copy(const std::vector<LoadTask>& tasks,
                 }
                 catch (const std::exception& ex)
                 {
-                    std::lock_guard<std::mutex> lk(errMtx);
+                    std::lock_guard<std::mutex> g(errMtx);
                     errors.emplace_back("Slice " + std::to_string(task.zIndex+1) +
                                         ": " + ex.what());
                 }
@@ -514,6 +534,7 @@ void parallel_decode_and_copy(const std::vector<LoadTask>& tasks,
         mexErrMsgIdAndTxt("load_bl_tif:Error", "%s", oss.str().c_str());
     }
 }
+
 
 // ==============================
 //       ENTRY POINT
