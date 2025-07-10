@@ -369,15 +369,17 @@ void readSubRegionToBuffer(const LoadTask& task, TIFF* tif, uint8_t bytesPerPixe
 //  parallel_decode_and_copy  –  NUMA-aware producer/consumer with
 //                               *always* contiguous writes into MATLAB array
 // -----------------------------------------------------------------------------
-void parallel_decode_and_copy(const std::vector<LoadTask>& tasks,
-                              void*                        outData,
-                              size_t                       bytesPerPixel)
+void parallel_decode_and_copy(
+    const std::vector<LoadTask>& tasks,
+    void* outData,
+    size_t bytesPerPixel,
+    unsigned chosenNumaNode)
 {
     const size_t numSlices       = tasks.size();
     // Ask for enough pairs for your workload, but use only what the NUMA node can provide.
     const size_t maxRequestedPairs = std::min(numSlices, get_available_cores());
     // Let the function return as many as are available on a single NUMA node
-    auto threadPairs = assign_thread_affinity_pairs_single_numa(maxRequestedPairs);
+    auto threadPairs = assign_thread_affinity_pairs_single_numa(maxPairs, chosenNumaNode);
     const size_t threadPairCount = threadPairs.size();  // always safe to use exactly what is available
 
     const size_t numWires        = threadPairCount / kWires + ((threadPairCount % kWires) ? 1 : 0);
@@ -548,6 +550,10 @@ void parallel_decode_and_copy(const std::vector<LoadTask>& tasks,
 // ==============================
 //       ENTRY POINT
 // ==============================
+#include "mex_thread_utils.hpp"
+
+// ... other includes ...
+
 void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     ensure_hwloc_initialized();
     try {
@@ -562,13 +568,28 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
         size_t pixelsPerSlice = outH * outW;
         if (pixelsPerSlice > kMaxPixelsPerSlice)
             mexErrMsgIdAndTxt("load_bl_tif:Error", "Requested ROI too large (>2^31 elements).");
-        void* outData = create_output_array(plhs[0], outType, outH, outW, args.fileList.size());
+        size_t outBytes = outH * outW * args.fileList.size() * bytesPerPixel;
+
+        // NUMA logic:
+        unsigned chosenNumaNode = find_least_busy_numa_node(g_hwlocTopo->get());
+        void* outDataNUMA = allocate_numa_local_buffer(g_hwlocTopo->get(), outBytes, chosenNumaNode);
+        if (!outDataNUMA)
+            mexErrMsgIdAndTxt("load_bl_tif:Error", "Failed to allocate NUMA-local output buffer");
 
         auto tasks = create_tasks(args.fileList, args.roiY0, args.roiX0, args.roiH, args.roiW, pixelsPerSlice, args.transpose);
 
-        parallel_decode_and_copy(tasks, outData, bytesPerPixel);
+        // Run the parallel decode and fill outDataNUMA
+        parallel_decode_and_copy(tasks, outDataNUMA, bytesPerPixel, chosenNumaNode);
+
+        // Now, after success, allocate the MATLAB output array and copy data in
+        void* outData = create_output_array(plhs[0], outType, outH, outW, args.fileList.size());
+        std::memcpy(outData, outDataNUMA, outBytes);
+
+        // Clean up NUMA buffer
+        free_numa_local_buffer(g_hwlocTopo->get(), outDataNUMA, outBytes);
     }
     catch (const std::exception& ex) {
         mexErrMsgIdAndTxt("load_bl_tif:Error", "%s", ex.what());
     }
 }
+
