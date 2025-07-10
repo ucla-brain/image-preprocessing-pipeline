@@ -499,7 +499,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
 
         for (size_t t = 0; t < numThreads; ++t) {
             workers.emplace_back([&, t]() {
-                set_thread_affinity(coreIds[t]);
+                //set_thread_affinity(coreIds[t]);
                 worker_main(tasks, results, bytesPerPixel, err_mutex, errors, error_count, nextTask);
             });
         }
