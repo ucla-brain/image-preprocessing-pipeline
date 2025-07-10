@@ -372,14 +372,10 @@ void parallel_decode_and_copy(const std::vector<LoadTask>& tasks, void* outData,
     const size_t numWires        = threadPairCount / kWires + ((threadPairCount % kWires) ? 1 : 0);
 
     using TaskPtr = std::shared_ptr<TaskResult>;
-    // One bounded queue per “wire”
     std::vector<std::unique_ptr<BoundedQueue<TaskPtr>>> queuesForWires;
     queuesForWires.reserve(numWires);
-    for (size_t w = 0; w < numWires; ++w) {
-        queuesForWires.emplace_back(
-            std::make_unique<BoundedQueue<TaskPtr>>(2 * kWires)
-        );
-    }
+    for (size_t w = 0; w < numWires; ++w)
+        queuesForWires.emplace_back(std::make_unique<BoundedQueue<TaskPtr>>(2 * kWires));
 
     std::vector<std::thread> producerThreads, consumerThreads;
     producerThreads.reserve(threadPairCount);
@@ -391,7 +387,7 @@ void parallel_decode_and_copy(const std::vector<LoadTask>& tasks, void* outData,
     std::atomic<bool>       abortFlag{false};
     auto                    threadPairs = assign_thread_affinity_pairs(threadPairCount);
 
-    // --- Producers: decode each slice into a TaskResult and push onto its queue ---
+    // PRODUCERS: decode on producerLogicalCore → push TaskResult pointers
     for (size_t t = 0; t < threadPairCount; ++t) {
         auto& queueForPair = *queuesForWires[t / kWires];
         producerThreads.emplace_back([&, t] {
@@ -408,14 +404,14 @@ void parallel_decode_and_copy(const std::vector<LoadTask>& tasks, void* outData,
                         std::lock_guard<std::mutex> lck(errorMutex);
                         runtimeErrors.emplace_back(
                             "Slice " + std::to_string(task.zIndex+1) +
-                            ": Cannot open file " + task.path
+                            ": Cannot open " + task.path
                         );
                         abortFlag.store(true, std::memory_order_release);
                         break;
                     }
                     auto res = std::make_shared<TaskResult>(
                         idx,
-                        static_cast<size_t>(task.cropH * task.cropW * bytesPerPixel),
+                        task.cropH * task.cropW * bytesPerPixel,
                         task.cropH,
                         task.cropW
                     );
@@ -439,12 +435,11 @@ void parallel_decode_and_copy(const std::vector<LoadTask>& tasks, void* outData,
                     break;
                 }
             }
-            // Signal end-of-stream for this wire
             queueForPair.push(nullptr);
         });
     }
 
-    // --- Consumers: pop each TaskResult and write into outData ---
+    // CONSUMERS: pop TaskResult → write into outData on consumerLogicalCore
     for (size_t t = 0; t < threadPairCount; ++t) {
         auto& queueForPair = *queuesForWires[t / kWires];
         consumerThreads.emplace_back([&, t] {
@@ -453,54 +448,57 @@ void parallel_decode_and_copy(const std::vector<LoadTask>& tasks, void* outData,
                 if (abortFlag.load(std::memory_order_acquire)) break;
                 TaskPtr res;
                 queueForPair.wait_and_pop(res);
-                if (!res) break;  // end-of-stream
+                if (!res) break;
 
                 const auto& task   = tasks[res->block_id];
                 const uint8_t* src = res->data.data();
                 uint8_t*       dst = static_cast<uint8_t*>(outData)
                                    + task.zIndex * task.pixelsPerSlice * bytesPerPixel;
 
-                if (!task.transpose) {
-                    // Always use contiguous writes down columns
-                    const size_t dstColStride = static_cast<size_t>(task.roiH) * bytesPerPixel;
-                    const size_t srcRowStride = static_cast<size_t>(task.cropW) * bytesPerPixel;
+                // Non-transpose: always contiguous writes down each column
+                const size_t dstColStride = task.roiH * bytesPerPixel;
+                const size_t srcRowStride = task.cropW * bytesPerPixel;
+
+                if (bytesPerPixel == 1) {
+                    // 8-bit path: single‐byte loads/stores
                     for (uint32_t col = 0; col < task.cropW; ++col) {
-                        const uint8_t* srcCol = src + col * bytesPerPixel;
+                        const uint8_t* srcCol = src + col;
                         uint8_t*       dstCol = dst + col * dstColStride;
                         for (uint32_t row = 0; row < task.cropH; ++row) {
-                            std::memcpy(
-                                dstCol + row * bytesPerPixel,
-                                srcCol + row * srcRowStride,
-                                bytesPerPixel
-                            );
+                            dstCol[row] = srcCol[row * srcRowStride];
                         }
                     }
                 } else {
-                    // Transpose case: copy full rows
-                    const size_t rowBytes = static_cast<size_t>(task.cropW) * bytesPerPixel;
-                    for (uint32_t row = 0; row < task.cropH; ++row) {
-                        std::memcpy(
-                            dst + row * rowBytes,
-                            src + row * rowBytes,
-                            rowBytes
-                        );
+                    // 16-bit path: 2-byte loads/stores
+                    const uint16_t* src16 = reinterpret_cast<const uint16_t*>(src);
+                    uint16_t*       dst16 = reinterpret_cast<uint16_t*>(dst);
+                    const size_t    src16Stride = srcRowStride / 2;
+                    const size_t    dst16Stride = dstColStride / 2;
+
+                    for (uint32_t col = 0; col < task.cropW; ++col) {
+                        const uint16_t* s = src16 + col;
+                        uint16_t*       d = dst16 + col * dst16Stride;
+                        for (uint32_t row = 0; row < task.cropH; ++row) {
+                            d[row] = s[row * src16Stride];
+                        }
                     }
                 }
             }
         });
     }
 
-    // Wait for everyone to finish
+    // join and error out
     for (auto& p : producerThreads) p.join();
     for (auto& c : consumerThreads) c.join();
 
     if (!runtimeErrors.empty()) {
-        std::ostringstream allerr;
-        allerr << "Errors during load_bl_tif (producer/consumer):\n";
-        for (auto& e : runtimeErrors) allerr << "  - " << e << "\n";
-        mexErrMsgIdAndTxt("load_bl_tif:Error", "%s", allerr.str().c_str());
+        std::ostringstream oss;
+        oss << "Errors during load_bl_tif (producer/consumer):\n";
+        for (auto& e : runtimeErrors) oss << "  - " << e << "\n";
+        mexErrMsgIdAndTxt("load_bl_tif:Error", "%s", oss.str().c_str());
     }
 }
+
 
 // ==============================
 //       ENTRY POINT
