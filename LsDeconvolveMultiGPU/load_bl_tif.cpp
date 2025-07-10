@@ -374,7 +374,6 @@ void parallel_decode_and_copy(
     void* outData,
     size_t bytesPerPixel)
 {
-    //auto coreIds = get_cores_on_numa_node();
     const size_t numThreads = std::min(tasks.size(), get_available_cores());
 
     std::atomic<uint32_t> nextSliceIndex{0};
@@ -385,7 +384,6 @@ void parallel_decode_and_copy(
 
     for (size_t t = 0; t < numThreads; ++t) {
         threads[t] = std::thread([&, t]{
-            //set_thread_affinity(coreIds[t]);
             std::vector<uint8_t> tempBuf;
             while (true) {
                 if (abortFlag.load(std::memory_order_acquire)) break;
