@@ -545,6 +545,30 @@ void parallel_decode_and_copy(
 // ==============================
 void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     ensure_hwloc_initialized();
+    hwloc_topology_t topology = g_hwlocTopo->get();
+
+    // 1. Find the least busy NUMA node
+    unsigned chosenNumaNode = find_least_busy_numa_node(topology);
+
+    // 2. Pick the first PU (logical core) in this NUMA node
+    int totalPU = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_PU);
+    unsigned logicalCoreOnNode = 0;
+    bool found = false;
+    for (int i = 0; i < totalPU; ++i) {
+        hwloc_obj_t pu = hwloc_get_obj_by_type(topology, HWLOC_OBJ_PU, i);
+        hwloc_obj_t node = hwloc_get_ancestor_obj_by_type(topology, HWLOC_OBJ_NUMANODE, pu);
+        if (node && node->os_index == chosenNumaNode) {
+            logicalCoreOnNode = pu->os_index;
+            found = true;
+            break;
+        }
+    }
+    if (!found)
+        mexErrMsgIdAndTxt("load_bl_tif:Error", "No logical core found on NUMA node %u", chosenNumaNode);
+
+    // 3. Bind main thread to chosen NUMA node's first logical core
+    set_thread_affinity(logicalCoreOnNode);
+
     try {
         ParsedInputs args = parse_inputs(nrhs, prhs);
         uint16_t bitsPerSample = 0;
@@ -567,3 +591,4 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
         mexErrMsgIdAndTxt("load_bl_tif:Error", "%s", ex.what());
     }
 }
+
