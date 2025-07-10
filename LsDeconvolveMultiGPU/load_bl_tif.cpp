@@ -550,23 +550,18 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     // 1. Find the least busy NUMA node
     unsigned chosenNumaNode = find_least_busy_numa_node(topology);
 
-    // 2. Pick the first PU (logical core) in this NUMA node
-    int totalPU = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_PU);
-    unsigned logicalCoreOnNode = 0;
-    bool found = false;
-    for (int i = 0; i < totalPU; ++i) {
-        hwloc_obj_t pu = hwloc_get_obj_by_type(topology, HWLOC_OBJ_PU, i);
-        hwloc_obj_t node = hwloc_get_ancestor_obj_by_type(topology, HWLOC_OBJ_NUMANODE, pu);
-        if (node && node->os_index == chosenNumaNode) {
-            logicalCoreOnNode = pu->os_index;
-            found = true;
-            break;
+    // 2. Find first PU (logical core) on this node robustly
+    int logicalCoreOnNode = get_first_core_on_numa_node(topology, chosenNumaNode);
+    if (logicalCoreOnNode < 0) {
+        // fallback: try ANY available core on ANY node
+        int totalPU = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_PU);
+        if (totalPU > 0) {
+            logicalCoreOnNode = hwloc_get_obj_by_type(topology, HWLOC_OBJ_PU, 0)->os_index;
+        } else {
+            mexErrMsgIdAndTxt("load_bl_tif:Error", "No logical core found on NUMA node %u (and no PUs available at all)", chosenNumaNode);
         }
     }
-    if (!found)
-        mexErrMsgIdAndTxt("load_bl_tif:Error", "No logical core found on NUMA node %u", chosenNumaNode);
 
-    // 3. Bind main thread to chosen NUMA node's first logical core
     set_thread_affinity(logicalCoreOnNode);
 
     try {
@@ -591,4 +586,3 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
         mexErrMsgIdAndTxt("load_bl_tif:Error", "%s", ex.what());
     }
 }
-
