@@ -592,7 +592,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
                 }
             }
         }
-        set_thread_affinity(logicalCoreOnNode);
+        //set_thread_affinity(logicalCoreOnNode);
 
         // Allocate output array (try to get NUMA-local memory)
         void* outData = create_output_array(plhs[0], outType, outH, outW, numSlices);
