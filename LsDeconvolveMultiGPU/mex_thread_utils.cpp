@@ -207,17 +207,27 @@ std::vector<unsigned> get_cores_on_numa_node()
 {
     hwloc_topology_t topology = g_hwlocTopo->get();
     unsigned numaNode = find_least_busy_numa_node(topology);
-    std::vector<unsigned> coreIds;
-    int totalPU = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_PU);
+    // Handle synthetic NUMA node 0 for UMA systems:
+    const int nbNumaObjs = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_NUMANODE);
+    const bool hasRealNuma = (nbNumaObjs > 0);
+
+    std::vector<unsigned> pus;
+
+    const int totalPU = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_PU);
     for (int i = 0; i < totalPU; ++i) {
         hwloc_obj_t pu = hwloc_get_obj_by_type(topology, HWLOC_OBJ_PU, i);
         if (!pu) continue;
+
         hwloc_obj_t node = hwloc_get_ancestor_obj_by_type(topology, HWLOC_OBJ_NUMANODE, pu);
-        if (node && node->os_index == numaNode) {
-            coreIds.push_back(pu->os_index);
+        unsigned nodeId = (node ? node->os_index : 0u);
+        if (!hasRealNuma) nodeId = 0; // treat entire machine as node 0
+
+        if (nodeId == numaNode) {
+            pus.push_back(pu->os_index);
         }
     }
-    return coreIds;
+
+    return pus;
 }
 
 // --- MAIN FUNCTION: assign all pairs on one NUMA node ---
