@@ -372,42 +372,36 @@ void readSubRegionToBuffer(const LoadTask& task, TIFF* tif, uint8_t bytesPerPixe
 void parallel_decode_and_copy(
     const std::vector<LoadTask>& tasks,
     void* outData,
-    size_t bytesPerPixel,
-    unsigned chosenNumaNode)
+    size_t bytesPerPixel)
 {
-    const size_t numSlices       = tasks.size();
-    // Ask for enough pairs for your workload, but use only what the NUMA node can provide.
+    const size_t numSlices = tasks.size();
     const size_t maxRequestedPairs = std::min(numSlices, get_available_cores());
-    // Let the function return as many as are available on a single NUMA node
-    auto threadPairs = assign_thread_affinity_pairs_single_numa(maxRequestedPairs, chosenNumaNode);
-    const size_t threadPairCount = threadPairs.size();  // always safe to use exactly what is available
+    auto threadPairs = assign_thread_affinity_pairs(maxRequestedPairs);
+    const size_t threadPairCount = threadPairs.size();
 
-    const size_t numWires        = threadPairCount / kWires + ((threadPairCount % kWires) ? 1 : 0);
+    const size_t numWires = threadPairCount;
 
-    using TaskPtr  = std::shared_ptr<TaskResult>;
+    using TaskPtr = std::shared_ptr<TaskResult>;
     using QueuePtr = std::unique_ptr<BoundedQueue<TaskPtr>>;
 
-    // 1) One bounded queue per wire; depth = 8*kWires for NUMA-friendly prefetch
     std::vector<QueuePtr> queuesForWires;
     queuesForWires.reserve(numWires);
     for (size_t w = 0; w < numWires; ++w)
-        queuesForWires.emplace_back(std::make_unique<BoundedQueue<TaskPtr>>(8 * kWires));
+        queuesForWires.emplace_back(std::make_unique<BoundedQueue<TaskPtr>>(8));
 
     std::vector<std::thread> producerThreads, consumerThreads;
     producerThreads.reserve(threadPairCount);
     consumerThreads.reserve(threadPairCount);
 
-    std::atomic<uint32_t>   nextSliceIndex{0};
-    std::atomic<bool>       abortFlag{false};
+    std::atomic<uint32_t> nextSliceIndex{0};
+    std::atomic<bool> abortFlag{false};
     std::vector<std::string> runtimeErrors;
-    std::mutex               errorMutex;
+    std::mutex errorMutex;
 
-
-
-    // --- PRODUCERS: decode TIFF → TaskResult
+    // PRODUCERS
     for (size_t t = 0; t < threadPairCount; ++t)
     {
-        BoundedQueue<TaskPtr>& queueForPair = *queuesForWires[t / kWires];
+        BoundedQueue<TaskPtr>& queueForPair = *queuesForWires[t];
         producerThreads.emplace_back([&, t]
         {
             set_thread_affinity(threadPairs[t].producerLogicalCore);
@@ -433,7 +427,7 @@ void parallel_decode_and_copy(
                         task.cropW
                     );
                     readSubRegionToBuffer(task, tif.get(), static_cast<uint8_t>(bytesPerPixel), result->data, tempBuf);
-                    queueForPair.push(result); // pass to consumer
+                    queueForPair.push(result);
                 }
                 catch (const std::exception& ex)
                 {
@@ -448,10 +442,10 @@ void parallel_decode_and_copy(
         });
     }
 
-    // --- CONSUMERS: write TaskResult to output (optimized for Milan)
+    // CONSUMERS
     for (size_t t = 0; t < threadPairCount; ++t)
     {
-        BoundedQueue<TaskPtr>& queueForPair = *queuesForWires[t / kWires];
+        BoundedQueue<TaskPtr>& queueForPair = *queuesForWires[t];
         consumerThreads.emplace_back([&, t]
         {
             set_thread_affinity(threadPairs[t].consumerLogicalCore);
@@ -464,35 +458,34 @@ void parallel_decode_and_copy(
                 queueForPair.wait_and_pop(res);
                 if (!res) break; // EOS
 
-                const LoadTask& task   = tasks[res->block_id];
-                const uint8_t*  src    = res->data.data();
-                uint8_t*        dst    = static_cast<uint8_t*>(outData) +
-                                          task.zIndex * task.pixelsPerSlice * bytesPerPixel;
+                const LoadTask& task = tasks[res->block_id];
+                const uint8_t* src = res->data.data();
+                uint8_t* dst = static_cast<uint8_t*>(outData) +
+                               task.zIndex * task.pixelsPerSlice * bytesPerPixel;
 
+                // Copy logic as in your working version:
                 if (!task.transpose)
                 {
-                    // New heuristic: Only use column-major copy for extremely wide ROIs
-                    // Otherwise, always use row-major copy (safe for tall/square)
+                    // Column-major copy for wide ROIs
                     if (task.cropW > 4 * task.cropH)
                     {
-                        // --- Column-major copy (contiguous writes) ---
                         const size_t dstColStride = static_cast<size_t>(task.roiH) * bytesPerPixel;
                         if (bytesPerPixel == 2)
                         {
                             for (uint32_t col = 0; col < task.cropW; ++col)
                             {
                                 const uint16_t* srcCol = reinterpret_cast<const uint16_t*>(src + col * bytesPerPixel);
-                                uint16_t*       dstCol = reinterpret_cast<uint16_t*>(dst + col * dstColStride);
+                                uint16_t* dstCol = reinterpret_cast<uint16_t*>(dst + col * dstColStride);
                                 for (uint32_t row = 0; row < task.cropH; ++row)
                                     dstCol[row] = srcCol[row * task.cropW];
                             }
                         }
-                        else // bytesPerPixel == 1
+                        else
                         {
                             for (uint32_t col = 0; col < task.cropW; ++col)
                             {
                                 const uint8_t* srcCol = src + col;
-                                uint8_t*       dstCol = dst + col * dstColStride;
+                                uint8_t* dstCol = dst + col * dstColStride;
                                 for (uint32_t row = 0; row < task.cropH; ++row)
                                     dstCol[row] = srcCol[row * task.cropW];
                             }
@@ -500,7 +493,6 @@ void parallel_decode_and_copy(
                     }
                     else
                     {
-                        // --- Row-major copy (default for tall/square ROIs) ---
                         const size_t srcRowStride = static_cast<size_t>(task.cropW) * bytesPerPixel;
                         if (bytesPerPixel == 2)
                         {
@@ -511,7 +503,7 @@ void parallel_decode_and_copy(
                                     reinterpret_cast<uint16_t*>(dst)[row + col * task.roiH] = srcRow[col];
                             }
                         }
-                        else // bytesPerPixel == 1
+                        else
                         {
                             for (uint32_t row = 0; row < task.cropH; ++row)
                             {
@@ -524,7 +516,7 @@ void parallel_decode_and_copy(
                 }
                 else
                 {
-                    // Transposed: copy full rows, always fast
+                    // Transposed: copy full rows
                     const size_t rowBytes = static_cast<size_t>(task.cropW) * bytesPerPixel;
                     for (uint32_t row = 0; row < task.cropH; ++row)
                         std::memcpy(dst + row * rowBytes,
@@ -547,16 +539,10 @@ void parallel_decode_and_copy(
     }
 }
 
+
 // ==============================
 //       ENTRY POINT
 // ==============================
-#include "mex_thread_utils.hpp"
-
-// ... other includes ...
-
-#include "mex_thread_utils.hpp"
-// ... (other includes, as before)
-
 void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     ensure_hwloc_initialized();
     try {
@@ -568,50 +554,16 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
 
         size_t outH = args.transpose ? args.roiW : args.roiH;
         size_t outW = args.transpose ? args.roiH : args.roiW;
-        size_t numSlices = args.fileList.size();
-        size_t outBytes = outH * outW * numSlices * bytesPerPixel;
-        if (outH * outW > kMaxPixelsPerSlice)
+        size_t pixelsPerSlice = outH * outW;
+        if (pixelsPerSlice > kMaxPixelsPerSlice)
             mexErrMsgIdAndTxt("load_bl_tif:Error", "Requested ROI too large (>2^31 elements).");
+        void* outData = create_output_array(plhs[0], outType, outH, outW, args.fileList.size());
 
-        // NUMA logic: choose NUMA node, pick a core, and bind this thread.
-        unsigned chosenNumaNode = find_least_busy_numa_node(g_hwlocTopo->get());
+        auto tasks = create_tasks(args.fileList, args.roiY0, args.roiX0, args.roiH, args.roiW, pixelsPerSlice, args.transpose);
 
-        //// Pick a logical core from chosen NUMA node (first available)
-        //unsigned logicalCoreOnNode = 0;
-        //{
-        //    hwloc_topology_t topology = g_hwlocTopo->get();
-        //    int totalPU = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_PU);
-        //    for (int i = 0; i < totalPU; ++i) {
-        //        hwloc_obj_t pu = hwloc_get_obj_by_type(topology, HWLOC_OBJ_PU, i);
-        //        if (pu) {
-        //            hwloc_obj_t node = hwloc_get_ancestor_obj_by_type(topology, HWLOC_OBJ_NUMANODE, pu);
-        //            if (node && node->os_index == chosenNumaNode) {
-        //                logicalCoreOnNode = pu->os_index;
-        //                break;
-        //            }
-        //        }
-        //    }
-        //}
-        //set_thread_affinity(logicalCoreOnNode);
-
-        // Allocate output array (try to get NUMA-local memory)
-        void* outData = create_output_array(plhs[0], outType, outH, outW, numSlices);
-
-        // Touch each page to trigger OS first-touch
-        //volatile char* p = reinterpret_cast<volatile char*>(outData);
-        //size_t pageSize = 4096;
-        //for (size_t i = 0; i < outBytes; i += pageSize) p[i] = 0;
-        //if (outBytes > 0) p[outBytes - 1] = 0; // touch last byte
-
-        // Prepare tasks as before
-        auto tasks = create_tasks(args.fileList, args.roiY0, args.roiX0, args.roiH, args.roiW, outH * outW, args.transpose);
-
-        // Parallel decode directly into outData
-        parallel_decode_and_copy(tasks, outData, bytesPerPixel, chosenNumaNode);
-
-    } catch (const std::exception& ex) {
+        parallel_decode_and_copy(tasks, outData, bytesPerPixel);
+    }
+    catch (const std::exception& ex) {
         mexErrMsgIdAndTxt("load_bl_tif:Error", "%s", ex.what());
     }
 }
-
-
