@@ -385,7 +385,7 @@ void parallel_decode_and_copy(
 
     for (size_t t = 0; t < numThreads; ++t) {
         threads[t] = std::thread([&, t]{
-            set_thread_affinity(coreIds[t]);
+            //set_thread_affinity(coreIds[t]);
             std::vector<uint8_t> tempBuf;
             while (true) {
                 if (abortFlag.load(std::memory_order_acquire)) break;
