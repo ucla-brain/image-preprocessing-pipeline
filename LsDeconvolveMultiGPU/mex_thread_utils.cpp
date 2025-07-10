@@ -146,13 +146,70 @@ std::vector<ThreadAffinityPair> assign_thread_affinity_pairs(size_t pairCount)
     return pairs;
 }
 
+//======================================================================================================================
+
+// --- Helper: Parse /proc/stat and get busy jiffies for each PU ---
+static std::map<unsigned, uint64_t> get_cpu_busy_jiffies()
+{
+    std::ifstream stat("/proc/stat");
+    std::string line;
+    std::map<unsigned, uint64_t> cpu_busy;
+    while (std::getline(stat, line)) {
+        if (line.rfind("cpu", 0) == 0 && line.size() > 3 && std::isdigit(line[3])) {
+            std::istringstream iss(line);
+            std::string cpuLabel;
+            iss >> cpuLabel;
+            unsigned puIdx = std::stoi(cpuLabel.substr(3));
+            uint64_t user, nice, system, idle, iowait, irq, softirq, steal = 0;
+            iss >> user >> nice >> system >> idle >> iowait >> irq >> softirq >> steal;
+            // busy = user + nice + system + irq + softirq + steal
+            uint64_t busy = user + nice + system + irq + softirq + steal;
+            cpu_busy[puIdx] = busy;
+        }
+    }
+    return cpu_busy;
+}
+
+// --- Helper: Returns NUMA node with lowest total busy jiffies ---
+static unsigned find_least_busy_numa_node(hwloc_topology_t topology)
+{
+    auto cpu_busy = get_cpu_busy_jiffies();
+
+    std::map<unsigned, std::vector<unsigned>> nodeToPUs;
+    int totalPU = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_PU);
+
+    for (int i = 0; i < totalPU; ++i) {
+        hwloc_obj_t pu = hwloc_get_obj_by_type(topology, HWLOC_OBJ_PU, i);
+        if (!pu) continue;
+        unsigned nodeId = 0;
+        hwloc_obj_t node = hwloc_get_ancestor_obj_by_type(topology, HWLOC_OBJ_NUMANODE, pu);
+        if (node) nodeId = node->os_index;
+        nodeToPUs[nodeId].push_back(pu->os_index);
+    }
+
+    unsigned bestNode = 0;
+    uint64_t bestBusy = ~0ULL;
+    for (const auto& [node, pus] : nodeToPUs) {
+        uint64_t busySum = 0;
+        for (unsigned pu : pus) {
+            busySum += cpu_busy.count(pu) ? cpu_busy[pu] : 0;
+        }
+        if (busySum < bestBusy) {
+            bestBusy = busySum;
+            bestNode = node;
+        }
+    }
+    return bestNode;
+}
+
+// --- MAIN FUNCTION: assign all pairs on least busy NUMA node ---
 std::vector<ThreadAffinityPair>
-assign_thread_affinity_pairs_single_numa(size_t pairCount)
+assign_thread_affinity_pairs_single_numa(size_t maxPairs)
 {
     ensure_hwloc_initialized();
     hwloc_topology_t topology = g_hwlocTopo->get();
 
-    // Step 1: Count PUs per NUMA node
+    // Step 1: Gather all PUs by NUMA node
     std::map<unsigned, std::vector<unsigned>> nodeToPUs;
     std::map<unsigned, std::vector<unsigned>> nodeToSockets;
     int totalPU = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_PU);
@@ -169,37 +226,31 @@ assign_thread_affinity_pairs_single_numa(size_t pairCount)
         nodeToSockets[nodeId].push_back(socketId);
     }
 
-    // Step 2: Choose the NUMA node with most available PUs
-    unsigned bestNode = 0;
-    size_t   maxPU = 0;
-    for (const auto& [node, pus] : nodeToPUs) {
-        if (pus.size() > maxPU) { bestNode = node; maxPU = pus.size(); }
-    }
-    if (maxPU < 2 * pairCount)
-        throw std::runtime_error("Not enough cores on a single NUMA node to launch all pairs");
+    // Step 2: Find the least busy NUMA node
+    unsigned chosenNode = find_least_busy_numa_node(topology);
+    auto& pus = nodeToPUs[chosenNode];
+    auto& sockets = nodeToSockets[chosenNode];
 
-    // Step 3: Build producer-consumer pairs on the chosen NUMA node
-    std::vector<unsigned>& pus = nodeToPUs[bestNode];
-    std::vector<unsigned>& sockets = nodeToSockets[bestNode];
+    // Step 3: Build producer-consumer pairs from this NUMA node
     std::vector<ThreadAffinityPair> pairs;
-    pairs.reserve(pairCount);
+    pairs.reserve(maxPairs);
 
-    for (size_t i = 0; i + 1 < pus.size() && pairs.size() < pairCount; i += 2) {
-        pairs.push_back({pus[i], pus[i+1], bestNode, sockets[i]});
+    for (size_t i = 0; i + 1 < pus.size() && pairs.size() < maxPairs; i += 2) {
+        pairs.push_back({pus[i], pus[i+1], chosenNode, sockets[i]});
     }
-
-    // Edge case: if not enough pairs from pure even pairing, fill using single PUs (producer==consumer)
-    if (pairs.size() < pairCount && pus.size() % 2) {
+    // If odd number, last pair is single-thread (producer==consumer)
+    if (pairs.size() < maxPairs && pus.size() % 2) {
         unsigned pu = pus.back();
         unsigned socketId = sockets.back();
-        pairs.push_back({pu, pu, bestNode, socketId});
+        pairs.push_back({pu, pu, chosenNode, socketId});
     }
     // Final check
-    if (pairs.size() < pairCount)
-        throw std::runtime_error("Could not assign enough pairs from a single NUMA node");
+    if (pairs.empty())
+        throw std::runtime_error("Could not assign any thread pairs from least busy NUMA node");
 
     return pairs;
 }
+
 
 // ==============================
 //   set_thread_affinity

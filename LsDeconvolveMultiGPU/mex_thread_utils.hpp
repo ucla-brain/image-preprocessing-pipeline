@@ -13,6 +13,11 @@
 #include <atomic>
 #include <vector>
 #include <string>
+#include <fstream>
+#include <sstream>
+#include <algorithm>
+#include <stdexcept>
+#include <cctype>
 
 extern "C" {
 #include <hwloc.h>
