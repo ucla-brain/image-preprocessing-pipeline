@@ -373,7 +373,7 @@ void worker_main(
 // ==============================
 void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
 {
-    ensure_hwloc_initialized();
+    //ensure_hwloc_initialized();
     try {
         if (nrhs < 5 || nrhs > 6)
             throw std::runtime_error("Usage: img = load_bl_tif(files, y, x, height, width[, transposeFlag])");
@@ -490,8 +490,12 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
             results.emplace_back(results.size(), static_cast<size_t>(roiH * roiW * bytesPerPixel), roiH, roiW);
         }
 
-        auto coreIds = get_cores_on_numa_node();
-        const size_t numThreads = std::min(tasks.size(), coreIds.size());
+        //auto coreIds = get_cores_on_numa_node();
+        //const size_t numThreads = std::min(tasks.size(), coreIds.size());
+        unsigned numThreads = std::max(1u, std::min(
+            std::thread::hardware_concurrency(),
+            static_cast<unsigned>(std::min<size_t>(tasks.size(), std::numeric_limits<unsigned>::max()))
+        ));
 
         std::vector<std::thread> workers;
         std::atomic<size_t> nextTask{0};
