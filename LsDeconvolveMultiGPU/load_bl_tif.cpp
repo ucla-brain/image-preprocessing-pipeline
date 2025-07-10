@@ -545,14 +545,21 @@ void parallel_decode_and_copy(
 //       ENTRY POINT
 // ==============================
 void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
-    ensure_hwloc_initialized();
+
+
     try {
-        // NUMA-aware: bind this thread to the least busy NUMA node
+        ensure_hwloc_initialized();
         hwloc_topology_t topology = g_hwlocTopo->get();
         unsigned chosenNumaNode = find_least_busy_numa_node(topology);
         int logicalCoreOnNode = get_first_core_on_numa_node(topology, chosenNumaNode);
-        if (logicalCoreOnNode < 0)
-            mexErrMsgIdAndTxt("load_bl_tif:Error", "No logical core found on NUMA node %u", chosenNumaNode);
+        if (logicalCoreOnNode < 0) {
+            int totalPU = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_PU);
+            if (totalPU > 0) {
+                logicalCoreOnNode = hwloc_get_obj_by_type(topology, HWLOC_OBJ_PU, 0)->os_index;
+            } else {
+                mexErrMsgIdAndTxt("load_bl_tif:Error", "No logical core found on NUMA node %u (and no PUs available at all)", chosenNumaNode);
+            }
+        }
         set_thread_affinity(logicalCoreOnNode);
 
         ParsedInputs args = parse_inputs(nrhs, prhs);
@@ -566,11 +573,10 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
         size_t pixelsPerSlice = outH * outW;
         if (pixelsPerSlice > kMaxPixelsPerSlice)
             mexErrMsgIdAndTxt("load_bl_tif:Error", "Requested ROI too large (>2^31 elements).");
-
         void* outData = create_output_array(plhs[0], outType, outH, outW, args.fileList.size());
+
         auto tasks = create_tasks(args.fileList, args.roiY0, args.roiX0, args.roiH, args.roiW, pixelsPerSlice, args.transpose);
 
-        // Pass chosenNumaNode down
         parallel_decode_and_copy(tasks, outData, bytesPerPixel, chosenNumaNode);
     }
     catch (const std::exception& ex) {
