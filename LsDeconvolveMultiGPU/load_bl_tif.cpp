@@ -544,21 +544,20 @@ void parallel_decode_and_copy(
 //       ENTRY POINT
 // ==============================
 void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
-    try {
-        ensure_hwloc_initialized();
-        hwloc_topology_t topology = g_hwlocTopo->get();
-        unsigned chosenNumaNode = find_least_busy_numa_node(topology);
-        int logicalCoreOnNode = get_first_core_on_numa_node(topology, chosenNumaNode);
-        if (logicalCoreOnNode < 0) {
-            int totalPU = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_PU);
-            if (totalPU > 0) {
-                logicalCoreOnNode = hwloc_get_obj_by_type(topology, HWLOC_OBJ_PU, 0)->os_index;
-            } else {
-                mexErrMsgIdAndTxt("load_bl_tif:Error", "No logical core found on NUMA node %u (and no PUs available at all)", chosenNumaNode);
-            }
+    ensure_hwloc_initialized();
+    hwloc_topology_t topology = g_hwlocTopo->get();
+    unsigned chosenNumaNode = find_least_busy_numa_node(topology);
+    int logicalCoreOnNode = get_first_core_on_numa_node(topology, chosenNumaNode);
+    if (logicalCoreOnNode < 0) {
+        int totalPU = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_PU);
+        if (totalPU > 0) {
+            logicalCoreOnNode = hwloc_get_obj_by_type(topology, HWLOC_OBJ_PU, 0)->os_index;
+        } else {
+            mexErrMsgIdAndTxt("load_bl_tif:Error", "No logical core found on NUMA node %u (and no PUs available at all)", chosenNumaNode);
         }
-        set_thread_affinity(logicalCoreOnNode);
-
+    }
+    set_thread_affinity(logicalCoreOnNode);
+    try {
         ParsedInputs args = parse_inputs(nrhs, prhs);
         uint16_t bitsPerSample = 0;
         check_tiff_metadata(args.fileList, args.roiY0, args.roiX0, args.roiH, args.roiW, bitsPerSample);
