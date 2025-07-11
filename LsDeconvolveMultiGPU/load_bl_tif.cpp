@@ -370,55 +370,54 @@ void readSubRegionToBuffer(const LoadTask& task, TIFF* tif, uint8_t bytesPerPixe
 //                               *always* contiguous writes into MATLAB array
 // -----------------------------------------------------------------------------
 #include <atomic>
-#include <thread>
 #include <vector>
+#include <thread>
 #include <string>
-#include <exception>
-#include <sstream>
+#include <mutex>
+#include <queue>
+#include <condition_variable>
+#include <memory>
 #include <stdexcept>
+#include <sstream>
 #include <cstring>
 #include <cassert>
-#include <memory>
-#include <mutex>
 
-// --- Lock-free bounded queue for (index, buffer) pairs --- //
-template<typename T, size_t Capacity>
-class LockFreeRingQueue {
+// SPSC lock-free queue for unique_ptr (C++17)
+// Minimalist, non-blocking, cache-friendly ring buffer
+template<typename T>
+class SPSCQueue {
 public:
-    LockFreeRingQueue() : head_(0), tail_(0) {
-        static_assert((Capacity & (Capacity-1)) == 0, "Capacity must be a power of 2");
+    explicit SPSCQueue(size_t capacity)
+        : buffer_(capacity), capacity_(capacity), head_(0), tail_(0) {}
+
+    bool enqueue(T&& item) {
+        size_t head = head_.load(std::memory_order_relaxed);
+        size_t next_head = (head + 1) % capacity_;
+        if (next_head == tail_.load(std::memory_order_acquire))
+            return false; // full
+        buffer_[head] = std::move(item);
+        head_.store(next_head, std::memory_order_release);
+        return true;
     }
 
-    // Push: Returns false if full
-    bool push(T&& value) {
-        size_t head = head_.load(std::memory_order_relaxed);
-        size_t nextHead = (head + 1) & (Capacity-1);
-        if (nextHead == tail_.load(std::memory_order_acquire)) return false; // full
-        buffer_[head] = std::move(value);
-        head_.store(nextHead, std::memory_order_release);
-        return true;
-    }
-    // Pop: Returns false if empty
-    bool pop(T& out) {
+    bool dequeue(T& item) {
         size_t tail = tail_.load(std::memory_order_relaxed);
-        if (tail == head_.load(std::memory_order_acquire)) return false; // empty
-        out = std::move(buffer_[tail]);
-        tail_.store((tail + 1) & (Capacity-1), std::memory_order_release);
+        if (tail == head_.load(std::memory_order_acquire))
+            return false; // empty
+        item = std::move(buffer_[tail]);
+        tail_.store((tail + 1) % capacity_, std::memory_order_release);
         return true;
     }
-    // Is queue empty?
-    bool empty() const {
-        return tail_.load(std::memory_order_acquire) == head_.load(std::memory_order_acquire);
-    }
+
 private:
-    T buffer_[Capacity];
+    std::vector<T> buffer_;
+    const size_t capacity_;
     std::atomic<size_t> head_, tail_;
 };
 
-// Struct to hold produced slice
-struct ProducedSliceBuffer {
-    size_t taskIndex;
-    std::vector<uint8_t> buffer;
+struct ProducerConsumerTask {
+    LoadTask task;
+    std::unique_ptr<std::vector<uint8_t>> buffer; // Ownership is unique and explicit
 };
 
 void parallel_decode_and_copy(
@@ -426,104 +425,112 @@ void parallel_decode_and_copy(
     void* outData,
     size_t bytesPerPixel)
 {
-    const size_t numTasks = tasks.size();
-    const size_t numThreads = std::min(numTasks, get_available_cores());
+    const size_t numWorkerThreads = std::min(tasks.size(), get_available_cores());
+    const size_t queueCapacity = 32; // Tune: large enough to buffer in-flight tasks
 
-    // Lock-free queue with extra room to avoid producer stalls
-    constexpr size_t kQueueCapacity = 128; // Must be power of 2, at least 2x numThreads for perf
-    LockFreeRingQueue<ProducedSliceBuffer, kQueueCapacity> producedQueue;
-
-    std::atomic<uint32_t> producerNextIndex{0};
-    std::atomic<uint32_t> consumerNextCount{0};
+    std::atomic<uint32_t> nextTaskIndex{0};
     std::atomic<bool> abortFlag{false};
-
     std::vector<std::string> runtimeErrors;
     std::mutex errorMutex;
 
-    // --- Producer thread function ---
-    auto producerFunc = [&](size_t /*producerId*/) {
-        std::vector<uint8_t> tempBuf;
-        while (true) {
-            if (abortFlag.load(std::memory_order_acquire)) break;
-            uint32_t idx = producerNextIndex.fetch_add(1, std::memory_order_relaxed);
-            if (idx >= numTasks) break;
-            const LoadTask& task = tasks[idx];
-            try {
-                TiffHandle tif(TIFFOpen(task.path.c_str(), "r"));
-                if (!tif)
-                    throw std::runtime_error("Cannot open file " + task.path);
+    // One queue per worker/consumer pair for max parallelism
+    std::vector<std::unique_ptr<SPSCQueue<std::unique_ptr<ProducerConsumerTask>>>> queues;
+    for (size_t i = 0; i < numWorkerThreads; ++i)
+        queues.emplace_back(std::make_unique<SPSCQueue<std::unique_ptr<ProducerConsumerTask>>>(queueCapacity));
 
-                std::vector<uint8_t> blockBuf(static_cast<size_t>(task.cropH * task.cropW * bytesPerPixel));
-                readSubRegionToBuffer(task, tif.get(), static_cast<uint8_t>(bytesPerPixel), blockBuf, tempBuf);
+    std::vector<std::thread> producerThreads, consumerThreads;
 
-                // Package produced slice into lock-free queue
-                ProducedSliceBuffer produced{idx, std::move(blockBuf)};
-                // Spin until enqueued (rare unless many more producers than queue slots)
-                while (!producedQueue.push(std::move(produced))) {
-                    if (abortFlag.load(std::memory_order_acquire)) break;
-                    std::this_thread::yield();
+    // -- PRODUCER THREADS: Decompress into buffers and enqueue tasks for consumers --
+    for (size_t threadIdx = 0; threadIdx < numWorkerThreads; ++threadIdx) {
+        producerThreads.emplace_back([&, threadIdx] {
+            std::vector<uint8_t> tempBuf;
+            auto& queue = *queues[threadIdx];
+            while (true) {
+                if (abortFlag.load(std::memory_order_acquire)) break;
+                uint32_t idx = nextTaskIndex.fetch_add(1, std::memory_order_relaxed);
+                if (idx >= tasks.size()) break;
+
+                const LoadTask& task = tasks[idx];
+                try {
+                    // Decompress into a new unique buffer (unique_ptr)
+                    TiffHandle tif(TIFFOpen(task.path.c_str(), "r"));
+                    if (!tif)
+                        throw std::runtime_error("Cannot open file " + task.path);
+
+                    auto blockBuf = std::make_unique<std::vector<uint8_t>>(static_cast<size_t>(task.cropH * task.cropW * bytesPerPixel));
+                    readSubRegionToBuffer(task, tif.get(), static_cast<uint8_t>(bytesPerPixel), *blockBuf, tempBuf);
+
+                    // Enqueue the buffer/task for the consumer
+                    auto prodTask = std::make_unique<ProducerConsumerTask>();
+                    prodTask->task = task;
+                    prodTask->buffer = std::move(blockBuf);
+
+                    // Spin-wait until the queue has space (rare unless tasks are huge)
+                    while (!queue.enqueue(std::move(prodTask))) {
+                        if (abortFlag.load(std::memory_order_acquire)) break;
+                        std::this_thread::yield();
+                    }
+                } catch (const std::exception& ex) {
+                    std::lock_guard<std::mutex> lk(errorMutex);
+                    runtimeErrors.emplace_back("Slice " + std::to_string(task.zIndex + 1) +
+                                               ": " + ex.what());
+                    abortFlag.store(true, std::memory_order_release);
+                    break;
                 }
-            } catch (const std::exception& ex) {
-                // Record error and abort
-                std::lock_guard<std::mutex> lk(errorMutex);
-                runtimeErrors.emplace_back("Slice " + std::to_string(task.zIndex + 1) +
-                                           ": " + ex.what());
-                abortFlag.store(true, std::memory_order_release);
-                break;
             }
-        }
-    };
+        });
+    }
 
-    // --- Consumer thread function ---
-    auto consumerFunc = [&]() {
-        while (true) {
-            if (abortFlag.load(std::memory_order_acquire)) break;
-            // Stop after all tasks are consumed
-            uint32_t idx = consumerNextCount.load(std::memory_order_relaxed);
-            if (idx >= numTasks && producedQueue.empty()) break;
-            ProducedSliceBuffer produced;
-            if (!producedQueue.pop(produced)) {
-                std::this_thread::yield();
-                continue;
-            }
-            // Copy logic as before, using produced.taskIndex and produced.buffer
-            const LoadTask& task = tasks[produced.taskIndex];
-            uint8_t* dst = static_cast<uint8_t*>(outData) +
-                           task.zIndex * task.pixelsPerSlice * bytesPerPixel;
-            const uint8_t* src = produced.buffer.data();
-
-            try {
-                if (!task.transpose) {
-                    if (task.cropW > 4 * task.cropH) {
-                        const size_t dstColStride = static_cast<size_t>(task.roiH) * bytesPerPixel;
-                        if (bytesPerPixel == 2) {
-                            for (uint32_t col = 0; col < task.cropW; ++col) {
-                                const uint16_t* srcCol = reinterpret_cast<const uint16_t*>(src + col * bytesPerPixel);
-                                uint16_t* dstCol = reinterpret_cast<uint16_t*>(dst + col * dstColStride);
-                                for (uint32_t row = 0; row < task.cropH; ++row)
-                                    dstCol[row] = srcCol[row * task.cropW];
+    // -- CONSUMER THREADS: Copy the decompressed buffer into outData and free buffer --
+    for (size_t threadIdx = 0; threadIdx < numWorkerThreads; ++threadIdx) {
+        consumerThreads.emplace_back([&, threadIdx] {
+            auto& queue = *queues[threadIdx];
+            while (!abortFlag.load(std::memory_order_acquire)) {
+                std::unique_ptr<ProducerConsumerTask> prodTask;
+                if (!queue.dequeue(prodTask)) {
+                    // Check if all producer threads are done and queue is empty
+                    if (nextTaskIndex.load(std::memory_order_acquire) >= tasks.size())
+                        break;
+                    std::this_thread::yield();
+                    continue;
+                }
+                const LoadTask& task = prodTask->task;
+                const uint8_t* src = prodTask->buffer->data();
+                uint8_t* dst = static_cast<uint8_t*>(outData) +
+                               task.zIndex * task.pixelsPerSlice * bytesPerPixel;
+                try {
+                    // Exact same copy logic as before
+                    if (!task.transpose) {
+                        if (task.cropW > 4 * task.cropH) {
+                            const size_t dstColStride = static_cast<size_t>(task.roiH) * bytesPerPixel;
+                            if (bytesPerPixel == 2) {
+                                for (uint32_t col = 0; col < task.cropW; ++col) {
+                                    const uint16_t* srcCol = reinterpret_cast<const uint16_t*>(src + col * bytesPerPixel);
+                                    uint16_t* dstCol = reinterpret_cast<uint16_t*>(dst + col * dstColStride);
+                                    for (uint32_t row = 0; row < task.cropH; ++row)
+                                        dstCol[row] = srcCol[row * task.cropW];
+                                }
+                            } else {
+                                for (uint32_t col = 0; col < task.cropW; ++col) {
+                                    const uint8_t* srcCol = src + col;
+                                    uint8_t* dstCol = dst + col * dstColStride;
+                                    for (uint32_t row = 0; row < task.cropH; ++row)
+                                        dstCol[row] = srcCol[row * task.cropW];
+                                }
                             }
                         } else {
-                            for (uint32_t col = 0; col < task.cropW; ++col) {
-                                const uint8_t* srcCol = src + col;
-                                uint8_t* dstCol = dst + col * dstColStride;
-                                for (uint32_t row = 0; row < task.cropH; ++row)
-                                    dstCol[row] = srcCol[row * task.cropW];
-                            }
-                        }
-                    } else {
-                        const size_t srcRowStride = static_cast<size_t>(task.cropW) * bytesPerPixel;
-                        if (bytesPerPixel == 2) {
-                            for (uint32_t row = 0; row < task.cropH; ++row) {
-                                const uint16_t* srcRow = reinterpret_cast<const uint16_t*>(src + row * srcRowStride);
-                                for (uint32_t col = 0; col < task.cropW; ++col)
-                                    reinterpret_cast<uint16_t*>(dst)[row + col * task.roiH] = srcRow[col];
-                            }
-                        } else {
-                            for (uint32_t row = 0; row < task.cropH; ++row) {
-                                const uint8_t* srcRow = src + row * srcRowStride;
-                                for (uint32_t col = 0; col < task.cropW; ++col)
-                                    dst[row + col * task.roiH] = srcRow[col];
+                            const size_t srcRowStride = static_cast<size_t>(task.cropW) * bytesPerPixel;
+                            if (bytesPerPixel == 2) {
+                                for (uint32_t row = 0; row < task.cropH; ++row) {
+                                    const uint16_t* srcRow = reinterpret_cast<const uint16_t*>(src + row * srcRowStride);
+                                    for (uint32_t col = 0; col < task.cropW; ++col)
+                                        reinterpret_cast<uint16_t*>(dst)[row + col * task.roiH] = srcRow[col];
+                                }
+                            } else {
+                                for (uint32_t row = 0; row < task.cropH; ++row) {
+                                    const uint8_t* srcRow = src + row * srcRowStride;
+                                    for (uint32_t col = 0; col < task.cropW; ++col)
+                                        dst[row + col * task.roiH] = srcRow[col];
                                 }
                             }
                         }
@@ -533,40 +540,28 @@ void parallel_decode_and_copy(
                             std::memcpy(dst + row * rowBytes, src + row * rowBytes, rowBytes);
                     }
                 } catch (const std::exception& ex) {
-                    // Record error and abort
                     std::lock_guard<std::mutex> lk(errorMutex);
                     runtimeErrors.emplace_back("Slice " + std::to_string(task.zIndex + 1) +
-                                               ": " + ex.what());
+                                               ": Copy error: " + ex.what());
                     abortFlag.store(true, std::memory_order_release);
                     break;
                 }
-                consumerNextCount.fetch_add(1, std::memory_order_release);
+                // Buffer is automatically freed as unique_ptr goes out of scope
             }
-        };
+        });
+    }
 
-        // --- Thread launching --- //
-        size_t numProducers = numThreads / 2 + 1;
-        size_t numConsumers = numThreads - numProducers;
+    for (auto& th : producerThreads) th.join();
+    for (auto& th : consumerThreads) th.join();
 
-        std::vector<std::thread> producerThreads;
-        std::vector<std::thread> consumerThreads;
-        for (size_t t = 0; t < numProducers; ++t)
-            producerThreads.emplace_back(producerFunc, t);
-        for (size_t t = 0; t < numConsumers; ++t)
-            consumerThreads.emplace_back(consumerFunc);
-
-        // Wait for producers, then consumers
-        for (auto& th : producerThreads) th.join();
-        for (auto& th : consumerThreads) th.join();
-
-        // --- Error handling as before --- //
-        if (!runtimeErrors.empty()) {
-            std::ostringstream oss;
-            oss << "Errors during load_bl_tif (lock-free prod/cons):\n";
-            for (const auto& e : runtimeErrors) oss << "  - " << e << '\n';
-            mexErrMsgIdAndTxt("load_bl_tif:Error", "%s", oss.str().c_str());
-        }
+    if (!runtimeErrors.empty()) {
+        std::ostringstream oss;
+        oss << "Errors during load_bl_tif (producer-consumer lock-free):\n";
+        for (const auto& e : runtimeErrors) oss << "  - " << e << '\n';
+        mexErrMsgIdAndTxt("load_bl_tif:Error", "%s", oss.str().c_str());
+    }
 }
+
 
 // ==============================
 //       ENTRY POINT
