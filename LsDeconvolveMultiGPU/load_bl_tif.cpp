@@ -111,6 +111,7 @@ static constexpr uint16_t kSupportedBitDepth8  = 8;
 static constexpr uint16_t kSupportedBitDepth16 = 16;
 static constexpr size_t   kMaxPixelsPerSlice   = static_cast<size_t>(std::numeric_limits<int>::max());
 static constexpr size_t   kWires = 1;
+static constexpr boot     numaLock = false;
 
 // --- RAII wrapper for mxArrayToUTF8String() ---
 struct MatlabString {
@@ -375,23 +376,27 @@ void parallel_decode_and_copy(
     void* outData,
     size_t bytesPerPixel)
 {
-    // === Detect NUMA node for outData and get logical cores on that node ===
-    const int numaNodeOfOutData = get_numa_node_of_pointer(outData);
     std::vector<unsigned> logicalCoresOnNumaNode;
-    if (numaNodeOfOutData >= 0) {
-        logicalCoresOnNumaNode = get_cores_on_numa_node(numaNodeOfOutData);
-        if (logicalCoresOnNumaNode.empty()) {
-            // Fallback: all available cores
+    size_t numThreads;
+    numThreads = std::min(tasks.size(), get_available_cores());
+
+    if (numaLock) {
+        // === NUMA-aware: Detect NUMA node for outData and get logical cores on that node ===
+        const int numaNodeOfOutData = get_numa_node_of_pointer(outData);
+        if (numaNodeOfOutData >= 0) {
+            logicalCoresOnNumaNode = get_cores_on_numa_node(numaNodeOfOutData);
+            if (logicalCoresOnNumaNode.empty()) {
+                // Fallback: all available cores
+                logicalCoresOnNumaNode.resize(get_available_cores());
+                std::iota(logicalCoresOnNumaNode.begin(), logicalCoresOnNumaNode.end(), 0);
+            }
+        } else {
+            // Could not determine NUMA node, use all cores
             logicalCoresOnNumaNode.resize(get_available_cores());
             std::iota(logicalCoresOnNumaNode.begin(), logicalCoresOnNumaNode.end(), 0);
         }
-    } else {
-        // Could not determine NUMA node, use all cores
-        logicalCoresOnNumaNode.resize(get_available_cores());
-        std::iota(logicalCoresOnNumaNode.begin(), logicalCoresOnNumaNode.end(), 0);
+        numThreads = std::min(tasks.size(), logicalCoresOnNumaNode.size());
     }
-
-    const size_t numThreads = std::min(tasks.size(), logicalCoresOnNumaNode.size());
 
     std::atomic<uint32_t> nextSliceIndex{0};
     std::atomic<bool> abortFlag{false};
@@ -401,7 +406,9 @@ void parallel_decode_and_copy(
 
     for (size_t t = 0; t < numThreads; ++t) {
         threads[t] = std::thread([&, t]{
-            set_thread_affinity(logicalCoresOnNumaNode[t % logicalCoresOnNumaNode.size()]);
+            if (numaLock) {
+                set_thread_affinity(logicalCoresOnNumaNode[t % logicalCoresOnNumaNode.size()]);
+            }
             std::vector<uint8_t> tempBuf;
             while (true) {
                 if (abortFlag.load(std::memory_order_acquire)) break;
