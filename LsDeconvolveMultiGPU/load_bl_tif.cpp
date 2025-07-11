@@ -369,184 +369,171 @@ void readSubRegionToBuffer(const LoadTask& task, TIFF* tif, uint8_t bytesPerPixe
 //  parallel_decode_and_copy  –  NUMA-aware producer/consumer with
 //                               *always* contiguous writes into MATLAB array
 // -----------------------------------------------------------------------------
-struct BufferItem {
-    uint32_t zIndex;
-    std::vector<uint8_t> blockBuf;
+#include <vector>
+#include <thread>
+#include <atomic>
+#include <cstring>
+#include <string>
+#include <sstream>
+#include <stdexcept>
+#include <mutex>
+#include <condition_variable>
+
+// Define a reasonably-sized ring buffer (for typical thread counts).
+constexpr size_t kNumRingBufferSlots = 16;
+
+struct CopyBufferSlot {
+    std::atomic<bool> readyToCopy{false};
     LoadTask task;
+    std::vector<uint8_t> blockBuffer;
+    std::string errorMessage;
 };
 
-// --- Swap bytes for 16-bit values in-place ---
-inline void swap_bytes_16(uint16_t* data, size_t n) {
-    for (size_t i = 0; i < n; ++i) {
-        data[i] = (data[i] >> 8) | (data[i] << 8);
-    }
-}
-
-// --- Detect host endianness (for more portable logic, not strictly needed with TIFFIsByteSwapped) ---
-inline bool isLittleEndianHost() {
-    const uint16_t one = 1;
-    return *reinterpret_cast<const uint8_t*>(&one) == 1;
-}
-
-// --- Main parallel producer-consumer pipeline ---
+// Main parallel producer-consumer decode/copy function
 void parallel_decode_and_copy(
-    const std::vector<LoadTask>& tasks,
+    const std::vector<LoadTask>& loadTasks,
     void* outData,
     size_t bytesPerPixel)
 {
-    using std::vector;
-    using std::string;
+    const size_t totalNumSlices = loadTasks.size();
+    const size_t numIOThreads = std::min<size_t>(std::thread::hardware_concurrency(), 4); // Or as you wish
+    const size_t numCopyThreads = std::min<size_t>(std::thread::hardware_concurrency(), 4);
 
-    const size_t numThreads = std::min(tasks.size(), get_available_cores());
-    const size_t numProducers = numThreads / 2 + 1;
-    const size_t numConsumers = numThreads - numProducers;
+    // Shared ring buffer for load and copy stages
+    std::vector<CopyBufferSlot> ringBuffer(kNumRingBufferSlots);
 
-    std::queue<std::shared_ptr<BufferItem>> queue;
-    std::mutex queueMutex;
-    std::condition_variable queueCV;
-
-    std::atomic<uint32_t> nextSliceIndex{0};
+    std::atomic<size_t> producerIndex{0};
+    std::atomic<size_t> consumerIndex{0};
     std::atomic<bool> abortFlag{false};
-    vector<string> runtimeErrors;
+
+    std::vector<std::string> runtimeErrors;
     std::mutex errorMutex;
-    std::atomic<uint32_t> consumedCount{0};
 
-    // --- Producer threads: decode TIFF and push BufferItem into the queue ---
-    std::vector<std::thread> producers;
-    for (size_t t = 0; t < numProducers; ++t) {
-        producers.emplace_back([&, t]{
-            std::vector<uint8_t> tempBuf;
-            while (true) {
-                if (abortFlag.load(std::memory_order_acquire)) break;
-                uint32_t idx = nextSliceIndex.fetch_add(1, std::memory_order_relaxed);
-                if (idx >= tasks.size()) break;
-                const LoadTask& task = tasks[idx];
-                try {
-                    TiffHandle tif(TIFFOpen(task.path.c_str(), "r"));
-                    if (!tif)
-                        throw std::runtime_error("Cannot open file " + task.path);
+    // --- Producer Stage: I/O, decompress, fill buffer slots ---
+    auto ioProducerThread = [&](size_t threadID) {
+        std::vector<uint8_t> scratchBuffer;
+        while (true) {
+            if (abortFlag.load(std::memory_order_acquire)) break;
+            size_t sliceIndex = producerIndex.fetch_add(1, std::memory_order_relaxed);
+            if (sliceIndex >= totalNumSlices) break;
 
-                    auto item = std::make_shared<BufferItem>();
-                    item->zIndex = task.zIndex;
-                    item->task = task;
-                    item->blockBuf.resize(static_cast<size_t>(task.cropH * task.cropW * bytesPerPixel));
-                    readSubRegionToBuffer(task, tif.get(), static_cast<uint8_t>(bytesPerPixel), item->blockBuf, tempBuf);
+            size_t bufferSlotIndex = sliceIndex % kNumRingBufferSlots;
+            CopyBufferSlot& slot = ringBuffer[bufferSlotIndex];
 
-                    // --- Byte swap if needed (16-bit only) ---
-                    bool needByteSwap = TIFFIsByteSwapped(tif.get());
-                    if (bytesPerPixel == 2 && needByteSwap) {
-                        swap_bytes_16(reinterpret_cast<uint16_t*>(item->blockBuf.data()), task.cropH * task.cropW);
-                    }
-
-                    // --- Push to queue ---
-                    {
-                        std::lock_guard<std::mutex> lock(queueMutex);
-                        queue.push(item);
-                    }
-                    queueCV.notify_one();
-
-                } catch (const std::exception& ex) {
-                    {
-                        std::lock_guard<std::mutex> lk(errorMutex);
-                        runtimeErrors.emplace_back("Slice " + std::to_string(task.zIndex + 1) + ": " + ex.what());
-                        abortFlag.store(true, std::memory_order_release);
-                    }
-                    queueCV.notify_all(); // Wake up any waiting consumers
-                    break;
-                }
+            // Wait until slot is available for writing (not readyToCopy)
+            while (slot.readyToCopy.load(std::memory_order_acquire)) {
+                if (abortFlag.load(std::memory_order_acquire)) return;
+                std::this_thread::yield();
             }
-        });
-    }
 
-    // --- Consumer threads: pop BufferItem and copy to outData ---
-    std::vector<std::thread> consumers;
-    for (size_t t = 0; t < numConsumers; ++t) {
-        consumers.emplace_back([&, t]{
-            while (true) {
-                std::shared_ptr<BufferItem> item;
-                // --- Pop from queue ---
-                {
-                    std::unique_lock<std::mutex> lock(queueMutex);
-                    queueCV.wait(lock, [&]{
-                        return !queue.empty() || abortFlag.load() || consumedCount >= tasks.size();
-                    });
-                    if (abortFlag.load() || (queue.empty() && consumedCount >= tasks.size())) break;
-                    if (queue.empty()) continue; // Spurious wakeup
+            slot.errorMessage.clear();
+            slot.task = loadTasks[sliceIndex];
+            slot.blockBuffer.resize(static_cast<size_t>(slot.task.cropH * slot.task.cropW * bytesPerPixel));
 
-                    item = queue.front();
-                    queue.pop();
-                }
-                if (!item) continue;
-                // --- Copy to output buffer ---
-                try {
-                    uint8_t* dst = static_cast<uint8_t*>(outData) +
-                                   item->zIndex * item->task.pixelsPerSlice * bytesPerPixel;
-                    const uint8_t* src = item->blockBuf.data();
-                    const LoadTask& task = item->task;
+            try {
+                TiffHandle tif(TIFFOpen(slot.task.path.c_str(), "r"));
+                if (!tif)
+                    throw std::runtime_error("Cannot open file " + slot.task.path);
 
-                    if (!task.transpose) {
-                        if (task.cropW > 4 * task.cropH) {
-                            const size_t dstColStride = static_cast<size_t>(task.roiH) * bytesPerPixel;
-                            if (bytesPerPixel == 2) {
-                                for (uint32_t col = 0; col < task.cropW; ++col) {
-                                    const uint16_t* srcCol = reinterpret_cast<const uint16_t*>(src + col * bytesPerPixel);
-                                    uint16_t* dstCol = reinterpret_cast<uint16_t*>(dst + col * dstColStride);
-                                    for (uint32_t row = 0; row < task.cropH; ++row)
-                                        dstCol[row] = srcCol[row * task.cropW];
-                                }
-                            } else {
-                                for (uint32_t col = 0; col < task.cropW; ++col) {
-                                    const uint8_t* srcCol = src + col;
-                                    uint8_t* dstCol = dst + col * dstColStride;
-                                    for (uint32_t row = 0; row < task.cropH; ++row)
-                                        dstCol[row] = srcCol[row * task.cropW];
-                                }
+                readSubRegionToBuffer(slot.task, tif.get(), static_cast<uint8_t>(bytesPerPixel), slot.blockBuffer, scratchBuffer);
+            } catch (const std::exception& ex) {
+                slot.errorMessage = "Slice " + std::to_string(slot.task.zIndex + 1) + ": " + ex.what();
+                abortFlag.store(true, std::memory_order_release);
+            }
+
+            // Mark slot as ready for copying
+            slot.readyToCopy.store(true, std::memory_order_release);
+        }
+    };
+
+    // --- Consumer Stage: copy into outData ---
+    auto memoryCopyThread = [&](size_t threadID) {
+        while (true) {
+            if (abortFlag.load(std::memory_order_acquire)) break;
+            size_t sliceIndex = consumerIndex.fetch_add(1, std::memory_order_relaxed);
+            if (sliceIndex >= totalNumSlices) break;
+
+            size_t bufferSlotIndex = sliceIndex % kNumRingBufferSlots;
+            CopyBufferSlot& slot = ringBuffer[bufferSlotIndex];
+
+            // Wait until producer has filled slot
+            while (!slot.readyToCopy.load(std::memory_order_acquire)) {
+                if (abortFlag.load(std::memory_order_acquire)) return;
+                std::this_thread::yield();
+            }
+
+            // Handle I/O error if any
+            if (!slot.errorMessage.empty()) {
+                std::lock_guard<std::mutex> lock(errorMutex);
+                runtimeErrors.push_back(slot.errorMessage);
+                abortFlag.store(true, std::memory_order_release);
+            } else {
+                const LoadTask& task = slot.task;
+                const uint8_t* src = slot.blockBuffer.data();
+                uint8_t* dst = static_cast<uint8_t*>(outData) +
+                               task.zIndex * task.pixelsPerSlice * bytesPerPixel;
+
+                // The original copy logic, unchanged
+                if (!task.transpose) {
+                    if (task.cropW > 4 * task.cropH) {
+                        const size_t dstColStride = static_cast<size_t>(task.roiH) * bytesPerPixel;
+                        if (bytesPerPixel == 2) {
+                            for (uint32_t col = 0; col < task.cropW; ++col) {
+                                const uint16_t* srcCol = reinterpret_cast<const uint16_t*>(src + col * bytesPerPixel);
+                                uint16_t* dstCol = reinterpret_cast<uint16_t*>(dst + col * dstColStride);
+                                for (uint32_t row = 0; row < task.cropH; ++row)
+                                    dstCol[row] = srcCol[row * task.cropW];
                             }
                         } else {
-                            const size_t srcRowStride = static_cast<size_t>(task.cropW) * bytesPerPixel;
-                            if (bytesPerPixel == 2) {
-                                for (uint32_t row = 0; row < task.cropH; ++row) {
-                                    const uint16_t* srcRow = reinterpret_cast<const uint16_t*>(src + row * srcRowStride);
-                                    for (uint32_t col = 0; col < task.cropW; ++col)
-                                        reinterpret_cast<uint16_t*>(dst)[row + col * task.roiH] = srcRow[col];
-                                }
-                            } else {
-                                for (uint32_t row = 0; row < task.cropH; ++row) {
-                                    const uint8_t* srcRow = src + row * srcRowStride;
-                                    for (uint32_t col = 0; col < task.cropW; ++col)
-                                        dst[row + col * task.roiH] = srcRow[col];
-                                }
+                            for (uint32_t col = 0; col < task.cropW; ++col) {
+                                const uint8_t* srcCol = src + col;
+                                uint8_t* dstCol = dst + col * dstColStride;
+                                for (uint32_t row = 0; row < task.cropH; ++row)
+                                    dstCol[row] = srcCol[row * task.cropW];
                             }
                         }
                     } else {
-                        const size_t rowBytes = static_cast<size_t>(task.cropW) * bytesPerPixel;
-                        for (uint32_t row = 0; row < task.cropH; ++row)
-                            std::memcpy(dst + row * rowBytes, src + row * rowBytes, rowBytes);
+                        const size_t srcRowStride = static_cast<size_t>(task.cropW) * bytesPerPixel;
+                        if (bytesPerPixel == 2) {
+                            for (uint32_t row = 0; row < task.cropH; ++row) {
+                                const uint16_t* srcRow = reinterpret_cast<const uint16_t*>(src + row * srcRowStride);
+                                for (uint32_t col = 0; col < task.cropW; ++col)
+                                    reinterpret_cast<uint16_t*>(dst)[row + col * task.roiH] = srcRow[col];
+                            }
+                        } else {
+                            for (uint32_t row = 0; row < task.cropH; ++row) {
+                                const uint8_t* srcRow = src + row * srcRowStride;
+                                for (uint32_t col = 0; col < task.cropW; ++col)
+                                    dst[row + col * task.roiH] = srcRow[col];
+                            }
+                        }
                     }
-                } catch (const std::exception& ex) {
-                    std::lock_guard<std::mutex> lk(errorMutex);
-                    runtimeErrors.emplace_back("Copy to output failed for slice " +
-                        std::to_string(item->zIndex + 1) + ": " + ex.what());
-                    abortFlag.store(true, std::memory_order_release);
-                    queueCV.notify_all();
-                    break;
+                } else {
+                    const size_t rowBytes = static_cast<size_t>(task.cropW) * bytesPerPixel;
+                    for (uint32_t row = 0; row < task.cropH; ++row)
+                        std::memcpy(dst + row * rowBytes, src + row * rowBytes, rowBytes);
                 }
-                ++consumedCount;
             }
-        });
-    }
 
-    // --- Wait for all producers to finish ---
-    for (auto& th : producers) th.join();
+            // Mark slot as available for producer (reset)
+            slot.readyToCopy.store(false, std::memory_order_release);
+        }
+    };
 
-    // --- Wait for all consumers to finish ---
-    queueCV.notify_all();
-    for (auto& th : consumers) th.join();
+    // --- Launch threads ---
+    std::vector<std::thread> ioThreads, copyThreads;
+    for (size_t i = 0; i < numIOThreads; ++i)
+        ioThreads.emplace_back(ioProducerThread, i);
+    for (size_t i = 0; i < numCopyThreads; ++i)
+        copyThreads.emplace_back(memoryCopyThread, i);
 
-    // --- Error reporting ---
+    for (auto& th : ioThreads) th.join();
+    for (auto& th : copyThreads) th.join();
+
+    // --- Handle errors if any ---
     if (!runtimeErrors.empty()) {
         std::ostringstream oss;
-        oss << "Errors during load_bl_tif (producer-consumer model):\n";
+        oss << "Errors during load_bl_tif (lockfree producer/consumer):\n";
         for (const auto& e : runtimeErrors) oss << "  - " << e << '\n';
         mexErrMsgIdAndTxt("load_bl_tif:Error", "%s", oss.str().c_str());
     }
