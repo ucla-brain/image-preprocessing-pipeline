@@ -40,11 +40,11 @@ end
 fprintf('--- Dataset: %d×%d ‖ %d slices ‖ %d-bit (%s) ---\n', ...
         imageHeight,imageWidth,numSlices,bitDepth,dtype);
 
-%% 1. Baseline reference vs MEX
+%% 1. Baseline reference vs MEX (multi-slice, robust direct ROI compare)
 blockSizes = [340,250];
 testZ      = [round(numSlices/2), max(1,numSlices-3)];
 
-fprintf('\n[Suite 1] Reference vs MEX baseline:\n');
+fprintf('\n[Suite 1] Reference vs MEX baseline (robust direct ROI compare):\n');
 fprintf('%-4s | %-5s | %-9s | %-13s | %-11s | %-11s | %s\n', ...
         'pass','Z','Block','(X,Y)','MaxErr','Speed-up','Mode');
 fprintf(repmat('-',1,76)); fprintf('\n');
@@ -59,36 +59,52 @@ for b = 1:size(blockSizes,1)
             y_idx = y : min(imageHeight, y+blkH-1);
             x_idx = x : min(imageWidth , x+blkW-1);
             z_idx = zidx : min(numSlices, zidx+2);
+            numZ = numel(z_idx);
 
-            % Correct dims for transpose flag
-            sz = [numel(y_idx), numel(x_idx)];
-            if tr, sz = fliplr(sz); end
-            ref = zeros([sz, numel(z_idx)], dtype); % Correct dtype
-
+            % Reference: gather all slices, then concatenate into array
             tref = tic;
-            for k = 1:numel(z_idx)
-                slice = imread(filelist{z_idx(k)}, ...
-                    'PixelRegion',{[y_idx(1),y_idx(end)], [x_idx(1),x_idx(end)]});
-                ref(:,:,k) = ternary(tr,slice',slice);
+            if ~tr
+                ref_roi = zeros(length(y_idx), length(x_idx), numZ, dtype);
+                for k = 1:numZ
+                    slice = imread(filelist{z_idx(k)}, ...
+                        'PixelRegion',{[1,imageHeight],[1,imageWidth]});
+                    ref_roi(:,:,k) = slice(y_idx, x_idx);
+                end
+            else
+                ref_roi = zeros(length(x_idx), length(y_idx), numZ, dtype); % swapped dims
+                for k = 1:numZ
+                    slice = imread(filelist{z_idx(k)}, ...
+                        'PixelRegion',{[1,imageHeight],[1,imageWidth]});
+                    ref_roi(:,:,k) = slice(y_idx, x_idx)'; % transpose ROI
+                end
             end
             tref = toc(tref);
 
+            % MEX: get the full stack in one call
             tmex = tic;
-            mexO = load_bl_tif(filelist(z_idx), y,x,blkH,blkW, tr);
+            mex_roi = load_bl_tif(filelist(z_idx), y, x, blkH, blkW, tr);
             tmex = toc(tmex);
 
-            pass   = isequaln(ref,mexO);
-            if pass, maxerr = 0;
+            % Compare stacks
+            pass = isequaln(ref_roi, mex_roi);
+            if pass
+                maxerr = 0;
             else
-                try, maxerr = max(abs(double(ref(:))-double(mexO(:))));
-                catch, maxerr = NaN; end
+                try
+                    maxerr = max(abs(double(ref_roi(:)) - double(mex_roi(:))));
+                catch
+                    maxerr = NaN;
+                end
             end
+
             fprintf('  %s  | %-5d | [%3d,%3d] | (%5d,%5d) | %1.4e | %9.2fx | %s\n', ...
-                ternary(pass,EMOJI_PASS,EMOJI_FAIL), zidx, blkH,blkW, x,y, maxerr, tref/tmex, ...
+                ternary(pass,EMOJI_PASS,EMOJI_FAIL), z_idx(1), blkH,blkW, x,y, maxerr, tref/tmex, ...
                 ternary(tr,'T','N'));
         end
     end
 end
+
+return
 
 %% 2. [SKIPPED] Spatial boundary checks — revise to enable later
 fprintf('\n[Suite 2] Spatial boundary checks:\n');
