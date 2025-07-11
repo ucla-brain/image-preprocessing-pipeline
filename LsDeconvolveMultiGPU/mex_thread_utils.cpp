@@ -53,14 +53,14 @@ int get_numa_node_of_pointer(hwloc_topology_t topology, const void* ptr)
 {
     if (!ptr) return -1;
     hwloc_nodeset_t nodeset = hwloc_bitmap_alloc();
-    // Use the modern, non-deprecated API (since hwloc 2.0)
+    // Query the NUMA location for the first page of ptr
     int err = hwloc_get_area_memlocation(
-        topology, ptr, 4096, nodeset, HWLOC_MEMBIND_BYNODESET, 0);
+        topology, ptr, 4096, nodeset, HWLOC_MEMBIND_BYNODESET);
     if (err < 0) {
         hwloc_bitmap_free(nodeset);
         return -1;
     }
-    int numaNode = hwloc_bitmap_first(nodeset);
+    int numaNode = hwloc_bitmap_first(nodeset); // -1 if empty
     hwloc_bitmap_free(nodeset);
     return numaNode;
 }
