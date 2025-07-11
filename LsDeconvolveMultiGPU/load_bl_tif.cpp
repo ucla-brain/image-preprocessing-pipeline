@@ -369,41 +369,102 @@ void readSubRegionToBuffer(const LoadTask& task, TIFF* tif, uint8_t bytesPerPixe
 //  parallel_decode_and_copy  –  NUMA-aware producer/consumer with
 //                               *always* contiguous writes into MATLAB array
 // -----------------------------------------------------------------------------
+struct BufferItem {
+    uint32_t zIndex;
+    std::vector<uint8_t> blockBuf;
+    LoadTask task;
+};
+
 void parallel_decode_and_copy(
     const std::vector<LoadTask>& tasks,
     void* outData,
     size_t bytesPerPixel)
 {
+    using std::vector;
+    using std::string;
+
     const size_t numThreads = std::min(tasks.size(), get_available_cores());
+    const size_t numProducers = numThreads / 2 + 1;
+    const size_t numConsumers = numThreads - numProducers;
+
+    std::queue<std::shared_ptr<BufferItem>> queue;
+    std::mutex queueMutex;
+    std::condition_variable queueCV;
 
     std::atomic<uint32_t> nextSliceIndex{0};
     std::atomic<bool> abortFlag{false};
-    std::vector<std::string> runtimeErrors;
+    std::vector<string> runtimeErrors;
     std::mutex errorMutex;
-    std::vector<std::thread> threads(numThreads);
 
-    for (size_t t = 0; t < numThreads; ++t) {
-        threads[t] = std::thread([&, t]{
+    // Producer threads
+    std::vector<std::thread> producers;
+    for (size_t t = 0; t < numProducers; ++t) {
+        producers.emplace_back([&, t]{
             std::vector<uint8_t> tempBuf;
             while (true) {
                 if (abortFlag.load(std::memory_order_acquire)) break;
                 uint32_t idx = nextSliceIndex.fetch_add(1, std::memory_order_relaxed);
                 if (idx >= tasks.size()) break;
-
                 const LoadTask& task = tasks[idx];
                 try {
                     TiffHandle tif(TIFFOpen(task.path.c_str(), "r"));
                     if (!tif)
                         throw std::runtime_error("Cannot open file " + task.path);
 
-                    std::vector<uint8_t> blockBuf(static_cast<size_t>(task.cropH * task.cropW * bytesPerPixel));
-                    readSubRegionToBuffer(task, tif.get(), static_cast<uint8_t>(bytesPerPixel), blockBuf, tempBuf);
+                    auto item = std::make_shared<BufferItem>();
+                    item->zIndex = task.zIndex;
+                    item->task = task;
+                    item->blockBuf.resize(static_cast<size_t>(task.cropH * task.cropW * bytesPerPixel));
+                    readSubRegionToBuffer(task, tif.get(), static_cast<uint8_t>(bytesPerPixel), item->blockBuf, tempBuf);
 
+                    // Push to queue
+                    {
+                        std::lock_guard<std::mutex> lock(queueMutex);
+                        queue.push(item);
+                    }
+                    queueCV.notify_one();
+
+                } catch (const std::exception& ex) {
+                    {
+                        std::lock_guard<std::mutex> lk(errorMutex);
+                        runtimeErrors.emplace_back("Slice " + std::to_string(task.zIndex + 1) + ": " + ex.what());
+                        abortFlag.store(true, std::memory_order_release);
+                    }
+                    queueCV.notify_all(); // Wake up any waiting consumers
+                    break;
+                }
+            }
+        });
+    }
+
+    // Consumer threads
+    std::vector<std::thread> consumers;
+    std::atomic<uint32_t> consumedCount{0};
+    for (size_t t = 0; t < numConsumers; ++t) {
+        consumers.emplace_back([&, t]{
+            while (true) {
+                std::shared_ptr<BufferItem> item;
+                // Pop from queue
+                {
+                    std::unique_lock<std::mutex> lock(queueMutex);
+                    queueCV.wait(lock, [&]{
+                        return !queue.empty() || abortFlag.load() || consumedCount >= tasks.size();
+                    });
+                    if (abortFlag.load() || (queue.empty() && consumedCount >= tasks.size())) break;
+                    if (queue.empty()) continue; // Spurious wakeup
+
+                    item = queue.front();
+                    queue.pop();
+                }
+                if (!item) continue;
+                // Now perform the copy as before
+                try {
                     uint8_t* dst = static_cast<uint8_t*>(outData) +
-                                   task.zIndex * task.pixelsPerSlice * bytesPerPixel;
-                    const uint8_t* src = blockBuf.data();
+                                   item->zIndex * item->task.pixelsPerSlice * bytesPerPixel;
+                    const uint8_t* src = item->blockBuf.data();
 
-                    // The copy logic as before:
+                    const LoadTask& task = item->task;
+
                     if (!task.transpose) {
                         if (task.cropW > 4 * task.cropH) {
                             const size_t dstColStride = static_cast<size_t>(task.roiH) * bytesPerPixel;
@@ -445,20 +506,27 @@ void parallel_decode_and_copy(
                     }
                 } catch (const std::exception& ex) {
                     std::lock_guard<std::mutex> lk(errorMutex);
-                    runtimeErrors.emplace_back("Slice " + std::to_string(task.zIndex + 1) +
-                                               ": " + ex.what());
+                    runtimeErrors.emplace_back("Copy to output failed for slice " +
+                        std::to_string(item->zIndex + 1) + ": " + ex.what());
                     abortFlag.store(true, std::memory_order_release);
+                    queueCV.notify_all();
                     break;
                 }
+                ++consumedCount;
             }
         });
     }
 
-    for (auto& th : threads) th.join();
+    // Wait for producers
+    for (auto& th : producers) th.join();
+
+    // Wait for consumers
+    queueCV.notify_all();
+    for (auto& th : consumers) th.join();
 
     if (!runtimeErrors.empty()) {
         std::ostringstream oss;
-        oss << "Errors during load_bl_tif (simple numa):\n";
+        oss << "Errors during load_bl_tif (producer-consumer model):\n";
         for (const auto& e : runtimeErrors) oss << "  - " << e << '\n';
         mexErrMsgIdAndTxt("load_bl_tif:Error", "%s", oss.str().c_str());
     }
