@@ -249,7 +249,7 @@ function [] = LsDeconv(varargin)
         
         p_log(log_file, 'postprocessing params ...')
         p_log(log_file, ['   histogram clipping percentiles: [lb=' num2str(100 - clipval) ' ub=' num2str(clipval) ']' ]);
-        p_log(log_file, ['   signal amplification: ' num2str(amplification)]);
+        p_log(log_file, ['   signal amplification: ' num2str(amplification) 'x']);
         p_log(log_file, ['   post deconvolution dark subtraction: ' num2str(amplification)]);
         if flip_upside_down
         p_log(log_file, '   flip the image upside down (y-axis): yes');
