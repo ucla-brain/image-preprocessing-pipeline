@@ -375,6 +375,13 @@ struct BufferItem {
     LoadTask task;
 };
 
+inline void swap_bytes_16(uint16_t* data, size_t n) {
+    for (size_t i = 0; i < n; ++i) {
+        data[i] = (data[i] >> 8) | (data[i] << 8);
+    }
+}
+
+
 void parallel_decode_and_copy(
     const std::vector<LoadTask>& tasks,
     void* outData,
@@ -416,7 +423,9 @@ void parallel_decode_and_copy(
                     item->task = task;
                     item->blockBuf.resize(static_cast<size_t>(task.cropH * task.cropW * bytesPerPixel));
                     readSubRegionToBuffer(task, tif.get(), static_cast<uint8_t>(bytesPerPixel), item->blockBuf, tempBuf);
-
+                    if (bytesPerPixel == 2 && task.needsByteSwap) {
+                        swap_bytes_16(reinterpret_cast<uint16_t*>(item->blockBuf.data()), task.cropH * task.cropW);
+                    }
                     // Push to queue
                     {
                         std::lock_guard<std::mutex> lock(queueMutex);
