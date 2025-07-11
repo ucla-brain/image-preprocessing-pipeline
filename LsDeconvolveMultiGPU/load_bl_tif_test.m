@@ -96,7 +96,7 @@ for b = 1:size(blockSizes,1)
                 end
             end
 
-            fprintf('  %s  | %-5d | [%3d,%3d] | (%5d,%5d) | %1.4e | %9.2fx | %s\n', ...
+            fprintf(' %s| %-5d | [%3d,%3d] | (%5d,%5d) | %1.4e | %9.2fx | %s\n', ...
                 ternary(pass,EMOJI_PASS,EMOJI_FAIL), z_idx(1), blkH,blkW, x,y, maxerr, tref/tmex, ...
                 ternary(tr,'T','N'));
         end
@@ -267,19 +267,19 @@ for idx = 1:numel(cfgs)
                 if status == 0 && exist(char(fname),'file')
                     created = true;
                 else
-                    fprintf('  %-13s → %s (convert failed: %s)\n', cname, EMOJI_FAIL, strtrim(out));
+                    fprintf(' %-13s → %s (convert failed: %s)\n', cname, EMOJI_FAIL, strtrim(out));
                 end
             else
-                fprintf('  %-13s → skipped (no TIFF tools found)\n', cname);
+                fprintf(' %-13s → skipped (no TIFF tools found)\n', cname);
             end
             if exist(char(src_tif),'file'), delete(char(src_tif)); end
         catch ME2
-            fprintf('  %-13s → %s (external tool error: %s)\n', cname, EMOJI_FAIL, ME2.message);
+            fprintf(' %-13s → %s (external tool error: %s)\n', cname, EMOJI_FAIL, ME2.message);
         end
     end
 
     if ~created
-        fprintf('  %-13s → skipped (could not create test TIFF: %s)\n', cname, errstr);
+        fprintf(' %-13s → skipped (could not create test TIFF: %s)\n', cname, errstr);
         if exist(char(src_tif),'file'), delete(char(src_tif)); end
         if exist(char(fname),'file'), delete(char(fname)); end
         continue
@@ -290,13 +290,13 @@ for idx = 1:numel(cfgs)
         blk = load_bl_tif({char(fname)}, y0, x0, h, w, false);
         reference = img(y0:(y0+h-1), x0:(x0+w-1));
         if isequaln(blk, reference)
-            fprintf('  %s %-13s\n', EMOJI_PASS, cname);
+            fprintf(' %s %-13s\n', EMOJI_PASS, cname);
         else
             maxerr = max(abs(double(blk(:)) - double(reference(:))));
-            fprintf('  %s %-13s (max abs diff = %g)\n', EMOJI_FAIL, cname, maxerr);
+            fprintf(' %s %-13s (max abs diff = %g)\n', EMOJI_FAIL, cname, maxerr);
         end
     catch ME
-        fprintf('  %s %-13s (%s) [%s]\n', EMOJI_FAIL, cname, ME.message, ME.identifier);
+        fprintf(' %s %-13s (%s) [%s]\n', EMOJI_FAIL, cname, ME.message, ME.identifier);
     end
     % Clean up files for this config
     if exist(char(fname),'file'), delete(char(fname)); end
@@ -317,9 +317,9 @@ end
 for n = 1:size(neg,1)
     try
         neg{n,2}();
-        fprintf('%s %-22s did NOT error\n', EMOJI_FAIL, neg{n,1});
+        fprintf(' %s %-22s did NOT error\n', EMOJI_FAIL, neg{n,1});
     catch ME
-        fprintf('%s %-22s raised error [%s]\n', EMOJI_PASS, neg{n,1}, ME.identifier);
+        fprintf(' %s %-22s raised error [%s]\n', EMOJI_PASS, neg{n,1}, ME.identifier);
     end
 end
 
