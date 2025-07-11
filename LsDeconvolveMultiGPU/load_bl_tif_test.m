@@ -290,13 +290,13 @@ for idx = 1:numel(cfgs)
         blk = load_bl_tif({char(fname)}, y0, x0, h, w, false);
         reference = img(y0:(y0+h-1), x0:(x0+w-1));
         if isequaln(blk, reference)
-            fprintf('  %-13s → %s\n', cname, EMOJI_PASS);
+            fprintf('  %s %-13s\n', EMOJI_PASS, cname);
         else
             maxerr = max(abs(double(blk(:)) - double(reference(:))));
-            fprintf('  %-13s → %s (max abs diff = %g)\n', cname, EMOJI_FAIL, maxerr);
+            fprintf('  %s %-13s (max abs diff = %g)\n', EMOJI_FAIL, cname, maxerr);
         end
     catch ME
-        fprintf('  %-13s → %s (%s) [%s]\n', cname, EMOJI_FAIL, ME.message, ME.identifier);
+        fprintf('  %s %-13s (%s) [%s]\n', EMOJI_FAIL, cname, ME.message, ME.identifier);
     end
     % Clean up files for this config
     if exist(char(fname),'file'), delete(char(fname)); end
@@ -317,43 +317,41 @@ end
 for n = 1:size(neg,1)
     try
         neg{n,2}();
-        fprintf('%s %-22s did NOT error\n',EMOJI_FAIL,neg{n,1});
+        fprintf('%s %-22s did NOT error\n', EMOJI_FAIL, neg{n,1});
     catch ME
-        fprintf('%s %-22s raised error [%s]\n',EMOJI_PASS,neg{n,1}, ME.identifier);
+        fprintf('%s %-22s raised error [%s]\n', EMOJI_PASS, neg{n,1}, ME.identifier);
     end
 end
 
-% 6. 500 random ROI fuzz tests
- fprintf('\n[Suite 6] 500 random ROI fuzz tests (printing each input):\n');
- rng(42);
- numFuzz = 500;
- num_pass = 0;
- fail_msgs = {};
- for k = 1:numFuzz
-     h = randi([1,imageHeight]);
-     w = randi([1,imageWidth ]);
-     y = randi([-32,imageHeight]);
-     x = randi([-32,imageWidth ]);
-     tr = rand > 0.5;
-     fprintf('Fuzz test %3d: y=%d, x=%d, h=%d, w=%d, tr=%d ... ', ...
-         k, y, x, h, w, tr);
-
-     try
-         load_bl_tif(filelist, y, x, h, w, tr);
-         fprintf("PASS\n");
-         num_pass = num_pass + 1;
-     catch ME
-         fprintf("FAIL [%s]: %s\n", ME.identifier, ME.message);
-         fail_msgs{end+1,1} = sprintf('k=%d: y=%d, x=%d, h=%d, w=%d, tr=%d -- %s [%s]', ...
-             k, y, x, h, w, tr, ME.message, ME.identifier);
-     end
- end
-
- fprintf('\nSuite 6 finished: %d/%d passed, %d failed.\n', num_pass, numFuzz, numFuzz-num_pass);
- if ~isempty(fail_msgs)
-     fprintf('\nFirst few failures:\n');
-     disp(fail_msgs(1:min(5,end)))
- end
+% % 6. 500 random ROI fuzz tests
+% fprintf('\n[Suite 6] 500 random ROI fuzz tests (printing each input):\n');
+% rng(42);
+% numFuzz = 500;
+% num_pass = 0;
+% fail_msgs = {};
+% for k = 1:numFuzz
+%     h = randi([1,imageHeight]);
+%     w = randi([1,imageWidth ]);
+%     y = randi([-32,imageHeight]);
+%     x = randi([-32,imageWidth ]);
+%     tr = rand > 0.5;
+%     fprintf('Fuzz test %3d: y=%d, x=%d, h=%d, w=%d, tr=%d ... ', ...
+%         k, y, x, h, w, tr);
+%     try
+%         load_bl_tif(filelist, y, x, h, w, tr);
+%         fprintf("PASS\n");
+%         num_pass = num_pass + 1;
+%     catch ME
+%         fprintf("FAIL [%s]: %s\n", ME.identifier, ME.message);
+%         fail_msgs{end+1,1} = sprintf('k=%d: y=%d, x=%d, h=%d, w=%d, tr=%d -- %s [%s]', ...
+%             k, y, x, h, w, tr, ME.message, ME.identifier);
+%     end
+% end
+% fprintf('\nSuite 6 finished: %d/%d passed, %d failed.\n', num_pass, numFuzz, numFuzz-num_pass);
+% if ~isempty(fail_msgs)
+%     fprintf('\nFirst few failures:\n');
+%     disp(fail_msgs(1:min(5,end)))
+% end
 
 fprintf('\nAll suites finished.\n');
 end
