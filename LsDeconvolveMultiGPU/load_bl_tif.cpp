@@ -375,13 +375,20 @@ struct BufferItem {
     LoadTask task;
 };
 
+// --- Swap bytes for 16-bit values in-place ---
 inline void swap_bytes_16(uint16_t* data, size_t n) {
     for (size_t i = 0; i < n; ++i) {
         data[i] = (data[i] >> 8) | (data[i] << 8);
     }
 }
 
+// --- Detect host endianness (for more portable logic, not strictly needed with TIFFIsByteSwapped) ---
+inline bool isLittleEndianHost() {
+    const uint16_t one = 1;
+    return *reinterpret_cast<const uint8_t*>(&one) == 1;
+}
 
+// --- Main parallel producer-consumer pipeline ---
 void parallel_decode_and_copy(
     const std::vector<LoadTask>& tasks,
     void* outData,
@@ -400,10 +407,11 @@ void parallel_decode_and_copy(
 
     std::atomic<uint32_t> nextSliceIndex{0};
     std::atomic<bool> abortFlag{false};
-    std::vector<string> runtimeErrors;
+    vector<string> runtimeErrors;
     std::mutex errorMutex;
+    std::atomic<uint32_t> consumedCount{0};
 
-    // Producer threads
+    // --- Producer threads: decode TIFF and push BufferItem into the queue ---
     std::vector<std::thread> producers;
     for (size_t t = 0; t < numProducers; ++t) {
         producers.emplace_back([&, t]{
@@ -423,10 +431,14 @@ void parallel_decode_and_copy(
                     item->task = task;
                     item->blockBuf.resize(static_cast<size_t>(task.cropH * task.cropW * bytesPerPixel));
                     readSubRegionToBuffer(task, tif.get(), static_cast<uint8_t>(bytesPerPixel), item->blockBuf, tempBuf);
-                    if (bytesPerPixel == 2 && task.needsByteSwap) {
+
+                    // --- Byte swap if needed (16-bit only) ---
+                    bool needByteSwap = TIFFIsByteSwapped(tif.get());
+                    if (bytesPerPixel == 2 && needByteSwap) {
                         swap_bytes_16(reinterpret_cast<uint16_t*>(item->blockBuf.data()), task.cropH * task.cropW);
                     }
-                    // Push to queue
+
+                    // --- Push to queue ---
                     {
                         std::lock_guard<std::mutex> lock(queueMutex);
                         queue.push(item);
@@ -446,14 +458,13 @@ void parallel_decode_and_copy(
         });
     }
 
-    // Consumer threads
+    // --- Consumer threads: pop BufferItem and copy to outData ---
     std::vector<std::thread> consumers;
-    std::atomic<uint32_t> consumedCount{0};
     for (size_t t = 0; t < numConsumers; ++t) {
         consumers.emplace_back([&, t]{
             while (true) {
                 std::shared_ptr<BufferItem> item;
-                // Pop from queue
+                // --- Pop from queue ---
                 {
                     std::unique_lock<std::mutex> lock(queueMutex);
                     queueCV.wait(lock, [&]{
@@ -466,12 +477,11 @@ void parallel_decode_and_copy(
                     queue.pop();
                 }
                 if (!item) continue;
-                // Now perform the copy as before
+                // --- Copy to output buffer ---
                 try {
                     uint8_t* dst = static_cast<uint8_t*>(outData) +
                                    item->zIndex * item->task.pixelsPerSlice * bytesPerPixel;
                     const uint8_t* src = item->blockBuf.data();
-
                     const LoadTask& task = item->task;
 
                     if (!task.transpose) {
@@ -526,13 +536,14 @@ void parallel_decode_and_copy(
         });
     }
 
-    // Wait for producers
+    // --- Wait for all producers to finish ---
     for (auto& th : producers) th.join();
 
-    // Wait for consumers
+    // --- Wait for all consumers to finish ---
     queueCV.notify_all();
     for (auto& th : consumers) th.join();
 
+    // --- Error reporting ---
     if (!runtimeErrors.empty()) {
         std::ostringstream oss;
         oss << "Errors during load_bl_tif (producer-consumer model):\n";
