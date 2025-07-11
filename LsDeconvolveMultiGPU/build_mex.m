@@ -99,43 +99,6 @@ function build_mex(debug)
         end
         cmake_arch = '-A x64';
         msvc = struct('vcvars',VCVARS64,'cl',cl_path,'tag',cc_ver);
-    
-        % ---- 4. Add aligned_malloc and aligned_free fallback for Windows ----
-        aligned_lib = fullfile(pwd, 'aligned_malloc_free.lib');
-        
-        % Check if the aligned_malloc_free.lib already exists
-        if ~isfile(aligned_lib)
-            fprintf('Adding custom implementations for aligned_malloc and aligned_free.\n');
-            % 1) Write C++ source
-            aligned_cpp = 'aligned_malloc_free.cpp';
-            fid = fopen(aligned_cpp, 'w');
-            fprintf(fid, '#include <stdlib.h>\n');
-            fprintf(fid, 'void* aligned_malloc(size_t size, size_t alignment) { return _aligned_malloc(size, alignment); }\n');
-            fprintf(fid, 'void  aligned_free(void* ptr)              { _aligned_free(ptr); }\n');
-            fclose(fid);
-        
-            % 2) Compile to object
-            mex('CXXFLAGS="$CXXFLAGS /std:c++17 /O2"', '-c', aligned_cpp);
-            aligned_obj = strrep(aligned_cpp, '.cpp', '.obj');
-            assert(isfile(aligned_obj), 'Failed to compile %s to object file', aligned_cpp);
-        
-            % 3) Locate lib.exe
-            libexe = fullfile(fileparts(MSVC_BASE), 'bin', 'Hostx64', 'x64', 'lib.exe');
-            assert(isfile(libexe), 'lib.exe not found at "%s"', libexe);
-        
-            % 4) Create the static library
-            lib_cmd = sprintf('"%s" /out:"%s" "%s"', libexe, aligned_lib, aligned_obj);
-            fprintf('Executing: %s\n', lib_cmd);
-            [status, cmdout] = system(lib_cmd);
-            assert(status == 0, 'lib.exe failed: %s', cmdout);
-        
-            % 5) Clean up and verify
-            delete(aligned_cpp);
-            delete(aligned_obj);
-            assert(isfile(aligned_lib), 'Failed to create static library %s', aligned_lib);
-        else
-            fprintf('Skipping aligned_malloc_free.lib (already exists).\n');
-        end
     else
         cmake_gen  = '';
         cmake_arch = '';
@@ -238,20 +201,7 @@ function build_mex(debug)
         builddir = fullfile(libtiff_src,'build'); if ~exist(builddir,'dir'), mkdir(builddir); end
         if ~exist(libtiff_inst,'dir'), mkdir(libtiff_inst); end
         if isWin
-            tools_cmake = fullfile(libtiff_src, 'tools', 'CMakeLists.txt');
-            txt = fileread(tools_cmake);
-            lines = regexp(txt, '\r?\n', 'split')'; % one line per cell
-            for i = 1:length(lines)
-                m = regexp(lines{i}, 'add_executable\(\s*(\w+)[^\)]*\)', 'tokens', 'once');
-                if ~isempty(m)
-                    target_line = sprintf('target_link_libraries(%s PRIVATE "%s")', m{1}, unixify(aligned_lib));
-                    lines{i} = sprintf('%s\n%s', lines{i}, target_line);
-                end
-            end
-            txt2 = strjoin(lines, newline);
-            fid = fopen(tools_cmake, 'w'); fwrite(fid, txt2); fclose(fid);
             args = [cmake_common_flags_tiff, ...
-                sprintf('-DAlignedMallocFree_LIB="%s"', unixify(aligned_lib)), ...
                 cmake_flags_win, ...
                 sprintf('-DZLIB_LIBRARY=%s',   unixify(fullfile(zlibng_inst,'lib','zlibstatic.lib'))), ...
                 sprintf('-DZLIB_INCLUDE_DIR=%s',unixify(fullfile(zlibng_inst,'include'))), ...

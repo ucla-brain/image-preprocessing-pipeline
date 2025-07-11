@@ -13,8 +13,7 @@ clearvars; clc;
 [EMOJI_PASS, EMOJI_FAIL] = emoji_checkmarks();
 
 % --------- Dataset location ---------
-%folder_path = '/data/tif/Plaque/B11_ds_4.5x_ABeta_z1200';         % ← Linux
-folder_path = '/data/tif/Glycin_MORF/crop/';
+folder_path = '/data/tif/Plaque/B11_ds_4.5x_ABeta_z1200';         % ← Linux
 if ispc, folder_path = 'V:/tif/Plaque/B11_ds_4.5x_ABeta_z1200'; end
 assert(isfolder(folder_path), 'Edit folder_path inside load_bl_tif_test.m');
 
