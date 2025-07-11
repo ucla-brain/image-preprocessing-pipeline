@@ -421,7 +421,7 @@ struct ProducedSliceBuffer {
     std::vector<uint8_t> buffer;
 };
 
-void parallel_decode_and_copy_lockfree(
+void parallel_decode_and_copy(
     const std::vector<LoadTask>& tasks,
     void* outData,
     size_t bytesPerPixel)
