@@ -83,7 +83,7 @@
   ---------------------------------------------------------------------------
   © 2025 Keivan Moradi — Released under GPLv3. See LICENSE or visit:
                          https://www.gnu.org/licenses/gpl-3.0.html
-==============================================================================*/
+==============================================================================
 
 #define NOMINMAX
 #include "mex.h"
@@ -490,7 +490,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
         mexErrMsgIdAndTxt("load_bl_tif:Error", "%s", ex.what());
     }
 }
-
+*/
 
 /*==============================================================================
   load_bl_tif.cpp
@@ -577,7 +577,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
   ---------------------------------------------------------------------------
   © 2025 Keivan Moradi — Released under GPLv3. See LICENSE or visit:
                          https://www.gnu.org/licenses/gpl-3.0.html
-==============================================================================
+==============================================================================*/
 
 
 #define NOMINMAX  // prevents Windows min/max macro pollution
@@ -1033,4 +1033,3 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         mexErrMsgIdAndTxt("load_bl_tif:Error", "%s", ex.what());
     }
 }
-*/
