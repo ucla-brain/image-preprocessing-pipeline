@@ -555,11 +555,12 @@ def parallel_image_processor(
     if destination is not None:
         Path(destination).mkdir(exist_ok=True)
         print(f"Modifying destination: {destination}")
-        # Windows Permission Check
-        if os.name == 'nt':
-            os.chmod(destination, 0o666)
-        else:
-            os.chmod(destination, 0o777)
+        # Permission Check - Disabled
+        # if os.name == 'nt':
+            # os.chmod(destination, 0o666)
+        # else:
+            # print('skipping permissions change')    
+            # os.chmod(destination, 0o777)
     if isinstance(downsampled_path, str):
         downsampled_path = Path(downsampled_path)
     downsampled_path: Path = destination if downsampled_path is None else downsampled_path

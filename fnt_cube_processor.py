@@ -234,63 +234,27 @@ def process_cube(
         gpu_semaphore: Queue = None,
 ):
     return_code = 0
-    output_file.parent.mkdir(exist_ok=True, parents=True)
-    if need_destripe or gaussian_sigma > 0 or need_deconvolution:
-        img, header = read(input_file.__str__())
-        dtype = img.dtype
-        if is_uniform_3d(img):
-            copy(input_file, output_file)
-        else:
-            if img.dtype != float32:
-                img = img.astype(float32)
-
+    if not output_file.exists():
+        output_file.parent.mkdir(exist_ok=True, parents=True)
+        if need_destripe or need_gaussian:
+            img, header = read(input_file.__str__())
+            dtype = img.dtype
+            if need_gaussian:
+                if img.dtype != float32:
+                    img = img.astype(float32)
+                gaussian(img, 1, output=img)
+                img = img.astype(dtype)
             if need_destripe:
                 img = rot90(img, k=1, axes=(1, 2))
                 for idx in range(0, img.shape[0], 1):
                     if not is_uniform_2d(img[idx]):
                         img[idx] = filter_streaks(img[idx], sigma=(1, 1), wavelet="db9", bidirectional=True)
                 img = rot90(img, k=-1, axes=(1, 2))
-
-            if need_deconvolution and deconvolution_args is not None:
-                if deconvolution_args['contrast_enhancement_factor'] > 1:
-                    img /= deconvolution_args['contrast_enhancement_factor']
-
-                img_decon = pad_to_good_dim(img, deconvolution_args['otf_shape'])
-
-                num_gaussian_decons = max(1, deconvolution_args['n_iters'] // deconvolution_args['dg_interation'])
-                for i in range(num_gaussian_decons):
-                    if gaussian_sigma > 0:
-                        sigma = (
-                            gaussian_sigma,
-                            gaussian_sigma,
-                            (round(gaussian_sigma, 0) + (2.0 if deconvolution_args['doubled_psf'] else 1.5)) if i==0 else gaussian_sigma
-                        )
-                        gaussian(img_decon, sigma=sigma, output=img_decon)
-
-                    img_decon = apply_deconvolution(img_decon, deconvolution_args, gpu_semaphore, num_gaussian_decons)
-
-                    # from PIL import Image
-                    # img = trim_to_shape(img.shape, img_decon.copy())
-                    # if img.dtype != dtype and np_d_type(dtype).kind in ("u", "i"):
-                    #     clip(img, iinfo(dtype).min, iinfo(dtype).max, out=img)
-                    #     img = img.astype(dtype)
-                    # image_stack = [Image.fromarray(_) for _ in img]
-                    # image_stack[0].save(output_file.parent / (output_file.stem + f"_{i}.tif"),
-                    #                     save_all=True,
-                    #                     append_images=image_stack[1:],
-                    #                     compression='tiff_lzw')
-
-                # resize image to match original
-                img = trim_to_shape(img.shape, img_decon)
-            elif gaussian_sigma > 0:
-                gaussian(img, sigma=gaussian_sigma, output=img)
-
-            if img.dtype != dtype and np_d_type(dtype).kind in ("u", "i"):
-                clip(img, iinfo(dtype).min, iinfo(dtype).max, out=img)
-                img = img.astype(dtype)
-            tmp_file = output_file.parent / (output_file.name + ".tmp")
-            write(file=tmp_file.__str__(), data=img, header=header, compression_level=9)
-            tmp_file.rename(output_file)
+            write(file=output_file.__str__(), data=img, header=header, compression_level=1)
+            if need_video:
+                input_file = output_file
+        if need_video:
+            return_code = call(f"{fnt_cube2video} {input_file} {output_file}", shell=True)
     return return_code
 
 

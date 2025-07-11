@@ -10,15 +10,13 @@ Python code for stitching and image enhancement of Light Sheet data
 * On Linux and if you have a high core count system make sure to [increase the limit on number of open files](https://stackoverflow.com/questions/39537731/errno-24-too-many-open-files-but-i-am-not-opening-files).
 * Install [anaconda python distribution](https://www.anaconda.com/products/individual):
   make a dedicated python environment for stitching:
-<!--- -c pytorch "pytorch>=2.2.1" "pytorch-cuda>=11.8" ptwt-->
-   `conda create -n stitching -c conda-forge -c nvidia -c pytorch python=3.11 pycudadecon "pytorch>=2.2.1" "pytorch-cuda>=11.8" psutil tqdm tifffile numpy scipy scikit-image scikit-learn matplotlib pandas 'imagecodecs>=2023.7.10' freeimage git mpi4py=3.1.5 ffmpeg cmake numba "numexpr>=2.8.4" jupyter ipykernel libopencv=4.8.* opencv=4.8.* py-opencv=4.8.* pynrrd`
+
+   `conda env create -f environment.yml`
 
    `conda activate stitching`
-    
-   `pip install dcimg cpufeature pyvista ptwt imaris_ims_file_reader`
-   
-<!--- `conda install jaxlib=*=*cuda* jax cuda-nvcc -c conda-forge -c nvidia` -->
-   
+
+   `pip install -r requirements.txt`
+
    **Note:** The last time I checked, Microsoft MPI installed fom conda-forge was functional. However, if mpi4py was not functional on Windows, try installing the latest [Microsoft MPI from GitHub](https://github.com/microsoft/Microsoft-MPI).
    
    **Note:** If installing anaconda as user did not work on Windows, you may test installing it as the system python.

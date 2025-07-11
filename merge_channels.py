@@ -30,14 +30,16 @@ if __name__ == '__main__':
         formatter_class=RawDescriptionHelpFormatter,
         epilog="Developed 2023 by Keivan Moradi at UCLA, Hongwei Dong Lab (B.R.A.I.N.) \n"
     )
-    parser.add_argument("--red", "-r", type=str, required=False, default="",
-                        help="Red channel path.")
-    parser.add_argument("--green", "-g", type=str, required=False, default="",
-                        help="Green channel path.")
-    parser.add_argument("--blue", "-b", type=str, required=False, default="",
-                        help="Blue channel path.")
+    parser.add_argument("--cyan", "-c", type=str, required=False, default="",
+                        help="Cyan channel path.")
+    parser.add_argument("--magenta", "-m", type=str, required=False, default="",
+                        help="Magenta channel path.")
+    parser.add_argument("--yellow", "-y", type=str, required=False, default="",
+                        help="Yellow channel path.")
+    parser.add_argument("--black", "-k", type=str, required=False, default="",
+                        help="key (black) channel path.")
     parser.add_argument("--output_path", "-o", type=str, required=True,
-                        help="Red channel.")
+                        help="Output path for the merged data.")
     parser.add_argument("--num_processes", "-n", type=int, required=False,
                         default=psutil.cpu_count(logical=False) + 4,
                         help="Number of CPU cores.")
@@ -70,16 +72,19 @@ if __name__ == '__main__':
     args = parser.parse_args()
     img_paths = []
     order_of_colors = ""
-    if args.red:
-        order_of_colors += "r"
-        img_paths += [Path(args.red)]
-    if args.green:
-        order_of_colors += "g"
-        img_paths += [Path(args.green)]
-    if args.blue:
-        order_of_colors += "b"
-        img_paths += [Path(args.blue)]
-    for color in "rgb":
+    if args.cyan:
+        order_of_colors += "c"
+        img_paths += [Path(args.cyan)]
+    if args.magenta:
+        order_of_colors += "m"
+        img_paths += [Path(args.magenta)]
+    if args.yellow:
+        order_of_colors += "y"
+        img_paths += [Path(args.yellow)]
+    if args.black:
+        order_of_colors += "k"
+        img_paths += [Path(args.black)]
+    for color in "cmyk":
         if color not in order_of_colors:
             order_of_colors += color
     if img_paths:
@@ -94,3 +99,4 @@ if __name__ == '__main__':
     else:
         print(f"{PrintColors.FAIL}at least one of --red or --green or --blue is required.{PrintColors.ENDC}")
         raise RuntimeError
+
