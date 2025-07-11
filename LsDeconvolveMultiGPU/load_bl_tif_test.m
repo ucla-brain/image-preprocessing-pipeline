@@ -104,8 +104,6 @@ for b = 1:size(blockSizes,1)
     end
 end
 
-return
-
 %% 2. [SKIPPED] Spatial boundary checks — revise to enable later
 fprintf('\n[Suite 2] Spatial boundary checks:\n');
 edge = { ...
