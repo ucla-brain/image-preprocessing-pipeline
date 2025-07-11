@@ -49,14 +49,35 @@ size_t get_available_cores() {
     return hint ? static_cast<size_t>(hint) : 1;
 }
 
+int get_numa_node_of_pointer(hwloc_topology_t topology, const void* ptr)
+{
+    if (!ptr) return -1;
+    // Query memory location for NUMA node
+    hwloc_membind_policy_t policy;
+    hwloc_nodeset_t nodeset = hwloc_bitmap_alloc();
+    int err = hwloc_get_area_membind_nodeset(topology, ptr, 4096, nodeset, &policy, 0);
+    if (err < 0) {
+        hwloc_bitmap_free(nodeset);
+        return -1;
+    }
+    // Find the first NUMA node in the nodeset
+    int numaNode = hwloc_bitmap_first(nodeset);
+    hwloc_bitmap_free(nodeset);
+    return numaNode;
+}
+
+// Overload: use global topology singleton
+int get_numa_node_of_pointer(const void* ptr)
+{
+    ensure_hwloc_initialized();
+    return get_numa_node_of_pointer(g_hwlocTopo->get(), ptr);
+}
 
 
 // Return vector of all logical PUs (core IDs) on the least-busy NUMA node
-std::vector<unsigned> get_cores_on_numa_node() {
+std::vector<unsigned> get_cores_on_numa_node(unsigned numaNode) {
     ensure_hwloc_initialized();
     hwloc_topology_t topology = g_hwlocTopo->get();
-    unsigned numaNode = find_least_busy_numa_node(topology);
-
     const int nbNumaObjs = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_NUMANODE);
     const bool hasRealNuma = (nbNumaObjs > 0);
 

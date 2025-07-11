@@ -104,6 +104,7 @@
 #include <atomic>
 #include <sstream>
 #include <limits>
+#include <numeric>  // For std::iota
 
 // --- Constants ---
 static constexpr uint16_t kSupportedBitDepth8  = 8;
@@ -374,7 +375,23 @@ void parallel_decode_and_copy(
     void* outData,
     size_t bytesPerPixel)
 {
-    const size_t numThreads = std::min(tasks.size(), get_available_cores());
+    // === Detect NUMA node for outData and get logical cores on that node ===
+    const int numaNodeOfOutData = get_numa_node_of_pointer(outData);
+    std::vector<unsigned> logicalCoresOnNumaNode;
+    if (numaNodeOfOutData >= 0) {
+        logicalCoresOnNumaNode = get_cores_on_numa_node(numaNodeOfOutData);
+        if (logicalCoresOnNumaNode.empty()) {
+            // Fallback: all available cores
+            logicalCoresOnNumaNode.resize(get_available_cores());
+            std::iota(logicalCoresOnNumaNode.begin(), logicalCoresOnNumaNode.end(), 0);
+        }
+    } else {
+        // Could not determine NUMA node, use all cores
+        logicalCoresOnNumaNode.resize(get_available_cores());
+        std::iota(logicalCoresOnNumaNode.begin(), logicalCoresOnNumaNode.end(), 0);
+    }
+
+    const size_t numThreads = std::min(tasks.size(), logicalCoresOnNumaNode.size());
 
     std::atomic<uint32_t> nextSliceIndex{0};
     std::atomic<bool> abortFlag{false};
@@ -384,7 +401,7 @@ void parallel_decode_and_copy(
 
     for (size_t t = 0; t < numThreads; ++t) {
         threads[t] = std::thread([&, t]{
-
+            set_thread_affinity(logicalCoresOnNumaNode[t % logicalCoresOnNumaNode.size()]);
             std::vector<uint8_t> tempBuf;
             while (true) {
                 if (abortFlag.load(std::memory_order_acquire)) break;

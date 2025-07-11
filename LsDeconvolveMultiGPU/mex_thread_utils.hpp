@@ -77,8 +77,8 @@ void ensure_hwloc_initialized();
 // Returns total logical cores
 size_t get_available_cores();
 
-// Returns a vector of all logical PUs on the least busy NUMA node
-std::vector<unsigned> get_cores_on_numa_node();
+// Get logical PUs on a specified NUMA node
+std::vector<unsigned> get_cores_on_numa_node(unsigned numaNode);
 
 // Returns all SMT (hyperthread) sibling pairs on a NUMA node, for atomic producer-consumer threading
 std::vector<ThreadAffinityPair> assign_thread_affinity_pairs_single_numa(std::size_t maxPairs);
@@ -98,5 +98,11 @@ void  free_numa_local_buffer(hwloc_topology_t topology, void* buf, size_t bytes)
 
 // Returns first logical core (PU) on a given NUMA node, or -1 if none found
 int get_first_core_on_numa_node(hwloc_topology_t topology, unsigned numaNode);
+
+// Returns the NUMA node index for a given pointer (if mappable, else -1)
+int get_numa_node_of_pointer(hwloc_topology_t topology, const void* ptr);
+
+// Overload: Uses default topology singleton
+int get_numa_node_of_pointer(const void* ptr);
 
 #endif // MEX_THREAD_UTILS_HPP

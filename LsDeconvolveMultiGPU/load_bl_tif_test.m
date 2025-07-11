@@ -119,8 +119,8 @@ for k = 1:size(edge,1)
     [y,x,h,w,label,kind] = edge{k,:};
     try
         switch kind
-            case "ok", mexP = load_bl_tif(filelist, y,x,h,w,false); %#ok<NASGU>
-            case "ok_singleZ", mexP = load_bl_tif(filelist(1), y,x,h,w,false); %#ok<NASGU>
+            case "ok", mexP = load_bl_tif(filelist, y,x,h,w,false);
+            case "ok_singleZ", mexP = load_bl_tif(filelist(1), y,x,h,w,false);
             otherwise, load_bl_tif(filelist, y,x,h,w,false);
         end
         if kind=="expect_error"
