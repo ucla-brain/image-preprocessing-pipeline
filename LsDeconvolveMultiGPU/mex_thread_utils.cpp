@@ -52,15 +52,14 @@ size_t get_available_cores() {
 int get_numa_node_of_pointer(hwloc_topology_t topology, const void* ptr)
 {
     if (!ptr) return -1;
-    // Query memory location for NUMA node
-    hwloc_membind_policy_t policy;
     hwloc_nodeset_t nodeset = hwloc_bitmap_alloc();
-    int err = hwloc_get_area_membind_nodeset(topology, ptr, 4096, nodeset, &policy, 0);
+    // Use the modern, non-deprecated API (since hwloc 2.0)
+    int err = hwloc_get_area_memlocation(
+        topology, ptr, 4096, nodeset, HWLOC_MEMBIND_BYNODESET, 0);
     if (err < 0) {
         hwloc_bitmap_free(nodeset);
         return -1;
     }
-    // Find the first NUMA node in the nodeset
     int numaNode = hwloc_bitmap_first(nodeset);
     hwloc_bitmap_free(nodeset);
     return numaNode;
