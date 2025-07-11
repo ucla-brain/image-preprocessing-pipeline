@@ -1,54 +1,41 @@
-% SEMAPHORE  Interfaces with POSIX semaphore.
+% SEMAPHORE  Cross-platform shared memory semaphore for MATLAB.
 %
-%   This mex file provides an interface with the POSIX semaphore
-%   functionality. For more information, see [1]. KEY must be a signed integer.
-%   VAL must be a positive integer.
+%   This MEX function provides access to a custom, cross-platform shared memory
+%   semaphore implementation. It is designed to allow synchronization across
+%   independent MATLAB sessions or threads, with consistent behavior on both
+%   Windows and POSIX systems.
 %
-%   SEMAPHORE('create',KEY,VAL)
-%      Initializes a semaphore which can later by accessed by KEY. The
-%      argument VAL specifies the initial value for the semaphore.
+%   SEMAPHORE('create', KEY, VAL)
+%      Creates or reinitializes a named semaphore identified by integer KEY.
+%      VAL must be a positive integer and sets the initial and maximum count.
+%      If the semaphore already exists, it will be reset and any waiting threads
+%      or processes will be released.
 %
-%   SEMAPHORE('destroy',KEY)
-%      Destroys the semaphore indexed by KEY. Destroying a semaphore that
-%      other processes or threads are currently blocked on (in
-%      'wait') produces undefined behavior. Using a semaphore that
-%      has been destroyed produces undefined results, until the semaphore
-%      has been reinitialized using 'init'.
+%   SEMAPHORE('wait', KEY)
+%      Decrements (locks) the semaphore. If the semaphore count is greater than
+%      zero, the function returns immediately. If the count is zero, the call
+%      blocks until a 'post' occurs or the semaphore is destroyed.
 %
-%   SEMAPHORE('wait',KEY)
-%      Decrements (locks) the semaphore indexed by KEY. If the
-%      semaphore's value is greater than zero, then the decrement
-%      proceeds, and the function returns, immediately. If the semaphore
-%      currently has the value zero, then the call blocks until either it
-%      becomes possible to perform the decrement (i.e., the semaphore
-%      value rises above zero), or a signal handler interrupts the call.
+%   SEMAPHORE('post', KEY)
+%      Increments (unlocks) the semaphore. If the count is already at maximum,
+%      a warning is issued but the call still succeeds. A waiting thread or
+%      process (if any) will be signaled to continue.
 %
-%   SEMAPHORE('post',KEY)
-%      Increments (unlocks) the semaphore indexed by KEY. If the
-%      semaphore's value consequently becomes greater than zero, then
-%      another process or thread blocked in a 'wait' call will be woken
-%      up and proceed to lock the semaphore.
+%   SEMAPHORE('destroy', KEY)
+%      Marks the semaphore for termination and wakes up all waiting threads or
+%      processes. Cleans up all associated shared memory and synchronization
+%      primitives. Safe to call even if no one is waiting.
 %
-%   See also WHOSSHARED, SHAREDMATRIX.
+%   This implementation ensures identical semantics on both Windows and Linux
+%   platforms, using shared memory regions and inter-process synchronization
+%   primitives native to each OS.
 %
 %   Example:
-%      semkey=1;
-%      semaphore('create',semkey,1);
-%      semaphore('wait',semkey)
-%      semaphore('post',semkey)
+%      semkey = 1;
+%      semaphore('create', semkey, 2);
+%      semaphore('wait', semkey);
+%      semaphore('post', semkey);
 %
-%   [1] - http://en.wikipedia.org/wiki/Semaphore_(programming)
 %
-%   Copyright (c) 2011, Joshua V Dillon
-%   Copyright (c) 2014, Andrew Smart 
-%   All rights reserved.
-
-% Joshua V. Dillon
-% jvdillon (a) gmail (.) com
-% Wed Aug 10 13:29:01 EDT 2011
-
-% The semaphore documentation (from which this help is generated) is part
-% of release 3.27 of the Linux man-pages project. A description of the
-% project, and information about reporting bugs, can be found at
-% http://www.kernel.org/doc/man-pages/.
-
+%   Author: Keivan Moradi
+%   Date: Updated May 2025

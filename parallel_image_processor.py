@@ -1,5 +1,8 @@
+import os
+import sys
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, TimeoutError
 from concurrent.futures.process import BrokenProcessPool
+from imaris_ims_file_reader.ims import ims
 from math import ceil, floor, sqrt
 from multiprocessing import Queue, Process, Manager, freeze_support
 from pathlib import Path
@@ -7,14 +10,16 @@ from queue import Empty
 from time import time, sleep
 from typing import List, Tuple, Union, Callable
 
-import h5py
-import hdf5plugin
+from contextlib import contextmanager
+# import h5py
+# import hdf5plugin
 from numpy import floor as np_floor
 from numpy import max as np_max
 from numpy import mean as np_mean
-from numpy import sqrt as np_sqrt
 from numpy import round as np_round
-from numpy import zeros, float32, dstack, rollaxis, savez_compressed, array, maximum, rot90, arange, uint8, uint16
+from numpy import sqrt as np_sqrt
+from numpy import (zeros, float32, dstack, rollaxis, savez_compressed, array, maximum, rot90, arange, uint8, uint16, flip,
+                   stack)
 from psutil import cpu_count, virtual_memory
 from skimage.measure import block_reduce
 from skimage.transform import resize, resize_local_mean
@@ -22,14 +27,57 @@ from tifffile import natural_sorted
 from tqdm import tqdm
 
 from pystripe.core import (imread_tif_raw_png, imsave_tif, progress_manager, is_uniform_2d, is_uniform_3d,
-                           convert_to_8bit_fun,  convert_to_16bit_fun)
+                           convert_to_8bit_fun, convert_to_16bit_fun)
 from supplements.cli_interface import PrintColors, date_time_now
 from tsv.volume import TSVVolume, VExtent
-import os
-import sys
 
 def imread_tsv(tsv_volume: TSVVolume, extent: VExtent, d_type: str):
     return tsv_volume.imread(extent, d_type)[0]
+
+
+class ImarisZWrapper:
+    @staticmethod
+    @contextmanager
+    def _suppress_stdout():
+        with open(os.devnull, "w") as devnull:
+            old_stdout = sys.stdout
+            sys.stdout = devnull
+            try:
+                yield
+            finally:
+                sys.stdout = old_stdout
+
+    def __init__(self, ims_path, timepoint=0, channel=0):
+        with self._suppress_stdout():
+            self.imaris_data = ims(ims_path)
+        self.timepoint = timepoint
+        self.channel = channel
+        self.num_z = self.imaris_data.shape[2]
+
+    def __getitem__(self, z):
+        if isinstance(z, slice):
+            indices = range(*z.indices(self.num_z))
+            return stack([self.imaris_data[self.timepoint, self.channel, zi, :, :] for zi in indices])
+        return self.imaris_data[self.timepoint, self.channel, z, :, :]
+
+    def __len__(self):
+        return self.num_z
+
+    def close(self):
+        with self._suppress_stdout():
+            self.imaris_data.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.close()
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
 
 
 class MultiProcess(Process):
@@ -58,7 +106,7 @@ class MultiProcess(Process):
             needed_memory: int = None,
             save_images: bool = True,
             alternating_downsampling_method: bool = True,
-            down_sampled_dtype: str = "float32"
+            down_sampled_dtype: str = "float32",
     ):
         Process.__init__(self)
         self.daemon = False
@@ -143,11 +191,17 @@ class MultiProcess(Process):
         if die:
             self.die = True
 
-    def tif_save_path(self, idx: int, images: List[Path]):
+    def tif_save_path(self, idx: int, images: List[Path], flip_z: bool = False):
         if self.is_tsv or self.is_ims or self.rename:
-            return self.save_path / f"{self.tif_prefix}_{idx:06}.tif"
+            if flip_z:
+                return self.save_path / f"{self.tif_prefix}_{(len(images) - idx - 1):06}.tif"
+            else:
+                return self.save_path / f"{self.tif_prefix}_{idx:06}.tif"
         else:
-            file = Path(images[idx])
+            if flip_z:
+                file = Path(images[len(images) - idx - 1])
+            else:
+                file = Path(images[idx])
             if file.suffix.lower() in (".png", ".raw"):
                 return self.save_path / (file.name[0:-4] + ".tif")
             else:
@@ -197,13 +251,18 @@ class MultiProcess(Process):
             # the last down-sampling for z step should be based on np_max to ensure max brightness
             down_sampling_method_z = tuple(np_max if i % 2 == 0 else np_mean for i in range(reduction_factor_z))
 
-        file = None
+        # file = None
         x0, x1, y0, y1 = 0, 0, 0, 0
+
+        # check if images are flipped
+        flip_x, flip_y, flip_z = [False] * 3
+
         if is_tsv:
             x0, x1, y0, y1 = images.volume.x0, images.volume.x1, images.volume.y0, images.volume.y1
         if is_ims:
-            file = h5py.File(images)
-            images = file[f"DataSet/ResolutionLevel 0/TimePoint 0/Channel {channel}/Data"]
+            images = ImarisZWrapper(images, timepoint=0, channel=channel)
+            num_images = len(images)
+
         queue_time_out = 20
         while not self.die and self.args_queue.qsize() > 0:
             if self.free_ram_is_not_enough():
@@ -215,11 +274,14 @@ class MultiProcess(Process):
                 z_stack = None
                 down_sampled_tif_path = Path()
                 if need_down_sampling and down_sampled_path is not None:
-                    down_sampled_tif_path = down_sampled_path / f"{tif_prefix}_{idx_down_sampled:06}.tif"
+                    if flip_z:
+                        down_sampled_tif_path = down_sampled_path / f"{tif_prefix}_{(num_images - idx_down_sampled - 1):06}.tif"
+                    else:
+                        down_sampled_tif_path = down_sampled_path / f"{tif_prefix}_{idx_down_sampled:06}.tif"
                     if resume and down_sampled_tif_path.exists():
                         exist_count = 0
                         for idx_z, idx in enumerate(indices):
-                            if self.tif_save_path(idx, images).exists():
+                            if self.tif_save_path(idx, images, flip_z=flip_z).exists():
                                 exist_count += 1
                         if len(indices) == exist_count:
                             for _ in range(exist_count):
@@ -236,7 +298,8 @@ class MultiProcess(Process):
                         continue
                     if self.die:
                         break
-                    tif_save_path = self.tif_save_path(idx, images)
+                    tif_save_path = self.tif_save_path(idx, images, flip_z=flip_z)
+                    # print(tif_save_path)
                     if resume and tif_save_path.exists() and not need_down_sampling:  # function is not None and
                         self.progress_queue.put(running_next)
                         continue
@@ -274,6 +337,7 @@ class MultiProcess(Process):
                                 else:
                                     img = function(img)
 
+                            # apply rotations
                             if rotation == 90:
                                 img = rot90(img, 1)
                             elif rotation == 180:
@@ -281,6 +345,13 @@ class MultiProcess(Process):
                             elif rotation == 270:
                                 img = rot90(img, 3)
 
+                            # apply flips
+                            if flip_x:
+                                img = flip(img, axis=1)
+                            if flip_y:
+                                img = flip(img, axis=0)
+
+                            # save image
                             if save_images and (is_tsv or is_ims or function is not None or rotation in (90, 180, 270)):
                                 #print(f"debug: {tif_save_path}")
                                 #print(f"debug: {img}")
@@ -365,8 +436,10 @@ class MultiProcess(Process):
 
             except (Empty, TimeoutError):
                 self.die = True
-        if is_ims and isinstance(file, h5py.File):
-            file.close()
+        # if is_ims and isinstance(file, h5py.File):
+        #     file.close()
+        if is_ims and isinstance(images, ImarisZWrapper):
+            images.close()
         if isinstance(pool, ProcessPoolExecutor):
             pool.shutdown()
         self.progress_queue.put(not running_next)
@@ -436,6 +509,7 @@ def parallel_image_processor(
         resume: bool = True,
         needed_memory: int = None,
         save_images: bool = True,
+        return_downsampled_path: bool = False
 ):
     """
     fun: Callable
@@ -516,12 +590,19 @@ def parallel_image_processor(
                 args_queue.put((idx, [idx]))
 
     elif source.is_file() and source.suffix.lower() == ".ims":
-        print(f"ims file detected. hdf5plugin=v{hdf5plugin.version}")
-        with h5py.File(source) as ims_file:
-            img = ims_file[f"DataSet/ResolutionLevel 0/TimePoint 0/Channel {channel}/Data"]
-            num_images = img.shape[0]
-            shape = img.shape[1:3]
-            dtype = img.dtype
+        # print(f"ims file detected. hdf5plugin=v{hdf5plugin.version}")
+        # with h5py.File(source) as ims_file:
+        #     img = ims_file[f"DataSet/ResolutionLevel 0/TimePoint 0/Channel {channel}/Data"]
+        #     num_images = img.shape[0]
+        #     shape = img.shape[1:3]
+        #     dtype = img.dtype
+        print(f"ims file detected. using imaris_ims_file_reader!")
+        with ImarisZWrapper(source, timepoint=0, channel=channel) as ims_wrapper:
+            num_images = len(ims_wrapper)  # Number of Z planes
+            img0 = ims_wrapper[0]  # Example 2D image to get shape and dtype
+            shape = img0.shape  # (Y, X)
+            dtype = img0.dtype
+
         if need_down_sampling and down_sampling_z_steps > 1:
             for ds_z_idx, z_range in enumerate(calculate_downsampling_z_ranges(0, num_images, down_sampling_z_steps)):
                 args_queue.put((ds_z_idx, z_range))
@@ -583,12 +664,6 @@ def parallel_image_processor(
     print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}starting workers ...")
     for worker in tqdm(range(workers), desc=' workers'):
         if progress_queue.qsize() + worker < num_images:
-            #print(f"Debug print - images in multi process: {len(images)}")
-            #print(f"Debug print - destination in multi process: {destination}")
-            #print(f"Debug print - kwargs in multi process: {kwargs}")
-            #print(f"Debug print - args in multi process: {args}")
-            #print(f"Debug print - dsp in multi process: {downsampled_path}")
-            #sys.exit()
             MultiProcess(
                 progress_queue, args_queue, semaphore, fun, images, destination, args, kwargs, shape, dtype,
                 rename=rename, tif_prefix=tif_prefix,
@@ -613,6 +688,8 @@ def parallel_image_processor(
         # os.chmod(npz_file, 0o777)
 
         if resume and npz_file.exists():
+            if return_downsampled_path:
+                return return_code, downsampled_path
             return return_code
         print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
               f"{PrintColors.BLUE}down-sampling: {PrintColors.ENDC}"
@@ -633,10 +710,10 @@ def parallel_image_processor(
         with ThreadPoolExecutor(max_processors) as pool:
             img_stack = list(pool.map(imread_tif_raw_png, tqdm(files, desc="loading", unit="images")))
             # print(f"Debug: Shape of img_stack after loading = {img_stack[0].shape} if img_stack else 'Empty'")  # Debugging statement after list creation
-#            print(f"Debug: Shape of img_stack after loading = {img_stack.shape if img_stack else 'Empty'}")
+            # print(f"Debug: Shape of img_stack after loading = {img_stack.shape if img_stack else 'Empty'}")
 
             img_stack = dstack(img_stack)  # yxz format
-#           print(f"Debug: Dimensions of img_stack after dstack = {img_stack.shape}")  
+            # print(f"Debug: Dimensions of img_stack after dstack = {img_stack.shape}")
             
             img_stack = rollaxis(img_stack, -1)  # zyx format
             print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
@@ -664,7 +741,7 @@ def parallel_image_processor(
                     else:
                         os.chmod(npz_file, 0o777)
                 else:
-                    print(f"Permissions for '{file_path}' are correctly set to 777.")
+                    print(f"Permissions for '{npz_file}' are correctly set to 777.")
             else: 
                 print("Permission edit skipped")
             savez_compressed(
@@ -673,6 +750,8 @@ def parallel_image_processor(
                 xI=array(axes_spacing, dtype='object')  # note specify object to avoid "ragged" warning
             )
 
+    if return_downsampled_path:
+        return return_code, downsampled_path
     return return_code
 
 

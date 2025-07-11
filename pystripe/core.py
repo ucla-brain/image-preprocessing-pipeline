@@ -1,5 +1,7 @@
 import sys
 import os
+import shutil
+import subprocess
 from argparse import RawDescriptionHelpFormatter, ArgumentParser
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, TimeoutError
 from concurrent.futures.process import BrokenProcessPool
@@ -19,7 +21,7 @@ from gc import collect as gc_collect
 
 from cv2 import morphologyEx, MORPH_CLOSE, MORPH_OPEN, floodFill, GaussianBlur
 from dcimg import DCIMGFile
-from imageio.v3 import imread as png_imread
+from imageio.v3 import imread as iio_imread
 from numba import jit
 from numexpr import evaluate
 from numpy import dtype as np_d_type
@@ -29,7 +31,7 @@ from numpy import median as np_median
 from numpy import min as np_min
 from numpy import (uint8, uint16, float32, float64, iinfo, ndarray, generic, broadcast_to, exp, expm1, log1p, tanh,
                    zeros, ones, cumsum, arange, unique, interp, pad, clip, where, rot90, flipud, dot, reshape, nonzero,
-                   logical_not, prod, asarray)
+                   logical_not, prod, rint, array)
 from psutil import cpu_count
 from ptwt import wavedec2 as pt_wavedec2
 from ptwt import waverec2 as pt_waverec2
@@ -39,7 +41,7 @@ from scipy.signal import butter, sosfiltfilt
 from skimage.filters import threshold_otsu, threshold_multiotsu
 from skimage.measure import block_reduce
 from skimage.transform import resize
-from tifffile import imread, imwrite
+from tifffile import imwrite
 from tifffile.tifffile import TiffFileError
 from torch import Tensor, as_tensor
 from torch import arange as pt_arange
@@ -55,6 +57,8 @@ from torch.cuda import is_available as cuda_is_available_for_pt
 from torch.fft import irfft as pt_irfft
 from torch.fft import rfft as pt_rfft
 from tqdm import tqdm
+from PIL import Image
+Image.MAX_IMAGE_PIXELS = None
 
 # from jax import local_devices, Array, default_device
 # from jax.numpy import broadcast_to as jx_broadcast_to
@@ -194,43 +198,69 @@ def log1p_jit(img: ndarray, dtype=float32):
 
 
 def imread_tif_raw_png(path: Path, dtype: str = None, shape: Tuple[int, int] = None):
-    """Load a tiff or raw image
-
-    Parameters
-    ----------
-    path : Path
-        path to tiff, raw or png image
-    dtype: str or None,
-        optional. If given will reduce the raw to tif conversion time.
-    shape : tuple (int, int) or None
-        optional. If given will reduce the raw to tif conversion time.
-
-    Returns
-    -------
-    img : ndarray
-        image as a numpy array
-
-    """
+    extension = path.suffix.lower()
     img = None
-    # for NAS
-    attempt = 0
+
     for attempt in range(NUM_RETRIES):
         try:
-            extension = path.suffix.lower()
             if extension == '.raw':
                 img = raw_imread(path, dtype=dtype, shape=shape)
+
             elif extension == '.png':
-                img = png_imread(path, extension='.png', plugin='PNG-FI')
-            elif extension in ['.tif', '.tiff']:
-                img = imread(path.__str__())
+                img = iio_imread(path, extension='.png', plugin='PNG-FI')
+
+            elif extension in ('.tif', '.tiff'):
+                try:
+                    img = iio_imread(path, plugin="tifffile")
+                except (TiffFileError, RuntimeError) as e:
+                    if attempt == 0:
+                        if 'imcd_lzw_decode' in str(e):
+                            print(f"{PrintColors.WARNING}[imagecodecs]: file: {path.name} LZW decode error: {e}{PrintColors.ENDC}")
+                        else:
+                            print(f"{PrintColors.WARNING}[tifffile]: file: {path.name} failed to read: {type(e).__name__} - {e}{PrintColors.ENDC}")
+                    try:
+                        with Image.open(path) as im:
+                            im.load()
+                            img = array(im)
+                    except (OSError, ValueError) as e2:
+                        if attempt == 0:
+                            print(f"{PrintColors.WARNING}[pillow]: file: {path.name} also failed to read: {type(e2).__name__} - {e2}{PrintColors.ENDC}")
+                        # 🛠 Try bfconvert as last resort
+                        bfconvert = shutil.which("bfconvert")
+                        if bfconvert:
+                            fixed_path = path.with_suffix('.bf.tif')
+                            if fixed_path.exists():
+                                fixed_path.unlink()
+                            try:
+                                subprocess.run(
+                                    [bfconvert, str(path), str(fixed_path)],
+                                    check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                                )
+                                if fixed_path.exists():
+                                    if path.exists():
+                                        path.unlink()
+                                    subprocess.run(
+                                        [bfconvert, str(fixed_path), "-compression", "LZW", str(path)],
+                                        check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                                    )
+                                    print(f"{PrintColors.BLUE}[bfconvert]: file: {path.name} fixed and recompressed.{PrintColors.ENDC}")
+                                    continue  # Retry reading the repaired file
+                            except subprocess.CalledProcessError as e3:
+                                print(f"{PrintColors.FAIL}[bfconvert]: file: {path.name} failed to fix: {e3}{PrintColors.ENDC}")
+                        raise
+
             else:
-                print(f"{PrintColors.WARNING}encountered unsupported file format: {extension}{PrintColors.ENDC}")
-        except (OSError, TypeError, PermissionError):
+                print(f"{PrintColors.WARNING}Unsupported file format: {extension}{PrintColors.ENDC}")
+        except (OSError, TypeError, PermissionError) as e:
+            print(f"[Attempt {attempt+1}]: file: {path.name} Read error: {type(e).__name__} - {e}")
             sleep(0.1)
             continue
-        break
+
+        if img is not None:
+            break
+
     if img is None:
-        print(f"after {attempt + 1} attempts failed to read file:\n{path}")
+        print(f"{PrintColors.FAIL}Failed to load image after {attempt + 1} attempts:\n{path.name}{PrintColors.ENDC}")
     return img
 
 
@@ -1121,6 +1151,7 @@ def filter_streaks(
         img = expm1_jit(img)
 
     if np_d_type(d_type).kind in ("u", "i"):
+        img = rint(img)
         d_type_info = iinfo(d_type)
         clip(img, d_type_info.min, d_type_info.max, out=img)
     if img.dtype != d_type:
@@ -1656,9 +1687,12 @@ def process_dc_images(input_file: Path, input_path: Path, output_path: Path, arg
 class MultiProcessQueueRunner(Process):
     def __init__(self, progress_queue: Queue, args_queue: Queue,
                  gpu_semaphore: Queue = None,
+                 gpu: int = None,
                  fun: Callable = read_filter_save,
                  timeout: float = None,
                  replace_timeout_with_dummy: bool = True):
+        if gpu is not None:
+            os.environ["CUDA_VISIBLE_DEVICES"] = f"{gpu}"
         Process.__init__(self)
         self.daemon = False
         self.progress_queue = progress_queue

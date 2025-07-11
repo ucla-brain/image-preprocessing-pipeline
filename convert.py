@@ -65,7 +65,7 @@ def main(args: Namespace):
             args.dark > 0 or args.convert_to_8bit or
             new_size or down_sample or args.voxel_size_target or
             args.rotation or args.flip_upside_down or
-            args.gaussian or args.background_subtraction or args.de_stripe or args.bleach_correction)
+            args.gaussian or args.background_subtraction or args.destripe or args.bleach_correction)
     ):
         if not args.tif:
             print(f"{PrintColors.FAIL}tif path is needed to continue.{PrintColors.ENDC}")
@@ -73,14 +73,14 @@ def main(args: Namespace):
 
         need_pre_processing = False
         if args.dark > 0 or args.convert_to_8bit or down_sample or args.flip_upside_down or args.gaussian or \
-                args.background_subtraction or args.de_stripe or args.bleach_correction:
+                args.background_subtraction or args.destripe or args.bleach_correction:
             need_pre_processing = True
 
         de_striping_sigma = (0, 0)
-        if args.de_stripe:
+        if args.destripe:
             de_striping_sigma = (250, 250)
-        if args.bleach_correction:
-            de_striping_sigma = (4000, 4000)
+        # if args.bleach_correction:
+        #    de_striping_sigma = (4000, 4000)
 
         gpu_semaphore = None
         if cuda_is_available_for_pt():
@@ -99,7 +99,7 @@ def main(args: Namespace):
                 "new_size": new_size,
                 "sigma": de_striping_sigma,
                 "padding_mode": args.padding_mode,
-                "bidirectional": True if args.bleach_correction else False,
+                "bidirectional": True, # if args.bleach_correction else False
                 "dark": args.dark,
                 "lightsheet": args.background_subtraction,
                 "bleach_correction_frequency": 1 / args.bleach_correction_period if args.bleach_correction else None,
@@ -127,7 +127,7 @@ def main(args: Namespace):
             save_images=args.save_images,
             downsampled_path=args.downsample_path,
             alternating_downsampling_method=False if args.downsample_method else True,
-            down_sampled_dtype=args.downsample_dtype
+            down_sampled_dtype=args.downsample_dtype,
         )
     elif input_path.is_dir():
         tif_2d_folder = input_path
@@ -296,11 +296,10 @@ if __name__ == '__main__':
     parser = ArgumentParser(
         description="Imaris to tif and TeraFly converter (version 0.1.0)\n\n",
         formatter_class=RawDescriptionHelpFormatter,
-        epilog="Developed 2022 by Keivan Moradi, Hongwei Dong Lab (B.R.A.I.N) at UCLA\n"
+        epilog="Developed 2022 by Keivan Moradi at Hongwei Dong Lab (B.R.A.I.N.) at UCLA\n"
     )
     parser.add_argument("--input", "-i", type=str, required=True,
-                        help="path to input image. Input path can be: a tera-stitcher stage 5 volume (xml) file"
-                             ", Imaris (ims) image, or a 2D tif[f]?, png, raw series.")
+                        help="path to input image. Input path can be: a tera-stitcher stage 5 volume (xml) file, Imaris (ims) image, or a 2D tif[f]?, png, raw series.")
     parser.add_argument("--tif", "-t", type=str, required=False, default='',
                         help="path to tif output files.")
     parser.add_argument("--teraFly", "-f", type=str, required=False, default='',
@@ -314,113 +313,92 @@ if __name__ == '__main__':
     parser.add_argument("--nthreads", "-n", type=int, default=psutil.cpu_count(logical=False),
                         help="number of threads. default is all physical cores for tif conversion and 12 for TeraFly.")
     parser.add_argument("--channel", "-c", type=int, default=0,
-                        help="channel to be converted. Default is 0. "
-                             "negative vales mean RGB image. Most operations do not work on RGB. "
-                             "Only compression is tested for RGB.")
+                        help="channel to be converted. Default is 0. negative values mean RGB image. Most operations do not work on RGB. Only compression is tested for RGB.")
     parser.add_argument("--gaussian", "-g", default=False, action=BooleanOptionalAction,
                         help="image pre-processing: apply Gaussian filter to denoise. Default is --no-gaussian.")
-    parser.add_argument("--de_stripe", default=False, action=BooleanOptionalAction,
-                        help="image pre-processing: apply de-striping algorithm. Default is --no-de_stripe")
-    parser.add_argument("--padding_mode", "-w", type=str, default='reflect',
-                        help="Padding method affects the edge artifacts during de-stripping and bleach correction. "
-                             "The default mode is reflect, but in some cases wrap method works better. "
-                             "Options: constant, edge, linear_ramp, maximum, mean, median, minimum, reflect, "
-                             "symmetric, wrap, and empty")
-    parser.add_argument("--downsample_x", "-dsx", type=int, default=0,
+    parser.add_argument("--destripe", default=False, action=BooleanOptionalAction,
+                        help="image pre-processing: apply de-striping algorithm. Default is --no-destripe")
+    parser.add_argument("--padding-mode", "-w", type=str, default='reflect',
+                        help="Padding method affects the edge artifacts during de-stripping and bleach correction. The default mode is reflect, but in some cases wrap method works better. Options: constant, edge, linear_ramp, maximum, mean, median, minimum, reflect, symmetric, wrap, and empty")
+    parser.add_argument("--downsample-x", "-dsx", type=int, default=0,
                         help="image pre-processing: 2D down-sampling factor for x-axis. Default is 0.")
-    parser.add_argument("--downsample_y", "-dsy", type=int, default=0,
+    parser.add_argument("--downsample-y", "-dsy", type=int, default=0,
                         help="image pre-processing: 2D down-sampling factor for y-axis. Default is 0.")
-    parser.add_argument("--downsample_method", "-dsm", type=str, default='max',
-                        help="image pre-processing: down-sampling method. "
-                             "options are max, min, mean, median. Default is max.")
-    parser.add_argument("--downsample_dtype", "-dsdt", type=str, default='float32',
-                        help="image pre-processing: down-sample final data type. "
-                             "options are float32, uint16, uint8.")
-    parser.add_argument("--downsample_path", "-dsp", type=str, default='',
+    parser.add_argument("--downsample-method", "-dsm", type=str, default='mean',
+                        help="image pre-processing: down-sampling method. options are max, min, mean, median. Default is max.")
+    parser.add_argument("--downsample-dtype", "-dsdt", type=str, default='float32',
+                        help="image pre-processing: down-sample final data type. options are float32, uint16, uint8.")
+    parser.add_argument("--downsample-path", "-dsp", type=str, default='',
                         help="path to tif output downsampled files.")
-    parser.add_argument("--new_size_x", "-nsx", type=int, default=0,
+    parser.add_argument("--new-size-x", "-nsx", type=int, default=0,
                         help="image pre-processing: new size of x-axis. Default is 0.")
-    parser.add_argument("--new_size_y", "-nsy", type=int, default=0,
+    parser.add_argument("--new-size-y", "-nsy", type=int, default=0,
                         help="image pre-processing: new size of y-axis. Default is 0.")
     parser.add_argument("--dark", "-d", type=int, default=0,
                         help="image pre-processing: background vs foreground threshold. Default is 0.")
-    parser.add_argument("--background_subtraction", default=False, action=BooleanOptionalAction,
-                        help="image pre-processing: apply lightsheet cleaning algorithm. "
-                             "Default is --no-background_subtraction")
-    parser.add_argument("--bleach_correction", default=False, action=BooleanOptionalAction,
-                        help="image pre-processing: correct image bleaching. Default is --no-bleach_correction.")
-    parser.add_argument("--bleach_correction_period", type=float, default=2000,
-                        help="inverse of low-pass filter frequency used for bleach correction. "
-                             "Try camera tile size first. Default is 2000.")
-    parser.add_argument("--bleach_correction_clip_min", type=float, default=20,
+    parser.add_argument("--background-subtraction", default=False, action=BooleanOptionalAction,
+                        help="image pre-processing: apply lightsheet cleaning algorithm. Default is --no-background-subtraction")
+    parser.add_argument("--bleach-correction", default=False, action=BooleanOptionalAction,
+                        help="image pre-processing: correct image bleaching. Default is --no-bleach-correction.")
+    parser.add_argument("--bleach-correction-period", type=float, default=2000,
+                        help="inverse of low-pass filter frequency used for bleach correction. Try camera tile size first. Default is 2000.")
+    parser.add_argument("--bleach-correction-clip-min", type=float, default=20,
                         help="foreground vs background threshold. Default is 20.")
-    parser.add_argument("--bleach_correction_clip_max", type=float, default=255,
+    parser.add_argument("--bleach-correction-clip-max", type=float, default=255,
                         help="max of the image without outliers. Default is 255.")
-    parser.add_argument("--convert_to_16bit", default=False, action=BooleanOptionalAction,
-                        help="Image pre-processing: convert to 16-bit. Default is --no-convert_to_16bit")
-    parser.add_argument("--convert_to_8bit", default=False, action=BooleanOptionalAction,
-                        help="Image pre-processing: convert to 8-bit. Default is --no-convert_to_8bit")
-    parser.add_argument("--bit_shift", "-b", type=int, default=8,
-                        help="bit_shift for 8-bit conversion. An number between 0 and 8. "
-                             "Smaller values make images brighter compared with he original image. "
-                             "Default is 8 (no change in brightness).\n"
-                             "0 any value larger than   255 will be set to 255 in 8 bit, values smaller than 255 "
-                             "will not change.\n"
-                             "1 any value larger than   511 will be set to 255 in 8 bit, 0-  1 will be set to 0,"
-                             "   2-  3 to 1.\n"
-                             "2 any value larger than  1023 will be set to 255 in 8 bit, 0-  3 will be set to 0,"
-                             "   4-  7 to 1.\n"
-                             "3 any value larger than  2047 will be set to 255 in 8 bit, 0-  7 will be set to 0,"
-                             "   8- 15 to 1.\n"
-                             "4 any value larger than  4095 will be set to 255 in 8 bit, 0- 15 will be set to 0,"
-                             "  16- 31 to 1.\n"
-                             "5 any value larger than  8191 will be set to 255 in 8 bit, 0- 31 will be set to 0,"
-                             "  32- 63 to 1.\n"
-                             "6 any value larger than 16383 will be set to 255 in 8 bit, 0- 63 will be set to 0,"
-                             "  64-127 to 1.\n"
-                             "7 any value larger than 32767 will be set to 255 in 8 bit, 0-127 will be set to 0,"
-                             " 128-255 to 1.\n"
-                             "8 any value larger than 65535 will be set to 255 in 8 bit, 0-255 will be set to 0,"
-                             " 256-511 to 1.")
+    parser.add_argument("--convert-to-16bit", default=False, action=BooleanOptionalAction,
+                        help="Image pre-processing: convert to 16-bit. Default is --no-convert-to-16bit")
+    parser.add_argument("--convert-to-8bit", default=False, action=BooleanOptionalAction,
+                        help="Image pre-processing: convert to 8-bit. Default is --no-convert-to-8bit")
+    parser.add_argument("--bit-shift", "-b", type=int, default=8,
+                        help="bit_shift for 8-bit conversion. An number between 0 and 8. Smaller values make images brighter compared with the original image. Default is 8 (no change in brightness).\n"
+                             "0 any value larger than   255 will be set to 255 in 8 bit, values smaller than 255 will not change.\n"
+                             "1 any value larger than   511 will be set to 255 in 8 bit, 0-  1 will be set to 0,   2-  3 to 1.\n"
+                             "2 any value larger than  1023 will be set to 255 in 8 bit, 0-  3 will be set to 0,   4-  7 to 1.\n"
+                             "3 any value larger than  2047 will be set to 255 in 8 bit, 0-  7 will be set to 0,   8- 15 to 1.\n"
+                             "4 any value larger than  4095 will be set to 255 in 8 bit, 0- 15 will be set to 0,  16- 31 to 1.\n"
+                             "5 any value larger than  8191 will be set to 255 in 8 bit, 0- 31 will be set to 0,  32- 63 to 1.\n"
+                             "6 any value larger than 16383 will be set to 255 in 8 bit, 0- 63 will be set to 0,  64-127 to 1.\n"
+                             "7 any value larger than 32767 will be set to 255 in 8 bit, 0-127 will be set to 0, 128-255 to 1.\n"
+                             "8 any value larger than 65535 will be set to 255 in 8 bit, 0-255 will be set to 0, 256-511 to 1.")
     parser.add_argument("--rotation", "-r", type=int, default=0,
-                        help="image pre-processing: rotate the image. "
-                             "one of 0, 90, 180 or 270 degree values are accepted. Default is 0.")
-    parser.add_argument("--flip_upside_down", default=False, action=BooleanOptionalAction,
-                        help="image pre-processing: flip the y-axis. Default is --no-flip_upside_down")
-    parser.add_argument("--compression_level", "-zl", type=int, default=1,
+                        help="image pre-processing: rotate the image. one of 0, 90, 180 or 270 degree values are accepted. Default is 0.")
+    parser.add_argument("--flip-upside-down", default=False, action=BooleanOptionalAction,
+                        help="image pre-processing: flip the y-axis. Default is --no-flip-upside-down")
+    parser.add_argument("--compression-level", "-zl", type=int, default=1,
                         help="image pre-processing: compression level for tif files. Default is 1.")
-    parser.add_argument("--compression_method", "-zm", type=str, default="ADOBE_DEFLATE",
-                        help="image pre-processing: compression method for tif files. Default is ADOBE_DEFLATE. "
-                             "LZW and PackBits are also supported.")
-    parser.add_argument("--movie_start", type=int, default=0,
+    parser.add_argument("--compression-method", "-zm", type=str, default="ADOBE_DEFLATE",
+                        help="image pre-processing: compression method for tif files. Default is ADOBE_DEFLATE. LZW and PackBits are also supported.")
+    parser.add_argument("--movie-start", type=int, default=0,
                         help="start frame counting from 0. Default is 0.")
-    parser.add_argument("--movie_end", type=int, default=None,
+    parser.add_argument("--movie-end", type=int, default=None,
                         help="end frame counting from 0. Default is the last frame.")
-    parser.add_argument("--movie_frame_duration", type=int, default=5,
+    parser.add_argument("--movie-frame-duration", type=int, default=5,
                         help="duration of each frame. should be a positive integer. Default is 5.")
-    parser.add_argument("--voxel_size_x", "-dx", type=float, default=1,
+    parser.add_argument("--voxel-size-x", "-dx", type=float, default=1,
                         help="x voxel size in µm. Default is 1.")
-    parser.add_argument("--voxel_size_y", "-dy", type=float, default=1,
+    parser.add_argument("--voxel-size-y", "-dy", type=float, default=1,
                         help="y voxel size in µm. Default is 1.")
-    parser.add_argument("--voxel_size_z", "-dz", type=float, default=1,
+    parser.add_argument("--voxel-size-z", "-dz", type=float, default=1,
                         help="z voxel size in µm. Default is 1.")
-    parser.add_argument("--voxel_size_target", "-dt", type=float, default=None,
+    parser.add_argument("--voxel-size-target", "-dt", type=float, default=None,
                         help="target voxel size in µm for 3D down-sampling.")
     parser.add_argument("--timeout", type=float, default=None,
-                        help="timeout in seconds for image reading. applies to image series and tsv volumes (not ims). "
-                             "adds up to 30 percent overhead for copying the data from one process to another.")
+                        help="timeout in seconds for image reading. "
+                             "Use it to work with 2D tif series that might have damaged files. "
+                             "Applies to image series and tsv volumes (not ims). "
+                             "Adds up to 30 percent overhead for copying the data from one process to another.")
     parser.add_argument("--rename", default=False, action=BooleanOptionalAction,
-                        help="applies to tif to tif conversion only. "
-                             "sorts input files and renumbers them like img_000000.tif. Default is --no-rename. ")
+                        help="applies to tif to tif conversion only. sorts input files and renumbers them like img_000000.tif. Default is --no-rename.")
     parser.add_argument("--resume", default=False, action=BooleanOptionalAction,
-                        help="applies to tif conversion only. "
-                             "resume processing remaining files. Default is --no-resume.")
-    parser.add_argument("--needed_memory", type=int, default=1,
+                        help="applies to tif conversion only. resume processing remaining files. Default is --no-resume.")
+    parser.add_argument("--needed-memory", type=int, default=1,
                         help="Memory needed per thread in GB. Default is 1 GB.")
-    parser.add_argument("--save_images", default=True, action=BooleanOptionalAction,
-                        help="save the processed images. Default is --save_images. "
-                             "if you just need to do downsampling use --no-save_images.")
-    parser.add_argument("--threads_per_gpu", type=int, default=1,
+    parser.add_argument("--save-images", default=True, action=BooleanOptionalAction,
+                        help="save the processed images. Default is --save-images. "
+                             "if you just need to do downsampling use --no-save-images.")
+    parser.add_argument("--threads-per-gpu", type=int, default=1,
                         help="Number of images processed on one GPU at a time. Default is 1. "
                              "Increase if the image sizes are small and multiple images fit into the vRAM.")
     main(parser.parse_args())
+

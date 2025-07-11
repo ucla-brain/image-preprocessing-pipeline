@@ -1,22 +1,28 @@
-% Program for Deconvolution of Light Sheet Microscopy Stacks. Copyright
-% TU-Wien 2019, written using MATLAB 2018b by Klaus
-% Becker(klaus.becker@tuwien.ac.at) Keivan Moradi at UCLA B.R.A.I.N (Dong
-% lab) patched it in MATLAB V2022b. kmoradi@mednet.ucla.edu. Main changes
-% by Keivan Moradi: Multi-GPU, resume, and 3D gaussian filter support
-% LsDeconv is free software: you can redistribute it and/or modify it under
-% the terms of the GNU General Publ`ic License as published by the Free
-% Software Foundation, either version 3 of the License, or at your option)
-% any later version. LsDeconv is distributed in the hope that it will be
-% useful, but WITHOUT ANY WARRANTY; without even the implied warranty of
-% MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
-% Public License for more details. You should have received a copy of the
-% GNU General Public License along with this file. If not, see
-% <http://www.gnu.org/licenses/>.
-% TODO: save both flipped and non-flipped
-% TODO: Test SmartSPIM PSF
-% TODO: resume saving consider images saved already in save_image function
-% TODO: Update showinfo function
-% TODO: test applying gaussian every 10 it
+% Program for Deconvolution of Light Sheet Microscopy Stacks.
+%
+% Originally written in MATLAB 2018b by Klaus Becker klaus.becker at tuwien.ac.at
+%
+% Enhanced by Keivan Moradi at UCLA B.R.A.I.N. (Dong lab) in MATLAB 2023a.
+% Contact: kmoradi at mednet.ucla.edu
+%
+% Main modifications by Keivan Moradi:
+%   - Multi-GPU support
+%   - Resume capability
+%   - 3D Gaussian filter support
+%   - Destripe function specifically along the z-axis
+%
+% LsDeconv is free software: you can redistribute it and/or modify it
+% under the terms of the GNU General Public License as published by
+% the Free Software Foundation, either version 3 of the License, or
+% (at your option) any later version.
+%
+% LsDeconv is distributed in the hope that it will be useful,
+% but WITHOUT ANY WARRANTY; without even the implied warranty of
+% MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+%
+% See the GNU General Public License for more details.
+% You should have received a copy of the GNU General Public License
+% along with this file. If not, see <http://www.gnu.org/licenses/>.
 
 function [] = LsDeconv(varargin)
     try
@@ -24,22 +30,18 @@ function [] = LsDeconv(varargin)
         disp('LsDeconv: Deconvolution tool for Light Sheet Microscopy.');
         disp('TU Wien, 2019: This program was was initially written in MATLAB V2018b by klaus.becker@tuwien.ac.at');
         disp('Keivan Moradi, 2023: Patched it in MATLAB V2023a. kmoradi@mednet.ucla.edu. UCLA B.R.A.I.N (Dong lab)');
-        disp('Main changes: Improved block size calculareon and Multi-GPU and Multi-CPU parallel processing, Resume, Flip Y axis, and 3D gaussian filter support');
+        disp('Main changes: Improved block size calculation and Multi-GPU and Multi-CPU parallel processing, Resume, Flip Y axis, and 3D gaussian filter support');
         disp(' ');
         disp(datetime('now'));
-        disp(' ');
 
         % make sure correct number of parameters specified
-        if nargin < 23
+        if nargin < 29
             showinfo();
-            if isdeployed
-                exit(1);
-            end
             return
         end
 
         %read command line parameters
-        disp("assigning command line parameter strings")
+        disp('assigning command line parameter strings')
         inpath = varargin{1};
         dxy = varargin{2};
         dz = varargin{3};
@@ -55,79 +57,49 @@ function [] = LsDeconv(varargin)
         stop_criterion = varargin{13};
         block_size_max = double(varargin{14});
         gpus = varargin{15};
-        amplification = varargin{16};
-        filter.sigma = varargin{17};
-        filter.size = varargin{18};
+        amplification = single(varargin{16});
+        filter.gaussian_sigma = varargin{17};
+        filter.gaussian_size = varargin{18};
         filter.dark = varargin{19};
-        resume = varargin{20};
-        starting_block = varargin{21};
-        flip_upside_down = varargin{22};
-        convert_to_8bit = varargin{23};
-        cache_drive = tempdir;
-        if nargin > 23
-            cache_drive = fullfile(inpath, varargin{24});
-            if ~exist(cache_drive, "dir")
-                disp("making cache drive dir " + cache_drive)
-                mkdir(cache_drive);
-            end
-            disp("cache drive dir created and/or exists " + cache_drive)            
-        end
-
-        %convert command line parameters from string to double
-        disp("Deployed? " + isdeployed);
-        if isdeployed
-            disp("converting double command line parameters")
-            dxy = str2double(strrep(dxy, ',', '.'));
-            dz = str2double(strrep(dz, ',', '.'));
-            numit = str2double(strrep(numit, ',', '.'));
-            NA = str2double(strrep(NA, ',', '.'));
-            rf = str2double(strrep(rf, ',', '.'));
-            lambda_ex = str2double(strrep(lambda_ex, ',', '.'));
-            lambda_em = str2double(strrep(lambda_em, ',', '.'));
-            fcyl = str2double(strrep(fcyl, ',', '.'));
-            slitwidth = str2double(strrep(slitwidth, ',', '.'));
-            damping = str2double(strrep(damping, ',', '.'))/100;
-            clipval = str2double(strrep(clipval, ',', '.'));
-            stop_criterion = str2double(strrep(stop_criterion, ',', '.'));
-            block_size_max = str2double(strrep(block_size_max, ',', '.'));
-            amplification = str2double(strrep(amplification, ',', '.'));
-            resume = str2double(strrep(resume, ',', '.'));
-            starting_block = str2double(strrep(starting_block, ',', '.'));
-            flip_upside_down = str2double(strrep(flip_upside_down, ',', '.'));
-            convert_to_8bit = str2double(strrep(convert_to_8bit, ',', '.'));
-            filter.dark  = str2double(strrep(filter.dark, ',', '.'));
+        filter.destripe_sigma = varargin{20};
+        filter.regularize_interval = varargin{21};
+        resume = varargin{22};
+        starting_block = varargin{23};
+        flip_upside_down = varargin{24};
+        convert_to_8bit = varargin{25};
+        convert_to_16bit = varargin{26};
+        filter.use_fft = varargin{27};
+        filter.adaptive_psf = varargin{28};
+        cache_drive = varargin{29};
+        if ~exist(cache_drive, 'dir')
+            mkdir(cache_drive);
+            disp('Cache drive dir created: ' + cache_drive)
+        else
+            disp('Cache drive dir exists: ' + cache_drive)
         end
         
-        calledAs = "LsDeconvolve(folderPath=" + inpath + ", dxy=" + dxy + ...
-                ", dz=" + dz + ", numit=" + numit + ", lambda_ex=" + lambda_ex + ...
-                ", lambda_em=" + lambda_em + ", cache_drive_path=" + ...
-                cache_drive + ")";        
-        disp("Hello I was called as ");
-        disp(calledAs);
-
-        assert(isa(inpath, "string"), "wrong type " + class(inpath));
-        assert(isa(dxy, "double"), "wrong type " + class(dxy));
-        assert(isa(dz, "double"), "wrong type " + class(dz));
-        assert(isa(numit, "double"), "wrong type " + class(numit));
-        assert(isa(lambda_ex, "double"), "wrong type " + class(lambda_ex));
-        assert(isa(lambda_em, "double"), "wrong type " + class(lambda_em));
-        assert(isa(cache_drive, "string"), "wrong type " + class(cache_drive));
-        disp("All types correct");
+        assert(isa(inpath     , 'string'), "wrong type " + class(inpath));
+        assert(isa(dxy        , 'double'), "wrong type " + class(dxy));
+        assert(isa(dz         , 'double'), "wrong type " + class(dz));
+        assert(isa(numit      , 'double'), "wrong type " + class(numit));
+        assert(isa(lambda_ex  , 'double'), "wrong type " + class(lambda_ex));
+        assert(isa(lambda_em  , 'double'), "wrong type " + class(lambda_em));
+        assert(isa(cache_drive, 'string'), "wrong type " + class(cache_drive));
 
         if isfolder(inpath)
             % make folder for results and make sure the outpath is writable
             outpath = fullfile(inpath, 'deconvolved');
             if flip_upside_down
-                outpath = fullfile(inpath, 'deconvolved_fliped_upside_down');
+                outpath = fullfile(inpath, 'deconvolved_flipped_upside_down');
             end
             if ~exist(outpath, 'dir')
-                disp("making folder " + outpath );
+                disp('making folder ' + outpath )
                 mkdir(outpath);
             end
-            disp("outpath folder created and/or exists " + outpath);
+            disp('outpath folder created and/or exists ' + outpath);
             log_file_path = fullfile(outpath, 'log.txt');
             log_file = fopen(log_file_path, 'w');
-            disp('made log file: ' + log_file)
+            disp('made log file: ' + log_file_path)
             % get available resources
             [ram_available, ram_total]  = get_memory();
             p_log(log_file, 'system information ...');
@@ -143,9 +115,10 @@ function [] = LsDeconv(varargin)
             stack_info.dz = dz;
             stack_info.flip_upside_down = flip_upside_down;
             stack_info.convert_to_8bit = convert_to_8bit;
+            stack_info.convert_to_16bit = convert_to_16bit;
 
-            if resume && numel(dir(fullfile(outpath, '*.tif'))) == stack_info.z
-                disp("it seems all the files are already deconvolved!");
+            if resume && numel(dir(fullfile(outpath, 'img_*.tif'))) == stack_info.z
+                disp('it seems all the files are already deconvolved!');
                 return
             elseif ~resume
                 delete(fullfile(outpath, '*.tif'));
@@ -162,28 +135,17 @@ function [] = LsDeconv(varargin)
             mkdir(cache_drive);
         elseif ~resume
             delete(fullfile(cache_drive, "*.mat"));
-        % else
-        %     files = dir(fullfile(cache_drive, "bl_*"));
-        %     files = files(~[files.isdir]); % files only
-        %     for idx = 1:length(files)
-        %         file = files(idx);
-        %         if file.bytes < 10
-        %             try
-        %                 delete(fullfile(cache_drive, file.name));
-        %             catch
-        %                 warning('Cannot delete %s', file.name);
-        %             end
-        %         end
-        %     end
+            delete(fullfile(cache_drive, "*.lz4"));
+            delete(fullfile(cache_drive, "*.tmp"));
         end
 
-        disp("Logging image attributes");
+        disp('Logging image attributes');
         p_log(log_file, ['   image size (voxels): ' num2str(stack_info.x)  'x * ' num2str(stack_info.y) 'y * ' num2str(stack_info.z) 'z = ' num2str(stack_info.x * stack_info.y * stack_info.z)]);
         p_log(log_file, ['   voxel size (nm^3): ' num2str(dxy)  'x * ' num2str(dxy) 'y * ' num2str(dz) 'z = ' num2str(dxy^2*dz)]);
         p_log(log_file, ['   image bit depth: ' num2str(stack_info.bit_depth)]);
         p_log(log_file, ' ');
 
-        disp("Logging imaging system parameters");
+        disp('Logging imaging system parameters');
         p_log(log_file, 'imaging system parameters ...')
         p_log(log_file, ['   focal length of cylinder lens (mm): ' num2str(fcyl)]);
         p_log(log_file, ['   width of slit aperture (mm): ' num2str(slitwidth)]);
@@ -197,36 +159,56 @@ function [] = LsDeconv(varargin)
         p_log(log_file, 'calculating PSF ...');
         Rxy = 0.61 * lambda_em / NA;
         dxy_corr = min(dxy, Rxy / 3);
-        [psf, FWHMxy, FWHMz] = LsMakePSF(dxy_corr, dz, NA, rf, lambda_ex, lambda_em, fcyl, slitwidth);
-        p_log(log_file, ['   size of PSF (pixel): ' num2str(size(psf, 1))  ' x ' num2str(size(psf, 2)) ' x ' num2str(size(psf, 3))]);
+        [psf.psf, FWHMxy, FWHMz] = LsMakePSF(dxy_corr, dz, NA, rf, lambda_ex, lambda_em, fcyl, slitwidth);
+        psf.inv = psf.psf(end:-1:1, end:-1:1, end:-1:1);
+        p_log(log_file, ['   size of PSF (pixel): ' num2str(size(psf.psf, 1))  ' x ' num2str(size(psf.psf, 2)) ' x ' num2str(size(psf.psf, 3))]);
         p_log(log_file, ['   FWHHM of PSF lateral (nm): ' num2str(FWHMxy)]);
         p_log(log_file, ['   FWHHM of PSF axial (nm): ' num2str(FWHMz)]);
         p_log(log_file, ['   Rayleigh range of objective lateral (nm): ' num2str(Rxy)]);
         p_log(log_file, ['   Rayleigh range of objective axial (nm): ' num2str((2 * lambda_em * rf) / NA^2)]);
         clear Rxy dxy_corr FWHMxy FWHMz;
-
-        % plot_matrix(psf);
-        options.overwrite = true;
-        saveastiff(psf, 'psf.tif', options);
         p_log(log_file, ' ');
 
-        % disp(psf)
-        % psf_file = Tiff(fullfile(inpath, 'deconvolved', 'psf.tif'), 'w');
-        % write(psf_file, psf);
-        % close(psf_file);
-
-        % split the image into smaller blocks
+        % === split the image into smaller blocks ===
         % x and y pads are interpolated since they are smaller than z
         % z pad is from actual image to avoid artifacts
-        p_log(log_file, 'partitioning the image into blocks ...')
 
         block_path = fullfile(cache_drive, 'block.mat');
         if resume && exist(block_path, 'file')
-            block = load(block_path).block;
+            p_log(log_file, 'Resuming by loading block info ...')
+            loaded = load(block_path);
+            block = loaded.block;
+            clear loaded;
+            % After loading block struct, assert its split is valid for the current stack
+            assert(all(size(block.p1) == [block.nx * block.ny * block.nz, 3]), ...
+                'block.p1 shape mismatch with block.nx, block.ny, block.nz');
+            assert(all(size(block.p2) == [block.nx * block.ny * block.nz, 3]), ...
+                'block.p2 shape mismatch with block.nx, block.ny, block.nz');
+            fields = fieldnames(stack_info);
+            for f = 1:numel(fields)
+                if ~isequal(block.stack_info.(fields{f}), stack_info.(fields{f}))
+                    error('Loaded block.mat stack_info.%s (%s) does not match current stack_info (%s)', ...
+                        fields{f}, mat2str(block.stack_info.(fields{f})), mat2str(stack_info.(fields{f})));
+                end
+            end
         else
-            [block.nx, block.ny, block.nz, block.x, block.y, block.z, block.x_pad, block.y_pad, block.z_pad] = autosplit(stack_info, size(psf), filter, block_size_max, ram_total);  % ram_total ram_available
-            save(block_path, "block");
+            p_log(log_file, 'partitioning the image into blocks ...')
+            output_bytes = 2;
+            if convert_to_8bit
+                output_bytes = 1;
+            elseif stack_info.bit_depth == 8
+                output_bytes = 1;
+            end
+
+            block.stack_info = stack_info;
+            [block.nx, block.ny, block.nz, block.x, block.y, block.z, ...
+             block.x_pad, block.y_pad, block.z_pad, block.fft_shape] = ...
+                autosplit(stack_info, size(psf.psf), filter, block_size_max, ram_available, numit, output_bytes);
+
+            [block.p1, block.p2] = split_stack(stack_info, block);
+            save(block_path, 'block');
         end
+        check_block_coverage_planes(stack_info, block);
 
         p_log(log_file, ['   block numbers: ' num2str(block.nx) 'x * ' num2str(block.ny) 'y * ' num2str(block.nz) 'z = ' num2str(block.nx * block.ny * block.nz) ' blocks.']);
         p_log(log_file, ['   block size loaded image: ' num2str(block.x) 'x * ' num2str(block.y) 'y * ' num2str(block.z) 'z = ' num2str(block.x * block.y * block.z) ' voxels.']);
@@ -240,19 +222,33 @@ function [] = LsDeconv(varargin)
         % start image processing
         filter.dark = dark(filter, stack_info.bit_depth);
         p_log(log_file, 'preprocessing params ...')
-        p_log(log_file, ['   3D gaussian filter sigma: ' num2str(filter.sigma, 3)]);
-        p_log(log_file, ['   3D gaussian filter size: ' num2str(filter.size, 3)]);
+        p_log(log_file, ['   3D gaussian filter sigma: ' num2str(filter.gaussian_sigma, 3)]);
+        p_log(log_file, ['   3D gaussian filter size: ' num2str(filter.gaussian_size, 3)]);
         p_log(log_file, ['   post filter baseline subtraction (denoising): ' num2str(filter.dark)]);
+        p_log(log_file, ['   destrip along the z-axis sigma: ' num2str(filter.destripe_sigma)]);
         p_log(log_file, ' ');
 
         p_log(log_file, 'deconvolution params ...')
         p_log(log_file, ['   max. iterations: ' num2str(numit)]);
+        p_log(log_file, ['   regularization interval: ' num2str(filter.regularize_interval)]);
+        p_log(log_file, ['   Tikhonov regularization lambda (0 to 1): ' num2str(damping)]);
+        p_log(log_file, ['   early stopping criterion (%): ' num2str(stop_criterion)]);
+        if filter.use_fft
+        p_log(log_file, ['   deconvolve in frequency domain: yes']);
+        p_log(log_file, ['   fft shape: ' num2str(block.fft_shape)]);
+        else
+        p_log(log_file, ['   deconvolve in frequency domain: no']);
+        end
+        if filter.adaptive_psf
+        p_log(log_file, ['   adaptive psf using Weiner method: yes']);
+        else
+        p_log(log_file, ['   adaptive psf using Weiner method: no']);
+        end
+        p_log(log_file, ['   destripe sigma: ' num2str(filter.destripe_sigma)]);
         p_log(log_file, ' ');
         
         p_log(log_file, 'postprocessing params ...')
-        p_log(log_file, ['   damping factor (%): ' num2str(damping)]);
-        p_log(log_file, ['   stop criterion (%): ' num2str(stop_criterion)]);
-        p_log(log_file, ['   histogram clipping value (%): ' num2str(clipval)]);
+        p_log(log_file, ['   histogram clipping percentiles: [lb=' num2str(100 - clipval) ' ub=' num2str(clipval) ']' ]);
         p_log(log_file, ['   signal amplification: ' num2str(amplification)]);
         p_log(log_file, ['   post deconvolution dark subtraction: ' num2str(amplification)]);
         if flip_upside_down
@@ -265,6 +261,11 @@ function [] = LsDeconv(varargin)
         else
         p_log(log_file, '   convert to 8-bit: no');
         end
+        if convert_to_16bit
+        p_log(log_file, '   convert to 16-bit: yes');
+        else
+        p_log(log_file, '   convert to 16-bit: no');
+        end
         p_log(log_file, ' ');
 
         p_log(log_file, 'paths ...')
@@ -273,189 +274,301 @@ function [] = LsDeconv(varargin)
         p_log(log_file, ['   blocks: ' char(cache_drive)]);
         p_log(log_file, ['   logs: ' char(log_file_path)]);
         p_log(log_file, ' ');
-        
+
+        start_time = datetime('now');
         process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
             damping, clipval, stop_criterion, gpus, cache_drive, ...
             amplification, filter, resume, starting_block);
 
-        fclose(log_file);
-        open(log_file_path);
-
-        if isdeployed
-            exit(0);
+        p_log(log_file, ['deconvolution finished at ' char(datetime)]);
+        p_log(log_file, ['elapsed time: ' char(duration(datetime('now') - start_time, 'Format', 'dd:hh:mm:ss'))]);
+        disp('----------------------------------------------------------------------------------------');
+        delete(gcp('nocreate'));
+        try
+            status = rmdir(cache_drive, 's');
+            if status
+                p_log(log_file, sprintf('[Cache folder deleting]: succeeded for "%s"!', cache_drive));
+            else
+                p_log(log_file, sprintf('[Cache folder deleting]: failed for "%s"!', cache_drive));
+            end
+        catch ME
+            p_log(log_file, sprintf('[Cache folder deleting]: failed for "%s": %s', cache_drive, ME.message));
         end
+        fclose(log_file);
     catch ME
         % error handling
         disp(ME);
         if exist('log_file', 'var')
             p_log(log_file, getReport(ME, 'extended', 'hyperlinks', 'off'));
         end
-        if isdeployed
-            exit(1);
-        end
+        exit(1)
     end
 end
 
-% calculate xy plan size based on z step size
-function [x, y, x_pad, y_pad] = calculate_xy_size(z, z_pad, stack_info, block_size_max, psf_size, filter)
-    function size = max_pad_size(x, psf_size, filter_size)
-        size = max(pad_size(x, psf_size), gaussian_pad_size(x, filter_size));
-    end
-    z_max = z + 2 * gaussian_pad_size(z, filter.size(3));
-    function size = block_size(x, y)
-        size = ...
-            (x + 2 * max_pad_size(x, psf_size(1), filter.size(1))) * ...
-            (y + 2 * max_pad_size(y, psf_size(2), filter.size(2))) * ...
-            z_max;
-    end
+function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(...
+    stack_info, psf_size, filter, block_size_max, ram_available, numit, output_bytes)
 
-    % min pad size is half the psf size on the axis
-    % x_max is max_value_allowed_by_block_size_and_z - 2 * min_pad
-    x_max_in_ram = floor(nthroot(block_size_max / z_max, 2));
-    x_max_deconvolved = x_max_in_ram - psf_size(1);
-    x_min_deconvolved = x_max_deconvolved - 5 * psf_size(1);
-    x = x_min_deconvolved;
-    x_pad = pad_size(x, psf_size(1));
-    z_deconvolved = z - ceil(z_pad) - floor(z_pad);
-    max_deconvolved_voxels = x^2 * z_deconvolved;
-    for x_ = x_min_deconvolved+1:x_max_deconvolved
-        x_pad_ = pad_size(x_, psf_size(1));
-        deconvolved_voxels = x_^2 * z_deconvolved;
-        if block_size(x_, x_) < block_size_max && deconvolved_voxels > max_deconvolved_voxels
-            x = x_;
-            x_pad = x_pad_;
-            max_deconvolved_voxels = deconvolved_voxels;
-        end
-    end
-    y = x;
-    y_pad = x_pad;
-    if x > stack_info.x
-        x = stack_info.x;
-    end
-    if y > stack_info.y
-        y = stack_info.y;
-    end
+    % Parameters for RAM and block sizing
+    max_elements_per_dim = min(1290, floor(block_size_max^(1/3)));  % 3D cube limit from (2^31-1)^(1/3) = 1290 elements
+    if filter.use_fft, max_elements_per_dim = min(1281, max_elements_per_dim); end
+    max_elements_total  = 2^31 - 1;        % MATLAB's total element limit
 
-    if stack_info.x > stack_info.y
-        % first try to increase x then y
-        while x < stack_info.x && block_size(x+1, y) < block_size_max && (x+1)*y*z_deconvolved > max_deconvolved_voxels
-            x = x + 1;
-            x_pad = pad_size(x, psf_size(1));
-            max_deconvolved_voxels = x*y*z_deconvolved;
-        end
-        while y < stack_info.y && block_size(x, y+1) < block_size_max && x*(y+1)*z_deconvolved > max_deconvolved_voxels
-            y = y + 1;
-            y_pad = pad_size(y, psf_size(2));
-            max_deconvolved_voxels = x*y*z_deconvolved;
-        end
-    else
-        % first try to increase y then x
-        while y < stack_info.y && block_size(x, y+1) < block_size_max && x*(y+1)*z_deconvolved > max_deconvolved_voxels
-            y = y + 1;
-            y_pad = pad_size(y, psf_size(2));
-            max_deconvolved_voxels = x*y*z_deconvolved;
-        end
-        while x < stack_info.x && block_size(x+1, y) < block_size_max && (x+1)*y*z_deconvolved > max_deconvolved_voxels
-            x = x + 1;
-            x_pad = pad_size(x, psf_size(1));
-            max_deconvolved_voxels = x*y*z_deconvolved;
-        end
-    end
-end
+    % Compute the max z size that fits in RAM (capped at 1290 and stack_info.z)
+    bl_bytes = 4;                          % saved bls are single
+    physCores   = feature('numCores');
+    ram_usage_portion = 0.5;               % R should use at most 50% of free RAM so that bl's have room to load
+    usable_ram = ram_available * ram_usage_portion;
+    slice_size = stack_info.x * stack_info.y;
+    z_max_ram = floor(usable_ram / (output_bytes * slice_size));  % slabs size is output_bytes * num_elements
+    z_max = min(z_max_ram, stack_info.z);
 
-% determine the required number of blocks that are deconvolved sequentially
-function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad] = autosplit(stack_info, psf_size, filter, block_size_max, ram_available)
-    if block_size_max <= 0
-        error(['block size should be larger than zero and smaller than ' num2str(intmax("int32")) ' for GPU computing']);
-    end
-    if block_size_max > intmax("int32")
-        warning(['block size should be smaller than ' num2str(intmax("int32")) ' for GPU computing']);
-    end
+    % Set min and max block sizes, capping to allowed per-dimension limit
+    min_block = min(psf_size(:)'.* 2, ...
+                    [stack_info.x                  stack_info.y                  stack_info.z]);
 
-    % psf half width was not enouph to eliminate artifacts on z
-    psf_size(3) = ceil(psf_size(3) .* 2);
+    max_block = min([max_elements_per_dim    max_elements_per_dim    max_elements_per_dim], ...
+                    [stack_info.x            stack_info.y            z_max]);
 
-    % image will be converted to single precision (8 bit) float during
-    % deconvolution but two copies are needed
-    % z z-steps of the original image volume will be chunked to
-    % smaller 3D blocks. After deconvolution the blocks will be
-    % reassembled to save deconvolved z-steps. Therefore, there should be
-    % enough ram to reassemble z z-steps in the end.
-    ram_usage_portion = 0.9;
-    z_max = min(floor(ram_available * ram_usage_portion / get_num_cpu_sockets() / 8 / stack_info.x / stack_info.y), stack_info.z);
-    z = z_max;
-    % load extra z layers for each block to avoid generating artifacts on z
-    % for efficiency of FFT pad data in a way that the largest prime
-    % factor becomes <= 5 for each end of the block
-    z_pad = pad_size(z, psf_size(3));
-    [x, y, x_pad, y_pad] = calculate_xy_size(z, z_pad, stack_info, block_size_max, psf_size, filter);
-    max_deconvolved_voxels = x * y * (z - 2 * z_pad);
-    
-    % gaussian filter padding cannot be disabled and the added z_pad should
-    % be considred in calculating block size
-    function size = block_size(x, y, z, x_pad, y_pad)
-        size = ...
-            (x + 2 * max(x_pad, gaussian_pad_size(x, filter.size(1)))) * ...
-            (y + 2 * max(y_pad, gaussian_pad_size(y, filter.size(2)))) * ...
-            (z + 2 *            gaussian_pad_size(z, filter.size(3)));
-    end
+    % Cap total block size to max allowed elements
+    block_size_max = min(block_size_max, max_elements_total);
 
-    z_min = 2 * psf_size(3) + 1;
-    for z_ = z_max:-1:z_min
-        z_pad_ = pad_size(z_, psf_size(3));
-        [x_, y_, x_pad_, y_pad_] = calculate_xy_size(z_, z_pad_, stack_info, block_size_max, psf_size, filter);
-        deconvolved_voxels = x_ * y_ * (z_ - 2 * z_pad_);
-        if z_ > 2 * z_pad_ && deconvolved_voxels > max_deconvolved_voxels && block_size(x_, y_, z_, x_pad_, y_pad_) < block_size_max
-            x = x_;
-            y = y_;
-            z = z_;
-            x_pad = x_pad_;
-            y_pad = y_pad_;
-            z_pad = z_pad_;
-            max_deconvolved_voxels = deconvolved_voxels;
-        end
-    end
-    assert(max_deconvolved_voxels > 0, "calculate_xy_size failed to find the correct block sizes and z-pads! probably you need more ram.");
-    % number of blocks on each axis considering z-pad
-    nx = ceil(stack_info.x / x);
-    ny = ceil(stack_info.y / y);
-    nz = ceil((stack_info.z - 2*z_pad) / (z - 2*z_pad));
-end
+    best_score = -Inf;
+    best = struct();
+    num_failed = 0;
 
-%provides coordinates of sub-blocks after splitting
-function [p1, p2] = split(stack_info, block)
-    % bounding box coordinate points
-    p1 = zeros(block.nx * block.ny * block.nz, 4);
-    p2 = zeros(block.nx * block.ny * block.nz, 3);
+    d_pad_base = [0 0 0];
+    if filter.destripe_sigma > 0, d_pad_base = max(d_pad_base, [1 1 1]); end
+    if numit > 0, d_pad_base = max(d_pad_base, decon_pad_size(psf_size)); end
+    % Use coarse step for initial sweep (square xy blocks)
+    for z = max_block(3):-1:min_block(3)
+        for xy = max_block(1):-1:min_block(1)
+            x = xy; y = xy; bl_core = [x y z];
+            d_pad = d_pad_base;
 
-    blnr = 0;
-    for nz = 0 : block.nz-1
-        zs = nz * (block.z - floor(block.z_pad) - ceil(block.z_pad)) + 1;
-        for ny = 0 : block.ny-1
-            ys = ny * block.y + 1;
-            for nx = 0 : block.nx-1
-                xs = nx * block.x + 1;
+            if any(filter.gaussian_sigma > 0),
+                d_pad = max(d_pad, gaussian_pad_size(bl_core, filter.gaussian_sigma, filter.gaussian_size));
+            end
+            bl_shape = bl_core + 2*d_pad;
 
-                blnr = blnr + 1;
-                p1(blnr, 1) = xs;
-                p2(blnr, 1) = min([xs + block.x - 1, stack_info.x]);
+            if filter.use_fft
+                bl_shape = next_fast_len(bl_shape);
+            end
 
-                p1(blnr, 2) = ys;
-                p2(blnr, 2) = min([ys + block.y - 1, stack_info.y]);
+            if any(bl_shape > max_elements_per_dim), continue; end
+            if prod(bl_shape) >= block_size_max, continue; end
+            if output_bytes * (slice_size * z) + (x * y * z * physCores * bl_bytes) > ram_available, continue; end
 
-                p1(blnr, 3) = zs;
-                p2(blnr, 3) = min([zs + block.z - 1, stack_info.z]);
-
-                % imaged processed so far
-                % p1(blnr, 4) = nz * block.z - max(2*nz - 1, 0) * block.z_pad;
-                if nz == 0
-                    p1(blnr, 4) = 0;
-                else
-                    % p1(blnr, 4) = nz * (block.z - floor(block.z_pad)) - 1;
-                    p1(blnr, 4) = zs + floor(block.z_pad) - 1;
+            score = prod(bl_core);
+            if score > best_score
+                best_score = score;
+                best = struct('bl_core', bl_core, 'd_pad', d_pad, 'fft_shape', bl_shape);
+                num_failed = 0;
+            else
+                if ~isempty(fieldnames(best))
+                    num_failed = num_failed + 1;
+                    if num_failed > 200, break; end
                 end
             end
         end
+    end
+
+    if isempty(fieldnames(best))
+        error('autosplit: No block shape fits in memory. Try increasing block_size_max or reducing min_block.');
+    end
+
+    x     = best.bl_core(1); y     = best.bl_core(2); z     = best.bl_core(3);
+    x_pad =   best.d_pad(1); y_pad =   best.d_pad(2); z_pad =   best.d_pad(3);
+    fft_shape = best.fft_shape;
+    nx = ceil(stack_info.x / x);
+    ny = ceil(stack_info.y / y);
+    nz = ceil(stack_info.z / z);
+end
+
+function pad_size = gaussian_pad_size(image_size, sigma, kernel)
+    % Accepts sigma (scalar or vector), computes pad_size for each dimension.
+    if isscalar(sigma)
+        sigma = repmat(sigma, size(image_size));
+    end
+    % Kernel size: covers ~99.7% of Gaussian (3 sigma each side)
+    ksize = 2 * ceil(3 * sigma(:)) + 1;
+    pad_size = floor(ksize / 2);    % Column vector
+    if numel(pad_size) ~= numel(image_size)
+        pad_size = [pad_size; zeros(numel(image_size) - numel(pad_size), 1)];
+    end
+    pad_size = ceil(max(pad_size(:).', kernel(:).'));
+end
+
+function pad = decon_pad_size(psf_sz)
+    pad = ceil(psf_sz(:).' * 1);
+end
+
+function n_vec = next_fast_len(n_vec)
+    % Accepts a scalar or a vector of positive integers and returns, for each,
+    % the next integer >= n_in(i) whose factors are all <= 7.
+    for i = 1:numel(n_vec)
+        n = n_vec(i);
+        while true
+            f = factor(n);
+            if all(f <= 7)
+                n_vec(i) = n;
+                break;
+            end
+            n = n + 1;
+        end
+    end
+end
+
+function check_block_coverage_planes(stack_info, block)
+    % disp('Checking block coverage for errors ...');
+
+    p1 = block.p1;
+    p2 = block.p2;
+    errors = {};
+
+    % 1. Block boundary checks
+    for k = 1:size(p1,1)
+        if any(p1(k,:) < 1) || any(p2(k,:) > [stack_info.x, stack_info.y, stack_info.z])
+            errors{end+1} = sprintf('Block %d out of bounds: p1=%s, p2=%s', ...
+                k, mat2str(p1(k,:)), mat2str(p2(k,:)));
+        end
+        if any(p1(k,:) > p2(k,:))
+            errors{end+1} = sprintf('Block %d has p1 > p2: p1=%s, p2=%s', ...
+                k, mat2str(p1(k,:)), mat2str(p2(k,:)));
+        end
+    end
+
+    % 2. Z-plane coverage
+    z_cover = zeros(1, stack_info.z);
+    for k = 1:size(p1,1)
+        z_range = p1(k,3):p2(k,3);
+        z_cover(z_range) = z_cover(z_range) + 1;
+    end
+    missing_z = find(z_cover == 0);
+    if ~isempty(missing_z)
+        errors{end+1} = sprintf('Missing Z planes: %s', mat2str(missing_z));
+    end
+    if numel(find(z_cover > 0)) ~= stack_info.z
+        errors{end+1} = sprintf('Unique covered Z planes = %d, expected %d', ...
+            numel(find(z_cover > 0)), stack_info.z);
+    end
+    if max(p2(:,3)) > stack_info.z
+        errors{end+1} = sprintf('Blocks extend past last Z-plane! Max p2(:,3)=%d, stack_info.z=%d', ...
+            max(p2(:,3)), stack_info.z);
+    end
+    if min(p1(:,3)) < 1
+        errors{end+1} = sprintf('Blocks start before Z=1! Min p1(:,3)=%d', min(p1(:,3)));
+    end
+
+    % 3. XY coverage at first and last z planes
+    for z = [1, stack_info.z]
+        covered = zeros(stack_info.x, stack_info.y);
+        blocks = find(p1(:,3) <= z & p2(:,3) >= z);
+        for k = blocks.'
+            xs = p1(k,1):p2(k,1);
+            ys = p1(k,2):p2(k,2);
+            covered(xs, ys) = covered(xs, ys) + 1;
+        end
+        num_gaps = sum(covered(:) == 0);
+        num_overlaps = sum(covered(:) > 1); % This counts pixels covered by more than 1 block (not face/edge)
+        %disp(['   Blocks covering z=' num2str(z) ': ' num2str(numel(blocks))]);
+        %disp(['   XY at z=' num2str(z) ': gaps=' num2str(num_gaps) ', overlaps=' num2str(num_overlaps)]);
+        if num_gaps > 0
+            errors{end+1} = sprintf('XY at z=%d: %d gaps', z, num_gaps);
+        end
+        % Only error if overlaps are >0 *AND* not just at the faces
+        % But for most tiling schemes, face/edge/corner overlaps are fine and expected,
+        % so we don't report overlaps here unless you want to.
+    end
+
+    % 4. XZ coverage at first and last y planes
+    for y = [1, stack_info.y]
+        covered = zeros(stack_info.x, stack_info.z);
+        blocks = find(p1(:,2) <= y & p2(:,2) >= y);
+        for k = blocks.'
+            xs = p1(k,1):p2(k,1);
+            zs = p1(k,3):p2(k,3);
+            covered(xs, zs) = covered(xs, zs) + 1;
+        end
+        num_gaps = sum(covered(:) == 0);
+        num_overlaps = sum(covered(:) > 1);
+        %disp(['   Blocks covering y=' num2str(y) ': ' num2str(numel(blocks))]);
+        %disp(['   XZ at y=' num2str(y) ': gaps=' num2str(num_gaps) ', overlaps=' num2str(num_overlaps)]);
+        if num_gaps > 0
+            errors{end+1} = sprintf('XZ at y=%d: %d gaps', y, num_gaps);
+        end
+    end
+
+    % 5. YZ coverage at first and last x planes
+    for x = [1, stack_info.x]
+        covered = zeros(stack_info.y, stack_info.z);
+        blocks = find(p1(:,1) <= x & p2(:,1) >= x);
+        for k = blocks.'
+            ys = p1(k,2):p2(k,2);
+            zs = p1(k,3):p2(k,3);
+            covered(ys, zs) = covered(ys, zs) + 1;
+        end
+        num_gaps = sum(covered(:) == 0);
+        num_overlaps = sum(covered(:) > 1);
+        %disp(['   Blocks covering x=' num2str(x) ': ' num2str(numel(blocks))]);
+        %disp(['   YZ at x=' num2str(x) ': gaps=' num2str(num_gaps) ', overlaps=' num2str(num_overlaps)]);
+        if num_gaps > 0
+            errors{end+1} = sprintf('YZ at x=%d: %d gaps', x, num_gaps);
+        end
+    end
+
+    % 6. True 3D interior-overlap check (ignore face/edge/corner)
+    %disp('   Checking for true 3D interior overlaps (ignoring faces/edges/corners)...');
+    N = size(p1, 1);
+    true_overlaps = [];
+    for i = 1:N-1
+        p1_i = p1(i, :); p2_i = p2(i, :);
+        for j = i+1:N
+            p1_j = p1(j, :); p2_j = p2(j, :);
+            overlap_x = min(p2_i(1), p2_j(1)) - max(p1_i(1), p1_j(1)) + 1;
+            overlap_y = min(p2_i(2), p2_j(2)) - max(p1_i(2), p1_j(2)) + 1;
+            overlap_z = min(p2_i(3), p2_j(3)) - max(p1_i(3), p1_j(3)) + 1;
+            % All axes must have overlap > 1 (true interior)
+            if overlap_x > 1 && overlap_y > 1 && overlap_z > 1
+                true_overlaps = [true_overlaps; i, j];
+            end
+        end
+    end
+    if isempty(true_overlaps)
+        %disp('   No true 3D interior overlaps found between blocks.');
+    else
+        %disp('   True 3D interior overlaps found between blocks:');
+        disp(true_overlaps);
+        errors{end+1} = sprintf('Found %d pairs of blocks with true interior overlap.', size(true_overlaps, 1));
+    end
+
+    % 7. Warn if any block is much smaller than nominal
+    % nominal_block_size = [block.x, block.y, block.z];
+    % actual_sizes = block.p2 - block.p1 + 1;
+    % axis_labels = 'XYZ';
+    % for i = 1:size(actual_sizes, 1)
+    %     too_small = actual_sizes(i,:) < 0.5 * nominal_block_size;
+    %     if any(too_small)
+    %         % MATLAB R2019b+: strjoin(string)
+    %         axstr = '';
+    %         for dim = 1:3
+    %             if too_small(dim)
+    %                 axstr = [axstr, axis_labels(dim)];
+    %             end
+    %         end
+    %         if isempty(axstr)
+    %             axstr = '-';
+    %         end
+    %         fprintf('Warning: Block %d is small in axis %s. Size: [%s], Expected: [%s]\n', ...
+    %             i, axstr, num2str(actual_sizes(i,:)), num2str(nominal_block_size));
+    %     end
+    % end
+
+    % Final report
+    if ~isempty(errors)
+        err_msg = sprintf('Block coverage error(s) detected:\n%s', strjoin(errors, '\n'));
+        error(err_msg);
+    else
+        disp('   Block coverage test: PASSED');
     end
 end
 
@@ -463,15 +576,10 @@ function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
     damping, clipval, stop_criterion, gpus, cache_drive, amplification, ...
     filter, resume, starting_block)
 
-    start_time = datetime('now');
-
     need_post_processing = false;
     if starting_block == 1
         need_post_processing = true;
     end
-    
-    % split it to chunks
-    [p1, p2] = split(stack_info, block);
 
     % load filelist
     filelist = dir(fullfile(inpath, '*.tif'));
@@ -479,11 +587,8 @@ function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
         filelist = dir(fullfile(inpath, '*.tiff'));
     end
     filelist = natsortfiles(filelist);
-    filelist = fullfile(inpath, {filelist.name});
+    filelist = fullfile(char(inpath), {filelist.name});
 
-    % flatten the gpus array
-    gpus = gpus(:)';
-    
     % intermediate variables needed for interprocess communication
     % NOTE: semaphore keys should be a more than zero values.
     % all the existing processes should be killed first before creating a
@@ -494,18 +599,20 @@ function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
     min_max_path = fullfile(cache_drive, "min_max.mat");
     [unique_gpus, ~, ~] = unique(gpus(:));
     unique_gpus = sort(unique_gpus, 'descend').';
-    % [unique_gpus, ~, gpus_vertical] = unique(sort(gpus(gpus>0)));
-    % gpu_count = accumarray(gpus_vertical, 1).';
-    clear gpus_vertical;
+    gpus = repmat(unique_gpus, 1, numel(gpus)/numel(unique_gpus));
+    % flatten the gpus array
+    gpus = gpus(:)';
     
     % initiate locks and semaphors
-    % semkeys are arbitrary non-zero values 
+    % semkeys are arbitrary non-zero values
     semkey_single = 1e3;
-    semkey_loading_base = 1e4;
+    % semkey_loading_base = 1e4;
     semaphore_create(semkey_single, 1);
+    semkey_gpu_base = 1e5;
+    % queue('create', semkey_gpu_base, unique_gpus);
     for gpu = unique_gpus
-        semaphore_create(gpu, 1);
-        semaphore_create(gpu + semkey_loading_base, 3);
+        semaphore_create(semkey_gpu_base + gpu, 1);
+        % semaphore_create(gpu + semkey_loading_base, 3);
     end
 
     % start deconvolution
@@ -514,8 +621,8 @@ function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
     while remaining_blocks > 0
         for i = starting_block : num_blocks
             % skip blocks already worked on
-            block_path = fullfile(cache_drive, ['bl_' num2str(i) '.mat']);
-            block_path_tmp = fullfile(cache_drive, ['bl_' num2str(i) '.mat.tmp']);
+            block_path = fullfile(cache_drive, ['bl_' num2str(i) '.lz4']);
+            block_path_tmp = fullfile(cache_drive, ['bl_' num2str(i) '.lz4.tmp']);
             if exist(block_path, "file")
                 if dir(block_path).bytes > 0
                     remaining_blocks = remaining_blocks - 1;
@@ -534,16 +641,18 @@ function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
         if remaining_blocks > 0
             gpus = gpus(1:min(numel(gpus), remaining_blocks));
             pool = parpool('local', numel(gpus), 'IdleTimeout', Inf);
-            queue = parallel.pool.DataQueue;
-            afterEach(queue, @disp);
+            dQueue = parallel.pool.DataQueue;
+            afterEach(dQueue, @disp);
+            deconvolution_start_time = tic;
             parfor idx = 1 : numel(gpus)
+
                 deconvolve( ...
                     filelist, psf, numit, damping, ...
-                    block, stack_info, p1, p2, min_max_path, ...
-                    stop_criterion, gpus(idx), cache_drive, ...
-                    filter, ...
-                    starting_block + idx - 1, queue);
+                    block, stack_info, min_max_path, clipval, ...
+                    stop_criterion, gpus(idx), semkey_gpu_base, ...
+                    cache_drive, filter, starting_block + idx - 1, dQueue);
             end
+            p_log(log_file, sprintf('deconvolution time: %.2fs', toc(deconvolution_start_time)));
             delete(pool);
         end
         starting_block = 1;
@@ -552,32 +661,23 @@ function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
     % clear locks and semaphors
     semaphore_destroy(semkey_single);
     for gpu = unique_gpus
-        semaphore_destroy(gpu);
-        semaphore_destroy(gpu + semkey_loading_base);
+        semaphore_destroy(semkey_gpu_base + gpu);
     end
 
     % postprocess and write tif files
-    % delete(gcp('nocreate'));
     if need_post_processing
-        postprocess_save(...
-            outpath, cache_drive, min_max_path, log_file, clipval, ...
-            p1, p2, stack_info, resume, block, amplification);
+        postprocess_save(outpath, cache_drive, min_max_path, clipval, log_file, stack_info, resume, block, amplification);
     end
-    
-    p_log(log_file, ['deconvolution finished at ' char(datetime)]);
-    p_log(log_file, ['elapsed time: ' char(duration(datetime('now') - start_time, 'Format', 'dd:hh:mm:ss'))]);
-    disp('----------------------------------------------------------------------------------------');
-    delete(gcp('nocreate'));
 end
 
 function deconvolve(filelist, psf, numit, damping, ...
-    block, stack_info, p1, p2, min_max_path, ...
-    stop_criterion, gpu, cache_drive, ...
-    filter, starting_block, queue)
+    block, stack_info, min_max_path, clipval, ...
+    stop_criterion, gpu, semkey_gpu_base, cache_drive, ...
+    filter, starting_block, dQueue)
     
     semkey_single = 1e3;
-    semkey_loading_base = 1e4;
-    semkey_loading = semkey_loading_base + gpu;
+    % semkey_loading_base = 1e4;
+    % semkey_loading = semkey_loading_base + gpu;
 
     if stack_info.bit_depth == 8
         rawmax = 255;
@@ -595,8 +695,8 @@ function deconvolve(filelist, psf, numit, damping, ...
 
     for blnr = starting_block : num_blocks
         % skip blocks already worked on
-        block_path = fullfile(cache_drive, ['bl_' num2str(blnr) '.mat']);
-        block_path_tmp = fullfile(cache_drive, ['bl_' num2str(blnr) '.mat.tmp']);
+        block_path = fullfile(cache_drive, ['bl_' num2str(blnr) '.lz4']);
+        block_path_tmp = fullfile(cache_drive, ['bl_' num2str(blnr) '.lz4.tmp']);
         semaphore('wait', semkey_single);
         if num_blocks > 1 && (exist(block_path, "file") || exist(block_path_tmp, "file"))
             semaphore('post', semkey_single);
@@ -606,43 +706,65 @@ function deconvolve(filelist, psf, numit, damping, ...
         semaphore('post', semkey_single);
 
         % begin processing next block and load next block of data into memory
-        startp = p1(blnr, :); endp = p2(blnr, :);
-        x1     = startp(x);     x2 = endp(x);
-        y1     = startp(y);     y2 = endp(y);
-        z1     = startp(z);     z2 = endp(z);
-        semaphore('wait', semkey_loading);
-        send(queue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' is loading ...']);
-        loading_start = tic;
-        bl = load_block(filelist, x1, x2, y1, y2, z1, z2);
-        send(queue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' is loaded in ' num2str(round(toc(loading_start), 1))]);
-        semaphore('post', semkey_loading);
+        startp = block.p1(blnr, :); endp = block.p2(blnr, :);
+        x1     = startp(x);           x2 = endp(x);
+        y1     = startp(y);           y2 = endp(y);
+        z1     = startp(z);           z2 = endp(z);
+
+        % decon_step_is_slower_than_loading = numit > 1; % then load slower to prevent RAM overload
+        % if decon_step_is_slower_than_loading, semaphore('wait', semkey_loading); end
+        % send(dQueue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' is loading ...']);
+        % loading_start = tic;
+        bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info);
+        % send(dQueue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' is loaded in ' num2str(round(toc(loading_start), 1))]);
+        % if decon_step_is_slower_than_loading, semaphore('post', semkey_loading); end
 
         % get min-max of raw data stack
         if ~ismember(stack_info.bit_depth, [8, 16])
             rawmax_start = tic;
             rawmax = max(max(bl(:)), rawmax);
-            send(queue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' rawmax calculated in ' num2str(round(toc(rawmax_start), 1))]);
+            send(dQueue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' rawmax calculated in ' num2str(round(toc(rawmax_start), 1))]);
         end
 
         % deconvolve current block of data
         if exist(block_path_tmp, "file") || (exist(block_path, "file") && dir(block_path).bytes > 0)
             continue
         end
-        block_processing_start = tic;
-        [bl, lb, ub] = process_block(bl, block, psf, numit, damping, stop_criterion, gpu, filter);
-        send(queue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' filters applied in ' num2str(round(toc(block_processing_start), 1))]);
-        
-        save_start = tic;
-        % delete block z_pad
-        if block.z_pad > 0 && block.nz > 1
-            if  z1 == 1
-                bl = bl(:, :,                     1 : end - floor(block.z_pad));
-            elseif z2 == stack_info.z
-                bl = bl(:, :, ceil(block.z_pad) + 1 : end);
-            else
-                bl = bl(:, :, ceil(block.z_pad) + 1 : end - floor(block.z_pad));
-            end
-        end
+
+        expected_size = size(bl);  % Store size before processing
+        logging_string = sprintf('%s: block %d from %d filters applied in', current_device(gpu), blnr, num_blocks);
+        [bl, lb, ub] = process_block(bl, block, psf, numit, damping, stop_criterion, filter, clipval, gpu, semkey_gpu_base, dQueue, logging_string);
+        % === Check padded block size is unchanged by process_block ===
+        actual_size = size(bl);
+        assert(isequal(actual_size, expected_size), ...
+            sprintf(['[process_block] Block %d: Output block size mismatch!\n', ...
+                     'Expected [%d %d %d], got [%d %d %d].\n', ...
+                     'Block X[%d-%d], Y[%d-%d], Z[%d-%d]'], ...
+                    blnr, expected_size, actual_size, ...
+                    block.p1(blnr,1), block.p2(blnr,1), ...
+                    block.p1(blnr,2), block.p2(blnr,2), ...
+                    block.p1(blnr,3), block.p2(blnr,3)));
+
+        % === Remove padding before saving ===
+        % save_start = tic;
+        bl = bl(1 + block.x_pad : end - block.x_pad, ...
+                1 + block.y_pad : end - block.y_pad, ...
+                1 + block.z_pad : end - block.z_pad);
+
+        % === Check trimmed block matches expected core size ===
+        expected_size = [block.p2(blnr,1) - block.p1(blnr,1) + 1, ...
+                         block.p2(blnr,2) - block.p1(blnr,2) + 1, ...
+                         block.p2(blnr,3) - block.p1(blnr,3) + 1];
+        actual_size = size(bl);
+
+        assert(isequal(actual_size, expected_size), ...
+            sprintf(['[remove padding] Block %d: Output block size mismatch!\n', ...
+                     'Expected [%d %d %d], got [%d %d %d].\n', ...
+                     'Block X[%d-%d], Y[%d-%d], Z[%d-%d]'], ...
+                    blnr, expected_size, actual_size, ...
+                    block.p1(blnr,1), block.p2(blnr,1), ...
+                    block.p1(blnr,2), block.p2(blnr,2), ...
+                    block.p1(blnr,3), block.p2(blnr,3)));
 
         % find maximum value in other blocks
         semaphore('wait', semkey_single);
@@ -667,7 +789,7 @@ function deconvolve(filelist, psf, numit, damping, ...
                 save(min_max_path, "deconvmin", "deconvmax", "rawmax", "-v7.3", "-nocompression");
                 could_not_save = false;
             catch
-                send(queue, "could not load or save min_max file. Retrying ...")
+                send(dQueue, "could not load or save min_max file. Retrying ...")
                 pause(1);
             end
         end
@@ -680,438 +802,372 @@ function deconvolve(filelist, psf, numit, damping, ...
         could_not_save = true;
         while could_not_save
             try
-                save(block_path_tmp, 'bl', '-v7.3');  % , '-nocompression'
+                save_lz4(block_path_tmp, bl);
                 movefile(block_path_tmp, block_path, 'f');
-                send(queue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' saved in ' num2str(round(toc(save_start), 1))]);
+                % send(dQueue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' saved in ' num2str(round(toc(save_start), 1))]);
                 could_not_save = false;
-            catch
-                send(queue, ['could not save ' block_path '! Retrying ...']);
+            catch ME
+                send(dQueue, sprintf('could not save %s! Retrying ... %s: %s', block_path, ME.identifier, ME.message));
                 pause(1);
             end
         end
     end
 end
 
-function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criterion, gpu, filter)
-    bl_size = size(bl);
-    if gpu
-        gpu_device = gpuDevice(gpu);
-        memory_needed_for_full_acceleration = 35e9;
-        memory_needed_for_semi_acceleration = 24e9;
-        num_full_accelerated_blocks = floor(gpu_device.TotalMemory / memory_needed_for_full_acceleration);
-        if num_full_accelerated_blocks > 0
-            num_semi_accelerated_blocks = floor(mod(gpu_device.TotalMemory, memory_needed_for_full_acceleration) / memory_needed_for_semi_acceleration);
-        else
-            num_semi_accelerated_blocks = floor(gpu_device.TotalMemory / memory_needed_for_semi_acceleration);
-        end
+function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
+    % Load a padded 3D block from the stack, using only available planes,
+    % and pad symmetrically to the target block size
 
-        % for gaussian filter 
-        if num_full_accelerated_blocks > 0
-            semaphore('wait', gpu);
-            bl = gpuArray(bl);
+    block_start = [x1, y1, z1];
+    block_end   = [x2, y2, z2];
+    block_pad   = [block.x_pad, block.y_pad, block.z_pad];
+    volume_size = [stack_info.x, stack_info.y, stack_info.z];
+
+    % Request region (may go out of bounds at the edges)
+    requested_start = block_start - block_pad;
+    requested_end   = block_end   + block_pad;
+
+    % In-bounds region (what we can actually read)
+    read_start = max(1, requested_start);
+    read_end   = min(volume_size, requested_end);
+
+    % Indices to load for each axis
+    x_indices = read_start(1):read_end(1);
+    y_indices = read_start(2):read_end(2);
+    z_indices = read_start(3):read_end(3);
+
+    % Only allocate space for what we read from disk
+    bl = zeros(numel(x_indices), numel(y_indices), numel(z_indices), 'single');
+
+    % -----------------------------
+    % Use `load_bl_tif` if available
+    % -----------------------------
+    use_fast_loader = exist('load_bl_tif', 'file') == 3;  % MEX-file available?
+
+    if use_fast_loader
+        try
+            % Extract subregion using fast multithreaded native MEX
+            subfilelist = filelist(z_indices);
+            y0 = y_indices(1);
+            x0 = x_indices(1);
+            H  = numel(y_indices);
+            W  = numel(x_indices);
+
+            % Note: transpose = true to match MATLAB behavior (imread' = X,Y)
+            bl = load_bl_tif(subfilelist, y0, x0, H, W, true);
+            bl = im2single(bl);  % Ensure consistent type
+
+        catch ME
+            warning('[load_block] load_bl_tif failed (%s), falling back to imread.', ME.message);
+            use_fast_loader = false;
         end
     end
 
-    if min(filter.sigma(:)) > 0
-        bl = imgaussfilt3(bl, filter.sigma, 'FilterSize', filter.size, 'Padding', 'symmetric'); %circular
-        bl = bl - filter.dark;
-        bl = max(bl, 0);
+    % --------------------------------------
+    % Fallback: use slow MATLAB imread loop
+    % --------------------------------------
+    if ~use_fast_loader
+        bl = zeros(numel(x_indices), numel(y_indices), numel(z_indices), 'single');
+        for k = 1:numel(z_indices)
+            slice_idx = z_indices(k);
+            slice = imread(filelist{slice_idx}, ...
+                'PixelRegion', {[y_indices(1), y_indices(end)], [x_indices(1), x_indices(end)]});
+            bl(:, :, k) = im2single(slice)';  % Transpose to [X,Y]
+        end
+    end
+
+    % ------------------------
+    % Symmetric edge padding
+    % ------------------------
+    % How much to pad before and after in each axis
+    pad_before = read_start - requested_start;
+    pad_after  = requested_end - read_end;
+
+    % Final block size after all padding
+    block_core_size = block_end - block_start + 1;
+    block_target_size = block_core_size + 2 * block_pad;
+
+    % Pad as needed to reach the requested size
+    if any(pad_before > 0)
+        bl = padarray(bl, pad_before, 'symmetric', 'pre');
+    end
+    if any(pad_after > 0)
+        bl = padarray(bl, pad_after, 'symmetric', 'post');
+    end
+
+    % ------------------------
+    % Final consistency check
+    % ------------------------
+    assert(isequal(size(bl), block_target_size), ...
+        sprintf('[load_block] Output size mismatch! Got [%s], expected [%s]', ...
+        num2str(size(bl)), num2str(block_target_size)));
+end
+
+function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criterion, filter, clipval, gpu, semkey_gpu_base, dQueue, logging_string)
+    block_processing_start = tic;
+    bl_size = size(bl);
+    if gpu && (min(filter.gaussian_sigma(:)) > 0 || niter > 0)
+        % get the next available gpu
+        % gpu = queue('wait', semkey_gpu_base);
+        semaphore('w', semkey_gpu_base + gpu);
+        gpu_device = gpuDevice(gpu);
+        bl = gpuArray(bl);
+    end
+
+    if any(filter.gaussian_sigma > 0)
+        if gpu
+            bl = gauss3d_gpu(bl, filter.gaussian_sigma, filter.gaussian_size, true);
+        else
+            bl = imgaussfilt3(bl, filter.gaussian_sigma, 'FilterSize', filter.gaussian_size, 'Padding', 'symmetric');
+        end
+        if filter.dark > 0
+            bl = bl - filter.dark;
+            bl = max(bl, 0);
+        end
     end
 
     if niter > 0 && max(bl(:)) > eps('single')
-        blx = size(bl, 1); pad_x = block.x_pad;
-        bly = size(bl, 2); pad_y = block.y_pad;
-        blz = size(bl, 3); pad_z = 0;
-        % for efficiency of FFT pad data in a way that the largest prime
-        % factor becomes <= 5. z_padding comes from image, which is
-        % different from x and y pad that are interpolated based on image.
-        % In case z_pad was small for FFT efficiency it will be
-        % interpolated slightly
-        if blx ~= block.x || block.x_pad <= 0
-            pad_x = pad_size(blx, size(psf, 1));
-            if blx + 2 * pad_x > block.x
-                pad_x = (block.x - blx)/2;
-            end
-        end
-        if bly ~= block.y || block.y_pad <= 0
-            pad_y = pad_size(bly, size(psf, 2));
-            if bly + 2 * pad_y > block.y
-                pad_y = (block.y - bly)/2;
-            end
-        end
-        if blz < block.z
-            pad_z = pad_size(blz, pad_z);
-            if blz + 2 * pad_z > block.z
-                pad_z = (block.z - blz)/2;
-            end
-        end
-    
-        bl = padarray(bl, [floor(pad_x) floor(pad_y) floor(pad_z)], 'pre', 'symmetric');
-        bl = padarray(bl, [ceil(pad_x) ceil(pad_y) ceil(pad_z)], 'post', 'symmetric');
-    
-        % deconvolve block using Lucy-Richardson algorithm
-        if gpu && isgpuarray(bl)
-            % block is already on GPU and no GPU allocation is needed
-            bl = deconGPU(bl, psf, niter, lambda, stop_criterion, gpu);
-        elseif gpu && num_semi_accelerated_blocks > 0
-            semaphore('wait', gpu);
-            bl = deconGPU(bl, psf, niter, lambda, stop_criterion, gpu);
-            bl = gather(bl);
-            gpuDevice(gpu);  % free GPU memory
-            semaphore('post', gpu);
-        else
-            % GPU acceleration is requested by the user but the GPU
-            % cannot handle the block at the time of the request
-            bl = deconCPU(bl, psf, niter, lambda, stop_criterion);
-        end
-
-        % remove padding
-        bl = bl(...
-            floor(pad_x) + 1 : end - ceil(pad_x), ...
-            floor(pad_y) + 1 : end - ceil(pad_y), ...
-            floor(pad_z) + 1 : end - ceil(pad_z));
+        % deconvolve block using Lucy-Richardson or blind algorithm
+        bl = decon(bl, psf, niter, lambda, stop_criterion, filter.regularize_interval, gpu, filter.use_fft, block.fft_shape, filter.adaptive_psf);
     end
-    if gpu && isgpuarray(bl) && gpu_device.TotalMemory < 60e9
-        % try hard to run deconvolved_stats on GPU, which needs 43e9 ram.
+
+    if filter.destripe_sigma > 0
+        bl = filter_subband_3d_z(bl, filter.destripe_sigma, 0, "db9");
+    end
+
+    % since prctile function needs high vram usage gather it to avoid low memory error
+    if gpu && isgpuarray(bl)
         % Reseting the GPU
         bl = gather(bl);
         reset(gpu_device);  % to free 2 extra copies of bl in gpu
-        if gpu_device.TotalMemory > 43e9
-            bl = gpuArray(bl);
-        else
-            semaphore('post', gpu);
-        end
+        semaphore('p', semkey_gpu_base + gpu);
     end
-    [lb, ub] = deconvolved_stats(bl);
-    % since prctile function needs high vram usage gather it to avoid low
-    % memory error
-    if gpu && isgpuarray(bl)
-        bl = gather(bl);
-        reset(gpu_device);  % to free gpu memory
-        semaphore('post', gpu);
-    end
-    assert(all(size(bl) == bl_size), 'block size mismatch!');
+    [lb, ub] = deconvolved_stats(bl, clipval);
+    send( dQueue, sprintf('%s %.1f', logging_string, toc(block_processing_start)) );
+    assert(all(size(bl) == bl_size), '[process_block]: block size mismatch!');
 end
 
-%Lucy-Richardson deconvolution
-function deconvolved = deconCPU(bl, psf, niter, lambda, stop_criterion)
-    deconvolved = bl;
-    OTF = single(psf2otf(psf, size(bl)));
-    R = 1/26 * ones(3, 3, 3, 'single');
-    R(2,2,2) = single(0);
+function postprocess_save(outpath, cache_drive, min_max_path, clipval, log_file, stack_info, resume, block, amplification)
 
-    for i = 1 : niter
-        start_time = tic;
-        if stop_criterion > 0
-            deconvolved_old = deconvolved;
-        end
-        denom = convFFT(deconvolved, OTF);
-        denom = max(denom, eps('single')); % protect against division by zero
-        denom = bl ./ denom;
-        denom = convFFT(denom, conj(OTF));
-        if lambda > 0
-            deconvolved = deconvolved .* denom .* (1 - lambda) + ...
-                          convn(deconvolved, R, 'same') .* lambda;
-        else
-            deconvolved = deconvolved .* denom;
-        end
-        % clear denom; % for 25% temporarily reduction in RAM memory usage
-        deconvolved = abs(deconvolved); % get rid of imaginary artifacts
+    %POSTPROCESS_SAVE   Final stage: re-assembles cached LZ4 blocks into TIFFs.
+    %
+    %   • For each Z-slab (one full X-Y plane stack), all bricks are loaded and
+    %     decompressed **in C++ threads** via load_slab_lz4 (zero MATLAB-side
+    %     parallel plumbing).  Only one slab lives in RAM at a time.
+    %
+    %   • Optional global histogram determines symmetric clip limits.
+    %
+    %   • The slab is rescaled / optionally histogram-clipped, optionally flipped,
+    %     cast to uint8 / uint16, and written as img_000001.tif … img_NNNNNN.tif.
+    %
+    %   INPUT ARGUMENTS
+    %     outpath        – destination folder for img_######.tif files
+    %     cache_drive    – folder containing the *.lz4 brick cache
+    %     min_max_path   – path to min_max.mat produced earlier (optional)
+    %     log_file       – file handle or path for p_log()
+    %     stack_info     – struct with fields:
+    %                         x,y,z, convert_to_8bit, convert_to_16bit,
+    %                         flip_upside_down   (see caller)
+    %     resume         – logical, continue an interrupted run
+    %     block          – struct with p1, p2, nx, ny, nz describing bricks
+    %     amplification  – display-style gain factor applied after clipping
+    %
+    %   The function assumes *save_lz4_mex* (for writing bricks) and
+    %   *load_slab_lz4* (parallel reader) are on the MATLAB path.
+    % -------------------------------------------------------------------------
 
-        if stop_criterion > 0
-            % estimate quality criterion
-            delta = rmse(deconvolved, deconvolved_old, 'all');
-            if i == 1
-                delta_rel = 0;
-            else
-                delta_rel = (deltaL - delta) / deltaL * 100;
-            end
-            deltaL = delta;
+    % -------------------------------------------------------------------------
+    % 1.  Build & sanity-check brick file list
+    % -------------------------------------------------------------------------
+    numBlocks  = size(block.p1, 1);
+    blocklist  = cellstr(fullfile(cache_drive, compose("bl_%d.lz4", (1:numBlocks).')));
+    missingMask = ~cellfun(@isfile, blocklist);
 
-            disp(['CPU: iteration: ' num2str(i) ' duration: ' num2str(round(toc(start_time), 1)) ' delta: ' num2str(delta_rel, 3)]);
-
-            if i > 1 && delta_rel <= stop_criterion
-                disp('stop criterion reached. finishing iterations.');
-                break
-            end
-        else
-            disp(['CPU: iteration: ' num2str(i) ' duration: ' num2str(round(toc(start_time), 1))]);
-        end
-    end
-end
-
-function deconvolved = deconGPU(bl, psf, niter, lambda, stop_criterion, gpu)
-    deconvolved = gpuArray(bl);
-    psf_inv = psf(end:-1:1, end:-1:1, end:-1:1); % spatially reversed psf
-    R = 1/26 * ones(3, 3, 3, 'single');
-    R(2,2,2) = single(0);
-
-    for i = 1 : niter
-        start_time = tic;
-        if stop_criterion > 0
-            deconvolved_old = deconvolved;
-        end
-        denom = convn(deconvolved, psf, 'same');
-        denom = max(denom, eps('single')); % protect against division by zero
-        denom = bl ./ denom;
-        denom = convn(denom, psf_inv, 'same');
-        if lambda > 0
-            deconvolved = deconvolved .* denom .* (1 - lambda) + ...
-                          convn(deconvolved, R, 'same') .* lambda;
-        else
-            deconvolved = deconvolved .* denom;
-        end
-        % clear denom; % for 25% temporarily reduction in GPU memory usage
-        deconvolved = abs(deconvolved); % get rid of imaginary artifacts
-
-        if stop_criterion > 0
-            % estimate quality criterion
-            delta = rmse(deconvolved, deconvolved_old, 'all');
-            if i == 1
-                delta_rel = 0;
-            else
-                delta_rel = (deltaL - delta) / deltaL * 100;
-            end
-            deltaL = delta;
-
-            disp(['GPU' num2str(gpu) ': iteration: ' num2str(i) ' duration: ' num2str(round(toc(start_time), 1)) ' delta: ' num2str(delta_rel, 3)]);
-
-            if i > 1 && delta_rel <= stop_criterion
-                disp('stop criterion reached. Finishing iterations.');
-                break
-            end
-        else
-            disp(['GPU' num2str(gpu) ': iteration: ' num2str(i) ' duration: ' num2str(round(toc(start_time), 1))]);
-        end
-    end
-end
-
-function postprocess_save(...
-    outpath, cache_drive, min_max_path, log_file, clipval, ...
-    p1, p2, stack_info, resume, block, amplification)
-
-    semkey_single = 1e3;
-    semkey_multi = 1e4;
-    semaphore_create(semkey_single, 1);
-    semaphore_create(semkey_multi, 32);
-
-    blocklist = strings(size(p1, 1), 1);
-    for i = 1 : size(p1, 1)
-        blocklist(i) = fullfile(cache_drive, ['bl_' num2str(i) '.mat']);
-        if ~exist(blocklist(i), 'file')
-            warning(['missing block: bl_' num2str(i) '.mat'])
-        end
+    if any(missingMask)
+        p_log(log_file, sprintf(2,'ERROR: %d block files are missing – aborting.', nnz(missingMask)));
+        disp(find(missingMask));
+        error('postprocess_save:MissingBlocks','Block cache incomplete.');
     end
 
-    x = 1; y = 2; z = 3; z_saved = 4;
-    if exist(min_max_path, "file")
-        min_max = load(min_max_path);
-        deconvmin = min_max.deconvmin;
-        deconvmax = min_max.deconvmax;
-        rawmax = min_max.rawmax;
+    % Axis shorthand for readability
+    x = 1; y = 2; z = 3;
+
+    % -------------------------------------------------------------------------
+    % 2.  Load min / max statistics for rescaling
+    % -------------------------------------------------------------------------
+    if isfile(min_max_path)
+        S         = load(min_max_path);
+        deconvmin = S.deconvmin;
+        deconvmax = S.deconvmax;
+        rawmax    = S.rawmax;
     else
-        warning("min_max.mat not found!")
+        warning('min_max.mat not found – using defaults.');
         deconvmin = 0;
         deconvmax = 5.3374;
+        rawmax    = 65535;
+    end
+
+    % Override for final datatype
+    if stack_info.convert_to_8bit
         rawmax = 255;
+    elseif stack_info.convert_to_16bit
+        rawmax = 65535;
     end
 
-    % rescale deconvolved data
-    if rawmax <= 255
+    % Target scale
+    if stack_info.convert_to_8bit || rawmax <= 255
         scal = 255;
-    elseif rawmax <= 65535
+    elseif stack_info.convert_to_16bit || rawmax <= 65535
         scal = 65535;
-        if stack_info.convert_to_8bit
-            rawmax = 255;
-            scal = 255;
-        end
     else
-        scal = rawmax; % scale to maximum of input data
-    end
-    p_log(log_file, 'image stats ...');
-    p_log(log_file, ['   max image value based on data type: ' num2str(scal)]);
-    p_log(log_file, ['   max block 99.9% percentile before deconvolution: ' num2str(rawmax)]);
-    p_log(log_file, ['   max block 99.9% percentile after deconvolution: ' num2str(deconvmax)]);
-    p_log(log_file, ['   min value in image after deconvolution: ' num2str(deconvmin)]);
-    p_log(log_file,  ' ');
-
-    %estimate the global histogram and upper and lower clipping values
-    if clipval > 0
-        nbins = 1e6;
-        binwidth = deconvmax / nbins;
-        bins = 0 : binwidth : deconvmax;
-
-        %calculate cumulative histogram by scanning all blocks
-        disp('calculating histogram...');
-
-        for i = size(blocklist, 1) : -1 : 1
-            S = load(blocklist(i), 'bl');
-            chist = chist + cumsum(histcounts(S.bl, bins));
-        end
-        clear S;
-
-        % normalize cumulative histogram to 0..100%
-        chist = chist / max(chist) * 100;
-        % determine upper and lower histogram clipping values
-        low_clip = findClosest(chist, clipval) * binwidth;
-        high_clip = findClosest(chist, 100-clipval) * binwidth;
+        scal = rawmax;
     end
 
-    % mount data and save data layer by layer
-    blnr = 1;  % block number
-    imagenr = 0;  % image number
-    starting_z_block = 1;
-    num_tif_files = numel(dir(fullfile(outpath, '*.tif')));
-    if resume && num_tif_files
-        starting_z_block = 0;
-        while blnr <= length(p1) && p1(blnr, z_saved) <= num_tif_files
-            if p1(blnr, x) == 1 && p1(blnr, y) == 1
-                starting_block_number = blnr;
-                starting_z_block = starting_z_block + 1;
-            end
-            blnr = blnr + 1;
-        end
-        blnr = starting_block_number;
-        imagenr = p1(starting_block_number, z_saved); % since imagenr starts from zero but z levels start from 1
-        disp(['number of existing tif files ' num2str(num_tif_files)]);
-        disp(['resuming from block ' num2str(blnr) ' and image number ' num2str(imagenr)]);
+    p_log(log_file,'image stats …');
+    p_log(log_file,sprintf('   target data type max value: %g', scal));
+    p_log(log_file,sprintf('   %.2f%% max before deconv  : %g', clipval, rawmax));
+    p_log(log_file,sprintf('   %.2f%% max after  deconv  : %g', clipval, deconvmax));
+    p_log(log_file,sprintf('   %.2f%% min after  deconv  : %g\n', 100 - clipval, deconvmin));
+
+    % -------------------------------------------------------------------------
+    % 3.  Detect already-written TIFFs (resume mode)
+    % -------------------------------------------------------------------------
+    blocksPerSlab = block.nx * block.ny;
+    if resume
+        files = dir(fullfile(outpath,'img_*.tif'));
+    else
+        files = [];
     end
-    clear num_tif_files;
-    
-    num_workers = feature('numcores');
-    needed_ram_per_thread = stack_info.x * stack_info.y * 8 * 4;
-    pool = parpool('local', num_workers, 'IdleTimeout', Inf);
-    async_load(1 : block.nx * block.ny) = parallel.FevalFuture;
+
+    if ~isempty(files)
+        nums          = cellfun(@(s) sscanf(s,'img_%6d.tif'), {files.name});
+        lastDone      = max(nums);
+        nextFileIdx   = lastDone + 1;
+
+        % first slab whose end-Z ≥ nextFileIdx
+        starting_z_block = find(block.p2(1:blocksPerSlab:end, z) >= nextFileIdx, 1);
+        p_log(log_file, sprintf('Resuming: last slice = %d ➜ continue at %d (slab %d)', ...
+                                lastDone, nextFileIdx, starting_z_block));
+    else
+        nextFileIdx      = 1;
+        starting_z_block = 1;
+    end
+
+    % -------------------------------------------------------------------------
+    % 4.  Re-assemble z-slabs (float32), re-scale to 8-bit or 16-bit, and save as 2D tif series
+    % -------------------------------------------------------------------------
     for nz = starting_z_block : block.nz
-        disp(['layer ' num2str(nz) ' from ' num2str(block.nz) ': mounting blocks ...']);
+        % -------------------------------------------------------------------------
+        % 4a.  Process each slab – all bricks (bls) loaded in one MEX call
+        % -------------------------------------------------------------------------
+        p_log(log_file, sprintf('Slab %d / %d – mounting %d blocks …', nz, block.nz, blocksPerSlab));
 
-        %load and mount next layer of images
-        if block.z_pad > 0 && block.nz > 1
-            bl_z = p2(blnr, z) - p1(blnr, z) + 1;
-            if  nz == 1
-                R = zeros(stack_info.x, stack_info.y,                      bl_z - floor(block.z_pad), 'single');
-            elseif nz == block.nz
-                R = zeros(stack_info.x, stack_info.y, -ceil(block.z_pad) + bl_z                     , 'single');
-            else
-                R = zeros(stack_info.x, stack_info.y, -ceil(block.z_pad) + bl_z - floor(block.z_pad), 'single');
-            end
+        block_inds = ((nz-1)*blocksPerSlab + 1) : (nz*blocksPerSlab);
+
+        if ~all(cellfun(@isfile, blocklist(block_inds)))
+            error('postprocess_save:MissingDuringResume', ...
+                  'Block files vanished during run (slab %d).', nz);
         end
-        for j = 1 : block.nx * block.ny
-             async_load(j) = pool.parfeval(@load_bl, 1, blocklist(blnr+j-1), semkey_multi);
-        end
-        for j = 1 : block.nx * block.ny
-            if ispc
-                file_path_parts = strsplit(blocklist(blnr), '\');
-            else
-                file_path_parts = strsplit(blocklist(blnr), '/');
-            end
-            file_name = char(file_path_parts(end));
-            % time_out_start = tic;
-            % data = async_load(j).fetchOutputs;
-            % loading_time = round(toc(time_out_start), 1);
-            asigment_time_start = tic;
-            R(p1(blnr, x) : p2(blnr, x), p1(blnr, y) : p2(blnr, y), :) = async_load(j).fetchOutputs;
-            % disp(['   block ' num2str(j) ':' num2str(block.nx * block.ny) ' file: ' file_name ' loaded in ' num2str(loading_time) ' asinged in ' num2str(round(toc(asigment_time_start), 1))]);
-            disp(['   block ' num2str(j) ':' num2str(block.nx * block.ny) ' file: ' file_name ' loaded and asinged in ' num2str(round(toc(asigment_time_start), 1))]);
-            blnr = blnr + 1;
-        end
-        
-        % since R matrix can be very large memory mangement is important.
-        % combining operations should be avoided to save RAM.
-        if clipval > 0
-            %perform histogram clipping
-            R = R - low_clip;
-            R = min(R, high_clip - low_clip);
-            R = R .* (scal .* amplification ./ (high_clip - low_clip));
-        else
-            %otherwise scale using min.max method
-            if deconvmin > 0
-                R = R - deconvmin;
-                R = R .* (scal .* amplification ./ (deconvmax - deconvmin));
-            else
-                R = R .* (scal .* amplification ./ deconvmax);
-            end
-        end
-        R = R - amplification;
-        R = min(R, scal);
-        R = max(R, 0);
+
+        % Z-range and slab depth
+        slab_z1    = block.p1(block_inds(1), z);
+        slab_z2    = block.p2(block_inds(1), z);
+        slab_depth = slab_z2 - slab_z1 + 1;
+
+        % 1-based brick coordinates **inside the slab**
+        p1_slab = uint64([ ...
+            block.p1(block_inds,x), ...
+            block.p1(block_inds,y), ...
+            block.p1(block_inds,z) - slab_z1 + 1 ]);
+
+        p2_slab = uint64([ ...
+            block.p2(block_inds,x), ...
+            block.p2(block_inds,y), ...
+            block.p2(block_inds,z) - slab_z1 + 1 ]);
+
+        slabSize = uint64([ stack_info.x, stack_info.y, slab_depth ]);
+
+        % ---- Parallel load + assemble (inside C++) -------------------------
+        [R, elapsed] = load_slab_lz4( ...
+            blocklist(block_inds), p1_slab, p2_slab, slabSize, ...
+            scal, amplification, deconvmin, deconvmax, feature('numCores'));
+
+        p_log(log_file, sprintf('   slab assembled + scaled in %.1fs.', elapsed));
+
         if stack_info.flip_upside_down
             R = flip(R, 2);
         end
 
-        if rawmax <= 255       % 8bit data
-            R = uint8(R); % , 'Compression', 'none'
-        elseif rawmax <= 65535 % 16bit data
-            R = uint16(R); % , 'Compression', 'none'
-        end
-
-        %write images to output path
-        disp(['layer ' num2str(nz) ' from ' num2str(block.nz) ': saving ' num2str(size(R, 3)) ' images ...']);
-        parfor k = 1 : size(R, 3)
-            save_time = tic;
-            % file path
-            s = num2str(imagenr + k - 1);
-            while length(s) < 6
-                s = strcat('0', s);
-            end
-            save_path = fullfile(outpath, ['img_' s '.tif']);
-            if exist(save_path, "file")
-                continue
-            end
-            
-            % make sure there is enough ram before copying img to the
-            % process that saving the image
-            %semaphore('wait', semkey_single);
-            %[ram_available, ~] = get_memory();
-            %while ram_available < needed_ram_per_thread
-            %    pause(1);
-            %    [ram_available, ~] = get_memory();
-            %end
-            % semaphore will be released once the data copied to the
-            % save_image_2d process
-
-            message = save_image_2d(R(:,:,k), save_path, s, rawmax, save_time, semkey_single);
-            disp(message);
-        end
-
-        imagenr = imagenr + size(R, 3);
-        % delete(gcp('nocreate'));
-        % pool = parpool('local', 16, 'IdleTimeout', Inf);
-        % async_load(1 : block.nx * block.ny) = parallel.FevalFuture;
+        % ---------------------------------------------------------------------
+        % 4b.  Write slab slices as TIFFs
+        % ---------------------------------------------------------------------
+        file_z1 = nextFileIdx;
+        p_log(log_file, sprintf('   saving %d slices starting at %06d …', size(R,3), file_z1));
+        save_slices_with_bl_tif(R, outpath, file_z1);
+        nextFileIdx = nextFileIdx + size(R,3);
     end
-    semaphore_destroy(semkey_single);
-    semaphore_destroy(semkey_multi);
-    % delte tmp files
-    % for i = 1 : blnr
-    %     delete(convertStringsToChars(blocklist(i)));
-    % end
+
+    p_log(log_file, 'postprocess_save completed successfully.');
 end
 
-function bl = load_bl(path, semkey)
+function save_slices_with_bl_tif(R, outpath, slab_z1)
+    %SAVE_SLICES_WITH_BL_TIF Save 3D image block using save_bl_tif with file skipping
+    %   R        : 3D block (X x Y x Z or Y x X x Z)
+    %   outpath  : directory to save TIFF slices
+    %   slab_z1  : base z-index (integer offset for naming)
+
+    start_t = tic;
+
+    assert(ndims(R) == 3, 'R must be a 3D array');
+    Z = size(R, 3);
+    indices = slab_z1 + (0:Z-1);
+    fileNames = compose("img_%06d.tif", indices);
+    fileList = cellstr(fullfile(outpath, fileNames));  % Ensure char cell array
+    existing = cellfun(@(f) exist(f, 'file'), fileList);
+
+    % Skip slices that already exist
+    if all(existing)
+        fprintf('   All %d slices already exist in %s\n', Z, outpath);
+        return;
+    end
+
+    % Slice only non-existing files
+    slicesToSave = find(~existing);
+    R = R(:, :, slicesToSave);
+    fileList = fileList(~existing);
+
+    % Determine array class and orientation flag
+    xyzOrder  = true;  % R is in [X Y Z] format --> ~30% faster save time
+    tiledTiff = false;
+    compression = 'deflate'; % 'deflate' use char '' not string ""
+
+    % Save using compiled multithreaded MEX
+    save_bl_tif(R, fileList, xyzOrder, compression, feature('numCores'), tiledTiff);
+
+    fprintf('   Saved %d slices in %.1fs.\n', numel(fileList), toc(start_t));
+end
+
+
+function bl = load_bl_lz4(path, semkey)
     semaphore('wait', semkey);
-    bl = importdata(path);
-    semaphore('post', semkey);
-end
-
-%calculates a theoretical point spread function
-function [psf, FWHMxy, FWHMz] = LsMakePSF(dxy, dz, NA, nf, lambda_ex, lambda_em, fcyl,slitwidth)
-    [nxy, nz, FWHMxy, FWHMz] = DeterminePSFsize(dxy, dz, NA, nf, lambda_ex, lambda_em, fcyl, slitwidth);
-
-    %construct psf
-    NAls = sin(atan(slitwidth / (2 * fcyl)));
-    psf = samplePSF(dxy, dz, nxy, nz, NA, nf, lambda_ex, lambda_em, NAls);
-    % disp('ok');
+    cleanup = onCleanup(@() semaphore('post', semkey));
+    max_tries = 3; tries = 0; loaded = false;
+    while ~loaded && tries < max_tries
+        tries = tries + 1;
+        try
+            bl = load_lz4(path);
+            loaded = true;
+        catch
+            pause(1);
+        end
+    end
+    if ~loaded
+        delete(path);
+        error('load_bl_lz4:CorruptFile', 'Deleting corrupted file %s after %d tries.', path, max_tries);
+    end
 end
 
 function semaphore_destroy(semkey)
-    if ispc
-        try
-            while true
-                sephamore('post', semkey);
-            end
-        catch
-        end
-    end
     try
         semaphore('destroy', semkey);
     catch
@@ -1120,121 +1176,8 @@ end
 
 function semaphore_create(semkey, value)
     semaphore_destroy(semkey);
-    semaphore('create', semkey, value);
-    disp(['semaphore ' num2str(semkey) ' is created with the initial value of ' num2str(value)]);
-end
-
-function device = current_device(gpu)
-    device = 'CPU';
-    if gpu > 0
-        device = ['GPU' num2str(gpu)];
-    end
-end
-
-%determine the required grid size (xyz) for psf sampling
-function [nxy, nz, FWHMxy, FWHMz] = DeterminePSFsize(dxy, dz, NA, nf, lambda_ex, lambda_em, fcyl, slitwidth)
-    %Size of PSF grid is gridsize (xy z) times FWHM
-    gridsizeXY = 2;
-    gridsizeZ = 2;
-
-    NAls = sin(atan(0.5 * slitwidth / fcyl));
-    halfmax = 0.5 .* LsPSFeq(0, 0, 0, NA, nf, lambda_ex, lambda_em, NAls);
-
-    %find zero crossings
-    fxy = @(x)LsPSFeq(x, 0, 0, NA, nf, lambda_ex, lambda_em, NAls) - halfmax;
-    fz = @(x)LsPSFeq(0, 0, x, NA, nf, lambda_ex, lambda_em, NAls) - halfmax;
-    FWHMxy = 2 * abs(fzero(fxy, 100));
-    FWHMz = 2 * abs(fzero(fz, 100));
-
-    Rxy = 0.61 * lambda_em / NA;
-    dxy_corr = min(dxy, Rxy / 3);
-
-    nxy = ceil(gridsizeXY * FWHMxy / dxy_corr);
-    nz = ceil(gridsizeZ * FWHMz / dz);
-
-    %ensure that the grid dimensions are odd
-    if mod(nxy, 2) == 0
-        nxy = nxy + 1;
-    end
-    if mod(nz, 2) == 0
-        nz = nz + 1;
-    end
-end
-
-function psf = samplePSF(dxy, dz, nxy, nz, NA_obj, rf, lambda_ex, lambda_em, NA_ls)
-	% disp([dxy, dz, nxy, nz, NA_obj, rf, lambda_ex, lambda_em, NA_ls]);
-    % fprintf('dxy=%.1f, dz=%.1f, nxy=%.1f, nz=%.1f, NA_obj=%.1f, rf=%.2f, lambda_ex=%.1f, lambda_em=%.1f, NA_ls=%.4f\n', dxy, dz, nxy, nz, NA_obj, rf, lambda_ex, lambda_em, NA_ls);
-
-    if mod(nxy, 2) == 0 || mod(nz, 2) == 0
-        error('function samplePSF: nxy and nz must be odd!');
-    end
-
-    psf = zeros((nxy - 1) / 2 + 1, (nxy - 1) / 2 + 1, (nz - 1) / 2 + 1, 'single');
-    for z = 0 : (nz - 1) / 2
-        for y = 0 : (nxy - 1) / 2
-            for x = 0 : (nxy - 1) / 2
-               psf(x+1, y+1, z+1) = LsPSFeq(x*dxy, y*dxy, z*dz, NA_obj, rf, lambda_ex, lambda_em, NA_ls);
-            end
-        end
-    end
-
-    %Since the PSF is symmetrical around all axes only the first Octand is
-    %calculated for computation efficiency. The other 7 Octands are
-    %obtained by mirroring around the respective axes
-    psf = mirror8(psf);
-
-    %normalize psf to integral one
-    psf = psf ./ sum(psf(:));
-end
-
-function R = mirror8(p1)
-    %mirrors the content of the first quadrant to all other quadrants to
-    %obtain the complete PSF.
-
-    sx = 2 * size(p1, 1) - 1; sy = 2 * size(p1, 2) - 1; sz = 2 * size(p1, 3) - 1;
-    cx = ceil(sx / 2); cy = ceil(sy / 2); cz = ceil(sz / 2);
-
-    R = zeros(sx, sy, sz, 'single');
-    R(cx:sx, cy:sy, cz:sz) = p1;
-    R(cx:sx, 1:cy, cz:sz) = flip3D(p1, 0, 1 ,0);
-    R(1:cx, 1:cy, cz:sz) = flip3D(p1, 1, 1, 0);
-    R(1:cx, cy:sy, cz:sz) = flip3D(p1, 1, 0, 0);
-    R(cx:sx, cy:sy, 1:cz) = flip3D(p1, 0, 0, 1);
-    R(cx:sx, 1:cy, 1:cz) =  flip3D(p1, 0, 1 ,1);
-    R(1:cx, 1:cy, 1:cz) =  flip3D(p1, 1, 1, 1);
-    R(1:cx, cy:sy, 1:cz) =  flip3D(p1, 1, 0, 1);
-end
-
-%utility function for mirror8
-function R = flip3D(data, x, y, z)
-    R = data;
-    if x
-        R = flip(R, 1);
-    end
-    if y
-        R = flip(R, 2);
-    end
-    if z
-        R = flip(R, 3);
-    end
-end
-
-%calculates PSF at point (x,y,z)
-function R = LsPSFeq(x, y, z, NAobj, n, lambda_ex, lambda_em, NAls)
-    R = PSF(z, 0, x, NAls, n, lambda_ex) .* PSF(x, y, z, NAobj, n, lambda_em);
-end
-
-%utility function for LsPSFeq
-function R = PSF(x, y, z, NA, n, lambda)
-    f2 = @(p)f1(p, x, y, z, lambda, NA, n);
-    f2_integral = integral(f2, 0, 1, 'AbsTol', 1e-3);
-    R = 4 .* abs(f2_integral).^2;
-end
-
-%utility function for LsPSFeq
-function R = f1(p, x, y, z, lambda, NA, n)
-    R = besselj(0, 2 .* pi .* NA .* sqrt(x.^2 + y.^2) .* p ./ (lambda .* n))...
-        .* exp(1i .* (-pi .* p.^2 .* z .* NA.^2) ./ (lambda .* n.^2)) .* p;
+    semaphore('c', semkey, value);
+    % disp(['semaphore ' num2str(semkey) ' is created with the initial value of ' num2str(value)]);
 end
 
 function [x, y, z, bit_depth] = getstackinfo(datadir)
@@ -1256,16 +1199,6 @@ function [x, y, z, bit_depth] = getstackinfo(datadir)
     end
 end
 
-% function plot_matrix(psf)
-%     % Keivan disp(size(psf));
-%     diff = double(squeeze(psf));
-%     diff(diff==0)=nan;                              % added line
-%     h = slice(diff, [], [], 1:size(diff,3));
-%     set(h, 'EdgeColor','none', 'FaceColor','interp')
-%     alpha(.1);
-%     drawnow;
-% end
-
 function [ram_available, ram_total]  = get_memory()
     if ispc
         [~, m] = memory;  % check if os supports memory function
@@ -1277,20 +1210,6 @@ function [ram_available, ram_total]  = get_memory()
         ram_total = stats(1);
         ram_available = stats(end);
     end
-    %     if gpu
-    %         try
-    %             check = gpuDevice;  % check if CUDA is available
-    %             if (check.DeviceSupported == 1)
-    %                 mem = check.TotalMemory;
-    %             else
-    %                 disp('Matlab does not support your GPU');
-    %                 mem = 0;
-    %             end
-    %         catch
-    %             disp('CUDA is not available');
-    %             mem = 0;
-    %         end
-    %     end
 end
 
 function num_cpu_sockets = get_num_cpu_sockets()
@@ -1355,186 +1274,34 @@ function p_log(log_file, message)
     fprintf(log_file, '%s\r\n', message);
 end
 
-function dark_ = dark(filter, bit_depth)
-    if bit_depth == 8
-        a=zeros(filter.size, "uint8");
-    elseif bit_depth == 16
-        a=zeros(filter.size, "uint16");
-    else
-        warning('unsupported image bit depth');
-        a=zeros(filter.size);
+function baseline_subtraction = dark(filter, bit_depth)
+    baseline_subtraction = 0;
+    if any(filter.gaussian_sigma > 0)
+        if bit_depth == 8
+            a=zeros(filter.gaussian_size, "uint8");
+        elseif bit_depth == 16
+            a=zeros(filter.gaussian_size, "uint16");
+        else
+            warning('unsupported image bit depth');
+            a=zeros(filter.gaussian_size);
+        end
+        % dark is a value greater than 10 surrounded by zeros
+        a(ceil(filter.gaussian_size(1)/2), ceil(filter.gaussian_size(2)/2), ceil(filter.gaussian_size(3)/2)) = filter.dark;
+        a=im2single(a);
+        a=imgaussfilt3(a, filter.gaussian_sigma, 'FilterSize', filter.gaussian_size, 'Padding', 'symmetric');
+        baseline_subtraction = max(a(:));
     end
-    % dark is a value greater than 10 surrounded by zeros
-    a(ceil(filter.size(1)/2), ceil(filter.size(2)/2), ceil(filter.size(3)/2)) = filter.dark;
-    a=im2single(a);
-    a=imgaussfilt3(a, filter.sigma, 'FilterSize', filter.size, 'Padding', 'circular');
-    dark_ = max(a(:));
-end
-
-%writes 32bit float tiff-imges
-function writeTiff32(img, fname)
-    t = Tiff(fname, 'w');
-    tag.ImageLength = size(img, 1);
-    tag.ImageWidth = size(img, 2);
-    tag.Compression = Tiff.Compression.LZW;
-    tag.SampleFormat = Tiff.SampleFormat.IEEEFP;
-    tag.Photometric = Tiff.Photometric.MinIsBlack;
-    tag.BitsPerSample = 32;
-    tag.SamplesPerPixel = 1;
-    tag.PlanarConfiguration = Tiff.PlanarConfiguration.Chunky;
-    t.setTag(tag);
-    t.write(img);
-    t.close();
 end
 
 function index = findClosest(data, x)
     [~,index] = min(abs(data-x));
 end
 
-function x = findGoodFFTLength(x)
-    while max(factor(x)) > 5
-        x = x + 1;
-    end
-end
-
-function pad = pad_size(x, min_pad_size)
-    pad = 0.5 * (findGoodFFTLength(x + min_pad_size) - x);
-end
-
-function pad_size = gaussian_pad_size(image_size, filter_size)
-    rankA = numel(image_size);
-    rankH = numel(filter_size);
-
-    filter_size = [filter_size ones(1, rankA-rankH)];
-
-    pad_size = floor(filter_size / 2);
-end
-
-function [lb, ub] = deconvolved_stats(deconvolved)
-    stats = prctile(deconvolved, [0.1 99.9], "all");
+function [lb, ub] = deconvolved_stats(deconvolved, clipval)
+    stats = prctile(deconvolved, [(100 - clipval) clipval], "all");
     if isgpuarray(stats)
         stats = gather(stats);
     end
     lb = stats(1);
     ub = stats(2);
 end
-
-function message = save_image_2d(im, path, s, rawmax, save_time, semkey_single)
-    %semaphore('post', semkey_single);
-    im = squeeze(im);
-    im = im';
-    for num_retries = 1 : 40
-        try
-            if rawmax <= 255       % 8bit data
-                imwrite(im, path, 'Compression', 'Deflate');
-            elseif rawmax <= 65535 % 16bit data
-                imwrite(im, path, 'Compression', 'Deflate');
-            else                   % 32 bit data
-                writeTiff32(im, path) %im must be single;
-            end
-            break
-        catch
-            pause(1);
-            continue
-        end
-    end
-    message = ['   saved img_' s ' in ' num2str(round(toc(save_time), 1)) ' seconds and after ' num2str(num_retries) ' attempts.'];
-end
-
-function bl = load_block(filelist, start_x, end_x, start_y, end_y, start_z, end_z)
-    nx = end_x - start_x;
-    ny = end_y - start_y;
-    nz = end_z - start_z;
-    bl = zeros(nx+1, ny+1, nz+1, 'single');
-    for k = 1 : nz+1
-        im = imread(filelist(start_z + k - 1), 'PixelRegion', {[start_y, end_y], [start_x, end_x]});
-        im = im2single(im);
-        im = im';
-        bl(:, :, k) = im;
-    end
-end
-
-%deconvolve with OTF
-function R = convFFT(data , otf)
-    R = ifftn(otf .* fftn(data));
-end
-
-% function img = filter_subband(img, sigma, level, wavelet)
-%     % img: is a 2D matrix
-%     % sigma: is a positive integer determines smooting degree. Larger = more
-%     % smoothing
-%     % level: decomposition level. 0 = max level
-%     % wavelet: a string determins the name of wavelet
-%     width_frac_h = sigma / size(img, 2);
-%     if level == 0
-%         level = wmaxlev(size(img), wavelet);
-%     end
-%     [c, s] = wavedec2(img, level, wavelet);
-%     for n_level = 2 : level
-%         [ch, cv, cd] = detcoef2('all', c, s, n_level);
-%         sigma_h = size(ch, 2) * width_frac_h;
-%         ch_fft = fft(ch);
-%         g = gaussian_filter(size(ch_fft), sigma_h);
-%         ch_fft = ch_fft * g;
-%         ch_filt = irfft(ch_fft, true); %, axis=-1 = x axis
-%     end
-% 
-% end
-% 
-% function filter = gaussian_filter(shape, sigma)
-%     % Create a gaussian notch filter
-%     % 
-%     % Parameters
-%     % ----------
-%     % shape : tuple
-%     %     shape of the output filter
-%     % sigma : float
-%     %     filter bandwidth
-%     % 
-%     % Returns
-%     % -------
-%     % g : ndarray
-%     %     the impulse response of the gaussian notch filter
-% 
-%     g = gaussian_notch_filter_1d(shape(0), sigma);
-%     filter = repmat(g, shape(1), 1);
-% end
-% 
-% function filter = gaussian_notch_filter_1d(n, sigma)
-%     % Generates a 1D gaussian notch filter `n` pixels long
-%     % 
-%     % Parameters
-%     % ----------
-%     % n : int
-%     %     length of the gaussian notch filter
-%     % sigma : float
-%     %     notch width
-%     % 
-%     % Returns
-%     % -------
-%     % g : ndarray
-%     %     (n,) array containing the gaussian notch filter
-% 
-%     assert(n > 0, 'n must be positive');
-%     assert(sigma > 0, 'sigma must be positive');
-%     n = int32(n);
-%     filter = 0:n-1;
-%     filter = 1 - exp(-filter.^2 / (2 * sigma^2));
-% end
-% 
-% function irfft = irfft(x, even)
-%      % n is the output length
-%      % s is the variable that will hold the index of the highest
-%      % frequency below N/2, s = floor((n+1)/2)
-%      if (even)
-%         n = 2 * (length(x) - 1 );
-%         s = length(x) - 1;
-%      else
-%         n = 2 * (length(x) - 1 )+1;
-%         s = length(x);
-%      end
-%      xn = zeros(1,n);
-%      xn(1:length(x)) = x;
-%      xn(length(x)+1:n) = conj(x(s:-1:2));
-%      irfft  = ifft(xn);
-% end
