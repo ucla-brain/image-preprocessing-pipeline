@@ -9,8 +9,8 @@ if nargin && strcmpi(varargin{1},'big')
     stack = struct('x',1024,'y',2049,'z',3073);
     brick = struct('x',256 ,'y',256 ,'z',384 );
 else
-    stack = struct('x',128,'y',128,'z',192);
-    brick = struct('x',32 ,'y',32 ,'z',48 );
+    stack = struct('x',959,'y',611,'z',287);
+    brick = struct('x',2 ,'y',1 ,'z',1 );
 end
 brick.nx = ceil(stack.x/brick.x);
 brick.ny = ceil(stack.y/brick.y);
