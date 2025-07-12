@@ -545,6 +545,8 @@ def main():
                 shell=is_windows,
                 env=env,
                 text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
                 preexec_fn=os.setsid if not is_windows else None
             )
             for line in proc.stdout:
