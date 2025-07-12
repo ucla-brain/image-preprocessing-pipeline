@@ -692,6 +692,7 @@ function deconvolve(filelist, psf, numit, damping, ...
 
     num_blocks = block.nx * block.ny * block.nz;
     num_blocks_str = num2str(num_blocks);
+    loading_time_moving_average = 0;
 
     for blnr = starting_block : num_blocks
         % skip blocks already worked on
@@ -714,9 +715,10 @@ function deconvolve(filelist, psf, numit, damping, ...
         % decon_step_is_slower_than_loading = numit > 1; % then load slower to prevent RAM overload
         % if decon_step_is_slower_than_loading, semaphore('wait', semkey_loading); end
         % send(dQueue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' is loading ...']);
-        % loading_start = tic;
+        loading_time = tic;
         bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info);
-        % send(dQueue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' is loaded in ' num2str(round(toc(loading_start), 1))]);
+        loading_time_moving_average = loading_time_moving_average * 0.9 + toc(loading_time) * 0.1;
+        send(dQueue, [current_device(gpu) ': block ' num2str(blnr) ' from ' num_blocks_str ' is loaded in ' num2str(round(loading_time_moving_average, 1))]);
         % if decon_step_is_slower_than_loading, semaphore('post', semkey_loading); end
 
         % get min-max of raw data stack
