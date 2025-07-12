@@ -307,7 +307,7 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(...
     stack_info, psf_size, filter, block_size_max, ram_available, numit, output_bytes)
 
     % Parameters for RAM and block sizing
-    max_elements_per_dim = min(1290, floor(block_size_max^(1/3)));  % 3D cube limit from (2^31-1)^(1/3) = 1290 elements
+    max_elements_per_dim = 1290; %min(1290, floor(block_size_max^(1/3)));  % 3D cube limit from (2^31-1)^(1/3) = 1290 elements
     if filter.use_fft, max_elements_per_dim = min(1281, max_elements_per_dim); end
     max_elements_total  = 2^31 - 1;        % MATLAB's total element limit
 
