@@ -513,9 +513,6 @@ def main():
             pbar = None
             total_blocks = None
 
-            def count_lz4_blocks(cache_dir):
-                return sum(1 for _ in Path(cache_dir).rglob("*.lz4"))
-
             for line in proc.stdout:
                 # Suppress block progress lines if progress bar is shown
                 if block_line_re.search(line):
