@@ -176,6 +176,7 @@ def resolve_path(p):
         raise ValueError(f"Path does not exist: {p}")
     return p.resolve()
 
+
 def validate_args(args):
     args.input = resolve_path(args.input)
 
@@ -217,6 +218,11 @@ def validate_args(args):
 
     if args.adaptive_psf and not args.use_fft:
         raise RuntimeError("--adaptive-psf and --use-fft should be used simultaneously.")
+
+
+def count_lz4_blocks(cache_dir):
+    """Count all .lz4 files recursively in cache_dir using pathlib."""
+    return sum(1 for _ in Path(cache_dir).rglob("*.lz4"))
 
 
 def main():
@@ -488,8 +494,8 @@ def main():
     try:
         log.info("Running MATLAB deconvolution...")
 
+        # -------- PROGRESS BAR ENABLED --------
         if args.progress:
-            # Start MATLAB process with stdout=PIPE
             proc = subprocess.Popen(
                 ' '.join(matlab_cmd) if is_windows else matlab_cmd,
                 shell=is_windows,
@@ -497,42 +503,45 @@ def main():
                 text=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                bufsize=1,  # line buffered
+                bufsize=1,
                 preexec_fn=os.setsid if not is_windows else None
             )
-
             block_pattern = re.compile(r'block (\d+) from (\d+)', re.IGNORECASE)
+            block_line_re = re.compile(r'GPU\d+:\s*block\s+\d+\s+from\s+\d+\s+filters applied in\s+[\d.]+',
+                                       re.IGNORECASE)
             seen_blocks = set()
             pbar = None
             total_blocks = None
 
+            def count_lz4_blocks(cache_dir):
+                return sum(1 for _ in Path(cache_dir).rglob("*.lz4"))
+
             for line in proc.stdout:
-                print(line, end='')  # Always echo MATLAB output
+                # Suppress block progress lines if progress bar is shown
+                if block_line_re.search(line):
+                    pass
+                else:
+                    print(line, end='')
 
                 match = block_pattern.search(line)
                 if match:
                     block_num = int(match.group(1))
                     total = int(match.group(2))
-
-                    # Initialize tqdm if not done yet
                     if pbar is None or (total_blocks is not None and total != total_blocks):
                         total_blocks = total
+                        n_completed = count_lz4_blocks(cache_drive_folder)
                         if pbar:
                             pbar.close()
-                        pbar = tqdm(total=total_blocks, desc="Blocks", unit="block")
+                        pbar = tqdm(total=total_blocks, desc="Blocks", unit="block", initial=n_completed)
                         seen_blocks = set()
-
-                    # Avoid double-counting blocks
                     if block_num not in seen_blocks:
                         pbar.update(1)
                         seen_blocks.add(block_num)
-
             proc.wait()
             if pbar:
                 pbar.close()
-
+        # -------- NO PROGRESS BAR --------
         else:
-            # Default: No progress bar
             proc = subprocess.Popen(
                 ' '.join(matlab_cmd) if is_windows else matlab_cmd,
                 shell=is_windows,
@@ -540,6 +549,8 @@ def main():
                 text=True,
                 preexec_fn=os.setsid if not is_windows else None
             )
+            for line in proc.stdout:
+                print(line, end='')
             proc.wait()
 
         if proc.returncode != 0:
@@ -550,7 +561,6 @@ def main():
 
     except KeyboardInterrupt:
         log.warning("Interrupted by user (Ctrl+C). Terminating MATLAB...")
-
         if proc and proc.poll() is None:
             killed = False
             try:
@@ -562,7 +572,6 @@ def main():
                 killed = True
             except Exception as e:
                 log.warning(f"Failed to terminate MATLAB process: {e}")
-
             if not killed:
                 try:
                     proc.terminate()
@@ -571,7 +580,6 @@ def main():
                     proc.kill()
                 except Exception as e:
                     log.warning(f"Fallback termination also failed: {e}")
-
         raise SystemExit("Execution interrupted by user.")
 
     finally:
