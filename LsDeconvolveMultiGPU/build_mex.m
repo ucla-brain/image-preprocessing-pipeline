@@ -41,7 +41,9 @@ function build_mex(debug)
 
     % === [2] CPU feature detection ===
     if isWin
-        mex('cpuid_mex.cpp');
+        if ~exist('cpuid_mex.mexw64', 'file')
+            mex('cpuid_mex.cpp');
+        end
         f = cpuid_mex();
         if f.AVX512,   instr = 'AVX512';
         elseif f.AVX2, instr = 'AVX2';
@@ -319,8 +321,7 @@ function build_mex(debug)
     %mex(mex_cpu{:}, 'save_lz4_mex.c', lz4_incflag, lz4_libfile);
     %mex(mex_cpu{:}, 'load_lz4_mex.c', lz4_incflag, lz4_libfile);
     %mex(mex_cpu{:}, 'load_slab_lz4.cpp', lz4_incflag, lz4_libfile);
-    %mex(mex_cpu{:}, inc_tiff, inc_hwloc, 'load_bl_tif.cpp', link_tiff{:});
-    mex(mex_cpu{:}, inc_tiff, inc_hwloc, 'load_bl_tif.cpp', 'mex_thread_utils.cpp', link_tiff{:}, link_hwloc{:});
+    %mex(mex_cpu{:}, inc_tiff, inc_hwloc, 'load_bl_tif.cpp', 'mex_thread_utils.cpp', link_tiff{:}, link_hwloc{:});
     %mex(mex_cpu{:}, inc_tiff, inc_hwloc, 'save_bl_tif.cpp', 'mex_thread_utils.cpp', link_tiff{:}, link_hwloc{:});
 
     %% --------- Build CUDA MEX files ---------
@@ -346,8 +347,8 @@ function build_mex(debug)
             nvccflags = sprintf('NVCCFLAGS="$NVCCFLAGS -use_fast_math -Xcompiler=-Ofast,-flto=%d %s"', ncores, gencode_flags);
         end
     end
-
-    %mexcuda('-R2018a', nvccflags, 'gauss3d_gpu.cu');
+    cufft_link = strsplit(strtrim(fft_lib()));
+    mexcuda('-R2018a', nvccflags, 'gauss3d_gpu.cu', cufft_link{:});
     %mexcuda('-R2018a', nvccflags, 'conv3d_gpu.cu');
 
     fprintf('\n✅  All MEX files built successfully.\n');
@@ -455,4 +456,61 @@ function sm_list = detect_sm_archs()
     sm_list_num = cellfun(@str2double, sm_list);
     [~, idx] = sort(sm_list_num);
     sm_list = sm_list(idx);
+end
+
+function cufft_link = fft_lib()
+%FFT_LIB  Return platform-correct linker flags for cuFFT library.
+%   Returns a string with -L and -lcufft for mexcuda.
+%   Issues a warning if cuFFT is not found.
+
+if ispc
+    % Windows
+    cuda_root = getenv('CUDA_PATH');
+    if isempty(cuda_root)
+        % Try common fallback location
+        possible_roots = { ...
+            'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA', ...
+            'C:\CUDA' ...
+        };
+        cuda_root = '';
+        for k = 1:numel(possible_roots)
+            d = dir(fullfile(possible_roots{k}, 'v*'));
+            if ~isempty(d)
+                % Use the highest version
+                [~, idx] = max([d.datenum]);
+                cuda_root = fullfile(possible_roots{k}, d(idx).name);
+                break;
+            end
+        end
+    end
+    if isempty(cuda_root) || ~isfolder(cuda_root)
+        warning('fft_lib:cudaNotFound', 'Could not find CUDA Toolkit. Please set CUDA_PATH.');
+        cufft_link = '';
+        return;
+    end
+    cufft_lib = fullfile(cuda_root, 'lib', 'x64');
+    if ~isfolder(cufft_lib)
+        warning('fft_lib:libNotFound', 'Could not find cuFFT library folder: %s', cufft_lib);
+        cufft_link = '';
+        return;
+    end
+    cufft_link = sprintf('-L"%s" -lcufft', cufft_lib);
+else
+    % Linux/Mac
+    cuda_root = getenv('CUDA_HOME');
+    if isempty(cuda_root)
+        cuda_root = getenv('CUDA_PATH');
+    end
+    if isempty(cuda_root)
+        cuda_root = '/usr/local/cuda';
+    end
+    cufft_lib = fullfile(cuda_root, 'lib64');
+    if ~isfolder(cufft_lib)
+        warning('fft_lib:libNotFound', 'Could not find cuFFT library folder: %s', cufft_lib);
+        cufft_link = '';
+        return;
+    end
+    cufft_link = sprintf('-L%s -lcufft', cufft_lib);
+end
+
 end

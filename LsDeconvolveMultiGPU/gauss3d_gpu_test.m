@@ -1,183 +1,170 @@
 function gauss3d_gpu_test()
-% Robust & colorful test harness for gauss3d_gpu vs imgaussfilt3 (GPU/CPU fallback).
-% Single-precision only. Shows performance, speedup, pass/fail, and summary.
+% Robust test harness for gauss3d_gpu vs imgaussfilt3 (GPU, single-precision).
+% Prints and counts direct and fft path tests separately.
 
-    g = gpuDevice(1);
-    reset(g);
+    gpuDeviceObject = gpuDevice(1);
+    reset(gpuDeviceObject);
 
-    % Color helper
-    hasCprintf = exist('cprintf','file') == 2;
-    col = @(c,str) colored_str(c,str,hasCprintf);
+    hasCprintfFunction = exist('cprintf','file') == 2;
+    colorFormat = @(colorName, inputString) format_colored_string(colorName, inputString, hasCprintfFunction);
 
-    szs = {[32, 64, 32], [512, 512, 256]};
-    types = {@single};   % Single only!
-    sigma_tests = {2.5, [1.5 1.5 2.5], [0.5 0.5 2.5], 0.25, 8};
-    ksize_tests = {'auto', [9 11 15], 3, 51, [25 25 25]};
-    SINGLE_THRESH = 5e-5;
+    testVolumeSizes = {[128, 192, 64], [934, 934, 697]};
+    %testVolumeSizes = {[128, 192, 64]};
+    sigmaTestCases = {[0.5 0.5 1.5], [0.5 0.5 2.5], 2.5, 0.25, 8};
+    kernelSizeTestCases = {'auto', [13 13 25], 3, 51};
+    SINGLE_PRECISION_PASS_THRESHOLD = 5e-5;
+    paddingMode = 'circular';
 
-    % Summary counters
-    total = 0; pass = 0; fail = 0; skip = 0; oom = 0; ksizeerr = 0;
+    testCounter = 0;
+    passDirect = 0; failDirect = 0;
+    passFFT = 0; failFFT = 0;
+    testOOMCounter = 0; testKernelSkipCounter = 0;
 
     % Print summary header
-    fprintf('%-4s %-5s %-11s %-20s %-14s %-16s %-8s %-8s %-8s %-8s %-10s\n', ...
-        'PF', 'Test', 'Type', 'Size', 'Sigma', 'Kernel', 'maxErr', 'RMS', 'relErr', 'mex(s)', 'Speedup');
+    fprintf('%-4s %-5s %-9s %-12s %-20s %-14s %-20s %-8s %-8s %-8s %-8s %-9s %-10s\n', ...
+        'PF', 'ID', 'Path', 'Type', 'Size', 'Sigma', 'Kernel', ...
+        'maxErr', 'RMS', 'relErr', 'Time(s)', 'Speedup');
 
-    for ityp = 1:numel(types)
-        for isz = 1:numel(szs)
-            sz = szs{isz};
-            T = types{ityp};
-            type_str = func2str(T);
+    for volumeSizeIndex = 1:numel(testVolumeSizes)
+        volumeSize = testVolumeSizes{volumeSizeIndex};
+        dataTypeName = 'single';
 
-            for isig = 1:numel(sigma_tests)
-                sigma = sigma_tests{isig};
-                for iksz = 1:numel(ksize_tests)
-                    total = total + 1;
-                    ksz = ksize_tests{iksz};
-                    if ischar(ksz) || isstring(ksz)
-                        kdesc = char(ksz);
-                    else
-                        kdesc = mat2str(ksz);
-                    end
-
-                    % Kernel size for padding
-                    if ischar(ksz) || isstring(ksz)
-                        kernel_sz = odd_kernel_size(sigma);
-                    else
-                        kernel_sz = ksz;
-                        if isscalar(kernel_sz)
-                            kernel_sz = repmat(kernel_sz,1,3);
-                        end
-                    end
-                    pad_amt = floor(kernel_sz / 2);
-
-                    rng(0);
-                    x = rand(sz, type_str);
-                    x = x ./ max(x(:));
-                    x_pad = padarray(x, pad_amt, 'replicate', 'both');
-                    x_pad_gpu = gpuArray(x_pad);
-                    opts = {'Padding', 'replicate', 'FilterSize', kernel_sz, 'FilterDomain', 'spatial'};
-
-                    try
-                        % Reference (imgaussfilt3, fallback to CPU)
-                        t1 = tic;
-                        try
-                            y_ref_gpu = imgaussfilt3(x_pad_gpu, sigma, opts{:});
-                        catch ME1
-                            if contains(ME1.message, 'fftn') || ...
-                               contains(ME1.message, 'FFT') || ...
-                               contains(ME1.message, 'out of memory') || ...
-                               contains(ME1.identifier, 'parallel:gpu:array:OOM')
-                                warning(col('blue','    imgaussfilt3 GPU failed (FFT or OOM), using CPU reference.'));
-                                y_ref_gpu = gpuArray(imgaussfilt3(gather(x_pad_gpu), sigma, opts{:}));
-                            else
-                                rethrow(ME1);
-                            end
-                        end
-                        wait(gpuDevice);   % <--- GPU SYNC FOR BENCHMARK
-                        t_ref = toc(t1);
-
-                        % gauss3d_gpu single (standard)
-                        t2 = tic;
-                        y_mex_gpu = gauss3d_gpu(x_pad_gpu, sigma, kernel_sz);
-                        wait(gpuDevice);   % <--- GPU SYNC FOR BENCHMARK
-                        t_mex = toc(t2);
-
-                        % Output checks and stats
-                        assert(isequal(size(y_mex_gpu), size(x_pad_gpu)), 'Output size mismatch.');
-                        assert(strcmp(class(y_mex_gpu), class(x_pad_gpu)), 'Output class mismatch.');
-                        assert(strcmp(classUnderlying(y_mex_gpu), classUnderlying(x_pad_gpu)), 'Output underlying class mismatch.');
-
-                        % Unpad for fair comparison
-                        [idx1, idx2, idx3] = unpad_indices(size(x_pad), pad_amt);
-                        y_ref_unpad = y_ref_gpu(idx1,idx2,idx3);
-                        y_mex_unpad = y_mex_gpu(idx1,idx2,idx3);
-
-                        % Error metrics
-                        err = max(abs(y_mex_unpad(:) - y_ref_unpad(:)));
-                        rms_err = sqrt(mean((y_mex_unpad(:) - y_ref_unpad(:)).^2));
-                        rel_err = rms_err / (max(abs(y_ref_unpad(:))) + eps);
-
-                        % Speedup (relative to reference)
-                        speedup = t_ref / t_mex;
-                        if isfinite(speedup)
-                            if speedup > 1
-                                speed_str = sprintf('+%.0f%%', 100*(speedup-1));
-                            else
-                                speed_str = sprintf('-%.0f%%', 100*(1-speedup));
-                            end
-                        else
-                            speed_str = 'N/A';
-                        end
-
-                        % Pass/Fail (now always emoji, never fallback)
-                        if strcmp(type_str,'single') && gather(err) < SINGLE_THRESH
-                            pf = col('green', '✔️');
-                            pass = pass+1;
-                        else
-                            pf = col('red', '❌');
-                            fail = fail+1;
-                        end
-
-                        fprintf('%-4s %-5d %-11s %-20s %-14s %-16s %-8.2e %-8.2e %-8.2e %-8.3f %-10s\n', ...
-                            pf, total, type_str, mat2str(sz), mat2str(sigma), kdesc, err, rms_err, rel_err, t_mex, speed_str);
-
-                    catch ME
-                        % OOM or kernel size errors
-                        if contains(ME.message, 'out of memory') || ...
-                           contains(ME.identifier, 'parallel:gpu:array:OOM')
-                            print_fail('OOM: Skipping due to GPU memory.', col);
-                            oom = oom+1; reset(gpuDevice); continue;
-                        elseif contains(ME.message, 'Kernel size exceeds')
-                            print_fail('Kernel size exceeds device limit.', col);
-                            ksizeerr = ksizeerr + 1;
-                            continue;
-                        else
-                            print_fail(['ERROR: ' ME.message], col);
-                            fail = fail+1;
-                            continue;
-                        end
-                    end
-
-                    clear x_pad_gpu y_mex_gpu y_ref_gpu y_mex_unpad y_ref_unpad
+        for sigmaIndex = 1:numel(sigmaTestCases)
+            gaussianSigma = sigmaTestCases{sigmaIndex};
+            for kernelSizeIndex = 1:numel(kernelSizeTestCases)
+                testCounter = testCounter + 1;
+                kernelSizeInput = kernelSizeTestCases{kernelSizeIndex};
+                if ischar(kernelSizeInput) || isstring(kernelSizeInput)
+                    kernelSizeDescription = char(kernelSizeInput);
+                else
+                    kernelSizeDescription = mat2str(kernelSizeInput);
                 end
+
+                % Compute kernel size array
+                if ischar(kernelSizeInput) || isstring(kernelSizeInput)
+                    kernelSizeArray = compute_odd_kernel_size(gaussianSigma);
+                else
+                    kernelSizeArray = kernelSizeInput;
+                    if isscalar(kernelSizeArray)
+                        kernelSizeArray = repmat(kernelSizeArray,1,3);
+                    end
+                end
+                kernelPaddingAmount = floor(kernelSizeArray / 2);
+
+                rng(0);
+                testInputVolume = gpuArray.rand(volumeSize, 'single');
+
+                % Direct reference (spatial domain, replicate pad)
+                directReferenceOutput = imgaussfilt3(testInputVolume, gaussianSigma, ...
+                    'Padding', paddingMode, 'FilterSize', kernelSizeArray, 'FilterDomain', 'spatial');
+                % FFT reference (frequency domain, replicate pad)
+                fftReferenceOutput = imgaussfilt3(testInputVolume, gaussianSigma, ...
+                    'Padding', paddingMode, 'FilterSize', kernelSizeArray, 'FilterDomain', 'frequency');
+
+                %% --- Direct path: pad input, unpad output ---
+                directInputPadded = padarray(testInputVolume, kernelPaddingAmount, paddingMode, 'both');
+                % Unpad indices
+                unpadIdxY = (1+kernelPaddingAmount(1)):(size(directInputPadded,1)-kernelPaddingAmount(1));
+                unpadIdxX = (1+kernelPaddingAmount(2)):(size(directInputPadded,2)-kernelPaddingAmount(2));
+                unpadIdxZ = (1+kernelPaddingAmount(3)):(size(directInputPadded,3)-kernelPaddingAmount(3));
+                % Check for valid indices
+                if isempty(unpadIdxY) || isempty(unpadIdxX) || isempty(unpadIdxZ)
+                    fprintf('%s Test skipped (direct): Padding too large for available data. (ID %d)\n', colorFormat('yellow','[SKIP]'), testCounter);
+                    testKernelSkipCounter = testKernelSkipCounter + 1;
+                    reset(gpuDeviceObject);
+                    continue;
+                end
+
+                directStartTime = tic;
+                directFilteredOutput = gauss3d_gpu(directInputPadded, gaussianSigma, kernelSizeArray, 'direct');
+                wait(gpuDeviceObject);
+                directElapsedSeconds = toc(directStartTime);
+                directFilteredUnpadded = directFilteredOutput(unpadIdxY, unpadIdxX, unpadIdxZ);
+
+                % Error metrics (direct)
+                maxAbsErrorDirect = max(abs(directFilteredUnpadded(:) - directReferenceOutput(:)));
+                rmsErrorDirect    = sqrt(mean((directFilteredUnpadded(:) - directReferenceOutput(:)).^2));
+                relErrorDirect    = rmsErrorDirect / (max(abs(directReferenceOutput(:))) + eps);
+
+                %% --- FFT path (no manual pad/unpad) ---
+                fftStartTime = tic;
+                fftFilteredOutput = gauss3d_gpu(directInputPadded, gaussianSigma, kernelSizeArray, 'fft');
+                wait(gpuDeviceObject);
+                fftElapsedSeconds = toc(fftStartTime);
+                fftFilteredOutput = fftFilteredOutput(unpadIdxY, unpadIdxX, unpadIdxZ);
+
+                maxAbsErrorFFT = max(abs(fftFilteredOutput(:) - fftReferenceOutput(:)));
+                rmsErrorFFT    = sqrt(mean((fftFilteredOutput(:) - fftReferenceOutput(:)).^2));
+                relErrorFFT    = rmsErrorFFT / (max(abs(fftReferenceOutput(:))) + eps);
+
+                % Speedup (fft vs direct)
+                speedupRatio = directElapsedSeconds / fftElapsedSeconds;
+                if isfinite(speedupRatio)
+                    if speedupRatio > 1
+                        speedupString = sprintf('+%.0f%%', 100*(speedupRatio-1));
+                    else
+                        speedupString = sprintf('-%.0f%%', 100*(1-speedupRatio));
+                    end
+                else
+                    speedupString = 'N/A';
+                end
+
+                %% --- Print Direct ---
+                if maxAbsErrorDirect < SINGLE_PRECISION_PASS_THRESHOLD
+                    pfDirect = colorFormat('green', '✔️');
+                    passDirect = passDirect + 1;
+                else
+                    pfDirect = colorFormat('red', '❌');
+                    failDirect = failDirect + 1;
+                end
+                fprintf('%-4s %-5d %-9s %-12s %-20s %-14s %-20s %-7.2e %-8.2e %-8.2e %-8.3f %-10s\n', ...
+                    pfDirect, testCounter, 'direct', dataTypeName, mat2str(volumeSize), mat2str(gaussianSigma), ...
+                    kernelSizeDescription, maxAbsErrorDirect, rmsErrorDirect, relErrorDirect, ...
+                    directElapsedSeconds, speedupString);
+
+                %% --- Print FFT ---
+                if maxAbsErrorFFT < SINGLE_PRECISION_PASS_THRESHOLD
+                    pfFFT = colorFormat('green', '✔️');
+                    passFFT = passFFT + 1;
+                else
+                    pfFFT = colorFormat('red', '❌');
+                    failFFT = failFFT + 1;
+                end
+                fprintf('%-4s %-5d %-9s %-12s %-20s %-14s %-20s %-8.2e %-8.2e %-8.2e %-8.3f %-10s\n', ...
+                    pfFFT, testCounter, 'fft', dataTypeName, mat2str(volumeSize), mat2str(gaussianSigma), ...
+                    kernelSizeDescription, maxAbsErrorFFT, rmsErrorFFT, relErrorFFT, ...
+                    fftElapsedSeconds, speedupString);
+
+                reset(gpuDeviceObject);
             end
         end
     end
 
     % --- Suite summary ---
-    fprintf('\n%s\n',col('yellow', repmat('=',1,80)));
-    fprintf('%s\n', col('magenta', 'TEST SUITE SUMMARY'));
-    fprintf('%-24s %-8d\n', col('green', 'Total tests:'), total);
-    fprintf('%-24s %-8d\n', col('green', 'Passed:'), pass);
-    fprintf('%-24s %-8d\n', col('red',   'Failed:'), fail);
-    fprintf('%-24s %-8d\n', col('blue',  'OOM/Skipped:'), oom);
-    fprintf('%-24s %-8d\n', col('red',   'Kernel size skip:'), ksizeerr);
-    fprintf('%s\n', col('yellow', repmat('=',1,80)));
+    fprintf('\n%s\n', colorFormat('yellow', repmat('=',1,80)));
+    fprintf('%s\n', colorFormat('magenta', 'TEST SUITE SUMMARY'));
+    fprintf('%-24s %-8d\n', colorFormat('green', 'Direct passed:'), passDirect);
+    fprintf('%-24s %-8d\n', colorFormat('red',   'Direct failed:'), failDirect);
+    fprintf('%-24s %-8d\n', colorFormat('green', 'FFT passed:'), passFFT);
+    fprintf('%-24s %-8d\n', colorFormat('red',   'FFT failed:'), failFFT);
+    fprintf('%-24s %-8d\n', colorFormat('blue',  'OOM/Skipped:'), testOOMCounter);
+    fprintf('%-24s %-8d\n', colorFormat('red',   'Kernel size skip:'), testKernelSkipCounter);
+    fprintf('%s\n', colorFormat('yellow', repmat('=',1,80)));
 end
 
-function [idx1, idx2, idx3] = unpad_indices(sz, pad_amt)
-    idx1 = (1+pad_amt(1)):(sz(1)-pad_amt(1));
-    idx2 = (1+pad_amt(2)):(sz(2)-pad_amt(2));
-    idx3 = (1+pad_amt(3)):(sz(3)-pad_amt(3));
-end
-
-function sz = odd_kernel_size(sigma)
-    if isscalar(sigma)
-        sigma = [sigma sigma sigma];
+function kernelSizeArray = compute_odd_kernel_size(gaussianSigma)
+    if isscalar(gaussianSigma)
+        gaussianSigma = [gaussianSigma gaussianSigma gaussianSigma];
     end
-    sz = 2*ceil(3*sigma) + 1;
-    sz = max(sz, 3);
+    kernelSizeArray = 2*ceil(3*gaussianSigma) + 1;
+    kernelSizeArray = max(kernelSizeArray, 3);
 end
 
-function print_fail(str, col)
-    fprintf('%s %s\n', col('red', '❌'), str); % always emoji
-end
-
-function out = colored_str(color, str, hasCprintf)
-    if hasCprintf
-        out = evalc(['cprintf(''', color, ''','' ', 'str', ')']);
-        out = out(1:end-1);
+function formattedString = format_colored_string(colorName, inputString, hasCprintfFunction)
+    if hasCprintfFunction
+        formattedString = evalc(['cprintf(''', colorName, ''','' ', 'inputString', ')']);
+        formattedString = formattedString(1:end-1);
     else
-        out = str;
+        formattedString = inputString;
     end
 end
