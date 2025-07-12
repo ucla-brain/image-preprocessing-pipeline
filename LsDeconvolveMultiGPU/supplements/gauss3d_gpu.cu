@@ -1,7 +1,8 @@
 /*
     gauss3d_gpu.cu
 
-    High-performance, in-place 3D Gaussian filtering for MATLAB gpuArray inputs.
+    High-performance, in-place 3D Gaussian filtering for MATLAB gpuArray inputs
+    using CUDA. Supports both separable direct and FFT-based filtering.
 
     ----------------------------------------------------------------------------
     Author:       Keivan Moradi (with assistance from ChatGPT v4.1, 2025)
@@ -10,50 +11,73 @@
 
     Overview:
     ---------
-    This MEX function implements a fast, memory-efficient, block-wise **3D Gaussian filter**
-    for single-precision (`single`) 3D gpuArray data in MATLAB, using CUDA for GPU acceleration.
-    It is **API-compatible** with MATLAB's `imgaussfilt3`, but is highly optimized
-    for batch processing and large volumes, and designed to be integrated into GPU deconvolution pipelines.
+    This MEX function implements a fast, VRAM-efficient **3D Gaussian filter**
+    for single-precision (`single`) 3D `gpuArray` data in MATLAB, with
+    CUDA acceleration. It is compatible with MATLAB's `imgaussfilt3`, but
+    optimized for large volumes, pipelined workflows, and multi-step GPU pipelines.
 
-    **IMPORTANT: This version performs filtering IN-PLACE. The input gpuArray is
-    overwritten and returned as output. The original input data will be destroyed.**
+    **IMPORTANT:** Filtering is performed IN-PLACE. The input gpuArray is
+    overwritten and returned as output. The original input data is destroyed.
 
-    Key Features:
-    -------------
-      - **In-place destructive filtering:** Minimizes VRAM usage by modifying the input array directly.
-        Only a single workspace buffer (same size as the array) is allocated in addition to the input.
-      - **Heavy CUDA optimization:** Performs separable convolution along all 3 axes using constant-memory kernels, and launches tuned CUDA kernels for maximum performance.
-      - **Workspace control:** Accepts user-provided block padding and kernel size to allow batch-wise processing (important for large volumes or integration in multi-step GPU workflows).
-      - **OOM-resilient:** Attempts memory allocation with automatic retries and helpful warnings when out-of-memory occurs.
-      - **MATLAB gpuArray interface:** Input and output are both MATLAB `gpuArray(single)` objects, fully compatible with native MATLAB workflows.
-      - **Flexible sigma and kernel size:** Accepts scalar or vector `sigma` and kernel size for anisotropic filtering.
-      - **Open source, GPL v3**.
+    Features:
+    ---------
+      - **In-place destructive filtering:** Input array is modified directly;
+        only a single workspace buffer is allocated in addition.
+      - **Two filtering methods:**
+          • **Direct (separable):** Three-pass 1D Gaussian convolution using
+            CUDA constant memory, optimal for small–moderate kernel sizes.
+          • **FFT-based:** Full 3D convolution via cuFFT for large kernels/volumes.
+        The method is auto-selected based on size, or can be set by user.
+      - **Automatic out-of-memory handling:** Allocations are retried with
+        informative warnings.
+      - **Flexible parameters:** Accepts scalar or 3-vector `sigma`, with
+        automatic or explicit kernel size selection.
+      - **MATLAB integration:** Both input and output are MATLAB `gpuArray(single)`.
+      - **Fully open source, GPL v3.**
 
     Differences from MATLAB's imgaussfilt3:
-    -----------------------------------------
-      1. **Much faster** on large data: Algorithm is hand-optimized for GPU with memory reuse and minimal transfers.
-      2. **Destructive in-place operation:** The input gpuArray is modified and returned. This avoids allocating a second full-size array and reduces VRAM requirements by up to 33%.
-      3. **External workspace control:** Padding/batching is managed outside the function, making it suitable for tiled processing during deconvolution or large-scale pipelines.
-      4. **Separable convolution:** Uses 1D convolutions in 3 passes, exploiting constant memory for kernel coefficients.
-      5. **Direct gpuArray support:** Does not require conversion or intermediate CPU copies.
+    ---------------------------------------
+      1. **In-place/destructive:** The input gpuArray is overwritten.
+      2. **Explicit VRAM management:** Workspace buffer is managed internally
+         with OOM resilience and optional user control.
+      3. **Auto or explicit method selection:** FFT is chosen for large
+         kernels/volumes; user can override.
+      4. **Optimized for pipelined/block-wise use:** Designed to slot into
+         large-scale, multi-GPU deconvolution pipelines.
+      5. **No CPU fallback:** All operations require GPU memory and CUDA.
 
-    Usage Example (in MATLAB):
-    --------------------------
+    Usage:
+    ------
+        % Standard usage
         x = gpuArray(single(randn(128,128,64)));
-        y = gauss3d_gpu(x, 2.0);               % x is destroyed/overwritten; y is the filtered result
-        y = gauss3d_gpu(x, [2 1 4], [9 5 15]); % Anisotropic sigma & kernel size
+        y = gauss3d_gpu(x, 2.0);                        % Isotropic, auto kernel size/mode
+        y = gauss3d_gpu(x, [2 1 4], [9 5 15]);          % Anisotropic, user kernel size
+
+        % Forcing FFT or direct mode (optional 4th arg: 'fft' or 'direct')
+        y = gauss3d_gpu(x, 2.0, [], 'fft');             % Force FFT mode
+        y = gauss3d_gpu(x, 2.0, [], 'direct');          % Force direct convolution
+
+    Arguments:
+    ----------
+      x           : 3D `gpuArray(single)`, input (overwritten)
+      sigma       : Scalar or 3-vector, Gaussian sigma(s) [default: required]
+      kernel_size : Scalar or 3-vector, optional kernel size (odd, per axis)
+                    Default: 2*ceil(3*sigma)+1 per axis
+      mode        : (Optional, char) 'fft', 'direct', or omitted for auto
 
     Notes:
     ------
-      - Input must be a 3D `gpuArray` of single precision.
-      - The function is **destructive**: the input will be overwritten.
-      - Designed for block-wise and pipelined use, e.g., in deconvolution, denoising, or pre-processing.
-      - All main computation is performed on the GPU with minimal synchronization overhead.
+      - **Input is 3D, single-precision, gpuArray.**
+      - **Destructive:** The input is destroyed; output is the filtered array.
+      - Workspace buffer of same size as input is allocated temporarily.
+      - The function auto-switches between FFT and direct mode, but can be forced.
+      - Optimized for high-throughput, block-wise, or batch GPU workflows.
+      - Not intended for small images or use on CPU data.
 
     Acknowledgments:
     ----------------
-      - Original algorithm and MEX/CUDA optimizations by Keivan Moradi.
-      - ChatGPT (OpenAI GPT-4.1, 2025) provided structural and code review assistance.
+      - Algorithm and optimization: Keivan Moradi
+      - CUDA/MEX structure review: ChatGPT (OpenAI GPT-4.1, 2025)
 
 */
 
@@ -340,6 +364,10 @@ void gauss3d_fft_float(float* d_input, int nx, int ny, int nz,
     const size_t N      = (size_t)nx * ny * nz;              // Real volume
     const int    NXfreq = nx / 2 + 1;               // freq length along x
     const size_t Nfreq  = (size_t)NXfreq * ny * nz; // ny·nz·(nx/2+1)
+
+    // Host-side printing
+    mexPrintf("[gauss3d_gpu] FFT input dims: nx=%d, ny=%d, nz=%d\n", nx, ny, nz);
+    mexPrintf("  N=%llu  NXfreq=%d  Nfreq=%llu\n", (unsigned long long)N, NXfreq, (unsigned long long)Nfreq);
 
     if (error_flag) *error_flag = true;
 
