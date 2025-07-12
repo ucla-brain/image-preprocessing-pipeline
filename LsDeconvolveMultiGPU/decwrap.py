@@ -529,7 +529,8 @@ def main():
                         n_completed = count_lz4_blocks(cache_drive_folder)
                         if pbar:
                             pbar.close()
-                        pbar = tqdm(total=total_blocks, desc="Blocks", unit="block", initial=n_completed, smoothing=0.05)
+                        pbar = tqdm(total=total_blocks, desc="Blocks", unit="block", initial=n_completed,
+                                    mininterval=1.0, smoothing=0.05)
                         seen_blocks = set()
                     if block_num not in seen_blocks:
                         pbar.update(1)
