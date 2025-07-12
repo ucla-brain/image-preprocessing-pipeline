@@ -241,10 +241,6 @@ size_t cmIdx(int row,int col,int z,int rows,int cols)
          + static_cast<size_t>(z)  *rows*cols;
 }
 
-static inline size_t linIdx(int x,int y,int z,int nx,int ny)
-{ return static_cast<size_t>(x) + static_cast<size_t>(y)*nx
-         + static_cast<size_t>(z)*nx*ny; }
-
 // -----------------------------------------------------------------------------
 // Build a full-volume Gaussian kernel:
 //
@@ -342,8 +338,8 @@ void gauss3d_fft_float(float* d_input, int nx, int ny, int nz,
     // ---- Shapes (column-major order): [nx, ny, nz] in MATLAB ===
     // cuFFT expects [nz, ny, nx] (depth, height, width)
     const size_t N      = (size_t)nx * ny * nz;              // Real volume
-    const int    NZfreq = nz / 2 + 1;                        // C2R/R2C output: freq dim is Z (slowest)
-    const size_t Nfreq  = (size_t)NZfreq * ny * nx;          // cuFFT complex freq size
+    const int    NXfreq = nx / 2 + 1;               // freq length along x
+    const size_t Nfreq  = (size_t)NXfreq * ny * nz; // ny·nz·(nx/2+1)
 
     if (error_flag) *error_flag = true;
 
