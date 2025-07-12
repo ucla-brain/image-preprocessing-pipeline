@@ -303,81 +303,96 @@ function [] = LsDeconv(varargin)
     end
 end
 
-function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(...
+function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit( ...
     stack_info, psf_size, filter, block_size_max, ram_available, numit, output_bytes)
 
-    %% Parameters for RAM and block sizing
-    % Compute the max z size that fits in RAM (capped at 1290 and stack_info.z)
-    bl_bytes = 4;                          % saved bls are single
-    physCores   = feature('numCores');
-    ram_usage_portion = 0.5 / get_num_cpu_sockets(); % R should use at most 50% of free RAM so that bl's have room to load
-    usable_ram = ram_available * ram_usage_portion;
-    slice_size = stack_info.x * stack_info.y;
-    z_max_ram = floor(usable_ram / (output_bytes * slice_size));  % slabs size is output_bytes * num_elements
-    z_max = min(z_max_ram, stack_info.z);
-    max_elements_total  = 2^31 - 1;        % MATLAB's total element limit
-    max_elements_per_dim = floor((max_elements_total / z_max)^0.5);
+    %=== Configurable Parameters ===%
+    physCores = feature('numCores');
+    socketCount = get_num_cpu_sockets();
+    ram_fraction = 0.5;                % Use at most 50% of available RAM per cpu socket
+    ram_reserved = ram_available * ram_fraction / socketCount;
+    bl_bytes = 4;                      % single precision block size (bytes)
+    max_total_elements = 2^31 - 1;     % MATLAB array element limit
 
-    % Set min and max block sizes, capping to allowed per-dimension limit
-    min_block = min(psf_size(:)'.* 2, ...
-                    [stack_info.x            stack_info.y            stack_info.z]);
+    %=== Input-derived Parameters ===%
+    x_dim = stack_info.x; y_dim = stack_info.y; z_dim = stack_info.z;
+    slice_pixels = x_dim * y_dim;
+    z_max_ram = floor(ram_reserved / (output_bytes * slice_pixels));
+    z_max = min(z_max_ram, z_dim);
+    xy_min = max(min([psf_size(1) * 2, x_dim, y_dim]), 1);
+    z_min  = min(psf_size(3) * 2, z_dim);
 
-    % Cap total block size to max allowed elements
-    block_size_max = min(block_size_max, max_elements_total);
+    block_size_max = min(block_size_max, max_total_elements);
 
+    %=== Precompute Pad Base ===%
+    base_pad = [0 0 0];
+    if filter.destripe_sigma > 0, base_pad = [1 1 1]; end
+    if numit > 0
+        dpz = decon_pad_size(psf_size);
+        base_pad = max(base_pad, dpz);
+    end
+    do_gauss = any(filter.gaussian_sigma > 0);
+    use_fft = filter.use_fft;
+
+    %=== Search for Best Block ===%
+    best = [];
     best_score = -Inf;
-    best = struct();
-    num_failed = 0;
+    fail_count = 0;
+    mem_core_mult = physCores * bl_bytes;
 
-    d_pad_base = [0 0 0];
-    if filter.destripe_sigma > 0, d_pad_base = max(d_pad_base, [1 1 1]); end
-    if numit > 0, d_pad_base = max(d_pad_base, decon_pad_size(psf_size)); end
-    % Use coarse step for initial sweep (square xy blocks)
-    assert(z_max > min_block(3));
-    for z = z_max:-1:min_block(3)
-        max_elements_per_dim = min(floor((max_elements_total / z)^0.5), min(stack_info.x, stack_info.z));
-        assert(max_elements_per_dim > min_block(1));
-        for xy = max_elements_per_dim:-1:min_block(1)
-            x = xy; y = xy; bl_core = [x y z];
-            d_pad = d_pad_base;
+    % For efficiency, precompute max for all z values to avoid repeat calculation
+    for z = z_max:-1:max(z_min, 1)
+        xy_max = min([floor((max_total_elements/z)^0.5), x_dim, y_dim]);
+        if xy_max < xy_min, continue; end
 
-            if any(filter.gaussian_sigma > 0),
-                d_pad = max(d_pad, gaussian_pad_size(bl_core, filter.gaussian_sigma, filter.gaussian_size));
-            end
-            bl_shape = bl_core + 2*d_pad;
+        slice_mem = output_bytes * (slice_pixels * z); % Same for all xy at this z
 
-            if filter.use_fft
-                bl_shape = next_fast_len(bl_shape);
+        for xy = xy_max:-1:xy_min
+            block_core = [xy xy z];
+            pad = base_pad;
+
+            if do_gauss
+                pad = max(pad, gaussian_pad_size(block_core, filter.gaussian_sigma, filter.gaussian_size));
             end
 
-            if any(bl_shape > max_elements_per_dim), continue; end
-            if prod(bl_shape) >= block_size_max, continue; end
-            if output_bytes * (slice_size * z) + (x * y * z * physCores * bl_bytes) > ram_available, continue; end
+            block_shape = block_core + 2*pad;
+            if use_fft
+                block_shape = next_fast_len(block_shape);
+            end
 
-            score = prod(bl_core);
+            % Safety checks (all fast, no function call)
+            if block_shape(1) > x_dim || block_shape(2) > y_dim || block_shape(3) > z_dim, continue; end
+            if prod(block_shape) >= block_size_max, continue; end
+
+            mem_needed = slice_mem + prod(block_core) * mem_core_mult;
+            if mem_needed > ram_available, continue; end
+
+            score = prod(block_core); % Use max block volume as score
             if score > best_score
+                best = struct('core', block_core, 'pad', pad, 'fft_shape', block_shape);
                 best_score = score;
-                best = struct('bl_core', bl_core, 'd_pad', d_pad, 'fft_shape', bl_shape);
-                num_failed = 0;
+                fail_count = 0;
             else
-                if ~isempty(fieldnames(best))
-                    num_failed = num_failed + 1;
-                    if num_failed > 200, break; end
+                if ~isempty(best)
+                    fail_count = fail_count + 1;
+                    if fail_count > 200, break; end
                 end
             end
         end
     end
 
-    if isempty(fieldnames(best))
-        error('autosplit: No block shape fits in memory. Try increasing block_size_max or reducing min_block.');
+    %=== Error if No Block Found ===%
+    if isempty(best)
+        error('autosplit: No block shape fits in memory. Try increasing block_size_max or reducing psf_size/min_block.');
     end
 
-    x     = best.bl_core(1); y     = best.bl_core(2); z     = best.bl_core(3);
-    x_pad =   best.d_pad(1); y_pad =   best.d_pad(2); z_pad =   best.d_pad(3);
+    %=== Output Calculations ===%
+    [x, y, z] = deal(best.core(1), best.core(2), best.core(3));
+    [x_pad, y_pad, z_pad] = deal(best.pad(1), best.pad(2), best.pad(3));
     fft_shape = best.fft_shape;
-    nx = ceil(stack_info.x / x);
-    ny = ceil(stack_info.y / y);
-    nz = ceil(stack_info.z / z);
+    nx = ceil(x_dim / x);
+    ny = ceil(y_dim / y);
+    nz = ceil(z_dim / z);
 end
 
 function pad_size = gaussian_pad_size(image_size, sigma, kernel)
