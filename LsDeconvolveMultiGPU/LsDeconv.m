@@ -320,10 +320,7 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(...
 
     % Set min and max block sizes, capping to allowed per-dimension limit
     min_block = min(psf_size(:)'.* 2, ...
-                    [stack_info.x                  stack_info.y                  stack_info.z]);
-
-    max_block = min([max_elements_per_dim    max_elements_per_dim    max_elements_per_dim], ...
-                    [stack_info.x            stack_info.y            z_max]);
+                    [stack_info.x            stack_info.y            stack_info.z]);
 
     % Cap total block size to max allowed elements
     block_size_max = min(block_size_max, max_elements_total);
@@ -336,8 +333,10 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(...
     if filter.destripe_sigma > 0, d_pad_base = max(d_pad_base, [1 1 1]); end
     if numit > 0, d_pad_base = max(d_pad_base, decon_pad_size(psf_size)); end
     % Use coarse step for initial sweep (square xy blocks)
-    for z = max_block(3):-1:min_block(3)
-        max_elements_per_dim = floor((max_elements_total / z)^0.5);
+    assert(z_max > min_block(3));
+    for z = z_max:-1:min_block(3)
+        max_elements_per_dim = min(floor((max_elements_total / z)^0.5), min(stack_info.x, stack_info.z));
+        assert(max_elements_per_dim > min_block(1));
         for xy = max_elements_per_dim:-1:min_block(1)
             x = xy; y = xy; bl_core = [x y z];
             d_pad = d_pad_base;
