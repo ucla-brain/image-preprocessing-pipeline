@@ -306,11 +306,7 @@ end
 function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(...
     stack_info, psf_size, filter, block_size_max, ram_available, numit, output_bytes)
 
-    % Parameters for RAM and block sizing
-    max_elements_per_dim = 1290; %min(1290, floor(block_size_max^(1/3)));  % 3D cube limit from (2^31-1)^(1/3) = 1290 elements
-    if filter.use_fft, max_elements_per_dim = min(1281, max_elements_per_dim); end
-    max_elements_total  = 2^31 - 1;        % MATLAB's total element limit
-
+    %% Parameters for RAM and block sizing
     % Compute the max z size that fits in RAM (capped at 1290 and stack_info.z)
     bl_bytes = 4;                          % saved bls are single
     physCores   = feature('numCores');
@@ -319,6 +315,8 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(...
     slice_size = stack_info.x * stack_info.y;
     z_max_ram = floor(usable_ram / (output_bytes * slice_size));  % slabs size is output_bytes * num_elements
     z_max = min(z_max_ram, stack_info.z);
+    max_elements_total  = 2^31 - 1;        % MATLAB's total element limit
+    max_elements_per_dim = floor((max_elements_total / z_max)^0.5);
 
     % Set min and max block sizes, capping to allowed per-dimension limit
     min_block = min(psf_size(:)'.* 2, ...
@@ -339,7 +337,8 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit(...
     if numit > 0, d_pad_base = max(d_pad_base, decon_pad_size(psf_size)); end
     % Use coarse step for initial sweep (square xy blocks)
     for z = max_block(3):-1:min_block(3)
-        for xy = max_block(1):-1:min_block(1)
+        max_elements_per_dim = floor((max_elements_total / z)^0.5);
+        for xy = max_elements_per_dim:-1:min_block(1)
             x = xy; y = xy; bl_core = [x y z];
             d_pad = d_pad_base;
 
