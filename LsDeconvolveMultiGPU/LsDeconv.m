@@ -945,15 +945,15 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
     end
 
     % since prctile function needs high vram usage gather it to avoid low memory error
-    % if filter.use_fft, [lb, ub] = deconvolved_stats(bl, clipval); end
+    if filter.use_fft, [lb, ub] = deconvolved_stats(bl, clipval); end
     if gpu && isgpuarray(bl)
         % Reseting the GPU
         bl = gather(bl);
         reset(gpu_device);  % to free 2 extra copies of bl in gpu
         semaphore('p', semkey_gpu_base + gpu);
     end
-    % if ~filter.use_fft, [lb, ub] = deconvolved_stats(bl, clipval); end
-    [lb, ub] = deconvolved_stats(bl, clipval);
+    if ~filter.use_fft, [lb, ub] = deconvolved_stats(bl, clipval); end
+    % [lb, ub] = deconvolved_stats(bl, clipval);
 
     send( dQueue, sprintf('%s %.1f', logging_string, toc(block_processing_start)) );
     assert(all(size(bl) == bl_size), '[process_block]: block size mismatch!');
