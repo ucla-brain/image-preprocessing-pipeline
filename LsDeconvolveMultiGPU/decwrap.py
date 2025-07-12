@@ -3,8 +3,9 @@ import ctypes.util
 import logging
 import os
 import platform
-import signal
+import re
 import shutil
+import signal
 import subprocess
 from json import dump
 from pathlib import Path
@@ -12,6 +13,7 @@ from subprocess import CalledProcessError
 from typing import Optional
 
 import psutil
+from tqdm import tqdm
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -325,6 +327,7 @@ def main():
                         help='Use jemalloc allocator (Linux only)')
     parser.add_argument('--use-tcmalloc', action='store_true', default=False,
                         help='Use tcmalloc allocator (Linux only)')
+    parser.add_argument('--progress', action='store_true', help='Show a progress bar for MATLAB deconvolution')
 
     args = parser.parse_args()
     validate_args(args)
@@ -484,14 +487,60 @@ def main():
     proc = None
     try:
         log.info("Running MATLAB deconvolution...")
-        proc = subprocess.Popen(
-            ' '.join(matlab_cmd) if is_windows else matlab_cmd,
-            shell=is_windows,
-            env=env,  # Pass the modified environment
-            text=True,
-            preexec_fn=os.setsid if not is_windows else None
-        )
-        proc.wait()
+
+        if args.progress:
+            # Start MATLAB process with stdout=PIPE
+            proc = subprocess.Popen(
+                ' '.join(matlab_cmd) if is_windows else matlab_cmd,
+                shell=is_windows,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                bufsize=1,  # line buffered
+                preexec_fn=os.setsid if not is_windows else None
+            )
+
+            block_pattern = re.compile(r'block (\d+) from (\d+)', re.IGNORECASE)
+            seen_blocks = set()
+            pbar = None
+            total_blocks = None
+
+            for line in proc.stdout:
+                print(line, end='')  # Always echo MATLAB output
+
+                match = block_pattern.search(line)
+                if match:
+                    block_num = int(match.group(1))
+                    total = int(match.group(2))
+
+                    # Initialize tqdm if not done yet
+                    if pbar is None or (total_blocks is not None and total != total_blocks):
+                        total_blocks = total
+                        if pbar:
+                            pbar.close()
+                        pbar = tqdm(total=total_blocks, desc="Blocks", unit="block")
+                        seen_blocks = set()
+
+                    # Avoid double-counting blocks
+                    if block_num not in seen_blocks:
+                        pbar.update(1)
+                        seen_blocks.add(block_num)
+
+            proc.wait()
+            if pbar:
+                pbar.close()
+
+        else:
+            # Default: No progress bar
+            proc = subprocess.Popen(
+                ' '.join(matlab_cmd) if is_windows else matlab_cmd,
+                shell=is_windows,
+                env=env,
+                text=True,
+                preexec_fn=os.setsid if not is_windows else None
+            )
+            proc.wait()
 
         if proc.returncode != 0:
             log.error(f"MATLAB exited with error code {proc.returncode}.")
