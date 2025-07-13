@@ -2,8 +2,10 @@
   save_bl_tif.cpp
 
   Ultra-high-throughput, NUMA- and socket-aware, multi-threaded TIFF Z-slice saver
-  for 3D MATLAB volumes. Uses explicit async producer-consumer I/O, advanced file
-  flags, and hwloc-driven thread pairing for maximum locality and throughput.
+  for 3D MATLAB volumes. Features NUMA-local huge page memory allocation, AVX-
+  accelerated non-temporal copying, explicit async producer-consumer I/O, advanced
+  file flags, and hwloc-driven thread pairing for maximum memory locality and disk
+  throughput across all modern CPUs.
 
   USAGE:
     save_bl_tif(volume, fileList, isXYZ, compression[, nThreads, useTiles]);
@@ -11,45 +13,42 @@
   INPUTS:
     • volume      : 3D MATLAB array (uint8 or uint16), or 2D for single slice.
     • fileList    : 1×Z cell array of output filenames, one per Z-slice.
-    • isXYZ       : Scalar logical/numeric. True if 'volume' is [X Y Z], false
-                    if [Y X Z].
+    • isXYZ       : Scalar logical/numeric. True if 'volume' is [X Y Z], false if [Y X Z].
     • compression : String. "none", "lzw", or "deflate".
-    • nThreads    : (Optional) Number of thread-pairs. Default = half of
-                    available cores. Pass [] to auto-select.
+    • nThreads    : (Optional) Number of thread-pairs (producer+consumer). Default = half
+                    of available logical cores. Pass [] to auto-select.
     • useTiles    : (Optional) true for tiled TIFF, false for strip mode.
 
   HIGHLIGHTS:
-    • **Async producer-consumer** with lock-limited bounded queue sized at
-      2×threadCount for smooth pipelining.
-    • **NUMA- and socket-aware affinity** via hwloc: each producer/consumer pair
-      is bound to sibling PUs on the same core or node.
-    • **Direct I/O flags**: FILE_FLAG_WRITE_THROUGH on Windows replaces
-      double FlushFileBuffers; buffered I/O on Linux (no O_DIRECT) avoids
-      misaligned-syscall overhead.
-    • **UTF-8 → UTF-16** on Windows via MultiByteToWideChar (no deprecated
-      <codecvt> usage).
-    • **Robust atomic output**: write to “.tmp”, flush/close, then rename with
-      copy-delete fallback for maximum atomicity.
-    • **Guarded strip/tile sizes**: default rowsPerStrip = 1; all dimensions
-      clamped to ≥1.
-    • **Macro-safe std::min/max**: calls wrapped as (std::min)/(std::max) to
-      avoid Windows min/max macro collisions.
-    • **Early-abort on error**: atomic<bool> flag stops all threads on first
-      exception.
-    • **RAII + C++17 best practices**: no resource leaks, clear ownership.
-    • **Extensible tuning**: compile-time constants for tile edge, queue
-      capacity, etc.
-    • **Build integration**: prebuilt hwloc on Windows; autotools-driven hwloc
-      on Linux.
+    • **NUMA-local, huge page allocation**: Slices are allocated on the correct NUMA node
+      with explicit `hwloc` and (on Linux) `MADV_HUGEPAGE` for maximum DRAM bandwidth.
+    • **AVX/AVX2/AVX512/SSE2 non-temporal memory copy**: Large slice memory transfers
+      bypass CPU cache using the widest available SIMD, further reducing cache pollution.
+    • **Async producer-consumer**: Lock-limited bounded queue (2×threadCount) allows smooth
+      pipelining of I/O and computation for maximum concurrency and throughput.
+    • **NUMA- and socket-aware affinity**: Each producer/consumer pair is bound to sibling
+      PUs on the same core or node for optimal locality (via `hwloc`).
+    • **Direct I/O flags**: FILE_FLAG_WRITE_THROUGH on Windows ensures durability without
+      redundant flushes; Linux/macOS use buffered I/O for compatibility and speed.
+    • **Cross-platform file atomicity**: Write to “.tmp”, flush/close, then rename with
+      copy-delete fallback (Windows/Linux/macOS) for atomic visible output and crash safety.
+    • **Macro-safe std::min/max**: All min/max calls safely wrapped to avoid Windows macro issues.
+    • **Guarded strip/tile sizes**: All strip/tile geometry clamped to ≥1 and robust to edge cases.
+    • **Early-abort on error**: First thread to raise throws; all threads abort cleanly, errors
+      reported to MATLAB immediately and reliably.
+    • **RAII + C++17 best practices**: No resource leaks, deterministic cleanup, modern idioms.
+    • **Build integration**: Prebuilt hwloc on Windows, autotools-driven hwloc on Linux.
+    • **Extensible tuning**: All parameters (tile size, copy thresholds, queue capacity, etc)
+      easily adjusted at compile time.
 
   DEPENDENCIES:
     • libtiff ≥ 4.7, hwloc ≥ 2.12 (prebuilt on Windows, autotools on Linux)
-    • MATLAB MEX API, C++17, <filesystem>, POSIX/Windows threading, hwloc.h.
+    • MATLAB MEX API, C++17, <filesystem>, POSIX/Windows threading, hwloc.h, SIMD intrinsics.
 
   EXAMPLES:
     % Async strip-mode LZW on [X Y Z] volume with default threads
     save_bl_tif(vol, fileList, true, 'lzw');
-    % Async tile-mode deflate with 8 pairs
+    % Async tile-mode deflate with 8 thread-pairs
     save_bl_tif(vol, fileList, true, 'deflate', 8, true);
 
   AUTHOR:

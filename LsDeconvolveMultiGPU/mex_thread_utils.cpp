@@ -14,12 +14,14 @@
 #include <thread>
 #include <memory>
 #include <stdexcept>
-
 #include <hwloc.h>
 #include <cstddef>
+#include <cstdint>
+#include <cstring>
 
 #if defined(__linux__)
     #include <sys/mman.h>
+    #include <unistd.h>
 #endif
 #if defined(_WIN32)
     #include <windows.h>
@@ -309,6 +311,21 @@ unsigned find_least_busy_numa_node(hwloc_topology_t topology)
 // ===============================================
 //      Allocate/free NUMA-local buffer
 // ===============================================
+inline void pretouch_memory(void* ptr, size_t bytes) {
+    constexpr size_t kDefaultPageSize = 4096;
+    size_t pageSize = kDefaultPageSize;
+#if defined(__linux__)
+    long sysPage = ::sysconf(_SC_PAGESIZE);
+    if (sysPage > 0) pageSize = static_cast<size_t>(sysPage);
+#endif
+    volatile uint8_t* p = static_cast<volatile uint8_t*>(ptr);
+    for (size_t offset = 0; offset < bytes; offset += pageSize) {
+        p[offset] = 0;
+    }
+    if (bytes > 0)
+        p[bytes - 1] = 0;
+}
+
 void* allocate_numa_local_buffer(hwloc_topology_t topology, size_t bytes, unsigned numaNode)
 {
     hwloc_obj_t node = nullptr;
@@ -325,11 +342,8 @@ void* allocate_numa_local_buffer(hwloc_topology_t topology, size_t bytes, unsign
     void* buf = nullptr;
 
 #if defined(_WIN32)
-    // --- Windows Large Page allocation ---
-    // Request large pages. This requires SeLockMemoryPrivilege.
     SIZE_T largePageSize = GetLargePageMinimum();
     if (largePageSize && bytes >= largePageSize && (bytes % largePageSize == 0)) {
-        // Try VirtualAllocExNuma if available (Vista+)
         HANDLE hProcess = GetCurrentProcess();
         ULONG_PTR idealNode = numaNode;
         buf = VirtualAllocExNuma(
@@ -337,45 +351,43 @@ void* allocate_numa_local_buffer(hwloc_topology_t topology, size_t bytes, unsign
             MEM_RESERVE | MEM_COMMIT | MEM_LARGE_PAGES,
             PAGE_READWRITE, idealNode
         );
-        // Fallback: Try normal VirtualAlloc if ExNuma fails (may land on wrong NUMA node)
         if (!buf) {
+            // Optionally: mexWarnMsgIdAndTxt("save_bl_tif:LargePages", "Large page allocation failed; falling back.");
             buf = VirtualAlloc(
                 NULL, bytes,
                 MEM_RESERVE | MEM_COMMIT | MEM_LARGE_PAGES,
                 PAGE_READWRITE
             );
         }
-        // NOTE: If this fails, likely SeLockMemoryPrivilege is not set; user must grant it!
     }
-    // Fallback to hwloc for normal pages if large pages fail
     if (!buf) {
         hwloc_nodeset_t nodeset = hwloc_bitmap_dup(node->nodeset);
         buf = hwloc_alloc_membind(
             topology, bytes, nodeset, HWLOC_MEMBIND_BIND, HWLOC_MEMBIND_THREAD);
         hwloc_bitmap_free(nodeset);
     }
-
 #elif defined(__linux__)
     hwloc_nodeset_t nodeset = hwloc_bitmap_dup(node->nodeset);
     buf = hwloc_alloc_membind(
         topology, bytes, nodeset, HWLOC_MEMBIND_BIND, HWLOC_MEMBIND_THREAD);
     hwloc_bitmap_free(nodeset);
 
-    // Huge pages hint (will silently ignore if not supported)
-    if (buf && bytes)
-        madvise(buf, bytes, MADV_HUGEPAGE);
-
+    if (buf && bytes) {
+        int ret = madvise(buf, bytes, MADV_HUGEPAGE);
+        // Optionally log: if (ret != 0) ... (no error if not supported)
+    }
 #else
-    // Fallback: POSIX systems without explicit huge page/NUMA support
     hwloc_nodeset_t nodeset = hwloc_bitmap_dup(node->nodeset);
     buf = hwloc_alloc_membind(
         topology, bytes, nodeset, HWLOC_MEMBIND_BIND, HWLOC_MEMBIND_THREAD);
     hwloc_bitmap_free(nodeset);
 #endif
 
+    if (buf) {
+        pretouch_memory(buf, bytes);
+    }
     return buf;
 }
-
 
 void free_numa_local_buffer(hwloc_topology_t topology, void* buf, size_t bytes)
 {
