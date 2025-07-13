@@ -529,6 +529,49 @@ inline void fast_slice_copy(void* dst, const void* src, size_t bytes) {
     std::memcpy(dst, src, bytes);
 }
 
+// Thread-safe pool of preallocated buffers for each thread-pair
+class BufferPool {
+public:
+    BufferPool(unsigned numaNode, size_t bufferBytes, size_t poolSize, hwloc_topology_t topo)
+        : bufferBytes_(bufferBytes), topo_(topo)
+    {
+        for (size_t i = 0; i < poolSize; ++i) {
+            void* buf = allocate_numa_local_buffer(topo, bufferBytes, numaNode);
+            buffers_.push_back(buf);
+            freeBuffers_.push(buf);
+        }
+    }
+    ~BufferPool() {
+        for (void* ptr : buffers_)
+            if (ptr) free_numa_local_buffer(topo_, ptr, bufferBytes_);
+    }
+    // Get a buffer, blocking if all are in use
+    void* get_buffer() {
+        std::unique_lock<std::mutex> lock(mtx_);
+        while (freeBuffers_.empty()) {
+            cv_.wait(lock);
+        }
+        void* ptr = freeBuffers_.front();
+        freeBuffers_.pop();
+        return ptr;
+    }
+    // Return a buffer to the pool
+    void release_buffer(void* ptr) {
+        std::unique_lock<std::mutex> lock(mtx_);
+        freeBuffers_.push(ptr);
+        lock.unlock();
+        cv_.notify_one();
+    }
+private:
+    std::vector<void*> buffers_;
+    std::queue<void*>  freeBuffers_;
+    std::mutex         mtx_;
+    std::condition_variable cv_;
+    size_t bufferBytes_;
+    hwloc_topology_t topo_;
+};
+
+
 //=========================
 //        mexFunction
 //=========================
@@ -633,27 +676,34 @@ void mexFunction(int nlhs, mxArray* plhs[],
         auto threadPairs = assign_thread_affinity_pairs(threadPairCount);
         const size_t sliceBytes = size_t(widthPixels) * heightPixels * bytesPerPixel;
 
+        // Buffer pool: N per pair, where N = max in-flight (queue size, e.g., 2)
+        constexpr size_t max_in_flight_per_pair = 2; // Can tune as needed
+        std::vector<std::unique_ptr<BufferPool>> bufferPools;
+        bufferPools.reserve(threadPairCount);
+        for (size_t t = 0; t < threadPairCount; ++t) {
+            unsigned numaNode = threadPairs[t].numaNode;
+            bufferPools.emplace_back(
+                std::make_unique<BufferPool>(numaNode, sliceBytes, max_in_flight_per_pair, g_hwlocTopo->get()));
+        }
+
         // ---- Launch threads: each pair uses its own queue ("wire") ----
         for (size_t t = 0; t < threadPairCount; ++t) {
-            // Each pair t uses queuesForWires[t / kWires]
             BoundedQueue<std::shared_ptr<SliceWriteTask>>& queueForPair = *queuesForWires[t / kWires];
+            BufferPool& bufferPool = *bufferPools[t];
 
-            // Producer: allocates memory (NUMA-local), prepares slice, pushes to queue
+            // Producer: gets a free buffer from pool, fills it, pushes to queue
             producerThreads.emplace_back([&, t] {
                 set_thread_affinity(threadPairs[t].producerLogicalCore);
-                unsigned numaNode = threadPairs[t].numaNode;
-
                 while (true) {
                     if (abortFlag.load(std::memory_order_acquire)) break;
                     uint32_t idx = nextSliceIndex.fetch_add(1, std::memory_order_relaxed);
                     if (idx >= numSlices) break;
 
+                    void* buffer = bufferPool.get_buffer(); // blocks if pool empty
+                    fast_slice_copy(buffer, volumePtr + idx * sliceBytes, sliceBytes);
 
                     auto task = std::make_shared<SliceWriteTask>();
-                    task->sliceBuffer    = allocate_numa_local_buffer(g_hwlocTopo->get(), sliceBytes, numaNode);
-                    assert(is_aligned(task->sliceBuffer, kAlignment));
-                    //std::memcpy(task->sliceBuffer, volumePtr + idx * sliceBytes, sliceBytes);
-                    fast_slice_copy(task->sliceBuffer, volumePtr + idx * sliceBytes, sliceBytes);
+                    task->sliceBuffer    = buffer;
                     task->sliceIndex     = idx;
                     task->widthPixels    = widthPixels;
                     task->heightPixels   = heightPixels;
@@ -668,7 +718,7 @@ void mexFunction(int nlhs, mxArray* plhs[],
                 queueForPair.push(nullptr);
             });
 
-            // Consumer: pops tasks from queue, writes to disk, aborts on error
+            // Consumer: pops from queue, writes, releases buffer after use
             consumerThreads.emplace_back([&, t] {
                 set_thread_affinity(threadPairs[t].consumerLogicalCore);
                 while (true) {
@@ -679,13 +729,13 @@ void mexFunction(int nlhs, mxArray* plhs[],
                     try {
                         write_slice_to_tiff(*task);
                     } catch (const std::exception& ex) {
-                        free_numa_local_buffer(g_hwlocTopo->get(), task->sliceBuffer, sliceBytes);
                         abortFlag.store(true, std::memory_order_release);
                         std::lock_guard<std::mutex> lock(errorMutex);
                         runtimeErrors.emplace_back(ex.what());
                         break;
                     }
-                    free_numa_local_buffer(g_hwlocTopo->get(), task->sliceBuffer, sliceBytes);
+                    // Return buffer to pool after file write is finished!
+                    bufferPool.release_buffer(task->sliceBuffer);
                 }
             });
         }
