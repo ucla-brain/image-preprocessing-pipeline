@@ -115,9 +115,6 @@ static constexpr uint32_t kOptimalTileEdge     = 128;
 // How many logical producer-consumer pairs to group together per queue (set to 1 for 1:1 mapping)
 static constexpr size_t kWires = 1;
 
-using SliceIndex = uint32_t;
-static constexpr SliceIndex kEndOfQueue = std::numeric_limits<SliceIndex>::max();
-
 namespace platform {
 #if defined(_WIN32)
     inline std::wstring utf8_to_utf16(const std::string& utf8)
@@ -149,6 +146,24 @@ inline void pick_tile_size(uint32_t width, uint32_t height,
         tileWidth = tileLength = 64;
     }
 }
+
+//=========================
+//    SliceWriteTask
+//=========================
+/**
+ * @brief Structure representing all info needed to write a single TIFF slice.
+ */
+struct SliceWriteTask {
+    std::vector<uint8_t> sliceBuffer;
+    uint32_t             sliceIndex;
+    uint32_t             widthPixels;
+    uint32_t             heightPixels;
+    uint32_t             bytesPerPixel;
+    std::string          outputFilePath;
+    bool                 isXYZLayout;
+    uint16_t             compressionTag;
+    bool                 useTiles;
+};
 
 //=========================
 //    TemporaryFileGuard
@@ -307,70 +322,58 @@ inline bool robust_move_or_replace(const fs::path& src,
 //=========================
 //  Slice TIFF Writer
 //=========================
-static void write_slice_to_tiff_raw(const uint8_t* buffer,
-                                    uint32_t       width,           // ← new
-                                    uint32_t       height,          // ← new
-                                    uint32_t       bytesPerPixel,
-                                    bool           isXYZLayout,
-                                    uint16_t       compressionTag,
-                                    bool           useTiles,
-                                    const std::string& outputFilePath)
+static void write_slice_to_tiff(const SliceWriteTask& task)
 {
-    // ---- Preserve legacy local identifiers -----------------------------
-    const uint32_t widthPixels  = width;
-    const uint32_t heightPixels = height;
-    const uint8_t* buf          = buffer;   // so old code can say “buffer”
-    // --------------------------------------------------------------------
-
-    const fs::path tempPath = fs::path(outputFilePath).concat(".tmp");
+    const fs::path tempPath = fs::path(task.outputFilePath).concat(".tmp");
     TemporaryFileGuard tempGuard(tempPath);
 
+    // Write TIFF into a temp file (closed before rename)
     {
         TiffWriterDirect tiffWriter(tempPath.string());
         TIFF* tiffHandle = tiffWriter.tiffHandle;
 
-        TIFFSetField(tiffHandle, TIFFTAG_IMAGEWIDTH,  (std::max)(1u, widthPixels));
-        TIFFSetField(tiffHandle, TIFFTAG_IMAGELENGTH, (std::max)(1u, heightPixels));
-        TIFFSetField(tiffHandle, TIFFTAG_BITSPERSAMPLE,
-                     static_cast<uint16_t>(bytesPerPixel * 8));
+        TIFFSetField(tiffHandle, TIFFTAG_IMAGEWIDTH,  (std::max)(1u, task.widthPixels));
+        TIFFSetField(tiffHandle, TIFFTAG_IMAGELENGTH, (std::max)(1u, task.heightPixels));
+        TIFFSetField(tiffHandle, TIFFTAG_BITSPERSAMPLE, static_cast<uint16_t>(task.bytesPerPixel * 8));
         TIFFSetField(tiffHandle, TIFFTAG_SAMPLESPERPIXEL, static_cast<uint16_t>(1));
-        TIFFSetField(tiffHandle, TIFFTAG_COMPRESSION, compressionTag);
+        TIFFSetField(tiffHandle, TIFFTAG_COMPRESSION, task.compressionTag);
         TIFFSetField(tiffHandle, TIFFTAG_PHOTOMETRIC, PHOTOMETRIC_MINISBLACK);
         TIFFSetField(tiffHandle, TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG);
 
-        if (compressionTag == COMPRESSION_ADOBE_DEFLATE) {
+        if (task.compressionTag == COMPRESSION_ADOBE_DEFLATE) {
             TIFFSetField(tiffHandle, TIFFTAG_ZIPQUALITY, 1);
             TIFFSetField(tiffHandle, TIFFTAG_PREDICTOR,  1);
         }
 
-        if (useTiles) {
+        if (task.useTiles) {
             uint32_t tileW, tileH;
-            pick_tile_size(widthPixels, heightPixels, tileW, tileH);
+            pick_tile_size(task.widthPixels, task.heightPixels, tileW, tileH);
             tileW = (std::max)(1u, tileW);
             tileH = (std::max)(1u, tileH);
             TIFFSetField(tiffHandle, TIFFTAG_TILEWIDTH,  tileW);
             TIFFSetField(tiffHandle, TIFFTAG_TILELENGTH, tileH);
 
-            const uint32_t tilesX   = (widthPixels  + tileW - 1) / tileW;
-            const uint32_t tilesY   = (heightPixels + tileH - 1) / tileH;
-            const size_t   tileBytes = size_t(tileW) * tileH * bytesPerPixel;
+            const uint32_t tilesX = (task.widthPixels  + tileW - 1) / tileW;
+            const uint32_t tilesY = (task.heightPixels + tileH - 1) / tileH;
+            const size_t   tileBytes = size_t(tileW) * tileH * task.bytesPerPixel;
 
-            if (isXYZLayout) {
+            if (task.isXYZLayout) {
                 std::vector<uint8_t> tile(tileBytes);
                 for (uint32_t ty = 0; ty < tilesY; ++ty)
                 for (uint32_t tx = 0; tx < tilesX; ++tx) {
                     const uint32_t y0   = ty * tileH;
-                    const uint32_t rows = (std::min)(tileH, heightPixels - y0);
+                    const uint32_t rows = (std::min)(tileH, task.heightPixels - y0);
                     const uint32_t x0   = tx * tileW;
-                    const uint32_t cols = (std::min)(tileW, widthPixels  - x0);
+                    const uint32_t cols = (std::min)(tileW, task.widthPixels  - x0);
 
                     std::fill(tile.begin(), tile.end(), 0);
 
                     for (uint32_t r = 0; r < rows; ++r)
-                        std::memcpy(&tile[(r * tileW) * bytesPerPixel],
-                                    buf + ((size_t(y0 + r) * widthPixels + x0) *
-                                           bytesPerPixel),
-                                    size_t(cols) * bytesPerPixel);
+                        std::memcpy(&tile[(r * tileW) * task.bytesPerPixel],
+                                    task.sliceBuffer.data() +
+                                        ((size_t(y0 + r) * task.widthPixels + x0) *
+                                        task.bytesPerPixel),
+                                    size_t(cols) * task.bytesPerPixel);
 
                     tstrip_t tileIdx = TIFFComputeTile(tiffHandle, x0, y0, 0, 0);
                     if (TIFFWriteEncodedTile(tiffHandle, tileIdx,
@@ -382,22 +385,22 @@ static void write_slice_to_tiff_raw(const uint8_t* buffer,
                 if (tile.size() < tileBytes) tile.resize(tileBytes);
                 for (uint32_t ty = 0; ty < tilesY; ++ty)
                 for (uint32_t tx = 0; tx < tilesX; ++tx) {
-                    const uint32_t y0   = ty * tileH;
-                    const uint32_t rows = (std::min)(tileH, heightPixels - y0);
-                    const uint32_t x0   = tx * tileW;
-                    const uint32_t cols = (std::min)(tileW, widthPixels  - x0);
+                    const uint32_t y0 = ty * tileH;
+                    const uint32_t rows = (std::min)(tileH, task.heightPixels - y0);
+                    const uint32_t x0 = tx * tileW;
+                    const uint32_t cols = (std::min)(tileW, task.widthPixels - x0);
 
-                    std::fill(tile.begin(), tile.begin() + rows*tileW*bytesPerPixel, 0);
+                    std::fill(tile.begin(), tile.begin() + rows*tileW*task.bytesPerPixel, 0);
 
                     for (uint32_t row = 0; row < rows; ++row) {
-                        const uint8_t* src = buf +
-                            ((size_t(y0 + row) + size_t(x0) * heightPixels) *
-                             bytesPerPixel);
-                        uint8_t* dst = tile.data() + row * tileW * bytesPerPixel;
+                        const uint8_t* src = task.sliceBuffer.data() +
+                            ((size_t(y0 + row) + size_t(x0) * task.heightPixels) *
+                              task.bytesPerPixel);
+                        uint8_t* dst = tile.data() + row * tileW * task.bytesPerPixel;
                         for (uint32_t col = 0; col < cols; ++col) {
-                            std::memcpy(dst + col * bytesPerPixel,
-                                        src + col * heightPixels * bytesPerPixel,
-                                        bytesPerPixel);
+                            std::memcpy(dst + col * task.bytesPerPixel,
+                                        src + col * task.heightPixels * task.bytesPerPixel,
+                                        task.bytesPerPixel);
                         }
                     }
                     tstrip_t tileIdx = TIFFComputeTile(tiffHandle, x0, y0, 0, 0);
@@ -407,19 +410,22 @@ static void write_slice_to_tiff_raw(const uint8_t* buffer,
                 }
             }
         } else {
+            // Use strip mode with minimum rowsPerStrip = 1
             const uint32_t rowsPerStrip =
-                (std::max)(1u, (std::min)(kRowsPerStripDefault, heightPixels));
+                (std::max)(1u, (std::min)(kRowsPerStripDefault, task.heightPixels));
             TIFFSetField(tiffHandle, TIFFTAG_ROWSPERSTRIP, rowsPerStrip);
             const uint32_t totalStrips =
-                (heightPixels + rowsPerStrip - 1) / rowsPerStrip;
+                (task.heightPixels + rowsPerStrip - 1) / rowsPerStrip;
 
-            if (isXYZLayout) {
+            if (task.isXYZLayout) {
                 for (uint32_t strip = 0; strip < totalStrips; ++strip) {
                     const uint32_t y0   = strip * rowsPerStrip;
-                    const uint32_t rows = (std::min)(rowsPerStrip, heightPixels - y0);
-                    const size_t   bytesThisStrip =
-                        size_t(widthPixels) * rows * bytesPerPixel;
-                    const uint8_t* src = buf + size_t(y0) * widthPixels * bytesPerPixel;
+                    const uint32_t rows = (std::min)(rowsPerStrip, task.heightPixels - y0);
+                    const size_t bytesThisStrip =
+                        size_t(task.widthPixels) * rows * task.bytesPerPixel;
+                    const uint8_t* src =
+                        task.sliceBuffer.data() +
+                        size_t(y0) * task.widthPixels * task.bytesPerPixel;
 
                     if (TIFFWriteEncodedStrip(tiffHandle, strip,
                                               const_cast<uint8_t*>(src),
@@ -429,25 +435,26 @@ static void write_slice_to_tiff_raw(const uint8_t* buffer,
             } else {
                 thread_local std::vector<uint8_t> stripBuffer;
                 const size_t maxStripBytes =
-                    size_t(widthPixels) * rowsPerStrip * bytesPerPixel;
+                    size_t(task.widthPixels) * rowsPerStrip * task.bytesPerPixel;
                 if (stripBuffer.size() < maxStripBytes)
                     stripBuffer.resize(maxStripBytes);
 
                 for (uint32_t strip = 0; strip < totalStrips; ++strip) {
                     const uint32_t y0   = strip * rowsPerStrip;
-                    const uint32_t rows = (std::min)(rowsPerStrip, heightPixels - y0);
+                    const uint32_t rows = (std::min)(rowsPerStrip, task.heightPixels - y0);
                     for (uint32_t row = 0; row < rows; ++row) {
-                        const uint8_t* src = buf + ((size_t(y0 + row)) * bytesPerPixel);
+                        const uint8_t* src = task.sliceBuffer.data() +
+                            ((size_t(y0 + row)) * task.bytesPerPixel);
                         uint8_t* dst = stripBuffer.data() +
-                            row * widthPixels * bytesPerPixel;
-                        for (uint32_t col = 0; col < widthPixels; ++col) {
-                            std::memcpy(dst + col * bytesPerPixel,
-                                        src + col * heightPixels * bytesPerPixel,
-                                        bytesPerPixel);
+                            row * task.widthPixels * task.bytesPerPixel;
+                        for (uint32_t col = 0; col < task.widthPixels; ++col) {
+                            std::memcpy(dst + col * task.bytesPerPixel,
+                                        src + col * task.heightPixels * task.bytesPerPixel,
+                                        task.bytesPerPixel);
                         }
                     }
                     const size_t bytesThisStrip =
-                        size_t(widthPixels) * rows * bytesPerPixel;
+                        size_t(task.widthPixels) * rows * task.bytesPerPixel;
                     if (TIFFWriteEncodedStrip(tiffHandle, strip,
                                               stripBuffer.data(),
                                               bytesThisStrip) < 0)
@@ -458,12 +465,11 @@ static void write_slice_to_tiff_raw(const uint8_t* buffer,
 
         TIFFFlush(tiffHandle);
     }
-
     if (!fs::exists(tempPath))
         throw std::runtime_error("Temp file vanished: " + tempPath.string());
 
     std::string moveError;
-    if (!robust_move_or_replace(tempPath, outputFilePath, moveError))
+    if (!robust_move_or_replace(tempPath, task.outputFilePath, moveError))
         throw std::runtime_error("Atomic move failed: " + moveError);
 }
 
@@ -554,17 +560,11 @@ void mexFunction(int nlhs, mxArray* plhs[],
         static_assert(kWires >= 1, "kWires must be at least 1.");
         const size_t numWires = threadPairCount / kWires + ((threadPairCount % kWires) ? 1 : 0);
 
-        // Vector of per-wire (per-pair) queues. Each wire is a producer-consumer pair
-        // sharing a dedicated queue. We now queue SliceIndex values instead of
-        // std::shared_ptr<SliceWriteTask>.
-        std::vector<std::unique_ptr<BoundedQueue<SliceIndex>>> queuesForWires;
+        // Vector of per-wire (per-pair) queues. Each wire is a producer-consumer pair sharing a dedicated queue.
+        std::vector<std::unique_ptr<BoundedQueue<std::shared_ptr<SliceWriteTask>>>> queuesForWires;
         queuesForWires.reserve(numWires);
         for (size_t w = 0; w < numWires; ++w)
-        {
-            // Bounded to 2 × pair size for pipelining
-            queuesForWires.emplace_back(
-                std::make_unique<BoundedQueue<SliceIndex>>(2 * kWires));
-        } // Bounded to 2×pair size for pipelining
+            queuesForWires.emplace_back(std::make_unique<BoundedQueue<std::shared_ptr<SliceWriteTask>>>(2 * kWires)); // Bounded to 2×pair size for pipelining
 
         std::vector<std::thread> producerThreads, consumerThreads;
         producerThreads.reserve(threadPairCount);
@@ -575,51 +575,51 @@ void mexFunction(int nlhs, mxArray* plhs[],
         std::mutex              errorMutex;
         std::atomic<bool>       abortFlag{false};
         auto threadPairs = assign_thread_affinity_pairs(threadPairCount);
-        const size_t sliceBytes = size_t(widthPixels) * heightPixels * bytesPerPixel;
 
         // ---- Launch threads: each pair uses its own queue ("wire") ----
         for (size_t t = 0; t < threadPairCount; ++t) {
-            auto& queueForPair = *queuesForWires[t / kWires];
-            // ---------- PRODUCER -------------------------------------------------
+            // Each pair t uses queuesForWires[t / kWires]
+            BoundedQueue<std::shared_ptr<SliceWriteTask>>& queueForPair = *queuesForWires[t / kWires];
+
+            // Producer: allocates memory (NUMA-local), prepares slice, pushes to queue
             producerThreads.emplace_back([&, t] {
                 set_thread_affinity(threadPairs[t].producerLogicalCore);
-                for (;;) {
-                    if (abortFlag.load(std::memory_order_acquire))
-                        break;
-                    SliceIndex idx = nextSliceIndex.fetch_add(1, std::memory_order_relaxed);
-                    if (idx >= numSlices)
-                        break;                       // all slices queued
-                    queueForPair.push(idx);          // enqueue index only
+                while (true) {
+                    if (abortFlag.load(std::memory_order_acquire)) break;
+                    uint32_t idx = nextSliceIndex.fetch_add(1, std::memory_order_relaxed);
+                    if (idx >= numSlices) break;
+
+                    size_t sliceBytes = size_t(widthPixels) * heightPixels * bytesPerPixel;
+                    auto task = std::make_shared<SliceWriteTask>();
+                    task->sliceBuffer.resize(sliceBytes);
+                    std::memcpy(task->sliceBuffer.data(), volumePtr + idx * sliceBytes, sliceBytes);
+                    task->sliceIndex     = idx;
+                    task->widthPixels    = widthPixels;
+                    task->heightPixels   = heightPixels;
+                    task->bytesPerPixel  = bytesPerPixel;
+                    task->outputFilePath = outputPaths[idx];
+                    task->isXYZLayout    = isXYZ;
+                    task->compressionTag = compressionTag;
+                    task->useTiles       = useTiles;
+                    queueForPair.push(std::move(task));
                 }
-                queueForPair.push(kEndOfQueue);       // sentinel
+                // Signal end-of-tasks to consumer(s)
+                queueForPair.push(nullptr);
             });
 
-            // ---------- CONSUMER -------------------------------------------------
+            // Consumer: pops tasks from queue, writes to disk, aborts on error
             consumerThreads.emplace_back([&, t] {
                 set_thread_affinity(threadPairs[t].consumerLogicalCore);
-
-                thread_local std::vector<uint8_t> scratch;   // one per consumer thread
-                scratch.resize(sliceBytes);                  // allocate once
-                for (;;) {
-                    if (abortFlag.load(std::memory_order_acquire))
-                        break;
-                    SliceIndex idx;
-                    queueForPair.wait_and_pop(idx);
-                    if (idx == kEndOfQueue)
-                        break;                               // producer finished
-                    const uint8_t* src = volumePtr + size_t(idx) * sliceBytes;
-                    std::memcpy(scratch.data(), src, sliceBytes);
+                while (true) {
+                    if (abortFlag.load(std::memory_order_acquire)) break;
+                    std::shared_ptr<SliceWriteTask> task;
+                    queueForPair.wait_and_pop(task);
+                    if (!task) break; // End-of-tasks signal
                     try {
-                        write_slice_to_tiff_raw(
-                            scratch.data(),
-                            widthPixels, heightPixels,
-                            bytesPerPixel, isXYZ,
-                            compressionTag, useTiles,
-                            outputPaths[idx]);
-                    }
-                    catch (const std::exception& ex) {
+                        write_slice_to_tiff(*task);
+                    } catch (const std::exception& ex) {
                         abortFlag.store(true, std::memory_order_release);
-                        std::lock_guard<std::mutex> lk(errorMutex);
+                        std::lock_guard<std::mutex> lock(errorMutex);
                         runtimeErrors.emplace_back(ex.what());
                         break;
                     }
@@ -638,5 +638,4 @@ void mexFunction(int nlhs, mxArray* plhs[],
             plhs[0] = const_cast<mxArray*>(prhs[0]);
     } catch (const std::exception& ex) {
         mexErrMsgIdAndTxt("save_bl_tif:runtime", ex.what());
-    }
 }
