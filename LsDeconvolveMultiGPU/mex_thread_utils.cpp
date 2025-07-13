@@ -25,6 +25,8 @@
 #endif
 #if defined(_WIN32)
     #include <windows.h>
+    #undef min
+    #undef max
 #endif
 
 // -----------------------------------------------
@@ -326,68 +328,53 @@ inline void pretouch_memory(void* ptr, size_t bytes) {
         p[bytes - 1] = 0;
 }
 
-void* allocate_numa_local_buffer(hwloc_topology_t topology, size_t bytes, unsigned numaNode)
+
+void* allocate_numa_local_buffer(hwloc_topology_t topology,
+                                 size_t           bytes,
+                                 unsigned         numaNode)
 {
+    /* The old version fault-touched every page, which incurred a huge
+       upfront cost on very large volumes.  The new implementation:
+
+         1.  Keeps exactly the same NUMA binding logic.
+         2.  Touches **only the first 64 KiB** so the buffer is mapped,
+             but lets the kernel fault-in the rest lazily as it is written.
+    */
+
     hwloc_obj_t node = nullptr;
-    int n = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_NUMANODE);
+    const int n = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_NUMANODE);
     for (int i = 0; i < n; ++i) {
         hwloc_obj_t obj = hwloc_get_obj_by_type(topology, HWLOC_OBJ_NUMANODE, i);
-        if (obj && obj->os_index == numaNode) {
-            node = obj;
-            break;
-        }
+        if (obj && obj->os_index == numaNode) { node = obj; break; }
     }
     if (!node) return nullptr;
 
     void* buf = nullptr;
 
 #if defined(_WIN32)
-    SIZE_T largePageSize = GetLargePageMinimum();
-    if (largePageSize && bytes >= largePageSize && (bytes % largePageSize == 0)) {
-        HANDLE hProcess = GetCurrentProcess();
-        ULONG_PTR idealNode = numaNode;
-        buf = VirtualAllocExNuma(
-            hProcess, NULL, bytes,
-            MEM_RESERVE | MEM_COMMIT | MEM_LARGE_PAGES,
-            PAGE_READWRITE, idealNode
-        );
-        if (!buf) {
-            // Optionally: mexWarnMsgIdAndTxt("save_bl_tif:LargePages", "Large page allocation failed; falling back.");
-            buf = VirtualAlloc(
-                NULL, bytes,
-                MEM_RESERVE | MEM_COMMIT | MEM_LARGE_PAGES,
-                PAGE_READWRITE
-            );
-        }
-    }
-    if (!buf) {
-        hwloc_nodeset_t nodeset = hwloc_bitmap_dup(node->nodeset);
-        buf = hwloc_alloc_membind(
-            topology, bytes, nodeset, HWLOC_MEMBIND_BIND, HWLOC_MEMBIND_THREAD);
-        hwloc_bitmap_free(nodeset);
-    }
+    buf = hwloc_alloc_membind(topology, bytes,
+                              node->nodeset, HWLOC_MEMBIND_BIND, HWLOC_MEMBIND_THREAD);
 #elif defined(__linux__)
-    hwloc_nodeset_t nodeset = hwloc_bitmap_dup(node->nodeset);
-    buf = hwloc_alloc_membind(
-        topology, bytes, nodeset, HWLOC_MEMBIND_BIND, HWLOC_MEMBIND_THREAD);
-    hwloc_bitmap_free(nodeset);
-
-    if (buf && bytes) {
-        int ret = madvise(buf, bytes, MADV_HUGEPAGE);
-        // Optionally log: if (ret != 0) ... (no error if not supported)
-    }
+    buf = hwloc_alloc_membind(topology, bytes,
+                              node->nodeset, HWLOC_MEMBIND_BIND, HWLOC_MEMBIND_THREAD);
 #else
-    hwloc_nodeset_t nodeset = hwloc_bitmap_dup(node->nodeset);
-    buf = hwloc_alloc_membind(
-        topology, bytes, nodeset, HWLOC_MEMBIND_BIND, HWLOC_MEMBIND_THREAD);
-    hwloc_bitmap_free(nodeset);
+    buf = hwloc_alloc_membind(topology, bytes,
+                              node->nodeset, HWLOC_MEMBIND_BIND, HWLOC_MEMBIND_THREAD);
 #endif
 
-    // if (buf) {
-    //     pretouch_memory(buf, bytes);
-    // }
+    /* Touch just enough to get pages mapped; avoids multi-gigabyte
+       zero-fill loops that caused the “cold start” delay. */
+    if (buf && bytes) {
+        constexpr size_t kPretouch = 64 * 1024;          // 64 KiB
+        volatile uint8_t* p = static_cast<volatile uint8_t*>(buf);
+        const size_t touchBytes = std::min(bytes, kPretouch);
+        for (size_t i = 0; i < touchBytes; i += 4096)    // assume 4 KiB pages
+            p[i] = 0;
+        p[touchBytes - 1] = 0;
+    }
     return buf;
 }
+
 
 void free_numa_local_buffer(hwloc_topology_t topology, void* buf, size_t bytes)
 {

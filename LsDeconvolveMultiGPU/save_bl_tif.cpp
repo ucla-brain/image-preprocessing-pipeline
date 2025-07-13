@@ -168,7 +168,8 @@ inline void pick_tile_size(uint32_t width, uint32_t height,
  * @brief Structure representing all info needed to write a single TIFF slice.
  */
 struct SliceWriteTask {
-    void*                sliceBuffer;
+    void*                sliceBuffer;      // Pointer to the slice pixels
+    bool                 ownsBuffer;       // True ⇢ producer must free after consumer
     uint32_t             sliceIndex;
     uint32_t             widthPixels;
     uint32_t             heightPixels;
@@ -533,10 +534,12 @@ inline void fast_slice_copy(void* dst, const void* src, size_t bytes) {
 //        mexFunction
 //=========================
 void mexFunction(int nlhs, mxArray* plhs[],
-                 int nrhs, const mxArray* prhs[]) {
-
+                 int nrhs, const mxArray* prhs[])
+{
     ensure_hwloc_initialized();
+
     try {
+        /* ---------- argument checking (unchanged) ---------- */
         if (nrhs < 4 || nrhs > 6)
             mexErrMsgIdAndTxt("save_bl_tif:usage",
                 "Usage: save_bl_tif(volume, fileList, isXYZ, compression[, nThreads, useTiles]);");
@@ -585,10 +588,10 @@ void mexFunction(int nlhs, mxArray* plhs[],
             fs::path dir = fs::path(path).parent_path();
             if (!dir.empty() && !fs::exists(dir))
                 mexErrMsgIdAndTxt("save_bl_tif:invalidPath",
-                    "Directory does not exist: %s", dir.string().c_str());
+                                  "Directory does not exist: %s", dir.string().c_str());
             if (fs::exists(path) && access(path.c_str(), W_OK) != 0)
                 mexErrMsgIdAndTxt("save_bl_tif:readonly",
-                    "Cannot overwrite read-only file: %s", path.c_str());
+                                  "Cannot overwrite read-only file: %s", path.c_str());
         }
 
         const uint8_t* volumePtr =
@@ -597,12 +600,12 @@ void mexFunction(int nlhs, mxArray* plhs[],
             (mxGetClassID(prhs[0]) == mxUINT16_CLASS ? 2u : 1u);
 
         const size_t totalLogicalCores = get_available_cores();
-        const size_t defaultThreads = std::max(totalLogicalCores / 2, size_t(1));
-        const size_t requestedThreads =
+        const size_t defaultThreads    = std::max(totalLogicalCores / 2, size_t(1));
+        const size_t requestedThreads  =
             (nrhs >= 5 && !mxIsEmpty(prhs[4]))
                 ? static_cast<size_t>(mxGetScalar(prhs[4]))
                 : defaultThreads;
-        const size_t threadPairCount =
+        const size_t threadPairCount   =
             std::min(requestedThreads, static_cast<size_t>(numSlices));
 
         const bool useTiles =
@@ -610,17 +613,15 @@ void mexFunction(int nlhs, mxArray* plhs[],
                            (mxIsNumeric(prhs[5]) && mxGetScalar(prhs[5]) != 0))
                         : false;
 
-        // ==========================================================================
-        //      Main producer-consumer queue tuning: set to 1 for maximal locality
-        // ==========================================================================
+        /* ---------- queue topology (unchanged) ---------- */
         static_assert(kWires >= 1, "kWires must be at least 1.");
         const size_t numWires = threadPairCount / kWires + ((threadPairCount % kWires) ? 1 : 0);
 
-        // Vector of per-wire (per-pair) queues. Each wire is a producer-consumer pair sharing a dedicated queue.
         std::vector<std::unique_ptr<BoundedQueue<std::shared_ptr<SliceWriteTask>>>> queuesForWires;
         queuesForWires.reserve(numWires);
         for (size_t w = 0; w < numWires; ++w)
-            queuesForWires.emplace_back(std::make_unique<BoundedQueue<std::shared_ptr<SliceWriteTask>>>(2 * kWires)); // Bounded to 2×pair size for pipelining
+            queuesForWires.emplace_back(
+                std::make_unique<BoundedQueue<std::shared_ptr<SliceWriteTask>>>(2 * kWires));
 
         std::vector<std::thread> producerThreads, consumerThreads;
         producerThreads.reserve(threadPairCount);
@@ -633,72 +634,93 @@ void mexFunction(int nlhs, mxArray* plhs[],
         auto threadPairs = assign_thread_affinity_pairs(threadPairCount);
         const size_t sliceBytes = size_t(widthPixels) * heightPixels * bytesPerPixel;
 
-        // ---- Launch threads: each pair uses its own queue ("wire") ----
+        /* =======================================================================
+         *  PRODUCER / CONSUMER THREADS  – changes start here
+         * =====================================================================*/
         for (size_t t = 0; t < threadPairCount; ++t) {
-            // Each pair t uses queuesForWires[t / kWires]
-            BoundedQueue<std::shared_ptr<SliceWriteTask>>& queueForPair = *queuesForWires[t / kWires];
 
-            // Producer: allocates memory (NUMA-local), prepares slice, pushes to queue
+            auto& queueForPair = *queuesForWires[t / kWires];
+
+            /* ---------------- producer ---------------- */
             producerThreads.emplace_back([&, t] {
                 set_thread_affinity(threadPairs[t].producerLogicalCore);
-                unsigned numaNode = threadPairs[t].numaNode;
+                const unsigned numaNode = threadPairs[t].numaNode;
 
                 while (true) {
                     if (abortFlag.load(std::memory_order_acquire)) break;
-                    uint32_t idx = nextSliceIndex.fetch_add(1, std::memory_order_relaxed);
+
+                    const uint32_t idx =
+                        nextSliceIndex.fetch_add(1, std::memory_order_relaxed);
                     if (idx >= numSlices) break;
 
+                    /* prepare task -------------------------------------------------- */
+                    auto task               = std::make_shared<SliceWriteTask>();
+                    task->sliceIndex        = idx;
+                    task->widthPixels       = widthPixels;
+                    task->heightPixels      = heightPixels;
+                    task->bytesPerPixel     = bytesPerPixel;
+                    task->outputFilePath    = outputPaths[idx];
+                    task->isXYZLayout       = isXYZ;
+                    task->compressionTag    = compressionTag;
+                    task->useTiles          = useTiles;
 
-                    auto task = std::make_shared<SliceWriteTask>();
-                    task->sliceBuffer    = allocate_numa_local_buffer(g_hwlocTopo->get(), sliceBytes, numaNode);
-                    assert(is_aligned(task->sliceBuffer, kAlignment));
-                    //std::memcpy(task->sliceBuffer, volumePtr + idx * sliceBytes, sliceBytes);
-                    fast_slice_copy(task->sliceBuffer, volumePtr + idx * sliceBytes, sliceBytes);
-                    task->sliceIndex     = idx;
-                    task->widthPixels    = widthPixels;
-                    task->heightPixels   = heightPixels;
-                    task->bytesPerPixel  = bytesPerPixel;
-                    task->outputFilePath = outputPaths[idx];
-                    task->isXYZLayout    = isXYZ;
-                    task->compressionTag = compressionTag;
-                    task->useTiles       = useTiles;
+                    const uint8_t* srcPtr   = volumePtr + size_t(idx) * sliceBytes;
+                    const bool canAliasVol  = isXYZ && !useTiles;   // contiguous → no copy needed
+
+                    if (canAliasVol) {
+                        task->sliceBuffer = const_cast<uint8_t*>(srcPtr);
+                        task->ownsBuffer  = false;                   // no free() later
+                    } else {
+                        task->sliceBuffer = allocate_numa_local_buffer(g_hwlocTopo->get(), sliceBytes, numaNode);
+                        if (!task->sliceBuffer)
+                            throw std::runtime_error("NUMA allocation failed");
+                        fast_slice_copy(task->sliceBuffer, srcPtr, sliceBytes);
+                        task->ownsBuffer  = true;
+                    }
+
                     queueForPair.push(std::move(task));
                 }
-                // Signal end-of-tasks to consumer(s)
-                queueForPair.push(nullptr);
+                queueForPair.push(nullptr);           // poison-pill
             });
 
-            // Consumer: pops tasks from queue, writes to disk, aborts on error
+            /* ---------------- consumer ---------------- */
             consumerThreads.emplace_back([&, t] {
                 set_thread_affinity(threadPairs[t].consumerLogicalCore);
+
                 while (true) {
                     if (abortFlag.load(std::memory_order_acquire)) break;
+
                     std::shared_ptr<SliceWriteTask> task;
                     queueForPair.wait_and_pop(task);
-                    if (!task) break; // End-of-tasks signal
+                    if (!task) break;                 // poison-pill
+
                     try {
                         write_slice_to_tiff(*task);
                     } catch (const std::exception& ex) {
-                        free_numa_local_buffer(g_hwlocTopo->get(), task->sliceBuffer, sliceBytes);
                         abortFlag.store(true, std::memory_order_release);
                         std::lock_guard<std::mutex> lock(errorMutex);
                         runtimeErrors.emplace_back(ex.what());
                         break;
                     }
-                    free_numa_local_buffer(g_hwlocTopo->get(), task->sliceBuffer, sliceBytes);
+
+                    if (task->ownsBuffer) {
+                        free_numa_local_buffer(g_hwlocTopo->get(),
+                                               task->sliceBuffer, sliceBytes);
+                    }
                 }
             });
         }
 
-        // Wait for all producers and consumers to finish
-        for (auto& p : producerThreads) p.join();
-        for (auto& c : consumerThreads) c.join();
+        /* ---------- join + error handling (unchanged) ---------- */
+        for (auto& p : producerThreads)  p.join();
+        for (auto& c : consumerThreads)  c.join();
 
         if (!runtimeErrors.empty())
             mexErrMsgIdAndTxt("save_bl_tif:runtime", runtimeErrors.front().c_str());
 
-        if (nlhs > 0)
+        if (nlhs > 0)                      // optional passthrough
             plhs[0] = const_cast<mxArray*>(prhs[0]);
+
     } catch (const std::exception& ex) {
         mexErrMsgIdAndTxt("save_bl_tif:runtime", ex.what());
     }
