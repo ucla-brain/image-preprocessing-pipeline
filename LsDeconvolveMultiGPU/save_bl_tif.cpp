@@ -84,6 +84,8 @@
 #include <bitset>
 #include <set>
 #include <map>
+#include <immintrin.h>
+#include <cstddef>
 
 #if defined(_WIN32)
     #define WIN32_LEAN_AND_MEAN
@@ -114,6 +116,8 @@ static constexpr uint32_t kRowsPerStripDefault = 1;
 static constexpr uint32_t kOptimalTileEdge     = 128;
 // How many logical producer-consumer pairs to group together per queue (set to 1 for 1:1 mapping)
 static constexpr size_t kWires = 1;
+// Threshold for large copy (tunable)
+static constexpr size_t kNonTemporalCopyThreshold = 128 * 1024;
 
 namespace platform {
 #if defined(_WIN32)
@@ -473,6 +477,59 @@ static void write_slice_to_tiff(const SliceWriteTask& task)
         throw std::runtime_error("Atomic move failed: " + moveError);
 }
 
+// Choose threshold and alignment width based on the *widest* supported instruction set:
+#if defined(__AVX512F__)
+    constexpr size_t kAlignment = 64;
+#elif defined(__AVX2__) || defined(__AVX__)
+    constexpr size_t kAlignment = 32;
+#elif defined(__SSE2__)
+    constexpr size_t kAlignment = 16;
+#else
+    constexpr size_t kAlignment = 1;
+#endif
+
+inline bool is_aligned(const void* ptr, size_t alignment) {
+    return (reinterpret_cast<uintptr_t>(ptr) & (alignment - 1)) == 0;
+}
+
+inline void fast_slice_copy(void* dst, const void* src, size_t bytes) {
+#if defined(__AVX512F__)
+    if (bytes >= kNonTemporalCopyThreshold && is_aligned(src, 64) && is_aligned(dst, 64) && (bytes % 64 == 0)) {
+        auto* d = reinterpret_cast<__m512i*>(dst);
+        const auto* s = reinterpret_cast<const __m512i*>(src);
+        size_t n = bytes / 64;
+        for (size_t i = 0; i < n; ++i) {
+            _mm512_stream_si512(d + i, _mm512_load_si512(s + i));
+        }
+        _mm_sfence();
+        return;
+    }
+#elif defined(__AVX2__) || defined(__AVX__)
+    if (bytes >= kNonTemporalCopyThreshold && is_aligned(src, 32) && is_aligned(dst, 32) && (bytes % 32 == 0)) {
+        auto* d = reinterpret_cast<__m256i*>(dst);
+        const auto* s = reinterpret_cast<const __m256i*>(src);
+        size_t n = bytes / 32;
+        for (size_t i = 0; i < n; ++i) {
+            _mm256_stream_si256(d + i, _mm256_load_si256(s + i));
+        }
+        _mm_sfence();
+        return;
+    }
+#elif defined(__SSE2__)
+    if (bytes >= kNonTemporalCopyThreshold && is_aligned(src, 16) && is_aligned(dst, 16) && (bytes % 16 == 0)) {
+        auto* d = reinterpret_cast<__m128i*>(dst);
+        const auto* s = reinterpret_cast<const __m128i*>(src);
+        size_t n = bytes / 16;
+        for (size_t i = 0; i < n; ++i) {
+            _mm_stream_si128(d + i, _mm_load_si128(s + i));
+        }
+        _mm_sfence();
+        return;
+    }
+#endif
+    std::memcpy(dst, src, bytes);
+}
+
 //=========================
 //        mexFunction
 //=========================
@@ -595,7 +652,9 @@ void mexFunction(int nlhs, mxArray* plhs[],
 
                     auto task = std::make_shared<SliceWriteTask>();
                     task->sliceBuffer    = allocate_numa_local_buffer(g_hwlocTopo->get(), sliceBytes, numaNode);
-                    std::memcpy(task->sliceBuffer, volumePtr + idx * sliceBytes, sliceBytes);
+                    assert(is_aligned(task->sliceBuffer, kAlignment));
+                    //std::memcpy(task->sliceBuffer, volumePtr + idx * sliceBytes, sliceBytes);
+                    fast_slice_copy(task->sliceBuffer, volumePtr + idx * sliceBytes, sliceBytes);
                     task->sliceIndex     = idx;
                     task->widthPixels    = widthPixels;
                     task->heightPixels   = heightPixels;
@@ -621,6 +680,7 @@ void mexFunction(int nlhs, mxArray* plhs[],
                     try {
                         write_slice_to_tiff(*task);
                     } catch (const std::exception& ex) {
+                        free_numa_local_buffer(g_hwlocTopo->get(), task->sliceBuffer, sliceBytes);
                         abortFlag.store(true, std::memory_order_release);
                         std::lock_guard<std::mutex> lock(errorMutex);
                         runtimeErrors.emplace_back(ex.what());
