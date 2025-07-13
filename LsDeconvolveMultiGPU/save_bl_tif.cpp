@@ -119,6 +119,17 @@ static constexpr size_t kWires = 1;
 // Threshold for large copy (tunable)
 static constexpr size_t kNonTemporalCopyThreshold = 128 * 1024;
 
+// Choose threshold and alignment width based on the *widest* supported instruction set:
+#if defined(__AVX512F__)
+    static constexpr size_t kAlignment = 64;
+#elif defined(__AVX2__) || defined(__AVX__)
+    static constexpr size_t kAlignment = 32;
+#elif defined(__SSE2__)
+    static constexpr size_t kAlignment = 16;
+#else
+    static constexpr size_t kAlignment = 1;
+#endif
+
 namespace platform {
 #if defined(_WIN32)
     inline std::wstring utf8_to_utf16(const std::string& utf8)
@@ -476,17 +487,6 @@ static void write_slice_to_tiff(const SliceWriteTask& task)
     if (!robust_move_or_replace(tempPath, task.outputFilePath, moveError))
         throw std::runtime_error("Atomic move failed: " + moveError);
 }
-
-// Choose threshold and alignment width based on the *widest* supported instruction set:
-#if defined(__AVX512F__)
-    constexpr size_t kAlignment = 64;
-#elif defined(__AVX2__) || defined(__AVX__)
-    constexpr size_t kAlignment = 32;
-#elif defined(__SSE2__)
-    constexpr size_t kAlignment = 16;
-#else
-    constexpr size_t kAlignment = 1;
-#endif
 
 inline bool is_aligned(const void* ptr, size_t alignment) {
     return (reinterpret_cast<uintptr_t>(ptr) & (alignment - 1)) == 0;
