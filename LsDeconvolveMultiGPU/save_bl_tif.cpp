@@ -59,17 +59,6 @@
     GNU GPL v3 — https://www.gnu.org/licenses/gpl-3.0.html
 ==============================================================================*/
 
-/*==============================================================================
-  save_bl_tif.cpp
-
-  Ultra-high-throughput, NUMA- and socket-aware, multi-threaded TIFF Z-slice saver
-  for 3D MATLAB volumes. Uses explicit async producer-consumer I/O, advanced file
-  flags, and hwloc-driven thread pairing for maximum locality and throughput.
-
-  AUTHOR: Keivan Moradi (with ChatGPT-4)
-  LICENSE: GNU GPL v3
-==============================================================================*/
-
 #define _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
 
 #include "mex.h"
@@ -123,47 +112,8 @@ namespace fs = std::filesystem;
 // Compile-time parameters for TIFF
 static constexpr uint32_t kRowsPerStripDefault = 1;
 static constexpr uint32_t kOptimalTileEdge     = 128;
+// How many logical producer-consumer pairs to group together per queue (set to 1 for 1:1 mapping)
 static constexpr size_t kWires = 1;
-
-// =============================
-//   Double Buffer for Slices
-// =============================
-struct DoubleBuffer {
-    std::vector<uint8_t> bufferA;
-    std::vector<uint8_t> bufferB;
-    std::atomic<bool> bufferAInUse{false}; // true if producer is filling bufferA
-    std::atomic<bool> bufferBInUse{false}; // true if producer is filling bufferB
-
-    DoubleBuffer(size_t sliceBytes)
-        : bufferA(sliceBytes), bufferB(sliceBytes)
-    {}
-
-    // Returns ptr to a free buffer for producer, waits if none available
-    uint8_t* get_next_free_buffer_for_producer() {
-        // Try A first
-        bool expected = false;
-        if (bufferAInUse.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
-            return bufferA.data();
-        }
-        // Try B
-        expected = false;
-        if (bufferBInUse.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
-            return bufferB.data();
-        }
-        // No free buffer: spin
-        while (bufferAInUse.load(std::memory_order_acquire) && bufferBInUse.load(std::memory_order_acquire)) {
-            std::this_thread::yield();
-        }
-        // Try again
-        return get_next_free_buffer_for_producer();
-    }
-
-    // Mark buffer as ready for reuse
-    void mark_buffer_ready(uint8_t* ptr) {
-        if (ptr == bufferA.data()) bufferAInUse.store(false, std::memory_order_release);
-        else if (ptr == bufferB.data()) bufferBInUse.store(false, std::memory_order_release);
-    }
-};
 
 namespace platform {
 #if defined(_WIN32)
@@ -200,24 +150,27 @@ inline void pick_tile_size(uint32_t width, uint32_t height,
 //=========================
 //    SliceWriteTask
 //=========================
+/**
+ * @brief Structure representing all info needed to write a single TIFF slice.
+ */
 struct SliceWriteTask {
-    uint8_t*  sliceBufferPtr = nullptr;
-    size_t    sliceBufferBytes = 0;
-    uint32_t  sliceIndex;
-    uint32_t  widthPixels;
-    uint32_t  heightPixels;
-    uint32_t  bytesPerPixel;
-    std::string outputFilePath;
-    bool      isXYZLayout;
-    uint16_t  compressionTag;
-    bool      useTiles;
-    DoubleBuffer* parentBuffer = nullptr;
-    uint8_t*   whichBufferPtr = nullptr;
+    void*                sliceBuffer;
+    uint32_t             sliceIndex;
+    uint32_t             widthPixels;
+    uint32_t             heightPixels;
+    uint32_t             bytesPerPixel;
+    std::string          outputFilePath;
+    bool                 isXYZLayout;
+    uint16_t             compressionTag;
+    bool                 useTiles;
 };
 
 //=========================
 //    TemporaryFileGuard
 //=========================
+/**
+ * @brief RAII guard for a temporary file.
+ */
 class TemporaryFileGuard {
 public:
     TemporaryFileGuard(const fs::path& path) : tempPath_(path) {}
@@ -235,6 +188,9 @@ private:
 //=========================
 //   TiffWriterDirect
 //=========================
+/**
+ * @brief RAII-safe cross-platform TIFF writer.
+ */
 struct TiffWriterDirect
 {
     TIFF*       tiffHandle = nullptr;
@@ -297,6 +253,9 @@ inline void make_writable(const fs::path& path) {
 #endif
 }
 
+/**
+ * @brief Copy src to dst, then delete src. Used as fallback if rename fails.
+ */
 inline bool copy_and_delete(const fs::path& src, const fs::path& dst, std::string& errorMessage) {
     std::error_code ec;
     fs::copy_file(src, dst, fs::copy_options::overwrite_existing, ec);
@@ -311,6 +270,9 @@ inline bool copy_and_delete(const fs::path& src, const fs::path& dst, std::strin
     return true;
 }
 
+/**
+ * @brief Atomically move/replace file; fallback to copy-delete if needed.
+ */
 inline bool robust_move_or_replace(const fs::path& src,
                                    const fs::path& dst,
                                    std::string&    errorMessage) {
@@ -383,9 +345,6 @@ static void write_slice_to_tiff(const SliceWriteTask& task)
             TIFFSetField(tiffHandle, TIFFTAG_PREDICTOR,  1);
         }
 
-        const uint8_t* buffer = task.sliceBufferPtr;
-        const size_t   sliceBytes = task.sliceBufferBytes;
-
         if (task.useTiles) {
             uint32_t tileW, tileH;
             pick_tile_size(task.widthPixels, task.heightPixels, tileW, tileH);
@@ -411,7 +370,9 @@ static void write_slice_to_tiff(const SliceWriteTask& task)
 
                     for (uint32_t r = 0; r < rows; ++r)
                         std::memcpy(&tile[(r * tileW) * task.bytesPerPixel],
-                                    buffer + ((size_t(y0 + r) * task.widthPixels + x0) * task.bytesPerPixel),
+                                    static_cast<uint8_t*>(task.sliceBuffer) +
+                                        ((size_t(y0 + r) * task.widthPixels + x0) *
+                                        task.bytesPerPixel),
                                     size_t(cols) * task.bytesPerPixel);
 
                     tstrip_t tileIdx = TIFFComputeTile(tiffHandle, x0, y0, 0, 0);
@@ -432,7 +393,7 @@ static void write_slice_to_tiff(const SliceWriteTask& task)
                     std::fill(tile.begin(), tile.begin() + rows*tileW*task.bytesPerPixel, 0);
 
                     for (uint32_t row = 0; row < rows; ++row) {
-                        const uint8_t* src = buffer +
+                        const uint8_t* src = static_cast<uint8_t*>(task.sliceBuffer) +
                             ((size_t(y0 + row) + size_t(x0) * task.heightPixels) *
                               task.bytesPerPixel);
                         uint8_t* dst = tile.data() + row * tileW * task.bytesPerPixel;
@@ -463,7 +424,8 @@ static void write_slice_to_tiff(const SliceWriteTask& task)
                     const size_t bytesThisStrip =
                         size_t(task.widthPixels) * rows * task.bytesPerPixel;
                     const uint8_t* src =
-                        buffer + size_t(y0) * task.widthPixels * task.bytesPerPixel;
+                        static_cast<uint8_t*>(task.sliceBuffer) +
+                        size_t(y0) * task.widthPixels * task.bytesPerPixel;
 
                     if (TIFFWriteEncodedStrip(tiffHandle, strip,
                                               const_cast<uint8_t*>(src),
@@ -481,7 +443,7 @@ static void write_slice_to_tiff(const SliceWriteTask& task)
                     const uint32_t y0   = strip * rowsPerStrip;
                     const uint32_t rows = (std::min)(rowsPerStrip, task.heightPixels - y0);
                     for (uint32_t row = 0; row < rows; ++row) {
-                        const uint8_t* src = buffer +
+                        const uint8_t* src = static_cast<uint8_t*>(task.sliceBuffer) +
                             ((size_t(y0 + row)) * task.bytesPerPixel);
                         uint8_t* dst = stripBuffer.data() +
                             row * task.widthPixels * task.bytesPerPixel;
@@ -604,14 +566,6 @@ void mexFunction(int nlhs, mxArray* plhs[],
         for (size_t w = 0; w < numWires; ++w)
             queuesForWires.emplace_back(std::make_unique<BoundedQueue<std::shared_ptr<SliceWriteTask>>>(2 * kWires)); // Bounded to 2×pair size for pipelining
 
-        // === DoubleBuffer: one per producer-consumer pair ===
-        std::vector<std::unique_ptr<DoubleBuffer>> doubleBuffersForPairs;
-        doubleBuffersForPairs.reserve(threadPairCount);
-        for (size_t t = 0; t < threadPairCount; ++t) {
-            doubleBuffersForPairs.emplace_back(std::make_unique<DoubleBuffer>(
-                size_t(widthPixels) * heightPixels * bytesPerPixel));
-        }
-
         std::vector<std::thread> producerThreads, consumerThreads;
         producerThreads.reserve(threadPairCount);
         consumerThreads.reserve(threadPairCount);
@@ -621,27 +575,27 @@ void mexFunction(int nlhs, mxArray* plhs[],
         std::mutex              errorMutex;
         std::atomic<bool>       abortFlag{false};
         auto threadPairs = assign_thread_affinity_pairs(threadPairCount);
+        const size_t sliceBytes = size_t(widthPixels) * heightPixels * bytesPerPixel;
 
         // ---- Launch threads: each pair uses its own queue ("wire") ----
         for (size_t t = 0; t < threadPairCount; ++t) {
+            // Each pair t uses queuesForWires[t / kWires]
             BoundedQueue<std::shared_ptr<SliceWriteTask>>& queueForPair = *queuesForWires[t / kWires];
 
             // Producer: allocates memory (NUMA-local), prepares slice, pushes to queue
             producerThreads.emplace_back([&, t] {
                 set_thread_affinity(threadPairs[t].producerLogicalCore);
-                DoubleBuffer* pairDoubleBuffer = doubleBuffersForPairs[t].get();
+                unsigned numaNode = threadPairs[t].numaNode;
+
                 while (true) {
                     if (abortFlag.load(std::memory_order_acquire)) break;
                     uint32_t idx = nextSliceIndex.fetch_add(1, std::memory_order_relaxed);
                     if (idx >= numSlices) break;
 
-                    size_t sliceBytes = size_t(widthPixels) * heightPixels * bytesPerPixel;
-                    uint8_t* scratchPtr = pairDoubleBuffer->get_next_free_buffer_for_producer();
-                    std::memcpy(scratchPtr, volumePtr + idx * sliceBytes, sliceBytes);
 
                     auto task = std::make_shared<SliceWriteTask>();
-                    task->sliceBufferPtr   = scratchPtr;
-                    task->sliceBufferBytes = sliceBytes;
+                    task->sliceBuffer    = allocate_numa_local_buffer(g_hwlocTopo->get(), sliceBytes, numaNode);
+                    std::memcpy(task->sliceBuffer, volumePtr + idx * sliceBytes, sliceBytes);
                     task->sliceIndex     = idx;
                     task->widthPixels    = widthPixels;
                     task->heightPixels   = heightPixels;
@@ -650,15 +604,13 @@ void mexFunction(int nlhs, mxArray* plhs[],
                     task->isXYZLayout    = isXYZ;
                     task->compressionTag = compressionTag;
                     task->useTiles       = useTiles;
-                    task->parentBuffer   = pairDoubleBuffer;
-                    task->whichBufferPtr = scratchPtr;
                     queueForPair.push(std::move(task));
                 }
                 // Signal end-of-tasks to consumer(s)
                 queueForPair.push(nullptr);
             });
 
-            // Consumer: pops tasks from queue, writes to disk, then marks buffer free
+            // Consumer: pops tasks from queue, writes to disk, aborts on error
             consumerThreads.emplace_back([&, t] {
                 set_thread_affinity(threadPairs[t].consumerLogicalCore);
                 while (true) {
@@ -668,15 +620,13 @@ void mexFunction(int nlhs, mxArray* plhs[],
                     if (!task) break; // End-of-tasks signal
                     try {
                         write_slice_to_tiff(*task);
-                        // Release buffer for reuse
-                        if (task->parentBuffer && task->whichBufferPtr)
-                            task->parentBuffer->mark_buffer_ready(task->whichBufferPtr);
                     } catch (const std::exception& ex) {
                         abortFlag.store(true, std::memory_order_release);
                         std::lock_guard<std::mutex> lock(errorMutex);
                         runtimeErrors.emplace_back(ex.what());
                         break;
                     }
+                    free_numa_local_buffer(g_hwlocTopo->get(), task->sliceBuffer, sliceBytes);
                 }
             });
         }
