@@ -15,6 +15,16 @@
 #include <memory>
 #include <stdexcept>
 
+#include <hwloc.h>
+#include <cstddef>
+
+#if defined(__linux__)
+    #include <sys/mman.h>
+#endif
+#if defined(_WIN32)
+    #include <windows.h>
+#endif
+
 // -----------------------------------------------
 //        Topology Singleton
 // -----------------------------------------------
@@ -311,12 +321,61 @@ void* allocate_numa_local_buffer(hwloc_topology_t topology, size_t bytes, unsign
         }
     }
     if (!node) return nullptr;
+
+    void* buf = nullptr;
+
+#if defined(_WIN32)
+    // --- Windows Large Page allocation ---
+    // Request large pages. This requires SeLockMemoryPrivilege.
+    SIZE_T largePageSize = GetLargePageMinimum();
+    if (largePageSize && bytes >= largePageSize && (bytes % largePageSize == 0)) {
+        // Try VirtualAllocExNuma if available (Vista+)
+        HANDLE hProcess = GetCurrentProcess();
+        ULONG_PTR idealNode = numaNode;
+        buf = VirtualAllocExNuma(
+            hProcess, NULL, bytes,
+            MEM_RESERVE | MEM_COMMIT | MEM_LARGE_PAGES,
+            PAGE_READWRITE, idealNode
+        );
+        // Fallback: Try normal VirtualAlloc if ExNuma fails (may land on wrong NUMA node)
+        if (!buf) {
+            buf = VirtualAlloc(
+                NULL, bytes,
+                MEM_RESERVE | MEM_COMMIT | MEM_LARGE_PAGES,
+                PAGE_READWRITE
+            );
+        }
+        // NOTE: If this fails, likely SeLockMemoryPrivilege is not set; user must grant it!
+    }
+    // Fallback to hwloc for normal pages if large pages fail
+    if (!buf) {
+        hwloc_nodeset_t nodeset = hwloc_bitmap_dup(node->nodeset);
+        buf = hwloc_alloc_membind(
+            topology, bytes, nodeset, HWLOC_MEMBIND_BIND, HWLOC_MEMBIND_THREAD);
+        hwloc_bitmap_free(nodeset);
+    }
+
+#elif defined(__linux__)
     hwloc_nodeset_t nodeset = hwloc_bitmap_dup(node->nodeset);
-    void* buf = hwloc_alloc_membind(
+    buf = hwloc_alloc_membind(
         topology, bytes, nodeset, HWLOC_MEMBIND_BIND, HWLOC_MEMBIND_THREAD);
     hwloc_bitmap_free(nodeset);
+
+    // Huge pages hint (will silently ignore if not supported)
+    if (buf && bytes)
+        madvise(buf, bytes, MADV_HUGEPAGE);
+
+#else
+    // Fallback: POSIX systems without explicit huge page/NUMA support
+    hwloc_nodeset_t nodeset = hwloc_bitmap_dup(node->nodeset);
+    buf = hwloc_alloc_membind(
+        topology, bytes, nodeset, HWLOC_MEMBIND_BIND, HWLOC_MEMBIND_THREAD);
+    hwloc_bitmap_free(nodeset);
+#endif
+
     return buf;
 }
+
 
 void free_numa_local_buffer(hwloc_topology_t topology, void* buf, size_t bytes)
 {
