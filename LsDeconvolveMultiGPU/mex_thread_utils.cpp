@@ -383,9 +383,9 @@ void* allocate_numa_local_buffer(hwloc_topology_t topology, size_t bytes, unsign
     hwloc_bitmap_free(nodeset);
 #endif
 
-    if (buf) {
-        pretouch_memory(buf, bytes);
-    }
+    // if (buf) {
+    //     pretouch_memory(buf, bytes);
+    // }
     return buf;
 }
 
