@@ -1297,6 +1297,7 @@ function postprocess_save(outpath, cache_drive, min_max_path, clipval, log_file,
         compression = 'deflate'; % or expose as input if you want
         useTiles    = false;     % or expose as input
         nThreads    = feature('numCores');
+        isXYZLayout = true;      % shoudl be in sync with load_bl_tif call; isXYZLayout path is much faster
 
         % Forward all parameters to C++: blocklist, fileListToSave, p1_slab, p2_slab, slabSize, etc.
         % All logic (rescaling, save, datatype, amplification, min/max) is handled inside C++
@@ -1305,7 +1306,7 @@ function postprocess_save(outpath, cache_drive, min_max_path, clipval, log_file,
             fileListToSave, ...            % destination .tif files (cellstr)
             p1_slab, p2_slab, slabSize, ...
             scal, amplification, deconvmin, deconvmax, ...
-            compression, useTiles, nThreads);
+            compression, useTiles, nThreads, isXYZLayout);
 
         nextFileIdx = nextFileIdx + slab_depth;
     end

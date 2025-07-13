@@ -1,32 +1,6 @@
 /*==============================================================================
-  load_slab_lz4.cpp
-  ------------------------------------------------------------------------------
-  High-throughput LZ4 slab loader for MATLAB.
-
-  USAGE
-  -----
-    vol = load_slab_lz4(filenames, p1, p2, dims, scal, ampl, dmin, dmax, maxThreads)
-
-  FEATURES
-  --------
-    • Parallel LZ4 decompression with per-thread reuse
-    • Lock-free atomic dispatch (no mutex or condvar)
-    • Early casting to reduce memory pressure (float→uint8/uint16)
-    • Memory-safe, exception-safe (RAII)
-    • Automatic thread reuse and buffer reuse
-    • Robust error handling with descriptive messages
-    • Clean separation of responsibilities
-
-  LIMITATIONS
-  -----------
-    • Only float32 LZ4 bricks supported
-    • No progress bar or cancellation
-    • Assumes all header sizes are valid and consistent
-
-  AUTHOR  : Keivan Moradi (with ChatGPT-4o assistance)
-  LICENSE : GNU GPL v3
-  DATE    : 2025-06-29
-==============================================================================*/
+  load_slab_lz4_save_as_tif.cpp
+================================================================================*/
 #define _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
 
 #include "mex.h"
@@ -663,6 +637,7 @@ struct ValidatedInputs {
     int maxThreads;
     mxClassID outType;
     const mxArray *p1, *p2;
+    size_t nBricks;
     size_t nSlices;
     bool isXYZLayout;   // <-- ADD THIS LINE
 };
@@ -911,9 +886,10 @@ void saveSlabTif(const std::vector<T*>& slices, const ValidatedInputs& inp)
 
 ValidatedInputs validate_inputs(const mxArray* prhs[], int nrhs)
 {
-    if (nrhs < 11 || nrhs > 12)
+    // === Minimum number of required args ===
+    if (nrhs < 9)
         mexErrMsgIdAndTxt("load_slab_lz4_save_as_tif:usage",
-            "Usage: load_and_save_slab_lz4_to_tif(srcFiles, dstFiles, p1, p2, dims, scal, ampl, dmin, dmax, compression, useTiles[, maxThreads], isXYZLayout)");
+            "Usage: load_slab_lz4_save_as_tif(srcFiles, dstFiles, p1, p2, dims, scal, ampl, dmin, dmax [, compression, useTiles, maxThreads, isXYZLayout])");
 
     // srcFiles and dstFiles
     if (!mxIsCell(prhs[0]) || !mxIsCell(prhs[1]))
@@ -925,7 +901,7 @@ ValidatedInputs validate_inputs(const mxArray* prhs[], int nrhs)
         mexErrMsgIdAndTxt("load_slab_lz4_save_as_tif:dim",
             "srcFiles and dstFiles must be non-empty cell arrays.");
 
-    // dims
+    // dims (should be 3)
     if (mxGetNumberOfElements(prhs[4]) != 3)
         mexErrMsgIdAndTxt("load_slab_lz4_save_as_tif:dims",
             "dims must be a vector of 3 elements [dimX, dimY, dimZ].");
@@ -945,26 +921,30 @@ ValidatedInputs validate_inputs(const mxArray* prhs[], int nrhs)
     GRAB_FLOAT(7, dmin)
     GRAB_FLOAT(8, dmax)
 
-    // Compression string
-    std::string compression;
-    if (mxIsChar(prhs[9]) || mxIsChar(prhs[9])) {
-        char* s = mxArrayToUTF8String(prhs[9]);
-        compression = s;
-        mxFree(s);
-    } else {
-        mexErrMsgIdAndTxt("load_slab_lz4_save_as_tif:type", "compression must be a string.");
+    // Compression string (default = 'deflate')
+    std::string compression = "deflate";
+    if (nrhs >= 10) {
+        if (mxIsChar(prhs[9])) {
+            char* s = mxArrayToUTF8String(prhs[9]);
+            compression = s; mxFree(s);
+        } else {
+            mexErrMsgIdAndTxt("load_slab_lz4_save_as_tif:type", "compression must be a string.");
+        }
     }
     if (compression != "none" && compression != "lzw" && compression != "deflate")
-        mexErrMsgIdAndTxt("load_slab_lz4_save_as_tif:compression", "compression must be 'none', 'lzw', or 'deflate'.");
+        mexErrMsgIdAndTxt("load_slab_lz4_save_as_tif:compression",
+                          "compression must be 'none', 'lzw', or 'deflate'.");
 
-    // useTiles logical
+    // useTiles logical (default = false)
     bool useTiles = false;
-    if (mxIsLogical(prhs[10]) || mxIsNumeric(prhs[10]))
-        useTiles = (mxGetScalar(prhs[10]) != 0);
-    else
-        mexErrMsgIdAndTxt("load_slab_lz4_save_as_tif:tiles", "useTiles must be logical or numeric.");
+    if (nrhs >= 11) {
+        if (mxIsLogical(prhs[10]) || mxIsNumeric(prhs[10]))
+            useTiles = (mxGetScalar(prhs[10]) != 0);
+        else
+            mexErrMsgIdAndTxt("load_slab_lz4_save_as_tif:tiles", "useTiles must be logical or numeric.");
+    }
 
-    // maxThreads (optional)
+    // maxThreads (default = hardware_concurrency)
     int maxThreads = std::thread::hardware_concurrency();
     if (nrhs >= 12) {
         if (!mxIsDouble(prhs[11]) && !mxIsUint32(prhs[11]))
@@ -973,21 +953,32 @@ ValidatedInputs validate_inputs(const mxArray* prhs[], int nrhs)
         if (maxThreads < 1) maxThreads = 1;
     }
 
+    // isXYZLayout (default = true)
+    bool isXYZLayout = true;
+    if (nrhs >= 13) {
+        if (mxIsLogical(prhs[12]) || mxIsNumeric(prhs[12]))
+            isXYZLayout = (mxGetScalar(prhs[12]) != 0);
+        else
+            mexErrMsgIdAndTxt("load_slab_lz4_save_as_tif:isXYZ", "isXYZLayout must be logical or numeric.");
+    }
+
     // Output type (auto)
     mxClassID outType = (scal <= 255) ? mxUINT8_CLASS : mxUINT16_CLASS;
     if (outType != mxUINT8_CLASS && outType != mxUINT16_CLASS)
         mexErrMsgIdAndTxt("load_slab_lz4_save_as_tif:badType", "Output type must be uint8 or uint16.");
 
-    // Get files as std::string
-    std::vector<std::string> srcFiles(nSlices), dstFiles(nSlices);
-    for (size_t i = 0; i < nSlices; ++i) {
+    // Get src and dst file lists (as std::string)
+    std::vector<std::string> srcFiles(nBricks), dstFiles(nSlices);
+    for (size_t i = 0; i < nBricks; ++i) {
         char* f = mxArrayToUTF8String(mxGetCell(prhs[0], i));
         srcFiles[i] = f; mxFree(f);
-        f = mxArrayToUTF8String(mxGetCell(prhs[1], i));
+    }
+    for (size_t i = 0; i < nSlices; ++i) {
+        char* f = mxArrayToUTF8String(mxGetCell(prhs[1], i));
         dstFiles[i] = f; mxFree(f);
     }
 
-    // Basic output file checks (writability/parent dir exists)
+    // Check output file parent directory exists & writable
     for (size_t i = 0; i < nSlices; ++i) {
         fs::path dir = fs::path(dstFiles[i]).parent_path();
         if (!dir.empty() && !fs::exists(dir))
@@ -996,22 +987,16 @@ ValidatedInputs validate_inputs(const mxArray* prhs[], int nrhs)
             mexErrMsgIdAndTxt("load_slab_lz4_save_as_tif:writable", "Cannot overwrite read-only file: %s", dstFiles[i].c_str());
     }
 
-    // isXYZLayout: logical/numeric scalar (usually prhs[2])
-    bool isXYZLayout = false;
-    if (mxIsLogical(prhs[2]) || mxIsNumeric(prhs[2]))
-        isXYZLayout = (mxGetScalar(prhs[2]) != 0);
-    else
-        mexErrMsgIdAndTxt("load_slab_lz4_save_as_tif:isXYZ", "isXYZLayout must be logical or numeric.");
-
-    // Pass through p1/p2 for region spec
+    // Pass through p1/p2 for region spec (these are still MATLAB arrays)
     ValidatedInputs inp {
         std::move(srcFiles), std::move(dstFiles), std::move(dims),
         scal, ampl, dmin, dmax,
         compression, useTiles, maxThreads, outType,
-        prhs[2], prhs[3], nSlices, isXYZLayout // <--- added field at the end
+        prhs[2], prhs[3], nSlices, isXYZLayout
     };
     return inp;
 }
+
 
 void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
 {
