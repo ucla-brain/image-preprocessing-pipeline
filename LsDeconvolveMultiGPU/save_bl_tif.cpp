@@ -670,6 +670,7 @@ void mexFunction(int nlhs, mxArray* plhs[],
                     if (canAliasVol) {
                         task->sliceBuffer = const_cast<uint8_t*>(srcPtr);
                         task->ownsBuffer  = false;                   // no free() later
+                        warm_pages_async(srcPtr, sliceBytes);
                     } else {
                         task->sliceBuffer = allocate_numa_local_buffer(g_hwlocTopo->get(), sliceBytes, numaNode);
                         if (!task->sliceBuffer)
@@ -697,16 +698,16 @@ void mexFunction(int nlhs, mxArray* plhs[],
                     try {
                         write_slice_to_tiff(*task);
                     } catch (const std::exception& ex) {
+                        if (task->ownsBuffer)
+                            free_numa_local_buffer(g_hwlocTopo->get(), task->sliceBuffer, sliceBytes);
                         abortFlag.store(true, std::memory_order_release);
                         std::lock_guard<std::mutex> lock(errorMutex);
                         runtimeErrors.emplace_back(ex.what());
                         break;
                     }
 
-                    if (task->ownsBuffer) {
-                        free_numa_local_buffer(g_hwlocTopo->get(),
-                                               task->sliceBuffer, sliceBytes);
-                    }
+                    if (task->ownsBuffer)
+                        free_numa_local_buffer(g_hwlocTopo->get(), task->sliceBuffer, sliceBytes);
                 }
             });
         }

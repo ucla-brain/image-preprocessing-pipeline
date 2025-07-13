@@ -78,6 +78,9 @@ void ensure_hwloc_initialized();
 // Returns total logical cores
 size_t get_available_cores();
 
+// Overload: Uses default topology singleton
+int get_numa_node_of_pointer(const void* ptr);
+
 // Get logical PUs on a specified NUMA node
 std::vector<unsigned> get_cores_on_numa_node(unsigned numaNode);
 
@@ -103,7 +106,31 @@ int get_first_core_on_numa_node(hwloc_topology_t topology, unsigned numaNode);
 // Returns the NUMA node index for a given pointer (if mappable, else -1)
 int get_numa_node_of_pointer(hwloc_topology_t topology, const void* ptr);
 
-// Overload: Uses default topology singleton
-int get_numa_node_of_pointer(const void* ptr);
+/*---------------------------------------------------------------------------
+    warm_pages_async  –  pre-fault or hint pages so the consumer threads
+    don’t stall on first access.  Inlined in the header so both the MEX
+    translation unit and mex_thread_utils.cpp see the definition.
+  ---------------------------------------------------------------------------*/
+static inline void warm_pages_async(const void* ptr, size_t bytes)
+{
+#if defined(__linux__)
+    // Non-blocking read-ahead hint
+    madvise(const_cast<void*>(ptr), bytes, MADV_WILLNEED);
+
+#elif defined(_WIN32)
+    WIN32_MEMORY_RANGE_ENTRY range;
+    range.VirtualAddress = const_cast<void*>(ptr);
+    range.NumberOfBytes  = bytes;
+    PrefetchVirtualMemory(GetCurrentProcess(), 1, &range, 0);
+
+#else   /* macOS / *BSD: no async hint, do light touch */
+    constexpr size_t kPage = 4096;
+    const volatile uint8_t* p = static_cast<const volatile uint8_t*>(ptr);
+    for (size_t off = 0; off < bytes; off += kPage)
+        (void)p[off];
+    if (bytes) (void)p[bytes - 1];
+#endif
+}
+
 
 #endif // MEX_THREAD_UTILS_HPP
