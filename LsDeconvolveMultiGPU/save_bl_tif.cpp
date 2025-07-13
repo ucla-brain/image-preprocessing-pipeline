@@ -638,4 +638,5 @@ void mexFunction(int nlhs, mxArray* plhs[],
             plhs[0] = const_cast<mxArray*>(prhs[0]);
     } catch (const std::exception& ex) {
         mexErrMsgIdAndTxt("save_bl_tif:runtime", ex.what());
+    }
 }
