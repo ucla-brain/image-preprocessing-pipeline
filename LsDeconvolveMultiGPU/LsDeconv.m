@@ -1301,11 +1301,6 @@ function postprocess_save(outpath, cache_drive, min_max_path, clipval, log_file,
 
         % Forward all parameters to C++: blocklist, fileListToSave, p1_slab, p2_slab, slabSize, etc.
         % All logic (rescaling, save, datatype, amplification, min/max) is handled inside C++
-        disp('File list to save:');
-        disp(fileListToSave);
-        disp('Length:');
-        disp(length(fileListToSave));
-
         load_slab_lz4_save_as_tif( ...
             blocklist(block_inds), ...     % source .lz4 brick files (cellstr)
             fileListToSave, ...            % destination .tif files (cellstr)

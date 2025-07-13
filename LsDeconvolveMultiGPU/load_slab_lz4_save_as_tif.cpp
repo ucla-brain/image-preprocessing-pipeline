@@ -992,7 +992,7 @@ ValidatedInputs validate_inputs(const mxArray* prhs[], int nrhs)
         std::move(srcFiles), std::move(dstFiles), std::move(dims),
         scal, ampl, dmin, dmax,
         compression, useTiles, maxThreads, outType,
-        prhs[2], prhs[3], nSlices, isXYZLayout
+        prhs[2], prhs[3], nBricks, nSlices, isXYZLayout
     };
     return inp;
 }
