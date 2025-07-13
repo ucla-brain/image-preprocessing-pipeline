@@ -14,6 +14,10 @@
 #include <stdexcept>
 #include <cstddef>
 
+#if defined(__linux__)
+    #include <sys/mman.h>
+#endif
+
 extern "C" {
 #include <hwloc.h>
 }
@@ -114,8 +118,12 @@ int get_numa_node_of_pointer(hwloc_topology_t topology, const void* ptr);
 static inline void warm_pages_async(const void* ptr, size_t bytes)
 {
 #if defined(__linux__)
-    // Non-blocking read-ahead hint
-    madvise(const_cast<void*>(ptr), bytes, MADV_WILLNEED);
+    /* Prefer madvise() if it’s visible; otherwise use the POSIX variant.   */
+    #ifdef MADV_WILLNEED
+        madvise(const_cast<void*>(ptr), bytes, MADV_WILLNEED);
+    #else
+        posix_madvise(const_cast<void*>(ptr), bytes, POSIX_MADV_WILLNEED);
+    #endif
 
 #elif defined(_WIN32)
     WIN32_MEMORY_RANGE_ENTRY range;
@@ -123,7 +131,7 @@ static inline void warm_pages_async(const void* ptr, size_t bytes)
     range.NumberOfBytes  = bytes;
     PrefetchVirtualMemory(GetCurrentProcess(), 1, &range, 0);
 
-#else   /* macOS / *BSD: no async hint, do light touch */
+#else   /* macOS / *BSD – no async hint, touch 1 byte per page */
     constexpr size_t kPage = 4096;
     const volatile uint8_t* p = static_cast<const volatile uint8_t*>(ptr);
     for (size_t off = 0; off < bytes; off += kPage)
@@ -131,6 +139,5 @@ static inline void warm_pages_async(const void* ptr, size_t bytes)
     if (bytes) (void)p[bytes - 1];
 #endif
 }
-
 
 #endif // MEX_THREAD_UTILS_HPP
