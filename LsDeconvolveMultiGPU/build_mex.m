@@ -322,7 +322,8 @@ function build_mex(debug)
     % mex(mex_cpu{:}, 'load_lz4_mex.c', lz4_incflag, lz4_libfile);
     % mex(mex_cpu{:}, 'load_slab_lz4.cpp', lz4_incflag, lz4_libfile);
     % mex(mex_cpu{:}, inc_tiff, inc_hwloc, 'load_bl_tif.cpp', 'mex_thread_utils.cpp', link_tiff{:}, link_hwloc{:});
-    mex(mex_cpu{:}, inc_tiff, inc_hwloc, 'save_bl_tif.cpp', 'mex_thread_utils.cpp', link_tiff{:}, link_hwloc{:});
+    % mex(mex_cpu{:}, inc_tiff, inc_hwloc, 'save_bl_tif.cpp', 'mex_thread_utils.cpp', link_tiff{:}, link_hwloc{:});
+    mex(mex_cpu{:}, inc_tiff, inc_hwloc, 'load_slab_lz4_save_as_tif.cpp', 'mex_thread_utils.cpp', lz4_incflag, lz4_libfile, link_tiff{:}, link_hwloc{:});
 
     %% --------- Build CUDA MEX files ---------
     archs_env = getenv('BUILD_SM_ARCHS');
