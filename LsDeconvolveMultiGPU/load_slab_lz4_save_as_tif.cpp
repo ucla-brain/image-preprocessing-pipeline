@@ -732,11 +732,14 @@ std::vector<std::unique_ptr<OUT_T[]>> loadSlabLz4(const ValidatedInputs& inp) {
                     if (!outSlice) {
                         // Use unique_ptr for exception safety, always freed if not released
                         std::unique_ptr<OUT_T[]> newBuf(new OUT_T[sliceSize]);
+                        #if defined(__linux__)
+                            madvise(newBuf.get(), sliceSize * sizeof(OUT_T), MADV_HUGEPAGE);
+                        #endif
+                        std::fill_n(newBuf.get(), sliceSize, OUT_T{});
                         OUT_T* expected = nullptr;
                         // Only install if it hasn't been set (thread-safe)
                         if (slices[globalZ].compare_exchange_strong(expected, newBuf.get(),
                                 std::memory_order_acq_rel, std::memory_order_acquire)) {
-                            std::fill_n(newBuf.get(), sliceSize, OUT_T{});
                             outSlice = newBuf.release(); // we "won" – transfer ownership to atomic array
                         } else {
                             outSlice = expected; // another thread beat us, unique_ptr auto-deletes
