@@ -283,16 +283,16 @@ function [] = LsDeconv(varargin)
         p_log(log_file, ['elapsed time: ' char(duration(datetime('now') - start_time, 'Format', 'dd:hh:mm:ss'))]);
         disp('----------------------------------------------------------------------------------------');
         delete(gcp('nocreate'));
-        %try
-        %    status = rmdir(cache_drive, 's');
-        %    if status
-        %        p_log(log_file, sprintf('[Cache folder deleting]: succeeded for "%s"!', cache_drive));
-        %    else
-        %        p_log(log_file, sprintf('[Cache folder deleting]: failed for "%s"!', cache_drive));
-        %    end
-        %catch ME
-        %    p_log(log_file, sprintf('[Cache folder deleting]: failed for "%s": %s', cache_drive, ME.message));
-        %end
+        try
+            status = rmdir(cache_drive, 's');
+            if status
+                p_log(log_file, sprintf('[Cache folder deleting]: succeeded for "%s"!', cache_drive));
+            else
+                p_log(log_file, sprintf('[Cache folder deleting]: failed for "%s"!', cache_drive));
+            end
+        catch ME
+            p_log(log_file, sprintf('[Cache folder deleting]: failed for "%s": %s', cache_drive, ME.message));
+        end
         fclose(log_file);
     catch ME
         % error handling
