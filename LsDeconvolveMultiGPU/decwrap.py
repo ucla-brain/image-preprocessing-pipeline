@@ -316,8 +316,6 @@ def main():
     parser.add_argument('--no-resume', dest='resume', action='store_false',
                         help='Disable resuming from previous cache (default: resume is enabled)')
     parser.set_defaults(resume=True)
-    parser.add_argument('--flip', action='store_true',
-                        help='Flip output image vertically after deconvolution')
     parser.add_argument('--convert-to-8bit', action='store_true',
                         help='Convert output to 8-bit (default keeps original bit depth, usually 16-bit)')
     parser.add_argument('--convert-to-16bit', action='store_true',
@@ -333,7 +331,9 @@ def main():
                         help='Use jemalloc allocator (Linux only)')
     parser.add_argument('--use-tcmalloc', action='store_true', default=False,
                         help='Use tcmalloc allocator (Linux only)')
-    parser.add_argument('--progress', action='store_true', help='Show a progress bar for MATLAB deconvolution')
+    parser.add_argument('--no-progress', dest='progress', action='store_false',
+                        help='Show a progress bar for MATLAB deconvolution')
+    parser.set_defaults(progress=True)
 
     args = parser.parse_args()
     validate_args(args)
@@ -441,7 +441,6 @@ def main():
         f"    {args.regularize_interval}, ...\n"
         f"    {int(args.resume)}, ...\n"
         f"    {args.start_block}, ...\n"
-        f"    {int(args.flip)}, ...\n"
         f"    {'true' if args.convert_to_8bit else 'false'}, ...\n"
         f"    {'true' if args.convert_to_16bit else 'false'}, ...\n"
         f"    {'true' if args.use_fft else 'false'}, ...\n"

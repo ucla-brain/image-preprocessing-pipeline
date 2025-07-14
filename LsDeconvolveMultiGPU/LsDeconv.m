@@ -11,6 +11,7 @@
 %   - 3D Gaussian filter support
 %   - Destripe function specifically along the z-axis
 %   - lots of C/C++/CUDA functions
+%   - adaptive PSF
 %
 % LsDeconv is free software: you can redistribute it and/or modify it
 % under the terms of the GNU General Public License as published by
@@ -30,13 +31,13 @@ function [] = LsDeconv(varargin)
         disp(' ');
         disp('LsDeconv: Deconvolution tool for Light Sheet Microscopy.');
         disp('TU Wien, 2019: This program was was initially written in MATLAB V2018b by klaus.becker@tuwien.ac.at');
-        disp('Keivan Moradi, 2023: Patched it in MATLAB V2023a. kmoradi@mednet.ucla.edu. UCLA B.R.A.I.N (Dong lab)');
-        disp('Main changes: Improved block size calculation and Multi-GPU and Multi-CPU parallel processing, Resume, Flip Y axis, and 3D gaussian filter support');
+        disp('Keivan Moradi, 2023-5: Rewrote in MATLAB V2025a. kmoradi@mednet.ucla.edu. UCLA B.R.A.I.N (Dong lab)');
+        disp('Multi-GPU and Multi-CPU parallel processing, Resume, Destripe, Gaussian, and adaptive PSF.');
         disp(' ');
         disp(datetime('now'));
 
         % make sure correct number of parameters specified
-        if nargin < 29
+        if nargin < 28
             showinfo();
             return
         end
@@ -66,12 +67,11 @@ function [] = LsDeconv(varargin)
         filter.regularize_interval = varargin{21};
         resume = varargin{22};
         starting_block = varargin{23};
-        flip_upside_down = varargin{24};
-        convert_to_8bit = varargin{25};
-        convert_to_16bit = varargin{26};
-        filter.use_fft = varargin{27};
-        filter.adaptive_psf = varargin{28};
-        cache_drive = varargin{29};
+        convert_to_8bit = varargin{24};
+        convert_to_16bit = varargin{25};
+        filter.use_fft = varargin{26};
+        filter.adaptive_psf = varargin{27};
+        cache_drive = varargin{28};
         if ~exist(cache_drive, 'dir')
             mkdir(cache_drive);
             disp('Cache drive dir created: ' + cache_drive)
@@ -90,9 +90,6 @@ function [] = LsDeconv(varargin)
         if isfolder(inpath)
             % make folder for results and make sure the outpath is writable
             outpath = fullfile(inpath, 'deconvolved');
-            if flip_upside_down
-                outpath = fullfile(inpath, 'deconvolved_flipped_upside_down');
-            end
             if ~exist(outpath, 'dir')
                 disp('making folder ' + outpath )
                 mkdir(outpath);
@@ -114,7 +111,6 @@ function [] = LsDeconv(varargin)
             [stack_info.x, stack_info.y, stack_info.z, stack_info.bit_depth] = getstackinfo(inpath); % n is volume dimension
             stack_info.dxy = dxy;
             stack_info.dz = dz;
-            stack_info.flip_upside_down = flip_upside_down;
             stack_info.convert_to_8bit = convert_to_8bit;
             stack_info.convert_to_16bit = convert_to_16bit;
 
@@ -250,11 +246,6 @@ function [] = LsDeconv(varargin)
         p_log(log_file, ['   histogram clipping percentiles: [lb=' num2str(100 - clipval) ' ub=' num2str(clipval) ']' ]);
         p_log(log_file, ['   signal amplification: ' num2str(amplification) 'x']);
         p_log(log_file, ['   post deconvolution dark subtraction: ' num2str(amplification)]);
-        if flip_upside_down
-        p_log(log_file, '   flip the image upside down (y-axis): yes');
-        else
-        p_log(log_file, '   flip the image upside down (y-axis): no');
-        end
         if convert_to_8bit
         p_log(log_file, '   convert to 8-bit: yes');
         else
