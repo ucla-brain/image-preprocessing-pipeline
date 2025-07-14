@@ -78,7 +78,7 @@ def make_a_list_of_input_output_paths(args):
             refractive_index=args.nimm,
             f_cylinder_lens=args.f_cylinder_lens,
             slit_width=args.slit_width,
-            gaussian_sgima=args.gaussian,
+            gaussian_sgima=args.gaussian,  # Pass as is
             doubled_psf=args.doubled_psf
         )
         psf: ndarray = rot90(psf, k=1, axes=(0, 2))
@@ -98,7 +98,6 @@ def make_a_list_of_input_output_paths(args):
         )
 
         deconvolution_args = make_deconvolution_args(
-            # psf,
             otf_file,
             n_iters=args.n_iters,
             dz_data=args.dz,
@@ -114,7 +113,6 @@ def make_a_list_of_input_output_paths(args):
             doubled_psf=args.doubled_psf
         )
 
-
     def get_args(input_file: Path):
         output_file = output_folder / input_file.relative_to(input_folder)
         if output_file.exists():
@@ -125,6 +123,7 @@ def make_a_list_of_input_output_paths(args):
                 "output_file": output_file,
                 "need_destripe": args.destripe,
                 "gaussian_sigma": args.gaussian,
+                "gaussian_mode": args.gaussian_mode,
                 "need_deconvolution": args.deconvolution,
                 "deconvolution_args": deconvolution_args,
             }
@@ -228,33 +227,88 @@ def process_cube(
         input_file: Path,
         output_file: Path,
         need_destripe: bool = False,
-        gaussian_sigma: float = 0,
+        gaussian_sigma=None,
+        gaussian_mode: str = "single",
         need_deconvolution: bool = False,
         deconvolution_args: dict = None,
         gpu_semaphore: Queue = None,
 ):
+    if gaussian_sigma is None:
+        gaussian_sigma = [0]
+    if gaussian_mode not in ("single", "triple"):
+        raise ValueError(f"Invalid gaussian_mode: {gaussian_mode}")
+
     return_code = 0
-    if not output_file.exists():
-        output_file.parent.mkdir(exist_ok=True, parents=True)
-        if need_destripe or need_gaussian:
-            img, header = read(input_file.__str__())
-            dtype = img.dtype
-            if need_gaussian:
-                if img.dtype != float32:
-                    img = img.astype(float32)
-                gaussian(img, 1, output=img)
-                img = img.astype(dtype)
+    output_file.parent.mkdir(exist_ok=True, parents=True)
+    # Check if any Gaussian is requested at all
+    gauss_requested = (gaussian_mode == "single" and gaussian_sigma[0] > 0) or \
+                      (gaussian_mode == "triple" and any(x > 0 for x in gaussian_sigma))
+    if need_destripe or gauss_requested or need_deconvolution:
+        img, header = read(input_file.__str__())
+        dtype = img.dtype
+        if is_uniform_3d(img):
+            copy(input_file, output_file)
+        else:
+            if img.dtype != float32:
+                img = img.astype(float32)
+
             if need_destripe:
                 img = rot90(img, k=1, axes=(1, 2))
                 for idx in range(0, img.shape[0], 1):
                     if not is_uniform_2d(img[idx]):
                         img[idx] = filter_streaks(img[idx], sigma=(1, 1), wavelet="db9", bidirectional=True)
                 img = rot90(img, k=-1, axes=(1, 2))
-            write(file=output_file.__str__(), data=img, header=header, compression_level=1)
-            if need_video:
-                input_file = output_file
-        if need_video:
-            return_code = call(f"{fnt_cube2video} {input_file} {output_file}", shell=True)
+
+            if need_deconvolution and deconvolution_args is not None:
+                if deconvolution_args['contrast_enhancement_factor'] > 1:
+                    img /= deconvolution_args['contrast_enhancement_factor']
+
+                img_decon = pad_to_good_dim(img, deconvolution_args['otf_shape'])
+                num_gaussian_decons = max(1, deconvolution_args['n_iters'] // deconvolution_args['dg_interation'])
+
+                for i in range(num_gaussian_decons):
+                    # SINGLE GAUSSIAN: use your special Z logic for first iteration, then isotropic
+                    if gaussian_mode == 'single' and gaussian_sigma[0] > 0:
+                        if i == 0:
+                            sigma = (
+                                gaussian_sigma[0],
+                                gaussian_sigma[0],
+                                (round(gaussian_sigma[0], 0) + (2.0 if deconvolution_args['doubled_psf'] else 1.5))
+                            )
+                        else:
+                            sigma = (gaussian_sigma[0],) * 3
+                        gaussian(img_decon, sigma=sigma, output=img_decon)
+                    # TRIPLE GAUSSIAN: use user values for all axes, all iterations
+                    elif gaussian_mode == 'triple' and any(x > 0 for x in gaussian_sigma):
+                        gaussian(img_decon, sigma=tuple(gaussian_sigma) if i == 0 else 0.5, output=img_decon)
+
+                    img_decon = apply_deconvolution(img_decon, deconvolution_args, gpu_semaphore, num_gaussian_decons)
+
+                    # from PIL import Image
+                    # img = trim_to_shape(img.shape, img_decon.copy())
+                    # if img.dtype != dtype and np_d_type(dtype).kind in ("u", "i"):
+                    #     clip(img, iinfo(dtype).min, iinfo(dtype).max, out=img)
+                    #     img = img.astype(dtype)
+                    # image_stack = [Image.fromarray(_) for _ in img]
+                    # image_stack[0].save(output_file.parent / (output_file.stem + f"_{i}.tif"),
+                    #                     save_all=True,
+                    #                     append_images=image_stack[1:],
+                    #                     compression='tiff_lzw')
+
+                # resize image to match original
+                img = trim_to_shape(img.shape, img_decon)
+            elif gauss_requested:
+                if gaussian_mode == 'single':
+                    gaussian(img, sigma=gaussian_sigma[0], output=img)
+                elif gaussian_mode == 'triple':
+                    gaussian(img, sigma=tuple(gaussian_sigma), output=img)
+
+        if img.dtype != dtype and np_d_type(dtype).kind in ("u", "i"):
+            clip(img, iinfo(dtype).min, iinfo(dtype).max, out=img)
+            img = img.astype(dtype)
+        tmp_file = output_file.parent / (output_file.name + ".tmp")
+        write(file=tmp_file.__str__(), data=img, header=header, compression_level=9)
+        tmp_file.rename(output_file)
     return return_code
 
 
@@ -329,9 +383,18 @@ if __name__ == '__main__':
     parser.add_argument("--num_processes", "-n", type=int, required=False,
                         default=num_processes,
                         help="Number of CPU cores.")
-    parser.add_argument("--gaussian", "-g", type=float, required=False,
-                        default=0.5,
-                        help="Sigma of a 3D gaussian filter. Default is 0.5. 0 disables gaussian.")
+    parser.add_argument("--gaussian", "-g", type=float, nargs='+', required=False,
+                        default=[0.5],
+                        help=(
+            "Sigma(s) of a 3D Gaussian filter. "
+            "You can provide either 1 value (e.g. -g 0.5) or 3 values (e.g. -g 0.5 0.5 1.5) "
+            "corresponding to sigma_x, sigma_y, sigma_z. For the first iteration in deconvolution, "
+            "If 1 value is given, the filter uses:\n"
+            "    sigma = (v, v, round(v)+2.0 if doubled_psf else round(v)+1.5) "
+            "If 3 values are provided, they are used directly for (sigma_x, sigma_y, sigma_z) with no modification."
+        )
+    )
+
     parser.add_argument("--destripe", "-ds", default=False, action=BooleanOptionalAction,
                         help="Enables axial image destriping. Default is --no-destripe.")
     parser.add_argument("--deconvolution", "-d", default=True, action=BooleanOptionalAction,
@@ -385,4 +448,21 @@ if __name__ == '__main__':
     parser.add_argument("--doubled_psf", "-dpsf", default=False, action=BooleanOptionalAction,
                         help="Use a specific psf that can better eliminate the doubling. default is --no-doubled_psf.")
 
-    main(parser.parse_args())
+    args_ = parser.parse_args()
+
+    # --- Gaussian Argument Normalization ---
+    if len(args_.gaussian) == 1:
+        gaussian_mode = 'single'
+        gaussian_sigma = float(args_.gaussian[0])
+    elif len(args_.gaussian) == 3:
+        gaussian_mode = 'triple'
+        gaussian_sigma = tuple(float(x) for x in args_.gaussian)
+    else:
+        raise ValueError(
+            "The --gaussian/-g argument must be either a single value or exactly three values (sigma_x sigma_y sigma_z)."
+        )
+
+    args_.gaussian_mode = gaussian_mode
+    args_.gaussian_sigma = gaussian_sigma
+
+    main(args_)
