@@ -1,6 +1,75 @@
 /*==============================================================================
   load_slab_lz4_save_as_tif.cpp
-================================================================================*/
+
+  Ultra-high-throughput, NUMA- and socket-aware, multi-threaded pipeline for
+  loading 3D LZ4-compressed slabs and saving them as TIFF Z-slices from MATLAB.
+
+  This single MEX integrates the robust LZ4 slab loading logic from `load_slab_lz4`
+  with the socket/NUMA-optimized, AVX-accelerated TIFF saving engine from `save_bl_tif`,
+  enabling maximal disk, memory, and CPU throughput for scientific volumes
+  (e.g., light-sheet microscopy, connectomics).
+
+  USAGE:
+    load_slab_lz4_save_as_tif(srcFiles, dstFiles, p1, p2, dims, scal, ampl, dmin, dmax
+                              [, compression, useTiles, maxThreads, isXYZLayout])
+
+  INPUTS:
+    • srcFiles     : 1×N cellstr, filenames for LZ4 brick inputs (float32 only)
+    • dstFiles     : 1×Z cellstr, output filenames for each Z-slice TIFF
+    • p1, p2       : [N×3] arrays, brick region start/end (MATLAB 1-based indexing)
+    • dims         : [dimX dimY dimZ], output slab size
+    • scal, ampl   : scaling/amplification factors
+    • dmin, dmax   : brick min/max (for normalization)
+    • compression  : (opt) 'none', 'lzw', or 'deflate' (default: 'deflate')
+    • useTiles     : (opt) logical, true for tiled TIFF, false for strips (default: false)
+    • maxThreads   : (opt) int, maximum thread count (default: all logical cores)
+    • isXYZLayout  : (opt) logical, true if slices are [X Y Z] (default: true)
+
+  OUTPUT:
+    • Writes each Z-slice as a separate TIFF file with requested compression, strip/tile mode,
+      and memory layout.
+
+  HIGHLIGHTS:
+    • **Parallel NUMA-aware buffer allocation**: Slice buffers are allocated in parallel,
+      one per output Z-plane, using the optimal NUMA node and, on Linux, huge page hints
+      (`MADV_HUGEPAGE`) for best DRAM bandwidth and reduced TLB pressure.
+    • **Brick file prefetching**: Files are asynchronously prefetched at allocation time
+      using platform-appropriate APIs (`posix_fadvise` on Linux, `FILE_FLAG_SEQUENTIAL_SCAN`
+      and async dummy read on Windows) to accelerate subsequent LZ4 I/O and minimize stalls.
+    • **Fully parallel LZ4 decompression and brick assembly**: Thread-local scratch buffers,
+      atomic round-robin dispatch, no mutexes, no lock contention.
+    • **Early casting/scaling**: Brick data is cast/scaled to uint8/uint16 as soon as possible
+      to minimize memory footprint and maximize CPU cache utilization.
+    • **AVX/AVX2/AVX512/SSE2-accelerated non-temporal memory copy**: For large slices,
+      copies bypass CPU cache for maximum speed.
+    • **Socket- and NUMA-aware async producer-consumer**: Each producer/consumer pair is bound
+      to sibling logical cores on the same node, ensuring memory locality and optimal throughput.
+    • **Cross-platform atomic output**: TIFF files are written to `.tmp`, closed/flushed, and
+      atomically renamed (with robust copy-delete fallback), ensuring visible output is always valid.
+    • **Robust error handling**: First error aborts all threads, propagates back to MATLAB reliably.
+    • **Zero memory/resource leaks**: Modern C++17 idioms (RAII, smart pointers, noexcept dtors).
+    • **Fully cross-platform**: Runs on Linux, Windows, and macOS (with minor feature differences).
+
+  EXAMPLES:
+    % Basic: Load and save with LZW compression using all available threads
+    load_slab_lz4_save_as_tif(srcFiles, dstFiles, p1, p2, dims, scal, ampl, dmin, dmax, 'lzw');
+    % Deflate + tiled TIFF + 8 threads, YXZ layout
+    load_slab_lz4_save_as_tif(srcFiles, dstFiles, p1, p2, dims, scal, ampl, dmin, dmax, 'deflate', true, 8, false);
+
+  LIMITATIONS:
+    • Only float32 LZ4 bricks supported for input
+    • Output TIFFs are always grayscale, 8 or 16 bits per pixel depending on scaling
+    • `p1`, `p2` must fully specify input brick regions; output must fit in memory
+    • No progress bar or interactive cancellation
+    • Requires libtiff ≥4.7, hwloc ≥2.12
+
+  AUTHOR:
+    Keivan Moradi (with ChatGPT assistance), 2025
+
+  LICENSE:
+    GNU GPL v3 — https://www.gnu.org/licenses/gpl-3.0.html
+==============================================================================*/
+
 #define _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
 
 #include "mex.h"
