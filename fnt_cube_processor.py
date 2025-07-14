@@ -78,7 +78,7 @@ def make_a_list_of_input_output_paths(args):
             refractive_index=args.nimm,
             f_cylinder_lens=args.f_cylinder_lens,
             slit_width=args.slit_width,
-            gaussian_sgima=float(args.gaussian[0]) if isinstance(args.gaussian, tuple) else args.gaussian,
+            gaussian_sgima=float(args.gaussian[0]),
             doubled_psf=args.doubled_psf
         )
         psf: ndarray = rot90(psf, k=1, axes=(0, 2))
