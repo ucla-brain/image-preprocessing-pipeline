@@ -806,7 +806,7 @@ std::vector<std::unique_ptr<OUT_T[], void(*)(void*)>> loadSlabLz4(const Validate
     auto deleter = [](void* p) {
         if (p) free_numa_local_buffer(g_hwlocTopo->get(), p, 0);
     };
-    std::vector<std::unique_ptr<OUT_T[], void(*)(void*)>> outSlices;
+    std::vector<std::unique_ptr<OUT_T[], decltype(deleter)>> outSlices;
     outSlices.reserve(nSlices);
     for (size_t i = 0; i < nSlices; ++i) {
         OUT_T* ptr = slices[i].exchange(nullptr);
