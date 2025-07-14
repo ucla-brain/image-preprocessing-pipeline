@@ -646,13 +646,15 @@ struct ValidatedInputs {
 // Each output buffer is width*height, suitable for direct TIFF writing.
 template<typename OUT_T>
 std::vector<std::unique_ptr<OUT_T[]>> loadSlabLz4(const ValidatedInputs& inp) {
-    const size_t nBricks = inp.nBricks;
-    const size_t nSlices = inp.nSlices;
-    const uint64_t dimX = inp.dims[0], dimY = inp.dims[1];
+    const size_t nBricks  = inp.nBricks;
+    const size_t nSlices  = inp.nSlices;
+    const uint64_t dimX   = inp.dims[0], dimY = inp.dims[1];
     const size_t sliceSize = dimX * dimY;
 
-    std::vector<std::mutex> sliceMutexes(nSlices);
-    std::vector<std::unique_ptr<OUT_T[]>> slices(nSlices); // All nullptr by default
+    // Atomic array of raw pointers (all nullptr initially)
+    std::vector<std::atomic<OUT_T*>> slices(nSlices);
+    for (size_t i = 0; i < nSlices; ++i)
+        slices[i].store(nullptr, std::memory_order_relaxed);
 
     struct Job {
         std::string file;
@@ -725,19 +727,25 @@ std::vector<std::unique_ptr<OUT_T[]>> loadSlabLz4(const ValidatedInputs& inp) {
                     uint64_t globalZ = job.z0 + bzIdx;
                     if (globalZ >= inp.nSlices) continue; // skip out-of-bounds
 
-                    OUT_T* outSlice = slices[globalZ] ? slices[globalZ].get() : nullptr;
+                    OUT_T* outSlice = slices[globalZ].load(std::memory_order_acquire);
                     if (!outSlice) {
-                        std::lock_guard<std::mutex> lock(sliceMutexes[globalZ]);
-                        if (!slices[globalZ]) {
-                            std::unique_ptr<OUT_T[]> newBuf(new OUT_T[sliceSize]);
-                            #if defined(__linux__)
-                                madvise(newBuf.get(), sliceSize * sizeof(OUT_T), MADV_HUGEPAGE);
-                            #endif
-                            std::fill_n(newBuf.get(), sliceSize, OUT_T{});
-                            slices[globalZ] = std::move(newBuf);
+                        // Allocate and zero, with hugepage hint
+                        std::unique_ptr<OUT_T[]> newBuf(new OUT_T[sliceSize]);
+                        #if defined(__linux__)
+                        madvise(newBuf.get(), sliceSize * sizeof(OUT_T), MADV_HUGEPAGE);
+                        #endif
+                        std::fill_n(newBuf.get(), sliceSize, OUT_T{});
+                        OUT_T* expected = nullptr;
+                        // Only install if it hasn't been set (thread-safe)
+                        if (slices[globalZ].compare_exchange_strong(expected, newBuf.get(),
+                                std::memory_order_acq_rel, std::memory_order_acquire)) {
+                            outSlice = newBuf.release(); // transfer ownership
+                        } else {
+                            outSlice = expected; // another thread "won", auto-free
                         }
-                        outSlice = slices[globalZ].get();
                     }
+                    // outSlice is now valid for this slice
+
                     // Copy bx-by region from brick into correct region of output slice
                     for (uint64_t byIdx = 0; byIdx < by; ++byIdx) {
                         uint64_t globalY = job.y0 + byIdx;
@@ -774,9 +782,12 @@ std::vector<std::unique_ptr<OUT_T[]>> loadSlabLz4(const ValidatedInputs& inp) {
 
     if (errorPtr) std::rethrow_exception(errorPtr);
 
-    return slices;
+    // Transfer to unique_ptrs for safe ownership
+    std::vector<std::unique_ptr<OUT_T[]>> outSlices(nSlices);
+    for (size_t i = 0; i < nSlices; ++i)
+        outSlices[i].reset(slices[i].exchange(nullptr));
+    return outSlices;
 }
-
 
 //=========================
 //        saveSlabTif
