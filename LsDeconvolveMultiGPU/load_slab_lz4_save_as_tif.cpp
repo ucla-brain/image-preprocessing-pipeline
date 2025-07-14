@@ -652,9 +652,13 @@ std::vector<std::unique_ptr<OUT_T[]>> loadSlabLz4(const ValidatedInputs& inp) {
     const size_t sliceSize = dimX * dimY;
 
     // Atomic array of pointers, one per output slice (all start as nullptr)
+    std::atomic<size_t> allocIndex{0};
     std::vector<std::atomic<OUT_T*>> slices(nSlices);
-    for (size_t i = 0; i < nSlices; ++i)
+    std::vector<size_t> sliceNumbers(nSlices);
+    for (size_t i = 0; i < nSlices; ++i) {
         slices[i].store(nullptr, std::memory_order_relaxed);
+        sliceNumbers[i] = i;
+    }
 
     struct Job {
         std::string file;
@@ -684,6 +688,29 @@ std::vector<std::unique_ptr<OUT_T[]>> loadSlabLz4(const ValidatedInputs& inp) {
     std::exception_ptr errorPtr = nullptr;
 
     auto worker = [&]() {
+        // Phase 1: Each thread allocates slice buffers in round-robin via atomic queue
+        while (true) {
+            size_t i = allocIndex.fetch_add(1, std::memory_order_relaxed);
+            if (i >= nSlices) break;
+            size_t sliceIdx = sliceNumbers[i];
+
+            OUT_T* curr = slices[sliceIdx].load(std::memory_order_acquire);
+            if (!curr) {
+                std::unique_ptr<OUT_T[]> newBuf(new OUT_T[sliceSize]);
+#if defined(__linux__)
+                madvise(newBuf.get(), sliceSize * sizeof(OUT_T), MADV_HUGEPAGE);
+#endif
+                std::fill_n(newBuf.get(), sliceSize, OUT_T{});
+                OUT_T* expected = nullptr;
+                if (slices[sliceIdx].compare_exchange_strong(expected, newBuf.get(),
+                        std::memory_order_acq_rel, std::memory_order_acquire)) {
+                    (void)newBuf.release(); // install and relinquish unique_ptr
+                }
+                // Otherwise another thread beat us, unique_ptr auto-frees
+            }
+        }
+
+        // 2. Proceed with the usual brick decompression/copy loop
         while (true) {
             size_t idx = jobIndex.fetch_add(1, std::memory_order_relaxed);
             if (idx >= jobs.size() || errorPtr) break;
@@ -718,6 +745,7 @@ std::vector<std::unique_ptr<OUT_T[]>> loadSlabLz4(const ValidatedInputs& inp) {
                 if (offset != header.totalBytes)
                     throw std::runtime_error(job.file + ": size mismatch");
 
+                // Compute scaling
                 const float kLinear = job.scal * job.ampl / job.dmax;
                 const float kMinMax = (job.dmin > 0.f) ? job.scal * job.ampl / (job.dmax - job.dmin) : kLinear;
                 const bool useMinMax = (job.dmin > 0.f);
@@ -725,24 +753,22 @@ std::vector<std::unique_ptr<OUT_T[]>> loadSlabLz4(const ValidatedInputs& inp) {
                 // For each Z-plane in this brick, copy/correct region into global output buffer
                 for (uint64_t bzIdx = 0; bzIdx < bz; ++bzIdx) {
                     uint64_t globalZ = job.z0 + bzIdx;
-                    if (globalZ >= inp.nSlices) continue; // skip out-of-bounds
+                    if (globalZ >= inp.nSlices) continue;
 
-                    // Allocate buffer only if this slice hasn't been allocated
                     OUT_T* outSlice = slices[globalZ].load(std::memory_order_acquire);
                     if (!outSlice) {
-                        // Use unique_ptr for exception safety, always freed if not released
+                        // Paranoia fallback (shouldn't happen if pre-allocated above)
                         std::unique_ptr<OUT_T[]> newBuf(new OUT_T[sliceSize]);
                         #if defined(__linux__)
-                            madvise(newBuf.get(), sliceSize * sizeof(OUT_T), MADV_HUGEPAGE);
+                        madvise(newBuf.get(), sliceSize * sizeof(OUT_T), MADV_HUGEPAGE);
                         #endif
                         std::fill_n(newBuf.get(), sliceSize, OUT_T{});
                         OUT_T* expected = nullptr;
-                        // Only install if it hasn't been set (thread-safe)
                         if (slices[globalZ].compare_exchange_strong(expected, newBuf.get(),
                                 std::memory_order_acq_rel, std::memory_order_acquire)) {
-                            outSlice = newBuf.release(); // we "won" – transfer ownership to atomic array
+                            outSlice = newBuf.release();
                         } else {
-                            outSlice = expected; // another thread beat us, unique_ptr auto-deletes
+                            outSlice = expected;
                         }
                     }
                     // Copy bx-by region from brick into correct region of output slice
