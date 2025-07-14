@@ -213,9 +213,6 @@ def validate_args(args):
     if len(args.gaussian_sigma) != 3:
         raise ValueError("Gaussian sigma must be a triplet, e.g., --gaussian-sigma 0.5 0.5 1.5")
 
-    if len(args.gaussian_filter_size) != 3:
-        raise ValueError("Gaussian filter size must be a triplet, e.g., --gaussian-filter-size 5 5 15")
-
     if args.adaptive_psf and not args.use_fft:
         raise RuntimeError("--adaptive-psf and --use-fft should be used simultaneously.")
 
@@ -301,8 +298,6 @@ def main():
                         help='Signal amplification factor')
     parser.add_argument('--gaussian-sigma', type=float, nargs=3, default=[0.5, 0.5, 2.5],
                         help='3D Gaussian filter sigma in voxel unit (e.g., 0.5 0.5 1.5). Use 0 0 0 to disable filtering.')
-    parser.add_argument('--gaussian-filter-size', type=int, nargs=3, default=[13, 13, 25],
-                        help='Size of the 3D Gaussian filter kernel in voxel unit')
     parser.add_argument('--denoise-strength', type=int, default=1,
                         help='Denoising strength (e.g., 1 to 255 for 8-bit images)')
     parser.add_argument('--destripe-sigma', type=float, default=0.0,
@@ -377,7 +372,6 @@ def main():
 
     gpu_indices_str = ' '.join(str(i) for i in final_gpu_indices)
     gaussian_sigma_str = ' '.join(str(i) for i in args.gaussian_sigma)
-    gaussian_filter_size_str = ' '.join(str(i) for i in args.gaussian_filter_size)
     cache_drive_folder = Path(args.input) / f"cache_deconvolution_Ex_{args.lambda_ex}_Em_{args.lambda_em}"
     if args.cache_drive:
         if not Path(args.cache_drive).exists():
@@ -435,7 +429,6 @@ def main():
         f"    [{gpu_indices_str}], ...\n"
         f"    {args.signal_amp}, ...\n"
         f"    [{gaussian_sigma_str}], ...\n"
-        f"    [{gaussian_filter_size_str}], ...\n"
         f"    {args.denoise_strength}, ...\n"
         f"    {args.destripe_sigma}, ...\n"
         f"    {args.regularize_interval}, ...\n"

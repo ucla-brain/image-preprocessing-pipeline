@@ -55,7 +55,7 @@ function bl = deconSpatial(bl, psf, psf_inv, niter, lambda, stop_criterion, regu
         is_regularization_time = apply_regularization && (i > 1) && (i < niter) && (mod(i, regularize_interval) == 0);
 
         if is_regularization_time
-            bl = imgaussfilt3(bl,0.5,'FilterDomain', 'spatial');
+            bl = imgaussfilt3(bl,0.5,'FilterDomain', 'spatial', 'Padding', 'symmetric');
         end
 
         buf = convn(bl, psf, 'same');
@@ -130,7 +130,7 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regula
         apply_regularization = (regularize_interval > 0) && (regularize_interval < niter);
         is_regularization_time = apply_regularization && (i > 1) && (i < niter) && (mod(i, regularize_interval) == 0);
         if is_regularization_time
-            bl = imgaussfilt3(bl,0.5,'FilterDomain', 'spatial');
+            bl = imgaussfilt3(bl,0.5,'FilterDomain', 'spatial', 'Padding', 'symmetric');
         end
         buf = fftn(bl);                                                        % x now holds fft(x)             complex
         buf = buf .* buf_otf;                                                  % x now holds fft(x) .* otf      complex
@@ -222,7 +222,7 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
         if i == 1
             buff1 = fftn(bl);
         elseif regularize_interval>0 && mod(i, regularize_interval)==0
-            bl = imgaussfilt3(bl,0.5,'FilterDomain', 'spatial');
+            bl = imgaussfilt3(bl,0.5,'FilterDomain', 'spatial', 'Padding', 'symmetric');
             buff1 = fftn(bl);                                            % F{Y}                                 complex
         end
         % apply PSF: H{Y}

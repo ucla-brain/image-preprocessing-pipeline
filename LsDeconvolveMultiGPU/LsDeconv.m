@@ -37,7 +37,7 @@ function [] = LsDeconv(varargin)
         disp(datetime('now'));
 
         % make sure correct number of parameters specified
-        if nargin < 28
+        if nargin < 27
             showinfo();
             return
         end
@@ -61,17 +61,16 @@ function [] = LsDeconv(varargin)
         gpus = varargin{15};
         amplification = single(varargin{16});
         filter.gaussian_sigma = varargin{17};
-        filter.gaussian_size = varargin{18};
-        filter.dark = varargin{19};
-        filter.destripe_sigma = varargin{20};
-        filter.regularize_interval = varargin{21};
-        resume = varargin{22};
-        starting_block = varargin{23};
-        convert_to_8bit = varargin{24};
-        convert_to_16bit = varargin{25};
-        filter.use_fft = varargin{26};
-        filter.adaptive_psf = varargin{27};
-        cache_drive = varargin{28};
+        filter.dark = varargin{18};
+        filter.destripe_sigma = varargin{19};
+        filter.regularize_interval = varargin{20};
+        resume = varargin{21};
+        starting_block = varargin{22};
+        convert_to_8bit = varargin{23};
+        convert_to_16bit = varargin{24};
+        filter.use_fft = varargin{25};
+        filter.adaptive_psf = varargin{26};
+        cache_drive = varargin{27};
         if ~exist(cache_drive, 'dir')
             mkdir(cache_drive);
             disp('Cache drive dir created: ' + cache_drive)
@@ -218,7 +217,6 @@ function [] = LsDeconv(varargin)
         filter.dark = dark(filter, stack_info.bit_depth);
         p_log(log_file, 'preprocessing params ...')
         p_log(log_file, ['   3D gaussian filter sigma: ' num2str(filter.gaussian_sigma, 3)]);
-        p_log(log_file, ['   3D gaussian filter size: ' num2str(filter.gaussian_size, 3)]);
         p_log(log_file, ['   post filter baseline subtraction (denoising): ' num2str(filter.dark)]);
         p_log(log_file, ['   destrip along the z-axis sigma: ' num2str(filter.destripe_sigma)]);
         p_log(log_file, ' ');
@@ -312,18 +310,14 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit( ...
     z_max_ram = floor(ram_reserved / (output_bytes * slice_pixels));
     z_max = min(z_max_ram, z_dim);
     xy_min = max(min([psf_size(1) * 2, x_dim, y_dim]), 1);
-    z_min  = min(psf_size(3) * 2, z_dim);
+    z_min  = max(min(psf_size(3) * 2, z_dim), 1);
 
     block_size_max = min(block_size_max, max_total_elements);
 
-    %=== Precompute Pad Base ===%
-    base_pad = [0 0 0];
-    if filter.destripe_sigma > 0, base_pad = [1 1 1]; end
-    if numit > 0
-        dpz = decon_pad_size(psf_size);
-        base_pad = max(base_pad, dpz);
-    end
-    do_gauss = any(filter.gaussian_sigma > 0);
+    %=== Precompute Pad Size ===%
+    pad = [0 0 0];
+    if filter.destripe_sigma > 0, pad = [1 1 1]; end
+    if numit > 0, pad = max(pad, decon_pad_size(psf_size)); end
     use_fft = filter.use_fft;
 
     %=== Search for Best Block ===%
@@ -333,7 +327,7 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit( ...
     mem_core_mult = physCores * bl_bytes;
 
     % For efficiency, precompute max for all z values to avoid repeat calculation
-    for z = z_max:-1:max(z_min, 1)
+    for z = z_max:-1:z_min
         xy_max = min([floor((max_total_elements/z)^0.5), x_dim, y_dim]);
         if xy_max < xy_min, continue; end
 
@@ -341,25 +335,19 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit( ...
 
         for xy = xy_max:-1:xy_min
             block_core = [xy xy z];
-            pad = base_pad;
-
-            if do_gauss
-                pad = max(pad, gaussian_pad_size(block_core, filter.gaussian_sigma, filter.gaussian_size));
-            end
 
             block_shape = block_core + 2*pad;
-            if use_fft
-                block_shape = next_fast_len(block_shape);
-            end
+            if use_fft, block_shape = next_fast_len(block_shape); end
 
             % Safety checks (all fast, no function call)
             if block_shape(1) > x_dim || block_shape(2) > y_dim || block_shape(3) > z_dim, continue; end
             if prod(block_shape) >= block_size_max, continue; end
 
-            mem_needed = slice_mem + prod(block_core) * mem_core_mult;
+            max_block_volume = prod(block_core);
+            mem_needed = slice_mem + max_block_volume * mem_core_mult;
             if mem_needed > ram_available, continue; end
 
-            score = prod(block_core); % Use max block volume as score
+            score = max_block_volume; % Use max block volume as score
             if score > best_score
                 best = struct('core', block_core, 'pad', pad, 'fft_shape', block_shape);
                 best_score = score;
@@ -402,7 +390,7 @@ function pad_size = gaussian_pad_size(image_size, sigma, kernel)
 end
 
 function pad = decon_pad_size(psf_sz)
-    pad = ceil(psf_sz(:).' * 1);
+    pad = ceil(psf_sz(:).' * 1.5);
 end
 
 function n_vec = next_fast_len(n_vec)
@@ -920,7 +908,7 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
     end
 
     if any(filter.gaussian_sigma > 0)
-        bl = imgaussfilt3(bl, filter.gaussian_sigma, 'FilterSize', filter.gaussian_size, 'Padding', 'symmetric', 'FilterDomain', 'spatial');
+        bl = imgaussfilt3(bl, filter.gaussian_sigma, 'Padding', 'symmetric', 'FilterDomain', 'spatial');
         if filter.dark > 0
             bl = bl - filter.dark;
             bl = max(bl, 0);
@@ -1215,22 +1203,30 @@ end
 
 function baseline_subtraction = dark(filter, bit_depth)
     baseline_subtraction = 0;
-    if any(filter.gaussian_sigma > 0)
+    sigma = double(filter.gaussian_sigma);
+    % Ensure sigma is a vector of length 3
+    if isscalar(sigma), sigma = repmat(sigma,1,3); end
+    if any(sigma > 0)
+        kernel_size = 2 * ceil(3 * sigma) + 1;
+        % Create the zeros array with the correct type
         if bit_depth == 8
-            a=zeros(filter.gaussian_size, "uint8");
+            a = zeros(kernel_size, 'uint8');
         elseif bit_depth == 16
-            a=zeros(filter.gaussian_size, "uint16");
+            a = zeros(kernel_size, 'uint16');
         else
             warning('unsupported image bit depth');
-            a=zeros(filter.gaussian_size);
+            a = zeros(kernel_size);
         end
-        % dark is a value greater than 10 surrounded by zeros
-        a(ceil(filter.gaussian_size(1)/2), ceil(filter.gaussian_size(2)/2), ceil(filter.gaussian_size(3)/2)) = filter.dark;
-        a=im2single(a);
-        a=imgaussfilt3(a, filter.gaussian_sigma, 'FilterSize', filter.gaussian_size, 'Padding', 'symmetric');
+        % Center index
+        kernel_center = ceil(kernel_size/2);
+        % Set center voxel to filter.dark
+        a(kernel_center(1), kernel_center(2), kernel_center(3)) = filter.dark;
+        a = im2single(a);
+        a = imgaussfilt3(a, sigma, 'Padding', 'symmetric', 'FilterDomain', 'spatial');
         baseline_subtraction = max(a(:));
     end
 end
+
 
 function [lb, ub] = deconvolved_stats(deconvolved, clipval)
     stats = prctile(deconvolved, [(100 - clipval) clipval], "all");
