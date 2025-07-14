@@ -651,12 +651,11 @@ std::vector<std::unique_ptr<OUT_T[]>> loadSlabLz4(const ValidatedInputs& inp) {
     const uint64_t dimX = inp.dims[0], dimY = inp.dims[1], dimZ = inp.dims[2];
     const size_t sliceSize = dimX * dimY;
 
-    // Allocate one buffer per output slice
-    std::vector<std::unique_ptr<OUT_T[]>> slices(nSlices);
-    //for (size_t i = 0; i < nSlices; ++i)
-    //    slices[i] = std::make_unique<OUT_T[]>(sliceSize);
+    // Atomic array of pointers, one per output slice (all start as nullptr)
+    std::vector<std::atomic<OUT_T*>> slices(nSlices);
+    for (size_t i = 0; i < nSlices; ++i)
+        slices[i].store(nullptr, std::memory_order_relaxed);
 
-    // For each brick, decompress and copy its Z-slices to the output buffers
     struct Job {
         std::string file;
         uint64_t x0, y0, z0, x1, y1, z1;
@@ -671,7 +670,7 @@ std::vector<std::unique_ptr<OUT_T[]>> loadSlabLz4(const ValidatedInputs& inp) {
             : static_cast<uint64_t>(mxGetPr(arr)[idx]);
     };
 
-    // Create brick jobs
+    // Prepare brick jobs
     for (size_t i = 0; i < nBricks; ++i) {
         jobs.push_back(Job{
             inp.srcFiles[i],
@@ -681,7 +680,6 @@ std::vector<std::unique_ptr<OUT_T[]>> loadSlabLz4(const ValidatedInputs& inp) {
         });
     }
 
-    // Parallel brick decompression/copy
     std::atomic<size_t> jobIndex{0};
     std::exception_ptr errorPtr = nullptr;
 
@@ -699,7 +697,6 @@ std::vector<std::unique_ptr<OUT_T[]>> loadSlabLz4(const ValidatedInputs& inp) {
 
                 const auto header = readHeader(fp.get(), job.file);
 
-                // Brick dims (in local slab coords)
                 uint64_t bx = job.x1 - job.x0 + 1;
                 uint64_t by = job.y1 - job.y0 + 1;
                 uint64_t bz = job.z1 - job.z0 + 1;
@@ -721,7 +718,6 @@ std::vector<std::unique_ptr<OUT_T[]>> loadSlabLz4(const ValidatedInputs& inp) {
                 if (offset != header.totalBytes)
                     throw std::runtime_error(job.file + ": size mismatch");
 
-                // Compute scaling
                 const float kLinear = job.scal * job.ampl / job.dmax;
                 const float kMinMax = (job.dmin > 0.f) ? job.scal * job.ampl / (job.dmax - job.dmin) : kLinear;
                 const bool useMinMax = (job.dmin > 0.f);
@@ -731,12 +727,20 @@ std::vector<std::unique_ptr<OUT_T[]>> loadSlabLz4(const ValidatedInputs& inp) {
                     uint64_t globalZ = job.z0 + bzIdx;
                     if (globalZ >= inp.nSlices) continue; // skip out-of-bounds
 
-                    // Lazy allocation on first write:
-                    if (!slices[globalZ]) {
-                        slices[globalZ] = std::make_unique<OUT_T[]>(sliceSize);
-                        std::fill_n(slices[globalZ].get(), sliceSize, OUT_T(0));
+                    // Allocate buffer only if this slice hasn't been allocated
+                    OUT_T* outSlice = slices[globalZ].load(std::memory_order_acquire);
+                    if (!outSlice) {
+                        // Use unique_ptr for exception safety, always freed if not released
+                        std::unique_ptr<OUT_T[]> newBuf(new OUT_T[sliceSize]);
+                        OUT_T* expected = nullptr;
+                        // Only install if it hasn't been set (thread-safe)
+                        if (slices[globalZ].compare_exchange_strong(expected, newBuf.get(),
+                                std::memory_order_acq_rel, std::memory_order_acquire)) {
+                            outSlice = newBuf.release(); // we "won" – transfer ownership to atomic array
+                        } else {
+                            outSlice = expected; // another thread beat us, unique_ptr auto-deletes
+                        }
                     }
-                    OUT_T* outSlice = slices[globalZ].get();
                     // Copy bx-by region from brick into correct region of output slice
                     for (uint64_t byIdx = 0; byIdx < by; ++byIdx) {
                         uint64_t globalY = job.y0 + byIdx;
@@ -774,14 +778,12 @@ std::vector<std::unique_ptr<OUT_T[]>> loadSlabLz4(const ValidatedInputs& inp) {
 
     if (errorPtr) std::rethrow_exception(errorPtr);
 
-    // PATCH: Ensure every slice buffer is at least allocated (zero-filled) if it wasn't written
-    for (size_t i = 0; i < slices.size(); ++i) {
-        if (!slices[i]) {
-            throw std::runtime_error("Output slice " + std::to_string(i) + " was never written by any input brick. Check brick decomposition or input region specifications.");
-        }
-    }
+    // Transfer pointers to unique_ptr for safe ownership and automatic cleanup
+    std::vector<std::unique_ptr<OUT_T[]>> outSlices(nSlices);
+    for (size_t i = 0; i < nSlices; ++i)
+        outSlices[i].reset(slices[i].exchange(nullptr));
 
-    return slices; // vector<unique_ptr<OUT_T[]>> – each is a [dimX * dimY] buffer for one output slice
+    return outSlices;
 }
 
 //=========================
