@@ -683,7 +683,7 @@ function deconvolve(filelist, psf, numit, damping, ...
 
     num_blocks = block.nx * block.ny * block.nz;
     num_blocks_str = num2str(num_blocks);
-    loading_time_moving_average = 0;
+    % loading_time_moving_average = 0;
 
     for blnr = starting_block : num_blocks
         % skip blocks already worked on
