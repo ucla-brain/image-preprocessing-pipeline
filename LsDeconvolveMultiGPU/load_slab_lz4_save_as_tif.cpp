@@ -653,8 +653,8 @@ std::vector<std::unique_ptr<OUT_T[]>> loadSlabLz4(const ValidatedInputs& inp) {
 
     // Allocate one buffer per output slice
     std::vector<std::unique_ptr<OUT_T[]>> slices(nSlices);
-    for (size_t i = 0; i < nSlices; ++i)
-        slices[i] = std::make_unique<OUT_T[]>(sliceSize);
+    //for (size_t i = 0; i < nSlices; ++i)
+    //    slices[i] = std::make_unique<OUT_T[]>(sliceSize);
 
     // For each brick, decompress and copy its Z-slices to the output buffers
     struct Job {
@@ -731,6 +731,9 @@ std::vector<std::unique_ptr<OUT_T[]>> loadSlabLz4(const ValidatedInputs& inp) {
                     uint64_t globalZ = job.z0 + bzIdx;
                     if (globalZ >= inp.nSlices) continue; // skip out-of-bounds
 
+                    // Lazy allocation on first write:
+                    if (!slices[globalZ])
+                        slices[globalZ] = std::make_unique<OUT_T[]>(sliceSize);
                     OUT_T* outSlice = slices[globalZ].get();
                     // Copy bx-by region from brick into correct region of output slice
                     for (uint64_t byIdx = 0; byIdx < by; ++byIdx) {
@@ -769,6 +772,13 @@ std::vector<std::unique_ptr<OUT_T[]>> loadSlabLz4(const ValidatedInputs& inp) {
 
     if (errorPtr) std::rethrow_exception(errorPtr);
 
+    // PATCH: Ensure every slice buffer is at least allocated (zero-filled) if it wasn't written
+    for (size_t i = 0; i < slices.size(); ++i) {
+        if (!slices[i]) {
+            throw std::runtime_error("Output slice " + std::to_string(i) + " was never written by any input brick. Check brick decomposition or input region specifications.");
+        }
+    }
+
     return slices; // vector<unique_ptr<OUT_T[]>> – each is a [dimX * dimY] buffer for one output slice
 }
 
@@ -793,7 +803,6 @@ void saveSlabTif(const std::vector<T*>& slices, const ValidatedInputs& inp)
 
     // Threading setup
     const size_t totalLogicalCores = get_available_cores();
-    const size_t defaultThreads    = std::max(totalLogicalCores / 2, size_t(1));
     const size_t threadPairCount   = std::min<size_t>(inp.maxThreads, numSlices);
 
     static_assert(kWires >= 1, "kWires must be at least 1.");
