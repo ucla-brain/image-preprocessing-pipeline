@@ -642,25 +642,28 @@ struct ValidatedInputs {
     bool isXYZLayout;   // <-- ADD THIS LINE
 };
 
-// Template function: loads each brick to a heap buffer with auto-free.
+// Template function: assembles per-slice output buffers from LZ4 bricks.
+// Each output buffer is width*height, suitable for direct TIFF writing.
 template<typename OUT_T>
 std::vector<std::unique_ptr<OUT_T[]>> loadSlabLz4(const ValidatedInputs& inp) {
-    const size_t nFiles = inp.srcFiles.size();
+    const size_t nBricks = inp.nBricks;
+    const size_t nSlices = inp.nSlices;
     const uint64_t dimX = inp.dims[0], dimY = inp.dims[1], dimZ = inp.dims[2];
-    const size_t volSize = dimX * dimY * dimZ;
+    const size_t sliceSize = dimX * dimY;
 
-    std::vector<std::unique_ptr<OUT_T[]>> slices;
-    slices.reserve(nFiles);
+    // Allocate one buffer per output slice
+    std::vector<std::unique_ptr<OUT_T[]>> slices(nSlices);
+    for (size_t i = 0; i < nSlices; ++i)
+        slices[i] = std::make_unique<OUT_T[]>(sliceSize);
 
-    // Prepare jobs
+    // For each brick, decompress and copy its Z-slices to the output buffers
     struct Job {
         std::string file;
         uint64_t x0, y0, z0, x1, y1, z1;
-        OUT_T* dst;
         float scal, ampl, dmin, dmax;
     };
     std::vector<Job> jobs;
-    jobs.reserve(nFiles);
+    jobs.reserve(nBricks);
 
     auto getCoord = [](const mxArray* arr, mwSize idx) -> uint64_t {
         return mxIsUint64(arr)
@@ -668,23 +671,17 @@ std::vector<std::unique_ptr<OUT_T[]>> loadSlabLz4(const ValidatedInputs& inp) {
             : static_cast<uint64_t>(mxGetPr(arr)[idx]);
     };
 
-    // For each file, allocate output buffer and setup job
-    for (size_t i = 0; i < nFiles; ++i) {
-        // Allocate the full output volume for each brick (or change if you want per-slice)
-        auto out = std::make_unique<OUT_T[]>(volSize);
-        OUT_T* outRaw = out.get();
-
+    // Create brick jobs
+    for (size_t i = 0; i < nBricks; ++i) {
         jobs.push_back(Job{
             inp.srcFiles[i],
-            getCoord(inp.p1, i)-1, getCoord(inp.p1, i+nFiles)-1, getCoord(inp.p1, i+2*nFiles)-1,
-            getCoord(inp.p2, i)-1, getCoord(inp.p2, i+nFiles)-1, getCoord(inp.p2, i+2*nFiles)-1,
-            outRaw,
+            getCoord(inp.p1, i)-1, getCoord(inp.p1, i+nBricks)-1, getCoord(inp.p1, i+2*nBricks)-1,
+            getCoord(inp.p2, i)-1, getCoord(inp.p2, i+nBricks)-1, getCoord(inp.p2, i+2*nBricks)-1,
             inp.scal, inp.ampl, inp.dmin, inp.dmax
         });
-        slices.push_back(std::move(out));
     }
 
-    // Atomic dispatch for multi-threaded brick decompression
+    // Parallel brick decompression/copy
     std::atomic<size_t> jobIndex{0};
     std::exception_ptr errorPtr = nullptr;
 
@@ -694,7 +691,6 @@ std::vector<std::unique_ptr<OUT_T[]>> loadSlabLz4(const ValidatedInputs& inp) {
             if (idx >= jobs.size() || errorPtr) break;
             try {
                 const Job& job = jobs[idx];
-                // === Brick decompress logic ===
                 auto& bufferFloat = ThreadScratch<float>::uncompressed;
                 auto& bufferCompressed = ThreadScratch<char>::compressed;
 
@@ -703,13 +699,15 @@ std::vector<std::unique_ptr<OUT_T[]>> loadSlabLz4(const ValidatedInputs& inp) {
 
                 const auto header = readHeader(fp.get(), job.file);
 
-                uint64_t bx = job.x1 - job.x0 + 1, by = job.y1 - job.y0 + 1, bz = job.z1 - job.z0 + 1;
-                uint64_t voxelCount = bx * by * bz;
-                if (bufferFloat.size() < voxelCount) bufferFloat.resize(voxelCount);
+                // Brick dims (in local slab coords)
+                uint64_t bx = job.x1 - job.x0 + 1;
+                uint64_t by = job.y1 - job.y0 + 1;
+                uint64_t bz = job.z1 - job.z0 + 1;
+                uint64_t brickVoxels = bx * by * bz;
+                if (bufferFloat.size() < brickVoxels) bufferFloat.resize(brickVoxels);
 
                 char* decompressed = reinterpret_cast<char*>(bufferFloat.data());
                 uint64_t offset = 0;
-
                 for (uint32_t i = 0; i < header.nChunks; ++i) {
                     if (bufferCompressed.size() < header.cLen[i])
                         bufferCompressed.resize(header.cLen[i]);
@@ -720,29 +718,39 @@ std::vector<std::unique_ptr<OUT_T[]>> loadSlabLz4(const ValidatedInputs& inp) {
                         throw std::runtime_error(job.file + ": LZ4 error");
                     offset += header.uLen[i];
                 }
-
                 if (offset != header.totalBytes)
                     throw std::runtime_error(job.file + ": size mismatch");
 
+                // Compute scaling
                 const float kLinear = job.scal * job.ampl / job.dmax;
                 const float kMinMax = (job.dmin > 0.f) ? job.scal * job.ampl / (job.dmax - job.dmin) : kLinear;
                 const bool useMinMax = (job.dmin > 0.f);
 
-                const float* src = bufferFloat.data();
-                for (uint64_t z = 0; z < bz; ++z)
-                for (uint64_t y = 0; y < by; ++y) {
-                    const uint64_t base = idx3d(job.x0, job.y0 + y, job.z0 + z, dimX, dimY);
-                    for (uint64_t x = 0; x < bx; ++x) {
-                        float val = src[(z * by + y) * bx + x];
-                        if (useMinMax)
-                            val = (val - job.dmin) * kMinMax;
-                        else
-                            val = val * kLinear;
+                // For each Z-plane in this brick, copy/correct region into global output buffer
+                for (uint64_t bzIdx = 0; bzIdx < bz; ++bzIdx) {
+                    uint64_t globalZ = job.z0 + bzIdx;
+                    if (globalZ >= inp.nSlices) continue; // skip out-of-bounds
 
-                        val -= job.ampl;
-                        val = (val >= 0.f) ? std::floor(val + 0.5f) : std::ceil(val - 0.5f);
-                        val = std::clamp(val, 0.f, job.scal);
-                        job.dst[base + x] = static_cast<OUT_T>(val);
+                    OUT_T* outSlice = slices[globalZ].get();
+                    // Copy bx-by region from brick into correct region of output slice
+                    for (uint64_t byIdx = 0; byIdx < by; ++byIdx) {
+                        uint64_t globalY = job.y0 + byIdx;
+                        if (globalY >= dimY) continue;
+                        for (uint64_t bxIdx = 0; bxIdx < bx; ++bxIdx) {
+                            uint64_t globalX = job.x0 + bxIdx;
+                            if (globalX >= dimX) continue;
+                            size_t slabIdx  = bxIdx + bx * (byIdx + by * bzIdx);      // [bx, by, bz]
+                            size_t outIdx   = globalX + dimX * globalY;                // [x + X*y]
+                            float val = bufferFloat[slabIdx];
+                            if (useMinMax)
+                                val = (val - job.dmin) * kMinMax;
+                            else
+                                val = val * kLinear;
+                            val -= job.ampl;
+                            val = (val >= 0.f) ? std::floor(val + 0.5f) : std::ceil(val - 0.5f);
+                            val = std::clamp(val, 0.f, job.scal);
+                            outSlice[outIdx] = static_cast<OUT_T>(val);
+                        }
                     }
                 }
             } catch (...) {
@@ -761,7 +769,7 @@ std::vector<std::unique_ptr<OUT_T[]>> loadSlabLz4(const ValidatedInputs& inp) {
 
     if (errorPtr) std::rethrow_exception(errorPtr);
 
-    return slices; // vector<unique_ptr<OUT_T[]>> – auto-freed
+    return slices; // vector<unique_ptr<OUT_T[]>> – each is a [dimX * dimY] buffer for one output slice
 }
 
 //=========================
