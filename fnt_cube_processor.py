@@ -452,17 +452,17 @@ if __name__ == '__main__':
 
     # --- Gaussian Argument Normalization ---
     if len(args_.gaussian) == 1:
-        gaussian_mode = 'single'
-        gaussian_sigma = float(args_.gaussian[0])
+        gaussian_mode_ = 'single'
+        gaussian_sigma_ = float(args_.gaussian[0])
     elif len(args_.gaussian) == 3:
-        gaussian_mode = 'triple'
-        gaussian_sigma = tuple(float(x) for x in args_.gaussian)
+        gaussian_mode_ = 'triple'
+        gaussian_sigma_ = tuple(float(x) for x in args_.gaussian)
     else:
         raise ValueError(
             "The --gaussian/-g argument must be either a single value or exactly three values (sigma_x sigma_y sigma_z)."
         )
 
-    args_.gaussian_mode = gaussian_mode
-    args_.gaussian_sigma = gaussian_sigma
+    args_.gaussian_mode = gaussian_mode_
+    args_.gaussian_sigma = gaussian_sigma_
 
     main(args_)
