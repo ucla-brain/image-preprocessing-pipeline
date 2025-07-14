@@ -646,12 +646,12 @@ struct ValidatedInputs {
 // Each output buffer is width*height, suitable for direct TIFF writing.
 template<typename OUT_T>
 std::vector<std::unique_ptr<OUT_T[]>> loadSlabLz4(const ValidatedInputs& inp) {
-    const size_t nBricks  = inp.nBricks;
-    const size_t nSlices  = inp.nSlices;
-    const uint64_t dimX   = inp.dims[0], dimY = inp.dims[1];
+    const size_t nBricks = inp.nBricks;
+    const size_t nSlices = inp.nSlices;
+    const uint64_t dimX = inp.dims[0], dimY = inp.dims[1], dimZ = inp.dims[2];
     const size_t sliceSize = dimX * dimY;
 
-    // Atomic array of raw pointers (all nullptr initially)
+    // Atomic array of pointers, one per output slice (all start as nullptr)
     std::vector<std::atomic<OUT_T*>> slices(nSlices);
     for (size_t i = 0; i < nSlices; ++i)
         slices[i].store(nullptr, std::memory_order_relaxed);
@@ -727,25 +727,24 @@ std::vector<std::unique_ptr<OUT_T[]>> loadSlabLz4(const ValidatedInputs& inp) {
                     uint64_t globalZ = job.z0 + bzIdx;
                     if (globalZ >= inp.nSlices) continue; // skip out-of-bounds
 
+                    // Allocate buffer only if this slice hasn't been allocated
                     OUT_T* outSlice = slices[globalZ].load(std::memory_order_acquire);
                     if (!outSlice) {
-                        // Allocate and zero, with hugepage hint
+                        // Use unique_ptr for exception safety, always freed if not released
                         std::unique_ptr<OUT_T[]> newBuf(new OUT_T[sliceSize]);
                         #if defined(__linux__)
-                        madvise(newBuf.get(), sliceSize * sizeof(OUT_T), MADV_HUGEPAGE);
+                            madvise(newBuf.get(), sliceSize * sizeof(OUT_T), MADV_HUGEPAGE);
                         #endif
                         std::fill_n(newBuf.get(), sliceSize, OUT_T{});
                         OUT_T* expected = nullptr;
                         // Only install if it hasn't been set (thread-safe)
                         if (slices[globalZ].compare_exchange_strong(expected, newBuf.get(),
                                 std::memory_order_acq_rel, std::memory_order_acquire)) {
-                            outSlice = newBuf.release(); // transfer ownership
+                            outSlice = newBuf.release(); // we "won" – transfer ownership to atomic array
                         } else {
-                            outSlice = expected; // another thread "won", auto-free
+                            outSlice = expected; // another thread beat us, unique_ptr auto-deletes
                         }
                     }
-                    // outSlice is now valid for this slice
-
                     // Copy bx-by region from brick into correct region of output slice
                     for (uint64_t byIdx = 0; byIdx < by; ++byIdx) {
                         uint64_t globalY = job.y0 + byIdx;
@@ -773,6 +772,7 @@ std::vector<std::unique_ptr<OUT_T[]>> loadSlabLz4(const ValidatedInputs& inp) {
         }
     };
 
+    // Launch threads
     size_t nThreads = std::min(inp.maxThreads > 0 ? inp.maxThreads : get_available_cores(), jobs.size());
     std::vector<std::thread> threads;
     threads.reserve(nThreads);
@@ -782,10 +782,11 @@ std::vector<std::unique_ptr<OUT_T[]>> loadSlabLz4(const ValidatedInputs& inp) {
 
     if (errorPtr) std::rethrow_exception(errorPtr);
 
-    // Transfer to unique_ptrs for safe ownership
+    // Transfer pointers to unique_ptr for safe ownership and automatic cleanup
     std::vector<std::unique_ptr<OUT_T[]>> outSlices(nSlices);
     for (size_t i = 0; i < nSlices; ++i)
         outSlices[i].reset(slices[i].exchange(nullptr));
+
     return outSlices;
 }
 
