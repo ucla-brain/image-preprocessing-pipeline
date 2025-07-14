@@ -732,8 +732,10 @@ std::vector<std::unique_ptr<OUT_T[]>> loadSlabLz4(const ValidatedInputs& inp) {
                     if (globalZ >= inp.nSlices) continue; // skip out-of-bounds
 
                     // Lazy allocation on first write:
-                    if (!slices[globalZ])
+                    if (!slices[globalZ]) {
                         slices[globalZ] = std::make_unique<OUT_T[]>(sliceSize);
+                        std::fill_n(slices[globalZ].get(), sliceSize, OUT_T(0));
+                    }
                     OUT_T* outSlice = slices[globalZ].get();
                     // Copy bx-by region from brick into correct region of output slice
                     for (uint64_t byIdx = 0; byIdx < by; ++byIdx) {
