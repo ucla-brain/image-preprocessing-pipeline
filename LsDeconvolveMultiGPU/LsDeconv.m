@@ -10,6 +10,7 @@
 %   - Resume capability
 %   - 3D Gaussian filter support
 %   - Destripe function specifically along the z-axis
+%   - lots of C/C++/CUDA functions
 %
 % LsDeconv is free software: you can redistribute it and/or modify it
 % under the terms of the GNU General Public License as published by
@@ -959,206 +960,6 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
     assert(all(size(bl) == bl_size), '[process_block]: block size mismatch!');
 end
 
-% function postprocess_save(outpath, cache_drive, min_max_path, clipval, log_file, stack_info, resume, block, amplification)
-%
-%     %POSTPROCESS_SAVE   Final stage: re-assembles cached LZ4 blocks into TIFFs.
-%     %
-%     %   • For each Z-slab (one full X-Y plane stack), all bricks are loaded and
-%     %     decompressed **in C++ threads** via load_slab_lz4 (zero MATLAB-side
-%     %     parallel plumbing).  Only one slab lives in RAM at a time.
-%     %
-%     %   • Optional global histogram determines symmetric clip limits.
-%     %
-%     %   • The slab is rescaled / optionally histogram-clipped, optionally flipped,
-%     %     cast to uint8 / uint16, and written as img_000001.tif … img_NNNNNN.tif.
-%     %
-%     %   INPUT ARGUMENTS
-%     %     outpath        – destination folder for img_######.tif files
-%     %     cache_drive    – folder containing the *.lz4 brick cache
-%     %     min_max_path   – path to min_max.mat produced earlier (optional)
-%     %     log_file       – file handle or path for p_log()
-%     %     stack_info     – struct with fields:
-%     %                         x,y,z, convert_to_8bit, convert_to_16bit,
-%     %                         flip_upside_down   (see caller)
-%     %     resume         – logical, continue an interrupted run
-%     %     block          – struct with p1, p2, nx, ny, nz describing bricks
-%     %     amplification  – display-style gain factor applied after clipping
-%     %
-%     %   The function assumes *save_lz4_mex* (for writing bricks) and
-%     %   *load_slab_lz4* (parallel reader) are on the MATLAB path.
-%     % -------------------------------------------------------------------------
-%
-%     % -------------------------------------------------------------------------
-%     % 1.  Build & sanity-check brick file list
-%     % -------------------------------------------------------------------------
-%     numBlocks  = size(block.p1, 1);
-%     blocklist  = cellstr(fullfile(cache_drive, compose("bl_%d.lz4", (1:numBlocks).')));
-%     missingMask = ~cellfun(@isfile, blocklist);
-%
-%     if any(missingMask)
-%         p_log(log_file, sprintf(2,'ERROR: %d block files are missing – aborting.', nnz(missingMask)));
-%         disp(find(missingMask));
-%         error('postprocess_save:MissingBlocks','Block cache incomplete.');
-%     end
-%
-%     % Axis shorthand for readability
-%     x = 1; y = 2; z = 3;
-%
-%     % -------------------------------------------------------------------------
-%     % 2.  Load min / max statistics for rescaling
-%     % -------------------------------------------------------------------------
-%     if isfile(min_max_path)
-%         S         = load(min_max_path);
-%         deconvmin = S.deconvmin;
-%         deconvmax = S.deconvmax;
-%         rawmax    = S.rawmax;
-%     else
-%         warning('min_max.mat not found – using defaults.');
-%         deconvmin = 0;
-%         deconvmax = 5.3374;
-%         rawmax    = 65535;
-%     end
-%
-%     % Override for final datatype
-%     if stack_info.convert_to_8bit
-%         rawmax = 255;
-%     elseif stack_info.convert_to_16bit
-%         rawmax = 65535;
-%     end
-%
-%     % Target scale
-%     if stack_info.convert_to_8bit || rawmax <= 255
-%         scal = 255;
-%     elseif stack_info.convert_to_16bit || rawmax <= 65535
-%         scal = 65535;
-%     else
-%         scal = rawmax;
-%     end
-%
-%     p_log(log_file,'image stats …');
-%     p_log(log_file,sprintf('   target data type max value: %g', scal));
-%     p_log(log_file,sprintf('   %.2f%% max before deconv  : %g', clipval, rawmax));
-%     p_log(log_file,sprintf('   %.2f%% max after  deconv  : %g', clipval, deconvmax));
-%     p_log(log_file,sprintf('   %.2f%% min after  deconv  : %g\n', 100 - clipval, deconvmin));
-%
-%     % -------------------------------------------------------------------------
-%     % 3.  Detect already-written TIFFs (resume mode)
-%     % -------------------------------------------------------------------------
-%     blocksPerSlab = block.nx * block.ny;
-%     if resume
-%         files = dir(fullfile(outpath,'img_*.tif'));
-%     else
-%         files = [];
-%     end
-%
-%     if ~isempty(files)
-%         nums          = cellfun(@(s) sscanf(s,'img_%6d.tif'), {files.name});
-%         lastDone      = max(nums);
-%         nextFileIdx   = lastDone + 1;
-%
-%         % first slab whose end-Z ≥ nextFileIdx
-%         starting_z_block = find(block.p2(1:blocksPerSlab:end, z) >= nextFileIdx, 1);
-%         p_log(log_file, sprintf('Resuming: last slice = %d ➜ continue at %d (slab %d)', ...
-%                                 lastDone, nextFileIdx, starting_z_block));
-%     else
-%         nextFileIdx      = 1;
-%         starting_z_block = 1;
-%     end
-%
-%     % -------------------------------------------------------------------------
-%     % 4.  Re-assemble z-slabs (float32), re-scale to 8-bit or 16-bit, and save as 2D tif series
-%     % -------------------------------------------------------------------------
-%     for nz = starting_z_block : block.nz
-%         % -------------------------------------------------------------------------
-%         % 4a.  Process each slab – all bricks (bls) loaded in one MEX call
-%         % -------------------------------------------------------------------------
-%         p_log(log_file, sprintf('Slab %d / %d – mounting %d blocks …', nz, block.nz, blocksPerSlab));
-%
-%         block_inds = ((nz-1)*blocksPerSlab + 1) : (nz*blocksPerSlab);
-%
-%         if ~all(cellfun(@isfile, blocklist(block_inds)))
-%             error('postprocess_save:MissingDuringResume', ...
-%                   'Block files vanished during run (slab %d).', nz);
-%         end
-%
-%         % Z-range and slab depth
-%         slab_z1    = block.p1(block_inds(1), z);
-%         slab_z2    = block.p2(block_inds(1), z);
-%         slab_depth = slab_z2 - slab_z1 + 1;
-%
-%         % 1-based brick coordinates **inside the slab**
-%         p1_slab = uint64([ ...
-%             block.p1(block_inds,x), ...
-%             block.p1(block_inds,y), ...
-%             block.p1(block_inds,z) - slab_z1 + 1 ]);
-%
-%         p2_slab = uint64([ ...
-%             block.p2(block_inds,x), ...
-%             block.p2(block_inds,y), ...
-%             block.p2(block_inds,z) - slab_z1 + 1 ]);
-%
-%         slabSize = uint64([ stack_info.x, stack_info.y, slab_depth ]);
-%
-%         % ---- Parallel load + assemble (inside C++) -------------------------
-%         [R, elapsed] = load_slab_lz4( ...
-%             blocklist(block_inds), p1_slab, p2_slab, slabSize, ...
-%             scal, amplification, deconvmin, deconvmax, feature('numCores'));
-%
-%         p_log(log_file, sprintf('   slab assembled + scaled in %.1fs.', elapsed));
-%
-%         if stack_info.flip_upside_down
-%             R = flip(R, 2);
-%         end
-%
-%         % ---------------------------------------------------------------------
-%         % 4b.  Write slab slices as TIFFs
-%         % ---------------------------------------------------------------------
-%         file_z1 = nextFileIdx;
-%         p_log(log_file, sprintf('   saving %d slices starting at %06d …', size(R,3), file_z1));
-%         save_slices_with_bl_tif(R, outpath, file_z1);
-%         nextFileIdx = nextFileIdx + size(R,3);
-%     end
-%
-%     p_log(log_file, 'postprocess_save completed successfully.');
-% end
-%
-% function save_slices_with_bl_tif(R, outpath, slab_z1)
-%     %SAVE_SLICES_WITH_BL_TIF Save 3D image block using save_bl_tif with file skipping
-%     %   R        : 3D block (X x Y x Z or Y x X x Z)
-%     %   outpath  : directory to save TIFF slices
-%     %   slab_z1  : base z-index (integer offset for naming)
-%
-%     start_t = tic;
-%
-%     assert(ndims(R) == 3, 'R must be a 3D array');
-%     Z = size(R, 3);
-%     indices = slab_z1 + (0:Z-1);
-%     fileNames = compose("img_%06d.tif", indices);
-%     fileList = cellstr(fullfile(outpath, fileNames));  % Ensure char cell array
-%     existing = cellfun(@(f) exist(f, 'file'), fileList);
-%
-%     % Skip slices that already exist
-%     if all(existing)
-%         fprintf('   All %d slices already exist in %s\n', Z, outpath);
-%         return;
-%     end
-%
-%     % Slice only non-existing files
-%     slicesToSave = find(~existing);
-%     R = R(:, :, slicesToSave);
-%     fileList = fileList(~existing);
-%
-%     % Determine array class and orientation flag
-%     xyzOrder  = true;  % R is in [X Y Z] format --> ~30% faster save time
-%     tiledTiff = false;
-%     compression = 'deflate'; % 'deflate' use char '' not string ""
-%
-%     % Save using compiled multithreaded MEX
-%     save_bl_tif(R, fileList, xyzOrder, compression, feature('numCores'), tiledTiff);
-%
-%     fprintf('   Saved %d slices in %.1fs.\n', numel(fileList), toc(start_t));
-% end
-
 function postprocess_save(outpath, cache_drive, min_max_path, clipval, log_file, stack_info, resume, block, amplification)
     %POSTPROCESS_SAVE   Final stage: re-assembles cached LZ4 blocks into TIFFs.
     %
@@ -1314,25 +1115,6 @@ function postprocess_save(outpath, cache_drive, min_max_path, clipval, log_file,
     p_log(log_file, 'postprocess_save completed successfully.');
 end
 
-function bl = load_bl_lz4(path, semkey)
-    semaphore('wait', semkey);
-    cleanup = onCleanup(@() semaphore('post', semkey));
-    max_tries = 3; tries = 0; loaded = false;
-    while ~loaded && tries < max_tries
-        tries = tries + 1;
-        try
-            bl = load_lz4(path);
-            loaded = true;
-        catch
-            pause(1);
-        end
-    end
-    if ~loaded
-        delete(path);
-        error('load_bl_lz4:CorruptFile', 'Deleting corrupted file %s after %d tries.', path, max_tries);
-    end
-end
-
 function semaphore_destroy(semkey)
     try
         semaphore('destroy', semkey);
@@ -1457,10 +1239,6 @@ function baseline_subtraction = dark(filter, bit_depth)
         a=imgaussfilt3(a, filter.gaussian_sigma, 'FilterSize', filter.gaussian_size, 'Padding', 'symmetric');
         baseline_subtraction = max(a(:));
     end
-end
-
-function index = findClosest(data, x)
-    [~,index] = min(abs(data-x));
 end
 
 function [lb, ub] = deconvolved_stats(deconvolved, clipval)
