@@ -642,10 +642,41 @@ struct ValidatedInputs {
     bool isXYZLayout;   // <-- ADD THIS LINE
 };
 
+//----------------- File Prefetch Utility ----------------
+inline void prefetch_file_async(const std::string& filename) {
+#if defined(__linux__)
+    int fd = ::open(filename.c_str(), O_RDONLY | O_NONBLOCK);
+    if (fd != -1) {
+        // Best effort: readahead will hint kernel to read all pages
+        posix_fadvise(fd, 0, 0, POSIX_FADV_WILLNEED);
+        // Optionally, use readahead (less portable, best effort)
+        // readahead(fd, 0, file_size); // Needs file size
+        ::close(fd);
+    }
+#elif defined(_WIN32)
+    // Use Windows async read with sequential scan hint
+    std::wstring wfile = platform::utf8_to_utf16(filename);
+    HANDLE hFile = CreateFileW(wfile.c_str(), GENERIC_READ,
+                               FILE_SHARE_READ, NULL, OPEN_EXISTING,
+                               FILE_FLAG_SEQUENTIAL_SCAN | FILE_FLAG_OVERLAPPED, NULL);
+    if (hFile != INVALID_HANDLE_VALUE) {
+        // Initiate a dummy read (prefetch first 64 KB)
+        char buf[65536];
+        DWORD bytesRead = 0;
+        OVERLAPPED ov = {};
+        ReadFile(hFile, buf, sizeof(buf), &bytesRead, &ov);
+        CloseHandle(hFile);
+    }
+#else
+    // No-op for macOS/other (unless you implement fcntl+F_RDADVISE or similar)
+#endif
+}
+
+
 // Template function: assembles per-slice output buffers from LZ4 bricks.
 // Each output buffer is width*height, suitable for direct TIFF writing.
 template<typename OUT_T>
-std::vector<std::unique_ptr<OUT_T[], void(*)(void*)>> loadSlabLz4(const ValidatedInputs& inp) {
+std::vector<std::unique_ptr<OUT_T[]>> loadSlabLz4(const ValidatedInputs& inp) {
     const size_t nBricks = inp.nBricks;
     const size_t nSlices = inp.nSlices;
     const uint64_t dimX = inp.dims[0], dimY = inp.dims[1], dimZ = inp.dims[2];
@@ -659,10 +690,6 @@ std::vector<std::unique_ptr<OUT_T[], void(*)(void*)>> loadSlabLz4(const Validate
         slices[i].store(nullptr, std::memory_order_relaxed);
         sliceNumbers[i] = i;
     }
-
-    // NUMA node assignment: optional, here just round-robin among available nodes
-    int num_numa_nodes = hwloc_get_nbobjs_by_type(g_hwlocTopo->get(), HWLOC_OBJ_NUMANODE);
-    if (num_numa_nodes < 1) num_numa_nodes = 1;
 
     struct Job {
         std::string file;
@@ -691,34 +718,36 @@ std::vector<std::unique_ptr<OUT_T[], void(*)(void*)>> loadSlabLz4(const Validate
     std::atomic<size_t> jobIndex{0};
     std::exception_ptr errorPtr = nullptr;
 
-    auto worker = [&](size_t thread_id) {
-        // Phase 1: Allocate slice buffers NUMA-locally via atomic queue
-        unsigned my_numa_node = (thread_id % num_numa_nodes);
+    auto worker = [&]() {
+        // Phase 1: Each thread allocates slice buffers in round-robin via atomic queue
         while (true) {
             size_t i = allocIndex.fetch_add(1, std::memory_order_relaxed);
+
+            // Prefetch a brick file (round-robin or per-thread, up to you)
+            // Example: one per allocation (simple, cheap)
+            if (!inp.srcFiles.empty())
+                prefetch_file_async(inp.srcFiles[i % inp.srcFiles.size()]);
+
             if (i >= nSlices) break;
             size_t sliceIdx = sliceNumbers[i];
 
             OUT_T* curr = slices[sliceIdx].load(std::memory_order_acquire);
             if (!curr) {
-                void* raw = allocate_numa_local_buffer(g_hwlocTopo->get(), sliceSize * sizeof(OUT_T), my_numa_node);
-                if (!raw)
-                    throw std::runtime_error("NUMA allocation failed for slice " + std::to_string(sliceIdx));
+                std::unique_ptr<OUT_T[]> newBuf(new OUT_T[sliceSize]);
 #if defined(__linux__)
-                madvise(raw, sliceSize * sizeof(OUT_T), MADV_HUGEPAGE);
+                madvise(newBuf.get(), sliceSize * sizeof(OUT_T), MADV_HUGEPAGE);
 #endif
-                std::fill_n(static_cast<OUT_T*>(raw), sliceSize, OUT_T{});
+                std::fill_n(newBuf.get(), sliceSize, OUT_T{});
                 OUT_T* expected = nullptr;
-                if (slices[sliceIdx].compare_exchange_strong(expected, static_cast<OUT_T*>(raw),
+                if (slices[sliceIdx].compare_exchange_strong(expected, newBuf.get(),
                         std::memory_order_acq_rel, std::memory_order_acquire)) {
-                    // Installed successfully
-                } else {
-                    free_numa_local_buffer(g_hwlocTopo->get(), raw, sliceSize * sizeof(OUT_T));
+                    (void)newBuf.release(); // install and relinquish unique_ptr
                 }
+                // Otherwise another thread beat us, unique_ptr auto-frees
             }
         }
 
-        // Phase 2: Usual brick decompression/copy loop
+        // 2. Proceed with the usual brick decompression/copy loop
         while (true) {
             size_t idx = jobIndex.fetch_add(1, std::memory_order_relaxed);
             if (idx >= jobs.size() || errorPtr) break;
@@ -764,7 +793,22 @@ std::vector<std::unique_ptr<OUT_T[], void(*)(void*)>> loadSlabLz4(const Validate
                     if (globalZ >= inp.nSlices) continue;
 
                     OUT_T* outSlice = slices[globalZ].load(std::memory_order_acquire);
-                    if (!outSlice) throw std::runtime_error("Slice buffer not allocated for z=" + std::to_string(globalZ));
+                    if (!outSlice) {
+                        // Paranoia fallback (shouldn't happen if pre-allocated above)
+                        std::unique_ptr<OUT_T[]> newBuf(new OUT_T[sliceSize]);
+                        #if defined(__linux__)
+                        madvise(newBuf.get(), sliceSize * sizeof(OUT_T), MADV_HUGEPAGE);
+                        #endif
+                        std::fill_n(newBuf.get(), sliceSize, OUT_T{});
+                        OUT_T* expected = nullptr;
+                        if (slices[globalZ].compare_exchange_strong(expected, newBuf.get(),
+                                std::memory_order_acq_rel, std::memory_order_acquire)) {
+                            outSlice = newBuf.release();
+                        } else {
+                            outSlice = expected;
+                        }
+                    }
+                    // Copy bx-by region from brick into correct region of output slice
                     for (uint64_t byIdx = 0; byIdx < by; ++byIdx) {
                         uint64_t globalY = job.y0 + byIdx;
                         if (globalY >= dimY) continue;
@@ -796,22 +840,15 @@ std::vector<std::unique_ptr<OUT_T[], void(*)(void*)>> loadSlabLz4(const Validate
     std::vector<std::thread> threads;
     threads.reserve(nThreads);
     for (size_t t = 0; t < nThreads; ++t)
-        threads.emplace_back(worker, t);
+        threads.emplace_back(worker);
     for (auto& t : threads) t.join();
 
     if (errorPtr) std::rethrow_exception(errorPtr);
 
     // Transfer pointers to unique_ptr for safe ownership and automatic cleanup
-    // Use a custom deleter for NUMA-local buffers
-    auto deleter = [](void* p) {
-        if (p) free_numa_local_buffer(g_hwlocTopo->get(), p, 0);
-    };
-    std::vector<std::unique_ptr<OUT_T[], decltype(deleter)>> outSlices;
-    outSlices.reserve(nSlices);
-    for (size_t i = 0; i < nSlices; ++i) {
-        OUT_T* ptr = slices[i].exchange(nullptr);
-        outSlices.emplace_back(ptr, deleter);
-    }
+    std::vector<std::unique_ptr<OUT_T[]>> outSlices(nSlices);
+    for (size_t i = 0; i < nSlices; ++i)
+        outSlices[i].reset(slices[i].exchange(nullptr));
 
     return outSlices;
 }
