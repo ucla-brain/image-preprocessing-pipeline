@@ -77,11 +77,6 @@ static constexpr size_t kNonTemporalCopyThreshold = 128 * 1024;
 #endif
 
 
-/*------------------------------ fmaf fallback --------------------------------*/
-#ifndef fmaf
-#  define fmaf(a,b,c) ((a)*(b)+(c))
-#endif
-
 /*========================== Thread-local Scratch Buffers =====================*/
 template<typename T>
 struct ThreadScratch {
@@ -93,9 +88,9 @@ template<typename T> thread_local std::vector<T> ThreadScratch<T>::uncompressed;
 template<typename T> thread_local std::vector<char> ThreadScratch<T>::compressed;
 
 /*=========================== Brick Header Parsing ============================*/
-constexpr uint32_t MAGIC = 0x4C5A4331U;  // 'LZC1'
-constexpr uint32_t HDR_BYTES = 33280;
-constexpr uint32_t MAX_CHUNKS = 2048;
+static constexpr uint32_t MAGIC = 0x4C5A4331U;  // 'LZC1'
+static constexpr uint32_t HDR_BYTES = 33280;
+static constexpr uint32_t MAX_CHUNKS = 2048;
 enum DType : uint8_t { DT_DOUBLE = 1, DT_SINGLE = 2, DT_UINT16 = 3 };
 
 struct BrickHeader {
@@ -126,98 +121,6 @@ static BrickHeader readHeader(FILE* fp, const std::string& file) {
 inline uint64_t idx3d(uint64_t x, uint64_t y, uint64_t z,
                       uint64_t dimX, uint64_t dimY) {
     return x + dimX * (y + dimY * z);
-}
-
-/*============================= Brick Job Struct ==============================*/
-template<typename OUT_T>
-struct BrickJob {
-    std::string file;
-    uint64_t x0, y0, z0, x1, y1, z1, dimX, dimY, dimZ;
-    OUT_T* dst;
-    float scal, ampl, dmin, dmax;
-
-    void operator()() const {
-        auto& bufferFloat = ThreadScratch<float>::uncompressed;
-        auto& bufferCompressed = ThreadScratch<char>::compressed;
-
-        std::unique_ptr<FILE, decltype(&std::fclose)> fp(std::fopen(file.c_str(), "rb"), &std::fclose);
-        if (!fp) throw std::runtime_error("open " + file);
-
-        const auto header = readHeader(fp.get(), file);
-
-        uint64_t bx = x1 - x0 + 1, by = y1 - y0 + 1, bz = z1 - z0 + 1;
-        uint64_t voxelCount = bx * by * bz;
-        if (bufferFloat.size() < voxelCount) bufferFloat.resize(voxelCount);
-
-        char* decompressed = reinterpret_cast<char*>(bufferFloat.data());
-        uint64_t offset = 0;
-
-        for (uint32_t i = 0; i < header.nChunks; ++i) {
-            if (bufferCompressed.size() < header.cLen[i])
-                bufferCompressed.resize(header.cLen[i]);
-            freadExact(fp.get(), bufferCompressed.data(), header.cLen[i], "chunk");
-            int written = LZ4_decompress_safe(bufferCompressed.data(), decompressed + offset,
-                                              int(header.cLen[i]), int(header.uLen[i]));
-            if (written < 0 || uint64_t(written) != header.uLen[i])
-                throw std::runtime_error(file + ": LZ4 error");
-            offset += header.uLen[i];
-        }
-
-        if (offset != header.totalBytes)
-            throw std::runtime_error(file + ": size mismatch");
-
-        const float kLinear = scal * ampl / dmax;
-        const float kMinMax = (dmin > 0.f) ? scal * ampl / (dmax - dmin) : kLinear;
-        const bool useMinMax = (dmin > 0.f);
-
-        const float* src = bufferFloat.data();
-        for (uint64_t z = 0; z < bz; ++z)
-        for (uint64_t y = 0; y < by; ++y) {
-            const uint64_t base = idx3d(x0, y0 + y, z0 + z, dimX, dimY);
-            for (uint64_t x = 0; x < bx; ++x) {
-                float val = src[(z * by + y) * bx + x];
-                if (useMinMax)
-                    val = (val - dmin) * kMinMax;
-                else
-                    val = val * kLinear;
-
-                val -= ampl;
-                val = (val >= 0.f) ? std::floor(val + 0.5f) : std::ceil(val - 0.5f);
-                val = std::clamp(val, 0.f, scal);
-                dst[base + x] = static_cast<OUT_T>(val);
-            }
-        }
-    }
-};
-
-/*============================ Atomic Thread Pool =============================*/
-template<typename JobT>
-void run_atomic_thread_pool(const std::vector<JobT>& jobs, int nThreads) {
-    std::atomic<size_t> jobIndex{0};
-    std::atomic<bool> hasException{false};
-    std::string errorMsg;
-
-    auto worker = [&]() {
-        while (true) {
-            size_t idx = jobIndex.fetch_add(1, std::memory_order_relaxed);
-            if (idx >= jobs.size() || hasException.load()) break;
-            try {
-                jobs[idx]();
-            } catch (const std::exception& e) {
-                if (!hasException.exchange(true))
-                    errorMsg = e.what();
-            }
-        }
-    };
-
-    std::vector<std::thread> threads;
-    threads.reserve(nThreads);
-    for (int t = 0; t < nThreads; ++t)
-        threads.emplace_back(worker);
-    for (auto& t : threads) t.join();
-
-    if (hasException)
-        throw std::runtime_error(errorMsg);
 }
 
 //======================================================================================================================
@@ -672,44 +575,11 @@ inline void prefetch_file_async(const std::string& filename) {
 #endif
 }
 
-// ==== LargePageSliceBuffer: Unique buffer with custom free in destructor ====
-template<typename OUT_T>
-struct LargePageSliceBuffer {
-    OUT_T* ptr;
-    size_t bytes;
-    LargePageSliceBuffer(OUT_T* p, size_t b) : ptr(p), bytes(b) {}
-    OUT_T* get() const { return ptr; }
-    operator OUT_T*() const { return ptr; }
-    ~LargePageSliceBuffer() {
-        if (ptr)
-            free_numa_local_buffer(g_hwlocTopo ? g_hwlocTopo->get() : nullptr, ptr, bytes);
-    }
-    LargePageSliceBuffer(const LargePageSliceBuffer&) = delete;
-    LargePageSliceBuffer& operator=(const LargePageSliceBuffer&) = delete;
-};
 
-// ==== Large-page NUMA allocation helper ====
+// Template function: assembles per-slice output buffers from LZ4 bricks.
+// Each output buffer is width*height, suitable for direct TIFF writing.
 template<typename OUT_T>
-std::unique_ptr<LargePageSliceBuffer<OUT_T>> allocate_largepage_slice_buffer(size_t sliceSize) {
-    size_t bytes = sliceSize * sizeof(OUT_T);
-    void* p = allocate_numa_local_buffer(
-        g_hwlocTopo ? g_hwlocTopo->get() : nullptr,
-        bytes,
-        -1   // NUMA node (default: thread-affine or interleave)
-    );
-    if (!p) throw std::bad_alloc();
-#if defined(__linux__)
-    madvise(p, bytes, MADV_HUGEPAGE);
-#endif
-    std::fill_n(reinterpret_cast<OUT_T*>(p), sliceSize, OUT_T{});
-    return std::unique_ptr<LargePageSliceBuffer<OUT_T>>(
-        new LargePageSliceBuffer<OUT_T>(reinterpret_cast<OUT_T*>(p), bytes)
-    );
-}
-
-// ==== Main loader function: Now manages buffer ownership transparently ====
-template<typename OUT_T>
-std::vector<std::unique_ptr<LargePageSliceBuffer<OUT_T>>> loadSlabLz4(const ValidatedInputs& inp) {
+std::vector<std::unique_ptr<OUT_T[]>> loadSlabLz4(const ValidatedInputs& inp) {
     const size_t nBricks = inp.nBricks;
     const size_t nSlices = inp.nSlices;
     const uint64_t dimX = inp.dims[0], dimY = inp.dims[1], dimZ = inp.dims[2];
@@ -717,7 +587,7 @@ std::vector<std::unique_ptr<LargePageSliceBuffer<OUT_T>>> loadSlabLz4(const Vali
 
     // Atomic array of pointers, one per output slice (all start as nullptr)
     std::atomic<size_t> allocIndex{0};
-    std::vector<std::atomic<LargePageSliceBuffer<OUT_T>*>> slices(nSlices);
+    std::vector<std::atomic<OUT_T*>> slices(nSlices);
     std::vector<size_t> sliceNumbers(nSlices);
     for (size_t i = 0; i < nSlices; ++i) {
         slices[i].store(nullptr, std::memory_order_relaxed);
@@ -756,28 +626,31 @@ std::vector<std::unique_ptr<LargePageSliceBuffer<OUT_T>>> loadSlabLz4(const Vali
         while (true) {
             size_t i = allocIndex.fetch_add(1, std::memory_order_relaxed);
 
-            // Prefetch a brick file (optional, may help with disk latency)
-            if (i < inp.srcFiles.size()) {
-                prefetch_file_async(inp.srcFiles[i]);
-            }
+            // Prefetch a brick file (round-robin or per-thread, up to you)
+            // Example: one per allocation (simple, cheap)
+            if (!inp.srcFiles.empty())
+                prefetch_file_async(inp.srcFiles[i % inp.srcFiles.size()]);
 
             if (i >= nSlices) break;
             size_t sliceIdx = sliceNumbers[i];
 
-            LargePageSliceBuffer<OUT_T>* curr = slices[sliceIdx].load(std::memory_order_acquire);
+            OUT_T* curr = slices[sliceIdx].load(std::memory_order_acquire);
             if (!curr) {
-                auto bufHolder = allocate_largepage_slice_buffer<OUT_T>(sliceSize);
-                LargePageSliceBuffer<OUT_T>* newBuf = bufHolder.get();
-                LargePageSliceBuffer<OUT_T>* expected = nullptr;
-                if (slices[sliceIdx].compare_exchange_strong(expected, newBuf,
+                std::unique_ptr<OUT_T[]> newBuf(new OUT_T[sliceSize]);
+#if defined(__linux__)
+                madvise(newBuf.get(), sliceSize * sizeof(OUT_T), MADV_HUGEPAGE);
+#endif
+                std::fill_n(newBuf.get(), sliceSize, OUT_T{});
+                OUT_T* expected = nullptr;
+                if (slices[sliceIdx].compare_exchange_strong(expected, newBuf.get(),
                         std::memory_order_acq_rel, std::memory_order_acquire)) {
-                    (void)bufHolder.release(); // Ownership now in atomic array
+                    (void)newBuf.release(); // install and relinquish unique_ptr
                 }
                 // Otherwise another thread beat us, unique_ptr auto-frees
             }
         }
 
-        // Phase 2: Usual brick decompression/copy loop
+        // 2. Proceed with the usual brick decompression/copy loop
         while (true) {
             size_t idx = jobIndex.fetch_add(1, std::memory_order_relaxed);
             if (idx >= jobs.size() || errorPtr) break;
@@ -822,19 +695,20 @@ std::vector<std::unique_ptr<LargePageSliceBuffer<OUT_T>>> loadSlabLz4(const Vali
                     uint64_t globalZ = job.z0 + bzIdx;
                     if (globalZ >= inp.nSlices) continue;
 
-                    LargePageSliceBuffer<OUT_T>* outSliceBuf = slices[globalZ].load(std::memory_order_acquire);
-                    OUT_T* outSlice = outSliceBuf ? outSliceBuf->get() : nullptr;
+                    OUT_T* outSlice = slices[globalZ].load(std::memory_order_acquire);
                     if (!outSlice) {
                         // Paranoia fallback (shouldn't happen if pre-allocated above)
-                        auto bufHolder = allocate_largepage_slice_buffer<OUT_T>(sliceSize);
-                        LargePageSliceBuffer<OUT_T>* fallbackBuf = bufHolder.get();
-                        LargePageSliceBuffer<OUT_T>* expected = nullptr;
-                        if (slices[globalZ].compare_exchange_strong(expected, fallbackBuf,
+                        std::unique_ptr<OUT_T[]> newBuf(new OUT_T[sliceSize]);
+                        #if defined(__linux__)
+                        madvise(newBuf.get(), sliceSize * sizeof(OUT_T), MADV_HUGEPAGE);
+                        #endif
+                        std::fill_n(newBuf.get(), sliceSize, OUT_T{});
+                        OUT_T* expected = nullptr;
+                        if (slices[globalZ].compare_exchange_strong(expected, newBuf.get(),
                                 std::memory_order_acq_rel, std::memory_order_acquire)) {
-                            outSlice = bufHolder.release()->get();
+                            outSlice = newBuf.release();
                         } else {
-                            outSlice = expected->get();
-                            // bufHolder auto-frees
+                            outSlice = expected;
                         }
                     }
                     // Copy bx-by region from brick into correct region of output slice
@@ -875,13 +749,12 @@ std::vector<std::unique_ptr<LargePageSliceBuffer<OUT_T>>> loadSlabLz4(const Vali
     if (errorPtr) std::rethrow_exception(errorPtr);
 
     // Transfer pointers to unique_ptr for safe ownership and automatic cleanup
-    std::vector<std::unique_ptr<LargePageSliceBuffer<OUT_T>>> outSlices(nSlices);
+    std::vector<std::unique_ptr<OUT_T[]>> outSlices(nSlices);
     for (size_t i = 0; i < nSlices; ++i)
         outSlices[i].reset(slices[i].exchange(nullptr));
 
     return outSlices;
 }
-
 
 //=========================
 //        saveSlabTif
@@ -1136,7 +1009,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
             std::vector<T*> rawPtrs;
             rawPtrs.reserve(slices.size());
             for (const auto& uptr : slices)
-                rawPtrs.push_back(uptr->get());
+                rawPtrs.push_back(uptr.get());
 
             auto t2 = std::chrono::high_resolution_clock::now();
             saveSlabTif<T>(rawPtrs, inp);
