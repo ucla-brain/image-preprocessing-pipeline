@@ -458,7 +458,7 @@ def main():
         matlab_cmd = [
             # "numactl", "--interleave=all",
             matlab_exec,
-            "-batch",
+            "-nodesktop", "-nosplash", "-batch",
             f"run('{tmp_script_path.stem}')"
         ]
     else:
