@@ -247,7 +247,6 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
         buff3 = buff3 .* conj(otf_buff);                                 % H'{F{Y/H{Y}}}                        complex
         buff3 = ifftn(buff3);                                            % X/Y                                  complex
         buff2 = real(buff3);                                             % X/Y                                  real
-
         % optional regularization
         if regularize_interval>0 && mod(i,regularize_interval)==0 && lambda>0 && i<niter
             buff3 = convn(bl, R, 'same');                                % Laplacian                            real
@@ -255,7 +254,6 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
         else
             buff2 = bl .* buff2;                                         % X                                    real
         end
-
         bl = abs(buff2);                                                 % X                                    real
 
         % -------------- Acceleration step ----------------------
@@ -265,13 +263,9 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
             accel_lambda = sum(buff2, 'all', 'double');
             buff2        = G_km2 .* G_km2;
             accel_lambda = accel_lambda / (sum(buff2, 'all', 'double') + epsilon_double);
-            if use_gpu
-            accel_lambda = single(max(gpuArray(0), min(gpuArray(1), accel_lambda))); % clamp for stability
-            else
             accel_lambda = single(max(0, min(1, accel_lambda))); % clamp for stability
-            end
             % ensure λ lives where bl lives and stays single precision:
-            buff2 = G_km1 * accel_lambda;
+            buff2 = G_km1 .* accel_lambda;
             bl = bl + buff2;
             bl = abs(bl); % store back into bl, enforce positivity
         end
