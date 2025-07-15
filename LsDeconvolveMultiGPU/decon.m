@@ -264,7 +264,7 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
             buff2 = G_km1 .* G_km2;
             accel_lambda = sum(buff2, 'all', 'double');
             buff2 = G_km2 .* G_km2;
-            accel_lambda = accel_lambda / (sum(buff2, 'all', 'double') + eps('double'));
+            accel_lambda = accel_lambda / (sum(buff2, 'all', 'double') + epsilon_double);
             accel_lambda = single(max(0, min(1, accel_lambda))); % clamp for stability
             % ensure λ lives where bl lives and stays single precision:
             buff2 = G_km1 * accel_lambda;
