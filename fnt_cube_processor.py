@@ -16,7 +16,7 @@ from pycudadecon import make_otf, decon
 from scipy.ndimage import gaussian_filter as gaussian
 from tifffile import imwrite, TiffFile
 from tqdm import tqdm
-from shutil import copy
+from shutil import copy, move
 
 from LsDeconvolveMultiGPU.psf_generator import generate_psf
 from pystripe.core import filter_streaks, is_uniform_2d, is_uniform_3d, MultiProcessQueueRunner, progress_manager
@@ -308,7 +308,7 @@ def process_cube(
             img = img.astype(dtype)
         tmp_file = output_file.parent / (output_file.name + ".tmp")
         write(file=tmp_file.__str__(), data=img, header=header, compression_level=9)
-        tmp_file.rename(output_file)
+        move(str(tmp_file), str(output_file))
     return return_code
 
 
