@@ -261,7 +261,7 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
             accel_lambda = single(max(0, min(1, accel_lambda))); % clamp for stability
             % ensure λ lives where bl lives and stays single precision:
             if use_gpu,  accel_lambda = gpuArray(single(accel_lambda));
-            else,         accel_lambda =            single(accel_lambda);
+            else,        accel_lambda =          single(accel_lambda);
             end
             buff2 = G_km1 * accel_lambda;
             bl = bl + buff2;
