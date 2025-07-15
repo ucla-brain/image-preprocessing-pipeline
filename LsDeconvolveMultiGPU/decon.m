@@ -250,18 +250,18 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
         % optional regularization
         if regularize_interval>0 && mod(i,regularize_interval)==0 && lambda>0 && i<niter
             buff3 = convn(bl, R, 'same');                                % Laplacian                            real
-            buff2 = bl .* buff2 .* (1-lambda) + buff3 .* lambda;         % re-equalized X                       real
+            bl = bl .* buff2 .* (1-lambda) + buff3 .* lambda;            % re-equalized X                       real
         else
-            buff2 = bl .* buff2;                                         % X                                    real
+            bl = bl .* buff2;                                            % X                                    real
         end
-        bl = abs(buff2);                                                 % X                                    real
+        bl = abs(bl);                                                    % X                                    real
 
         % -------------- Acceleration step ----------------------
         if i > 1
             G_km1        = bl - bl_previous;    % current change
-            num          = sum(G_km1 .* G_km2, 'all', 'single');
-            den          = sum(G_km2 .* G_km2, 'all', 'single') + epsilon;
-            accel_lambda = single(max(0, min(1, num/den))); % clamp for stability
+            numerator    = sum(G_km1 .* G_km2, 'all', 'single');
+            denominator  = sum(G_km2 .* G_km2, 'all', 'single') + epsilon;
+            accel_lambda = single(max(0, min(1, numerator/denominator))); % clamp for stability
             bl           = bl + G_km1 .* accel_lambda;
             bl           = abs(bl);
         end
