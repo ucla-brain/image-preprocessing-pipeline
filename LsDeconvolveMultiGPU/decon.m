@@ -204,8 +204,8 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
     buff1    = complex(buff2, buff2);  % complex(single) zeros
     buff3    = complex(buff2, buff2);
     otf_buff = complex(buff2, buff2);
-    % bl_previous  = bl;
-    % G_km2 = buff2;
+    bl_previous  = bl;
+    G_km2 = buff2;
 
     epsilon = single(eps('single'));
     psf_sz = size(psf);
@@ -267,9 +267,30 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
         %     bl = bl + buff2;
         %     bl = abs(bl); % store back into bl, enforce positivity
         % end
+        if i > 1
+            %--- current and previous update vectors
+            G_km1 = bl - bl_previous;              % Δk   (current change)
+            % (G_km2 already holds Δk-1)
+
+            %--- dot products in double-precision without big temporaries
+            num = sum(G_km1 .* G_km2 , 'all', 'double');   % ⟨Δk , Δk-1⟩
+            den = sum(G_km2  .* G_km2 , 'all', 'double') + eps('double');
+
+            %--- acceleration factor λ, clamped to [0,1]
+            accel_lambda = max(0, min(1, num / den));
+
+            % ensure λ lives where bl lives and stays single precision:
+            if use_gpu,  accel_lambda = gpuArray(single(accel_lambda));
+            else,         accel_lambda =            single(accel_lambda);
+            end
+
+            %--- accelerated update
+            bl = bl + accel_lambda .* G_km1;       % .*  (NOT the * operator!)
+            bl = abs(bl);                          % positivity
+        end
         % % Update previous iterates
-        % G_km2 = G_km1;
-        % bl_previous  = bl;
+        G_km2 = G_km1;
+        bl_previous  = bl;
         % -------------------------------------------------------
 
         % ----------- Wiener PSF update ---------------
