@@ -204,6 +204,7 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
     buff1    = complex(buff2, buff2);  % complex(single) zeros
     buff3    = complex(buff2, buff2);
     otf_buff = complex(buff2, buff2);
+    bl_previous  = bl;
 
     epsilon = single(eps('single'));
     psf_sz = size(psf);
@@ -248,6 +249,21 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
         end
 
         bl = abs(buff2);                                                 % X                                    real
+
+        % -------------- Acceleration step ----------------------
+        if i > 1
+            G_km1 = bl - bl_previous;    % current change
+            accel_lambda = sum(G_km1(:) .* G_km2(:)) / (sum(G_km2(:) .* G_km2(:)) + epsilon);
+            accel_lambda = max(0, min(1, accel_lambda)); % clamp for stability
+            buff2 = G_km1 * accel_lambda;
+            bl = bl + buf;
+            bl = abs(bl); % store back into bl, enforce positivity
+        end
+
+        % Update previous iterates
+        G_km2 = G_km1;
+        bl_previous  = bl;
+        % -------------------------------------------------------
 
         % ----------- Wiener PSF update ---------------
         % Wiener update: improves PSF estimate based on current object (bl) and blurred image spectrum
@@ -342,4 +358,101 @@ function bl = unpad_block(bl, pad_pre, pad_post)
         error(['unpad_block: Output block size is empty in at least one dimension! ' ...
             'Resulting size: [%s]'], num2str(size(bl)));
     end
+end
+
+function bl = deconFFT_accelerated(bl, psf, fft_shape, niter, lambda, stop_criterion, regularize_interval, device_id)
+    use_gpu = isgpuarray(bl);
+
+    if use_gpu, psf = gpuArray(psf); end
+    [buf_otf, ~, ~] = pad_block_to_fft_shape(psf, fft_shape, 0);
+    buf_otf = ifftshift(buf_otf);
+    buf_otf = fftn(buf_otf);
+
+    if regularize_interval < niter && lambda > 0
+        if use_gpu
+            R = single(1/26) * gpuArray.ones(3,3,3, 'single');
+        else
+            R = single(1/26) *          ones(3,3,3, 'single');
+        end
+        R(2,2,2) = 0;
+    end
+    bl = edgetaper_3d(bl, psf);
+    [bl, pad_pre, pad_post] = pad_block_to_fft_shape(bl, fft_shape, 0); % 'symmetric'
+    if stop_criterion > 0
+        delta_prev = norm(bl(:));
+    end
+
+    if use_gpu
+        buf = gpuArray.zeros(fft_shape, 'single') + 0i;
+    else
+        buf =          zeros(fft_shape, 'single') + 0i;
+    end
+    epsilon = single(eps('single'));
+
+    % --- Acceleration variables ---
+    bl_previous = bl;           % previous iterate
+    % -----------------------------
+
+    for i = 1:niter
+        apply_regularization = (regularize_interval > 0) && (regularize_interval < niter);
+        is_regularization_time = apply_regularization && (i > 1) && (i < niter) && (mod(i, regularize_interval) == 0);
+
+        if is_regularization_time
+            bl = imgaussfilt3(bl,0.5,'FilterDomain', 'spatial', 'Padding', 'symmetric');
+        end
+
+        % ---- Richardson-Lucy update step (start with buf = fftn(bl)) ----
+        buf = fftn(bl);                                     % FFT of current estimate
+        buf = buf .* buf_otf;                               % Convolve in freq domain
+        buf = ifftn(buf);
+        buf = real(buf);                                    % Blurred estimate
+        buf = max(buf, epsilon);                            % Remove zeros
+        buf = bl ./ buf;                                    % Ratio for RL
+        buf_otf = conj(buf_otf);                            % Adjoint OTF
+        buf = fftn(buf);
+        buf = buf .* buf_otf;
+        buf = ifftn(buf);
+        buf = real(buf);
+
+        if i<niter
+            buf_otf = conj(buf_otf);
+        end
+        if is_regularization_time
+            if lambda > 0
+                reg = convn(bl, R, 'same');
+                bl = bl .* buf .* (1 - lambda) + reg .* lambda;
+            else
+                bl = bl .* buf;
+            end
+        else
+            bl = bl .* buf;
+        end
+        bl = abs(bl); % enforce positivity
+
+        % -------------- Acceleration step ----------------------
+        if i > 1
+            G_km1 = bl - bl_previous;    % current change
+            accel_lambda = sum(G_km1(:) .* G_km2(:)) / (sum(G_km2(:) .* G_km2(:)) + epsilon);
+            accel_lambda = max(0, min(1, accel_lambda)); % clamp for stability
+            buf = G_km1 * accel_lambda;
+            bl = bl + buf;
+            bl = abs(bl); % store back into bl, enforce positivity
+        end
+
+        % Update previous iterates
+        G_km2 = G_km1;
+        bl_previous  = bl;
+        % -------------------------------------------------------
+
+        if stop_criterion > 0
+            delta_current = norm(bl(:));
+            delta_rel = abs(delta_prev - delta_current) / delta_prev * 100;
+            delta_prev = delta_current;
+            if i > 1 && delta_rel <= stop_criterion
+                disp('Stop criterion reached. Finishing iterations.');
+                break
+            end
+        end
+    end
+    bl = unpad_block(bl, pad_pre, pad_post);
 end

@@ -342,10 +342,10 @@ def main():
     n_real_blocks_on_gpu = 2
     n_complex_blocks_on_gpu = 0
     if args.use_fft:
-        n_real_blocks_on_gpu = 1
+        n_real_blocks_on_gpu = 1 + 2
         n_complex_blocks_on_gpu = 2
         if args.adaptive_psf:
-            n_real_blocks_on_gpu = 2
+            n_real_blocks_on_gpu = 2 + 2
             n_complex_blocks_on_gpu = 3
     if args.lambda_damping and not args.adaptive_psf:
         n_real_blocks_on_gpu += 1
