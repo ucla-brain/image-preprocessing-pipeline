@@ -189,14 +189,18 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
     if stop_criterion>0, delta_prev = norm(bl(:)); end
 
     if use_gpu
-        psf = gpuArray(psf);                                             % transfer to GPU
-        buff2 = gpuArray.zeros(fft_shape, 'single');                     % allocate directly on GPU
+        psf          = gpuArray(psf);                                              % transfer to GPU
+        buff2        = gpuArray.zeros(fft_shape, 'single');                        % allocate directly on GPU
+        bl_previous  = gpuArray.zeros(fft_shape, 'single');
+        G_km2        = gpuArray.zeros(fft_shape, 'single');
         % Laplacian-like regulariser (only allocated if used)
         if regularize_interval < niter && lambda > 0
             R = single(1/26) * gpuArray.ones(3,3,3, 'single'); R(2,2,2) = 0;       % allocate directly on GPU
         end
     else
-        buff2 = zeros(fft_shape, 'single');
+        buff2        = zeros(fft_shape, 'single');
+        bl_previous  = zeros(fft_shape, 'single');
+        G_km2        = zeros(fft_shape, 'single');
         if regularize_interval < niter && lambda > 0
             R = single(1/26) *          ones(3,3,3, 'single'); R(2,2,2) = 0;       % allocate on CPU
         end
@@ -204,10 +208,13 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
     buff1    = complex(buff2, buff2);  % complex(single) zeros
     buff3    = complex(buff2, buff2);
     otf_buff = complex(buff2, buff2);
-    bl_previous  = bl;
-    G_km2 = buff2;
 
     epsilon = single(eps('single'));
+    epsilon_double = eps('double');
+    if use_gpu
+        epsilon = gpuArray(epsilon);
+        epsilon_double = gpuArray(epsilon_double);
+    end
     psf_sz = size(psf);
     center = floor((fft_shape - psf_sz) / 2) + 1;
     for i = 1:niter
@@ -252,43 +259,19 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
         bl = abs(buff2);                                                 % X                                    real
 
         % -------------- Acceleration step ----------------------
-        % if i > 1
-        %     G_km1 = bl - bl_previous;    % current change
-        %     buff2 = G_km1 .* G_km2;
-        %     accel_lambda = sum(buff2, 'all', 'double');
-        %     buff2 = G_km2 .* G_km2;
-        %     accel_lambda = accel_lambda / (sum(buff2, 'all', 'double') + eps('double'));
-        %     accel_lambda = single(max(0, min(1, accel_lambda))); % clamp for stability
-        %     % ensure λ lives where bl lives and stays single precision:
-        %     if use_gpu,  accel_lambda = gpuArray(single(accel_lambda));
-        %     else,        accel_lambda =          single(accel_lambda);
-        %     end
-        %     buff2 = G_km1 * accel_lambda;
-        %     bl = bl + buff2;
-        %     bl = abs(bl); % store back into bl, enforce positivity
-        % end
         if i > 1
-            %--- current and previous update vectors
-            G_km1 = bl - bl_previous;              % Δk   (current change)
-            % (G_km2 already holds Δk-1)
-
-            %--- dot products in double-precision without big temporaries
-            num = sum(G_km1 .* G_km2 , 'all', 'double');   % ⟨Δk , Δk-1⟩
-            den = sum(G_km2  .* G_km2 , 'all', 'double') + eps('double');
-
-            %--- acceleration factor λ, clamped to [0,1]
-            accel_lambda = max(0, min(1, num / den));
-
+            G_km1 = bl - bl_previous;    % current change
+            buff2 = G_km1 .* G_km2;
+            accel_lambda = sum(buff2, 'all', 'double');
+            buff2 = G_km2 .* G_km2;
+            accel_lambda = accel_lambda / (sum(buff2, 'all', 'double') + eps('double'));
+            accel_lambda = single(max(0, min(1, accel_lambda))); % clamp for stability
             % ensure λ lives where bl lives and stays single precision:
-            if use_gpu,  accel_lambda = gpuArray(single(accel_lambda));
-            else,         accel_lambda =            single(accel_lambda);
-            end
-
-            %--- accelerated update
-            bl = bl + accel_lambda .* G_km1;       % .*  (NOT the * operator!)
-            bl = abs(bl);                          % positivity
+            buff2 = G_km1 * accel_lambda;
+            bl = bl + buff2;
+            bl = abs(bl); % store back into bl, enforce positivity
         end
-        % % Update previous iterates
+        % Update previous iterates
         G_km2 = G_km1;
         bl_previous  = bl;
         % -------------------------------------------------------
