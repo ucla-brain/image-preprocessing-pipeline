@@ -465,7 +465,7 @@ def main():
         # Windows-compatible MATLAB command
         matlab_cmd = [
             matlab_exec,
-            "-nodesktop -nosplash -nojvm -batch",
+            "-nodesktop -nosplash -nojvm -batch", #
             f"run('{tmp_script_path.stem}')"
         ]
 
