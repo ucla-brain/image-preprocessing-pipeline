@@ -458,14 +458,14 @@ def main():
         matlab_cmd = [
             # "numactl", "--interleave=all",
             matlab_exec,
-            "-nodesktop -nosplash -batch",
+            "-nodesktop -nosplash -batch ",
             f"run('{tmp_script_path.stem}')"
         ]
     else:
         # Windows-compatible MATLAB command
         matlab_cmd = [
             matlab_exec,
-            "-nodesktop -nosplash -batch", #
+            "-nodesktop -nosplash -batch ",
             f"run('{tmp_script_path.stem}')"
         ]
 
