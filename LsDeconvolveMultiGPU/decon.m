@@ -205,6 +205,7 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
     buff3    = complex(buff2, buff2);
     otf_buff = complex(buff2, buff2);
     bl_previous  = bl;
+    G_km2 = buff2;
 
     epsilon = single(eps('single'));
     psf_sz = size(psf);
