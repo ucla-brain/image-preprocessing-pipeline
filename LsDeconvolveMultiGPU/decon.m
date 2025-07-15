@@ -259,8 +259,8 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
         % -------------- Acceleration step ----------------------
         if i > 1
             G_km1        = bl - bl_previous;    % current change
-            num          = sum(G_km1 .* G_km2, 'all', 'double');
-            den          = sum(G_km2 .* G_km2, 'all', 'double') + epsilon_double
+            num          = sum(G_km1 .* G_km2, 'all', 'single');
+            den          = sum(G_km2 .* G_km2, 'all', 'single') + epsilon_double
             accel_lambda = single(max(0, min(1, num/den))); % clamp for stability
             bl           = bl + G_km1 .* accel_lambda;
             bl           = abs(buff2);
