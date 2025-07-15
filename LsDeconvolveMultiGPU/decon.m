@@ -260,7 +260,7 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
         buff2            = bl - bl_previous;
         if i > 2
             numerator    = sum(buff2 .* G_km2, 'all', 'double');
-            denominator  = sum(buff2 .* G_km2, 'all', 'double') + epsilon;
+            denominator  = sum(buff2 .* G_km2, 'all', 'double') + epsilon_double;
             accel_lambda = single(max(0, min(1, numerator/denominator))); % clamp for stability
             bl           = bl + buff2 .* accel_lambda;
             bl           = abs(bl);
