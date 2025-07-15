@@ -257,17 +257,17 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
         bl = abs(bl);                                                    % X                                    real
 
         % -------------- Acceleration step ----------------------
-        if i > 1
-            G_km1        = bl - bl_previous;    % current change
-            numerator    = sum(G_km1 .* G_km2, 'all', 'single');
-            denominator  = sum(G_km2 .* G_km2, 'all', 'single') + epsilon;
+        G_km1            = bl - bl_previous;
+        if i > 2
+            numerator    = sum(G_km1 .* G_km2, 'all', 'double');
+            denominator  = sum(G_km2 .* G_km2, 'all', 'double') + epsilon;
             accel_lambda = single(max(0, min(1, numerator/denominator))); % clamp for stability
             bl           = bl + G_km1 .* accel_lambda;
             bl           = abs(bl);
         end
         % Update previous iterates
-        G_km2        = G_km1;
-        bl_previous  = bl;
+        G_km2            = G_km1;
+        bl_previous      = bl;
         % -------------------------------------------------------
 
         % ----------- Wiener PSF update ---------------
