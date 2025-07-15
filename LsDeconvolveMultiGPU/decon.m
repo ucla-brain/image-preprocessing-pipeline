@@ -253,10 +253,13 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
         % -------------- Acceleration step ----------------------
         if i > 1
             G_km1 = bl - bl_previous;    % current change
-            accel_lambda = sum(G_km1(:) .* G_km2(:)) / (sum(G_km2(:) .* G_km2(:)) + epsilon);
+            buff2 = G_km1(:) .* G_km2(:);
+            accel_lambda = sum(buff2);
+            buff2 = G_km2(:) .* G_km2(:);
+            accel_lambda = accel_lambda / (sum(buff2) + epsilon);
             accel_lambda = max(0, min(1, accel_lambda)); % clamp for stability
             buff2 = G_km1 * accel_lambda;
-            bl = bl + buf;
+            bl = bl + buff2;
             bl = abs(bl); % store back into bl, enforce positivity
         end
 
@@ -432,7 +435,10 @@ function bl = deconFFT_accelerated(bl, psf, fft_shape, niter, lambda, stop_crite
         % -------------- Acceleration step ----------------------
         if i > 1
             G_km1 = bl - bl_previous;    % current change
-            accel_lambda = sum(G_km1(:) .* G_km2(:)) / (sum(G_km2(:) .* G_km2(:)) + epsilon);
+            buf = G_km1(:) .* G_km2(:);
+            accel_lambda = sum(buf);
+            buf = G_km2(:) .* G_km2(:);
+            accel_lambda = accel_lambda / (sum(buf) + epsilon);
             accel_lambda = max(0, min(1, accel_lambda)); % clamp for stability
             buf = G_km1 * accel_lambda;
             bl = bl + buf;
