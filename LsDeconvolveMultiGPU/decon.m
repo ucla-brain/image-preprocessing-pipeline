@@ -204,8 +204,8 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
     buff1    = complex(buff2, buff2);  % complex(single) zeros
     buff3    = complex(buff2, buff2);
     otf_buff = complex(buff2, buff2);
-    bl_previous  = bl;
-    G_km2 = buff2;
+    % bl_previous  = bl;
+    % G_km2 = buff2;
 
     epsilon = single(eps('single'));
     psf_sz = size(psf);
@@ -252,25 +252,24 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
         bl = abs(buff2);                                                 % X                                    real
 
         % -------------- Acceleration step ----------------------
-        if i > 1
-            G_km1 = bl - bl_previous;    % current change
-            buff2 = G_km1 .* G_km2;
-            accel_lambda = sum(buff2, 'all', 'double');
-            buff2 = G_km2 .* G_km2;
-            accel_lambda = accel_lambda / (sum(buff2, 'all', 'double') + eps('double'));
-            accel_lambda = single(max(0, min(1, accel_lambda))); % clamp for stability
-            % ensure λ lives where bl lives and stays single precision:
-            if use_gpu,  accel_lambda = gpuArray(single(accel_lambda));
-            else,        accel_lambda =          single(accel_lambda);
-            end
-            buff2 = G_km1 * accel_lambda;
-            bl = bl + buff2;
-            bl = abs(bl); % store back into bl, enforce positivity
-        end
-
-        % Update previous iterates
-        G_km2 = G_km1;
-        bl_previous  = bl;
+        % if i > 1
+        %     G_km1 = bl - bl_previous;    % current change
+        %     buff2 = G_km1 .* G_km2;
+        %     accel_lambda = sum(buff2, 'all', 'double');
+        %     buff2 = G_km2 .* G_km2;
+        %     accel_lambda = accel_lambda / (sum(buff2, 'all', 'double') + eps('double'));
+        %     accel_lambda = single(max(0, min(1, accel_lambda))); % clamp for stability
+        %     % ensure λ lives where bl lives and stays single precision:
+        %     if use_gpu,  accel_lambda = gpuArray(single(accel_lambda));
+        %     else,        accel_lambda =          single(accel_lambda);
+        %     end
+        %     buff2 = G_km1 * accel_lambda;
+        %     bl = bl + buff2;
+        %     bl = abs(bl); % store back into bl, enforce positivity
+        % end
+        % % Update previous iterates
+        % G_km2 = G_km1;
+        % bl_previous  = bl;
         % -------------------------------------------------------
 
         % ----------- Wiener PSF update ---------------
