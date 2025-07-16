@@ -917,7 +917,7 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
 
     if niter > 0 && max(bl(:)) > eps('single')
         % deconvolve block using Lucy-Richardson or blind algorithm
-        bl = decon(bl, psf, niter, lambda, stop_criterion, filter.regularize_interval, gpu, filter.use_fft, block.fft_shape, filter.adaptive_psf);
+        bl = decon(bl, psf, niter, lambda, stop_criterion, filter.regularize_interval, filter.use_fft, block.fft_shape, filter.adaptive_psf);
     end
 
     if filter.destripe_sigma > 0

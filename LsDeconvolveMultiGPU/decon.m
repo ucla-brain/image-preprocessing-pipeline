@@ -1,4 +1,4 @@
-function bl = decon(bl, psf, niter, lambda, stop_criterion, regularize_interval, device_id, use_fft, fft_shape, adaptive_psf)
+function bl = decon(bl, psf, niter, lambda, stop_criterion, regularize_interval, use_fft, fft_shape, adaptive_psf)
     % Performs Richardson-Lucy or blind deconvolution (with optional Tikhonov regularization).
     %
     % Inputs:
@@ -13,17 +13,17 @@ function bl = decon(bl, psf, niter, lambda, stop_criterion, regularize_interval,
 
     if use_fft
         if adaptive_psf
-            bl = deconFFT_Wiener(bl, psf.psf, fft_shape, niter, lambda, stop_criterion, regularize_interval, device_id);
+            bl = deconFFT_Wiener(bl, psf.psf, fft_shape, niter, lambda, stop_criterion, regularize_interval);
         else
-            bl = deconFFT       (bl, psf.psf, fft_shape, niter, lambda, stop_criterion, regularize_interval, device_id);
+            bl = deconFFT       (bl, psf.psf, fft_shape, niter, lambda, stop_criterion, regularize_interval);
         end
     else
-        bl = deconSpatial(bl, psf.psf, psf.inv  , niter, lambda, stop_criterion, regularize_interval, device_id);
+        bl = deconSpatial(bl, psf.psf, psf.inv  , niter, lambda, stop_criterion, regularize_interval);
     end
 end
 
 % === Spatial-domain version ===
-function bl = deconSpatial(bl, psf, psf_inv, niter, lambda, stop_criterion, regularize_interval, device_id)
+function bl = deconSpatial(bl, psf, psf_inv, niter, lambda, stop_criterion, regularize_interval)
 
     if ~isa(bl, 'single'), bl = single(bl); end
     if ~isa(psf, 'single'), psf = single(psf); end
@@ -97,7 +97,7 @@ function bl = deconSpatial(bl, psf, psf_inv, niter, lambda, stop_criterion, regu
 end
 
 %=== Frequency-domain version ===
-function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regularize_interval, device_id)
+function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regularize_interval)
     use_gpu = isgpuarray(bl);
 
     if use_gpu, psf = gpuArray(psf); end
@@ -176,7 +176,7 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regula
     bl = unpad_block(bl, pad_pre, pad_post);
 end
 
-function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion, regularize_interval, device_id)
+function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion, regularize_interval)
 
     % Richardson–Lucy + on-the-fly Wiener PSF refinement
     % RAM-minimal version
