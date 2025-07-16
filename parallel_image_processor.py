@@ -11,15 +11,13 @@ from time import time, sleep
 from typing import List, Tuple, Union, Callable
 
 from contextlib import contextmanager
-# import h5py
-# import hdf5plugin
 from numpy import floor as np_floor
 from numpy import max as np_max
 from numpy import mean as np_mean
 from numpy import round as np_round
 from numpy import sqrt as np_sqrt
 from numpy import (zeros, float32, dstack, rollaxis, savez_compressed, array, maximum, rot90, arange, uint8, uint16, flip,
-                   stack)
+                   stack, fliplr, flipud)
 from psutil import cpu_count, virtual_memory
 from skimage.measure import block_reduce
 from skimage.transform import resize, resize_local_mean
@@ -54,11 +52,35 @@ class ImarisZWrapper:
         self.channel = channel
         self.num_z = self.imaris_data.shape[2]
 
+        x_min = float(self.imaris_data.read_numerical_dataset_attr('ExtMin0'))
+        x_max = float(self.imaris_data.read_numerical_dataset_attr('ExtMax0'))
+        y_min = float(self.imaris_data.read_numerical_dataset_attr('ExtMin1'))
+        y_max = float(self.imaris_data.read_numerical_dataset_attr('ExtMax1'))
+        z_min = float(self.imaris_data.read_numerical_dataset_attr('ExtMin2'))
+        z_max = float(self.imaris_data.read_numerical_dataset_attr('ExtMax2'))
+        # print(x_min, x_max, y_min, y_max, z_min, z_max)
+        self.flip_x = abs(x_min) > abs(x_max)
+        self.flip_y = abs(y_min) > abs(y_max)
+        self.flip_z = abs(z_min) > abs(z_max)
+        # print(self.flip_x, self.flip_y, self.flip_z)
+
     def __getitem__(self, z):
         if isinstance(z, slice):
             indices = range(*z.indices(self.num_z))
-            return stack([self.imaris_data[self.timepoint, self.channel, zi, :, :] for zi in indices])
-        return self.imaris_data[self.timepoint, self.channel, z, :, :]
+            if self.flip_z:
+                indices = reversed(list(indices))
+            img = stack([self.imaris_data[self.timepoint, self.channel, zi, :, :] for zi in indices])
+        else:
+            if self.flip_z:
+                img = self.imaris_data[self.timepoint, self.channel, self.num_z - z - 1, :, :]
+            else:
+                img = self.imaris_data[self.timepoint, self.channel, z, :, :]
+        if self.flip_x:
+            img = fliplr(img)
+        if self.flip_y:
+            img = flipud(img)
+
+        return img
 
     def __len__(self):
         return self.num_z
@@ -76,7 +98,8 @@ class ImarisZWrapper:
     def __del__(self):
         try:
             self.close()
-        except Exception:
+        except Exception as e:
+            print(f"Exception during __del__: {e}")
             pass
 
 
