@@ -355,7 +355,7 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit( ...
             else
                 if ~isempty(best)
                     fail_count = fail_count + 1;
-                    if fail_count > 200, break; end
+                    if fail_count > 10, break; end
                 end
             end
         end
