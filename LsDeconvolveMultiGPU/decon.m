@@ -231,7 +231,7 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regula
     bl = unpad_block(bl, pad_pre, pad_post);
 end
 
-function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion, regularize_interval)
+function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion, regularize_interval, accelerate)
 
     % Richardson–Lucy + on-the-fly Wiener PSF refinement
     % RAM-minimal version
