@@ -78,7 +78,8 @@ function bl = deconSpatial(bl, psf, psf_inv, niter, lambda, stop_criterion, regu
         end
 
         buf = convn(bl, psf, 'same');
-        buf = max(buf, epsilon);
+        % buf = max(buf, epsilon);
+        buf(buf == 0) = epsilon;
         buf = bl ./ buf;
         buf = convn(buf, psf_inv, 'same');
 
@@ -176,7 +177,8 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regula
         buf = buf .* buf_otf;                                                  % x now holds fft(x) .* otf      complex
         buf = ifftn(buf);                                                      % inverse fft                    complex
         buf = real(buf);                                                       % convFFT                        real
-        buf = max(buf, epsilon);                                               % remove zeros                   real
+        %buf = max(buf, epsilon);                                               % remove zeros                   real
+        buf(buf==0) = epsilon;
         buf = bl ./ buf;                                                       %                                real
         buf_otf = conj(buf_otf);                                               % otf_conj                       complex
         buf = fftn(buf);                                                       % x now holds fft(buff)          complex
@@ -293,7 +295,9 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
         buff3 = ifftn(buff3);                                            % H{Y}                                 complex
         buff2 = real(buff3);                                             % H{Y}                                 real
 
-        buff2 = max(buff2, epsilon);                                     % H{Y} + epsilon                       real
+        % buff2 = max(buff2, epsilon);                                     % H{Y} + epsilon                       real
+        buff2(buff2==0) = epsilon;
+
         buff2 = bl ./ buff2;                                             % Y/H{Y}                               real
 
         % apply adjoint filter: H'{Y/H{Y}}
@@ -331,7 +335,8 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
             buff3    = fftn(bl);                                         % F{X}                                 complex
             otf_buff = conj(buff3);                                      % conj(F{X})                           complex
             buff2    = buff3 .* otf_buff;                                % |F{X}|^2                             real
-            buff2    = max(buff2, epsilon);                              % |F{X}|^2 + epsilon                   real
+            %buff2    = max(buff2, epsilon);                              % |F{X}|^2 + epsilon                   real
+            buff2(buff2==0) = epsilon;
             otf_buff = buff1 .* otf_buff;                                % F{Y} .* conj(F{X})                   complex
             buff1    = buff3;                                            % store F{X} for next iteration
             otf_buff = otf_buff ./ buff2;                                % otf_new                              complex

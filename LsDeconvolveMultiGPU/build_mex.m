@@ -339,17 +339,22 @@ function build_mex(debug)
         if debug
             nvccflags = sprintf('NVCCFLAGS="$NVCCFLAGS -allow-unsupported-compiler -G %s"', gencode_flags);
         else
-            nvccflags = sprintf('NVCCFLAGS="$NVCCFLAGS -allow-unsupported-compiler -Xcompiler=/O2,/arch:%s,-D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH %s"', instr, gencode_flags);
+            %nvccflags = sprintf('NVCCFLAGS="$NVCCFLAGS -allow-unsupported-compiler -Xcompiler=/O2,/arch:%s,-D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH %s"', instr, gencode_flags);
+            nvccflags = sprintf(['NVCCFLAGS="$NVCCFLAGS -allow-unsupported-compiler -Xcompiler=/O2,/arch:%s,/openmp,-D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH %s"'], ...
+            instr, gencode_flags);
+            disp(nvccflags)
         end
     else
         if debug
             nvccflags = sprintf('NVCCFLAGS="$NVCCFLAGS -G %s"', gencode_flags);
         else
-            nvccflags = sprintf('NVCCFLAGS="$NVCCFLAGS -use_fast_math -Xcompiler=-Ofast,-flto=%d %s"', ncores, gencode_flags);
+            %nvccflags = sprintf('NVCCFLAGS="$NVCCFLAGS -use_fast_math -Xcompiler=-Ofast,-flto=%d %s"', ncores, gencode_flags);
+            nvccflags = sprintf(['NVCCFLAGS="$NVCCFLAGS -use_fast_math -Xcompiler=-Ofast,-flto=%d,-mavx2,-fopenmp %s"'], ncores, gencode_flags);
         end
     end
     % cufft_link = strsplit(strtrim(fft_lib()));
     % mexcuda('-R2018a', nvccflags, 'gauss3d_gpu.cu', cufft_link{:});
+    % mexcuda('-R2018a', nvccflags, 'if_else.cu');
     mexcuda('-R2018a', nvccflags, 'conv3d_gpu.cu');
 
     fprintf('\n✅  All MEX files built successfully.\n');
