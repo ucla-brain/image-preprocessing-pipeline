@@ -194,7 +194,7 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regula
         else
             bl = bl .* buf;
         end
-        bl = abs(bl);
+        bl = max(bl, 0);
 
         % -------------- Nesterov or Anderson Acceleration --------------
         if accelerate
@@ -309,7 +309,7 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
         else
             bl = bl .* buff2;                                            % X                                    real
         end
-        bl = abs(bl);                                                    % X                                    real
+        bl = max(bl, 0);                                                 % X                                    real
 
         % -------------- Nesterov or Anderson Acceleration --------------
         if accelerate
