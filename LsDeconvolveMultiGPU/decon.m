@@ -302,8 +302,9 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
         buff3 = buff3 .* conj(otf_buff);                                 % H'{F{Y/H{Y}}}                        complex
         buff3 = ifftn(buff3);                                            % X/Y                                  complex
         buff2 = real(buff3);                                             % X/Y                                  real
-        % optional regularization
-        if regularize_interval>0 && mod(i,regularize_interval)==0 && lambda>0 && i<niter
+
+        % -------------- Tikhonov (L2) regularization --------------
+        if lambda>0
             buff3 = convn(bl, R, 'same');                                % Laplacian                            real
             bl = bl .* buff2 .* (1-lambda) + buff3 .* lambda;            % re-equalized X                       real
         else
