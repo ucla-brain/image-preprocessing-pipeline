@@ -649,6 +649,9 @@ inline void prefetch_file_async(const std::string& filename) {
 // Each output buffer is width*height, suitable for direct TIFF writing.
 template<typename OUT_T>
 std::vector<std::unique_ptr<OUT_T[]>> loadSlabLz4(const ValidatedInputs& inp) {
+    for (const auto& file : inp.srcFiles)
+        prefetch_file_async(file);
+
     const size_t nBricks = inp.nBricks;
     const size_t nSlices = inp.nSlices;
     const uint64_t dimX = inp.dims[0], dimY = inp.dims[1], dimZ = inp.dims[2];
@@ -694,12 +697,6 @@ std::vector<std::unique_ptr<OUT_T[]>> loadSlabLz4(const ValidatedInputs& inp) {
         // Phase 1: Each thread allocates slice buffers in round-robin via atomic queue
         while (true) {
             size_t i = allocIndex.fetch_add(1, std::memory_order_relaxed);
-
-            // Prefetch a brick file (round-robin or per-thread, up to you)
-            // Example: one per allocation (simple, cheap)
-            if (!inp.srcFiles.empty())
-                prefetch_file_async(inp.srcFiles[i % inp.srcFiles.size()]);
-
             if (i >= nSlices) break;
             size_t sliceIdx = sliceNumbers[i];
 
@@ -709,7 +706,7 @@ std::vector<std::unique_ptr<OUT_T[]>> loadSlabLz4(const ValidatedInputs& inp) {
 #if defined(__linux__)
                 madvise(newBuf.get(), sliceSize * sizeof(OUT_T), MADV_HUGEPAGE);
 #endif
-                std::fill_n(newBuf.get(), sliceSize, OUT_T{});
+                //std::fill_n(newBuf.get(), sliceSize, OUT_T{});
                 OUT_T* expected = nullptr;
                 if (slices[sliceIdx].compare_exchange_strong(expected, newBuf.get(),
                         std::memory_order_acq_rel, std::memory_order_acquire)) {
@@ -768,10 +765,10 @@ std::vector<std::unique_ptr<OUT_T[]>> loadSlabLz4(const ValidatedInputs& inp) {
                     if (!outSlice) {
                         // Paranoia fallback (shouldn't happen if pre-allocated above)
                         std::unique_ptr<OUT_T[]> newBuf(new OUT_T[sliceSize]);
-                        #if defined(__linux__)
+#if defined(__linux__)
                         madvise(newBuf.get(), sliceSize * sizeof(OUT_T), MADV_HUGEPAGE);
-                        #endif
-                        std::fill_n(newBuf.get(), sliceSize, OUT_T{});
+#endif
+                        //std::fill_n(newBuf.get(), sliceSize, OUT_T{});
                         OUT_T* expected = nullptr;
                         if (slices[globalZ].compare_exchange_strong(expected, newBuf.get(),
                                 std::memory_order_acq_rel, std::memory_order_acquire)) {
