@@ -160,7 +160,7 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regula
         velocity_previous = buf;
         epsilon_double    = eps('double');
     end
-    buf                   = complex(buf, buf)
+    buf                   = complex(buf, buf);
 
     epsilon = single(eps('single'));
     for i = 1:niter
