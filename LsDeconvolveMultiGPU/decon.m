@@ -153,7 +153,7 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regula
     if use_gpu
         buf               = gpuArray.zeros(fft_shape, 'single');
     else
-        buf               =          zeros(fft_shape, 'single')i;
+        buf               =          zeros(fft_shape, 'single');
     end
     if accelerate
         bl_previous       = buf;
