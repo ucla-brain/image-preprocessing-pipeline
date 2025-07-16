@@ -531,11 +531,9 @@ def main():
                     if pbar is None or (total_blocks is not None and total != total_blocks):
                         total_blocks = total
                         n_completed = count_lz4_blocks(cache_drive_folder)
-                        if pbar:
-                            pbar.close()
-                        pbar = tqdm(total=total_blocks, desc="Blocks", unit="block", initial=n_completed,
-                                    mininterval=1.0, smoothing=0.01)
-                        seen_blocks = set()
+                        if pbar is None:
+                            pbar = tqdm(total=total_blocks, desc="Blocks", unit="block", initial=n_completed,
+                                        mininterval=1.0, smoothing=0.01)
                     if block_num not in seen_blocks:
                         pbar.update(1)
                         seen_blocks.add(block_num)
