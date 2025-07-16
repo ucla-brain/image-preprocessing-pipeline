@@ -321,6 +321,7 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
                 bl            = bl + buff2 .* acceleration;
                 bl            = max(bl, 0);
             end
+            % Update previous iterates
             velocity_previous = buff2;
             bl_previous       = bl;
         end
