@@ -218,7 +218,7 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
     psf_sz = size(psf);
     center = floor((fft_shape - psf_sz) / 2) + 1;
     for i = 1:niter
-        % ----------- Richardson–Lucy core ------------
+        % -------------- Richardson–Lucy core --------------
         % Y: observed image (blurred, bl)
         % X: current object estimate (sharpened)
 
@@ -256,21 +256,20 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
         end
         bl = abs(bl);                                                    % X                                    real
 
-        % -------------- Acceleration step ----------------------
+        % -------------- Nesterov or Anderson Acceleration --------------
         buff2            = bl - bl_previous;
         if i > 2
             numerator    = sum(buff2 .* G_km2, 'all', 'double');
             denominator  = sum(buff2 .* G_km2, 'all', 'double') + epsilon_double;
             accel_lambda = single(max(0, min(1, numerator/denominator))); % clamp for stability
             bl           = bl + buff2 .* accel_lambda;
-            bl           = abs(bl);
+            bl           = max(bl, 0);
         end
         % Update previous iterates
         G_km2            = buff2;
         bl_previous      = bl;
-        % -------------------------------------------------------
 
-        % ----------- Wiener PSF update ---------------
+        % -------------- Wiener PSF update --------------
         % Wiener update: improves PSF estimate based on current object (bl) and blurred image spectrum
         % otf_new = (F{Y} . conj(F{X})) ./ (F{X} . conj(F{X}) + epsilon)
         if i < niter
@@ -298,7 +297,7 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
             end
         end
 
-        % ------------- stopping test -----------------
+        % -------------- early stopping test --------------
         if stop_criterion > 0
             delta_cur = norm(bl(:));
             if abs(delta_prev - delta_cur)/delta_prev*100 <= stop_criterion
