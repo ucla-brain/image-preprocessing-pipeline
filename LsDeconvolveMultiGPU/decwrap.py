@@ -356,10 +356,12 @@ def main():
         n_real_blocks_on_gpu = 1
         n_complex_blocks_on_gpu = 2
         if args.adaptive_psf:
-            n_real_blocks_on_gpu = 2 + 2
+            n_real_blocks_on_gpu = 2
             n_complex_blocks_on_gpu = 3
     if args.lambda_damping and not args.adaptive_psf:
         n_real_blocks_on_gpu += 1
+    if args.accelerate:
+        n_real_blocks_on_gpu += 2
     if user_specified_subset or not user_overrode_block_size:
         args.block_size_max = estimate_block_size_max(
             args.gpu_indices,
