@@ -532,8 +532,8 @@ def main():
                     print(line, end='')
 
             proc.wait()
-            if pbar:
-                pbar.close()
+            # if pbar:
+            #     pbar.close()
         # -------- NO PROGRESS BAR --------
         else:
             proc = subprocess.Popen(
