@@ -233,6 +233,11 @@ function [] = LsDeconv(varargin)
         else
         p_log(log_file, ['   deconvolve in frequency domain: no']);
         end
+        if filter.accelerate
+        p_log(log_file, ['   Nesterov/Anderson-style acceleration: yes']);
+        else
+        p_log(log_file, ['   Nesterov/Anderson-style acceleration: no']);
+        end
         if filter.adaptive_psf
         p_log(log_file, ['   adaptive psf using Weiner method: yes']);
         else
