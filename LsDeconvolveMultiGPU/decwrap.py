@@ -516,23 +516,19 @@ def main():
             n_completed = count_lz4_blocks(cache_drive_folder)
 
             for line in proc.stdout:
-                # Find all block progress lines (even if multiple in one line)
-                matches = list(block_line_re.finditer(line))
-                last_end = 0
-                for match in matches:
+                # Suppress block progress lines if progress bar is shown
+                match = block_line_re.search(line)
+                if match:
                     block_num = int(match.group(1))
                     if pbar is None:
                         total = int(match.group(2))
                         pbar = tqdm(total=total, desc="Blocks", unit="block",
                                     initial=n_completed, mininterval=1.0, smoothing=0.01)
+                        pbar.update(1)
                     if block_num not in seen_blocks:
                         pbar.update(1)
                         seen_blocks.add(block_num)
-                    last_end = match.end()
-                # Print any non-matching tail part of the line
-                if last_end < len(line):
-                    print(line[last_end:], end='')
-                elif not matches:
+                else:
                     print(line, end='')
 
             proc.wait()
