@@ -22,7 +22,7 @@ function bl = decon(bl, psf, niter, lambda, stop_criterion, filter, fft_shape)
             bl = deconFFT       (bl, psf.psf, fft_shape, niter, lambda, stop_criterion, regularize_interval, accelerate);
         end
     else
-        bl = deconSpatial(bl, psf.psf, psf.inv  , niter, lambda, stop_criterion, regularize_interval, accelerate);
+        bl = deconSpatial       (bl, psf.psf, psf.inv  , niter, lambda, stop_criterion, regularize_interval, accelerate);
     end
 end
 
@@ -318,7 +318,7 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
                 numerator     = sum(buff2             .* velocity_previous, 'all', 'double');
                 denominator   = sum(velocity_previous .* velocity_previous, 'all', 'double') + epsilon_double;
                 acceleration  = single(max(0, min(1, numerator/denominator))); % clamp for stability
-                bl            = bl + buff2 .* accel_lambda;
+                bl            = bl + buff2 .* acceleration;
                 bl            = max(bl, 0);
             end
             velocity_previous = buff2;
