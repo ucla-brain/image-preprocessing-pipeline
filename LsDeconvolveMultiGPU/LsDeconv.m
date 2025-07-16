@@ -37,7 +37,7 @@ function [] = LsDeconv(varargin)
         disp(datetime('now'));
 
         % make sure correct number of parameters specified
-        if nargin < 27
+        if nargin < 28
             showinfo();
             return
         end
@@ -70,7 +70,8 @@ function [] = LsDeconv(varargin)
         convert_to_16bit = varargin{24};
         filter.use_fft = varargin{25};
         filter.adaptive_psf = varargin{26};
-        cache_drive = varargin{27};
+        filter.accelerate = varargin{27};
+        cache_drive = varargin{28};
         if ~exist(cache_drive, 'dir')
             mkdir(cache_drive);
             disp('Cache drive dir created: ' + cache_drive)
@@ -917,7 +918,7 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
 
     if niter > 0 && max(bl(:)) > eps('single')
         % deconvolve block using Lucy-Richardson or blind algorithm
-        bl = decon(bl, psf, niter, lambda, stop_criterion, filter.regularize_interval, filter.use_fft, block.fft_shape, filter.adaptive_psf);
+        bl = decon(bl, psf, niter, lambda, stop_criterion, filter, block.fft_shape);
     end
 
     if filter.destripe_sigma > 0

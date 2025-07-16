@@ -180,6 +180,12 @@ def resolve_path(p):
 def validate_args(args):
     args.input = resolve_path(args.input)
 
+    if args.accelerate and args.numit < 3:
+        raise RuntimeError(
+            "Acceleration requires at least 3 iterations to operate. "
+            "Please increase '--numit' to 3 or more when using '--accelerate'."
+        )
+
     # Supported excitation/emission wavelength pairs (nm)
     supported_pairs = [
         (350, 460),  # DAPI
@@ -255,7 +261,12 @@ def main():
     parser.add_argument('--use-fft', action='store_true', default=False,
                         help='use FFT-based convolution, which is faster but uses more memory.')
     parser.add_argument('--adaptive-psf', action='store_true', default=False,
-                        help='use Wiener method to adaptively update the PSF at every step.')
+                        help='use Wiener method to adaptively update the PSF at every step. '
+                             'Implemented only for fft based deconvolution.')
+    parser.add_argument('--accelerate', action='store_true', default=False,
+                        help='Enable accelerated convergence (Nesterov/Anderson-style extrapolation). '
+                             'Uses the momentum of recent changes to predict the next iterate, '
+                             'often reducing the number of iterations required for convergence.')
     parser.add_argument('--cache-drive', type=str, default=None,
                         help='Optional brain name for cache path construction')
     parser.add_argument('-it', '--numit', type=int, default=6,
@@ -383,8 +394,6 @@ def main():
     except NameError:
         deconvolve_dir = Path.cwd().as_posix()
 
-
-
     if args.convert_to_8bit and args.convert_to_16bit:
         raise RuntimeError("Cannot use both convert-to-8bit and convert-to-16bit simultaneously. Choose one.")
 
@@ -438,6 +447,7 @@ def main():
         f"    {'true' if args.convert_to_16bit else 'false'}, ...\n"
         f"    {'true' if args.use_fft else 'false'}, ...\n"
         f"    {'true' if args.adaptive_psf else 'false'}, ...\n"
+        f"    {'true' if args.accelerate else 'false'}, ...\n"
         f"    convertCharsToStrings('{cache_drive_folder.as_posix()}') ...\n"
         f");\n"
     )

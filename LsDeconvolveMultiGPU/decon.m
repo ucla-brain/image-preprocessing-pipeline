@@ -1,4 +1,4 @@
-function bl = decon(bl, psf, niter, lambda, stop_criterion, regularize_interval, use_fft, fft_shape, adaptive_psf)
+function bl = decon(bl, psf, niter, lambda, stop_criterion, filter, fft_shape)
     % Performs Richardson-Lucy or blind deconvolution (with optional Tikhonov regularization).
     %
     % Inputs:
@@ -10,20 +10,24 @@ function bl = decon(bl, psf, niter, lambda, stop_criterion, regularize_interval,
     % - regularize_interval: enables blind mode when > 0 (with PSF updates + smoothing)
     % - device_id: int, 0 = cpu, >0 = GPU
     % - use_fft: true = use FFT-based convolution (faster, more memory), false = use convn (slower, low-memory)
+    regularize_interval = filter.regularize_interval;
+    use_fft             = filter.use_fft;
+    adaptive_psf        = filter.adaptive_psf;
+    accelerate          = filter.accelerate;
 
     if use_fft
         if adaptive_psf
-            bl = deconFFT_Wiener(bl, psf.psf, fft_shape, niter, lambda, stop_criterion, regularize_interval);
+            bl = deconFFT_Wiener(bl, psf.psf, fft_shape, niter, lambda, stop_criterion, regularize_interval, accelerate);
         else
-            bl = deconFFT       (bl, psf.psf, fft_shape, niter, lambda, stop_criterion, regularize_interval);
+            bl = deconFFT       (bl, psf.psf, fft_shape, niter, lambda, stop_criterion, regularize_interval, accelerate);
         end
     else
-        bl = deconSpatial(bl, psf.psf, psf.inv  , niter, lambda, stop_criterion, regularize_interval);
+        bl = deconSpatial(bl, psf.psf, psf.inv  , niter, lambda, stop_criterion, regularize_interval, accelerate);
     end
 end
 
 % === Spatial-domain version ===
-function bl = deconSpatial(bl, psf, psf_inv, niter, lambda, stop_criterion, regularize_interval)
+function bl = deconSpatial(bl, psf, psf_inv, niter, lambda, stop_criterion, regularize_interval, accelerate)
 
     if ~isa(bl, 'single'), bl = single(bl); end
     if ~isa(psf, 'single'), psf = single(psf); end
@@ -48,6 +52,18 @@ function bl = deconSpatial(bl, psf, psf_inv, niter, lambda, stop_criterion, regu
     end
 
     bl = edgetaper_3d(bl, psf);
+
+    if use_gpu
+        buf = gpuArray.zeros(size(bl), 'single');
+    else
+        buf =          zeros(size(bl), 'single');
+    end
+    if accelerate
+        bl_previous       = buf;
+        velocity_previous = buf;
+        epsilon_double    = eps('double');
+    end
+
     for i = 1:niter
         % start_time = tic;
 
@@ -55,7 +71,7 @@ function bl = deconSpatial(bl, psf, psf_inv, niter, lambda, stop_criterion, regu
         is_regularization_time = apply_regularization && (i > 1) && (i < niter) && (mod(i, regularize_interval) == 0);
 
         if is_regularization_time
-            bl = imgaussfilt3(bl,0.5,'FilterDomain', 'spatial', 'Padding', 'symmetric');
+            bl = imgaussfilt3(bl, 0.5, 'FilterDomain', 'spatial', 'Padding', 'symmetric');
         end
 
         buf = convn(bl, psf, 'same');
@@ -65,19 +81,33 @@ function bl = deconSpatial(bl, psf, psf_inv, niter, lambda, stop_criterion, regu
 
         % Apply smoothing and optional Tikhonov every N iterations (except final iteration)
         if is_regularization_time
-
             if lambda > 0
                 reg = convn(bl, R, 'same');
-                buf = bl .* buf .* (1 - lambda) + reg .* lambda;
+                bl = bl .* buf .* (1 - lambda) + reg .* lambda;
             else
-                buf = bl .* buf;
+                bl = bl .* buf;
             end
         else
-            buf = bl .* buf;
+            bl = bl .* buf;
+        end
+        bl = max(bl, 0);
+
+        % -------------- Nesterov or Anderson Acceleration --------------
+        if accelerate
+            buf               = bl - bl_previous;                              % velocity_now
+            if i > 2
+                numerator     = sum(buf               .* velocity_previous, 'all', 'double');
+                denominator   = sum(velocity_previous .* velocity_previous, 'all', 'double') + epsilon_double;
+                acceleration  = single(max(0, min(1, numerator/denominator))); % clamp for stability
+                bl            = bl + buf .* acceleration;
+                bl            = max(bl, 0);
+            end
+            % Update previous iterates
+            velocity_previous = buf;
+            bl_previous       = bl;
         end
 
-        bl = abs(buf);
-
+        % -------------- early stopping test --------------
         if stop_criterion > 0
             delta_current = norm(bl(:));
             delta_rel = abs(delta_prev - delta_current) / delta_prev * 100;
@@ -97,7 +127,7 @@ function bl = deconSpatial(bl, psf, psf_inv, niter, lambda, stop_criterion, regu
 end
 
 %=== Frequency-domain version ===
-function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regularize_interval)
+function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regularize_interval, accelerate)
     use_gpu = isgpuarray(bl);
 
     if use_gpu, psf = gpuArray(psf); end
@@ -113,17 +143,25 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regula
         end
         R(2,2,2) = 0;
     end
+
     bl = edgetaper_3d(bl, psf);
     [bl, pad_pre, pad_post] = pad_block_to_fft_shape(bl, fft_shape, 0); % 'symmetric'
-    if stop_criterion > 0
-        delta_prev = norm(bl(:));
-    end
 
-    if use_gpu
-        buf = gpuArray.zeros(fft_shape, 'single') + 0i;
-    else
-        buf =          zeros(fft_shape, 'single') + 0i;
+    if stop_criterion > 0
+        delta_prev        = norm(bl(:));
     end
+    if use_gpu
+        buf               = gpuArray.zeros(fft_shape, 'single');
+    else
+        buf               =          zeros(fft_shape, 'single')i;
+    end
+    if accelerate
+        bl_previous       = buf;
+        velocity_previous = buf;
+        epsilon_double    = eps('double');
+    end
+    buf                   = complex(buf, buf)
+
     epsilon = single(eps('single'));
     for i = 1:niter
         % start_time = tic;
@@ -157,6 +195,23 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regula
             bl = bl .* buf;
         end
         bl = abs(bl);
+
+        % -------------- Nesterov or Anderson Acceleration --------------
+        if accelerate
+            buf               = bl - bl_previous;                              % velocity_now
+            if i > 2
+                numerator     = sum(buf               .* velocity_previous, 'all', 'double');
+                denominator   = sum(velocity_previous .* velocity_previous, 'all', 'double') + epsilon_double;
+                acceleration  = single(max(0, min(1, numerator/denominator))); % clamp for stability
+                bl            = bl + buf .* acceleration;
+                bl            = max(bl, 0);
+            end
+            % Update previous iterates
+            velocity_previous = buf;
+            bl_previous       = bl;
+        end
+
+        % -------------- early stopping test --------------
         if stop_criterion > 0
             delta_current = norm(bl(:));
             delta_rel = abs(delta_prev - delta_current) / delta_prev * 100;
@@ -191,16 +246,12 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
     if use_gpu
         psf          = gpuArray(psf);                                              % transfer to GPU
         buff2        = gpuArray.zeros(fft_shape, 'single');                        % allocate directly on GPU
-        bl_previous  = gpuArray.zeros(fft_shape, 'single');
-        G_km2        = gpuArray.zeros(fft_shape, 'single');
         % Laplacian-like regulariser (only allocated if used)
         if regularize_interval < niter && lambda > 0
             R = single(1/26) * gpuArray.ones(3,3,3, 'single'); R(2,2,2) = 0;       % allocate directly on GPU
         end
     else
         buff2        = zeros(fft_shape, 'single');
-        bl_previous  = zeros(fft_shape, 'single');
-        G_km2        = zeros(fft_shape, 'single');
         if regularize_interval < niter && lambda > 0
             R = single(1/26) *          ones(3,3,3, 'single'); R(2,2,2) = 0;       % allocate on CPU
         end
@@ -208,9 +259,13 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
     buff1    = complex(buff2, buff2);  % complex(single) zeros
     buff3    = complex(buff2, buff2);
     otf_buff = complex(buff2, buff2);
+    if accelerate
+        bl_previous       = buff2;
+        velocity_previous = buff2;
+        epsilon_double    = eps('double');
+    end
 
     epsilon = single(eps('single'));
-    epsilon_double = eps('double');
     if use_gpu
         epsilon = gpuArray(epsilon);
         epsilon_double = gpuArray(epsilon_double);
@@ -257,17 +312,18 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
         bl = abs(bl);                                                    % X                                    real
 
         % -------------- Nesterov or Anderson Acceleration --------------
-        buff2            = bl - bl_previous;
-        if i > 2
-            numerator    = sum(buff2 .* G_km2, 'all', 'double');
-            denominator  = sum(buff2 .* G_km2, 'all', 'double') + epsilon_double;
-            accel_lambda = single(max(0, min(1, numerator/denominator))); % clamp for stability
-            bl           = bl + buff2 .* accel_lambda;
-            bl           = max(bl, 0);
+        if accelerate
+            buff2             = bl - bl_previous;                        % velocity_now
+            if i > 2
+                numerator     = sum(buff2             .* velocity_previous, 'all', 'double');
+                denominator   = sum(velocity_previous .* velocity_previous, 'all', 'double') + epsilon_double;
+                acceleration  = single(max(0, min(1, numerator/denominator))); % clamp for stability
+                bl            = bl + buff2 .* accel_lambda;
+                bl            = max(bl, 0);
+            end
+            velocity_previous = buff2;
+            bl_previous       = bl;
         end
-        % Update previous iterates
-        G_km2            = buff2;
-        bl_previous      = bl;
 
         % -------------- Wiener PSF update --------------
         % Wiener update: improves PSF estimate based on current object (bl) and blurred image spectrum
