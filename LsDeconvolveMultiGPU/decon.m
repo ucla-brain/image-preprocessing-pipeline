@@ -53,15 +53,18 @@ function bl = deconSpatial(bl, psf, psf_inv, niter, lambda, stop_criterion, regu
 
     bl = edgetaper_3d(bl, psf);
 
+    epsilon = single(eps('single'));
     if use_gpu
-        buf = gpuArray.zeros(size(bl), 'single');
+        buf     = gpuArray.zeros(size(bl), 'single');
+        epsilon = gpuArray(epsilon);
     else
-        buf =          zeros(size(bl), 'single');
+        buf     =          zeros(size(bl), 'single');
     end
     if accelerate
         bl_previous       = buf;
         velocity_previous = buf;
         epsilon_double    = eps('double');
+        if use_gpu, epsilon_double = gpuArray(epsilon_double); end
     end
 
     for i = 1:niter
@@ -75,7 +78,7 @@ function bl = deconSpatial(bl, psf, psf_inv, niter, lambda, stop_criterion, regu
         end
 
         buf = convn(bl, psf, 'same');
-        buf = max(buf, single(eps('single')));
+        buf = max(buf, epsilon);
         buf = bl ./ buf;
         buf = convn(buf, psf_inv, 'same');
 
@@ -86,7 +89,6 @@ function bl = deconSpatial(bl, psf, psf_inv, niter, lambda, stop_criterion, regu
         else
             bl = bl .* buf;
         end
-        bl = max(bl, 0);
 
         % -------------- Nesterov/Anderson Acceleration --------------
         if accelerate
@@ -102,6 +104,7 @@ function bl = deconSpatial(bl, psf, psf_inv, niter, lambda, stop_criterion, regu
             velocity_previous = buf;
             bl_previous       = bl;
         end
+        bl = max(bl, 0);
 
         % -------------- early stopping test --------------
         if stop_criterion > 0
@@ -146,8 +149,11 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regula
     if stop_criterion > 0
         delta_prev        = norm(bl, 'fro');
     end
+
+    epsilon = single(eps('single'));
     if use_gpu
         buf               = gpuArray.zeros(fft_shape, 'single');
+        epsilon           = gpuArray(epsilon);
     else
         buf               =          zeros(fft_shape, 'single');
     end
@@ -155,10 +161,10 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regula
         bl_previous       = buf;
         velocity_previous = buf;
         epsilon_double    = eps('double');
+        if use_gpu, epsilon_double = gpuArray(epsilon_double); end
     end
     buf                   = complex(buf, buf);
 
-    epsilon = single(eps('single'));
     for i = 1:niter
         % start_time = tic;
         apply_regularization = (regularize_interval > 0) && (regularize_interval < niter);
@@ -253,17 +259,16 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
     buff1    = complex(buff2, buff2);  % complex(single) zeros
     buff3    = complex(buff2, buff2);
     otf_buff = complex(buff2, buff2);
+    epsilon = single(eps('single'));
+    if use_gpu, epsilon = gpuArray(epsilon); end
+
     if accelerate
         bl_previous       = bl;
         velocity_previous = buff2;
         epsilon_double    = eps('double');
+        if use_gpu, epsilon_double = gpuArray(epsilon_double); end
     end
 
-    epsilon = single(eps('single'));
-    if use_gpu
-        epsilon = gpuArray(epsilon);
-        epsilon_double = gpuArray(epsilon_double);
-    end
     psf_sz = size(psf);
     center = floor((fft_shape - psf_sz) / 2) + 1;
     for i = 1:niter
