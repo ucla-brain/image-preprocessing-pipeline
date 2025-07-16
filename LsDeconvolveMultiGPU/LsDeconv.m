@@ -692,6 +692,9 @@ function deconvolve(filelist, psf, numit, damping, ...
     % loading_time_moving_average = 0;
 
     for blnr = starting_block : num_blocks
+
+        block_processing_start = tic;
+
         % skip blocks already worked on
         block_path = fullfile(cache_drive, ['bl_' num2str(blnr) '.lz4']);
         block_path_tmp = fullfile(cache_drive, ['bl_' num2str(blnr) '.lz4.tmp']);
@@ -731,8 +734,7 @@ function deconvolve(filelist, psf, numit, damping, ...
         end
 
         expected_size = size(bl);  % Store size before processing
-        logging_string = sprintf('%s: block %d from %d filters applied in', current_device(gpu), blnr, num_blocks);
-        [bl, lb, ub] = process_block(bl, block, psf, numit, damping, stop_criterion, filter, clipval, gpu, semkey_gpu_base, dQueue, logging_string);
+        [bl, lb, ub] = process_block(bl, block, psf, numit, damping, stop_criterion, filter, clipval, gpu, semkey_gpu_base);
         % === Check padded block size is unchanged by process_block ===
         actual_size = size(bl);
         assert(isequal(actual_size, expected_size), ...
@@ -810,6 +812,7 @@ function deconvolve(filelist, psf, numit, damping, ...
                 pause(1);
             end
         end
+        send(dQueue, sprintf('%s: block %d from %d filters applied in %.1f', current_device(gpu), blnr, num_blocks, toc(block_processing_start)));
     end
 end
 
@@ -902,8 +905,7 @@ function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
         num2str(size(bl)), num2str(block_target_size)));
 end
 
-function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criterion, filter, clipval, gpu, semkey_gpu_base, dQueue, logging_string)
-    block_processing_start = tic;
+function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criterion, filter, clipval, gpu, semkey_gpu_base)
     bl_size = size(bl);
     if gpu && (min(filter.gaussian_sigma(:)) > 0 || niter > 0)
         % get the next available gpu
@@ -941,7 +943,6 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
     if ~filter.use_fft, [lb, ub] = deconvolved_stats(bl, clipval); end
     % [lb, ub] = deconvolved_stats(bl, clipval);
 
-    send( dQueue, sprintf('%s %.1f', logging_string, toc(block_processing_start)) );
     assert(all(size(bl) == bl_size), '[process_block]: block size mismatch!');
 end
 
