@@ -510,16 +510,16 @@ def main():
                 bufsize=1,
                 preexec_fn=os.setsid if not is_windows else None
             )
-            block_line_re = re.compile(r'GPU\d+:\s*block\s+(\d+)\s+from\s+(\d+)\s+filters applied in\s+[\d.]+',
-                                       re.IGNORECASE)
+            block_line_re = re.compile(r'GPU\d+:\s*block\s+(\d+)\s+from\s+(\d+)\s+filters applied in\s+[\d.]+', re.IGNORECASE)
             seen_blocks = set()
             pbar = None
             n_completed = count_lz4_blocks(cache_drive_folder)
 
             for line in proc.stdout:
-                # Suppress block progress lines if progress bar is shown
-                match = block_line_re.search(line)
-                if match:
+                # Find all block progress lines (even if multiple in one line)
+                matches = list(block_line_re.finditer(line))
+                last_end = 0
+                for match in matches:
                     block_num = int(match.group(1))
                     if pbar is None:
                         total = int(match.group(2))
@@ -528,7 +528,11 @@ def main():
                     if block_num not in seen_blocks:
                         pbar.update(1)
                         seen_blocks.add(block_num)
-                else:
+                    last_end = match.end()
+                # Print any non-matching tail part of the line
+                if last_end < len(line):
+                    print(line[last_end:], end='')
+                elif not matches:
                     print(line, end='')
 
             proc.wait()
