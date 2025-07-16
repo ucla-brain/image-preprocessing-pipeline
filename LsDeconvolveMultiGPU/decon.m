@@ -42,7 +42,7 @@ function bl = deconSpatial(bl, psf, psf_inv, niter, lambda, stop_criterion, regu
 
     % Apply smoothing and optional Tikhonov every N iterations (except final iteration)
 
-    if regularize_interval < niter && lambda > 0
+    if lambda > 0
         R = single(1/26 * ones(3,3,3)); R(2,2,2) = 0;
         if use_gpu, R = gpuArray(R); end
     end
@@ -131,7 +131,7 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regula
     buf_otf = ifftshift(buf_otf);
     buf_otf = fftn(buf_otf);
 
-    if regularize_interval < niter && lambda > 0
+    if lambda > 0
         if use_gpu
             R = single(1/26) * gpuArray.ones(3,3,3, 'single');
         else
