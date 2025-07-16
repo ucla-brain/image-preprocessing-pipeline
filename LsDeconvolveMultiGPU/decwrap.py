@@ -510,33 +510,27 @@ def main():
                 bufsize=1,
                 preexec_fn=os.setsid if not is_windows else None
             )
-            block_pattern = re.compile(r'block (\d+) from (\d+)', re.IGNORECASE)
-            block_line_re = re.compile(r'GPU\d+:\s*block\s+\d+\s+from\s+\d+\s+filters applied in\s+[\d.]+',
+            block_line_re = re.compile(r'GPU\d+:\s*block\s+(\d+)\s+from\s+(\d+)\s+filters applied in\s+[\d.]+',
                                        re.IGNORECASE)
             seen_blocks = set()
             pbar = None
-            total_blocks = None
+            n_completed = count_lz4_blocks(cache_drive_folder)
 
             for line in proc.stdout:
                 # Suppress block progress lines if progress bar is shown
-                if block_line_re.search(line):
-                    pass
-                else:
-                    print(line, end='')
-
-                match = block_pattern.search(line)
+                match = block_line_re.search(line)
                 if match:
                     block_num = int(match.group(1))
-                    total = int(match.group(2))
-                    if pbar is None or (total_blocks is not None and total != total_blocks):
-                        total_blocks = total
-                        n_completed = count_lz4_blocks(cache_drive_folder)
-                        if pbar is None:
-                            pbar = tqdm(total=total_blocks, desc="Blocks", unit="block", initial=n_completed,
-                                        mininterval=1.0, smoothing=0.01)
+                    if pbar is None:
+                        total = int(match.group(2))
+                        pbar = tqdm(total=total, desc="Blocks", unit="block",
+                                    initial=n_completed, mininterval=1.0, smoothing=0.01)
                     if block_num not in seen_blocks:
                         pbar.update(1)
                         seen_blocks.add(block_num)
+                else:
+                    print(line, end='')
+
             proc.wait()
             if pbar:
                 pbar.close()
