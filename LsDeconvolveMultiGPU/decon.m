@@ -48,7 +48,7 @@ function bl = deconSpatial(bl, psf, psf_inv, niter, lambda, stop_criterion, regu
     end
 
     if stop_criterion > 0
-        delta_prev = norm(bl(:));
+        delta_prev = norm(bl, 'fro');
     end
 
     bl = edgetaper_3d(bl, psf);
@@ -105,7 +105,7 @@ function bl = deconSpatial(bl, psf, psf_inv, niter, lambda, stop_criterion, regu
 
         % -------------- early stopping test --------------
         if stop_criterion > 0
-            delta_current = norm(bl(:));
+            delta_current = norm(bl, 'fro');
             delta_rel = abs(delta_prev - delta_current) / delta_prev * 100;
             delta_prev = delta_current;
             % disp([current_device(device_id) ': Iter ' num2str(i) ...
@@ -144,7 +144,7 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regula
     [bl, pad_pre, pad_post] = pad_block_to_fft_shape(bl, fft_shape, 0); % 'symmetric'
 
     if stop_criterion > 0
-        delta_prev        = norm(bl(:));
+        delta_prev        = norm(bl, 'fro');
     end
     if use_gpu
         buf               = gpuArray.zeros(fft_shape, 'single');
@@ -207,7 +207,7 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regula
 
         % -------------- early stopping test --------------
         if stop_criterion > 0
-            delta_current = norm(bl(:));
+            delta_current = norm(bl, 'fro');
             delta_rel = abs(delta_prev - delta_current) / delta_prev * 100;
             delta_prev = delta_current;
             % disp([current_device(device_id) ': Iter ' num2str(i) ...
@@ -235,7 +235,7 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
     bl = edgetaper_3d(bl, psf);
     [bl, pad_pre, pad_post] = pad_block_to_fft_shape(bl, fft_shape, 0);
 
-    if stop_criterion>0, delta_prev = norm(bl(:)); end
+    if stop_criterion>0, delta_prev = norm(bl, 'fro'); end
 
     if use_gpu
         psf          = gpuArray(psf);                                              % transfer to GPU
@@ -304,7 +304,6 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
         else
             bl = bl .* buff2;                                            % X                                    real
         end
-        bl = max(bl, 0);                                                 % X                                    real
 
         % -------------- Nesterov/Anderson Acceleration --------------
         if accelerate
@@ -314,44 +313,39 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
                 denominator   = sum(velocity_previous .* velocity_previous, 'all', 'double') + epsilon_double;
                 acceleration  = single(max(0, min(1, numerator/denominator))); % clamp for stability
                 bl            = bl + buff2 .* acceleration;
-                bl            = max(bl, 0);
             end
             % Update previous iterates
             velocity_previous = buff2;
             bl_previous       = bl;
         end
-
+        bl = max(bl, 0);                                                 % X                                    real
         % -------------- Wiener PSF update --------------
         % Wiener update: improves PSF estimate based on current object (bl) and blurred image spectrum
         % otf_new = (F{Y} . conj(F{X})) ./ (F{X} . conj(F{X}) + epsilon)
         if i < niter
-            buff3 = fftn(bl);                                            % F{X}                                 complex
+            buff3    = fftn(bl);                                         % F{X}                                 complex
             otf_buff = conj(buff3);                                      % conj(F{X})                           complex
-            buff2 = buff3 .* otf_buff;                                   % |F{X}|^2                             real
-            buff2 = max(buff2, epsilon);                                 % |F{X}|^2 + epsilon                   real
+            buff2    = buff3 .* otf_buff;                                % |F{X}|^2                             real
+            buff2    = max(buff2, epsilon);                              % |F{X}|^2 + epsilon                   real
             otf_buff = buff1 .* otf_buff;                                % F{Y} .* conj(F{X})                   complex
-            buff1 = buff3;                                               % store F{X} for next iteration
+            buff1    = buff3;                                            % store F{X} for next iteration
             otf_buff = otf_buff ./ buff2;                                % otf_new                              complex
 
             % inverse FFT to get new PSF
-            buff3 = ifftn(otf_buff);                                     % psf                                  complex
-            buff2 = real(buff3);                                         % psf                                  real
-            psf = buff2(center(1):center(1)+psf_sz(1)-1, ...
-                        center(2):center(2)+psf_sz(2)-1, ...
-                        center(3):center(3)+psf_sz(3)-1);
-            psf = max(psf, 0);                                           % clamp negatives
-            sum_psf = sum(psf(:));
-            if sum_psf > 0
-                psf = psf / sum(psf(:));                                 % normalize to unit energy
-            end
-            if use_gpu && ~isgpuarray(psf)
-                psf = gpuArray(psf);
-            end
+            buff3    = ifftn(otf_buff);                                  % psf                                  complex
+            buff2    = real(buff3);                                      % psf                                  real
+            psf      = buff2(center(1):center(1)+psf_sz(1)-1, ...
+                             center(2):center(2)+psf_sz(2)-1, ...
+                             center(3):center(3)+psf_sz(3)-1);
+            psf      = max(psf, 0);                                      % clamp negatives
+            sum_psf  = single(sum(psf, 'all', 'double'));
+            if sum_psf > 0, psf  = psf / sum_psf; end                    % normalize to unit energy
+            if use_gpu && ~isgpuarray(psf), psf = gpuArray(psf); end
         end
 
         % -------------- early stopping test --------------
         if stop_criterion > 0
-            delta_cur = norm(bl(:));
+            delta_cur = norm(bl, 'fro');
             if abs(delta_prev - delta_cur)/delta_prev*100 <= stop_criterion
                 fprintf('Stop criterion reached in %d iterations.\n', i);
                 break;
