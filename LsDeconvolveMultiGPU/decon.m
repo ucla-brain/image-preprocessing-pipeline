@@ -241,12 +241,12 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
         psf          = gpuArray(psf);                                              % transfer to GPU
         buff2        = gpuArray.zeros(fft_shape, 'single');                        % allocate directly on GPU
         % Laplacian-like regulariser (only allocated if used)
-        if regularize_interval < niter && lambda > 0
+        if lambda > 0
             R = single(1/26) * gpuArray.ones(3,3,3, 'single'); R(2,2,2) = 0;       % allocate directly on GPU
         end
     else
         buff2        = zeros(fft_shape, 'single');
-        if regularize_interval < niter && lambda > 0
+        if lambda > 0
             R = single(1/26) *          ones(3,3,3, 'single'); R(2,2,2) = 0;       % allocate on CPU
         end
     end
