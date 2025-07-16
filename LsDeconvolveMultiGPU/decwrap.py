@@ -284,11 +284,11 @@ def main():
                              'Applies only during blind deconvolution (enabled when --regularize-interval > 0). '
                              'Blends each RL update with a smoothed version of the image to suppress noise. '
                              'Set to 0 to disable. Suggested values:\n'
-                             '- 1e-5 to 1e-3: Low noise, high SNR data\n'
-                             '- 1e-3 to 1e-2: Typical data with moderate noise\n'
-                             '- 1e-2 to 0.1: High noise or very ill-posed cases\n'
-                             '- Use slightly higher values for fewer iterations, lower for many iterations\n'
-                             '- 5e-3 to 5e-2 recommended for Weiner deconvolution')
+                             '- 0.00001 to 0.001: Low noise, high SNR data;\n'
+                             '- 0.001   to 0.01 : Typical data with moderate noise;\n'
+                             '- 0.01    to 0.1  : High noise or very ill-posed cases;\n'
+                             '- 0.005   to 0.05 : adaptive-psf deconvolution.\n'
+                             '- Use slightly higher values for fewer iterations, lower for many iterations.')
     parser.add_argument('--clipval', type=float, default=99.99,
                         help='Clip the upper intensity of the entire image at the given percentile (default: 99.99). '
                              'The upper limit is computed as max(percentile(all_blocks, clipval)). '

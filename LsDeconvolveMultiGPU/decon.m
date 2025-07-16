@@ -79,20 +79,16 @@ function bl = deconSpatial(bl, psf, psf_inv, niter, lambda, stop_criterion, regu
         buf = bl ./ buf;
         buf = convn(buf, psf_inv, 'same');
 
-        % Apply smoothing and optional Tikhonov every N iterations (except final iteration)
-        if is_regularization_time
-            if lambda > 0
-                reg = convn(bl, R, 'same');
-                bl = bl .* buf .* (1 - lambda) + reg .* lambda;
-            else
-                bl = bl .* buf;
-            end
+        % -------------- Tikhonov (L2) regularization --------------
+        if lambda > 0
+            reg = convn(bl, R, 'same');
+            bl = bl .* buf .* (1 - lambda) + reg .* lambda;
         else
             bl = bl .* buf;
         end
         bl = max(bl, 0);
 
-        % -------------- Nesterov or Anderson Acceleration --------------
+        % -------------- Nesterov/Anderson Acceleration --------------
         if accelerate
             buf               = bl - bl_previous;                              % velocity_now
             if i > 2
@@ -184,19 +180,17 @@ function bl = deconFFT(bl, psf, fft_shape, niter, lambda, stop_criterion, regula
         if i<niter
             buf_otf = conj(buf_otf);                                           % otf                            complex
         end
-        if is_regularization_time
-            if lambda > 0
-                reg = convn(bl, R, 'same');
-                bl = bl .* buf .* (1 - lambda) + reg .* lambda;
-            else
-                bl = bl .* buf;
-            end
+
+        % -------------- Tikhonov (L2) regularization --------------
+        if lambda > 0
+            reg = convn(bl, R, 'same');
+            bl = bl .* buf .* (1 - lambda) + reg .* lambda;
         else
             bl = bl .* buf;
         end
         bl = max(bl, 0);
 
-        % -------------- Nesterov or Anderson Acceleration --------------
+        % -------------- Nesterov/Anderson Acceleration --------------
         if accelerate
             buf               = bl - bl_previous;                              % velocity_now
             if i > 2
@@ -304,7 +298,7 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
         buff2 = real(buff3);                                             % X/Y                                  real
 
         % -------------- Tikhonov (L2) regularization --------------
-        if lambda>0
+        if lambda > 0
             buff3 = convn(bl, R, 'same');                                % Laplacian                            real
             bl = bl .* buff2 .* (1-lambda) + buff3 .* lambda;            % re-equalized X                       real
         else
@@ -312,7 +306,7 @@ function bl = deconFFT_Wiener(bl, psf, fft_shape, niter, lambda, stop_criterion,
         end
         bl = max(bl, 0);                                                 % X                                    real
 
-        % -------------- Nesterov or Anderson Acceleration --------------
+        % -------------- Nesterov/Anderson Acceleration --------------
         if accelerate
             buff2             = bl - bl_previous;                        % velocity_now
             if i > 2
