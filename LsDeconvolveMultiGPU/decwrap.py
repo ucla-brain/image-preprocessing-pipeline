@@ -510,15 +510,17 @@ def main():
                 bufsize=1,
                 preexec_fn=os.setsid if not is_windows else None
             )
-            block_line_re = re.compile(r'^GPU\d+:\s*block\s+(\d+)\s+from\s+(\d+)\s+filters applied in\s+[\d.]+$', re.IGNORECASE)
+            block_line_re = re.compile(r'^GPU\d+:\s*block\s+(\d+)\s+from\s+(\d+)\s+filters applied in\s+[\d.]+$',
+                                       re.IGNORECASE | re.MULTILINE)
             seen_blocks = set()
             pbar = None
             n_completed = count_lz4_blocks(cache_drive_folder)
 
             for line in proc.stdout:
-                # Suppress block progress lines if progress bar is shown
-                match = block_line_re.search(line)
-                if match:
+                matches = block_line_re.finditer(line)
+                any_match = False
+                for match in matches:
+                    any_match = True
                     block_num = int(match.group(1))
                     if pbar is None:
                         total = int(match.group(2))
@@ -527,7 +529,7 @@ def main():
                     if block_num not in seen_blocks:
                         pbar.update(1)
                         seen_blocks.add(block_num)
-                else:
+                if not any_match:
                     print(line, end='')
 
             proc.wait()
