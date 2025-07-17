@@ -494,64 +494,67 @@ def main():
         log.info("Dry run enabled. Command was not executed.")
         return
 
+    import contextlib
+
     proc = None
+    output_lines = []
     try:
         log.info("Running MATLAB deconvolution...")
 
-        # -------- PROGRESS BAR ENABLED --------
         if args.progress:
-            proc = subprocess.Popen(
-                ' '.join(matlab_cmd) if is_windows else matlab_cmd,
-                shell=is_windows,
-                env=env,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                bufsize=1,
-                preexec_fn=os.setsid if not is_windows else None
-            )
-            block_line_re = re.compile(r'^GPU\d+:\s*block\s+(\d+)\s+from\s+(\d+)\s+filters applied in\s+[\d.]+$',
-                                       re.IGNORECASE | re.MULTILINE)
-            seen_blocks = set()
-            pbar = None
-            n_completed = count_lz4_blocks(cache_drive_folder)
+            with subprocess.Popen(
+                    ' '.join(matlab_cmd) if is_windows else matlab_cmd,
+                    shell=is_windows,
+                    env=env,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    bufsize=1,
+                    preexec_fn=os.setsid if not is_windows else None
+            ) as proc:
+                block_line_re = re.compile(r'^GPU\d+:\s*block\s+(\d+)\s+from\s+(\d+)\s+filters applied in\s+[\d.]+$',
+                                           re.IGNORECASE)
+                seen_blocks = set()
+                pbar = None
+                n_completed = count_lz4_blocks(cache_drive_folder)
 
-            for line in proc.stdout:
-                matches = block_line_re.finditer(line)
-                any_match = False
-                for match in matches:
-                    any_match = True
-                    block_num = int(match.group(1))
-                    if pbar is None:
-                        total = int(match.group(2))
-                        pbar = tqdm(total=total, desc="Blocks", unit="block",
-                                    initial=n_completed, smoothing=0.01)
-                    if block_num not in seen_blocks:
-                        pbar.update(1)
-                        seen_blocks.add(block_num)
-                if not any_match:
-                    print(line, end='', flush=True)
+                for line in proc.stdout:
+                    output_lines.append(line)
+                    any_match = False
+                    for match in block_line_re.finditer(line):
+                        any_match = True
+                        block_num = int(match.group(1))
+                        if pbar is None:
+                            total = int(match.group(2))
+                            pbar = tqdm(total=total, desc="Blocks", unit="block",
+                                        initial=n_completed, smoothing=0.01)
+                        if block_num not in seen_blocks:
+                            pbar.update(1)
+                            seen_blocks.add(block_num)
+                    if not any_match:
+                        print(line, end='', flush=True)
+                proc.wait()
+                if pbar:
+                    pbar.close()
 
-            proc.wait()
-            if pbar:
-                pbar.close()
-        # -------- NO PROGRESS BAR --------
         else:
-            proc = subprocess.Popen(
-                ' '.join(matlab_cmd) if is_windows else matlab_cmd,
-                shell=is_windows,
-                env=env,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                preexec_fn=os.setsid if not is_windows else None
-            )
-            for line in proc.stdout:
-                print(line, end='')
-            proc.wait()
+            with subprocess.Popen(
+                    ' '.join(matlab_cmd) if is_windows else matlab_cmd,
+                    shell=is_windows,
+                    env=env,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    preexec_fn=os.setsid if not is_windows else None
+            ) as proc:
+                for line in proc.stdout:
+                    output_lines.append(line)
+                    print(line, end='', flush=True)
+                proc.wait()
 
         if proc.returncode != 0:
             log.error(f"MATLAB exited with error code {proc.returncode}.")
+            log.error("MATLAB Output (last 10 lines):\n" + ''.join(output_lines[-10:]))
             raise SystemExit(f"MATLAB execution failed with exit code {proc.returncode}. Check logs for details.")
 
         log.info("Deconvolution completed successfully.")
