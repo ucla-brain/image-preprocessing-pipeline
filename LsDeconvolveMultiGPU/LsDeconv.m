@@ -388,9 +388,9 @@ function [nx,ny,nz,x,y,z,x_pad,y_pad,z_pad,fft_shape] = autosplit( ...
     end
 
     %=== Return values ===%
-    [x, y, z]         = deal(best.core(1), best.core(2), best.core(3));
-    [x_pad,y_pad,z_pad] = deal(best.pad(1), best.pad(2), best.pad(3));
-    fft_shape         = best.fft_shape;
+    [x, y, z]           = deal(best.core(1), best.core(2), best.core(3));
+    [x_pad,y_pad,z_pad] = deal(best.pad(1) , best.pad(2) , best.pad(3));
+    fft_shape           = best.fft_shape;
 
     % Final sanity check (defensive)
     assert(prod([x y z] + 2*[x_pad y_pad z_pad]) <= max_total_elements, ...
