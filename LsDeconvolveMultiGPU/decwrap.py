@@ -510,7 +510,7 @@ def main():
                 bufsize=1,
                 preexec_fn=os.setsid if not is_windows else None
             )
-            block_line_re = re.compile(r'GPU\d+:\s*block\s+(\d+)\s+from\s+(\d+)\s+filters applied in\s+[\d.]+', re.IGNORECASE)
+            block_line_re = re.compile(r'^GPU\d+:\s*block\s+(\d+)\s+from\s+(\d+)\s+filters applied in\s+[\d.]+$', re.IGNORECASE)
             seen_blocks = set()
             pbar = None
             n_completed = count_lz4_blocks(cache_drive_folder)
