@@ -18,8 +18,8 @@ from tqdm import tqdm
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
 
-is_windows = platform.system() == "Windows"
-is_linux = platform.system() == "Linux"
+is_windows = platform.system().lower() == "windows"
+is_linux = platform.system().lower()   == "linux"
 
 
 def find_matlab_executable():
