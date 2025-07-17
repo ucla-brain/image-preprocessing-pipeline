@@ -335,15 +335,15 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit( ...
     mem_core_mult = physCores * bl_bytes;
 
     % For efficiency, precompute max for all z values to avoid repeat calculation
-    for z = z_max:-1:z_min
-        if z > z_dim, continue; end
-        xy_max = min([floor(floor(block_size_max/z)^0.5) x_dim y_dim]);
+    for zz = z_max:-1:z_min
+        if zz > z_dim, continue; end
+        xy_max = min([floor(sqrt(floor(block_size_max/zz))) x_dim y_dim]);
         if xy_max < xy_min, continue; end
 
-        slice_mem = output_bytes * (slice_pixels * z); % Same for all xy at this z
+        slice_mem = output_bytes * (slice_pixels * zz); % Same for all xy at this z
 
         for xy = xy_max:-1:xy_min
-            block_core = [xy xy z];
+            block_core = [xy xy zz];
             block_shape = block_core + 2*pad;
             if use_fft, block_shape = next_fast_len(block_shape); end
 
