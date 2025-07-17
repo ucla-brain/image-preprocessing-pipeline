@@ -393,8 +393,12 @@ function [nx,ny,nz,x,y,z,x_pad,y_pad,z_pad,fft_shape] = autosplit( ...
     fft_shape           = best.fft_shape;
 
     % Final sanity check (defensive)
-    assert(prod([x y z] + 2*[x_pad y_pad z_pad]) <= max_total_elements, ...
+    assert(prod([x y z] + 2*[x_pad y_pad z_pad] + 2*unwanted_pad) <= max_total_elements, ...
            'autosplit: internal bug — selected block exceeds MATLAB array limit');
+    if use_fft
+    assert(fft_shape <= block_size_max, ...
+           'autosplit: internal bug — selected block exceeds MATLAB array limit');
+    end
 
     nx = ceil(x_dim / x);
     ny = ceil(y_dim / y);
