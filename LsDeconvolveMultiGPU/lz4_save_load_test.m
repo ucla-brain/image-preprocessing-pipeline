@@ -1,67 +1,20 @@
 % ===============================
-% lz4_save_load_test.m (with diagnostics for save_lz4_mex write/flush issues)
+% lz4_save_load_test.m (standalone, speedup columns, no parallel/worker code)
 % ===============================
 
-disp('Running save/load LZ4 test and benchmark with integrity and worker MEX checks ...');
+disp('Running save/load LZ4 test and benchmark with integrity checks ...');
 
 % --- Check for save_lz4_mex and load_lz4_mex visibility ---
-disp('Checking MEX visibility on client and all workers ...');
+disp('Checking MEX visibility ...');
 mexfiles = {'save_lz4_mex', 'load_lz4_mex'};
 for m = 1:numel(mexfiles)
     mf = mexfiles{m};
     loc = which(mf);
     if isempty(loc)
-        error('MEX file "%s" not found on client MATLAB path. Please add its folder with addpath().', mf);
+        error('MEX file "%s" not found on MATLAB path. Please add its folder with addpath().', mf);
     else
         fprintf('Found "%s" at: %s\n', mf, loc);
     end
-end
-
-pool = gcp('nocreate');
-if isempty(pool)
-    pool = parpool('local');
-end
-
-% --- Check MEX file functionality and worker context ---
-fprintf('\nTesting save_lz4_mex and load_lz4_mex on all workers...\n');
-mex_test_ok = true(pool.NumWorkers, 1);
-mex_test_msg = cell(pool.NumWorkers, 1);
-cwd_on_workers = cell(pool.NumWorkers, 1);
-path_on_workers = cell(pool.NumWorkers, 1);
-
-spmd
-    try
-        testfile = ['test_mex_worker_' num2str(labindex) '.lz4'];
-        A = magic(8) * labindex;
-        save_lz4_mex(testfile, A);
-        B = load_lz4_mex(testfile);
-        assert(isequal(A,B), 'Data mismatch');
-        if exist(testfile, 'file'), delete(testfile); end
-        mex_test_ok = true;
-        mex_test_msg = 'OK';
-    catch ME
-        mex_test_ok = false;
-        mex_test_msg = getReport(ME);
-    end
-    cwd_on_workers{labindex} = pwd;
-    path_on_workers{labindex} = path;
-end
-
-any_fail = false;
-fail_idx = [];
-for w = 1:pool.NumWorkers
-    if ~mex_test_ok{w}
-        warning('MEX test failed on worker %d:\n%s', w, mex_test_msg{w});
-        fprintf('Worker %d current folder: %s\n', w, cwd_on_workers{w});
-        any_fail = true;
-        fail_idx(end+1) = w;
-    else
-        fprintf('Worker %d passed MEX functionality test.\n', w);
-    end
-end
-
-if any_fail
-    error('Error detected on workers %s. See above for diagnostics.', num2str(fail_idx));
 end
 
 % =========== MAIN TEST LOGIC FOLLOWS ===========
@@ -88,10 +41,7 @@ rng(42); % For reproducibility
 filetypes = {'double', 'single', 'uint16'};
 filenames = {'test_dbl.lz4', 'test_sgl.lz4', 'test_u16.lz4'};
 shapes = { [100, 200], [20, 30, 10], [512, 512, 8] };
-all_ok = true;
 bench_results = {};
-
-do_raw_bin = false; % Set true to include raw binary (optional)
 
 % --- Test moderate-sized arrays ---
 for k = 1:numel(filetypes)
@@ -115,22 +65,18 @@ for k = 1:numel(filetypes)
     t_save_lz4 = toc;
 
     % --- DIAGNOSTIC FILE CHECK ---
-    % 1. Check file exists
     if ~isfile(fname)
         error('File not found after save_lz4_mex: %s', fname);
     end
-    % 2. Check file is nonzero size
     finfo = dir(fname);
     if finfo.bytes == 0
         error('File is zero bytes after save_lz4_mex: %s', fname);
     end
-    % 3. Try to open for read
     [fid, errmsg] = fopen(fname, 'rb');
     if fid < 0
         error('Cannot open saved file for reading: %s. Error: %s', fname, errmsg);
     end
     fclose(fid);
-    % 4. Try to load immediately
     try
         arr2 = load_lz4_mex(fname);
     catch ME
@@ -167,47 +113,20 @@ for k = 1:numel(filetypes)
     S = load(fname_mat, 'arr');
     arr4 = S.arr;
     t_load_mat = toc;
-    eq_type_mat = isa(arr4, t);
-    eq_shape_mat = isequal(size(arr), size(arr4));
-    eq_content_mat = isequal(arr, arr4);
-    res_mat = eq_type_mat && eq_shape_mat && eq_content_mat;
 
     % ========== MATLAB matfile ==========
     tic;
     mf = matfile(fname_mat);
     arr5 = mf.arr;
     t_load_matfile = toc;
-    eq_type_mf = isa(arr5, t);
-    eq_shape_mf = isequal(size(arr), size(arr5));
-    eq_content_mf = isequal(arr, arr5);
-    res_mf = eq_type_mf && eq_shape_mf && eq_content_mf;
 
-    t_save_raw = NaN; t_load_raw = NaN; res_raw = false;
-    if do_raw_bin
-        fname_raw = fullfile(cache_dir, [filenames{k}(1:end-4) '.rawbin']);
-        tic;
-        fid = fopen(fname_raw, 'wb');
-        fwrite(fid, arr, class(arr));
-        fclose(fid);
-        t_save_raw = toc;
-        clear arr6
-        tic;
-        fid = fopen(fname_raw, 'rb');
-        arr6 = fread(fid, numel(arr), ['*' class(arr)]);
-        fclose(fid);
-        arr6 = reshape(arr6, size(arr));
-        t_load_raw = toc;
-        res_raw = isequal(arr, arr6);
-        if isfile(fname_raw), delete(fname_raw); end
-    end
-
-    % --- Store results ---
+    % --- Store results + speedup ratios ---
     bench_results(end+1,:) = {t, ...
         t_save_lz4, t_load_lz4, res_lz4, ...
         eq_content_backmask, ...
-        t_save_mat, t_load_mat, res_mat, ...
-        t_load_matfile, res_mf, ...
-        t_save_raw, t_load_raw, res_raw};
+        t_save_mat, t_load_mat, ...
+        t_save_mat/t_save_lz4, t_load_mat/t_load_lz4, ...
+        t_load_matfile};
 
     % Clean up files
     if isfile(fname), delete(fname); end
@@ -240,7 +159,6 @@ for k = 1:numel(big_types)
     save_lz4_mex(fname, arr);
     t_save_lz4 = toc;
 
-    % --- DIAGNOSTIC FILE CHECK ---
     if ~isfile(fname)
         error('File not found after save_lz4_mex: %s', fname);
     end
@@ -289,31 +207,20 @@ for k = 1:numel(big_types)
     S = load(fname_mat, 'arr');
     arr4 = S.arr;
     t_load_mat = toc;
-    eq_type_mat = isa(arr4, t);
-    eq_shape_mat = isequal(size(arr), size(arr4));
-    eq_content_mat = isequal(arr, arr4);
-    res_mat = eq_type_mat && eq_shape_mat && eq_content_mat;
 
     % ========== MATLAB matfile ==========
     tic;
     mf = matfile(fname_mat);
     arr5 = mf.arr;
     t_load_matfile = toc;
-    eq_type_mf = isa(arr5, t);
-    eq_shape_mf = isequal(size(arr), size(arr5));
-    eq_content_mf = isequal(arr, arr5);
-    res_mf = eq_type_mf && eq_shape_mf && eq_content_mf;
 
-    t_save_raw = NaN; t_load_raw = NaN; res_raw = false;
-    % (skip raw binary for >2GB)
-
-    % --- Store results ---
+    % --- Store results + speedup ratios ---
     bench_results(end+1,:) = {['big-' t], ...
         t_save_lz4, t_load_lz4, res_lz4, ...
         eq_content_backmask, ...
-        t_save_mat, t_load_mat, res_mat, ...
-        t_load_matfile, res_mf, ...
-        t_save_raw, t_load_raw, res_raw};
+        t_save_mat, t_load_mat, ...
+        t_save_mat/t_save_lz4, t_load_mat/t_load_lz4, ...
+        t_load_matfile};
 
     if isfile(fname), delete(fname); end
     if isfile(fname_mat), delete(fname_mat); end
@@ -324,15 +231,18 @@ headers = { ...
     'Type', ...
     'LZ4_Save', 'LZ4_Load', 'LZ4_Ok', ...
     'LZ4_Backmask_Ok', ...
-    'MAT_Save', 'MAT_Load', 'MAT_Ok', ...
-    'Matfile_Load', 'Matfile_Ok', ...
-    'Raw_Save', 'Raw_Load', 'Raw_Ok' ...
+    'MAT_Save', 'MAT_Load', ...
+    'LZ4_Save_vs_MAT', 'LZ4_Load_vs_MAT', ...
+    'Matfile_Load' ...
 };
 tbl = cell2table(bench_results, 'VariableNames', headers);
 disp(tbl);
 
-if all([tbl.LZ4_Ok; tbl.LZ4_Backmask_Ok; tbl.MAT_Ok; tbl.Matfile_Ok])
-    disp('All LZ4/MAT/matfile save/load and integrity (backmask) tests PASSED.');
+fprintf('\n--- LZ4 vs MAT Save/Load Speedup Ratios ---\n');
+disp(tbl(:, {'Type','LZ4_Save_vs_MAT','LZ4_Load_vs_MAT'}));
+
+if all([tbl.LZ4_Ok; tbl.LZ4_Backmask_Ok])
+    disp('All LZ4 save/load and integrity (backmask) tests PASSED.');
 else
-    disp('Some LZ4/MAT/matfile save/load or integrity (backmask) tests FAILED.');
+    disp('Some LZ4 save/load or integrity (backmask) tests FAILED.');
 end

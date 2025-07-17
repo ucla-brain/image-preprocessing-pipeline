@@ -134,45 +134,70 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
     if (fseek(file, 0, SEEK_SET) != 0 || write_header(file, &header) != 0)
         FAIL("save_lz4_mex:HeaderWriteFailed", "Could not write header.");
 
-    // --- Compress and write each chunk ---
+    // --- Compress all chunks in parallel ---
     const char* src_data = (const char*)mxGetData(input_array);
     if (!src_data)
         FAIL("save_lz4_mex:NoData", "Input array has no data.");
 
-    uint64_t offset_bytes = 0;
+    // Allocate arrays for compressed buffers and sizes
+    char** compressed_bufs = (char**)mxCalloc(num_chunks, sizeof(char*));
+    int*   compressed_sizes = (int*)mxCalloc(num_chunks, sizeof(int));
+    int*   max_compressed_sizes = (int*)mxCalloc(num_chunks, sizeof(int));
+    uint64_t* chunk_offsets = (uint64_t*)mxCalloc(num_chunks, sizeof(uint64_t));
 
-    for (uint32_t chunk_idx = 0; chunk_idx < num_chunks; ++chunk_idx)
+    // Compute chunk offsets in advance
+    for (uint32_t chunk_idx = 0; chunk_idx < num_chunks; ++chunk_idx) {
+        chunk_offsets[chunk_idx] = chunk_idx * header.chunk_size;
+    }
+
+    // Parallel compression
+    int chunk_idx;
+    #pragma omp parallel for
+    for (chunk_idx = 0; chunk_idx < (int)num_chunks; ++chunk_idx)
     {
+        uint64_t offset_bytes = chunk_offsets[chunk_idx];
         uint64_t this_chunk_bytes = header.chunk_size;
         if (offset_bytes + this_chunk_bytes > header.total_uncompressed)
             this_chunk_bytes = header.total_uncompressed - offset_bytes;
 
-        header.chunk_uncomp[chunk_idx] = this_chunk_bytes;
-
         int uncomp_size = (int)this_chunk_bytes;
         int max_compressed_size = LZ4_compressBound(uncomp_size);
-        if (max_compressed_size <= 0)
-            FAIL("save_lz4_mex:LZ4BoundError", "LZ4_compressBound failed.");
+        max_compressed_sizes[chunk_idx] = max_compressed_size;
 
         char* compressed_buf = (char*)mxMalloc(max_compressed_size);
         if (!compressed_buf)
-            FAIL("save_lz4_mex:AllocFailed", "Out of memory.");
+            mexErrMsgIdAndTxt("save_lz4_mex:AllocFailed", "Out of memory in thread.");
 
-        int compressed_bytes = LZ4_compress_default(src_data + offset_bytes, compressed_buf, uncomp_size, max_compressed_size);
+        int compressed_bytes = LZ4_compress_default(
+            src_data + offset_bytes, compressed_buf, uncomp_size, max_compressed_size);
+
         if (compressed_bytes <= 0) {
             mxFree(compressed_buf);
-            FAIL("save_lz4_mex:CompressFail", "LZ4 compression failed.");
+            mexErrMsgIdAndTxt("save_lz4_mex:CompressFail", "LZ4 compression failed in thread.");
         }
 
+        compressed_bufs[chunk_idx] = compressed_buf;
+        compressed_sizes[chunk_idx] = compressed_bytes;
+        // Save metadata
+        header.chunk_uncomp[chunk_idx] = this_chunk_bytes;
         header.chunk_comp[chunk_idx] = (uint64_t)compressed_bytes;
-
-        size_t bytes_written = fwrite(compressed_buf, 1, compressed_bytes, file);
-        mxFree(compressed_buf);
-        if (bytes_written != (size_t)compressed_bytes)
-            FAIL("save_lz4_mex:WriteFail", "Failed to write compressed data.");
-
-        offset_bytes += this_chunk_bytes;
     }
+
+    // Sequentially write all compressed chunks to file
+    for (uint32_t chunk_idx = 0; chunk_idx < num_chunks; ++chunk_idx) {
+        size_t bytes_written = fwrite(compressed_bufs[chunk_idx], 1, compressed_sizes[chunk_idx], file);
+        mxFree(compressed_bufs[chunk_idx]);
+        if (bytes_written != (size_t)compressed_sizes[chunk_idx]) {
+            mxFree(compressed_bufs); mxFree(compressed_sizes); mxFree(max_compressed_sizes); mxFree(chunk_offsets);
+            FAIL("save_lz4_mex:WriteFail", "Failed to write compressed data.");
+        }
+    }
+
+    // Free arrays
+    mxFree(compressed_bufs);
+    mxFree(compressed_sizes);
+    mxFree(max_compressed_sizes);
+    mxFree(chunk_offsets);
 
     // --- Rewrite final header with actual chunk sizes ---
     if (fflush(file) != 0 || fseek(file, 0, SEEK_SET) != 0 || write_header(file, &header) != 0)
