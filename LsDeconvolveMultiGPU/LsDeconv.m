@@ -326,7 +326,7 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit( ...
     if filter.destripe_sigma > 0, pad = [1 1 1]; end
     if numit > 0, pad = max(pad, decon_pad_size(psf_size)); end
     use_fft = filter.use_fft;
-    extra_pad = gaussian_pad_size(filter.gaussian_sigma);
+    unwanted_pad = gaussian_pad_size(filter.gaussian_sigma);
 
     %=== Search for Best Block ===%
     best = [];
@@ -350,7 +350,8 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit( ...
             % Safety checks (all fast, no function call)
             if any(block_shape > stack_shape), continue; end
 
-            if prod(block_shape + 2*extra_pad) >= max_total_elements, continue; end
+            if prod(block_shape) > block_size_max, continue; end
+            if prod(block_shape + 2*unwanted_pad) > max_total_elements, continue; end
 
             block_core_volume = prod(block_core);
             mem_needed = slice_mem + block_core_volume * mem_core_mult;
