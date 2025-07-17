@@ -324,7 +324,7 @@ class MultiProcess(Process):
                     tif_save_path = self.tif_save_path(idx, images, flip_z=flip_z)
                     # print(tif_save_path)
                     if resume and tif_save_path.exists() and not need_down_sampling:  # function is not None and
-                        self.progress_queue.put(running_next)
+                        # self.progress_queue.put(running_next)
                         continue
                     try:
                         if resume and tif_save_path.exists():
