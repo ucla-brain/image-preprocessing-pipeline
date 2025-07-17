@@ -674,10 +674,14 @@ def parallel_image_processor(
         else:
             os.chmod(downsampled_path, 0o777)
 
+    initial = 0
+    if resume:
+        initial = sum(1 for _ in destination.glob("*.tif"))
+
     progress_queue = Queue()
     semaphore = Queue()
     semaphore.put(1)
-    workers = min(max_processors, args_queue.qsize())
+    workers = min(max_processors, args_queue.qsize() - initial)
     print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}starting workers ...")
     for worker in tqdm(range(workers), desc=' workers'):
         if progress_queue.qsize() + worker < num_images:
@@ -691,9 +695,7 @@ def parallel_image_processor(
             print('\n the existing workers can finish the job! no more workers are needed.')
             workers = worker
             break
-    initial = 0
-    if resume:
-        initial = sum(1 for _ in destination.glob("*.tif"))
+
     return_code = progress_manager(progress_queue, workers, num_images, desc=progress_bar_name, initial=initial)
     args_queue.cancel_join_thread()
     args_queue.close()
