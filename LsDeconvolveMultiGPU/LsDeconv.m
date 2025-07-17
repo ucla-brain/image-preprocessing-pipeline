@@ -335,21 +335,20 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit( ...
 
     % For efficiency, precompute max for all z values to avoid repeat calculation
     for z = z_max:-1:z_min
-        xy_max = min([floor((block_size_max/z)^0.5), x_dim, y_dim]);
+        xy_max = min([floor((block_size_max/z)^0.5)-1, x_dim, y_dim]);
         if xy_max < xy_min, continue; end
 
         slice_mem = output_bytes * (slice_pixels * z); % Same for all xy at this z
 
         for xy = xy_max:-1:xy_min
             block_core = [xy xy z];
-
             block_shape = block_core + 2*pad;
             if use_fft, block_shape = next_fast_len(block_shape); end
 
             % Safety checks (all fast, no function call)
             if block_shape(1) > x_dim || block_shape(2) > y_dim || block_shape(3) > z_dim, continue; end
 
-            if prod(block_shape + 2 * extra_pad) >= max_total_elements, continue; end
+            if prod(block_shape + 2*extra_pad) >= max_total_elements, continue; end
 
             max_block_volume = prod(block_core);
             mem_needed = slice_mem + max_block_volume * mem_core_mult;
