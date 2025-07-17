@@ -613,12 +613,6 @@ def parallel_image_processor(
                 args_queue.put((idx, [idx]))
 
     elif source.is_file() and source.suffix.lower() == ".ims":
-        # print(f"ims file detected. hdf5plugin=v{hdf5plugin.version}")
-        # with h5py.File(source) as ims_file:
-        #     img = ims_file[f"DataSet/ResolutionLevel 0/TimePoint 0/Channel {channel}/Data"]
-        #     num_images = img.shape[0]
-        #     shape = img.shape[1:3]
-        #     dtype = img.dtype
         print(f"ims file detected. using imaris_ims_file_reader!")
         with ImarisZWrapper(source, timepoint=0, channel=channel) as ims_wrapper:
             num_images = len(ims_wrapper)  # Number of Z planes
@@ -697,8 +691,10 @@ def parallel_image_processor(
             print('\n the existing workers can finish the job! no more workers are needed.')
             workers = worker
             break
-
-    return_code = progress_manager(progress_queue, workers, num_images, desc=progress_bar_name)
+    initial = 0
+    if resume:
+        initial = sum(1 for _ in destination.glob("*.tif"))
+    return_code = progress_manager(progress_queue, workers, num_images, desc=progress_bar_name, initial=initial)
     args_queue.cancel_join_thread()
     args_queue.close()
     progress_queue.cancel_join_thread()
