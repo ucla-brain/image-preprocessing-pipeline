@@ -10,7 +10,7 @@ from typing import List
 from psutil import cpu_count
 from nrrd import read as read_nrrd
 
-from pystripe.core import imread_tif_raw_png, glob_re
+from ..pystripe.core import imread_tif_raw_png, glob_re
 from supplements.cli_interface import PrintColors
 from tsv.convert import calculate_cores_and_chunk_size
 
