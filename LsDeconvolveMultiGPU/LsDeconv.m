@@ -312,7 +312,7 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit( ...
 
     %=== Input-derived Parameters ===%
     x_dim = stack_info.x; y_dim = stack_info.y; z_dim = stack_info.z;
-    stack_shape = [x_dim y_dim z_dim]
+    stack_shape = [x_dim y_dim z_dim];
     slice_pixels = x_dim * y_dim;
     z_max_ram = floor(ram_reserved / (output_bytes * slice_pixels));
     z_max = min(z_max_ram, z_dim);
