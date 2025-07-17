@@ -325,6 +325,7 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit( ...
     if filter.destripe_sigma > 0, pad = [1 1 1]; end
     if numit > 0, pad = max(pad, decon_pad_size(psf_size)); end
     use_fft = filter.use_fft;
+    extra_pad = gaussian_pad_size(filter.gaussian_sigma)
 
     %=== Search for Best Block ===%
     best = [];
@@ -347,7 +348,7 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit( ...
 
             % Safety checks (all fast, no function call)
             if block_shape(1) > x_dim || block_shape(2) > y_dim || block_shape(3) > z_dim, continue; end
-            if prod(block_shape) >= block_size_max, continue; end
+            if prod(block_shape + 2*extra_pad) >= block_size_max, continue; end
 
             max_block_volume = prod(block_core);
             mem_needed = slice_mem + max_block_volume * mem_core_mult;
@@ -381,18 +382,23 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit( ...
     nz = ceil(z_dim / z);
 end
 
-function pad_size = gaussian_pad_size(image_size, sigma, kernel)
-    % Accepts sigma (scalar or vector), computes pad_size for each dimension.
-    if isscalar(sigma)
-        sigma = repmat(sigma, size(image_size));
-    end
-    % Kernel size: covers ~99.7% of Gaussian (3 sigma each side)
+% function pad_size = gaussian_pad_size(image_size, sigma, kernel)
+%     % Accepts sigma (scalar or vector), computes pad_size for each dimension.
+%     if isscalar(sigma)
+%         sigma = repmat(sigma, size(image_size));
+%     end
+%     % Kernel size: covers ~99.7% of Gaussian (3 sigma each side)
+%     ksize = 2 * ceil(3 * sigma(:)) + 1;
+%     pad_size = floor(ksize / 2);    % Column vector
+%     if numel(pad_size) ~= numel(image_size)
+%         pad_size = [pad_size; zeros(numel(image_size) - numel(pad_size), 1)];
+%     end
+%     pad_size = ceil(max(pad_size(:).', kernel(:).'));
+% end
+
+function pad_size = gaussian_pad_size(sigma)
     ksize = 2 * ceil(3 * sigma(:)) + 1;
     pad_size = floor(ksize / 2);    % Column vector
-    if numel(pad_size) ~= numel(image_size)
-        pad_size = [pad_size; zeros(numel(image_size) - numel(pad_size), 1)];
-    end
-    pad_size = ceil(max(pad_size(:).', kernel(:).'));
 end
 
 function pad = decon_pad_size(psf_sz)
