@@ -301,73 +301,69 @@ end
 
 function [nx,ny,nz,x,y,z,x_pad,y_pad,z_pad,fft_shape] = autosplit( ...
     stack_info, psf_size, filter, block_size_max, ram_available, numit, output_bytes)
+%AUTOSPLIT  Choose an (x,y,z) block size that fits in RAM and ≤ 2 147 483 647 elements.
+%
+%   The function searches from the largest feasible block downwards and
+%   returns the best‐scoring candidate (largest core volume).  Two run-time
+%   assertions at the end double-check that the chosen block really obeys
+%   MATLAB’s hard array-size limit and the user-supplied block_size_max.
 
-    %=== Configurable constants ===%
+    % =====  CONFIGURABLE CONSTANTS  =====================================
     physCores          = feature('numCores');
     socketCount        = get_num_cpu_sockets();
-    ram_fraction       = 0.5;                   % ≤50 % of per-socket RAM
+    ram_fraction       = 0.5;        % ≤ 50 % of per-socket RAM
     ram_reserved       = ram_available * ram_fraction / socketCount;
-    bl_bytes           = 4;                     % single-precision
-    max_total_elements = 2^31 - 1;              % MATLAB hard cap
-
-    % Enforce element limit *before* anything else
+    bl_bytes           = 4;          % single-precision
+    max_total_elements = 2^31 - 1;   % MATLAB hard cap (≈2.147 billion)
     block_size_max = min(block_size_max, max_total_elements);
+    use_fft            = filter.use_fft;
 
-    %=== Input-derived parameters ===%
+    % =====  INPUT-DERIVED CONSTANTS  ====================================
     x_dim = stack_info.x;  y_dim = stack_info.y;  z_dim = stack_info.z;
     slice_pixels = x_dim * y_dim;
-    z_max_ram = floor(ram_reserved / (output_bytes*slice_pixels));
+    z_max_ram = floor(ram_reserved / (output_bytes * slice_pixels));
     z_max     = min(z_max_ram, z_dim);
 
-    xy_min = max(min([psf_size(1)*2, x_dim, y_dim]),1);
-    z_min  = max(min(psf_size(3)*2, z_dim),1);
+    xy_min = max(min([psf_size(1)*2, x_dim, y_dim]), 1);
+    z_min  = max(min(psf_size(3)*2, z_dim), 1);
 
-    %=== Padding ===%
+    % =====  PAD SIZES  ===================================================
     pad = [0 0 0];
-    if filter.destripe_sigma > 0
-        pad = [1 1 1];
-    end
-    if numit > 0
-        pad = max(pad, decon_pad_size(psf_size));
-    end
-    unwanted_pad = gaussian_pad_size(filter.gaussian_sigma);  % may be zero
-    use_fft      = filter.use_fft;
+    if filter.destripe_sigma > 0, pad = [1 1 1]; end
+    if numit > 0, pad = max(pad, decon_pad_size(psf_size)); end
+    unwanted_pad = reshape(gaussian_pad_size(filter.gaussian_sigma), 1, []);
 
-    best       = [];
-    best_score = -Inf;
-    fail_count = 0;
-    mem_core_mult = physCores * bl_bytes;
+    % =====  SEARCH  ======================================================
+    best = [];              best_score   = -Inf;
+    fail_count = 0;         mem_core_mult = physCores * bl_bytes;
 
-    %=== Candidate search ===%
     for zz = z_max:-1:z_min
         if zz > z_dim, continue; end
 
         xy_max = min([floor(sqrt(floor(block_size_max/zz))), x_dim, y_dim]);
         if xy_max < xy_min, continue; end
 
-        slice_mem = output_bytes * slice_pixels * zz;  % constant over xy for this zz
+        % memory that scales only with z (constant inside inner loop)
+        slice_mem  = output_bytes * slice_pixels * zz;
 
         for xy = xy_max:-1:xy_min
             block_core  = [xy xy zz];
             block_shape = block_core + 2*pad;
-
             if use_fft
                 block_shape = next_fast_len(block_shape);
             end
 
-            % ---- guards -------------------------------------------------
-            if any( block_shape                   > [x_dim y_dim z_dim]), continue; end
+            % ---------- guards -------------------------------------------
+            if  any(block_shape                   > [x_dim y_dim z_dim]), continue; end
             if prod(block_shape)                  > block_size_max      , continue; end
             if prod(block_shape + 2*unwanted_pad) > max_total_elements  , continue; end
 
-
-            block_core_vol = prod(block_core);
-            mem_needed = slice_mem + block_core_vol * mem_core_mult;
+            % workspace memory (per-core) is proportional to block_core volume
+            mem_needed = slice_mem + prod(block_core) * mem_core_mult;
             if mem_needed > ram_available, continue; end
             % --------------------------------------------------------------
 
-            score = block_core_vol;  % favour large cores
-
+            score = prod(block_core);            % favour larger core vols
             if score > best_score
                 best        = struct('core',block_core, 'pad',pad, ...
                                      'fft_shape',block_shape);
@@ -384,26 +380,29 @@ function [nx,ny,nz,x,y,z,x_pad,y_pad,z_pad,fft_shape] = autosplit( ...
 
     if isempty(best)
         error(['autosplit: No block shape fits in memory. ', ...
-               'Increase block_size_max or use a smaller psf_size.']);
+               'Increase block_size_max or reduce psf_size.']);
     end
 
-    %=== Return values ===%
-    [x, y, z]           = deal(best.core(1), best.core(2), best.core(3));
-    [x_pad,y_pad,z_pad] = deal(best.pad(1) , best.pad(2) , best.pad(3));
-    fft_shape           = best.fft_shape;
+    % =====  RETURN VALUES  ==============================================
+    [x ,y ,z ]           = deal(best.core (1), best.core (2), best.core (3));
+    [x_pad,y_pad,z_pad]  = deal(best.pad  (1), best.pad  (2), best.pad  (3));
+    fft_shape            = best.fft_shape;
 
-    % Final sanity check (defensive)
-    assert(prod([x y z] + 2*[x_pad y_pad z_pad] + 2*unwanted_pad) <= max_total_elements, ...
-           'autosplit: internal bug — selected block exceeds MATLAB array limit');
+    % ==================  FINAL DEFENSIVE ASSERTS  ========================
+    total_shape = [x y z] + 2*[x_pad y_pad z_pad] + 2*unwanted_pad;     % FIX #3
+    assert(prod(total_shape(:)) <= max_total_elements, ...              % FIX #4
+        'autosplit: internal bug — selected block exceeds MATLAB array limit');
+
     if use_fft
-    assert(prod(fft_shape) <= block_size_max, ...
-           'autosplit: internal bug — selected block exceeds MATLAB array limit');
+        assert(prod(fft_shape(:)) <= block_size_max, ...
+            'autosplit: internal bug — FFT shape exceeds block_size_max');
     end
 
     nx = ceil(x_dim / x);
     ny = ceil(y_dim / y);
     nz = ceil(z_dim / z);
 end
+
 
 % function pad_size = gaussian_pad_size(image_size, sigma, kernel)
 %     % Accepts sigma (scalar or vector), computes pad_size for each dimension.
