@@ -494,8 +494,6 @@ def main():
         log.info("Dry run enabled. Command was not executed.")
         return
 
-    import contextlib
-
     proc = None
     output_lines = []
     try:
