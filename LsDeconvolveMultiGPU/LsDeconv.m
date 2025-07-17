@@ -325,7 +325,7 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit( ...
     if filter.destripe_sigma > 0, pad = [1 1 1]; end
     if numit > 0, pad = max(pad, decon_pad_size(psf_size)); end
     use_fft = filter.use_fft;
-    extra_pad = gaussian_pad_size(filter.gaussian_sigma)
+    extra_pad = gaussian_pad_size(filter.gaussian_sigma);
 
     %=== Search for Best Block ===%
     best = [];
