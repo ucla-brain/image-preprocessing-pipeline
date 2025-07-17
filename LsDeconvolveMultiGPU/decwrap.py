@@ -530,7 +530,7 @@ def main():
                         pbar.update(1)
                         seen_blocks.add(block_num)
                 if not any_match:
-                    print(line, end='')
+                    print(line, end='', flush=True)
 
             proc.wait()
             if pbar:
