@@ -361,7 +361,7 @@ function [nx,ny,nz,x,y,z,x_pad,y_pad,z_pad,fft_shape] = autosplit( ...
             if prod(block_shape + 2*unwanted_pad) > max_total_elements  , continue; end
 
 
-            block_core_vol = prod(block_core)
+            block_core_vol = prod(block_core);
             mem_needed = slice_mem + block_core_vol * mem_core_mult;
             if mem_needed > ram_available, continue; end
             % --------------------------------------------------------------
