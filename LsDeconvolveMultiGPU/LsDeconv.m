@@ -350,8 +350,8 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit( ...
             % Safety checks (all fast, no function call)
             if any(block_shape > stack_shape), continue; end
 
-            if prod(block_shape) > block_size_max, continue; end
-            if prod(block_shape + 2*unwanted_pad) > max_total_elements, continue; end
+            if prod(block_shape) >= block_size_max, continue; end
+            if prod(block_shape + 2*unwanted_pad) >= max_total_elements, continue; end
 
             block_core_volume = prod(block_core);
             mem_needed = slice_mem + block_core_volume * mem_core_mult;
