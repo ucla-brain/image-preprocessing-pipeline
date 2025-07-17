@@ -404,7 +404,7 @@ function pad_size = gaussian_pad_size(sigma)
     end
     % Kernel size: covers ~99.7% of Gaussian (3 sigma each side)
     ksize = 2 * ceil(3 * sigma(:)) + 1;
-    pad_size = ksize % ceil(ksize / 2);    % Column vector
+    pad_size = ksize; % ceil(ksize / 2);    % Column vector
 end
 
 function pad = decon_pad_size(psf_sz)
