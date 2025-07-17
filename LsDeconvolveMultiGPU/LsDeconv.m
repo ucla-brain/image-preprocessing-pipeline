@@ -335,7 +335,7 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit( ...
 
     % For efficiency, precompute max for all z values to avoid repeat calculation
     for z = z_max:-1:z_min
-        xy_max = min([floor((max_total_elements/z)^0.5), x_dim, y_dim]);
+        xy_max = min([floor((block_size_max/z)^0.5), x_dim, y_dim]);
         if xy_max < xy_min, continue; end
 
         slice_mem = output_bytes * (slice_pixels * z); % Same for all xy at this z
@@ -349,7 +349,7 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit( ...
             % Safety checks (all fast, no function call)
             if block_shape(1) > x_dim || block_shape(2) > y_dim || block_shape(3) > z_dim, continue; end
 
-            if prod(block_shape + 3*extra_pad) > block_size_max, continue; end
+            if prod(block_shape + 2 * extra_pad) > block_size_max, continue; end
 
             max_block_volume = prod(block_core);
             mem_needed = slice_mem + max_block_volume * mem_core_mult;
@@ -404,7 +404,7 @@ function pad_size = gaussian_pad_size(sigma)
     end
     % Kernel size: covers ~99.7% of Gaussian (3 sigma each side)
     ksize = 2 * ceil(3 * sigma(:)) + 1;
-    pad_size = ksize; % ceil(ksize / 2);    % Column vector
+    pad_size = floor(ksize / 2);    % Column vector
 end
 
 function pad = decon_pad_size(psf_sz)
