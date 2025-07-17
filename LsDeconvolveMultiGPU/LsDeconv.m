@@ -312,6 +312,7 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit( ...
 
     %=== Input-derived Parameters ===%
     x_dim = stack_info.x; y_dim = stack_info.y; z_dim = stack_info.z;
+    stack_shape = [x_dim y_dim z_dim]
     slice_pixels = x_dim * y_dim;
     z_max_ram = floor(ram_reserved / (output_bytes * slice_pixels));
     z_max = min(z_max_ram, z_dim);
@@ -335,7 +336,8 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit( ...
 
     % For efficiency, precompute max for all z values to avoid repeat calculation
     for z = z_max:-1:z_min
-        xy_max = min([floor((block_size_max/z)^0.5), x_dim, y_dim]);
+        if z > z_dim, continue; end
+        xy_max = min([floor(floor(block_size_max/z)^0.5) x_dim y_dim]);
         if xy_max < xy_min, continue; end
 
         slice_mem = output_bytes * (slice_pixels * z); % Same for all xy at this z
@@ -346,15 +348,15 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit( ...
             if use_fft, block_shape = next_fast_len(block_shape); end
 
             % Safety checks (all fast, no function call)
-            if block_shape(1) > x_dim || block_shape(2) > y_dim || block_shape(3) > z_dim, continue; end
+            if any(block_shape > stack_shape), continue; end
 
             if prod(block_shape + 2*extra_pad) >= max_total_elements, continue; end
 
-            max_block_volume = prod(block_core);
-            mem_needed = slice_mem + max_block_volume * mem_core_mult;
+            block_core_volume = prod(block_core);
+            mem_needed = slice_mem + block_core_volume * mem_core_mult;
             if mem_needed > ram_available, continue; end
 
-            score = max_block_volume; % Use max block volume as score
+            score = block_core_volume; % Use core block volume as score
             if score > best_score
                 best = struct('core', block_core, 'pad', pad, 'fft_shape', block_shape);
                 best_score = score;
