@@ -1268,7 +1268,7 @@ function baseline_subtraction = dark(filter, bit_depth)
 end
 
 function [lb, ub] = deconvolved_stats(deconvolved, clipval)
-    stats = prctile(deconvolved, [(100 - clipval) clipval], "all", "Method", "approximate");
+    stats = prctile(deconvolved, [(100 - clipval) clipval], "all");
     if isgpuarray(stats)
         stats = gather(stats);
     end

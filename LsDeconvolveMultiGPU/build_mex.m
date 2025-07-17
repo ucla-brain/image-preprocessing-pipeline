@@ -318,8 +318,10 @@ function build_mex(debug)
         end
         mex_cpu = mex_cpu_linux;
     end
-
+    
     fprintf('\n[MEX] Compiling CPU modules …\n');
+    mex(mex_cpu{:}, 'twin_percentile_mex.cpp');
+    return
     mex(mex_cpu{:}, 'save_lz4_mex.c', lz4_incflag, lz4_libfile);
     mex(mex_cpu{:}, 'semaphore.c');
     mex(mex_cpu{:}, 'load_lz4_mex.c', lz4_incflag, lz4_libfile);
