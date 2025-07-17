@@ -325,7 +325,7 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit( ...
     if filter.destripe_sigma > 0, pad = [1 1 1]; end
     if numit > 0, pad = max(pad, decon_pad_size(psf_size)); end
     use_fft = filter.use_fft;
-    extra_pad = gaussian_pad_size(block_shape, filter.gaussian_sigma);
+    extra_pad = gaussian_pad_size(filter.gaussian_sigma);
 
     %=== Search for Best Block ===%
     best = [];
@@ -383,18 +383,28 @@ function [nx, ny, nz, x, y, z, x_pad, y_pad, z_pad, fft_shape] = autosplit( ...
     nz = ceil(z_dim / z);
 end
 
-function pad_size = gaussian_pad_size(image_size, sigma)
+% function pad_size = gaussian_pad_size(image_size, sigma, kernel)
+%     % Accepts sigma (scalar or vector), computes pad_size for each dimension.
+%     if isscalar(sigma)
+%         sigma = repmat(sigma, size(image_size));
+%     end
+%     % Kernel size: covers ~99.7% of Gaussian (3 sigma each side)
+%     ksize = 2 * ceil(3 * sigma(:)) + 1;
+%     pad_size = floor(ksize / 2);    % Column vector
+%     if numel(pad_size) ~= numel(image_size)
+%         pad_size = [pad_size; zeros(numel(image_size) - numel(pad_size), 1)];
+%     end
+%     pad_size = ceil(max(pad_size(:).', kernel(:).'));
+% end
+
+function pad_size = gaussian_pad_size(sigma)
     % Accepts sigma (scalar or vector), computes pad_size for each dimension.
     if isscalar(sigma)
-        sigma = repmat(sigma, size(image_size));
+        sigma = repmat(sigma, 3);
     end
     % Kernel size: covers ~99.7% of Gaussian (3 sigma each side)
     ksize = 2 * ceil(3 * sigma(:)) + 1;
     pad_size = ceil(ksize / 2);    % Column vector
-    if numel(pad_size) ~= numel(image_size)
-        pad_size = [pad_size; zeros(numel(image_size) - numel(pad_size), 1)];
-    end
-    % pad_size = ceil(max(pad_size(:).', kernel(:).'));
 end
 
 function pad = decon_pad_size(psf_sz)
