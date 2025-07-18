@@ -1,21 +1,19 @@
 /*==============================================================================
-  fast_twin_tail_orderstat.cu
+  fast_twin_tail_orderstat.cpp
 
-  Efficient twin-tail percentile estimation (prctile) for large arrays.
-  MATLAB MEX implementation, heap-based, matches MATLAB's prctile(...,'Method','exact')
-  with much better speed for small percentiles.
+  Efficient twin-tail percentile estimation for large arrays (MATLAB MEX).
 
-  - Finds the [p, 100-p] percentiles with O(N log K) complexity (K: heap size).
-  - Only the most extreme values are kept, no full sort.
-  - Uses max-heap and min-heap (std::priority_queue) for low/high tails.
-  - Heaps are non-overlapping (asserted at runtime), so only one heap is ever
-    updated per value after initial fill.
-  - Linear interpolation is performed exactly as in MATLAB's "exact" method.
-  - Designed for high performance, minimal memory, and compatibility.
+  - Fast approximation of MATLAB's prctile(...,'Method','exact') using heaps.
+  - Finds the [p, 100-p] percentiles with O(N log K) complexity (K = heap size).
+  - Only the most extreme values are kept; no full sort or copy is needed.
+  - Uses a max-heap for the low tail and min-heap for the high tail (std::priority_queue).
+  - Heaps are non-overlapping (asserted at runtime); after initial fill, at most one heap is updated per value.
+  - Linear interpolation matches MATLAB's "exact" method for non-integer ranks.
+  - Designed for high performance, low memory overhead, and drop-in MATLAB compatibility.
 
   Usage in MATLAB:
       result = fast_twin_tail_orderstat(data, [p1, p2])
-      // returns a 1x2 vector of the requested percentiles
+      % Returns a 1x2 vector of the requested percentiles (same output as prctile(data, [p1, p2], 'all', Method='exact'))
 
   Author:      Keivan Moradi (2025)
   Assistance:  ChatGPT (OpenAI, 2025)
