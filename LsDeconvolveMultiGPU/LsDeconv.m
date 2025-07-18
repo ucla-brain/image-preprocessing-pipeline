@@ -966,15 +966,13 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
     end
 
     % since prctile function needs high vram usage gather it to avoid low memory error
-    if filter.use_fft, [lb, ub] = deconvolved_stats(bl, clipval); end
     if gpu && isgpuarray(bl)
         % Reseting the GPU
         bl = gather(bl);
         reset(gpu_device);  % to free 2 extra copies of bl in gpu
         semaphore('p', semkey_gpu_base + gpu);
     end
-    if ~filter.use_fft, [lb, ub] = deconvolved_stats(bl, clipval); end
-    % [lb, ub] = deconvolved_stats(bl, clipval);
+    [lb, ub] = deconvolved_stats(bl, clipval);
 
     assert(all(size(bl) == bl_size), '[process_block]: block size mismatch!');
 end
@@ -1267,11 +1265,8 @@ function baseline_subtraction = dark(filter, bit_depth)
     end
 end
 
-function [lb, ub] = deconvolved_stats(deconvolved, clipval)
-    stats = prctile(deconvolved, [(100 - clipval) clipval], "all");
-    if isgpuarray(stats)
-        stats = gather(stats);
-    end
+function [lb, ub] = deconvolved_stats(bl, clipval)
+    stats = fast_twin_tail_orderstat(bl, [(100 - clipval) clipval]);
     lb = stats(1);
     ub = stats(2);
 end
