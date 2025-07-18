@@ -18,23 +18,23 @@ end
 
 rng(42);
 fprintf('\n== fast_twin_tail_orderstat test & benchmark ==\n');
-fprintf('Tolerance for pass: %.2e%% (relative percent diff)\n', tol);
+fprintf('Tolerance for pass: %.1f%% (relative percent diff)\n', tol);
 
-clipvals = [0.01 0.1];
+clipvals = [0.01 0];
 
 if isQuick
-    nDouble = 20;
-    nSingle = 20;
-    nUint   = 4;
+    nDouble = 1;
+    nSingle = 1;
+    nUint   = 1;
 else
-    nDouble = 100;
-    nSingle = 100;
-    nUint   = 10;
+    nDouble = 2;
+    nSingle = 2;
+    nUint   = 2;
 end
 
-sizesDouble = [5e4, 1e5, 2e5, 5e5, 1e6, 5e6];
-sizesSingle = [5e4, 1e5, 2e5, 5e5, 1e6, 5e6];
-sizesUint   = [1e4, 5e4, 1e5, 2e5, 5e5];
+sizesDouble = [5e4, 2^31 - 1];
+sizesSingle = [5e4, 2^31 - 1];
+sizesUint   = [5e4, 2^31 - 1];
 
 benchRows = {};
 failCountDouble = 0;

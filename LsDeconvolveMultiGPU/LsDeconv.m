@@ -767,7 +767,7 @@ function deconvolve(filelist, psf, numit, damping, ...
         end
 
         expected_size = size(bl);  % Store size before processing
-        [bl, lb, ub] = process_block(bl, block, psf, numit, damping, stop_criterion, filter, clipval, gpu, semkey_gpu_base);
+        bl = process_block(bl, block, psf, numit, damping, stop_criterion, filter, clipval, gpu, semkey_gpu_base);
         % === Check padded block size is unchanged by process_block ===
         actual_size = size(bl);
         assert(isequal(actual_size, expected_size), ...
@@ -799,7 +799,7 @@ function deconvolve(filelist, psf, numit, damping, ...
                     block.p1(blnr,1), block.p2(blnr,1), ...
                     block.p1(blnr,2), block.p2(blnr,2), ...
                     block.p1(blnr,3), block.p2(blnr,3)));
-
+        [lb, ub] = deconvolved_stats(bl, clipval);
         % find maximum value in other blocks
         semaphore('wait', semkey_single);
         could_not_save = true;
@@ -938,7 +938,7 @@ function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
         num2str(size(bl)), num2str(block_target_size)));
 end
 
-function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criterion, filter, clipval, gpu, semkey_gpu_base)
+function bl = process_block(bl, block, psf, niter, lambda, stop_criterion, filter, clipval, gpu, semkey_gpu_base)
     bl_size = size(bl);
     if gpu && (min(filter.gaussian_sigma(:)) > 0 || niter > 0)
         % get the next available gpu
@@ -972,7 +972,6 @@ function [bl, lb, ub] = process_block(bl, block, psf, niter, lambda, stop_criter
         reset(gpu_device);  % to free 2 extra copies of bl in gpu
         semaphore('p', semkey_gpu_base + gpu);
     end
-    [lb, ub] = deconvolved_stats(bl, clipval);
 
     assert(all(size(bl) == bl_size), '[process_block]: block size mismatch!');
 end
@@ -1266,7 +1265,7 @@ function baseline_subtraction = dark(filter, bit_depth)
 end
 
 function [lb, ub] = deconvolved_stats(bl, clipval)
-    stats = fast_twin_tail_orderstat(bl, [(100 - clipval) clipval]);
+    stats = single(fast_twin_tail_orderstat(bl, [(100 - clipval) clipval]));
     lb = stats(1);
     ub = stats(2);
 end
