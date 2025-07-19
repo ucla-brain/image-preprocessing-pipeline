@@ -214,7 +214,6 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
     bool isgpu = mxIsGPUArray(mxvol);
 
     const mwSize* dims;
-    int nd;
     float* h_src = nullptr;         // Host pointer (if needed)
     const float* d_src = nullptr;   // Device pointer (always valid)
     float* d_buf = nullptr;         // For cleanup (CPU input)
