@@ -224,7 +224,6 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         if(mxGetClassID(mxvol) != mxSINGLE_CLASS || mxGetNumberOfDimensions(mxvol) != 3)
             mexErrMsgIdAndTxt("fibermetric_gpu:input", "Input must be 3D single or gpuArray(single) in [X Y Z] order.");
         dims = mxGetDimensions(mxvol);
-        nd = mxGetNumberOfDimensions(mxvol);
         h_src = (float*)mxGetData(mxvol);
 
         // Copy to device
@@ -239,7 +238,6 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         if (mxGPUGetClassID(garr) != mxSINGLE_CLASS || mxGPUGetNumberOfDimensions(garr) != 3)
             mexErrMsgIdAndTxt("fibermetric_gpu:input", "Input gpuArray must be 3D single [X Y Z].");
         dims = mxGPUGetDimensions(garr);
-        nd = mxGPUGetNumberOfDimensions(garr);
         d_src = (const float*)mxGPUGetDataReadOnly(garr);
         h_src = nullptr; // don't use
     }
