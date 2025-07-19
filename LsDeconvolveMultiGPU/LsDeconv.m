@@ -972,6 +972,7 @@ function bl = process_block(bl, block, psf, niter, lambda, stop_criterion, filte
         reset(gpu_device);  % to free 2 extra copies of bl in gpu
         semaphore('p', semkey_gpu_base + gpu);
     end
+    bl = fibermetric(bl);
 
     assert(all(size(bl) == bl_size), '[process_block]: block size mismatch!');
 end
