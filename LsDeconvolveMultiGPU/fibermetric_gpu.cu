@@ -217,6 +217,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
     float* h_src = nullptr;         // Host pointer (if needed)
     const float* d_src = nullptr;   // Device pointer (always valid)
     float* d_buf = nullptr;         // For cleanup (CPU input)
+    mxGPUArray const* garr = nullptr; // Input GPU handle
 
     // ---------------- CPU input ----------------
     if (!isgpu) {
@@ -233,7 +234,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
     }
     // ---------------- GPU input ----------------
     else {
-        mxGPUArray const *garr = mxGPUCreateFromMxArray(mxvol);
+        garr = mxGPUCreateFromMxArray(mxvol);
         if (mxGPUGetClassID(garr) != mxSINGLE_CLASS || mxGPUGetNumberOfDimensions(garr) != 3)
             mexErrMsgIdAndTxt("fibermetric_gpu:input", "Input gpuArray must be 3D single [X Y Z].");
         dims = mxGPUGetDimensions(garr);
@@ -278,12 +279,12 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         plhs[0] = mxCreateNumericArray(3, dims, mxSINGLE_CLASS, mxREAL);
         float* h_dst = (float*)mxGetData(plhs[0]);
         CHECK_CUDA(cudaMemcpy(h_dst, d_dst, N * sizeof(float), cudaMemcpyDeviceToHost));
-        cudaFree((void*)d_dst);
-        if (d_buf) cudaFree((void*)d_buf);
+        cudaFree((void*)d_dst); // Only free if you cudaMalloc-ed it
+        if (d_buf) cudaFree((void*)d_buf); // Only free if you cudaMalloc-ed d_buf
     }
 
     // Clean up input GPU handle if used
-    if (isgpu) {
-        mxGPUDestroyGPUArray((mxGPUArray*)mxvol);
+    if (isgpu && garr) {
+        mxGPUDestroyGPUArray(garr); // Only if you created garr with mxGPUCreateFromMxArray
     }
 }
