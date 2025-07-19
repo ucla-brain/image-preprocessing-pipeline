@@ -1,6 +1,7 @@
 // vesselness_mex.cu -- MATLAB MEX (CUDA) for 3D Frangi/Vesselness filter (single-precision, all-in-one)
 // Compile with: mexcuda -largeArrayDims vesselness_mex.cu
 #include "mex.h"
+#include "gpu/mxGPUArray.h"
 #include <cuda_runtime.h>
 #include <cmath>
 #include <vector>
@@ -204,23 +205,88 @@ void vesselness_multiscale(
 // ============================= MEX ENTRY =========================================
 void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
 {
+    // Initialize the GPU API for MATLAB gpuArrays
+    mxInitGPU();
+
     if(nrhs < 1)
-        mexErrMsgIdAndTxt("vesselness:input", "Usage: out = vesselness_mex(volume, sigma_from, sigma_to, sigma_step, alpha, beta, gamma)");
-    if(mxGetClassID(prhs[0]) != mxSINGLE_CLASS || mxGetNumberOfDimensions(prhs[0])!=3)
-        mexErrMsgIdAndTxt("vesselness:input", "Input must be 3D single array");
+        mexErrMsgIdAndTxt("fibermetric_gpu:input", "Usage: out = fibermetric_gpu(vol, [sigma_from, sigma_to, sigma_step, alpha, beta, gamma])");
+    const mxArray* mxvol = prhs[0];
+    bool isgpu = mxIsGPUArray(mxvol);
 
-    const mwSize* dims = mxGetDimensions(prhs[0]);
-    int sx = int(dims[0]), sy = int(dims[1]), sz = int(dims[2]);
-    const float* src = static_cast<const float*>(mxGetData(prhs[0]));
+    const mwSize* dims;
+    int nd;
+    float* h_src = nullptr;         // Host pointer (if needed)
+    const float* d_src = nullptr;   // Device pointer (always valid)
+    float* d_buf = nullptr;         // For cleanup (CPU input)
 
+    // ---------------- CPU input ----------------
+    if (!isgpu) {
+        if(mxGetClassID(mxvol) != mxSINGLE_CLASS || mxGetNumberOfDimensions(mxvol) != 3)
+            mexErrMsgIdAndTxt("fibermetric_gpu:input", "Input must be 3D single or gpuArray(single) in [X Y Z] order.");
+        dims = mxGetDimensions(mxvol);
+        nd = mxGetNumberOfDimensions(mxvol);
+        h_src = (float*)mxGetData(mxvol);
+
+        // Copy to device
+        size_t N = dims[0] * dims[1] * dims[2];
+        CHECK_CUDA(cudaMalloc(&d_buf, N * sizeof(float)));
+        CHECK_CUDA(cudaMemcpy(d_buf, h_src, N * sizeof(float), cudaMemcpyHostToDevice));
+        d_src = d_buf;
+    }
+    // ---------------- GPU input ----------------
+    else {
+        mxGPUArray const *garr = mxGPUCreateFromMxArray(mxvol);
+        if (mxGPUGetClassID(garr) != mxSINGLE_CLASS || mxGPUGetNumberOfDimensions(garr) != 3)
+            mexErrMsgIdAndTxt("fibermetric_gpu:input", "Input gpuArray must be 3D single [X Y Z].");
+        dims = mxGPUGetDimensions(garr);
+        nd = mxGPUGetNumberOfDimensions(garr);
+        d_src = (const float*)mxGPUGetDataReadOnly(garr);
+        h_src = nullptr; // don't use
+    }
+
+    int sx = static_cast<int>(dims[0]);
+    int sy = static_cast<int>(dims[1]);
+    int sz = static_cast<int>(dims[2]);
+    size_t N = static_cast<size_t>(sx) * sy * sz;
+
+    // ----- Parse parameters (with defaults) -----
     float sigma_from = (nrhs>1) ? float(mxGetScalar(prhs[1])) : 1.0f;
-    float sigma_to   = (nrhs>2) ? float(mxGetScalar(prhs[2]))  : 3.0f;
-    float sigma_step = (nrhs>3) ? float(mxGetScalar(prhs[3]))  : 0.5f;
-    float alpha      = (nrhs>4) ? float(mxGetScalar(prhs[4]))  : 1.0e-1f;
+    float sigma_to   = (nrhs>2) ? float(mxGetScalar(prhs[2]))  : 4.0f;
+    float sigma_step = (nrhs>3) ? float(mxGetScalar(prhs[3]))  : 1.0f;
+    float alpha      = (nrhs>4) ? float(mxGetScalar(prhs[4]))  : 0.1f;
     float beta       = (nrhs>5) ? float(mxGetScalar(prhs[5]))  : 5.0f;
     float gamma      = (nrhs>6) ? float(mxGetScalar(prhs[6]))  : 3.5e5f;
 
-    plhs[0] = mxCreateNumericArray(3, dims, mxSINGLE_CLASS, mxREAL);
-    float* dst = static_cast<float*>(mxGetData(plhs[0]));
-    vesselness_multiscale(src, dst, sx, sy, sz, sigma_from, sigma_to, sigma_step, alpha, beta, gamma);
+    // ---- Allocate OUTPUT ----
+    bool outputOnGPU = isgpu;
+    float* d_dst = nullptr;
+    mxGPUArray* gOut = nullptr;
+
+    if (outputOnGPU) {
+        mwSize outDims[3] = { (mwSize)sx, (mwSize)sy, (mwSize)sz };
+        gOut = mxGPUCreateGPUArray(3, outDims, mxSINGLE_CLASS, mxREAL, MX_GPU_DO_NOT_INITIALIZE);
+        d_dst = (float*)mxGPUGetData(gOut);
+    } else {
+        CHECK_CUDA(cudaMalloc(&d_dst, N * sizeof(float)));
+    }
+
+    // ---- RUN ALGORITHM ----
+    vesselness_multiscale(d_src, d_dst, sx, sy, sz, sigma_from, sigma_to, sigma_step, alpha, beta, gamma);
+
+    // ---- Copy back/output ----
+    if (outputOnGPU) {
+        plhs[0] = mxGPUCreateMxArrayOnGPU(gOut);
+        mxGPUDestroyGPUArray(gOut);
+    } else {
+        plhs[0] = mxCreateNumericArray(3, dims, mxSINGLE_CLASS, mxREAL);
+        float* h_dst = (float*)mxGetData(plhs[0]);
+        CHECK_CUDA(cudaMemcpy(h_dst, d_dst, N * sizeof(float), cudaMemcpyDeviceToHost));
+        cudaFree((void*)d_dst);
+        if (d_buf) cudaFree((void*)d_buf);
+    }
+
+    // Clean up input GPU handle if used
+    if (isgpu) {
+        mxGPUDestroyGPUArray((mxGPUArray*)mxvol);
+    }
 }
