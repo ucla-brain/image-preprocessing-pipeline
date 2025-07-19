@@ -16,6 +16,17 @@
         mexErrMsgIdAndTxt("vesselness:cuda", "%s", oss.str().c_str()); \
     }} while (0)
 
+__device__ __forceinline__
+float get(const float* v,int i,int sx,int sy,int sz,int ox,int oy,int oz)
+{
+    return v[i + ox + oy*sx + oz*sx*sy];
+}
+
+#ifndef M_PI                /* π if <cmath> didn’t supply it             */
+#define M_PI 3.14159265358979323846
+#endif
+
+
 // ======================= UTILITY: 3D Indexing ========================
 inline __host__ __device__ int sub2ind(int x, int y, int z, int sx, int sy, int sz) {
     return x + y*sx + z*sx*sy;
@@ -58,69 +69,79 @@ __global__ void multiply_kernel(const float* src, float* dst, int N, float scale
 #define GET(src, i, sx, sy, sz, ox, oy, oz) \
     src[(i) + (ox) + (oy)*(sx) + (oz)*(sx)*(sy)]
 
+/* ------------------------------------------------------------------
+ * src, dst : device pointers (single)
+ * sx,sy,sz : volume dimensions
+ * alpha,beta,gamma : Frangi parameters
+ * bright    : true = bright tubes, false = dark tubes
+ * -----------------------------------------------------------------*/
 __global__ void vesselness_kernel(
-    const float* src, float* dst, int sx, int sy, int sz,
-    float alpha, float beta, float gamma)
+        const float* __restrict__ src,
+              float*              dst,
+        int  sx,int  sy,int  sz,
+        float alpha,float beta,float gamma,
+        bool  bright)
 {
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    int N = sx*sy*sz;
-    if (i >= N) return;
+    int idx = blockIdx.x*blockDim.x + threadIdx.x;
+    int N   = sx*sy*sz;
+    if(idx>=N) return;
 
-    int ix = i % sx, iy = (i / sx) % sy, iz = i / (sx*sy);
-    if(ix<=0 || ix>=sx-1 || iy<=0 || iy>=sy-1 || iz<=0 || iz>=sz-1) return;
+    /* skip borders */
+    int ix =  idx % sx;
+    int iy = (idx / sx) % sy;
+    int iz =  idx / (sx*sy);
+    if(ix<=0||ix>=sx-1||iy<=0||iy>=sy-1||iz<=0||iz>=sz-1) return;
 
-    float im_dx2 = -2.0f * GET(src,i,sx,sy,sz,0,0,0)
-                   + GET(src,i,sx,sy,sz,-1,0,0)
-                   + GET(src,i,sx,sy,sz,+1,0,0);
-    float im_dy2 = -2.0f * GET(src,i,sx,sy,sz,0,0,0)
-                   + GET(src,i,sx,sy,sz,0,-1,0)
-                   + GET(src,i,sx,sy,sz,0,+1,0);
-    float im_dz2 = -2.0f * GET(src,i,sx,sy,sz,0,0,0)
-                   + GET(src,i,sx,sy,sz,0,0,-1)
-                   + GET(src,i,sx,sy,sz,0,0,+1);
-    float im_dxdy = (GET(src,i,sx,sy,sz,-1,-1,0) + GET(src,i,sx,sy,sz,1,1,0)
-                   - GET(src,i,sx,sy,sz,-1,1,0) - GET(src,i,sx,sy,sz,1,-1,0)) * 0.25f;
-    float im_dxdz = (GET(src,i,sx,sy,sz,-1,0,-1) + GET(src,i,sx,sy,sz,1,0,1)
-                   - GET(src,i,sx,sy,sz,-1,0,1) - GET(src,i,sx,sy,sz,1,0,-1)) * 0.25f;
-    float im_dydz = (GET(src,i,sx,sy,sz,0,-1,-1) + GET(src,i,sx,sy,sz,0,1,1)
-                   - GET(src,i,sx,sy,sz,0,1,-1) - GET(src,i,sx,sy,sz,0,-1,1)) * 0.25f;
+    /* second-order derivatives */
+    float dxx = -2.0f*get(src,idx,sx,sy,sz,0,0,0)
+                + get(src,idx,sx,sy,sz,-1,0,0) + get(src,idx,sx,sy,sz,1,0,0);
+    float dyy = -2.0f*get(src,idx,sx,sy,sz,0,0,0)
+                + get(src,idx,sx,sy,sz,0,-1,0)+ get(src,idx,sx,sy,sz,0,1,0);
+    float dzz = -2.0f*get(src,idx,sx,sy,sz,0,0,0)
+                + get(src,idx,sx,sy,sz,0,0,-1)+ get(src,idx,sx,sy,sz,0,0,1);
+    float dxy = 0.25f*( get(src,idx,sx,sy,sz,-1,-1,0)+get(src,idx,sx,sy,sz,1,1,0)
+                       -get(src,idx,sx,sy,sz,-1,1,0) -get(src,idx,sx,sy,sz,1,-1,0) );
+    float dxz = 0.25f*( get(src,idx,sx,sy,sz,-1,0,-1)+get(src,idx,sx,sy,sz,1,0,1)
+                       -get(src,idx,sx,sy,sz,-1,0,1) -get(src,idx,sx,sy,sz,1,0,-1) );
+    float dyz = 0.25f*( get(src,idx,sx,sy,sz,0,-1,-1)+get(src,idx,sx,sy,sz,0,1,1)
+                       -get(src,idx,sx,sy,sz,0,1,-1) -get(src,idx,sx,sy,sz,0,-1,1) );
 
-    const float A11 = im_dx2, A22 = im_dy2, A33 = im_dz2;
-    const float A12 = im_dxdy, A13 = im_dxdz, A23 = im_dydz;
-
-    float eig1, eig2, eig3;
+    /* eigenvalues of symmetric 3×3 */
+    float A11=dxx,A22=dyy,A33=dzz,A12=dxy,A13=dxz,A23=dyz;
+    float eig1,eig2,eig3;
     float p1 = A12*A12 + A13*A13 + A23*A23;
-    if( p1 < 1e-7f ) {
-        eig1 = A11; eig2 = A22; eig3 = A33;
-    } else {
-        float q = (A11+A22+A33)/3;
+    if(p1<1e-7f){ eig1=A11; eig2=A22; eig3=A33; }
+    else{
+        float q  = (A11+A22+A33)/3.0f;
         float p2 = (A11-q)*(A11-q)+(A22-q)*(A22-q)+(A33-q)*(A33-q)+2*p1;
-        float p = sqrtf(p2/6);
-        float B11=(1/p)*(A11-q), B12=(1/p)*(A12-q), B13=(1/p)*(A13-q),
-              B22=(1/p)*(A22-q), B23=(1/p)*(A23-q), B33=(1/p)*(A33-q);
-        float B21=B12, B31=B13, B32=B23;
-        float detB = B11*(B22*B33-B23*B32) - B12*(B21*B33-B23*B31) + B13*(B21*B32-B22*B31);
-        float r = detB/2, phi;
-        const float M_PI3 = 3.14159265f / 3;
-        if(r <= -1.0f) phi = M_PI3;
-        else if(r >= 1.0f) phi = 0;
-        else phi = acosf(r) / 3;
+        float p  = sqrtf(p2/6.0f);
+        float B11=(A11-q)/p, B22=(A22-q)/p, B33=(A33-q)/p;
+        float B12=A12/p,     B13=A13/p,     B23=A23/p;
+        float detB = B11*(B22*B33-B23*B23) - B12*(B12*B33-B23*B13)
+                   + B13*(B12*B23-B22*B13);
+        float r   = detB*0.5f;
+        float phi = (r<=-1.f)? (float)(M_PI/3.0)
+                  : (r>= 1.f)? 0.f
+                  : acosf(r)/3.0f;
         eig1 = q + 2*p*cosf(phi);
-        eig3 = q + 2*p*cosf(phi+2*M_PI3);
+        eig3 = q + 2*p*cosf(phi + 2.f*(float)M_PI/3.f);
         eig2 = 3*q - eig1 - eig3;
     }
-    // sort abs(eig1) < abs(eig2) < abs(eig3)
-    if(fabsf(eig1)>fabsf(eig2)){float t=eig2; eig2=eig1; eig1=t;}
-    if(fabsf(eig2)>fabsf(eig3)){float t=eig2; eig2=eig3; eig3=t;}
-    if(fabsf(eig1)>fabsf(eig2)){float t=eig2; eig2=eig1; eig1=t;}
-    float vn = 0.0f;
-    if(eig2<0 && eig3<0){
-        float l1=fabsf(eig1), l2=fabsf(eig2), l3=fabsf(eig3);
-        float A=l2/l3, B=l1/sqrtf(l2*l3), S=sqrtf(l1*l1+l2*l2+l3*l3);
-        vn = (1.0f-expf(-A*A/alpha))*expf(B*B/beta)*(1-expf(-S*S/gamma));
-    }
-    if(vn>dst[i]) dst[i]=vn;
+    /* sort by absolute value */
+    if(fabsf(eig1)>fabsf(eig2)){ float t=eig1; eig1=eig2; eig2=t; }
+    if(fabsf(eig2)>fabsf(eig3)){ float t=eig2; eig2=eig3; eig3=t; }
+    if(fabsf(eig1)>fabsf(eig2)){ float t=eig1; eig1=eig2; eig2=t; }
+
+    bool cond = bright ? (eig2<0.f && eig3<0.f)
+                       : (eig2>0.f && eig3>0.f);
+    if(!cond) return;
+
+    float l1=fabsf(eig1), l2=fabsf(eig2), l3=fabsf(eig3);
+    float A=l2/l3, B=l1/sqrtf(l2*l3), S=sqrtf(l1*l1+l2*l2+l3*l3);
+    float vn=(1.f-expf(-A*A/alpha))*expf(  B*B/beta)*(1.f-expf(-S*S/gamma));
+    if(vn>dst[idx]) dst[idx]=vn;
 }
+
 
 // =============== GAUSSIAN KERNEL GENERATION (HOST) =================
 
@@ -148,143 +169,117 @@ void makeGaussianKernel3D(std::vector<float>& kernel, int kx, int ky, int kz, fl
 }
 
 // ======================= HOST: Multi-scale Vesselness ===========================
-void vesselness_multiscale(
-    const float* h_src, float* h_dst,
-    int sx, int sy, int sz,
-    float sigma_from, float sigma_to, float sigma_step,
-    float alpha, float beta, float gamma)
+// -----------------------------------------------------------------------------
+// d_src : device pointer to input volume  (read-only)
+// d_dst : device pointer to output volume (already allocated)
+// -----------------------------------------------------------------------------
+void vesselness_multiscale_device(
+        const float* d_src, float* d_dst,
+        int sx, int sy, int sz,
+        float sigma_from, float sigma_to, float sigma_step,
+        float alpha, float beta, float gamma,
+        bool bright)                               // <── NEW
 {
-    size_t N = sx * sy * sz;
-    float* d_src = nullptr; float* d_blur = nullptr; float* d_temp = nullptr; float* d_dst = nullptr;
-    float* d_kernel = nullptr;
+    const size_t N = static_cast<size_t>(sx) * sy * sz;
+    float *d_blur = nullptr, *d_temp = nullptr, *d_kernel = nullptr;
 
-    CHECK_CUDA(cudaMalloc(&d_src, N*sizeof(float)));
-    CHECK_CUDA(cudaMalloc(&d_blur, N*sizeof(float)));
-    CHECK_CUDA(cudaMalloc(&d_temp, N*sizeof(float)));
-    CHECK_CUDA(cudaMalloc(&d_dst, N*sizeof(float)));
-    CHECK_CUDA(cudaMemcpy(d_src, h_src, N*sizeof(float), cudaMemcpyHostToDevice));
-    CHECK_CUDA(cudaMemset(d_dst, 0, N*sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_blur, N * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_temp, N * sizeof(float)));
+    CHECK_CUDA(cudaMemset(d_dst, 0, N * sizeof(float)));
 
-    int nTPB = 512;
-    int nBlocks = int((N+nTPB-1)/nTPB);
+    const int nTPB = 512;
+    const int blocks = static_cast<int>((N + nTPB - 1) / nTPB);
 
-    for(float sigma = sigma_from; sigma <= sigma_to+1e-4f; sigma += sigma_step) {
-        int ksize = int(6*sigma+1); if(ksize%2==0) ++ksize;
-        std::vector<float> h_kernel;
-        makeGaussianKernel3D(h_kernel, ksize, 1, 1, sigma, 1.0f, 1.0f); // X
-        CHECK_CUDA(cudaMalloc(&d_kernel, ksize*sizeof(float)));
-        CHECK_CUDA(cudaMemcpy(d_kernel, h_kernel.data(), ksize*sizeof(float), cudaMemcpyHostToDevice));
-        cov3_kernel<<<nBlocks,nTPB>>>(d_src, d_blur, d_kernel, sx, sy, sz, ksize, 1, 1);
+    for (float sigma = sigma_from; sigma <= sigma_to + 1e-4f; sigma += sigma_step) {
+        int ksize = static_cast<int>(6 * sigma + 1); if (!(ksize & 1)) ++ksize;
+        std::vector<float> hK;
+
+        // X
+        makeGaussianKernel3D(hK, ksize, 1, 1, sigma, 1.f, 1.f);
+        CHECK_CUDA(cudaMalloc(&d_kernel, ksize * sizeof(float)));
+        CHECK_CUDA(cudaMemcpy(d_kernel, hK.data(), ksize * sizeof(float), cudaMemcpyHostToDevice));
+        cov3_kernel<<<blocks, nTPB>>>(d_src, d_blur, d_kernel, sx, sy, sz, ksize, 1, 1);
         CHECK_CUDA(cudaDeviceSynchronize());
         cudaFree(d_kernel);
 
-        makeGaussianKernel3D(h_kernel, 1, ksize, 1, 1.0f, sigma, 1.0f); // Y
-        CHECK_CUDA(cudaMalloc(&d_kernel, ksize*sizeof(float)));
-        CHECK_CUDA(cudaMemcpy(d_kernel, h_kernel.data(), ksize*sizeof(float), cudaMemcpyHostToDevice));
-        cov3_kernel<<<nBlocks,nTPB>>>(d_blur, d_temp, d_kernel, sx, sy, sz, 1, ksize, 1);
+        // Y
+        makeGaussianKernel3D(hK, 1, ksize, 1, 1.f, sigma, 1.f);
+        CHECK_CUDA(cudaMalloc(&d_kernel, ksize * sizeof(float)));
+        CHECK_CUDA(cudaMemcpy(d_kernel, hK.data(), ksize * sizeof(float), cudaMemcpyHostToDevice));
+        cov3_kernel<<<blocks, nTPB>>>(d_blur, d_temp, d_kernel, sx, sy, sz, 1, ksize, 1);
         CHECK_CUDA(cudaDeviceSynchronize());
         cudaFree(d_kernel);
 
-        makeGaussianKernel3D(h_kernel, 1, 1, ksize, 1.0f, 1.0f, sigma); // Z
-        CHECK_CUDA(cudaMalloc(&d_kernel, ksize*sizeof(float)));
-        CHECK_CUDA(cudaMemcpy(d_kernel, h_kernel.data(), ksize*sizeof(float), cudaMemcpyHostToDevice));
-        cov3_kernel<<<nBlocks,nTPB>>>(d_temp, d_blur, d_kernel, sx, sy, sz, 1, 1, ksize);
+        // Z
+        makeGaussianKernel3D(hK, 1, 1, ksize, 1.f, 1.f, sigma);
+        CHECK_CUDA(cudaMalloc(&d_kernel, ksize * sizeof(float)));
+        CHECK_CUDA(cudaMemcpy(d_kernel, hK.data(), ksize * sizeof(float), cudaMemcpyHostToDevice));
+        cov3_kernel<<<blocks, nTPB>>>(d_temp, d_blur, d_kernel, sx, sy, sz, 1, 1, ksize);
         CHECK_CUDA(cudaDeviceSynchronize());
         cudaFree(d_kernel);
 
-        multiply_kernel<<<nBlocks,nTPB>>>(d_blur, d_blur, int(N), sigma);
+        multiply_kernel<<<blocks, nTPB>>>(d_blur, d_blur, static_cast<int>(N), sigma);
         CHECK_CUDA(cudaDeviceSynchronize());
 
-        vesselness_kernel<<<nBlocks, nTPB>>>(d_blur, d_dst, sx, sy, sz, alpha, beta, gamma);
+        vesselness_kernel<<<blocks, nTPB>>>(d_blur, d_dst, sx, sy, sz, alpha, beta, gamma, bright);
         CHECK_CUDA(cudaDeviceSynchronize());
     }
-    CHECK_CUDA(cudaMemcpy(h_dst, d_dst, N*sizeof(float), cudaMemcpyDeviceToHost));
-    cudaFree(d_src); cudaFree(d_blur); cudaFree(d_temp); cudaFree(d_dst);
+
+    cudaFree(d_blur);
+    cudaFree(d_temp);
 }
 
-// ============================= MEX ENTRY =========================================
+// ========== MEX entry: gpuArray(single) only ==========
 void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
 {
-    // Initialize the GPU API for MATLAB gpuArrays
     mxInitGPU();
+    if(nrhs<1)
+        mexErrMsgIdAndTxt("fibermetric_gpu:input",
+           "Usage: out = fibermetric_gpu(gpuArray(single), [sigma_from, sigma_to, sigma_step, alpha, beta, gamma, polarity])");
 
-    if(nrhs < 1)
-        mexErrMsgIdAndTxt("fibermetric_gpu:input", "Usage: out = fibermetric_gpu(vol, [sigma_from, sigma_to, sigma_step, alpha, beta, gamma])");
-    const mxArray* mxvol = prhs[0];
-    bool isgpu = mxIsGPUArray(mxvol);
+    /* ---- input must be gpuArray(single) 3-D ---- */
+    if(!mxIsGPUArray(prhs[0]))
+        mexErrMsgIdAndTxt("fibermetric_gpu:input","Input must be gpuArray(single).");
 
-    const mwSize* dims;
-    float* h_src = nullptr;         // Host pointer (if needed)
-    const float* d_src = nullptr;   // Device pointer (always valid)
-    float* d_buf = nullptr;         // For cleanup (CPU input)
-    mxGPUArray const* garr = nullptr; // Input GPU handle
+    mxGPUArray const* gIn = mxGPUCreateFromMxArray(prhs[0]);
+    if(mxGPUGetClassID(gIn)!=mxSINGLE_CLASS || mxGPUGetNumberOfDimensions(gIn)!=3)
+        mexErrMsgIdAndTxt("fibermetric_gpu:input","Input must be 3-D gpuArray(single).");
 
-    // ---------------- CPU input ----------------
-    if (!isgpu) {
-        if(mxGetClassID(mxvol) != mxSINGLE_CLASS || mxGetNumberOfDimensions(mxvol) != 3)
-            mexErrMsgIdAndTxt("fibermetric_gpu:input", "Input must be 3D single or gpuArray(single) in [X Y Z] order.");
-        dims = mxGetDimensions(mxvol);
-        h_src = (float*)mxGetData(mxvol);
+    const mwSize* d = mxGPUGetDimensions(gIn);
+    int sx=d[0], sy=d[1], sz=d[2];
 
-        // Copy to device
-        size_t N = dims[0] * dims[1] * dims[2];
-        CHECK_CUDA(cudaMalloc(&d_buf, N * sizeof(float)));
-        CHECK_CUDA(cudaMemcpy(d_buf, h_src, N * sizeof(float), cudaMemcpyHostToDevice));
-        d_src = d_buf;
-    }
-    // ---------------- GPU input ----------------
-    else {
-        garr = mxGPUCreateFromMxArray(mxvol);
-        if (mxGPUGetClassID(garr) != mxSINGLE_CLASS || mxGPUGetNumberOfDimensions(garr) != 3)
-            mexErrMsgIdAndTxt("fibermetric_gpu:input", "Input gpuArray must be 3D single [X Y Z].");
-        dims = mxGPUGetDimensions(garr);
-        d_src = (const float*)mxGPUGetDataReadOnly(garr);
-        h_src = nullptr; // don't use
-    }
-
-    int sx = static_cast<int>(dims[0]);
-    int sy = static_cast<int>(dims[1]);
-    int sz = static_cast<int>(dims[2]);
-    size_t N = static_cast<size_t>(sx) * sy * sz;
-
-    // ----- Parse parameters (with defaults) -----
-    float sigma_from = (nrhs>1) ? float(mxGetScalar(prhs[1])) : 1.0f;
-    float sigma_to   = (nrhs>2) ? float(mxGetScalar(prhs[2]))  : 4.0f;
-    float sigma_step = (nrhs>3) ? float(mxGetScalar(prhs[3]))  : 1.0f;
-    float alpha      = (nrhs>4) ? float(mxGetScalar(prhs[4]))  : 0.1f;
-    float beta       = (nrhs>5) ? float(mxGetScalar(prhs[5]))  : 5.0f;
-    float gamma      = (nrhs>6) ? float(mxGetScalar(prhs[6]))  : 3.5e5f;
-
-    // ---- Allocate OUTPUT ----
-    bool outputOnGPU = isgpu;
-    float* d_dst = nullptr;
-    mxGPUArray* gOut = nullptr;
-
-    if (outputOnGPU) {
-        mwSize outDims[3] = { (mwSize)sx, (mwSize)sy, (mwSize)sz };
-        gOut = mxGPUCreateGPUArray(3, outDims, mxSINGLE_CLASS, mxREAL, MX_GPU_DO_NOT_INITIALIZE);
-        d_dst = (float*)mxGPUGetData(gOut);
-    } else {
-        CHECK_CUDA(cudaMalloc(&d_dst, N * sizeof(float)));
+    /* ---- optional parameters ---- */
+    float sigma_from = (nrhs>1)? (float)mxGetScalar(prhs[1]) : 1.f;
+    float sigma_to   = (nrhs>2)? (float)mxGetScalar(prhs[2]) : 4.f;
+    float sigma_step = (nrhs>3)? (float)mxGetScalar(prhs[3]) : 1.f;
+    float alpha      = (nrhs>4)? (float)mxGetScalar(prhs[4]) : 0.1f;
+    float beta       = (nrhs>5)? (float)mxGetScalar(prhs[5]) : 5.f;
+    float gamma      = (nrhs>6)? (float)mxGetScalar(prhs[6]) : 3.5e5f;
+    bool  bright     = true;
+    if(nrhs>7){
+        char* s = mxArrayToString(prhs[7]);
+#ifdef _WIN32
+        if(!_stricmp(s,"dark"))   bright=false;
+        else if(_stricmp(s,"bright"))
+#else
+        if(strcasecmp(s,"dark")==0) bright=false;
+        else if(strcasecmp(s,"bright")!=0)
+#endif
+            mexErrMsgIdAndTxt("fibermetric_gpu:polarity","polarity must be 'bright' or 'dark'");
+        mxFree(s);
     }
 
-    // ---- RUN ALGORITHM ----
-    vesselness_multiscale(d_src, d_dst, sx, sy, sz, sigma_from, sigma_to, sigma_step, alpha, beta, gamma);
+    /* ---- allocate output gpuArray ---- */
+    mwSize outDims[3]={d[0],d[1],d[2]};
+    mxGPUArray* gOut = mxGPUCreateGPUArray(3,outDims,mxSINGLE_CLASS,mxREAL,MX_GPU_DO_NOT_INITIALIZE);
+    const float* d_src = static_cast<const float*>(mxGPUGetDataReadOnly(gIn));
+    float*       d_dst = static_cast<float*>(mxGPUGetData(gOut));
 
-    // ---- Copy back/output ----
-    if (outputOnGPU) {
-        plhs[0] = mxGPUCreateMxArrayOnGPU(gOut);
-        mxGPUDestroyGPUArray(gOut);
-    } else {
-        plhs[0] = mxCreateNumericArray(3, dims, mxSINGLE_CLASS, mxREAL);
-        float* h_dst = (float*)mxGetData(plhs[0]);
-        CHECK_CUDA(cudaMemcpy(h_dst, d_dst, N * sizeof(float), cudaMemcpyDeviceToHost));
-        cudaFree((void*)d_dst); // Only free if you cudaMalloc-ed it
-        if (d_buf) cudaFree((void*)d_buf); // Only free if you cudaMalloc-ed d_buf
-    }
+    /* ---- run multiscale (device-only) ---- */
+    vesselness_multiscale_device(d_src,d_dst,sx,sy,sz,
+        sigma_from,sigma_to,sigma_step,alpha,beta,gamma,bright);
 
-    // Clean up input GPU handle if used
-    if (isgpu && garr) {
-        mxGPUDestroyGPUArray(garr); // Only if you created garr with mxGPUCreateFromMxArray
-    }
+    plhs[0] = mxGPUCreateMxArrayOnGPU(gOut);
+    mxGPUDestroyGPUArray(gOut);
+    mxGPUDestroyGPUArray(gIn);
 }

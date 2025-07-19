@@ -1,8 +1,8 @@
-% benchmark_fibermetric_gpu.m
-% Compare MATLAB's fibermetric and your fibermetric_gpu (CPU and GPU modes)
+% benchmark_fibermetric_gpu_gpuonly.m
+% Compare MATLAB's fibermetric (CPU) and your fibermetric_gpu (gpuArray only)
 clear; clc;
 
-fprintf('\n==== Benchmark: fibermetric vs fibermetric\\_gpu (CPU & GPU) ====\n');
+fprintf('\n==== Benchmark: fibermetric (CPU) vs fibermetric\\_gpu (gpuArray only) ====\n');
 
 % --- Generate a 3D test volume (already single, normalized, blurred)
 sz = [128 128 32];
@@ -13,52 +13,47 @@ vol = single(mat2gray(vol));                       % normalized [0,1]
 % --- Set vesselness thickness/scale parameters to match MATLAB defaults
 sigma_from = 1; sigma_to = 4; sigma_step = 1;
 
-% --- 1. MATLAB fibermetric (CPU)
+% --- 1. MATLAB fibermetric (CPU, reference)
 t1 = tic;
 fm_cpu = fibermetric(vol, sigma_from:sigma_step:sigma_to);
 tcpu = toc(t1);
 
-% --- 2. fibermetric_gpu with CPU input
-t2 = tic;
-fm_gpu_cpu = fibermetric_gpu(vol, sigma_from, sigma_to, sigma_step);
-tgpu_cpu = toc(t2);
-
-% --- 3. fibermetric_gpu with gpuArray input
+% --- 2. fibermetric_gpu with gpuArray input ONLY
+gpu = gpuDevice();
 gvol = gpuArray(vol);
-t3 = tic;
-fm_gpu_gpu = fibermetric_gpu(gvol, sigma_from, sigma_to, sigma_step);
-tgpu_gpu = toc(t3);        % time includes GPU computation only
-fm_gpu_gpu = gather(fm_gpu_gpu); % gather after timing for pure GPU kernel time
+t2 = tic;
+fm_gpu_gpu = fibermetric_gpu(gvol, sigma_from, sigma_to, sigma_step, 0.1, 5, 3.5e5, 'bright');
+tgpu_gpu = toc(t2);             % time for GPU kernel only
+wait(gpu);
+fm_gpu_gpu = gather(fm_gpu_gpu);
 
 % --- Quantitative comparison
-diff_cpu_vs_gpu = abs(fm_cpu - fm_gpu_cpu);
-diff_cpu_vs_gpuarray = abs(fm_cpu - fm_gpu_gpu);
+diff_gpu = abs(fm_cpu - fm_gpu_gpu);
 
 % --- Print timings and accuracy
-fprintf('  %-32s : %8.4f s\n', 'MATLAB fibermetric (CPU)', tcpu);
-fprintf('  %-32s : %8.4f s\n', 'fibermetric_gpu (CPU input)', tgpu_cpu);
-fprintf('  %-32s : %8.4f s\n', 'fibermetric_gpu (gpuArray input)', tgpu_gpu);
-fprintf('  %-32s : %8.2fx\n', 'Speedup (GPU vs CPU)', tcpu / tgpu_gpu);
+fprintf('  %-36s : %8.4f s\n', 'MATLAB fibermetric (CPU)', tcpu);
+fprintf('  %-36s : %8.4f s\n', 'fibermetric_gpu (gpuArray input)', tgpu_gpu);
+fprintf('  %-36s : %8.2fx\n', 'Speedup (GPU vs CPU)', tcpu / tgpu_gpu);
 
-fprintf('\nAccuracy (vs MATLAB):\n');
-fprintf('  %-32s : max %.3g, mean %.3g\n', 'CPU input', max(diff_cpu_vs_gpu(:)), mean(diff_cpu_vs_gpu(:)));
-fprintf('  %-32s : max %.3g, mean %.3g\n', 'gpuArray input', max(diff_cpu_vs_gpuarray(:)), mean(diff_cpu_vs_gpuarray(:)));
+fprintf('\nAccuracy (vs MATLAB CPU):\n');
+fprintf('  %-36s : max %.3g, mean %.3g\n', 'gpuArray input', max(diff_gpu(:)), mean(diff_gpu(:)));
 
 % --- Summarize in a table
 resTable = table( ...
-    [tcpu; tgpu_cpu; tgpu_gpu], ...
-    [NaN; max(diff_cpu_vs_gpu(:)); max(diff_cpu_vs_gpuarray(:))], ...
-    [NaN; mean(diff_cpu_vs_gpu(:)); mean(diff_cpu_vs_gpuarray(:))], ...
+    [tcpu; tgpu_gpu], ...
+    [NaN; max(diff_gpu(:))], ...
+    [NaN; mean(diff_gpu(:))], ...
     'VariableNames', {'Time_sec', 'MaxAbsDiff_vsCPU', 'MeanAbsDiff_vsCPU'}, ...
-    'RowNames', {'fibermetric_CPU', 'fibermetric_gpu_CPUin', 'fibermetric_gpu_GPUin'});
+    'RowNames', {'fibermetric_CPU', 'fibermetric_gpu_GPUin'});
 disp(resTable);
+
+fprintf('fm_gpu_gpu min: %.5g, max: %.5g, nnz: %d\n', min(fm_gpu_gpu(:)), max(fm_gpu_gpu(:)), nnz(fm_gpu_gpu));
 
 fprintf('\nDone!\n');
 
 % --- Visualization (center slice)
 midz = round(sz(3)/2);
 figure;
-subplot(2,2,1); imagesc(fm_cpu(:,:,midz)); axis image; colorbar; title('MATLAB fibermetric');
-subplot(2,2,2); imagesc(fm_gpu_cpu(:,:,midz)); axis image; colorbar; title('fibermetric\_gpu (CPU)');
-subplot(2,2,3); imagesc(fm_gpu_gpu(:,:,midz)); axis image; colorbar; title('fibermetric\_gpu (GPU)');
-subplot(2,2,4); imagesc(abs(fm_cpu(:,:,midz)-fm_gpu_gpu(:,:,midz))); axis image; colorbar; title('Abs diff (CPU vs GPU)');
+subplot(1,3,1); imagesc(fm_cpu(:,:,midz)); axis image; colorbar; title('MATLAB fibermetric');
+subplot(1,3,2); imagesc(fm_gpu_gpu(:,:,midz)); axis image; colorbar; title('fibermetric\_gpu (GPU)');
+subplot(1,3,3); imagesc(abs(fm_cpu(:,:,midz)-fm_gpu_gpu(:,:,midz))); axis image; colorbar; title('Abs diff (CPU vs GPU)');
