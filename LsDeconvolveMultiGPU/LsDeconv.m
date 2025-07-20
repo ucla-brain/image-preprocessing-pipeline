@@ -965,7 +965,7 @@ function bl = process_block(bl, block, psf, niter, lambda, stop_criterion, filte
         bl = filter_subband_3d_z(bl, filter.destripe_sigma, 0, "db9");
     end
 
-    bl = fibermetric(bl);
+    bl = fibermetric_gpu(bl, 1, 4, 1); % sigma_from = 1, sigma_to = 4, sigma_step = 1
 
     % since prctile function needs high vram usage gather it to avoid low memory error
     if gpu && isgpuarray(bl)
@@ -974,6 +974,7 @@ function bl = process_block(bl, block, psf, niter, lambda, stop_criterion, filte
         reset(gpu_device);  % to free 2 extra copies of bl in gpu
         semaphore('p', semkey_gpu_base + gpu);
     end
+    % bl = fibermetric(bl);
 
     assert(all(size(bl) == bl_size), '[process_block]: block size mismatch!');
 end

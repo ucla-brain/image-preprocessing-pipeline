@@ -1,285 +1,269 @@
-// vesselness_mex.cu -- MATLAB MEX (CUDA) for 3D Frangi/Vesselness filter (single-precision, all-in-one)
-// Compile with: mexcuda -largeArrayDims vesselness_mex.cu
 #include "mex.h"
 #include "gpu/mxGPUArray.h"
 #include <cuda_runtime.h>
+#include <device_launch_parameters.h>
 #include <cmath>
-#include <vector>
 #include <stdexcept>
-#include <sstream>
 #include <string>
+#include <algorithm>
 
-#define CHECK_CUDA(call) \
-    do { cudaError_t err = (call); if (err != cudaSuccess) { \
-        std::ostringstream oss; \
-        oss << "CUDA error: " << cudaGetErrorString(err) << " at " << __FILE__ << ":" << __LINE__; \
-        mexErrMsgIdAndTxt("vesselness:cuda", "%s", oss.str().c_str()); \
-    }} while (0)
+// ========= Helper Macros ==========
+#define cudaCheck(err) if (err != cudaSuccess) { mexErrMsgIdAndTxt("fibermetric_gpu:cuda", "CUDA error %s at %s:%d", cudaGetErrorString(err), __FILE__, __LINE__); }
 
-__device__ __forceinline__
-float get(const float* v,int i,int sx,int sy,int sz,int ox,int oy,int oz)
-{
-    return v[i + ox + oy*sx + oz*sx*sy];
+// ========= Index helpers for MATLAB COLUMN-MAJOR order =========
+__device__ __host__ inline
+int getLinearIndex3D(int row, int col, int slice, int numRows, int numCols, int numSlices) {
+    // MATLAB: data(row + (col-1)*numRows + (slice-1)*numRows*numCols)
+    return row + col * numRows + slice * numRows * numCols;
 }
 
-#ifndef M_PI                /* π if <cmath> didn’t supply it             */
-#define M_PI 3.14159265358979323846
-#endif
-
-
-// ======================= UTILITY: 3D Indexing ========================
-inline __host__ __device__ int sub2ind(int x, int y, int z, int sx, int sy, int sz) {
-    return x + y*sx + z*sx*sy;
+// ========= CUDA Gaussian Kernel Generation =========
+void createGaussianKernel1D(float* hKernel, int ksize, float sigma) {
+    int halfK = ksize/2;
+    float sum = 0.f;
+    for (int i = 0; i < ksize; ++i) {
+        int x = i - halfK;
+        float v = expf(-0.5f * (x * x) / (sigma * sigma));
+        hKernel[i] = v;
+        sum += v;
+    }
+    for (int i = 0; i < ksize; ++i) hKernel[i] /= sum;
 }
 
-// ======================= CUDA KERNELS ================================
+// ========= 1D Convolution along each axis (separable Gaussian) =========
+__global__ void convolve1DAlongX(const float* src, float* dst, const float* kernel, int ksize, int numRows, int numCols, int numSlices) {
+    // Each thread processes one voxel (row,col,slice)
+    int row = blockIdx.x * blockDim.x + threadIdx.x;
+    int col = blockIdx.y;
+    int slice = blockIdx.z;
+    if (row >= numRows || col >= numCols || slice >= numSlices) return;
+    int halfK = ksize/2;
+    float sum = 0.f;
+    for (int k = -halfK; k <= halfK; ++k) {
+        int r = row + k;
+        if (r < 0) r = 0;
+        if (r >= numRows) r = numRows - 1;
+        sum += src[getLinearIndex3D(r, col, slice, numRows, numCols, numSlices)] * kernel[k+halfK];
+    }
+    dst[getLinearIndex3D(row, col, slice, numRows, numCols, numSlices)] = sum;
+}
+__global__ void convolve1DAlongY(const float* src, float* dst, const float* kernel, int ksize, int numRows, int numCols, int numSlices) {
+    int row = blockIdx.x;
+    int col = blockIdx.y * blockDim.y + threadIdx.y;
+    int slice = blockIdx.z;
+    if (row >= numRows || col >= numCols || slice >= numSlices) return;
+    int halfK = ksize/2;
+    float sum = 0.f;
+    for (int k = -halfK; k <= halfK; ++k) {
+        int c = col + k;
+        if (c < 0) c = 0;
+        if (c >= numCols) c = numCols - 1;
+        sum += src[getLinearIndex3D(row, c, slice, numRows, numCols, numSlices)] * kernel[k+halfK];
+    }
+    dst[getLinearIndex3D(row, col, slice, numRows, numCols, numSlices)] = sum;
+}
+__global__ void convolve1DAlongZ(const float* src, float* dst, const float* kernel, int ksize, int numRows, int numCols, int numSlices) {
+    int row = blockIdx.x;
+    int col = blockIdx.y;
+    int slice = blockIdx.z * blockDim.z + threadIdx.z;
+    if (row >= numRows || col >= numCols || slice >= numSlices) return;
+    int halfK = ksize/2;
+    float sum = 0.f;
+    for (int k = -halfK; k <= halfK; ++k) {
+        int s = slice + k;
+        if (s < 0) s = 0;
+        if (s >= numSlices) s = numSlices - 1;
+        sum += src[getLinearIndex3D(row, col, s, numRows, numCols, numSlices)] * kernel[k+halfK];
+    }
+    dst[getLinearIndex3D(row, col, slice, numRows, numCols, numSlices)] = sum;
+}
 
-__global__ void cov3_kernel(
-    const float* src, float* dst, const float* kernel,
-    int sx, int sy, int sz, int kx, int ky, int kz)
-{
+// ========= Vesselness Kernel (matches MATLAB polarity/Frangi) ==========
+__global__ void vesselness3D(const float* src, float* dst, int numRows, int numCols, int numSlices, float alpha, float beta, float gamma, bool brightPolarity) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int N = sx * sy * sz;
-    if (idx >= N) return;
-    int x = idx % sx, y = (idx / sx) % sy, z = idx / (sx*sy);
-    float sum = 0.0f, ksum = 0.0f;
+    int total = numRows * numCols * numSlices;
+    if (idx >= total) return;
 
-    int hx = kx / 2, hy = ky / 2, hz = kz / 2;
-    for (int dz = -hz; dz <= hz; ++dz)
-        for (int dy = -hy; dy <= hy; ++dy)
-            for (int dx = -hx; dx <= hx; ++dx) {
-                int xx = x + dx, yy = y + dy, zz = z + dz;
-                if (xx < 0 || xx >= sx || yy < 0 || yy >= sy || zz < 0 || zz >= sz) continue;
-                int kidx = (dx+hx) + (dy+hy)*kx + (dz+hz)*kx*ky;
-                int sidx = xx + yy*sx + zz*sx*sy;
-                sum += src[sidx] * kernel[kidx];
-                ksum += kernel[kidx];
-            }
-    dst[idx] = (ksum > 0.0f) ? sum / ksum : 0.0f;
-}
+    int row = idx % numRows;
+    int col = (idx / numRows) % numCols;
+    int slice = idx / (numRows * numCols);
 
-__global__ void multiply_kernel(const float* src, float* dst, int N, float scale) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < N)
-        dst[idx] = src[idx] * scale;
-}
+    if (row <= 0 || row >= numRows-1 ||
+        col <= 0 || col >= numCols-1 ||
+        slice <= 0 || slice >= numSlices-1) {
+        dst[idx] = 0;
+        return;
+    }
 
-// --- Vesselness Kernel ---
+    // Hessian (second derivatives, central diff)
+    #define IDX(r,c,s) getLinearIndex3D(r,c,s,numRows,numCols,numSlices)
+    float i_xx = src[IDX(row-1,col,slice)] - 2*src[IDX(row,col,slice)] + src[IDX(row+1,col,slice)];
+    float i_yy = src[IDX(row,col-1,slice)] - 2*src[IDX(row,col,slice)] + src[IDX(row,col+1,slice)];
+    float i_zz = src[IDX(row,col,slice-1)] - 2*src[IDX(row,col,slice)] + src[IDX(row,col,slice+1)];
 
-#define GET(src, i, sx, sy, sz, ox, oy, oz) \
-    src[(i) + (ox) + (oy)*(sx) + (oz)*(sx)*(sy)]
+    float i_xy = (src[IDX(row-1,col-1,slice)] + src[IDX(row+1,col+1,slice)]
+                - src[IDX(row-1,col+1,slice)] - src[IDX(row+1,col-1,slice)]) * 0.25f;
+    float i_xz = (src[IDX(row-1,col,slice-1)] + src[IDX(row+1,col,slice+1)]
+                - src[IDX(row-1,col,slice+1)] - src[IDX(row+1,col,slice-1)]) * 0.25f;
+    float i_yz = (src[IDX(row,col-1,slice-1)] + src[IDX(row,col+1,slice+1)]
+                - src[IDX(row,col+1,slice-1)] - src[IDX(row,col-1,slice+1)]) * 0.25f;
+    #undef IDX
 
-/* ------------------------------------------------------------------
- * src, dst : device pointers (single)
- * sx,sy,sz : volume dimensions
- * alpha,beta,gamma : Frangi parameters
- * bright    : true = bright tubes, false = dark tubes
- * -----------------------------------------------------------------*/
-__global__ void vesselness_kernel(
-        const float* __restrict__ src,
-              float*              dst,
-        int  sx,int  sy,int  sz,
-        float alpha,float beta,float gamma,
-        bool  bright)
-{
-    int idx = blockIdx.x*blockDim.x + threadIdx.x;
-    int N   = sx*sy*sz;
-    if(idx>=N) return;
-
-    /* skip borders */
-    int ix =  idx % sx;
-    int iy = (idx / sx) % sy;
-    int iz =  idx / (sx*sy);
-    if(ix<=0||ix>=sx-1||iy<=0||iy>=sy-1||iz<=0||iz>=sz-1) return;
-
-    /* second-order derivatives */
-    float dxx = -2.0f*get(src,idx,sx,sy,sz,0,0,0)
-                + get(src,idx,sx,sy,sz,-1,0,0) + get(src,idx,sx,sy,sz,1,0,0);
-    float dyy = -2.0f*get(src,idx,sx,sy,sz,0,0,0)
-                + get(src,idx,sx,sy,sz,0,-1,0)+ get(src,idx,sx,sy,sz,0,1,0);
-    float dzz = -2.0f*get(src,idx,sx,sy,sz,0,0,0)
-                + get(src,idx,sx,sy,sz,0,0,-1)+ get(src,idx,sx,sy,sz,0,0,1);
-    float dxy = 0.25f*( get(src,idx,sx,sy,sz,-1,-1,0)+get(src,idx,sx,sy,sz,1,1,0)
-                       -get(src,idx,sx,sy,sz,-1,1,0) -get(src,idx,sx,sy,sz,1,-1,0) );
-    float dxz = 0.25f*( get(src,idx,sx,sy,sz,-1,0,-1)+get(src,idx,sx,sy,sz,1,0,1)
-                       -get(src,idx,sx,sy,sz,-1,0,1) -get(src,idx,sx,sy,sz,1,0,-1) );
-    float dyz = 0.25f*( get(src,idx,sx,sy,sz,0,-1,-1)+get(src,idx,sx,sy,sz,0,1,1)
-                       -get(src,idx,sx,sy,sz,0,1,-1) -get(src,idx,sx,sy,sz,0,-1,1) );
-
-    /* eigenvalues of symmetric 3×3 */
-    float A11=dxx,A22=dyy,A33=dzz,A12=dxy,A13=dxz,A23=dyz;
-    float eig1,eig2,eig3;
+    // Symmetric Hessian eigenvalues (analytical, cubic)
+    float A11 = i_xx, A22 = i_yy, A33 = i_zz, A12 = i_xy, A13 = i_xz, A23 = i_yz;
+    float eig1, eig2, eig3;
     float p1 = A12*A12 + A13*A13 + A23*A23;
-    if(p1<1e-7f){ eig1=A11; eig2=A22; eig3=A33; }
-    else{
-        float q  = (A11+A22+A33)/3.0f;
-        float p2 = (A11-q)*(A11-q)+(A22-q)*(A22-q)+(A33-q)*(A33-q)+2*p1;
-        float p  = sqrtf(p2/6.0f);
-        float B11=(A11-q)/p, B22=(A22-q)/p, B33=(A33-q)/p;
-        float B12=A12/p,     B13=A13/p,     B23=A23/p;
-        float detB = B11*(B22*B33-B23*B23) - B12*(B12*B33-B23*B13)
-                   + B13*(B12*B23-B22*B13);
-        float r   = detB*0.5f;
-        float phi = (r<=-1.f)? (float)(M_PI/3.0)
-                  : (r>= 1.f)? 0.f
-                  : acosf(r)/3.0f;
-        eig1 = q + 2*p*cosf(phi);
-        eig3 = q + 2*p*cosf(phi + 2.f*(float)M_PI/3.f);
-        eig2 = 3*q - eig1 - eig3;
+    if (p1 < 1e-7f) {
+        eig1 = A11; eig2 = A22; eig3 = A33;
+    } else {
+        float q = (A11 + A22 + A33)/3.f;
+        float p2 = (A11-q)*(A11-q) + (A22-q)*(A22-q) + (A33-q)*(A33-q) + 2.f*p1;
+        float p = sqrtf(p2 / 6.f);
+        float B11 = (A11-q)/p, B12 = (A12)/p, B13 = (A13)/p;
+        float B22 = (A22-q)/p, B23 = (A23)/p, B33 = (A33-q)/p;
+        float detB =   B11*(B22*B33 - B23*B23)
+                     - B12*(B12*B33 - B23*B13)
+                     + B13*(B12*B23 - B22*B13);
+        float r = detB/2.f;
+        float phi;
+        const float PI3 = 3.14159265f / 3.f;
+        if (r <= -1.f) phi = PI3;
+        else if (r >= 1.f) phi = 0.f;
+        else phi = acosf(r)/3.f;
+        eig1 = q + 2.f*p*cosf(phi);
+        eig3 = q + 2.f*p*cosf(phi + 2.f*PI3);
+        eig2 = 3.f*q - eig1 - eig3;
     }
-    /* sort by absolute value */
-    if(fabsf(eig1)>fabsf(eig2)){ float t=eig1; eig1=eig2; eig2=t; }
-    if(fabsf(eig2)>fabsf(eig3)){ float t=eig2; eig2=eig3; eig3=t; }
-    if(fabsf(eig1)>fabsf(eig2)){ float t=eig1; eig1=eig2; eig2=t; }
+    // Sort |eig1| < |eig2| < |eig3|
+    float abse1 = fabsf(eig1), abse2 = fabsf(eig2), abse3 = fabsf(eig3);
+    float tmp;
+    if (abse1 > abse2) { tmp = eig1; eig1 = eig2; eig2 = tmp; tmp = abse1; abse1 = abse2; abse2 = tmp; }
+    if (abse2 > abse3) { tmp = eig2; eig2 = eig3; eig3 = tmp; tmp = abse2; abse2 = abse3; abse3 = tmp; }
+    if (abse1 > abse2) { tmp = eig1; eig1 = eig2; eig2 = tmp; tmp = abse1; abse1 = abse2; abse2 = tmp; }
 
-    bool cond = bright ? (eig2<0.f && eig3<0.f)
-                       : (eig2>0.f && eig3>0.f);
-    if(!cond) return;
-
-    float l1=fabsf(eig1), l2=fabsf(eig2), l3=fabsf(eig3);
-    float A=l2/l3, B=l1/sqrtf(l2*l3), S=sqrtf(l1*l1+l2*l2+l3*l3);
-    float vn=(1.f-expf(-A*A/alpha))*expf(  B*B/beta)*(1.f-expf(-S*S/gamma));
-    if(vn>dst[idx]) dst[idx]=vn;
-}
-
-
-// =============== GAUSSIAN KERNEL GENERATION (HOST) =================
-
-void makeGaussianKernel1D(std::vector<float>& kernel, int ksize, float sigma) {
-    int half = ksize / 2;
-    kernel.resize(ksize);
-    float sum = 0.0f;
-    for(int i=0;i<ksize;++i) {
-        int x = i-half;
-        float val = expf(-0.5f*x*x/(sigma*sigma));
-        kernel[i]=val; sum+=val;
+    // Polarity select (as in MATLAB)
+    bool keep = brightPolarity ? (eig2 < 0 && eig3 < 0) : (eig2 > 0 && eig3 > 0);
+    float vesselness = 0.f;
+    if (keep) {
+        float l1 = abse1, l2 = abse2, l3 = abse3;
+        float Ra = l2 / l3;
+        float Rb = l1 / sqrtf(l2*l3);
+        float S  = sqrtf(l1*l1 + l2*l2 + l3*l3);
+        vesselness = (1.f - __expf(-Ra*Ra/alpha)) * __expf(-Rb*Rb/beta) * (1.f - __expf(-S*S/gamma));
     }
-    for(int i=0;i<ksize;++i) kernel[i] /= sum;
-}
-void makeGaussianKernel3D(std::vector<float>& kernel, int kx, int ky, int kz, float sigmax, float sigmay, float sigmaz) {
-    std::vector<float> kxv, kyv, kzv;
-    makeGaussianKernel1D(kxv, kx, sigmax);
-    makeGaussianKernel1D(kyv, ky, sigmay);
-    makeGaussianKernel1D(kzv, kz, sigmaz);
-    kernel.resize(kx*ky*kz);
-    for(int z=0;z<kz;++z)
-        for(int y=0;y<ky;++y)
-            for(int x=0;x<kx;++x)
-                kernel[x + y*kx + z*kx*ky] = kxv[x] * kyv[y] * kzv[z];
+    dst[idx] = vesselness;
 }
 
-// ======================= HOST: Multi-scale Vesselness ===========================
-// -----------------------------------------------------------------------------
-// d_src : device pointer to input volume  (read-only)
-// d_dst : device pointer to output volume (already allocated)
-// -----------------------------------------------------------------------------
-void vesselness_multiscale_device(
-        const float* d_src, float* d_dst,
-        int sx, int sy, int sz,
-        float sigma_from, float sigma_to, float sigma_step,
-        float alpha, float beta, float gamma,
-        bool bright)                               // <── NEW
+// ======= In-place max projection kernel for vesselness over scales =======
+__global__ void maxInPlaceKernel(const float* src, float* dst, size_t n) {
+    size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n)
+        dst[i] = fmaxf(dst[i], src[i]);
+}
+
+// ---- In-place scaling kernel ------------------------------------------------
+__global__ void scaleArrayInPlace(float* data, size_t n, float factor)
 {
-    const size_t N = static_cast<size_t>(sx) * sy * sz;
-    float *d_blur = nullptr, *d_temp = nullptr, *d_kernel = nullptr;
-
-    CHECK_CUDA(cudaMalloc(&d_blur, N * sizeof(float)));
-    CHECK_CUDA(cudaMalloc(&d_temp, N * sizeof(float)));
-    CHECK_CUDA(cudaMemset(d_dst, 0, N * sizeof(float)));
-
-    const int nTPB = 512;
-    const int blocks = static_cast<int>((N + nTPB - 1) / nTPB);
-
-    for (float sigma = sigma_from; sigma <= sigma_to + 1e-4f; sigma += sigma_step) {
-        int ksize = static_cast<int>(6 * sigma + 1); if (!(ksize & 1)) ++ksize;
-        std::vector<float> hK;
-
-        // X
-        makeGaussianKernel3D(hK, ksize, 1, 1, sigma, 1.f, 1.f);
-        CHECK_CUDA(cudaMalloc(&d_kernel, ksize * sizeof(float)));
-        CHECK_CUDA(cudaMemcpy(d_kernel, hK.data(), ksize * sizeof(float), cudaMemcpyHostToDevice));
-        cov3_kernel<<<blocks, nTPB>>>(d_src, d_blur, d_kernel, sx, sy, sz, ksize, 1, 1);
-        CHECK_CUDA(cudaDeviceSynchronize());
-        cudaFree(d_kernel);
-
-        // Y
-        makeGaussianKernel3D(hK, 1, ksize, 1, 1.f, sigma, 1.f);
-        CHECK_CUDA(cudaMalloc(&d_kernel, ksize * sizeof(float)));
-        CHECK_CUDA(cudaMemcpy(d_kernel, hK.data(), ksize * sizeof(float), cudaMemcpyHostToDevice));
-        cov3_kernel<<<blocks, nTPB>>>(d_blur, d_temp, d_kernel, sx, sy, sz, 1, ksize, 1);
-        CHECK_CUDA(cudaDeviceSynchronize());
-        cudaFree(d_kernel);
-
-        // Z
-        makeGaussianKernel3D(hK, 1, 1, ksize, 1.f, 1.f, sigma);
-        CHECK_CUDA(cudaMalloc(&d_kernel, ksize * sizeof(float)));
-        CHECK_CUDA(cudaMemcpy(d_kernel, hK.data(), ksize * sizeof(float), cudaMemcpyHostToDevice));
-        cov3_kernel<<<blocks, nTPB>>>(d_temp, d_blur, d_kernel, sx, sy, sz, 1, 1, ksize);
-        CHECK_CUDA(cudaDeviceSynchronize());
-        cudaFree(d_kernel);
-
-        multiply_kernel<<<blocks, nTPB>>>(d_blur, d_blur, static_cast<int>(N), sigma);
-        CHECK_CUDA(cudaDeviceSynchronize());
-
-        vesselness_kernel<<<blocks, nTPB>>>(d_blur, d_dst, sx, sy, sz, alpha, beta, gamma, bright);
-        CHECK_CUDA(cudaDeviceSynchronize());
-    }
-
-    cudaFree(d_blur);
-    cudaFree(d_temp);
+    size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) data[i] *= factor;
 }
 
-// ========== MEX entry: gpuArray(single) only ==========
+
+// ========= Main entry point (all in one) =========
 void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
 {
-    mxInitGPU();
-    if(nrhs<1)
-        mexErrMsgIdAndTxt("fibermetric_gpu:input",
-           "Usage: out = fibermetric_gpu(gpuArray(single), [sigma_from, sigma_to, sigma_step, alpha, beta, gamma, polarity])");
+    // --- Argument checking ---
+    if (nrhs < 8)
+        mexErrMsgIdAndTxt("fibermetric_gpu:usage", "Usage: out = fibermetric_gpu(gpuArray_single, sigmaFrom, sigmaTo, sigmaStep, alpha, beta, gamma, objectPolarity)");
 
-    /* ---- input must be gpuArray(single) 3-D ---- */
-    if(!mxIsGPUArray(prhs[0]))
-        mexErrMsgIdAndTxt("fibermetric_gpu:input","Input must be gpuArray(single).");
+    // --- Parse gpuArray input ---
+    if (!mxIsGPUArray(prhs[0]))
+        mexErrMsgIdAndTxt("fibermetric_gpu:input", "Input must be a gpuArray.");
+    mxGPUArray const* inputGpuArray = mxGPUCreateFromMxArray(prhs[0]);
+    if (mxGPUGetClassID(inputGpuArray) != mxSINGLE_CLASS || mxGPUGetNumberOfDimensions(inputGpuArray) != 3)
+        mexErrMsgIdAndTxt("fibermetric_gpu:type", "Input must be 3D single-precision gpuArray.");
 
-    mxGPUArray const* gIn = mxGPUCreateFromMxArray(prhs[0]);
-    if(mxGPUGetClassID(gIn)!=mxSINGLE_CLASS || mxGPUGetNumberOfDimensions(gIn)!=3)
-        mexErrMsgIdAndTxt("fibermetric_gpu:input","Input must be 3-D gpuArray(single).");
+    const mwSize* dims = mxGPUGetDimensions(inputGpuArray);
+    int numRows = dims[0], numCols = dims[1], numSlices = dims[2];
+    size_t numel = (size_t)numRows * numCols * numSlices;
+    const float* inputData = static_cast<const float*>(mxGPUGetDataReadOnly(inputGpuArray));
 
-    const mwSize* d = mxGPUGetDimensions(gIn);
-    int sx=d[0], sy=d[1], sz=d[2];
+    // --- Vesselness params ---
+    float sigmaFrom = static_cast<float>(mxGetScalar(prhs[1]));
+    float sigmaTo   = static_cast<float>(mxGetScalar(prhs[2]));
+    float sigmaStep = static_cast<float>(mxGetScalar(prhs[3]));
+    float alpha     = static_cast<float>(mxGetScalar(prhs[4]));
+    float beta      = static_cast<float>(mxGetScalar(prhs[5]));
+    float gamma     = static_cast<float>(mxGetScalar(prhs[6]));
 
-    /* ---- optional parameters ---- */
-    float sigma_from = (nrhs>1)? (float)mxGetScalar(prhs[1]) : 1.f;
-    float sigma_to   = (nrhs>2)? (float)mxGetScalar(prhs[2]) : 4.f;
-    float sigma_step = (nrhs>3)? (float)mxGetScalar(prhs[3]) : 1.f;
-    float alpha      = (nrhs>4)? (float)mxGetScalar(prhs[4]) : 0.1f;
-    float beta       = (nrhs>5)? (float)mxGetScalar(prhs[5]) : 5.f;
-    float gamma      = (nrhs>6)? (float)mxGetScalar(prhs[6]) : 3.5e5f;
-    bool  bright     = true;
-    if(nrhs>7){
-        char* s = mxArrayToString(prhs[7]);
-#ifdef _WIN32
-        if(!_stricmp(s,"dark"))   bright=false;
-        else if(_stricmp(s,"bright"))
-#else
-        if(strcasecmp(s,"dark")==0) bright=false;
-        else if(strcasecmp(s,"bright")!=0)
-#endif
-            mexErrMsgIdAndTxt("fibermetric_gpu:polarity","polarity must be 'bright' or 'dark'");
-        mxFree(s);
+    // --- Polarity ---
+    char objectPolarity[16];
+    mxGetString(prhs[7], objectPolarity, sizeof(objectPolarity));
+    bool brightPolarity = (strcmp(objectPolarity,"bright")==0);
+
+    // --- Output gpuArray (single, 3D) ---
+    mxGPUArray* outputGpuArray = mxGPUCreateGPUArray(3, dims, mxSINGLE_CLASS, mxREAL, MX_GPU_DO_NOT_INITIALIZE);
+    float* outputData = static_cast<float*>(mxGPUGetData(outputGpuArray));
+    cudaCheck(cudaMemset(outputData, 0, numel * sizeof(float)));
+
+    // --- Allocate buffers for Gaussian blur (separable) ---
+    float* dTemp1; float* dTemp2;
+    cudaCheck(cudaMalloc(&dTemp1, numel * sizeof(float)));
+    cudaCheck(cudaMalloc(&dTemp2, numel * sizeof(float)));
+
+    int maxKernel = int(6 * sigmaTo + 1);
+    if (maxKernel % 2 == 0) ++maxKernel;
+    float* hKernel = new float[maxKernel];
+    float* dKernel;
+    cudaCheck(cudaMalloc(&dKernel, maxKernel * sizeof(float)));
+
+    // --- Multi-scale vesselness computation ---
+    float* dVesselness = outputData;
+    for (float sigma = sigmaFrom; sigma <= sigmaTo + 1e-4f; sigma += sigmaStep) {
+        int ksize = int(6 * sigma + 1);
+        if (ksize % 2 == 0) ++ksize;
+        createGaussianKernel1D(hKernel, ksize, sigma);
+        cudaCheck(cudaMemcpy(dKernel, hKernel, ksize * sizeof(float), cudaMemcpyHostToDevice));
+
+        // Separable Gaussian: X -> Y -> Z
+        // X
+        dim3 blockX(32,1,1), gridX((numRows+31)/32,numCols,numSlices);
+        convolve1DAlongX<<<gridX, blockX>>>(inputData, dTemp1, dKernel, ksize, numRows, numCols, numSlices);
+        cudaCheck(cudaGetLastError());
+        // Y
+        dim3 blockY(1,32,1), gridY(numRows,(numCols+31)/32,numSlices);
+        convolve1DAlongY<<<gridY, blockY>>>(dTemp1, dTemp2, dKernel, ksize, numRows, numCols, numSlices);
+        cudaCheck(cudaGetLastError());
+        // Z
+        dim3 blockZ(1,1,32), gridZ(numRows,numCols,(numSlices+31)/32);
+        convolve1DAlongZ<<<gridZ, blockZ>>>(dTemp2, dTemp1, dKernel, ksize, numRows, numCols, numSlices);
+        cudaCheck(cudaGetLastError());
+
+        // === Scale by sigma^2 to match MATLAB fibermetric (Frangi normalisation) ===
+        int nThreads = 256, nBlocks = (int)((numel + nThreads - 1) / nThreads);
+
+        //float scaleFactor = sigma;          // σ²
+        //scaleArrayInPlace<<<nBlocks, nThreads>>>(dTemp1, numel, scaleFactor);
+        //cudaCheck(cudaGetLastError());
+
+        // --- Vesselness for this scale ---
+        vesselness3D<<<nBlocks, nThreads>>>(dTemp1, dTemp2, numRows, numCols, numSlices, alpha, beta, gamma, brightPolarity);
+        cudaCheck(cudaGetLastError());
+
+        // Max-projection vesselness over scales
+        // dVesselness = max(dVesselness, dTemp2)
+        // (use a simple kernel here for element-wise max)
+        maxInPlaceKernel<<<nBlocks, nThreads>>>(dTemp2, dVesselness, numel);
+        cudaCheck(cudaGetLastError());
     }
 
-    /* ---- allocate output gpuArray ---- */
-    mwSize outDims[3]={d[0],d[1],d[2]};
-    mxGPUArray* gOut = mxGPUCreateGPUArray(3,outDims,mxSINGLE_CLASS,mxREAL,MX_GPU_DO_NOT_INITIALIZE);
-    const float* d_src = static_cast<const float*>(mxGPUGetDataReadOnly(gIn));
-    float*       d_dst = static_cast<float*>(mxGPUGetData(gOut));
+    // --- Clean up ---
+    cudaFree(dTemp1);
+    cudaFree(dTemp2);
+    cudaFree(dKernel);
+    delete[] hKernel;
 
-    /* ---- run multiscale (device-only) ---- */
-    vesselness_multiscale_device(d_src,d_dst,sx,sy,sz,
-        sigma_from,sigma_to,sigma_step,alpha,beta,gamma,bright);
-
-    plhs[0] = mxGPUCreateMxArrayOnGPU(gOut);
-    mxGPUDestroyGPUArray(gOut);
-    mxGPUDestroyGPUArray(gIn);
+    mxGPUDestroyGPUArray(inputGpuArray);
+    plhs[0] = mxGPUCreateMxArrayOnGPU(outputGpuArray);
+    mxGPUDestroyGPUArray(outputGpuArray);
 }
