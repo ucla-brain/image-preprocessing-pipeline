@@ -331,7 +331,7 @@ function [nx,ny,nz,x,y,z,x_pad,y_pad,z_pad,fft_shape] = autosplit( ...
     pad = [0 0 0];
     if filter.destripe_sigma > 0, pad = [1 1 1]; end
     if numit > 0, pad = max(pad, decon_pad_size(psf_size)); end
-    unwanted_pad = reshape(gaussian_pad_size(filter.gaussian_sigma), 1, []);
+    unwanted_pad = 0; % reshape(gaussian_pad_size(filter.gaussian_sigma), 1, []);
 
     % =====  SEARCH  ======================================================
     best = [];              best_score   = -Inf;
@@ -767,7 +767,7 @@ function deconvolve(filelist, psf, numit, damping, ...
         end
 
         expected_size = size(bl);  % Store size before processing
-        bl = process_block(bl, block, psf, numit, damping, stop_criterion, filter, clipval, gpu, semkey_gpu_base);
+        bl = process_block(bl, block, psf, numit, damping, stop_criterion, filter, gpu, semkey_gpu_base);
         % === Check padded block size is unchanged by process_block ===
         actual_size = size(bl);
         assert(isequal(actual_size, expected_size), ...
@@ -938,7 +938,7 @@ function bl = load_block(filelist, x1, x2, y1, y2, z1, z2, block, stack_info)
         num2str(size(bl)), num2str(block_target_size)));
 end
 
-function bl = process_block(bl, block, psf, niter, lambda, stop_criterion, filter, clipval, gpu, semkey_gpu_base)
+function bl = process_block(bl, block, psf, niter, lambda, stop_criterion, filter, gpu, semkey_gpu_base)
     bl_size = size(bl);
     if gpu && (min(filter.gaussian_sigma(:)) > 0 || niter > 0)
         % get the next available gpu
@@ -949,7 +949,11 @@ function bl = process_block(bl, block, psf, niter, lambda, stop_criterion, filte
     end
 
     if any(filter.gaussian_sigma > 0)
-        bl = imgaussfilt3(bl, filter.gaussian_sigma, 'Padding', 'symmetric', 'FilterDomain', 'spatial');
+        if gpu
+            bl = gauss3d_gpu(bl, filter.gaussian_sigma);
+        else
+            bl = imgaussfilt3(bl, filter.gaussian_sigma, 'Padding', 'symmetric', 'FilterDomain', 'spatial');
+        end
         if filter.dark > 0
             bl = bl - filter.dark;
             bl = max(bl, 0);

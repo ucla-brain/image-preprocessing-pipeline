@@ -357,11 +357,11 @@ function build_mex(debug)
         end
     end
     % cufft_link = strsplit(strtrim(fft_lib()));
-    mexcuda('-R2018a', nvccflags, 'fibermetric_gpu.cu');
+    mexcuda('-R2018a', nvccflags, 'gauss3d_gpu.cu');
     return
     mexcuda('-R2018a', nvccflags, 'conv3d_gpu.cu');
+    mexcuda('-R2018a', nvccflags, 'fibermetric_gpu.cu');
 
-    % mexcuda('-R2018a', nvccflags, 'gauss3d_gpu.cu', cufft_link{:});
     % mexcuda('-R2018a', nvccflags, 'if_else.cu');
 
     fprintf('\n✅  All MEX files built successfully.\n');

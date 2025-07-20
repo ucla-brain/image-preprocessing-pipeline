@@ -79,7 +79,8 @@ __global__ void convolve1DAlongZ(const float* src, float* dst, const float* kern
 }
 
 // ========= Vesselness Kernel (matches MATLAB polarity/Frangi) ==========
-__global__ void vesselness3D(const float* src, float* dst, int numRows, int numCols, int numSlices, float alpha, float beta, float gamma, bool brightPolarity) {
+__global__ void vesselness3D(const float* src, float* dst, int numRows, int numCols, int numSlices, float sigma,
+                             float alpha, float beta, float gamma, bool brightPolarity) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int total = numRows * numCols * numSlices;
     if (idx >= total) return;
@@ -149,7 +150,7 @@ __global__ void vesselness3D(const float* src, float* dst, int numRows, int numC
         float Ra = l2 / l3;
         float Rb = l1 / sqrtf(l2*l3);
         float S  = sqrtf(l1*l1 + l2*l2 + l3*l3);
-        vesselness = (1.f - __expf(-Ra*Ra/alpha)) * __expf(-Rb*Rb/beta) * (1.f - __expf(-S*S/gamma));
+        vesselness = sigma * sigma * (1.f - __expf(-Ra*Ra/alpha)) * __expf(-Rb*Rb/beta) * (1.f - __expf(-S*S/gamma));
     }
     dst[idx] = vesselness;
 }
@@ -242,12 +243,8 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         // === Scale by sigma^2 to match MATLAB fibermetric (Frangi normalisation) ===
         int nThreads = 256, nBlocks = (int)((numel + nThreads - 1) / nThreads);
 
-        //float scaleFactor = sigma;          // σ²
-        //scaleArrayInPlace<<<nBlocks, nThreads>>>(dTemp1, numel, scaleFactor);
-        //cudaCheck(cudaGetLastError());
-
         // --- Vesselness for this scale ---
-        vesselness3D<<<nBlocks, nThreads>>>(dTemp1, dTemp2, numRows, numCols, numSlices, alpha, beta, gamma, brightPolarity);
+        vesselness3D<<<nBlocks, nThreads>>>(dTemp1, dTemp2, numRows, numCols, numSlices, sigma, alpha, beta, gamma, brightPolarity);
         cudaCheck(cudaGetLastError());
 
         // Max-projection vesselness over scales
