@@ -320,6 +320,7 @@ function build_mex(debug)
     end
     
     %fprintf('\n[MEX] Compiling CPU modules …\n');
+    %mex(mex_cpu{:}, 'eig3volume.c');
     %mex(mex_cpu{:}, 'fast_twin_tail_orderstat.cpp');
     %mex(mex_cpu{:}, 'semaphore.c');
     %mex(mex_cpu{:}, 'save_lz4_mex.c', lz4_incflag, lz4_libfile);
@@ -527,3 +528,4 @@ else
 end
 
 end
+

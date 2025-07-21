@@ -8,23 +8,31 @@ sz = [128 128 32];
 rng(42);
 vol = imgaussfilt3(rand(sz, 'single'), 2);
 vol = single(mat2gray(vol));
-polarities = {'bright', 'dark'};
+polarities = {'dark', 'bright'};
 
 sigma_from = 1; sigma_to = 4; sigma_step = 1;
-alpha = 0.5; beta = 0.8; gamma = 15;
+alpha = 0.5; beta = 0.5; gamma = 15;
 pol = 'bright'; % or 'dark'—do both if you want
-structureSensitivity = 1e-6;
+structureSensitivity = eps('single');
 
 % Find alpha, beta, and gamma with optimization
-fm_cpu = fibermetric(vol, sigma_from:sigma_step:sigma_to, 'ObjectPolarity', pol);
+fm_cpu = fibermetric(vol, sigma_from:sigma_step:sigma_to, 'ObjectPolarity', pol, 'StructureSensitivity',structureSensitivity);
 gpu = gpuDevice(2);
 gvol = gpuArray(vol);
-x0 = [alpha, beta, gamma];
 loss_fun = @(params) vesselness_param_loss(params, gvol, sigma_from, sigma_to, sigma_step, pol, structureSensitivity, fm_cpu);
-fprintf('\nOptimizing alpha, beta, gamma for best match (fminsearch)...\n');
-opts = optimset('Display','iter', 'MaxFunEvals',Inf, 'MaxIter',Inf, 'TolX',eps('single'), 'TolFun',eps('single'));
-[xopt, fval, exitflag, output] = fminsearch(loss_fun, x0, opts);
-alpha = xopt(1); beta = xopt(2); gamma = xopt(3);
+nvars = 3; % [alpha, beta, gamma]
+fprintf('\nOptimizing alpha, beta, gamma for best match (particleswarm)...\n');
+opts = optimoptions('particleswarm', ...
+    'Display','iter', ...
+    'MaxIterations', Inf, ...     % Increase for better results
+    'SwarmSize', 10, ...          % Increase for thorough search
+    'UseParallel', false);        % If you have Parallel Toolbox
+lb = [0, 0, 0]; % Lower bounds for alpha, beta, gamma
+ub = [1, 1, 1000]; % Upper bounds for alpha, beta, gamma
+[xopt, fval, exitflag, output] = particleswarm(loss_fun, nvars, lb, ub, opts);
+alpha = xopt(1);
+beta  = xopt(2);
+gamma = xopt(3);
 fprintf('\nOptimal params: alpha=%.4f, beta=%.4f, gamma=%.2f (mean diff=%.5g)\n', alpha, beta, gamma, fval);
 
 for i = 1:2
