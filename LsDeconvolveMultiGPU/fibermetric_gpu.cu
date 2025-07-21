@@ -238,11 +238,13 @@ __global__ void vesselness3D(
 }
 
 // ======= In-place max projection kernel for vesselness over scales =======
-__global__ void maxInPlaceKernel(const float* src, float* dst, size_t n) {
+__global__ void maxInPlaceThresholdKernel(const float* src, float* dst, size_t n, float threshold)
+{
     size_t i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < n)
-        dst[i] = fmaxf(dst[i], src[i]);
+    float v = fmaxf(dst[i], src[i]);
+    dst[i] = (v >= threshold) ? v : 0.0f;
 }
+
 
 // ========= Main entry point (all in one) =========
 void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
@@ -315,7 +317,11 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         cudaCheck(cudaGetLastError());
 
         // 3. Max-projection across scales
-        maxInPlaceKernel<<<nBlocks, nThreads>>>(vesselness_d, outputData, numel);
+        float structureSensitivity = 0.0f;
+        if (nrhs >= 9) {
+            structureSensitivity = static_cast<float>(mxGetScalar(prhs[8]));
+        }
+        maxInPlaceThresholdKernel<<<nBlocks, nThreads>>>(vesselness_d, outputData, numel, structureSensitivity);
         cudaCheck(cudaGetLastError());
     }
 

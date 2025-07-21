@@ -11,17 +11,18 @@ vol = single(mat2gray(vol));
 polarities = {'bright', 'dark'};
 
 sigma_from = 1; sigma_to = 4; sigma_step = 1;
-alpha = 0.5; beta = 0.5; gamma = 15;
+alpha = 0.5; beta = 0.8; gamma = 15;
 pol = 'bright'; % or 'dark'—do both if you want
+structureSensitivity = 1e-6;
 
 % Find alpha, beta, and gamma with optimization
 fm_cpu = fibermetric(vol, sigma_from:sigma_step:sigma_to, 'ObjectPolarity', pol);
 gpu = gpuDevice(2);
 gvol = gpuArray(vol);
 x0 = [alpha, beta, gamma];
-loss_fun = @(params) vesselness_param_loss(params, gvol, sigma_from, sigma_to, sigma_step, pol, fm_cpu);
+loss_fun = @(params) vesselness_param_loss(params, gvol, sigma_from, sigma_to, sigma_step, pol, structureSensitivity, fm_cpu);
 fprintf('\nOptimizing alpha, beta, gamma for best match (fminsearch)...\n');
-opts = optimset('Display','iter', 'MaxFunEvals',500, 'MaxIter',1e4);
+opts = optimset('Display','iter', 'MaxFunEvals',Inf, 'MaxIter',Inf, 'TolX',eps('single'), 'TolFun',eps('single'));
 [xopt, fval, exitflag, output] = fminsearch(loss_fun, x0, opts);
 alpha = xopt(1); beta = xopt(2); gamma = xopt(3);
 fprintf('\nOptimal params: alpha=%.4f, beta=%.4f, gamma=%.2f (mean diff=%.5g)\n', alpha, beta, gamma, fval);
@@ -38,7 +39,7 @@ for i = 1:2
     % --- 2. fibermetric_gpu with gpuArray input ONLY
     gvol = gpuArray(vol);
     t2 = tic;
-    fm_gpu = fibermetric_gpu(gvol, sigma_from, sigma_to, sigma_step, alpha, beta, gamma, pol);
+    fm_gpu = fibermetric_gpu(gvol, sigma_from, sigma_to, sigma_step, alpha, beta, gamma, pol, structureSensitivity);
     wait(gpu);
     tgpu_gpu = toc(t2);             
     fm_gpu = gather(fm_gpu);
@@ -74,13 +75,13 @@ end
 
 fprintf('\nDone!\n');
 
-function loss = vesselness_param_loss(params, gvol, sigma_from, sigma_to, sigma_step, pol, fm_cpu)
+function loss = vesselness_param_loss(params, gvol, sigma_from, sigma_to, sigma_step, pol, structureSensitivity, fm_cpu)
     alpha = params(1); beta = params(2); gamma = params(3);
     try
-        fm_gpu = fibermetric_gpu(gvol, sigma_from, sigma_to, sigma_step, alpha, beta, gamma, pol);
+        fm_gpu = fibermetric_gpu(gvol, sigma_from, sigma_to, sigma_step, alpha, beta, gamma, pol, structureSensitivity);
         %fm_gpu = fm_gpu / max(fm_gpu, [], 'all');
         fm_gpu = gather(fm_gpu);
-        loss = mean(abs(fm_cpu(:) - fm_gpu(:)));
+        loss = mean(abs(fm_cpu - fm_gpu), 'all');
         if isnan(loss) || isinf(loss)
             loss = 1e6;
         end
