@@ -169,7 +169,7 @@ __global__ void vesselness3D(const float* src, float* dst, int numRows, int numC
         float expRa = 1.0f - __expf(-(Ra*Ra)/A);
         float expRb =        __expf(-(Rb*Rb)/B);
         float expS  = 1.0f - __expf(-(S *S )/C);
-        vesselness = sigma * sigma * expRa * expRb * expS;
+        vesselness = expRa * expRb * expS;
     }
     dst[idx] = vesselness;
 }
