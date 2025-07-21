@@ -6,8 +6,8 @@
 #include <stdexcept>
 #include <string>
 #include <algorithm>
-#include <thrust/device_ptr.h>
-#include <thrust/extrema.h>
+//#include <thrust/device_ptr.h>
+//#include <thrust/extrema.h>
 
 // ========= Helper Macros ==========
 #define cudaCheck(err) if (err != cudaSuccess) { mexErrMsgIdAndTxt("fibermetric_gpu:cuda", "CUDA error %s at %s:%d", cudaGetErrorString(err), __FILE__, __LINE__); }
@@ -166,10 +166,10 @@ __global__ void vesselness3D(const float* src, float* dst, int numRows, int numC
         float B = 2.0f * beta * beta;
         float C = 2.0f * gamma * gamma;
 
-        float expRa = 1.0f - __expf(-(Ra * Ra) / A);
-        float expRb = __expf(-(Rb * Rb) / B);
-        float expS  = 1.0f - __expf(-(S * S) / (2.0f * C));
-        vesselness = expRa * expRb * expS;
+        float expRa = 1.0f - __expf(-(Ra*Ra)/A);
+        float expRb =        __expf(-(Rb*Rb)/B);
+        float expS  = 1.0f - __expf(-(S *S )/C);
+        vesselness = sigma * sigma * expRa * expRb * expS;
     }
     dst[idx] = vesselness;
 }
@@ -270,14 +270,13 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         cudaCheck(cudaGetLastError());
     }
 
-    // === [ INSERT THIS NORMALIZATION BLOCK HERE ] ===
-    thrust::device_ptr<float> d_ptr(dVesselness);
-    float maxVal = *thrust::max_element(d_ptr, d_ptr + numel);
-    if (maxVal > 0.f) {
-        int nBlocks = (int)((numel + nThreads - 1) / nThreads);
-        scaleArrayInPlace<<<nBlocks, nThreads>>>(dVesselness, numel, 1.0f / maxVal);
-        cudaCheck(cudaGetLastError());
-    }
+    //thrust::device_ptr<float> d_ptr(dVesselness);
+    //float maxVal = *thrust::max_element(d_ptr, d_ptr + numel);
+    //if (maxVal > 0.f) {
+    //    int nBlocks = (int)((numel + nThreads - 1) / nThreads);
+    //    scaleArrayInPlace<<<nBlocks, nThreads>>>(dVesselness, numel, 1.0f / maxVal);
+    //    cudaCheck(cudaGetLastError());
+    //}
 
     // --- Clean up ---
     cudaFree(dTemp1);

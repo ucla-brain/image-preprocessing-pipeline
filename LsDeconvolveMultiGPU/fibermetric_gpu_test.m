@@ -92,6 +92,7 @@ function loss = vesselness_param_loss(params, gvol, sigma_from, sigma_to, sigma_
     alpha = params(1); beta = params(2); gamma = params(3);
     try
         fm_gpu = fibermetric_gpu(gvol, sigma_from, sigma_to, sigma_step, alpha, beta, gamma, pol);
+        fm_gpu = fm_gpu / max(fm_gpu, [], 'all');
         fm_gpu = gather(fm_gpu);
         loss = mean(abs(fm_cpu(:) - fm_gpu(:)));
         if isnan(loss) || isinf(loss)
