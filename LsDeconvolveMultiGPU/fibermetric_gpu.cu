@@ -6,6 +6,8 @@
 #include <stdexcept>
 #include <string>
 #include <algorithm>
+#include <thrust/device_ptr.h>
+#include <thrust/extrema.h>
 
 // ========= Helper Macros ==========
 #define cudaCheck(err) if (err != cudaSuccess) { mexErrMsgIdAndTxt("fibermetric_gpu:cuda", "CUDA error %s at %s:%d", cudaGetErrorString(err), __FILE__, __LINE__); }
@@ -109,6 +111,13 @@ __global__ void vesselness3D(const float* src, float* dst, int numRows, int numC
                 - src[IDX(row-1,col,slice+1)] - src[IDX(row+1,col,slice-1)]) * 0.25f;
     float i_yz = (src[IDX(row,col-1,slice-1)] + src[IDX(row,col+1,slice+1)]
                 - src[IDX(row,col+1,slice-1)] - src[IDX(row,col-1,slice+1)]) * 0.25f;
+    float scale = sigma * sigma;
+    i_xx *= scale;
+    i_yy *= scale;
+    i_zz *= scale;
+    i_xy *= scale;
+    i_xz *= scale;
+    i_yz *= scale;
     #undef IDX
 
     // Symmetric Hessian eigenvalues (analytical, cubic)
@@ -229,6 +238,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
 
     // --- Multi-scale vesselness computation ---
     float* dVesselness = outputData;
+    int nThreads = 256, nBlocks = (int)((numel + nThreads - 1) / nThreads);
     for (float sigma = sigmaFrom; sigma <= sigmaTo + 1e-4f; sigma += sigmaStep) {
         int ksize = int(6 * sigma + 1);
         if (ksize % 2 == 0) ++ksize;
@@ -249,9 +259,6 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         convolve1DAlongZ<<<gridZ, blockZ>>>(dTemp2, dTemp1, dKernel, ksize, numRows, numCols, numSlices);
         cudaCheck(cudaGetLastError());
 
-        // === Scale by sigma^2 to match MATLAB fibermetric (Frangi normalisation) ===
-        int nThreads = 256, nBlocks = (int)((numel + nThreads - 1) / nThreads);
-
         // --- Vesselness for this scale ---
         vesselness3D<<<nBlocks, nThreads>>>(dTemp1, dTemp2, numRows, numCols, numSlices, sigma, alpha, beta, gamma, brightPolarity);
         cudaCheck(cudaGetLastError());
@@ -260,6 +267,15 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         // dVesselness = max(dVesselness, dTemp2)
         // (use a simple kernel here for element-wise max)
         maxInPlaceKernel<<<nBlocks, nThreads>>>(dTemp2, dVesselness, numel);
+        cudaCheck(cudaGetLastError());
+    }
+
+    // === [ INSERT THIS NORMALIZATION BLOCK HERE ] ===
+    thrust::device_ptr<float> d_ptr(dVesselness);
+    float maxVal = *thrust::max_element(d_ptr, d_ptr + numel);
+    if (maxVal > 0.f) {
+        int nBlocks = (int)((numel + nThreads - 1) / nThreads);
+        scaleArrayInPlace<<<nBlocks, nThreads>>>(dVesselness, numel, 1.0f / maxVal);
         cudaCheck(cudaGetLastError());
     }
 
