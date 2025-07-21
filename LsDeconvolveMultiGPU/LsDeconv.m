@@ -977,7 +977,7 @@ function bl = process_block(bl, block, psf, niter, lambda, stop_criterion, filte
     sigma_from = 1; sigma_to = 4; sigma_step = 1;
     alpha = 0.5; beta = 0.5; gamma = 500;
 
-    % bl = fibermetric_gpu(bl, sigma_from, sigma_to, sigma_step, alpha, beta, gamma, 'bright');
+    bl = fibermetric_gpu(bl, sigma_from, sigma_to, sigma_step, alpha, beta, gamma, 'bright');
 
     % since prctile function needs high vram usage gather it to avoid low memory error
     if gpu && isgpuarray(bl)
