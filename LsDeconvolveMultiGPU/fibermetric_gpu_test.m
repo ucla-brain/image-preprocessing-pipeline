@@ -3,7 +3,6 @@
 %clear; clc;
 
 fprintf('\n==== Benchmark: fibermetric (CPU) vs fibermetric_gpu (gpuArray only) [bright/dark] ====\n');
-gpu = gpuDevice(2);
 
 sz = [128 128 32];
 rng(42);
@@ -15,31 +14,17 @@ sigma_from = 1; sigma_to = 4; sigma_step = 1;
 alpha = 0.5; beta = 0.5; gamma = 15;
 pol = 'bright'; % or 'dark'—do both if you want
 
-% fm_cpu = fibermetric(vol, sigma_from:sigma_step:sigma_to, 'ObjectPolarity', pol);
-% gpu = gpuDevice(2);
-% gvol = gpuArray(vol);
-% 
-% if ~license('test','GADS_Toolbox')
-%     error('Particle Swarm requires the Global Optimization Toolbox.');
-% end
-% 
-% lb = [0.01 0.01 double(eps('single'))];   % Lower bounds (gamma > 0!)
-% ub = [2    2   1000];    % Upper bounds (tune as appropriate)
-% 
-% opts = optimoptions('particleswarm', ...
-%     'SwarmSize', 100, ...
-%     'Display', 'iter', ...
-%     'UseParallel', false, ...
-%     'MaxTime', Inf, 'MaxIterations', Inf);
-% 
-% loss_fun = @(params) vesselness_param_loss(params, gvol, sigma_from, sigma_to, sigma_step, pol, fm_cpu);
-% 
-% fprintf('\nOptimizing alpha, beta, gamma for best match (particleswarm)...\n');
-% [xopt, fval, exitflag, output] = particleswarm(loss_fun, 3, lb, ub, opts);
-% 
-% alpha = xopt(1); beta = xopt(2); gamma = xopt(3);
-% 
-% fprintf('\nOptimal params: alpha=%.4f, beta=%.4f, gamma=%.2f (mean diff=%.5g)\n', alpha, beta, gamma, fval);
+% Find alpha, beta, and gamma with optimization
+fm_cpu = fibermetric(vol, sigma_from:sigma_step:sigma_to, 'ObjectPolarity', pol);
+gpu = gpuDevice(2);
+gvol = gpuArray(vol);
+x0 = [alpha, beta, gamma];
+loss_fun = @(params) vesselness_param_loss(params, gvol, sigma_from, sigma_to, sigma_step, pol, fm_cpu);
+fprintf('\nOptimizing alpha, beta, gamma for best match (fminsearch)...\n');
+opts = optimset('Display','iter', 'MaxFunEvals',500, 'MaxIter',1e4);
+[xopt, fval, exitflag, output] = fminsearch(loss_fun, x0, opts);
+alpha = xopt(1); beta = xopt(2); gamma = xopt(3);
+fprintf('\nOptimal params: alpha=%.4f, beta=%.4f, gamma=%.2f (mean diff=%.5g)\n', alpha, beta, gamma, fval);
 
 for i = 1:2
     pol = polarities{i};
