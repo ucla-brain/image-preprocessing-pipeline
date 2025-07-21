@@ -8,7 +8,7 @@ function gauss3d_gpu_test()
     hasCprintfFunction = exist('cprintf','file') == 2;
     colorFormat = @(colorName, inputString) format_colored_string(colorName, inputString, hasCprintfFunction);
 
-    testVolumeSizes = {[900, 900, 1000]};
+    testVolumeSizes = {[900, 900, 500]};
     sigmaTestCases = {[0.5 0.5 1.5], [0.5 0.5 2.5], 3.0, 0.25};
     SINGLE_PRECISION_PASS_THRESHOLD = 5e-5;
     paddingMode = 'symmetric';
