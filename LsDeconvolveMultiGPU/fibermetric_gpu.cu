@@ -92,9 +92,9 @@ __global__ void vesselness3D(const float* src, float* dst, int numRows, int numC
     int col = (idx / numRows) % numCols;
     int slice = idx / (numRows * numCols);
 
-    if (row <= 0 || row >= numRows-1 ||
-        col <= 0 || col >= numCols-1 ||
-        slice <= 0 || slice >= numSlices-1) {
+    if (row <= 1 || row >= numRows-2 ||
+        col <= 1 || col >= numCols-2 ||
+        slice <= 1 || slice >= numSlices-2) {
         dst[idx] = 0;
         return;
     }
@@ -105,24 +105,15 @@ __global__ void vesselness3D(const float* src, float* dst, int numRows, int numC
     //float i_yy = src[IDX(row,col-1,slice)] - 2*src[IDX(row,col,slice)] + src[IDX(row,col+1,slice)];
     //float i_zz = src[IDX(row,col,slice-1)] - 2*src[IDX(row,col,slice)] + src[IDX(row,col,slice+1)];
 
+    float scale = 0.25f * sigma * sigma;
     float center = src[IDX(row, col, slice)];
-    float i_xx = 0.25f * (src[IDX(row-2, col, slice)] - 2.0f * center + src[IDX(row+2, col, slice)]);
-    float i_yy = 0.25f * (src[IDX(row, col-2, slice)] - 2.0f * center + src[IDX(row, col+2, slice)]);
-    float i_zz = 0.25f * (src[IDX(row, col, slice-2)] - 2.0f * center + src[IDX(row, col, slice+2)]);
+    float i_xx = scale * (src[IDX(row-2, col, slice)] - 2.0f * center + src[IDX(row+2, col, slice)]);
+    float i_yy = scale * (src[IDX(row, col-2, slice)] - 2.0f * center + src[IDX(row, col+2, slice)]);
+    float i_zz = scale * (src[IDX(row, col, slice-2)] - 2.0f * center + src[IDX(row, col, slice+2)]);
 
-    float i_xy = (src[IDX(row-1,col-1,slice)] + src[IDX(row+1,col+1,slice)]
-                - src[IDX(row-1,col+1,slice)] - src[IDX(row+1,col-1,slice)]) * 0.25f;
-    float i_xz = (src[IDX(row-1,col,slice-1)] + src[IDX(row+1,col,slice+1)]
-                - src[IDX(row-1,col,slice+1)] - src[IDX(row+1,col,slice-1)]) * 0.25f;
-    float i_yz = (src[IDX(row,col-1,slice-1)] + src[IDX(row,col+1,slice+1)]
-                - src[IDX(row,col+1,slice-1)] - src[IDX(row,col-1,slice+1)]) * 0.25f;
-    float scale = sigma * sigma;
-    i_xx *= scale;
-    i_yy *= scale;
-    i_zz *= scale;
-    i_xy *= scale;
-    i_xz *= scale;
-    i_yz *= scale;
+    float i_xy = scale * (src[IDX(row-1,col-1,slice)] + src[IDX(row+1,col+1,slice)] - src[IDX(row-1,col+1,slice)] - src[IDX(row+1,col-1,slice)]);
+    float i_xz = scale * (src[IDX(row-1,col,slice-1)] + src[IDX(row+1,col,slice+1)] - src[IDX(row-1,col,slice+1)] - src[IDX(row+1,col,slice-1)]);
+    float i_yz = scale * (src[IDX(row,col-1,slice-1)] + src[IDX(row,col+1,slice+1)] - src[IDX(row,col+1,slice-1)] - src[IDX(row,col-1,slice+1)]);
     #undef IDX
 
     // Symmetric Hessian eigenvalues (analytical, cubic)
