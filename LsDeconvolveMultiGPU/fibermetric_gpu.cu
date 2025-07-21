@@ -32,7 +32,6 @@ void createGaussianKernel1D(float* hKernel, int ksize, float sigma) {
 
 // ========= 1D Convolution along each axis (separable Gaussian) =========
 __global__ void convolve1DAlongX(const float* src, float* dst, const float* kernel, int ksize, int numRows, int numCols, int numSlices) {
-    // Each thread processes one voxel (row,col,slice)
     int row = blockIdx.x * blockDim.x + threadIdx.x;
     int col = blockIdx.y;
     int slice = blockIdx.z;
@@ -43,37 +42,39 @@ __global__ void convolve1DAlongX(const float* src, float* dst, const float* kern
         int r = row + k;
         if (r < 0) r = 0;
         if (r >= numRows) r = numRows - 1;
-        sum += src[getLinearIndex3D(r, col, slice, numRows, numCols, numSlices)] * kernel[k+halfK];
+        sum = fmaf(src[getLinearIndex3D(r, col, slice, numRows, numCols, numSlices)], kernel[k+halfK], sum);
     }
     dst[getLinearIndex3D(row, col, slice, numRows, numCols, numSlices)] = sum;
 }
+
 __global__ void convolve1DAlongY(const float* src, float* dst, const float* kernel, int ksize, int numRows, int numCols, int numSlices) {
     int row = blockIdx.x;
     int col = blockIdx.y * blockDim.y + threadIdx.y;
     int slice = blockIdx.z;
     if (row >= numRows || col >= numCols || slice >= numSlices) return;
-    int halfK = ksize/2;
+    int halfK = ksize / 2;
     float sum = 0.f;
     for (int k = -halfK; k <= halfK; ++k) {
         int c = col + k;
         if (c < 0) c = 0;
         if (c >= numCols) c = numCols - 1;
-        sum += src[getLinearIndex3D(row, c, slice, numRows, numCols, numSlices)] * kernel[k+halfK];
+        sum = fmaf(src[getLinearIndex3D(row, c, slice, numRows, numCols, numSlices)], kernel[k + halfK], sum);
     }
     dst[getLinearIndex3D(row, col, slice, numRows, numCols, numSlices)] = sum;
 }
+
 __global__ void convolve1DAlongZ(const float* src, float* dst, const float* kernel, int ksize, int numRows, int numCols, int numSlices) {
     int row = blockIdx.x;
     int col = blockIdx.y;
     int slice = blockIdx.z * blockDim.z + threadIdx.z;
     if (row >= numRows || col >= numCols || slice >= numSlices) return;
-    int halfK = ksize/2;
+    int halfK = ksize / 2;
     float sum = 0.f;
     for (int k = -halfK; k <= halfK; ++k) {
         int s = slice + k;
         if (s < 0) s = 0;
         if (s >= numSlices) s = numSlices - 1;
-        sum += src[getLinearIndex3D(row, col, s, numRows, numCols, numSlices)] * kernel[k+halfK];
+        sum = fmaf(src[getLinearIndex3D(row, col, s, numRows, numCols, numSlices)], kernel[k + halfK], sum);
     }
     dst[getLinearIndex3D(row, col, slice, numRows, numCols, numSlices)] = sum;
 }
@@ -150,7 +151,7 @@ __global__ void vesselness3D(const float* src, float* dst, int numRows, int numC
         float Ra = l2 / l3;
         float Rb = l1 / sqrtf(l2*l3);
         float S  = sqrtf(l1*l1 + l2*l2 + l3*l3);
-        vesselness = sigma * sigma * (1.f - __expf(-Ra*Ra/alpha)) * __expf(-Rb*Rb/beta) * (1.f - __expf(-S*S/gamma));
+        vesselness = 2.5e5f * (1.f - __expf(-Ra*Ra/alpha)) * __expf(-Rb*Rb/beta) * (1.f - __expf(-S*S/gamma));
     }
     dst[idx] = vesselness;
 }
