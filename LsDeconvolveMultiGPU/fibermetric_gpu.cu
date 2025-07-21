@@ -101,9 +101,26 @@ __global__ void vesselness3D(const float* src, float* dst, int numRows, int numC
 
     // Hessian (second derivatives, central diff)
     #define IDX(r,c,s) getLinearIndex3D(r,c,s,numRows,numCols,numSlices)
-    float i_xx = src[IDX(row-1,col,slice)] - 2*src[IDX(row,col,slice)] + src[IDX(row+1,col,slice)];
-    float i_yy = src[IDX(row,col-1,slice)] - 2*src[IDX(row,col,slice)] + src[IDX(row,col+1,slice)];
-    float i_zz = src[IDX(row,col,slice-1)] - 2*src[IDX(row,col,slice)] + src[IDX(row,col,slice+1)];
+    //float i_xx = src[IDX(row-1,col,slice)] - 2*src[IDX(row,col,slice)] + src[IDX(row+1,col,slice)];
+    //float i_yy = src[IDX(row,col-1,slice)] - 2*src[IDX(row,col,slice)] + src[IDX(row,col+1,slice)];
+    //float i_zz = src[IDX(row,col,slice-1)] - 2*src[IDX(row,col,slice)] + src[IDX(row,col,slice+1)];
+    float i_xx = 0.25f * (
+          src[IDX(row-2, col,   slice)]
+        - 2.0f * src[IDX(row,   col,   slice)]
+        + src[IDX(row+2, col,   slice)]
+    );
+
+    float i_yy = 0.25f * (
+          src[IDX(row,   col-2, slice)]
+        - 2.0f * src[IDX(row,   col,   slice)]
+        + src[IDX(row,   col+2, slice)]
+    );
+
+    float i_zz = 0.25f * (
+          src[IDX(row,   col,   slice-2)]
+        - 2.0f * src[IDX(row,   col,   slice)]
+        + src[IDX(row,   col,   slice+2)]
+    );
 
     float i_xy = (src[IDX(row-1,col-1,slice)] + src[IDX(row+1,col+1,slice)]
                 - src[IDX(row-1,col+1,slice)] - src[IDX(row+1,col-1,slice)]) * 0.25f;

@@ -12,33 +12,34 @@ vol = single(mat2gray(vol));
 polarities = {'bright', 'dark'};
 
 sigma_from = 1; sigma_to = 4; sigma_step = 1;
+alpha = 0.5; beta = 0.5; gamma = 15;
 pol = 'bright'; % or 'dark'—do both if you want
 
-fm_cpu = fibermetric(vol, sigma_from:sigma_step:sigma_to, 'ObjectPolarity', pol);
-gpu = gpuDevice(2);
-gvol = gpuArray(vol);
-
-if ~license('test','GADS_Toolbox')
-    error('Particle Swarm requires the Global Optimization Toolbox.');
-end
-
-lb = [0.01 0.01 double(eps('single'))];   % Lower bounds (gamma > 0!)
-ub = [2    2   1000];    % Upper bounds (tune as appropriate)
-
-opts = optimoptions('particleswarm', ...
-    'SwarmSize', 100, ...
-    'Display', 'iter', ...
-    'UseParallel', false, ...
-    'MaxTime', Inf, 'MaxIterations', Inf);
-
-loss_fun = @(params) vesselness_param_loss(params, gvol, sigma_from, sigma_to, sigma_step, pol, fm_cpu);
-
-fprintf('\nOptimizing alpha, beta, gamma for best match (particleswarm)...\n');
-[xopt, fval, exitflag, output] = particleswarm(loss_fun, 3, lb, ub, opts);
-
-alpha = xopt(1); beta = xopt(2); gamma = xopt(3);
-
-fprintf('\nOptimal params: alpha=%.4f, beta=%.4f, gamma=%.2f (mean diff=%.5g)\n', alpha, beta, gamma, fval);
+% fm_cpu = fibermetric(vol, sigma_from:sigma_step:sigma_to, 'ObjectPolarity', pol);
+% gpu = gpuDevice(2);
+% gvol = gpuArray(vol);
+% 
+% if ~license('test','GADS_Toolbox')
+%     error('Particle Swarm requires the Global Optimization Toolbox.');
+% end
+% 
+% lb = [0.01 0.01 double(eps('single'))];   % Lower bounds (gamma > 0!)
+% ub = [2    2   1000];    % Upper bounds (tune as appropriate)
+% 
+% opts = optimoptions('particleswarm', ...
+%     'SwarmSize', 100, ...
+%     'Display', 'iter', ...
+%     'UseParallel', false, ...
+%     'MaxTime', Inf, 'MaxIterations', Inf);
+% 
+% loss_fun = @(params) vesselness_param_loss(params, gvol, sigma_from, sigma_to, sigma_step, pol, fm_cpu);
+% 
+% fprintf('\nOptimizing alpha, beta, gamma for best match (particleswarm)...\n');
+% [xopt, fval, exitflag, output] = particleswarm(loss_fun, 3, lb, ub, opts);
+% 
+% alpha = xopt(1); beta = xopt(2); gamma = xopt(3);
+% 
+% fprintf('\nOptimal params: alpha=%.4f, beta=%.4f, gamma=%.2f (mean diff=%.5g)\n', alpha, beta, gamma, fval);
 
 for i = 1:2
     pol = polarities{i};
@@ -92,7 +93,7 @@ function loss = vesselness_param_loss(params, gvol, sigma_from, sigma_to, sigma_
     alpha = params(1); beta = params(2); gamma = params(3);
     try
         fm_gpu = fibermetric_gpu(gvol, sigma_from, sigma_to, sigma_step, alpha, beta, gamma, pol);
-        fm_gpu = fm_gpu / max(fm_gpu, [], 'all');
+        %fm_gpu = fm_gpu / max(fm_gpu, [], 'all');
         fm_gpu = gather(fm_gpu);
         loss = mean(abs(fm_cpu(:) - fm_gpu(:)));
         if isnan(loss) || isinf(loss)
