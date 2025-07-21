@@ -151,7 +151,16 @@ __global__ void vesselness3D(const float* src, float* dst, int numRows, int numC
         float Ra = l2 / l3;
         float Rb = l1 / sqrtf(l2*l3);
         float S  = sqrtf(l1*l1 + l2*l2 + l3*l3);
-        vesselness = 2.5e5f * (1.f - __expf(-Ra*Ra/alpha)) * __expf(-Rb*Rb/beta) * (1.f - __expf(-S*S/gamma));
+
+        // Frangi's vesselness constants (match reference)
+        float A = 2.0f * alpha * alpha;
+        float B = 2.0f * beta * beta;
+        float C = 2.0f * gamma * gamma;
+
+        float expRa = 1.0f - __expf(-(Ra * Ra) / A);
+        float expRb = __expf(-(Rb * Rb) / B);
+        float expS  = 1.0f - __expf(-(S * S) / (2.0f * C));
+        vesselness = expRa * expRb * expS;
     }
     dst[idx] = vesselness;
 }
@@ -169,7 +178,6 @@ __global__ void scaleArrayInPlace(float* data, size_t n, float factor)
     size_t i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < n) data[i] *= factor;
 }
-
 
 // ========= Main entry point (all in one) =========
 void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])

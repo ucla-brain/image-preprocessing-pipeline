@@ -975,7 +975,7 @@ function bl = process_block(bl, block, psf, niter, lambda, stop_criterion, filte
     % Object is brighter than background	'bright'
     % Object is darker than background	'dark'
     sigma_from = 1; sigma_to = 4; sigma_step = 1;
-    alpha = 0.5; beta = 0.5; gamma = 500;
+    alpha=1.2615, beta=0.2413, gamma=double(eps('single'));
 
     bl = fibermetric_gpu(bl, sigma_from, sigma_to, sigma_step, alpha, beta, gamma, 'bright');
 

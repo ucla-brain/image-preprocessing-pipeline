@@ -3,23 +3,42 @@
 %clear; clc;
 
 fprintf('\n==== Benchmark: fibermetric (CPU) vs fibermetric_gpu (gpuArray only) [bright/dark] ====\n');
+gpu = gpuDevice(2);
 
-% --- Generate a 3D test volume (already single, normalized, blurred)
 sz = [128 128 32];
 rng(42);
-vol = imgaussfilt3(rand(sz, 'single'), 2); % smooth random texture
-vol = single(mat2gray(vol));               % normalized [0,1]
-
-% --- Set vesselness thickness/scale parameters to match MATLAB defaults
-% alpha – weight for "blobness" suppression (Ra): typically 0.5 or 0.5²
-% beta – weight for "plate-like" suppression (Rb): typically 0.5 or 0.5²
-% gamma – normalization for the "second order structureness" (S): often set high, e.g., 15² or 500
-sigma_from = 1; sigma_to = 4; sigma_step = 1;
-alpha = 0.5; beta = 0.5; gamma = 500;
-
-
-
+vol = imgaussfilt3(rand(sz, 'single'), 2);
+vol = single(mat2gray(vol));
 polarities = {'bright', 'dark'};
+
+sigma_from = 1; sigma_to = 4; sigma_step = 1;
+pol = 'bright'; % or 'dark'—do both if you want
+
+fm_cpu = fibermetric(vol, sigma_from:sigma_step:sigma_to, 'ObjectPolarity', pol);
+gpu = gpuDevice(2);
+gvol = gpuArray(vol);
+
+if ~license('test','GADS_Toolbox')
+    error('Particle Swarm requires the Global Optimization Toolbox.');
+end
+
+lb = [0.01 0.01 double(eps('single'))];   % Lower bounds (gamma > 0!)
+ub = [2    2   1000];    % Upper bounds (tune as appropriate)
+
+opts = optimoptions('particleswarm', ...
+    'SwarmSize', 100, ...
+    'Display', 'iter', ...
+    'UseParallel', false, ...
+    'MaxTime', Inf, 'MaxIterations', Inf);
+
+loss_fun = @(params) vesselness_param_loss(params, gvol, sigma_from, sigma_to, sigma_step, pol, fm_cpu);
+
+fprintf('\nOptimizing alpha, beta, gamma for best match (particleswarm)...\n');
+[xopt, fval, exitflag, output] = particleswarm(loss_fun, 3, lb, ub, opts);
+
+alpha = xopt(1); beta = xopt(2); gamma = xopt(3);
+
+fprintf('\nOptimal params: alpha=%.4f, beta=%.4f, gamma=%.2f (mean diff=%.5g)\n', alpha, beta, gamma, fval);
 
 for i = 1:2
     pol = polarities{i};
@@ -31,7 +50,6 @@ for i = 1:2
     tcpu = toc(t1);
 
     % --- 2. fibermetric_gpu with gpuArray input ONLY
-    gpu = gpuDevice(2);
     gvol = gpuArray(vol);
     t2 = tic;
     fm_gpu = fibermetric_gpu(gvol, sigma_from, sigma_to, sigma_step, alpha, beta, gamma, pol);
@@ -69,3 +87,17 @@ for i = 1:2
 end
 
 fprintf('\nDone!\n');
+
+function loss = vesselness_param_loss(params, gvol, sigma_from, sigma_to, sigma_step, pol, fm_cpu)
+    alpha = params(1); beta = params(2); gamma = params(3);
+    try
+        fm_gpu = fibermetric_gpu(gvol, sigma_from, sigma_to, sigma_step, alpha, beta, gamma, pol);
+        fm_gpu = gather(fm_gpu);
+        loss = mean(abs(fm_cpu(:) - fm_gpu(:)));
+        if isnan(loss) || isinf(loss)
+            loss = 1e6;
+        end
+    catch
+        loss = 1e6;
+    end
+end
