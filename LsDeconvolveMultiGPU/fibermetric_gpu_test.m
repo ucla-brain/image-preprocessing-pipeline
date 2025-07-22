@@ -16,24 +16,24 @@ pol = 'bright'; % or 'dark'—do both if you want
 structureSensitivity = eps('single');
 
 % Find alpha, beta, and gamma with optimization
-fm_cpu = fibermetric(vol, sigma_from:sigma_step:sigma_to, 'ObjectPolarity', pol, 'StructureSensitivity',structureSensitivity);
-gpu = gpuDevice(2);
-gvol = gpuArray(vol);
-loss_fun = @(params) vesselness_param_loss(params, gvol, sigma_from, sigma_to, sigma_step, pol, structureSensitivity, fm_cpu);
-nvars = 3; % [alpha, beta, gamma]
-fprintf('\nOptimizing alpha, beta, gamma for best match (particleswarm)...\n');
-opts = optimoptions('particleswarm', ...
-    'Display','iter', ...
-    'MaxIterations', Inf, ...     % Increase for better results
-    'SwarmSize', 10, ...          % Increase for thorough search
-    'UseParallel', false);        % If you have Parallel Toolbox
-lb = [0, 0, 0]; % Lower bounds for alpha, beta, gamma
-ub = [1, 1, 1000]; % Upper bounds for alpha, beta, gamma
-[xopt, fval, exitflag, output] = particleswarm(loss_fun, nvars, lb, ub, opts);
-alpha = xopt(1);
-beta  = xopt(2);
-gamma = xopt(3);
-fprintf('\nOptimal params: alpha=%.4f, beta=%.4f, gamma=%.2f (mean diff=%.5g)\n', alpha, beta, gamma, fval);
+%fm_cpu = fibermetric(vol, sigma_from:sigma_step:sigma_to, 'ObjectPolarity', pol, 'StructureSensitivity',structureSensitivity);
+%gpu = gpuDevice(2);
+%gvol = gpuArray(vol);
+%loss_fun = @(params) vesselness_param_loss(params, gvol, sigma_from, sigma_to, sigma_step, pol, structureSensitivity, fm_cpu);
+%nvars = 3; % [alpha, beta, gamma]
+%fprintf('\nOptimizing alpha, beta, gamma for best match (particleswarm)...\n');
+%opts = optimoptions('particleswarm', ...
+%    'Display','iter', ...
+%    'MaxIterations', Inf, ...     % Increase for better results
+%    'SwarmSize', 10, ...          % Increase for thorough search
+%    'UseParallel', false);        % If you have Parallel Toolbox
+%lb = [0, 0, 0]; % Lower bounds for alpha, beta, gamma
+%ub = [1, 1, 1000]; % Upper bounds for alpha, beta, gamma
+%[xopt, fval, exitflag, output] = particleswarm(loss_fun, nvars, lb, ub, opts);
+%alpha = xopt(1);
+%beta  = xopt(2);
+%gamma = xopt(3);
+%fprintf('\nOptimal params: alpha=%.4f, beta=%.4f, gamma=%.2f (mean diff=%.5g)\n', alpha, beta, gamma, fval);
 
 for i = 1:2
     pol = polarities{i};
