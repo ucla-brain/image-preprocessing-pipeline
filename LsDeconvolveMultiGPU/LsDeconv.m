@@ -1206,48 +1206,44 @@ function num_cpu_sockets = get_num_cpu_sockets()
 end
 
 function showinfo()
-    disp('Usage: LsDeconv TIFDIR DELTAXY DELTAZ nITER NA RI LAMBDA_EX LAMBDA_EM FCYL SLITWIDTH DAMPING HISOCLIP STOP_CRIT MEM_PERCENT');
+    disp('Usage: LsDeconv TIFDIR DELTAXY DELTAZ nITER NA RI LAMBDA_EX LAMBDA_EM FCYL SLITWIDTH DAMPING HISOCLIP STOP_CRIT BLOCK_SIZE_MAX GPU AMPLIFICATION GAUSSIAN_SIGMA DARK DESTRIPE_SIGMA FIBERMETRIC_SIGMA REGULARIZE_INTERVAL RESUME STARTING_BLOCK CONVERT_TO_8BIT CONVERT_TO_16BIT USE_FFT ADAPTIVE_PSF ACCELERATE CACHE_DRIVE');
     disp(' ');
-    disp('TIFFDIR: Directory containing the 2D-tiff files to be deconvolved(16-bit 0r 32bit float grayscale images supported).');
-    disp('The images are expected to be formated with numerical endings, as e.g. xx00001.tif, xx00002.tif, ... xx00010.tif....');
+    disp('TIFFDIR: Directory of 2D TIFF files (8/16/32-bit grayscale). Numerical filenames like xx00001.tif, xx00002.tif, ...');
+    disp('DELTAXY DELTAZ: Voxel size in nanometers [XY Z]. E.g., 250 500 means 250 nm XY, 500 nm Z.');
+    disp('nITER: Maximum number of Richardson-Lucy iterations.');
+    disp('NA: Numerical aperture of objective.');
+    disp('RI: Refractive index of imaging medium/sample.');
+    disp('LAMBDA_EX / LAMBDA_EM: Excitation / emission wavelength in nm.');
+    disp('FCYL: Focal length (mm) of cylinder lens for light sheet.');
+    disp('SLITWIDTH: Slit width (mm) before cylinder lens (NaLs = sin(arctan(w/(2*f))).');
+    disp('DAMPING: Regularization/damping factor [0-10%]. Higher for noisy data.');
+    disp('HISOCLIP: Histogram clip % [0-5]. 0 disables, 0.01 clips 0.01 and 99.99 percentile.');
+    disp('STOP_CRIT: Stopping criterion as percent change per iteration.');
+    disp('BLOCK_SIZE_MAX: Maximum block size for splitting large data (in elements).');
+    disp('GPU: List of GPU IDs to use (0 for CPU only, or e.g. [0 1 2]).');
+    disp('AMPLIFICATION: Additional signal scaling factor.');
+    disp('GAUSSIAN_SIGMA: 3D Gaussian filter sigma (pixels).');
+    disp('DARK: 1 to invert input image for dark objects, 0 for bright.');
+    disp('DESTRIPE_SIGMA: Destripe filter sigma (pixels) [0 disables].');
+    disp('FIBERMETRIC_SIGMA: [start step end] for vesselness filter (0 disables).');
+    disp('REGULARIZE_INTERVAL: Number of iterations between regularization steps.');
+    disp('RESUME: 1 to resume from existing cache, 0 to start fresh.');
+    disp('STARTING_BLOCK: Index to start block-wise deconvolution from.');
+    disp('CONVERT_TO_8BIT / CONVERT_TO_16BIT: Convert output to 8-bit/16-bit (logical).');
+    disp('USE_FFT: 1 to use FFT-based convolution, 0 for direct.');
+    disp('ADAPTIVE_PSF: 1 to enable adaptive PSF computation.');
+    disp('ACCELERATE: 1 to enable acceleration mode (approx. RL or Nesterov).');
+    disp('CACHE_DRIVE: Path to cache directory for block outputs/temp files.');
     disp(' ');
-    disp('DELTAXY DELTAZ: xy- and z-Size of a voxel in nanometer. Choosing e.g. 250 500 means that a voxel is 250 nm x 250 nm wide in x- and y-direction');
-    disp('and 500 nm wide in z-direction (vertical direction). Values depend on the total magnification of the microscope and the camera chip.');
+    disp('Example:');
+    disp('  LsDeconv ./images 250 500 20 1.0 1.333 488 520 50 1.0 0 0.01 2 500000000 0 1.0 1 0 0 0 [1 1 1] 0 1 0 1 0 0 ./cache');
     disp(' ');
-    disp('nITER: max. number of iterations for Lucy-Richardson algorithm. Deconvolution stops before if stop_crit is reached.');
-    disp(' ');
-    disp('NA: numerical aperture of the objective.');
-    disp(' ');
-    disp('RI: refractive index of imaging medium and sample');
-    disp(' ');
-    disp('LAMBDA_EX: fluorescence excitation wavelength in nanometer.');
-    disp(' ');
-    disp('LAMBDA_EM: fluorescence emmision wavelength in nanometer.');
-    disp(' ');
-    disp('FCYL: focal length f in millimeter of the cylinder lens used for light sheet generation.');
-    disp(' ');
-    disp('SLITWIDTH: full width w in millimeter of the slit aperture placed in front of the cylinder lens. The NA of the light sheet');
-    disp('generator system is calculated as NaLs = sin(arctan(w/(2*f))');
-    disp(' ');
-    disp('DAMPING: parameter between 0% and 10%. Increase value for images that are noisy. For images with');
-    disp('good signal to noise ratio the damping parameter should be set to zero (no damping at all)');
-    disp(' ');
-    disp('HISTOCLIP: percent value between 0 and 5 percent. If HISTOCLIP is set e.g. to 0.01% then the histogram of the deconvolved');
-    disp('stack is clipped at the 0.01 and the 99.99 percentile and the remaininginte intensity values are scaled to the full range (0...65535');
-    disp('in case of of 16 bit images, and 0...Imax in case of 32 bit float images, where Imax is the highest intensity value');
-    disp('occuring in the source stack');
-    disp(' ');
-    disp('STOP_CRIT: I the pecentual change to the last iteration step becomes lower than STOP_CRIT the deconvolution of the current');
-    disp('block is finished. If STOP_CRIT is e.g. set to 2% then the iteration stops, if there is less than 2% percent');
-    disp('change compared to the last iteration step.');
-    disp(' ');
-    disp('MEM_PERCENT: percent of RAM (or GPU memory, respectivbely, that can maximally by occopied by a data block. If the size of the image stack');
-    disp('is larger than MEM_PERCENT * RAMSIZE / 100, the data set is split into blocks that are deconvolved sequentially and then stitched.');
-    disp('A value of 4% usually is a good choice when working on CPU, a value of 50% when using the GPU. Decrease this value if other memory consuming');
-	disp('programs are active.');
-    disp(' ');
-    disp('GPU: 0 = peform convolutions on CPU, 1 = perform convolutions on GPU');
+    disp('Notes:');
+    disp('- Supports block-based, multi-GPU, resumable deconvolution with advanced options.');
+    disp('- Cache directory is created automatically if it does not exist.');
+    disp('- Input images must be grayscale, single-channel, and ordered numerically.');
 end
+
 
 function p_log(log_file, message)
     disp(message);
