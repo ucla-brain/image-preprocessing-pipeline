@@ -37,7 +37,7 @@ function [] = LsDeconv(varargin)
         disp(datetime('now'));
 
         % make sure correct number of parameters specified
-        if nargin < 29
+        if nargin ~= 29
             showinfo();
             return
         end
@@ -1319,3 +1319,4 @@ function bl = apply_fibermetric_filter(bl, sigma, polarity)
         % bl = bl; % (implicit)
     end
 end
+
