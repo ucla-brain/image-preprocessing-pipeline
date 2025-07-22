@@ -466,7 +466,7 @@ def main():
         f"    [{gaussian_sigma_str}], ...\n"
         f"    {args.denoise_strength}, ...\n"
         f"    {args.destripe_sigma}, ...\n"
-        f"    {fibermetric_sigma_str}, ..."
+        f"    [{fibermetric_sigma_str}], ..."
         f"    {args.regularize_interval}, ...\n"
         f"    {int(args.resume)}, ...\n"
         f"    {args.start_block}, ...\n"
