@@ -170,6 +170,7 @@ def estimate_block_size_max(gpu_indices, workers_per_gpu, use_fft,
 
     return max_allowed
 
+
 def resolve_path(p):
     p = Path(p)
     if not p.exists():
@@ -590,12 +591,13 @@ def main():
                 log.info("Terminating MATLAB process tree...")
                 if is_windows:
                     subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], shell=True)
+                    subprocess.run(["taskkill", "/F", "/IM", "MathWorksService.exe"], shell=True)
                 else:
                     os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-                killed = True
+                    subprocess.run(["pkill", "-u", str(os.getuid()), "-f", "MathWorksService"], check=False)
             except Exception as e:
-                log.warning(f"Failed to terminate MATLAB process: {e}")
-            if not killed:
+                log.warning(f"Failed to terminate MATLAB or service process: {e}")
+            if proc and proc.poll() is None:
                 try:
                     proc.terminate()
                     proc.wait(timeout=5)
@@ -604,11 +606,10 @@ def main():
                 except Exception as e:
                     log.warning(f"Fallback termination also failed: {e}")
         raise SystemExit("Execution interrupted by user.")
-
     finally:
-        if not args.dry_run and tmp_script_path.exists():
-            log.info("Cleaning up temporary MATLAB script...")
-            tmp_script_path.unlink(missing_ok=True)
+            if not args.dry_run and tmp_script_path.exists():
+                log.info("Cleaning up temporary MATLAB script...")
+                tmp_script_path.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":
