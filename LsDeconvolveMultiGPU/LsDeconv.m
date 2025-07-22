@@ -37,7 +37,7 @@ function [] = LsDeconv(varargin)
         disp(datetime('now'));
 
         % make sure correct number of parameters specified
-        if nargin < 28
+        if nargin < 29
             showinfo();
             return
         end
@@ -63,15 +63,16 @@ function [] = LsDeconv(varargin)
         filter.gaussian_sigma = varargin{17};
         filter.dark = varargin{18};
         filter.destripe_sigma = varargin{19};
-        filter.regularize_interval = varargin{20};
-        resume = varargin{21};
-        starting_block = varargin{22};
-        convert_to_8bit = varargin{23};
-        convert_to_16bit = varargin{24};
-        filter.use_fft = varargin{25};
-        filter.adaptive_psf = varargin{26};
-        filter.accelerate = varargin{27};
-        cache_drive = varargin{28};
+        filter.fibermetric_sigma = varargin{20};
+        filter.regularize_interval = varargin{21};
+        resume = varargin{22};
+        starting_block = varargin{23};
+        convert_to_8bit = varargin{24};
+        convert_to_16bit = varargin{25};
+        filter.use_fft = varargin{26};
+        filter.adaptive_psf = varargin{27};
+        filter.accelerate = varargin{28};
+        cache_drive = varargin{29};
         if ~exist(cache_drive, 'dir')
             mkdir(cache_drive);
             disp('Cache drive dir created: ' + cache_drive)
@@ -974,10 +975,9 @@ function bl = process_block(bl, block, psf, niter, lambda, stop_criterion, filte
     % gamma – normalization for the "second order structureness" (S): often set high, e.g., 15² or 500
     % Object is brighter than background	'bright'
     % Object is darker than background	'dark'
-    sigma_from = 1; sigma_to = 4; sigma_step = 1;
-    alpha=0.2640; beta=0.9963; gamma=127.98;
-
-    bl = fibermetric_gpu(bl, sigma_from, sigma_to, sigma_step, alpha, beta, gamma, 'bright');
+    % sigma_from = 1; sigma_to = 4; sigma_step = 1;
+    % alpha=0.2640; beta=0.9963; gamma=127.98;
+    % bl = fibermetric_gpu(bl, sigma_from, sigma_to, sigma_step, alpha, beta, gamma, 'bright');
 
     % since prctile function needs high vram usage gather it to avoid low memory error
     if gpu && isgpuarray(bl)
@@ -986,7 +986,8 @@ function bl = process_block(bl, block, psf, niter, lambda, stop_criterion, filte
         reset(gpu_device);  % to free 2 extra copies of bl in gpu
         semaphore('p', semkey_gpu_base + gpu);
     end
-    % bl = fibermetric(bl);
+
+    bl = apply_fibermetric_filter(bl, filter.fibermetric_sigma, 'Bright');
 
     assert(all(size(bl) == bl_size), '[process_block]: block size mismatch!');
 end
@@ -1283,4 +1284,38 @@ function [lb, ub] = deconvolved_stats(bl, clipval)
     stats = single(fast_twin_tail_orderstat(bl, [(100 - clipval) clipval]));
     lb = stats(1);
     ub = stats(2);
+end
+
+function bl = apply_fibermetric_filter(bl, sigma, polarity)
+% APPLY_FIBERMETRIC_FILTER  Robust wrapper for MATLAB's fibermetric filter
+%
+%   bl = APPLY_FIBERMETRIC_FILTER(bl, sigma, polarity)
+%
+%   - bl:        Input 2D or 3D image/volume
+%   - sigma:     [start step end] for sigma range, all positive, step > 0
+%   - polarity:  'Bright' (default) or 'Dark'
+%
+%   Returns:
+%     bl:        Filtered image, or input if disabled/invalid
+
+    arguments
+        bl
+        sigma (1,3) double = [0 0 0]
+        polarity char {mustBeMember(polarity,{'Bright','Dark'})} = 'Bright'
+    end
+
+    if all(sigma > 0) && sigma(2) > 0 && sigma(1) <= sigma(3)
+        sigma_range = sigma(1):sigma(2):sigma(3);
+        if isempty(sigma_range)
+            warning('Fibermetric sigma range is empty. No filtering applied.');
+            % bl = bl; % (implicit)
+        else
+            bl = fibermetric(bl, sigma_range, polarity);
+        end
+    else
+        if any(sigma > 0)
+            warning('Invalid fibermetric_sigma: [start step end] must all be > 0, step > 0, start <= end. No filtering applied.');
+        end
+        % bl = bl; % (implicit)
+    end
 end

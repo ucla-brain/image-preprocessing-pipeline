@@ -177,6 +177,22 @@ def resolve_path(p):
     return p.resolve()
 
 
+def validate_fibermetric_sigma(sigma_args):
+    if len(sigma_args) != 3:
+        raise ValueError("fibermetric-sigma must have exactly 3 values: [start step end]")
+    start, step, end = sigma_args
+    if any(s < 0 for s in sigma_args):
+        raise ValueError("All values for fibermetric-sigma must be non-negative.")
+    if step < 0:
+        raise ValueError("Step must be non-negative.")
+    if start == step == end == 0:
+        return False  # Disabled
+    if end < start:
+        raise ValueError("End sigma must be greater than or equal to start sigma.")
+    if step == 0 and end > start:
+        raise ValueError("Step cannot be zero unless using a fixed sigma.")
+
+
 def validate_args(args):
     args.input = resolve_path(args.input)
 
@@ -221,6 +237,8 @@ def validate_args(args):
 
     if args.adaptive_psf and not args.use_fft:
         raise RuntimeError("--adaptive-psf and --use-fft should be used simultaneously.")
+
+    validate_fibermetric_sigma(args.fibermetric_sigma)
 
 
 def count_lz4_blocks(cache_dir):
@@ -316,6 +334,11 @@ def main():
                              'Set to 0 to disable destriping. '
                              'A value around 1000 is recommended for older cameras to remove stripe artifacts; '
                              'for most modern cameras, destriping is usually unnecessary.')
+    parser.add_argument('--fibermetric-sigma', type=float, nargs=3, metavar=('START', 'STEP', 'END'), default=[0, 0, 0],
+                        help='Sigma parameters for built-in fibermetric filter of MATLAB: '
+                             '[start step end]. Example: --fibermetric-sigma 1 0.5 3 applies sigmas 1, 1.5, 2, 2.5, 3. '
+                             'Use [0 0 0] to disable filtering. All values must be non-negative.'
+                        )
     parser.add_argument('--regularize-interval', type=int, default=3,
                         help='Apply a 3D Gaussian smoothing filter (σ=0.5) to the deconvolved volume every N iterations. '
                              'Set to 0 to disable both smoothing and blind deconvolution.')
@@ -385,6 +408,7 @@ def main():
 
     gpu_indices_str = ' '.join(str(i) for i in final_gpu_indices)
     gaussian_sigma_str = ' '.join(str(i) for i in args.gaussian_sigma)
+    fibermetric_sigma_str = ' '.join(str(i) for i in args.fibermetric_sigma_str)
     cache_drive_folder = Path(args.input) / f"cache_deconvolution_Ex_{args.lambda_ex}_Em_{args.lambda_em}"
     if args.cache_drive:
         if not Path(args.cache_drive).exists():
@@ -442,6 +466,7 @@ def main():
         f"    [{gaussian_sigma_str}], ...\n"
         f"    {args.denoise_strength}, ...\n"
         f"    {args.destripe_sigma}, ...\n"
+        f"    {fibermetric_sigma_str}, ..."
         f"    {args.regularize_interval}, ...\n"
         f"    {int(args.resume)}, ...\n"
         f"    {args.start_block}, ...\n"
