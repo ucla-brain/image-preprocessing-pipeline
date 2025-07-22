@@ -408,7 +408,7 @@ def main():
 
     gpu_indices_str = ' '.join(str(i) for i in final_gpu_indices)
     gaussian_sigma_str = ' '.join(str(i) for i in args.gaussian_sigma)
-    fibermetric_sigma_str = ' '.join(str(i) for i in args.fibermetric_sigma_str)
+    fibermetric_sigma_str = ' '.join(str(i) for i in args.fibermetric_sigma)
     cache_drive_folder = Path(args.input) / f"cache_deconvolution_Ex_{args.lambda_ex}_Em_{args.lambda_em}"
     if args.cache_drive:
         if not Path(args.cache_drive).exists():
