@@ -1306,7 +1306,7 @@ function bl = apply_fibermetric_filter(bl, sigma, polarity)
             warning('Fibermetric sigma range is empty. No filtering applied.');
             % bl = bl; % (implicit)
         else
-            bl = fibermetric(bl, sigma_range, polarity);
+            bl = fibermetric(bl, sigma_range, ObjectPolarity=polarity);
         end
     else
         if any(sigma > 0)
