@@ -184,7 +184,6 @@ void swapCUDA(T& a, T& b) noexcept
     b = temp;
 }
 
-
 // Robust 3x3 symmetric matrix eigenvalue solver
 __device__ __host__ __forceinline__
 void computeSymmetricEigenvalues3x3(
