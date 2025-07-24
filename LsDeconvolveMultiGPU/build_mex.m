@@ -321,12 +321,12 @@ function build_mex(debug)
     
     %fprintf('\n[MEX] Compiling CPU modules …\n');
     %mex(mex_cpu{:}, 'eig3volume.c');
-    mex(mex_cpu{:}, 'fast_twin_tail_orderstat.cpp');
-    mex(mex_cpu{:}, 'semaphore.c');
-    mex(mex_cpu{:}, 'save_lz4_mex.c', lz4_incflag, lz4_libfile);
-    mex(mex_cpu{:}, 'load_lz4_mex.c', lz4_incflag, lz4_libfile);
-    mex(mex_cpu{:}, inc_tiff, inc_hwloc, 'load_bl_tif.cpp', 'mex_thread_utils.cpp', link_tiff{:}, link_hwloc{:});
-    mex(mex_cpu{:}, inc_tiff, inc_hwloc, 'load_slab_lz4_save_as_tif.cpp', 'mex_thread_utils.cpp', lz4_incflag, lz4_libfile, link_tiff{:}, link_hwloc{:});
+    %mex(mex_cpu{:}, 'fast_twin_tail_orderstat.cpp');
+    %mex(mex_cpu{:}, 'semaphore.c');
+    %mex(mex_cpu{:}, 'save_lz4_mex.c', lz4_incflag, lz4_libfile);
+    %mex(mex_cpu{:}, 'load_lz4_mex.c', lz4_incflag, lz4_libfile);
+    %mex(mex_cpu{:}, inc_tiff, inc_hwloc, 'load_bl_tif.cpp', 'mex_thread_utils.cpp', link_tiff{:}, link_hwloc{:});
+    %mex(mex_cpu{:}, inc_tiff, inc_hwloc, 'load_slab_lz4_save_as_tif.cpp', 'mex_thread_utils.cpp', lz4_incflag, lz4_libfile, link_tiff{:}, link_hwloc{:});
     
     % mex(mex_cpu{:}, inc_tiff, inc_hwloc, 'save_bl_tif.cpp', 'mex_thread_utils.cpp', link_tiff{:}, link_hwloc{:});
     % mex(mex_cpu{:}, 'load_slab_lz4.cpp', lz4_incflag, lz4_libfile);
@@ -345,7 +345,6 @@ function build_mex(debug)
         if debug
             nvccflags = sprintf('NVCCFLAGS="$NVCCFLAGS -allow-unsupported-compiler -G %s"', gencode_flags);
         else
-            %nvccflags = sprintf('NVCCFLAGS="$NVCCFLAGS -allow-unsupported-compiler -Xcompiler=/O2,/arch:%s,-D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH %s"', instr, gencode_flags);
             nvccflags = sprintf(['NVCCFLAGS="$NVCCFLAGS -allow-unsupported-compiler -Xcompiler=/O2,/arch:%s,/openmp,-D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH %s"'], ...
             instr, gencode_flags);
         end
@@ -353,12 +352,12 @@ function build_mex(debug)
         if debug
             nvccflags = sprintf('NVCCFLAGS="$NVCCFLAGS -G %s"', gencode_flags);
         else
-            %nvccflags = sprintf('NVCCFLAGS="$NVCCFLAGS -use_fast_math -Xcompiler=-Ofast,-flto=%d %s"', ncores, gencode_flags);
             nvccflags = sprintf(['NVCCFLAGS="$NVCCFLAGS -use_fast_math -Xcompiler=-Ofast,-flto=%d,-mavx2,-fopenmp %s"'], ncores, gencode_flags);
         end
     end
     % cufft_link = strsplit(strtrim(fft_lib()));
     mexcuda('-R2018a', nvccflags, 'fibermetric_gpu.cu');
+    return
     mexcuda('-R2018a', nvccflags, 'gauss3d_gpu.cu');
     mexcuda('-R2018a', nvccflags, 'conv3d_gpu.cu');
 

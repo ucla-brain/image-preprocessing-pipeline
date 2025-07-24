@@ -980,14 +980,13 @@ function bl = process_block(bl, block, psf, niter, lambda, stop_criterion, filte
     % bl = fibermetric_gpu(bl, sigma_from, sigma_to, sigma_step, alpha, beta, gamma, 'bright');
 
     % since prctile function needs high vram usage gather it to avoid low memory error
+    bl = apply_fibermetric_filter(bl, filter.fibermetric_sigma, 'Bright');
     if gpu && isgpuarray(bl)
         % Reseting the GPU
         bl = gather(bl);
         reset(gpu_device);  % to free 2 extra copies of bl in gpu
         semaphore('p', semkey_gpu_base + gpu);
     end
-
-    bl = apply_fibermetric_filter(bl, filter.fibermetric_sigma, 'Bright');
 
     assert(all(size(bl) == bl_size), '[process_block]: block size mismatch!');
 end
@@ -1244,7 +1243,6 @@ function showinfo()
     disp('- Input images must be grayscale, single-channel, and ordered numerically.');
 end
 
-
 function p_log(log_file, message)
     disp(message);
     fprintf(log_file, '%s\r\n', message);
@@ -1306,7 +1304,11 @@ function bl = apply_fibermetric_filter(bl, sigma, polarity)
             warning('Fibermetric sigma range is empty. No filtering applied.');
             % bl = bl; % (implicit)
         else
-            bl = fibermetric(bl, sigma_range, ObjectPolarity=polarity);
+            alpha=0.5;
+            beta =0.5;
+            structureSensitivity=0.5;
+            bl = fibermetric_gpu(bl, sigma(1), sigma(3), sigma(2), alpha, beta, polarity, structureSensitivity);
+            % bl = fibermetric(bl, sigma_range, ObjectPolarity=polarity, 'StructureSensitivity', structureSensitivity);
         end
     else
         if any(sigma > 0)

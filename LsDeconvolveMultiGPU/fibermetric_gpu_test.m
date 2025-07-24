@@ -1,6 +1,77 @@
+%clear; clc;
+%gpu=gpuDevice(2);
+%
+%% --- Compare Hessian outputs ---
+%sz = [128 128 32];
+%sigma = 4;
+%rng(42);
+%vol = rand(sz, 'single');
+%
+%% Padding for CPU side (to replicate what GPU will process without boundary issues)
+%padSize = ceil(3 * sigma);
+%padShape = [padSize padSize padSize];
+%vol_padded = padarray(vol, padShape, 'replicate', 'both');
+%
+%% === Run MATLAB version on padded volume ===
+%[Dxx_cpu, Dyy_cpu, Dzz_cpu, Dxy_cpu, Dxz_cpu, Dyz_cpu] = Hessian3D(vol, sigma);
+%
+%% === Run GPU MEX version ===
+%gvol = gpuArray(vol_padded);
+%[Dxx_gpu, Dyy_gpu, Dzz_gpu, Dxy_gpu, Dxz_gpu, Dyz_gpu, eig1_gpu, eig2_gpu, eig3_gpu] = ...
+%    fibermetric_gpu(gvol, sigma, sigma, 1, 0, 0, 0, 'bright', 1);
+%
+%% Gather & crop to match CPU unpadded result
+%cropX = padShape(1)+1 : padShape(1)+sz(1);
+%cropY = padShape(2)+1 : padShape(2)+sz(2);
+%cropZ = padShape(3)+1 : padShape(3)+sz(3);
+%Dxx_gpu = gather(Dxx_gpu(cropX, cropY, cropZ));
+%Dyy_gpu = gather(Dyy_gpu(cropX, cropY, cropZ));
+%Dzz_gpu = gather(Dzz_gpu(cropX, cropY, cropZ));
+%Dxy_gpu = gather(Dxy_gpu(cropX, cropY, cropZ));
+%Dxz_gpu = gather(Dxz_gpu(cropX, cropY, cropZ));
+%Dyz_gpu = gather(Dyz_gpu(cropX, cropY, cropZ));
+%eig1_gpu = gather(eig1_gpu(cropX, cropY, cropZ));
+%eig2_gpu = gather(eig2_gpu(cropX, cropY, cropZ));
+%eig3_gpu = gather(eig3_gpu(cropX, cropY, cropZ));
+%
+%% === Run eig3volume.c (CPU reference) ===
+%[e1_ref, e2_ref, e3_ref] = eig3volume(Dxx_cpu, Dxy_cpu, Dxz_cpu, Dyy_cpu, Dyz_cpu, Dzz_cpu);
+%
+%% === Compare Hessian derivatives ===
+%fprintf('\n== HESSIAN COMPARISON ==\n');
+%fprintf('Max abs diff (Dxx): %g\n', max(abs(Dxx_cpu(:) - Dxx_gpu(:))));
+%fprintf('Max abs diff (Dyy): %g\n', max(abs(Dyy_cpu(:) - Dyy_gpu(:))));
+%fprintf('Max abs diff (Dzz): %g\n', max(abs(Dzz_cpu(:) - Dzz_gpu(:))));
+%fprintf('Max abs diff (Dxy): %g\n', max(abs(Dxy_cpu(:) - Dxy_gpu(:))));
+%fprintf('Max abs diff (Dxz): %g\n', max(abs(Dxz_cpu(:) - Dxz_gpu(:))));
+%fprintf('Max abs diff (Dyz): %g\n', max(abs(Dyz_cpu(:) - Dyz_gpu(:))));
+%
+%% === Compare eigenvalues ===
+%% Sort eigenvalues by abs value ascending
+%% eig_ref = sort(abs(cat(4, e1_ref, e2_ref, e3_ref)), 4);
+%% eig_gpu = sort(abs(cat(4, eig1_gpu, eig2_gpu, eig3_gpu)), 4);
+%% 
+%% e1_ref = eig_ref(:,:,:,1);  e2_ref = eig_ref(:,:,:,2);  e3_ref = eig_ref(:,:,:,3);
+%% eig1_gpu = eig_gpu(:,:,:,1); eig2_gpu = eig_gpu(:,:,:,2); eig3_gpu = eig_gpu(:,:,:,3);
+%
+%
+%fprintf('\n== EIGENVALUE COMPARISON (GPU vs eig3volume.c) ==\n');
+%fprintf('Max abs diff (eig1): %g\n', max(abs(e1_ref(:) - eig1_gpu(:))));
+%fprintf('Max abs diff (eig2): %g\n', max(abs(e2_ref(:) - eig2_gpu(:))));
+%fprintf('Max abs diff (eig3): %g\n', max(abs(e3_ref(:) - eig3_gpu(:))));
+%
+%% === Optional visualization ===
+%midz = round(sz(3)/2);
+%figure('Name', 'Hessian Comparison: Dxx');
+%subplot(1,2,1); imagesc(Dxx_cpu(:,:,midz)); axis image; title('Dxx CPU');
+%subplot(1,2,2); imagesc(Dxx_gpu(:,:,midz)); axis image; title('Dxx GPU');
+%
+%figure('Name', 'Eigenvalue Comparison: eig1');
+%subplot(1,2,1); imagesc(e1_ref(:,:,midz)); axis image; title('eig1 CPU');
+%subplot(1,2,2); imagesc(eig1_gpu(:,:,midz)); axis image; title('eig1 GPU');
+
 % benchmark_fibermetric_gpu_gpuonly.m
 % Compare MATLAB's fibermetric (CPU) and your fibermetric_gpu (gpuArray only), both 'bright' and 'dark'
-%clear; clc;
 
 fprintf('\n==== Benchmark: fibermetric (CPU) vs fibermetric_gpu (gpuArray only) [bright/dark] ====\n');
 
@@ -10,30 +81,9 @@ vol = imgaussfilt3(rand(sz, 'single'), 2);
 vol = single(mat2gray(vol));
 polarities = {'dark', 'bright'};
 
-sigma_from = 1; sigma_to = 4; sigma_step = 1;
-alpha = 0.5; beta = 0.5; gamma = 15;
+sigma_from = 4; sigma_to = 4; sigma_step = 1;
+alpha = 0.5; beta = 0.5; structureSensitivity = 0.5;
 pol = 'bright'; % or 'dark'—do both if you want
-structureSensitivity = eps('single');
-
-% Find alpha, beta, and gamma with optimization
-%fm_cpu = fibermetric(vol, sigma_from:sigma_step:sigma_to, 'ObjectPolarity', pol, 'StructureSensitivity',structureSensitivity);
-%gpu = gpuDevice(2);
-%gvol = gpuArray(vol);
-%loss_fun = @(params) vesselness_param_loss(params, gvol, sigma_from, sigma_to, sigma_step, pol, structureSensitivity, fm_cpu);
-%nvars = 3; % [alpha, beta, gamma]
-%fprintf('\nOptimizing alpha, beta, gamma for best match (particleswarm)...\n');
-%opts = optimoptions('particleswarm', ...
-%    'Display','iter', ...
-%    'MaxIterations', Inf, ...     % Increase for better results
-%    'SwarmSize', 10, ...          % Increase for thorough search
-%    'UseParallel', false);        % If you have Parallel Toolbox
-%lb = [0, 0, 0]; % Lower bounds for alpha, beta, gamma
-%ub = [1, 1, 1000]; % Upper bounds for alpha, beta, gamma
-%[xopt, fval, exitflag, output] = particleswarm(loss_fun, nvars, lb, ub, opts);
-%alpha = xopt(1);
-%beta  = xopt(2);
-%gamma = xopt(3);
-%fprintf('\nOptimal params: alpha=%.4f, beta=%.4f, gamma=%.2f (mean diff=%.5g)\n', alpha, beta, gamma, fval);
 
 for i = 1:2
     pol = polarities{i};
@@ -41,13 +91,13 @@ for i = 1:2
 
     % --- 1. MATLAB fibermetric (CPU, reference)
     t1 = tic;
-    fm_cpu = fibermetric(vol, sigma_from:sigma_step:sigma_to, 'ObjectPolarity', pol);
+    fm_cpu = fibermetric(vol, sigma_from:sigma_step:sigma_to, 'ObjectPolarity', pol, 'StructureSensitivity', structureSensitivity);
     tcpu = toc(t1);
 
     % --- 2. fibermetric_gpu with gpuArray input ONLY
     gvol = gpuArray(vol);
     t2 = tic;
-    fm_gpu = fibermetric_gpu(gvol, sigma_from, sigma_to, sigma_step, alpha, beta, gamma, pol, structureSensitivity);
+    fm_gpu = fibermetric_gpu(gvol, sigma_from, sigma_to, sigma_step, alpha, beta, pol, structureSensitivity);
     wait(gpu);
     tgpu_gpu = toc(t2);             
     fm_gpu = gather(fm_gpu);
