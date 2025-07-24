@@ -25,7 +25,7 @@
 #define M_PI 3.14159265358979323846
 #endif
 
-constexpr float GAUSS_HALFWIDTH_MULT = 4.0f;    // ±4σ for numerical support
+constexpr float GAUSS_HALFWIDTH_MULT = 8.0f;    // ±4σ for numerical support
 constexpr double FINITE_DIFF_5PT_DIVISOR = 12.0;
 constexpr int THREADS_PER_BLOCK = 256;
 
