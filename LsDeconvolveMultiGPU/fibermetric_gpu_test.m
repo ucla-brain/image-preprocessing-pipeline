@@ -81,7 +81,7 @@ vol = imgaussfilt3(rand(sz, 'single'), 2);
 vol = single(mat2gray(vol));
 polarities = {'dark', 'bright'};
 
-sigma_from = 4; sigma_to = 4; sigma_step = 1;
+sigma_from = 2; sigma_to = 2; sigma_step = 1;
 alpha = 0.5; beta = 0.5; structureSensitivity = 0.5;
 pol = 'bright'; % or 'dark'—do both if you want
 
@@ -91,7 +91,7 @@ for i = 1:2
 
     % --- 1. MATLAB fibermetric (CPU, reference)
     t1 = tic;
-    fm_cpu = fibermetric(vol, sigma_from:sigma_step:sigma_to, 'ObjectPolarity', pol, 'StructureSensitivity', structureSensitivity);
+    fm_cpu = fibermetric(vol, sigma_to, 'ObjectPolarity', pol, 'StructureSensitivity', structureSensitivity);
     tcpu = toc(t1);
 
     % --- 2. fibermetric_gpu with gpuArray input ONLY
