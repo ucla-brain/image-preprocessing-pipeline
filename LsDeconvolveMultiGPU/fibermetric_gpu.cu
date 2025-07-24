@@ -101,6 +101,16 @@ int linearIndex3D(int row, int col, int slice,
   return row + col * numRows + slice * numRows * numCols;
 }
 
+template<typename T>
+__device__ __host__ __forceinline__
+void inlineSwapCuda(T& a, T& b)
+{
+    T tmp = a;
+    a = b;
+    b = tmp;
+}
+
+
 // ───────────────────── 1-D SEPARABLE CONVOLUTION KERNEL ────────────────────
 template<int AXIS>
 __global__ void separableConvolution1DKernel(
@@ -284,8 +294,7 @@ void computeSymmetricEigenvalues3x3(float  A11, float  A22, float  A33,
   int    order[3]  = { 0,1,2 };
   for (int i = 0; i < 2; ++i)
     for (int j = i+1; j < 3; ++j)
-      if (absVal[i] > absVal[j])
-      { std::swap(absVal[i], absVal[j]); std::swap(order[i], order[j]); }
+      if (absVal[i] > absVal[j]) { inlineSwapCuda(absVal[i], absVal[j]); inlineSwapCuda(order[i], order[j]); }
 
   const double vals[3] = { x1, x2, x3 };
   lambda1 = vals[order[0]];
