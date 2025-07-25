@@ -16,12 +16,17 @@
     #define STRICMP strcasecmp
 #endif
 
+#define MAX_CONST_COEF_LEN 4096
+__constant__ float gCoef[MAX_CONST_COEF_LEN];
+__constant__ float dCoef[MAX_CONST_COEF_LEN];
+
 constexpr double SQRT_TWO_PI = 2.5066282746310002; // sqrt(2π)
 constexpr float TWO_PI_OVER_THREE = 2.0943951023931953f;
 constexpr float GAUSS_HALFWIDTH_MULT = 8.0f;
 constexpr float EPSILON = 1e-7f;
 constexpr int THREADS_PER_BLOCK = 512;
 constexpr double FINITE_DIFF_5PT_DIVISOR = 12.0;
+
 
 #define cudaCheck(call) \
     do { cudaError_t err = (call); if (err != cudaSuccess) \
@@ -81,6 +86,37 @@ void buildGaussianAndDerivativeKernelsDevice(
 
 //---------------- Separable 1D Convolution (fmaf, in-place option) -------------------------
 template<int AXIS>
+__global__ void separableConvolution1DConstKernel(
+    const float* __restrict__ input,  float* __restrict__ output,
+    int kernelLen, int nRows, int nCols, int nSlices, bool useGaussian)
+{
+    size_t idx    = size_t(blockIdx.x) * blockDim.x + threadIdx.x;
+    size_t total  = size_t(nRows) * nCols * nSlices;
+    if (idx >= total) return;
+
+    int row   = int(idx % nRows);
+    int col   = int((idx / nRows) % nCols);
+    int slice = int(idx / (size_t(nRows) * nCols));
+
+    int halfWidth = kernelLen >> 1;
+    float acc = 0.f;
+    for (int k = -halfWidth; k <= halfWidth; ++k)
+    {
+        int rr = row, cc = col, ss = slice;
+        if (AXIS == 0) rr += k;
+        if (AXIS == 1) cc += k;
+        if (AXIS == 2) ss += k;
+        rr = reflectCoord(rr, nRows);
+        cc = reflectCoord(cc, nCols);
+        ss = reflectCoord(ss, nSlices);
+
+        float coef = useGaussian ? gCoef[k + halfWidth] : dCoef[k + halfWidth];
+        acc = fmaf(coef, input[linearIndex3D(rr, cc, ss, nRows, nCols)], acc);
+    }
+    output[idx] = acc;
+}
+
+template<int AXIS>
 __global__ void separableConvolution1DDeviceKernelFlat(
     const float* __restrict__ input,  float* __restrict__ output,
     const float* __restrict__ kernelDev, int kernelLen,
@@ -96,45 +132,60 @@ __global__ void separableConvolution1DDeviceKernelFlat(
 
     int halfWidth = kernelLen >> 1;
     float acc = 0.f;
-
     for (int k = -halfWidth; k <= halfWidth; ++k)
     {
-        int rr = row, cc = col, ss = slice;   // start at current voxel
+        int rr = row, cc = col, ss = slice;
         if (AXIS == 0) rr += k;
         if (AXIS == 1) cc += k;
         if (AXIS == 2) ss += k;
-
-        // NEW: robust mirror padding for any dimension length (including 1)
         rr = reflectCoord(rr, nRows);
         cc = reflectCoord(cc, nCols);
         ss = reflectCoord(ss, nSlices);
 
-        acc = fmaf(kernelDev[k + halfWidth],
-                   input[linearIndex3D(rr, cc, ss, nRows, nCols)],
-                   acc);
+        acc = fmaf(kernelDev[k + halfWidth], input[linearIndex3D(rr, cc, ss, nRows, nCols)], acc);
     }
     output[idx] = acc;
 }
 
 void launchSeparableConvolutionDevice(
     int axis, const float* inputDev, float* outputDev, const float* kernelDev,
-    int kernelLen, int nRows, int nCols, int nSlices, int threadsPerBlock, cudaStream_t stream)
+    int kernelLen, int nRows, int nCols, int nSlices, int threadsPerBlock,
+    cudaStream_t stream, bool useGaussian, bool useConstMem)
 {
     size_t total = size_t(nRows) * nCols * nSlices;
     size_t nBlocks = (total + threadsPerBlock - 1) / threadsPerBlock;
-    if (axis == 0)
-        separableConvolution1DDeviceKernelFlat<0><<<nBlocks, threadsPerBlock, 0, stream>>>(
-            inputDev, outputDev, kernelDev, kernelLen, nRows, nCols, nSlices);
-    else if (axis == 1)
-        separableConvolution1DDeviceKernelFlat<1><<<nBlocks, threadsPerBlock, 0, stream>>>(
-            inputDev, outputDev, kernelDev, kernelLen, nRows, nCols, nSlices);
+    if (useConstMem && kernelLen <= MAX_CONST_COEF_LEN)
+    {
+        if (axis == 0)
+            separableConvolution1DConstKernel<0><<<nBlocks, threadsPerBlock, 0, stream>>>(
+                inputDev, outputDev, kernelLen, nRows, nCols, nSlices, useGaussian);
+        else if (axis == 1)
+            separableConvolution1DConstKernel<1><<<nBlocks, threadsPerBlock, 0, stream>>>(
+                inputDev, outputDev, kernelLen, nRows, nCols, nSlices, useGaussian);
+        else
+            separableConvolution1DConstKernel<2><<<nBlocks, threadsPerBlock, 0, stream>>>(
+                inputDev, outputDev, kernelLen, nRows, nCols, nSlices, useGaussian);
+    }
     else
-        separableConvolution1DDeviceKernelFlat<2><<<nBlocks, threadsPerBlock, 0, stream>>>(
-            inputDev, outputDev, kernelDev, kernelLen, nRows, nCols, nSlices);
-
+    {
+        if (axis == 0)
+            separableConvolution1DDeviceKernelFlat<0><<<nBlocks, threadsPerBlock, 0, stream>>>(
+                inputDev, outputDev, kernelDev, kernelLen, nRows, nCols, nSlices);
+        else if (axis == 1)
+            separableConvolution1DDeviceKernelFlat<1><<<nBlocks, threadsPerBlock, 0, stream>>>(
+                inputDev, outputDev, kernelDev, kernelLen, nRows, nCols, nSlices);
+        else
+            separableConvolution1DDeviceKernelFlat<2><<<nBlocks, threadsPerBlock, 0, stream>>>(
+                inputDev, outputDev, kernelDev, kernelLen, nRows, nCols, nSlices);
+    }
     cudaCheck(cudaPeekAtLastError());
 }
 
+void uploadCoefficientsToConstantMemory(const float* h_gCoef, const float* h_dCoef, int kernelLen)
+{
+    cudaCheck(cudaMemcpyToSymbol(gCoef, h_gCoef, kernelLen * sizeof(float), 0, cudaMemcpyHostToDevice));
+    cudaCheck(cudaMemcpyToSymbol(dCoef, h_dCoef, kernelLen * sizeof(float), 0, cudaMemcpyHostToDevice));
+}
 
 //-------------------- 5-point Second Derivative (fmaf, precompute squares) ----------------------
 template<int AXIS>
@@ -192,20 +243,21 @@ void launchCrossDerivativesDevice(
     const float* inputDev, float* Dxy, float* Dxz, float* Dyz,
     float* tmp1, float* tmp2,
     const float* derivKernelDev, const float* gaussKernelDev, int kernelLen,
-    int nRows, int nCols, int nSlices, int threadsPerBlock, cudaStream_t stream)
+    int nRows, int nCols, int nSlices, int threadsPerBlock, cudaStream_t stream,
+    bool useConstMem)
 {
     // Dxy: d2/dxdy
-    launchSeparableConvolutionDevice(0, inputDev, tmp1, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream);
-    launchSeparableConvolutionDevice(1, tmp1, tmp2, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream);
-    launchSeparableConvolutionDevice(2, tmp2, Dxy, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream);
+    launchSeparableConvolutionDevice(0, inputDev, tmp1, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/false, useConstMem);
+    launchSeparableConvolutionDevice(1, tmp1, tmp2, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/false, useConstMem);
+    launchSeparableConvolutionDevice(2, tmp2, Dxy, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/true, useConstMem);
     // Dxz: d2/dxdz
-    launchSeparableConvolutionDevice(0, inputDev, tmp1, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream);
-    launchSeparableConvolutionDevice(2, tmp1, tmp2, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream);
-    launchSeparableConvolutionDevice(1, tmp2, Dxz, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream);
+    launchSeparableConvolutionDevice(0, inputDev, tmp1, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/false, useConstMem);
+    launchSeparableConvolutionDevice(2, tmp1, tmp2, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/false, useConstMem);
+    launchSeparableConvolutionDevice(1, tmp2, Dxz, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/true, useConstMem);
     // Dyz: d2/dydz
-    launchSeparableConvolutionDevice(1, inputDev, tmp1, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream);
-    launchSeparableConvolutionDevice(2, tmp1, tmp2, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream);
-    launchSeparableConvolutionDevice(0, tmp2, Dyz, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream);
+    launchSeparableConvolutionDevice(1, inputDev, tmp1, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/false, useConstMem);
+    launchSeparableConvolutionDevice(2, tmp1, tmp2, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/false, useConstMem);
+    launchSeparableConvolutionDevice(0, tmp2, Dyz, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/true, useConstMem);
 }
 
 //-------------------- Eigenvalue Decomposition (fmaf, float only) ----------------------
@@ -397,6 +449,9 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
     cudaCheck(cudaGetDeviceProperties(&prop, deviceId));
     int threadsPerBlock = std::min(THREADS_PER_BLOCK, prop.maxThreadsPerBlock);
 
+    // Each array is half, each float is 4 bytes:
+    const int maxKernelLen = prop.totalConstMem / (2 * sizeof(float)); // 2 arrays: gCoef, dCoef
+
     //--- Inputs ---
     const mxGPUArray* input = mxGPUCreateFromMxArray(prhs[0]);
     if (mxGPUGetClassID(input) != mxSINGLE_CLASS || mxGPUGetNumberOfDimensions(input) != 3)
@@ -426,12 +481,13 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
     //--- Output Allocation ---
     mxGPUArray* output = mxGPUCreateGPUArray(3, dims, mxSINGLE_CLASS, mxREAL, MX_GPU_DO_NOT_INITIALIZE);
     float* outputDev = static_cast<float*>(mxGPUGetData(output));
-    size_t bytes = n * sizeof(float);
+    cudaCheck(cudaMemset(outputDev, 0, n * sizeof(float)));
 
     //--- Workspace Buffers ---
     float *tmp1, *tmp2;
-    cudaCheck(cudaMalloc(&tmp1, bytes));
-    cudaCheck(cudaMalloc(&tmp2, bytes));
+    size_t bytes = n * sizeof(float);
+    cudaCheck(cudaMalloc(&tmp1,   bytes));
+    cudaCheck(cudaMalloc(&tmp2,   bytes));
 
     // --- Allocate Hessian and eigenvalue arrays ---
     float *Dxx, *Dyy, *Dzz, *Dxy, *Dxz, *Dyz, *l1, *l2, *l3;
@@ -464,10 +520,6 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
     cudaGraph_t graph = nullptr;
     cudaGraphExec_t graphExec = nullptr;
 
-    //---- **Key fix: Zero output buffer before projection** ----
-    cudaCheck(cudaMemsetAsync(outputDev, 0, n * sizeof(float), stream));
-    cudaCheck(cudaStreamSynchronize(stream));
-
     //--- Main Loop Over Scales ---
     for (size_t sigmaIdx = 0; sigmaIdx < sigmaList.size(); ++sigmaIdx) {
         double sigma = sigmaList[sigmaIdx];
@@ -479,6 +531,15 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         int kernelLen = 2 * halfWidth + 1;
         buildGaussianAndDerivativeKernelsDevice(gaussKernelDev, derivKernelDev, kernelLen, sigma, threadsPerBlock);
 
+        // --- Upload kernels to constant memory if eligible ---
+        bool useConstMem = (kernelLen <= maxKernelLen) && (kernelLen <= MAX_CONST_COEF_LEN);
+        if (useConstMem) {
+            std::vector<float> gaussHost(kernelLen), derivHost(kernelLen);
+            cudaCheck(cudaMemcpy(gaussHost.data(), gaussKernelDev, kernelLen * sizeof(float), cudaMemcpyDeviceToHost));
+            cudaCheck(cudaMemcpy(derivHost.data(), derivKernelDev, kernelLen * sizeof(float), cudaMemcpyDeviceToHost));
+            uploadCoefficientsToConstantMemory(gaussHost.data(), derivHost.data(), kernelLen);
+        }
+
         // --- (Re)calculate constants as needed ---
         float sigmaSq = float(sigma * sigma);
         const float inv2Alpha2 = static_cast<float>(1.0 / (2.0 * double(alpha) * double(alpha)));
@@ -487,30 +548,22 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         const float inv2Gamma2 = static_cast<float>(1.0 / (2.0 * double(gamma) * double(gamma)));
 
         // --- Clean up any old graph (always recapture per sigma for correctness) ---
-        if (graphExec) {
-            cudaCheck(cudaGraphExecDestroy(graphExec));
-            graphExec = nullptr;
-        }
-        if (graph) {
-            cudaCheck(cudaGraphDestroy(graph));
-            graph = nullptr;
-        }
+        if (graphExec) { cudaCheck(cudaGraphExecDestroy(graphExec)); graphExec = nullptr; }
+        if (graph)     { cudaCheck(cudaGraphDestroy(graph)); graph = nullptr; }
 
-        // ===================== Graph Capture ==========================
-        cudaCheck(cudaStreamSynchronize(stream));
+        //cudaCheck(cudaStreamSynchronize(stream));
         cudaCheck(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
 
-        // 1. Gaussian smoothing (separable, X, Y, Z)
-        launchSeparableConvolutionDevice(0, inputDev, tmp1, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream);
-        launchSeparableConvolutionDevice(1, tmp1, tmp2, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream);
-        launchSeparableConvolutionDevice(2, tmp2, tmp1, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream);
+        // Gaussian smoothing (separable, X, Y, Z) -- must select const/global, gaussian/deriv
+        launchSeparableConvolutionDevice(0, inputDev, tmp1, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/true, useConstMem);
+        launchSeparableConvolutionDevice(1, tmp1,   tmp2, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/true, useConstMem);
+        launchSeparableConvolutionDevice(2, tmp2,   tmp1, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/true, useConstMem);
 
-        // 2. Hessian diagonals
+        // Hessian diagonals
         launchSecondDerivatives(tmp1, Dxx, Dyy, Dzz, nRows, nCols, nSlices, stream);
 
-        // 3. Cross-derivatives
-        launchCrossDerivativesDevice(inputDev, Dxy, Dxz, Dyz, tmp1, tmp2,
-            derivKernelDev, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream);
+        // Cross-derivatives (always pass both kernels, and the memory flags)
+        launchCrossDerivativesDevice(inputDev, Dxy, Dxz, Dyz, tmp1, tmp2, derivKernelDev, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, useConstMem);
 
         // 4. Scale normalization
         scaleArrayInPlaceKernel<<<nBlocks, threadsPerBlock, 0, stream>>>(Dxx, n, sigmaSq);
@@ -544,7 +597,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
 
         // --- Launch the captured graph for this sigma ---
         cudaCheck(cudaGraphLaunch(graphExec, stream));
-        cudaCheck(cudaStreamSynchronize(stream)); // Wait for results
+        //cudaCheck(cudaStreamSynchronize(stream)); // Wait for results
 
         // --- Max projection or copy, as before ---
         if (!singleSigma)
@@ -552,7 +605,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         else
             cudaCheck(cudaMemcpyAsync(outputDev, tmp1, bytes, cudaMemcpyDeviceToDevice, stream));
 
-        cudaCheck(cudaStreamSynchronize(stream)); // Ensure all results are ready before output
+        //cudaCheck(cudaStreamSynchronize(stream)); // Ensure all results are ready before output
 
         cudaFree(gaussKernelDev);
         cudaFree(derivKernelDev);
@@ -564,7 +617,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
     cudaCheck(cudaStreamDestroy(stream));
 
     //--- Output ---
-    cudaCheck(cudaDeviceSynchronize());
+    cudaCheck(cudaStreamSynchronize(stream));
     plhs[0] = mxGPUCreateMxArrayOnGPU(output);
 
     //--- Free device buffers ---
