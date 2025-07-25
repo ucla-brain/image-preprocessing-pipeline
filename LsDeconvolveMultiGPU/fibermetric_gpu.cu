@@ -402,6 +402,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         launchCrossDerivativesDevice(inputDev, Dxy, Dxz, Dyz, tmp1, tmp2,
             derivKernelDev, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock);
 
+        cudaCheck(cudaDeviceSynchronize());
         cudaFree(gaussKernelDev);
         cudaFree(derivKernelDev);
 
