@@ -289,7 +289,7 @@ void uploadCoefficientsToConstantMemory(const float* h_gCoef, const float* h_dCo
 
 //-------------------- 5-point Second Derivative (fmaf, precompute squares) ----------------------
 // Fused Hessian kernel with shared memory padding to avoid bank conflicts
-template<int TILE_X=8, int TILE_Y=8, int TILE_Z=8, int SHMEM_PAD=1>
+template<int TILE_X=16, int TILE_Y=8, int TILE_Z=8, int SHMEM_PAD=1>
 __global__ void fusedHessianKernelCoalesced(
     const float* __restrict__ smoothedInput,
     float* __restrict__ Dxx, float* __restrict__ Dyy, float* __restrict__ Dzz,
