@@ -93,7 +93,9 @@ void launchSeparableConvolutionDevice(
     int kernelLen, int nRows, int nCols, int nSlices, int threadsPerBlock)
 {
     size_t total = size_t(nRows) * nCols * nSlices;
-    int nBlocks = int((total + threadsPerBlock - 1) / threadsPerBlock);
+    size_t nBlocks = (total + threadsPerBlock - 1) / threadsPerBlock;
+    if (nBlocks > 0x7FFFFFFF)
+        mexErrMsgIdAndTxt("fibermetric_gpu:launch", "Too many CUDA blocks requested (%llu)", (unsigned long long)nBlocks);
 
     if (axis == 0)
         separableConvolution1DDeviceKernelFlat<0><<<nBlocks, threadsPerBlock>>>(
@@ -104,7 +106,9 @@ void launchSeparableConvolutionDevice(
     else
         separableConvolution1DDeviceKernelFlat<2><<<nBlocks, threadsPerBlock>>>(
             inputDev, outputDev, kernelDev, kernelLen, nRows, nCols, nSlices);
-    cudaCheck(cudaGetLastError());
+
+    cudaCheck(cudaPeekAtLastError());
+    cudaCheck(cudaDeviceSynchronize());
 }
 
 //-------------------- 5-point Second Derivative (fmaf, precompute squares) ----------------------
