@@ -21,12 +21,21 @@ __constant__ float gCoef[MAX_CONST_COEF_LEN];
 __constant__ float dCoef[MAX_CONST_COEF_LEN];
 
 constexpr double SQRT_TWO_PI = 2.5066282746310002; // sqrt(2π)
-constexpr float TWO_PI_OVER_THREE = 2.0943951023931953f;
+constexpr float TWO_PI_OVER_THREE = 2.0943951023931953f; // 2π/3
 constexpr float GAUSS_HALFWIDTH_MULT = 8.0f;
 constexpr float EPSILON = 1e-7f;
 constexpr int THREADS_PER_BLOCK = 512;
 constexpr double FINITE_DIFF_5PT_DIVISOR = 12.0;
 
+// -- Hardware shared memory limits --
+// Most NVIDIA GPUs provide at least 48KB (49152 bytes) shared memory per block.
+// Some allow up to 96KB (98304 bytes), but 48KB is the safe minimum for compatibility.
+// DEFAULT_TILE_SIZE + kernelLen - 1 must satisfy: (DEFAULT_TILE_SIZE + kernelLen - 1) * sizeof(float) <= SHARED_MEMORY_PER_BLOCK
+constexpr int SHARED_MEMORY_PER_BLOCK = 48 * 1024; // 48 KB safe default for all compute >= 3.0
+constexpr int DEFAULT_TILE_SIZE = 256;  // Can tune for best occupancy. Set to 128 or 256 as per shared memory limit and occupancy
+
+static_assert((DEFAULT_TILE_SIZE + MAX_CONST_COEF_LEN - 1) * sizeof(float) <= SHARED_MEMORY_PER_BLOCK,
+        "DEFAULT_TILE_SIZE + kernelLen - 1 exceeds hardware shared memory per block. Lower DEFAULT_TILE_SIZE or kernelLen, or target a GPU with more shared memory.");
 
 #define cudaCheck(call) \
     do { cudaError_t err = (call); if (err != cudaSuccess) \
@@ -54,7 +63,6 @@ int reflectCoord(int p, int len) noexcept
         p = period - p;
     return p;                               // guaranteed 0 ≤ p < len
 }
-
 
 //---------------- Device-side Gaussian/Derivative Kernel (double for accuracy) -------------
 __global__ void generateGaussianAndDerivativeKernels(
@@ -88,20 +96,19 @@ void buildGaussianAndDerivativeKernelsDevice(
 template<int AXIS>
 __global__ void separableConvolution1DTiledConstKernel(
     const float* __restrict__ input,  float* __restrict__ output,
-    int kernelLen, int nRows, int nCols, int nSlices, bool useGaussian)
+    int kernelLen, int nRows, int nCols, int nSlices, bool useGaussian, int tileSize)
 {
     // Only AXIS == 0 (X-pass) is supported for shared-mem tiling here
-    constexpr int TILE_SIZE = 128;  // Set to 128 or 256 as per shared memory limit and occupancy
     extern __shared__ float tile[];
     int col = blockIdx.y;
     int slice = blockIdx.z;
 
     int halfWidth = kernelLen >> 1;
-    int tileStart = blockIdx.x * TILE_SIZE;
+    int tileStart = blockIdx.x * tileSize;
     int globalY = col, globalZ = slice;
 
     // Each thread loads one element, plus halo at start/end
-    for (int tx = threadIdx.x; tx < TILE_SIZE + kernelLen - 1; tx += blockDim.x)
+    for (int tx = threadIdx.x; tx < tileSize + kernelLen - 1; tx += blockDim.x)
     {
         int inputX = tileStart + tx - halfWidth;
         // Reflect boundary
@@ -213,7 +220,7 @@ __global__ void separableConvolution1DDeviceKernelFlat(
 void launchSeparableConvolutionDevice(
     int axis, const float* inputDev, float* outputDev, const float* kernelDev,
     int kernelLen, int nRows, int nCols, int nSlices, int threadsPerBlock,
-    cudaStream_t stream, bool useGaussian, bool useConstMem)
+    cudaStream_t stream, bool useGaussian, bool useConstMem, int tileSize)
 {
     size_t total = size_t(nRows) * nCols * nSlices;
     size_t nBlocks = (total + threadsPerBlock - 1) / threadsPerBlock;
@@ -222,12 +229,25 @@ void launchSeparableConvolutionDevice(
     {
         if (axis == 0)
         {
-            constexpr int TILE_SIZE = 128;  // Can tune for best occupancy
-            dim3 blockDim(TILE_SIZE, 1, 1);
-            dim3 gridDim((nRows + TILE_SIZE - 1) / TILE_SIZE, nCols, nSlices);
-            size_t shmemSize = (TILE_SIZE + kernelLen - 1) * sizeof(float);
+            int shmemBytes = (tileSize + kernelLen - 1) * sizeof(float);
+
+            int maxSharedMem = SHARED_MEMORY_PER_BLOCK;
+            // Query actual device limit at runtime
+            cudaDeviceProp prop;
+            cudaCheck(cudaGetDeviceProperties(&prop, 0));
+            maxSharedMem = prop.sharedMemPerBlock;
+
+            if (shmemBytes > maxSharedMem) {
+                mexErrMsgIdAndTxt("fibermetric_gpu:sharedmem",
+                    "Requested shared memory per block (%d bytes) exceeds device limit (%d bytes). "
+                    "Reduce DEFAULT_TILE_SIZE or kernel size.", shmemBytes, maxSharedMem);
+            }
+
+            dim3 blockDim(tileSize, 1, 1);
+            dim3 gridDim((nRows + tileSize - 1) / tileSize, nCols, nSlices);
+            size_t shmemSize = (tileSize + kernelLen - 1) * sizeof(float);
             separableConvolution1DTiledConstKernel<0><<<gridDim, blockDim, shmemSize, stream>>>(
-                inputDev, outputDev, kernelLen, nRows, nCols, nSlices, useGaussian);
+                inputDev, outputDev, kernelLen, nRows, nCols, nSlices, useGaussian, tileSize);
         }
         else if (axis == 1)
         {
@@ -324,20 +344,20 @@ void launchCrossDerivativesDevice(
     float* tmp1, float* tmp2,
     const float* derivKernelDev, const float* gaussKernelDev, int kernelLen,
     int nRows, int nCols, int nSlices, int threadsPerBlock, cudaStream_t stream,
-    bool useConstMem)
+    bool useConstMem, int tileSize)
 {
     // Dxy: d2/dxdy
-    launchSeparableConvolutionDevice(0, inputDev, tmp1, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/false, useConstMem);
-    launchSeparableConvolutionDevice(1, tmp1, tmp2, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/false, useConstMem);
-    launchSeparableConvolutionDevice(2, tmp2, Dxy, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/true, useConstMem);
+    launchSeparableConvolutionDevice(0, inputDev, tmp1, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/false, useConstMem, tileSize);
+    launchSeparableConvolutionDevice(1, tmp1, tmp2, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/false, useConstMem, tileSize);
+    launchSeparableConvolutionDevice(2, tmp2, Dxy, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/true, useConstMem, tileSize);
     // Dxz: d2/dxdz
-    launchSeparableConvolutionDevice(0, inputDev, tmp1, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/false, useConstMem);
-    launchSeparableConvolutionDevice(2, tmp1, tmp2, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/false, useConstMem);
-    launchSeparableConvolutionDevice(1, tmp2, Dxz, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/true, useConstMem);
+    launchSeparableConvolutionDevice(0, inputDev, tmp1, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/false, useConstMem, tileSize);
+    launchSeparableConvolutionDevice(2, tmp1, tmp2, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/false, useConstMem, tileSize);
+    launchSeparableConvolutionDevice(1, tmp2, Dxz, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/true, useConstMem, tileSize);
     // Dyz: d2/dydz
-    launchSeparableConvolutionDevice(1, inputDev, tmp1, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/false, useConstMem);
-    launchSeparableConvolutionDevice(2, tmp1, tmp2, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/false, useConstMem);
-    launchSeparableConvolutionDevice(0, tmp2, Dyz, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/true, useConstMem);
+    launchSeparableConvolutionDevice(1, inputDev, tmp1, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/false, useConstMem, tileSize);
+    launchSeparableConvolutionDevice(2, tmp1, tmp2, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/false, useConstMem, tileSize);
+    launchSeparableConvolutionDevice(0, tmp2, Dyz, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/true, useConstMem, tileSize);
 }
 
 //-------------------- Eigenvalue Decomposition (fmaf, float only) ----------------------
@@ -609,6 +629,11 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         float* derivKernelDev = nullptr;
         int halfWidth = int(std::ceil(GAUSS_HALFWIDTH_MULT * sigma));
         int kernelLen = 2 * halfWidth + 1;
+
+        int maxTileSize = (prop.sharedMemPerBlock / sizeof(float)) - (kernelLen - 1);
+        if (maxTileSize < 16) maxTileSize = 16;
+        int tileSize = std::min(DEFAULT_TILE_SIZE, maxTileSize);
+
         buildGaussianAndDerivativeKernelsDevice(gaussKernelDev, derivKernelDev, kernelLen, sigma, threadsPerBlock);
 
         // --- Upload kernels to constant memory if eligible ---
@@ -635,15 +660,15 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         cudaCheck(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
 
         // Gaussian smoothing (separable, X, Y, Z) -- must select const/global, gaussian/deriv
-        launchSeparableConvolutionDevice(0, inputDev, tmp1, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/true, useConstMem);
-        launchSeparableConvolutionDevice(1, tmp1,   tmp2, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/true, useConstMem);
-        launchSeparableConvolutionDevice(2, tmp2,   tmp1, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/true, useConstMem);
+        launchSeparableConvolutionDevice(0, inputDev, tmp1, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/true, useConstMem, tileSize);
+        launchSeparableConvolutionDevice(1, tmp1,   tmp2, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/true, useConstMem, tileSize);
+        launchSeparableConvolutionDevice(2, tmp2,   tmp1, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/true, useConstMem, tileSize);
 
         // Hessian diagonals
         launchSecondDerivatives(tmp1, Dxx, Dyy, Dzz, nRows, nCols, nSlices, stream);
 
         // Cross-derivatives (always pass both kernels, and the memory flags)
-        launchCrossDerivativesDevice(inputDev, Dxy, Dxz, Dyz, tmp1, tmp2, derivKernelDev, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, useConstMem);
+        launchCrossDerivativesDevice(inputDev, Dxy, Dxz, Dyz, tmp1, tmp2, derivKernelDev, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, useConstMem, tileSize);
 
         // 4. Scale normalization
         scaleArrayInPlaceKernel<<<nBlocks, threadsPerBlock, 0, stream>>>(Dxx, n, sigmaSq);
