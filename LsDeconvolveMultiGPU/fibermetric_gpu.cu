@@ -1,7 +1,10 @@
 #include "mex.h"
 #include "gpu/mxGPUArray.h"
+
 #include <cuda_runtime.h>
+#include <cuda.h>
 #include <device_launch_parameters.h>
+
 #include <cmath>
 #include <vector>
 #include <cstring>
@@ -115,26 +118,23 @@ __global__ void separableConvolution1DDeviceKernelFlat(
 
 void launchSeparableConvolutionDevice(
     int axis, const float* inputDev, float* outputDev, const float* kernelDev,
-    int kernelLen, int nRows, int nCols, int nSlices, int threadsPerBlock)
+    int kernelLen, int nRows, int nCols, int nSlices, int threadsPerBlock, cudaStream_t stream)
 {
     size_t total = size_t(nRows) * nCols * nSlices;
     size_t nBlocks = (total + threadsPerBlock - 1) / threadsPerBlock;
-    if (nBlocks > 0x7FFFFFFF)
-        mexErrMsgIdAndTxt("fibermetric_gpu:launch", "Too many CUDA blocks requested (%llu)", (unsigned long long)nBlocks);
-
     if (axis == 0)
-        separableConvolution1DDeviceKernelFlat<0><<<nBlocks, threadsPerBlock>>>(
+        separableConvolution1DDeviceKernelFlat<0><<<nBlocks, threadsPerBlock, 0, stream>>>(
             inputDev, outputDev, kernelDev, kernelLen, nRows, nCols, nSlices);
     else if (axis == 1)
-        separableConvolution1DDeviceKernelFlat<1><<<nBlocks, threadsPerBlock>>>(
+        separableConvolution1DDeviceKernelFlat<1><<<nBlocks, threadsPerBlock, 0, stream>>>(
             inputDev, outputDev, kernelDev, kernelLen, nRows, nCols, nSlices);
     else
-        separableConvolution1DDeviceKernelFlat<2><<<nBlocks, threadsPerBlock>>>(
+        separableConvolution1DDeviceKernelFlat<2><<<nBlocks, threadsPerBlock, 0, stream>>>(
             inputDev, outputDev, kernelDev, kernelLen, nRows, nCols, nSlices);
 
     cudaCheck(cudaPeekAtLastError());
-    //cudaCheck(cudaDeviceSynchronize());
 }
+
 
 //-------------------- 5-point Second Derivative (fmaf, precompute squares) ----------------------
 template<int AXIS>
@@ -176,14 +176,14 @@ __global__ void secondDerivative5ptKernel(
 
 void launchSecondDerivatives(
     const float* smoothedInput, float* Dxx, float* Dyy, float* Dzz,
-    int nRows, int nCols, int nSlices)
+    int nRows, int nCols, int nSlices, cudaStream_t stream)
 {
     dim3 bx(32,1,1), gx((nRows+31)/32, nCols, nSlices);
-    secondDerivative5ptKernel<0><<<gx, bx>>>(smoothedInput, Dxx, nRows, nCols, nSlices);
+    secondDerivative5ptKernel<0><<<gx, bx, 0, stream>>>(smoothedInput, Dxx, nRows, nCols, nSlices);
     dim3 by(1,32,1), gy(nRows, (nCols+31)/32, nSlices);
-    secondDerivative5ptKernel<1><<<gy, by>>>(smoothedInput, Dyy, nRows, nCols, nSlices);
+    secondDerivative5ptKernel<1><<<gy, by, 0, stream>>>(smoothedInput, Dyy, nRows, nCols, nSlices);
     dim3 bz(1,1,32), gz(nRows, nCols, (nSlices+31)/32);
-    secondDerivative5ptKernel<2><<<gz, bz>>>(smoothedInput, Dzz, nRows, nCols, nSlices);
+    secondDerivative5ptKernel<2><<<gz, bz, 0, stream>>>(smoothedInput, Dzz, nRows, nCols, nSlices);
     cudaCheck(cudaGetLastError());
 }
 
@@ -192,20 +192,20 @@ void launchCrossDerivativesDevice(
     const float* inputDev, float* Dxy, float* Dxz, float* Dyz,
     float* tmp1, float* tmp2,
     const float* derivKernelDev, const float* gaussKernelDev, int kernelLen,
-    int nRows, int nCols, int nSlices, int threadsPerBlock)
+    int nRows, int nCols, int nSlices, int threadsPerBlock, cudaStream_t stream)
 {
     // Dxy: d2/dxdy
-    launchSeparableConvolutionDevice(0, inputDev, tmp1, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock);
-    launchSeparableConvolutionDevice(1, tmp1, tmp2, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock);
-    launchSeparableConvolutionDevice(2, tmp2, Dxy, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock);
+    launchSeparableConvolutionDevice(0, inputDev, tmp1, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream);
+    launchSeparableConvolutionDevice(1, tmp1, tmp2, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream);
+    launchSeparableConvolutionDevice(2, tmp2, Dxy, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream);
     // Dxz: d2/dxdz
-    launchSeparableConvolutionDevice(0, inputDev, tmp1, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock);
-    launchSeparableConvolutionDevice(2, tmp1, tmp2, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock);
-    launchSeparableConvolutionDevice(1, tmp2, Dxz, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock);
+    launchSeparableConvolutionDevice(0, inputDev, tmp1, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream);
+    launchSeparableConvolutionDevice(2, tmp1, tmp2, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream);
+    launchSeparableConvolutionDevice(1, tmp2, Dxz, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream);
     // Dyz: d2/dydz
-    launchSeparableConvolutionDevice(1, inputDev, tmp1, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock);
-    launchSeparableConvolutionDevice(2, tmp1, tmp2, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock);
-    launchSeparableConvolutionDevice(0, tmp2, Dyz, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock);
+    launchSeparableConvolutionDevice(1, inputDev, tmp1, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream);
+    launchSeparableConvolutionDevice(2, tmp1, tmp2, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream);
+    launchSeparableConvolutionDevice(0, tmp2, Dyz, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream);
 }
 
 //-------------------- Eigenvalue Decomposition (fmaf, float only) ----------------------
@@ -428,11 +428,23 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
     float* outputDev = static_cast<float*>(mxGPUGetData(output));
     cudaCheck(cudaMemset(outputDev, 0, n * sizeof(float)));
 
-    //--- Workspace Buffers (only 2 temp) ---
+    //--- Workspace Buffers ---
     float *tmp1, *tmp2;
     size_t bytes = n * sizeof(float);
     cudaCheck(cudaMalloc(&tmp1,   bytes));
     cudaCheck(cudaMalloc(&tmp2,   bytes));
+
+    // --- Allocate Hessian and eigenvalue arrays ---
+    float *Dxx, *Dyy, *Dzz, *Dxy, *Dxz, *Dyz, *l1, *l2, *l3;
+    cudaCheck(cudaMalloc(&Dxx, bytes));
+    cudaCheck(cudaMalloc(&Dyy, bytes));
+    cudaCheck(cudaMalloc(&Dzz, bytes));
+    cudaCheck(cudaMalloc(&Dxy, bytes));
+    cudaCheck(cudaMalloc(&Dxz, bytes));
+    cudaCheck(cudaMalloc(&Dyz, bytes));
+    cudaCheck(cudaMalloc(&l1, bytes));
+    cudaCheck(cudaMalloc(&l2, bytes));
+    cudaCheck(cudaMalloc(&l3, bytes));
 
     //--- Sigma List and Scale Norm ---
     std::vector<double> sigmaList;
@@ -447,99 +459,116 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
     }
     int nBlocks = int((n + threadsPerBlock - 1) / threadsPerBlock);
 
-    // --- Allocate eigenvalue arrays (always n*3) ---
-    float *l1, *l2, *l3;
-    cudaCheck(cudaMalloc(&l1, bytes));
-    cudaCheck(cudaMalloc(&l2, bytes));
-    cudaCheck(cudaMalloc(&l3, bytes));
+    // --- CUDA Graph Variables ---
+    cudaStream_t stream = nullptr;
+    cudaCheck(cudaStreamCreate(&stream));
+    cudaGraph_t graph = nullptr;
+    cudaGraphExec_t graphExec = nullptr;
 
     //--- Main Loop Over Scales ---
-    for (double sigma : sigmaList)
-    {
-        int halfWidth = int(std::ceil(GAUSS_HALFWIDTH_MULT * sigma));
-        int kernelLen = 2 * halfWidth + 1;
+    for (size_t sigmaIdx = 0; sigmaIdx < sigmaList.size(); ++sigmaIdx) {
+        double sigma = sigmaList[sigmaIdx];
+
+        // -- Create Gaussian and derivative kernels for this sigma --
         float* gaussKernelDev = nullptr;
         float* derivKernelDev = nullptr;
+        int halfWidth = int(std::ceil(GAUSS_HALFWIDTH_MULT * sigma));
+        int kernelLen = 2 * halfWidth + 1;
         buildGaussianAndDerivativeKernelsDevice(gaussKernelDev, derivKernelDev, kernelLen, sigma, threadsPerBlock);
 
-        // Gaussian smoothing (tmp1 <-> tmp2, ends in tmp1)
-        launchSeparableConvolutionDevice(0, inputDev, tmp1, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock);
-        launchSeparableConvolutionDevice(1, tmp1, tmp2, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock);
-        launchSeparableConvolutionDevice(2, tmp2, tmp1, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock);
-
-        // --- Allocate Hessian/cross-derivative buffers (min lifetime!) ---
-        float *Dxx, *Dyy, *Dzz, *Dxy, *Dxz, *Dyz;
-        cudaCheck(cudaMalloc(&Dxx, bytes));
-        cudaCheck(cudaMalloc(&Dyy, bytes));
-        cudaCheck(cudaMalloc(&Dzz, bytes));
-        cudaCheck(cudaMalloc(&Dxy, bytes));
-        cudaCheck(cudaMalloc(&Dxz, bytes));
-        cudaCheck(cudaMalloc(&Dyz, bytes));
-
-        // Hessian diagonals
-        launchSecondDerivatives(tmp1, Dxx, Dyy, Dzz, nRows, nCols, nSlices);
-        cudaCheck(cudaGetLastError());
-
-        // Cross-derivatives
-        launchCrossDerivativesDevice(inputDev, Dxy, Dxz, Dyz, tmp1, tmp2,
-            derivKernelDev, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock);
-        cudaCheck(cudaGetLastError());
-
-        //cudaCheck(cudaDeviceSynchronize());
-        cudaFree(gaussKernelDev);
-        cudaFree(derivKernelDev);
-
-        // Scale normalization
+        // --- (Re)calculate constants as needed ---
         float sigmaSq = float(sigma * sigma);
-        scaleArrayInPlaceKernel<<<nBlocks, threadsPerBlock>>>(Dxx, n, sigmaSq);
-        scaleArrayInPlaceKernel<<<nBlocks, threadsPerBlock>>>(Dyy, n, sigmaSq);
-        scaleArrayInPlaceKernel<<<nBlocks, threadsPerBlock>>>(Dzz, n, sigmaSq);
-        scaleArrayInPlaceKernel<<<nBlocks, threadsPerBlock>>>(Dxy, n, sigmaSq);
-        scaleArrayInPlaceKernel<<<nBlocks, threadsPerBlock>>>(Dxz, n, sigmaSq);
-        scaleArrayInPlaceKernel<<<nBlocks, threadsPerBlock>>>(Dyz, n, sigmaSq);
-        cudaCheck(cudaGetLastError());
-
-        // --- Compute eigenvalues: l1, l2, l3, then free Hessians immediately! ---
-        hessianToEigenvaluesKernel<<<nBlocks, threadsPerBlock>>>(
-            Dxx, Dyy, Dzz, Dxy, Dxz, Dyz, l1, l2, l3, n);
-        cudaCheck(cudaGetLastError());
-        //cudaCheck(cudaDeviceSynchronize());
-        cudaFree(Dxx); cudaFree(Dyy); cudaFree(Dzz);
-        cudaFree(Dxy); cudaFree(Dxz); cudaFree(Dyz);
-
-        // --- Vesselness kernel on eigenvalues only ---
-        float* vessTmp = tmp1; // reuse tmp1 for vesselness result!
-
-        float gamma = structureSensitivity * float(sigma);
         const float inv2Alpha2 = static_cast<float>(1.0 / (2.0 * double(alpha) * double(alpha)));
         const float inv2Beta2  = static_cast<float>(1.0 / (2.0 * double(beta)  * double(beta )));
+        float gamma = structureSensitivity * float(sigma);
         const float inv2Gamma2 = static_cast<float>(1.0 / (2.0 * double(gamma) * double(gamma)));
-        if (useFrangi) {
-            vesselnessFrangiKernelFromEigen<<<nBlocks, threadsPerBlock>>>(
-                l1, l2, l3, vessTmp, n, inv2Alpha2, inv2Beta2, inv2Gamma2, bright, doScaleNorm, scaleNorm);
-        } else if (useSato) {
-            vesselnessSatoKernelFromEigen<<<nBlocks, threadsPerBlock>>>(
-                l1, l2, l3, vessTmp, n, inv2Alpha2, inv2Beta2, bright);
-        } else if (useMeijering) {
-            neuritenessMeijeringKernelFromEigen<<<nBlocks, threadsPerBlock>>>(
-                l1, l2, l3, vessTmp, n, bright);
-        } else if (useJerman) {
-            vesselnessJermanKernelFromEigen<<<nBlocks, threadsPerBlock>>>(
-                l1, l2, l3, vessTmp, n, inv2Alpha2, inv2Beta2, bright, scaleNorm);
-        }
-        cudaCheck(cudaGetLastError());
 
-        // --- Multi-sigma: max-projection; single: copy
+        // --- Clean up any old graph (always recapture per sigma for correctness) ---
+        if (graphExec) {
+            cudaCheck(cudaGraphExecDestroy(graphExec));
+            graphExec = nullptr;
+        }
+        if (graph) {
+            cudaCheck(cudaGraphDestroy(graph));
+            graph = nullptr;
+        }
+
+        // ===================== Graph Capture ==========================
+        cudaCheck(cudaStreamSynchronize(stream));
+        cudaCheck(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
+
+        // 1. Gaussian smoothing (separable, X, Y, Z)
+        launchSeparableConvolutionDevice(0, inputDev, tmp1, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream);
+        launchSeparableConvolutionDevice(1, tmp1, tmp2, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream);
+        launchSeparableConvolutionDevice(2, tmp2, tmp1, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream);
+
+        // 2. Hessian diagonals
+        launchSecondDerivatives(tmp1, Dxx, Dyy, Dzz, nRows, nCols, nSlices, stream);
+
+        // 3. Cross-derivatives
+        launchCrossDerivativesDevice(inputDev, Dxy, Dxz, Dyz, tmp1, tmp2,
+            derivKernelDev, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream);
+
+        // 4. Scale normalization
+        scaleArrayInPlaceKernel<<<nBlocks, threadsPerBlock, 0, stream>>>(Dxx, n, sigmaSq);
+        scaleArrayInPlaceKernel<<<nBlocks, threadsPerBlock, 0, stream>>>(Dyy, n, sigmaSq);
+        scaleArrayInPlaceKernel<<<nBlocks, threadsPerBlock, 0, stream>>>(Dzz, n, sigmaSq);
+        scaleArrayInPlaceKernel<<<nBlocks, threadsPerBlock, 0, stream>>>(Dxy, n, sigmaSq);
+        scaleArrayInPlaceKernel<<<nBlocks, threadsPerBlock, 0, stream>>>(Dxz, n, sigmaSq);
+        scaleArrayInPlaceKernel<<<nBlocks, threadsPerBlock, 0, stream>>>(Dyz, n, sigmaSq);
+
+        // 5. Eigenvalue decomposition
+        hessianToEigenvaluesKernel<<<nBlocks, threadsPerBlock, 0, stream>>>(
+            Dxx, Dyy, Dzz, Dxy, Dxz, Dyz, l1, l2, l3, n);
+
+        // 6. Vesselness kernel (choose the right one for your method)
+        if (useFrangi) {
+            vesselnessFrangiKernelFromEigen<<<nBlocks, threadsPerBlock, 0, stream>>>(
+                l1, l2, l3, tmp1, n, inv2Alpha2, inv2Beta2, inv2Gamma2, bright, doScaleNorm, scaleNorm);
+        } else if (useSato) {
+            vesselnessSatoKernelFromEigen<<<nBlocks, threadsPerBlock, 0, stream>>>(
+                l1, l2, l3, tmp1, n, inv2Alpha2, inv2Beta2, bright);
+        } else if (useMeijering) {
+            neuritenessMeijeringKernelFromEigen<<<nBlocks, threadsPerBlock, 0, stream>>>(
+                l1, l2, l3, tmp1, n, bright);
+        } else if (useJerman) {
+            vesselnessJermanKernelFromEigen<<<nBlocks, threadsPerBlock, 0, stream>>>(
+                l1, l2, l3, tmp1, n, inv2Alpha2, inv2Beta2, bright, scaleNorm);
+        }
+
+        cudaCheck(cudaStreamEndCapture(stream, &graph));
+        cudaCheck(cudaGraphInstantiate(&graphExec, graph, nullptr, nullptr, 0));
+
+        // --- Launch the captured graph for this sigma ---
+        cudaCheck(cudaGraphLaunch(graphExec, stream));
+        cudaCheck(cudaStreamSynchronize(stream)); // Wait for results
+
+        // --- Max projection or copy, as before ---
         if (!singleSigma)
-            elementwiseMaxKernel<<<nBlocks, threadsPerBlock>>>(vessTmp, outputDev, n);
+            elementwiseMaxKernel<<<nBlocks, threadsPerBlock, 0, stream>>>(tmp1, outputDev, n);
         else
-            cudaCheck(cudaMemcpy(outputDev, vessTmp, bytes, cudaMemcpyDeviceToDevice));
+            cudaCheck(cudaMemcpyAsync(outputDev, tmp1, bytes, cudaMemcpyDeviceToDevice, stream));
+
+        cudaCheck(cudaStreamSynchronize(stream)); // Ensure all results are ready before output
+
+        cudaFree(gaussKernelDev);
+        cudaFree(derivKernelDev);
     }
 
-    //--- Cleanup ---
-    plhs[0] = mxGPUCreateMxArrayOnGPU(output);
+    // Cleanup: (after the sigma loop)
+    if (graphExec) cudaCheck(cudaGraphExecDestroy(graphExec));
+    if (graph)     cudaCheck(cudaGraphDestroy(graph));
+    cudaCheck(cudaStreamDestroy(stream));
+
+    //--- Output ---
     cudaCheck(cudaDeviceSynchronize());
+    plhs[0] = mxGPUCreateMxArrayOnGPU(output);
+
+    //--- Free device buffers ---
     cudaFree(tmp1); cudaFree(tmp2);
+    cudaFree(Dxx); cudaFree(Dyy); cudaFree(Dzz);
+    cudaFree(Dxy); cudaFree(Dxz); cudaFree(Dyz);
     cudaFree(l1); cudaFree(l2); cudaFree(l3);
+
     mxGPUDestroyGPUArray(input); mxGPUDestroyGPUArray(output);
 }
