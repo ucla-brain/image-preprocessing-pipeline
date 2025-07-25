@@ -29,6 +29,21 @@ size_t linearIndex3D(int row, int col, int slice, int nRows, int nCols) noexcept
          + static_cast<size_t>(slice) * static_cast<size_t>(nRows) * nCols;
 }
 
+__device__ __host__ __forceinline__
+int reflectCoord(int p, int len) noexcept
+{
+    // Handle degenerate axes (len == 0 never occurs, len == 1 is common for 2-D data)
+    if (len <= 1) return 0;
+
+    // Mirror-padding with period 2*len-2  (…len-2, len-1, len-2, …, 1, 0, 1, …)
+    int period = 2 * len - 2;
+    p = ((p % period) + period) % period;   // wrap into [0, period-1]
+    if (p >= len)                           // reflect the second half
+        p = period - p;
+    return p;                               // guaranteed 0 ≤ p < len
+}
+
+
 //---------------- Device-side Gaussian/Derivative Kernel (double for accuracy) -------------
 __global__ void generateGaussianAndDerivativeKernels(
     float* __restrict__ gaussKernel, float* __restrict__ derivKernel,
@@ -60,12 +75,12 @@ void buildGaussianAndDerivativeKernelsDevice(
 //---------------- Separable 1D Convolution (fmaf, in-place option) -------------------------
 template<int AXIS>
 __global__ void separableConvolution1DDeviceKernelFlat(
-    const float* __restrict__ input, float* __restrict__ output,
+    const float* __restrict__ input,  float* __restrict__ output,
     const float* __restrict__ kernelDev, int kernelLen,
     int nRows, int nCols, int nSlices)
 {
-    size_t idx = size_t(blockIdx.x) * blockDim.x + threadIdx.x;
-    size_t total = size_t(nRows) * nCols * nSlices;
+    size_t idx    = size_t(blockIdx.x) * blockDim.x + threadIdx.x;
+    size_t total  = size_t(nRows) * nCols * nSlices;
     if (idx >= total) return;
 
     int row   = int(idx % nRows);
@@ -74,16 +89,22 @@ __global__ void separableConvolution1DDeviceKernelFlat(
 
     int halfWidth = kernelLen >> 1;
     float acc = 0.f;
-    for (int k = -halfWidth; k <= halfWidth; ++k) {
-        int rr = row, cc = col, ss = slice;
+
+    for (int k = -halfWidth; k <= halfWidth; ++k)
+    {
+        int rr = row, cc = col, ss = slice;   // start at current voxel
         if (AXIS == 0) rr += k;
         if (AXIS == 1) cc += k;
         if (AXIS == 2) ss += k;
-        // Reflective boundary handling
-        rr = (rr < 0) ? -rr : (rr >= nRows   ? 2 * nRows   - rr - 2 : rr);
-        cc = (cc < 0) ? -cc : (cc >= nCols   ? 2 * nCols   - cc - 2 : cc);
-        ss = (ss < 0) ? -ss : (ss >= nSlices ? 2 * nSlices - ss - 2 : ss);
-        acc = fmaf(kernelDev[k + halfWidth], input[linearIndex3D(rr, cc, ss, nRows, nCols)], acc);
+
+        // NEW: robust mirror padding for any dimension length (including 1)
+        rr = reflectCoord(rr, nRows);
+        cc = reflectCoord(cc, nCols);
+        ss = reflectCoord(ss, nSlices);
+
+        acc = fmaf(kernelDev[k + halfWidth],
+                   input[linearIndex3D(rr, cc, ss, nRows, nCols)],
+                   acc);
     }
     output[idx] = acc;
 }
