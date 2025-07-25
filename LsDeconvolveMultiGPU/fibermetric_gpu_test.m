@@ -64,7 +64,12 @@ disp(T);
 figure('Name', 'Max Projections: Both Polarities', 'Position', [100 100 1600 600]);
 for i = 1:numel(polarities)
     pol = results(i).pol;
+    colormap(gray);
+    if strcmp(pol, 'dark')
+    subplot(2,4,(i-1)*4+1); imagesc(min(results(i).vol          ,[],3)); axis image off; colorbar; title(['Original (',pol,')']);
+    else
     subplot(2,4,(i-1)*4+1); imagesc(max(results(i).vol          ,[],3)); axis image off; colorbar; title(['Original (',pol,')']);
+    end
     subplot(2,4,(i-1)*4+2); imagesc(max(results(i).fm_cpu       ,[],3)); axis image off; colorbar; title('fibermetric (CPU)');
     subplot(2,4,(i-1)*4+3); imagesc(max(results(i).fm_gpu_frangi,[],3)); axis image off; colorbar; title('fibermetric\_gpu (frangi)');
     subplot(2,4,(i-1)*4+4); imagesc(max(results(i).fm_gpu_sato  ,[],3)); axis image off; colorbar; title('fibermetric\_gpu (sato)');

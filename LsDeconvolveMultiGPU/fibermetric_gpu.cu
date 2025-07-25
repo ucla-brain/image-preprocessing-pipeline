@@ -414,6 +414,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         scaleArrayInPlaceKernel<<<nBlocks, threadsPerBlock>>>(Dxz, n, sigmaSq);
         scaleArrayInPlaceKernel<<<nBlocks, threadsPerBlock>>>(Dyz, n, sigmaSq);
         cudaCheck(cudaGetLastError());
+        cudaCheck(cudaDeviceSynchronize());
 
         // --- Compute eigenvalues: l1, l2, l3, then free Hessians immediately! ---
         hessianToEigenvaluesKernel<<<nBlocks, threadsPerBlock>>>(
@@ -437,6 +438,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
                 l1, l2, l3, vessTmp, n, inv2Alpha2, inv2Beta2            , bright);
         }
         cudaCheck(cudaGetLastError());
+        cudaCheck(cudaDeviceSynchronize());
 
         // --- Multi-sigma: max-projection; single: copy
         if (!singleSigma)
