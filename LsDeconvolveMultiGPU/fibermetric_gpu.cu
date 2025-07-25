@@ -399,10 +399,12 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
 
         // Hessian diagonals
         launchSecondDerivatives(tmp1, Dxx, Dyy, Dzz, nRows, nCols, nSlices);
+        cudaCheck(cudaGetLastError());
 
         // Cross-derivatives
         launchCrossDerivativesDevice(inputDev, Dxy, Dxz, Dyz, tmp1, tmp2,
             derivKernelDev, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock);
+        cudaCheck(cudaGetLastError());
 
         cudaCheck(cudaDeviceSynchronize());
         cudaFree(gaussKernelDev);
