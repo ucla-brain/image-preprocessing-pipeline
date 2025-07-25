@@ -423,18 +423,27 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         mexErrMsgIdAndTxt("fibermetric_gpu:usage",
             "Last argument must be 'frangi', 'sato', 'meijering', or 'jerman'.");
 
+    //--- Workspace and kernel buffers (PREALLOCATED) ---
+    int maxHalfWidth = int(std::ceil(GAUSS_HALFWIDTH_MULT * std::max(sigmaFrom, sigmaTo)));
+    int maxKernelLen = 2 * maxHalfWidth + 1;
+    size_t kernelBytes = size_t(maxKernelLen) * sizeof(float);
+    float* gaussKernelDev = nullptr;
+    float* derivKernelDev = nullptr;
+    cudaCheck(cudaMalloc(&gaussKernelDev, kernelBytes));
+    cudaCheck(cudaMalloc(&derivKernelDev, kernelBytes));
+
     //--- Output Allocation ---
     mxGPUArray* output = mxGPUCreateGPUArray(3, dims, mxSINGLE_CLASS, mxREAL, MX_GPU_DO_NOT_INITIALIZE);
     float* outputDev = static_cast<float*>(mxGPUGetData(output));
     cudaCheck(cudaMemset(outputDev, 0, n * sizeof(float)));
 
-    //--- Workspace Buffers ---
+    //--- Workspace Buffers (PREALLOCATED) ---
     float *tmp1, *tmp2;
     size_t bytes = n * sizeof(float);
-    cudaCheck(cudaMalloc(&tmp1,   bytes));
-    cudaCheck(cudaMalloc(&tmp2,   bytes));
+    cudaCheck(cudaMalloc(&tmp1, bytes));
+    cudaCheck(cudaMalloc(&tmp2, bytes));
 
-    // --- Allocate Hessian and eigenvalue arrays ---
+    // --- Allocate Hessian and eigenvalue arrays (PREALLOCATED) ---
     float *Dxx, *Dyy, *Dzz, *Dxy, *Dxz, *Dyz, *l1, *l2, *l3;
     cudaCheck(cudaMalloc(&Dxx, bytes));
     cudaCheck(cudaMalloc(&Dyy, bytes));
@@ -459,41 +468,27 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
     }
     int nBlocks = int((n + threadsPerBlock - 1) / threadsPerBlock);
 
-    // --- CUDA Graph Variables ---
+    // --- CUDA Graph Variables (build ONCE) ---
     cudaStream_t stream = nullptr;
     cudaCheck(cudaStreamCreate(&stream));
     cudaGraph_t graph = nullptr;
     cudaGraphExec_t graphExec = nullptr;
 
-    //--- Main Loop Over Scales ---
-    for (size_t sigmaIdx = 0; sigmaIdx < sigmaList.size(); ++sigmaIdx) {
-        double sigma = sigmaList[sigmaIdx];
-
-        // -- Create Gaussian and derivative kernels for this sigma --
-        float* gaussKernelDev = nullptr;
-        float* derivKernelDev = nullptr;
+    // Build CUDA Graph ONCE using max kernel buffer sizes
+    {
+        // Build with dummy kernelLen for first sigma, always use full preallocated buffers
+        double sigma = sigmaList[0];
         int halfWidth = int(std::ceil(GAUSS_HALFWIDTH_MULT * sigma));
         int kernelLen = 2 * halfWidth + 1;
+        // Overwrite kernel buffers for first sigma
         buildGaussianAndDerivativeKernelsDevice(gaussKernelDev, derivKernelDev, kernelLen, sigma, threadsPerBlock);
 
-        // --- (Re)calculate constants as needed ---
         float sigmaSq = float(sigma * sigma);
         const float inv2Alpha2 = static_cast<float>(1.0 / (2.0 * double(alpha) * double(alpha)));
         const float inv2Beta2  = static_cast<float>(1.0 / (2.0 * double(beta)  * double(beta )));
         float gamma = structureSensitivity * float(sigma);
         const float inv2Gamma2 = static_cast<float>(1.0 / (2.0 * double(gamma) * double(gamma)));
 
-        // --- Clean up any old graph (always recapture per sigma for correctness) ---
-        if (graphExec) {
-            cudaCheck(cudaGraphExecDestroy(graphExec));
-            graphExec = nullptr;
-        }
-        if (graph) {
-            cudaCheck(cudaGraphDestroy(graph));
-            graph = nullptr;
-        }
-
-        // ===================== Graph Capture ==========================
         cudaCheck(cudaStreamSynchronize(stream));
         cudaCheck(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
 
@@ -538,10 +533,24 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
 
         cudaCheck(cudaStreamEndCapture(stream, &graph));
         cudaCheck(cudaGraphInstantiate(&graphExec, graph, nullptr, nullptr, 0));
+    }
 
-        // --- Launch the captured graph for this sigma ---
+    //--- Main Loop Over Scales ---
+    for (size_t sigmaIdx = 0; sigmaIdx < sigmaList.size(); ++sigmaIdx) {
+        double sigma = sigmaList[sigmaIdx];
+
+        // Recompute kernel values IN-PLACE for this sigma (device buffers already allocated)
+        int halfWidth = int(std::ceil(GAUSS_HALFWIDTH_MULT * sigma));
+        int kernelLen = 2 * halfWidth + 1;
+        buildGaussianAndDerivativeKernelsDevice(gaussKernelDev, derivKernelDev, kernelLen, sigma, threadsPerBlock);
+
+        // Update any *constants* in kernels using device-to-device copies or arguments,
+        // but device pointers in graph are always the same.
+
+        // Launch the captured graph for this sigma
         cudaCheck(cudaGraphLaunch(graphExec, stream));
-        cudaCheck(cudaStreamSynchronize(stream)); // Wait for results
+        // Only synchronize ONCE per-sigma after everything is written to outputDev
+        cudaCheck(cudaStreamSynchronize(stream));
 
         // --- Max projection or copy, as before ---
         if (!singleSigma)
@@ -550,9 +559,6 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
             cudaCheck(cudaMemcpyAsync(outputDev, tmp1, bytes, cudaMemcpyDeviceToDevice, stream));
 
         cudaCheck(cudaStreamSynchronize(stream)); // Ensure all results are ready before output
-
-        cudaFree(gaussKernelDev);
-        cudaFree(derivKernelDev);
     }
 
     // Cleanup: (after the sigma loop)
@@ -569,6 +575,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
     cudaFree(Dxx); cudaFree(Dyy); cudaFree(Dzz);
     cudaFree(Dxy); cudaFree(Dxz); cudaFree(Dyz);
     cudaFree(l1); cudaFree(l2); cudaFree(l3);
+    cudaFree(gaussKernelDev); cudaFree(derivKernelDev);
 
     mxGPUDestroyGPUArray(input); mxGPUDestroyGPUArray(output);
 }
