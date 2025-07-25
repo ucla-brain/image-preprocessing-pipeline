@@ -124,6 +124,37 @@ __global__ void separableConvolution1DTiledConstKernel(
     output[linearIndex3D(x, globalY, globalZ, nRows, nCols)] = acc;
 }
 
+// ---- Non-tiled constant-memory 1D convolution for Y and Z axes ----
+template<int AXIS>
+__global__ void separableConvolution1DConstKernel(
+    const float* __restrict__ input,  float* __restrict__ output,
+    int kernelLen, int nRows, int nCols, int nSlices, bool useGaussian)
+{
+    size_t idx    = size_t(blockIdx.x) * blockDim.x + threadIdx.x;
+    size_t total  = size_t(nRows) * nCols * nSlices;
+    if (idx >= total) return;
+
+    int row   = int(idx % nRows);
+    int col   = int((idx / nRows) % nCols);
+    int slice = int(idx / (size_t(nRows) * nCols));
+
+    int halfWidth = kernelLen >> 1;
+    float acc = 0.f;
+    for (int k = -halfWidth; k <= halfWidth; ++k)
+    {
+        int rr = row, cc = col, ss = slice;
+        if (AXIS == 1) cc += k;
+        if (AXIS == 2) ss += k;
+        cc = reflectCoord(cc, nCols);
+        ss = reflectCoord(ss, nSlices);
+
+        float coef = useGaussian ? gCoef[k + halfWidth] : dCoef[k + halfWidth];
+        acc = fmaf(coef, input[linearIndex3D(rr, cc, ss, nRows, nCols)], acc);
+    }
+    output[idx] = acc;
+}
+
+
 template<int AXIS>
 __global__ void separableConvolution1DDeviceKernelFlat(
     const float* __restrict__ input,  float* __restrict__ output,
