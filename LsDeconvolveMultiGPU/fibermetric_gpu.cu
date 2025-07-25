@@ -611,13 +611,13 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         cudaFree(derivKernelDev);
     }
 
-    // Cleanup: (after the sigma loop)
+    // Synchronize & Cleanup
+    cudaCheck(cudaStreamSynchronize(stream));
     if (graphExec) cudaCheck(cudaGraphExecDestroy(graphExec));
     if (graph)     cudaCheck(cudaGraphDestroy(graph));
     cudaCheck(cudaStreamDestroy(stream));
 
     //--- Output ---
-    cudaCheck(cudaStreamSynchronize(stream));
     plhs[0] = mxGPUCreateMxArrayOnGPU(output);
 
     //--- Free device buffers ---
