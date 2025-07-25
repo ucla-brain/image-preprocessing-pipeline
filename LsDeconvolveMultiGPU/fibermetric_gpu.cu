@@ -288,45 +288,41 @@ void uploadCoefficientsToConstantMemory(const float* h_gCoef, const float* h_dCo
 }
 
 //-------------------- 5-point Second Derivative (fmaf, precompute squares) ----------------------
-template<int TILE_X=8, int TILE_Y=8, int TILE_Z=8>
-__global__ void fusedHessianKernel(
+// Fused Hessian kernel with shared memory padding to avoid bank conflicts
+template<int TILE_X=8, int TILE_Y=8, int TILE_Z=8, int SHMEM_PAD=1>
+__global__ void fusedHessianKernelCoalesced(
     const float* __restrict__ smoothedInput,
     float* __restrict__ Dxx, float* __restrict__ Dyy, float* __restrict__ Dzz,
     float* __restrict__ Dxy, float* __restrict__ Dxz, float* __restrict__ Dyz,
     int nRows, int nCols, int nSlices)
 {
-    // 5-pt stencil requires a 2-voxel halo in each dimension
     constexpr int HALO = 2;
-    __shared__ float shInput[TILE_Z+2*HALO][TILE_Y+2*HALO][TILE_X+2*HALO];
+    __shared__ float shInput[TILE_Z+2*HALO][TILE_Y+2*HALO][TILE_X+2*HALO + SHMEM_PAD];
 
-    // Calculate global indices for this thread (in output tile)
     int x = blockIdx.x * TILE_X + threadIdx.x;
     int y = blockIdx.y * TILE_Y + threadIdx.y;
     int z = blockIdx.z * TILE_Z + threadIdx.z;
-
-    // Calculate the indices in the shared memory tile
     int sx = threadIdx.x + HALO;
     int sy = threadIdx.y + HALO;
     int sz = threadIdx.z + HALO;
 
-    // Each thread loads its input, plus border (handle with thread striding if needed)
-    for (int dz = threadIdx.z; dz < TILE_Z + 2*HALO; dz += blockDim.z) {
-    for (int dy = threadIdx.y; dy < TILE_Y + 2*HALO; dy += blockDim.y) {
-    for (int dx = threadIdx.x; dx < TILE_X + 2*HALO; dx += blockDim.x) {
+    // Load shared memory (with bank conflict padding)
+    for (int dz = threadIdx.z; dz < TILE_Z + 2*HALO; dz += blockDim.z)
+    for (int dy = threadIdx.y; dy < TILE_Y + 2*HALO; dy += blockDim.y)
+    for (int dx = threadIdx.x; dx < TILE_X + 2*HALO; dx += blockDim.x)
+    {
         int gx = blockIdx.x * TILE_X + dx - HALO;
         int gy = blockIdx.y * TILE_Y + dy - HALO;
         int gz = blockIdx.z * TILE_Z + dz - HALO;
-        // Reflect boundary
         int rx = reflectCoord(gx, nRows);
         int ry = reflectCoord(gy, nCols);
         int rz = reflectCoord(gz, nSlices);
         shInput[dz][dy][dx] = smoothedInput[linearIndex3D(rx, ry, rz, nRows, nCols)];
-    }}}
+    }
     __syncthreads();
 
-    // Compute only if inside volume
+    // Main computation, as before
     if (x < nRows && y < nCols && z < nSlices) {
-        // 5-pt finite difference for Dxx at (x,y,z)
         float xm2 = shInput[sz][sy][sx-2];
         float xm1 = shInput[sz][sy][sx-1];
         float xc  = shInput[sz][sy][sx];
@@ -339,7 +335,6 @@ __global__ void fusedHessianKernel(
         dxx = fmaf(-1.0f, xp2, dxx);
         dxx /= float(FINITE_DIFF_5PT_DIVISOR);
 
-        // Dyy: along y
         float ym2 = shInput[sz][sy-2][sx];
         float ym1 = shInput[sz][sy-1][sx];
         float yc  = shInput[sz][sy][sx];
@@ -352,7 +347,6 @@ __global__ void fusedHessianKernel(
         dyy = fmaf(-1.0f, yp2, dyy);
         dyy /= float(FINITE_DIFF_5PT_DIVISOR);
 
-        // Dzz: along z
         float zm2 = shInput[sz-2][sy][sx];
         float zm1 = shInput[sz-1][sy][sx];
         float zc  = shInput[sz][sy][sx];
@@ -365,18 +359,14 @@ __global__ void fusedHessianKernel(
         dzz = fmaf(-1.0f, zp2, dzz);
         dzz /= float(FINITE_DIFF_5PT_DIVISOR);
 
-        // Cross derivatives (central difference: (f(+1,+1) - f(-1,+1) - f(+1,-1) + f(-1,-1))/4)
-        // Dxy
         float dxy = 0.25f * (
             shInput[sz][sy+1][sx+1] - shInput[sz][sy+1][sx-1]
           - shInput[sz][sy-1][sx+1] + shInput[sz][sy-1][sx-1]
         );
-        // Dxz
         float dxz = 0.25f * (
             shInput[sz+1][sy][sx+1] - shInput[sz-1][sy][sx+1]
           - shInput[sz+1][sy][sx-1] + shInput[sz-1][sy][sx-1]
         );
-        // Dyz
         float dyz = 0.25f * (
             shInput[sz+1][sy+1][sx] - shInput[sz-1][sy+1][sx]
           - shInput[sz+1][sy-1][sx] + shInput[sz-1][sy-1][sx]
@@ -393,15 +383,15 @@ __global__ void fusedHessianKernel(
 }
 
 // --------- 2. Launch wrapper for fused Hessian ----------
-void launchFusedHessianKernel(
+void launchFusedHessianKernelCoalesced(
     const float* smoothedInput,
     float* Dxx, float* Dyy, float* Dzz, float* Dxy, float* Dxz, float* Dyz,
     int nRows, int nCols, int nSlices, cudaStream_t stream)
 {
-    constexpr int TX = 8, TY = 8, TZ = 8; // tile/block size; tune for occupancy
+    constexpr int TX = 8, TY = 8, TZ = 8, SHMEM_PAD = 1;
     dim3 blockDim(TX, TY, TZ);
     dim3 gridDim((nRows + TX - 1) / TX, (nCols + TY - 1) / TY, (nSlices + TZ - 1) / TZ);
-    fusedHessianKernel<TX,TY,TZ><<<gridDim, blockDim, 0, stream>>>(
+    fusedHessianKernelCoalesced<TX,TY,TZ,SHMEM_PAD><<<gridDim, blockDim, 0, stream>>>(
         smoothedInput, Dxx, Dyy, Dzz, Dxy, Dxz, Dyz, nRows, nCols, nSlices);
     cudaCheck(cudaPeekAtLastError());
 }
@@ -733,7 +723,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         launchSeparableConvolutionDevice(2, tmp2,   tmp1, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/true, useConstMem, tileSize);
 
         // Hessian diagonals
-        launchFusedHessianKernel(tmp1, Dxx, Dyy, Dzz, Dxy, Dxz, Dyz, nRows, nCols, nSlices, stream);
+        launchFusedHessianKernelCoalesced(tmp1, Dxx, Dyy, Dzz, Dxy, Dxz, Dyz, nRows, nCols, nSlices, stream);
 
         // 4. Scale normalization
         scaleArrayInPlaceKernel<<<nBlocks, threadsPerBlock, 0, stream>>>(Dxx, n, sigmaSq);
