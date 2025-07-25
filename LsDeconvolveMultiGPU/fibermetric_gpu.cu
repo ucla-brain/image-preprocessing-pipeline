@@ -288,54 +288,122 @@ void uploadCoefficientsToConstantMemory(const float* h_gCoef, const float* h_dCo
 }
 
 //-------------------- 5-point Second Derivative (fmaf, precompute squares) ----------------------
-template<int AXIS>
-__global__ void secondDerivative5ptKernel(
-    const float* __restrict__ input, float* __restrict__ output,
+template<int TILE_X=8, int TILE_Y=8, int TILE_Z=8>
+__global__ void fusedHessianKernel(
+    const float* __restrict__ smoothedInput,
+    float* __restrict__ Dxx, float* __restrict__ Dyy, float* __restrict__ Dzz,
+    float* __restrict__ Dxy, float* __restrict__ Dxz, float* __restrict__ Dyz,
     int nRows, int nCols, int nSlices)
 {
-    int row   = (AXIS == 0) ? blockIdx.x * blockDim.x + threadIdx.x : blockIdx.x;
-    int col   = (AXIS == 1) ? blockIdx.y * blockDim.y + threadIdx.y : blockIdx.y;
-    int slice = (AXIS == 2) ? blockIdx.z * blockDim.z + threadIdx.z : blockIdx.z;
-    if (row >= nRows || col >= nCols || slice >= nSlices) return;
+    // 5-pt stencil requires a 2-voxel halo in each dimension
+    constexpr int HALO = 2;
+    __shared__ float shInput[TILE_Z+2*HALO][TILE_Y+2*HALO][TILE_X+2*HALO];
 
-    int rr[5] = {row, row, row, row, row};
-    int cc[5] = {col, col, col, col, col};
-    int ss[5] = {slice, slice, slice, slice, slice};
-    for (int k = 0; k < 5; ++k) {
-        int offset = k - 2;
-        if (AXIS == 0) rr[k] += offset;
-        if (AXIS == 1) cc[k] += offset;
-        if (AXIS == 2) ss[k] += offset;
-        // Reflect at borders
-        rr[k] = (rr[k] < 0) ? -rr[k] : (rr[k] >= nRows   ? 2 * nRows   - rr[k] - 2 : rr[k]);
-        cc[k] = (cc[k] < 0) ? -cc[k] : (cc[k] >= nCols   ? 2 * nCols   - cc[k] - 2 : cc[k]);
-        ss[k] = (ss[k] < 0) ? -ss[k] : (ss[k] >= nSlices ? 2 * nSlices - ss[k] - 2 : ss[k]);
+    // Calculate global indices for this thread (in output tile)
+    int x = blockIdx.x * TILE_X + threadIdx.x;
+    int y = blockIdx.y * TILE_Y + threadIdx.y;
+    int z = blockIdx.z * TILE_Z + threadIdx.z;
+
+    // Calculate the indices in the shared memory tile
+    int sx = threadIdx.x + HALO;
+    int sy = threadIdx.y + HALO;
+    int sz = threadIdx.z + HALO;
+
+    // Each thread loads its input, plus border (handle with thread striding if needed)
+    for (int dz = threadIdx.z; dz < TILE_Z + 2*HALO; dz += blockDim.z) {
+    for (int dy = threadIdx.y; dy < TILE_Y + 2*HALO; dy += blockDim.y) {
+    for (int dx = threadIdx.x; dx < TILE_X + 2*HALO; dx += blockDim.x) {
+        int gx = blockIdx.x * TILE_X + dx - HALO;
+        int gy = blockIdx.y * TILE_Y + dy - HALO;
+        int gz = blockIdx.z * TILE_Z + dz - HALO;
+        // Reflect boundary
+        int rx = reflectCoord(gx, nRows);
+        int ry = reflectCoord(gy, nCols);
+        int rz = reflectCoord(gz, nSlices);
+        shInput[dz][dy][dx] = smoothedInput[linearIndex3D(rx, ry, rz, nRows, nCols)];
+    }}}
+    __syncthreads();
+
+    // Compute only if inside volume
+    if (x < nRows && y < nCols && z < nSlices) {
+        // 5-pt finite difference for Dxx at (x,y,z)
+        float xm2 = shInput[sz][sy][sx-2];
+        float xm1 = shInput[sz][sy][sx-1];
+        float xc  = shInput[sz][sy][sx];
+        float xp1 = shInput[sz][sy][sx+1];
+        float xp2 = shInput[sz][sy][sx+2];
+        float dxx = fmaf(-1.0f, xm2, 0.f);
+        dxx = fmaf(16.0f, xm1, dxx);
+        dxx = fmaf(-30.0f, xc, dxx);
+        dxx = fmaf(16.0f, xp1, dxx);
+        dxx = fmaf(-1.0f, xp2, dxx);
+        dxx /= float(FINITE_DIFF_5PT_DIVISOR);
+
+        // Dyy: along y
+        float ym2 = shInput[sz][sy-2][sx];
+        float ym1 = shInput[sz][sy-1][sx];
+        float yc  = shInput[sz][sy][sx];
+        float yp1 = shInput[sz][sy+1][sx];
+        float yp2 = shInput[sz][sy+2][sx];
+        float dyy = fmaf(-1.0f, ym2, 0.f);
+        dyy = fmaf(16.0f, ym1, dyy);
+        dyy = fmaf(-30.0f, yc, dyy);
+        dyy = fmaf(16.0f, yp1, dyy);
+        dyy = fmaf(-1.0f, yp2, dyy);
+        dyy /= float(FINITE_DIFF_5PT_DIVISOR);
+
+        // Dzz: along z
+        float zm2 = shInput[sz-2][sy][sx];
+        float zm1 = shInput[sz-1][sy][sx];
+        float zc  = shInput[sz][sy][sx];
+        float zp1 = shInput[sz+1][sy][sx];
+        float zp2 = shInput[sz+2][sy][sx];
+        float dzz = fmaf(-1.0f, zm2, 0.f);
+        dzz = fmaf(16.0f, zm1, dzz);
+        dzz = fmaf(-30.0f, zc, dzz);
+        dzz = fmaf(16.0f, zp1, dzz);
+        dzz = fmaf(-1.0f, zp2, dzz);
+        dzz /= float(FINITE_DIFF_5PT_DIVISOR);
+
+        // Cross derivatives (central difference: (f(+1,+1) - f(-1,+1) - f(+1,-1) + f(-1,-1))/4)
+        // Dxy
+        float dxy = 0.25f * (
+            shInput[sz][sy+1][sx+1] - shInput[sz][sy+1][sx-1]
+          - shInput[sz][sy-1][sx+1] + shInput[sz][sy-1][sx-1]
+        );
+        // Dxz
+        float dxz = 0.25f * (
+            shInput[sz+1][sy][sx+1] - shInput[sz-1][sy][sx+1]
+          - shInput[sz+1][sy][sx-1] + shInput[sz-1][sy][sx-1]
+        );
+        // Dyz
+        float dyz = 0.25f * (
+            shInput[sz+1][sy+1][sx] - shInput[sz-1][sy+1][sx]
+          - shInput[sz+1][sy-1][sx] + shInput[sz-1][sy-1][sx]
+        );
+
+        size_t idx = linearIndex3D(x, y, z, nRows, nCols);
+        Dxx[idx] = dxx;
+        Dyy[idx] = dyy;
+        Dzz[idx] = dzz;
+        Dxy[idx] = dxy;
+        Dxz[idx] = dxz;
+        Dyz[idx] = dyz;
     }
-    // Store input value for each neighbor only once
-    float in0 = input[linearIndex3D(rr[0], cc[0], ss[0], nRows, nCols)];
-    float in1 = input[linearIndex3D(rr[1], cc[1], ss[1], nRows, nCols)];
-    float in2 = input[linearIndex3D(rr[2], cc[2], ss[2], nRows, nCols)];
-    float in3 = input[linearIndex3D(rr[3], cc[3], ss[3], nRows, nCols)];
-    float in4 = input[linearIndex3D(rr[4], cc[4], ss[4], nRows, nCols)];
-    float v = fmaf( -1.0f, in0, 0.f);
-    v = fmaf( 16.0f, in1, v);
-    v = fmaf(-30.0f, in2, v);
-    v = fmaf( 16.0f, in3, v);
-    v = fmaf( -1.0f, in4, v);
-    output[linearIndex3D(row, col, slice, nRows, nCols)] = v / float(FINITE_DIFF_5PT_DIVISOR);
 }
 
-void launchSecondDerivatives(
-    const float* smoothedInput, float* Dxx, float* Dyy, float* Dzz,
+// --------- 2. Launch wrapper for fused Hessian ----------
+void launchFusedHessianKernel(
+    const float* smoothedInput,
+    float* Dxx, float* Dyy, float* Dzz, float* Dxy, float* Dxz, float* Dyz,
     int nRows, int nCols, int nSlices, cudaStream_t stream)
 {
-    dim3 bx(32,1,1), gx((nRows+31)/32, nCols, nSlices);
-    secondDerivative5ptKernel<0><<<gx, bx, 0, stream>>>(smoothedInput, Dxx, nRows, nCols, nSlices);
-    dim3 by(1,32,1), gy(nRows, (nCols+31)/32, nSlices);
-    secondDerivative5ptKernel<1><<<gy, by, 0, stream>>>(smoothedInput, Dyy, nRows, nCols, nSlices);
-    dim3 bz(1,1,32), gz(nRows, nCols, (nSlices+31)/32);
-    secondDerivative5ptKernel<2><<<gz, bz, 0, stream>>>(smoothedInput, Dzz, nRows, nCols, nSlices);
-    cudaCheck(cudaGetLastError());
+    constexpr int TX = 8, TY = 8, TZ = 8; // tile/block size; tune for occupancy
+    dim3 blockDim(TX, TY, TZ);
+    dim3 gridDim((nRows + TX - 1) / TX, (nCols + TY - 1) / TY, (nSlices + TZ - 1) / TZ);
+    fusedHessianKernel<TX,TY,TZ><<<gridDim, blockDim, 0, stream>>>(
+        smoothedInput, Dxx, Dyy, Dzz, Dxy, Dxz, Dyz, nRows, nCols, nSlices);
+    cudaCheck(cudaPeekAtLastError());
 }
 
 //---------------- Cross Derivatives: chain of separable convs (reuse buffers) ----------------
@@ -665,10 +733,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         launchSeparableConvolutionDevice(2, tmp2,   tmp1, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/true, useConstMem, tileSize);
 
         // Hessian diagonals
-        launchSecondDerivatives(tmp1, Dxx, Dyy, Dzz, nRows, nCols, nSlices, stream);
-
-        // Cross-derivatives (always pass both kernels, and the memory flags)
-        launchCrossDerivativesDevice(inputDev, Dxy, Dxz, Dyz, tmp1, tmp2, derivKernelDev, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, useConstMem, tileSize);
+        launchFusedHessianKernel(tmp1, Dxx, Dyy, Dzz, Dxy, Dxz, Dyz, nRows, nCols, nSlices, stream);
 
         // 4. Scale normalization
         scaleArrayInPlaceKernel<<<nBlocks, threadsPerBlock, 0, stream>>>(Dxx, n, sigmaSq);
