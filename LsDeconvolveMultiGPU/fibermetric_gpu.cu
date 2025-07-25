@@ -28,7 +28,9 @@ constexpr double FINITE_DIFF_5PT_DIVISOR = 12.0;
 
 __device__ __host__ __forceinline__
 int linearIndex3D(int row, int col, int slice, int nRows, int nCols) noexcept {
-    return row + col * nRows + slice * nRows * nCols;
+    return static_cast<size_t>(row)
+         + static_cast<size_t>(col)   * static_cast<size_t>(nRows)
+         + static_cast<size_t>(slice) * static_cast<size_t>(nRows) * nCols;
 }
 
 //-------------------- Device-side Gaussian/Derivative Kernel (double for accuracy) -----------------
