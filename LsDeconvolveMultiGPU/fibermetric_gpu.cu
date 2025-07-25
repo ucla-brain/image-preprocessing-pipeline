@@ -6,6 +6,13 @@
 #include <vector>
 #include <cstring>
 
+#if defined(_WIN32)
+    #define STRICMP _stricmp
+#else
+    #include <strings.h>  // For strcasecmp
+    #define STRICMP strcasecmp
+#endif
+
 constexpr double SQRT_TWO_PI = 2.5066282746310002; // sqrt(2π)
 constexpr float TWO_PI_OVER_THREE = 2.0943951023931953f;
 constexpr float GAUSS_HALFWIDTH_MULT = 8.0f;
@@ -359,10 +366,10 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
     float beta       = float(mxGetScalar(prhs[5]));
     float structureSensitivity = float(mxGetScalar(prhs[6]));
     char polarityBuf[16]; mxGetString(prhs[7], polarityBuf, sizeof(polarityBuf));
-    bool bright = (strcmp(polarityBuf, "bright") == 0);
+    bool bright = (STRICMP(polarityBuf, "bright") == 0);
     char methodBuf[16]; mxGetString(prhs[8], methodBuf, sizeof(methodBuf));
-    bool useFrangi = (strcmp(methodBuf, "frangi") == 0);
-    bool useSato   = (strcmp(methodBuf, "sato") == 0);
+    bool useFrangi = (STRICMP(methodBuf, "frangi") == 0);
+    bool useSato   = (STRICMP(methodBuf, "sato") == 0);
     if (!useFrangi && !useSato)
         mexErrMsgIdAndTxt("fibermetric_gpu:usage", "Last argument must be 'frangi' or 'sato'.");
 
