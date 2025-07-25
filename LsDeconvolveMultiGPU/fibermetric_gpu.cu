@@ -125,6 +125,7 @@ __global__ void separableConvolution1DTiledConstKernel(
 }
 
 // ---- Non-tiled constant-memory 1D convolution for Y and Z axes ----
+// -- Constant-memory, untiled, for Y/Z (AXIS=1,2) --
 template<int AXIS>
 __global__ void separableConvolution1DConstKernel(
     const float* __restrict__ input,  float* __restrict__ output,
@@ -153,7 +154,6 @@ __global__ void separableConvolution1DConstKernel(
     }
     output[idx] = acc;
 }
-
 
 template<int AXIS>
 __global__ void separableConvolution1DDeviceKernelFlat(
