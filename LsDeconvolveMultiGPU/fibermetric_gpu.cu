@@ -331,7 +331,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         mexErrMsgIdAndTxt("fibermetric_gpu:type", "Input must be 3D single gpuArray.");
     const mwSize* dims = mxGPUGetDimensions(input);
     int nRows = int(dims[0]), nCols = int(dims[1]), nSlices = int(dims[2]);
-    size_t n = size_t(nRows) * nCols * nSlices;
+    size_t n = (size_t)nRows * (size_t)nCols * (size_t)nSlices;
     const float* inputDev = static_cast<const float*>(mxGPUGetDataReadOnly(input));
 
     double sigmaFrom = mxGetScalar(prhs[1]);
