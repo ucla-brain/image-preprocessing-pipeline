@@ -6,11 +6,8 @@
 #include <vector>
 #include <cstring>
 
-#ifndef M_PI
-#define M_PI 3.14159265358979323846
-#endif
 constexpr double SQRT_TWO_PI = 2.5066282746310002; // sqrt(2π)
-constexpr float TWO_PI_OVER_THREE = float(2.0 * M_PI / 3.0);
+constexpr float TWO_PI_OVER_THREE = 2.0943951023931953f;
 constexpr float GAUSS_HALFWIDTH_MULT = 8.0f;
 constexpr float EPSILON = 1e-7f;
 constexpr int THREADS_PER_BLOCK = 512;
@@ -444,7 +441,6 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         scaleArrayInPlaceKernel<<<nBlocks, threadsPerBlock>>>(Dxz, n, sigmaSq);
         scaleArrayInPlaceKernel<<<nBlocks, threadsPerBlock>>>(Dyz, n, sigmaSq);
         cudaCheck(cudaGetLastError());
-        cudaCheck(cudaDeviceSynchronize());
 
         // --- Compute eigenvalues: l1, l2, l3, then free Hessians immediately! ---
         hessianToEigenvaluesKernel<<<nBlocks, threadsPerBlock>>>(

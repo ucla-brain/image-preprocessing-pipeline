@@ -3,11 +3,12 @@ gpu = gpuDevice(2);
 
 fprintf('\n==== Benchmark: fibermetric (CPU) vs fibermetric_gpu (gpuArray only) [bright/dark, frangi/sato] ====\n');
 
-volOrig = im2single(load("ExampleVolumeStent.mat").V);
+% volOrig = im2single(load("ExampleVolumeStent.mat").V);
+%volOrig = im2single(tiffreadVolume("V:\tif\Glycin_MORF\crop_ds_it03_g2.0_crop.tif"));
 polarities = {'dark', 'bright'};
 
-sigma_from = 1; sigma_to = 16; sigma_step = 4;
-alpha = 0.5; beta = 0.5; structureSensitivity = 0.5;
+sigma_from = 1; sigma_to = 16; sigma_step = 1;
+alpha = 2; beta = 0.01; structureSensitivity = 15;
 
 benchmarks = [];
 results = struct();

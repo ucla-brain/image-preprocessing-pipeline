@@ -1297,10 +1297,10 @@ function bl = apply_fibermetric_filter(bl, sigma, polarity)
             warning('Fibermetric sigma range is empty. No filtering applied.');
             % bl = bl; % (implicit)
         else
-            alpha=0.5;
-            beta =0.5;
+            alpha=1;    % High alpha: The filter is more tolerant of blob-like shapes (less discrimination).
+            beta =0.01; % Low beta: The filter more strongly favors elongated (tube-like) features and suppresses plate-like responses.
             structureSensitivity=0.5;
-            bl = fibermetric_gpu(bl, sigma(1), sigma(3), sigma(2), alpha, beta, structureSensitivity, polarity, 'frangi');
+            bl = fibermetric_gpu(bl, sigma(1), sigma(3), sigma(2), alpha, beta, structureSensitivity, polarity, 'sato');
             % bl = fibermetric(bl, sigma_range, ObjectPolarity=polarity, 'StructureSensitivity', structureSensitivity);
         end
     else
