@@ -414,12 +414,12 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         scaleArrayInPlaceKernel<<<nBlocks, threadsPerBlock>>>(Dxz, n, sigmaSq);
         scaleArrayInPlaceKernel<<<nBlocks, threadsPerBlock>>>(Dyz, n, sigmaSq);
         cudaCheck(cudaGetLastError());
-        cudaCheck(cudaDeviceSynchronize());
 
         // --- Compute eigenvalues: l1, l2, l3, then free Hessians immediately! ---
         hessianToEigenvaluesKernel<<<nBlocks, threadsPerBlock>>>(
             Dxx, Dyy, Dzz, Dxy, Dxz, Dyz, l1, l2, l3, n);
         cudaCheck(cudaGetLastError());
+        cudaCheck(cudaDeviceSynchronize());
         cudaFree(Dxx); cudaFree(Dyy); cudaFree(Dzz);
         cudaFree(Dxy); cudaFree(Dxz); cudaFree(Dyz);
 
@@ -438,7 +438,6 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
                 l1, l2, l3, vessTmp, n, inv2Alpha2, inv2Beta2            , bright);
         }
         cudaCheck(cudaGetLastError());
-        cudaCheck(cudaDeviceSynchronize());
 
         // --- Multi-sigma: max-projection; single: copy
         if (!singleSigma)
@@ -449,6 +448,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
 
     //--- Cleanup ---
     plhs[0] = mxGPUCreateMxArrayOnGPU(output);
+    cudaCheck(cudaDeviceSynchronize());
     cudaFree(tmp1); cudaFree(tmp2);
     cudaFree(l1); cudaFree(l2); cudaFree(l3);
     mxGPUDestroyGPUArray(input); mxGPUDestroyGPUArray(output);
