@@ -383,6 +383,11 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         float* derivKernelDev = nullptr;
         buildGaussianAndDerivativeKernelsDevice(gaussKernelDev, derivKernelDev, kernelLen, sigma, threadsPerBlock);
 
+        // Gaussian smoothing (tmp1 <-> tmp2, ends in tmp1)
+        launchSeparableConvolutionDevice(0, inputDev, tmp1, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock);
+        launchSeparableConvolutionDevice(1, tmp1, tmp2, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock);
+        launchSeparableConvolutionDevice(2, tmp2, tmp1, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock);
+
         // --- Allocate Hessian/cross-derivative buffers (min lifetime!) ---
         float *Dxx, *Dyy, *Dzz, *Dxy, *Dxz, *Dyz;
         cudaCheck(cudaMalloc(&Dxx, bytes));
@@ -391,11 +396,6 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         cudaCheck(cudaMalloc(&Dxy, bytes));
         cudaCheck(cudaMalloc(&Dxz, bytes));
         cudaCheck(cudaMalloc(&Dyz, bytes));
-
-        // Gaussian smoothing (tmp1 <-> tmp2, ends in tmp1)
-        launchSeparableConvolutionDevice(0, inputDev, tmp1, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock);
-        launchSeparableConvolutionDevice(1, tmp1, tmp2, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock);
-        launchSeparableConvolutionDevice(2, tmp2, tmp1, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock);
 
         // Hessian diagonals
         launchSecondDerivatives(tmp1, Dxx, Dyy, Dzz, nRows, nCols, nSlices);
@@ -417,6 +417,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         scaleArrayInPlaceKernel<<<nBlocks, threadsPerBlock>>>(Dxz, n, sigmaSq);
         scaleArrayInPlaceKernel<<<nBlocks, threadsPerBlock>>>(Dyz, n, sigmaSq);
         cudaCheck(cudaGetLastError());
+        cudaCheck(cudaDeviceSynchronize());
 
         // --- Compute eigenvalues: l1, l2, l3, then free Hessians immediately! ---
         hessianToEigenvaluesKernel<<<nBlocks, threadsPerBlock>>>(
