@@ -1291,13 +1291,6 @@ function bl = apply_fibermetric_filter(bl, sigma, polarity)
 %
 %   Returns:
 %     bl:        Filtered image, or input if disabled/invalid
-
-    arguments
-        bl
-        sigma (1,3) double = [0 0 0]
-        polarity char {mustBeMember(polarity,{'Bright','Dark'})} = 'Bright'
-    end
-
     if all(sigma > 0) && sigma(2) > 0 && sigma(1) <= sigma(3)
         sigma_range = sigma(1):sigma(2):sigma(3);
         if isempty(sigma_range)
@@ -1307,7 +1300,7 @@ function bl = apply_fibermetric_filter(bl, sigma, polarity)
             alpha=0.5;
             beta =0.5;
             structureSensitivity=0.5;
-            bl = fibermetric_gpu(bl, sigma(1), sigma(3), sigma(2), alpha, beta, polarity, structureSensitivity);
+            bl = fibermetric_gpu(bl, sigma(1), sigma(3), sigma(2), alpha, beta, structureSensitivity, polarity, 'frangi');
             % bl = fibermetric(bl, sigma_range, ObjectPolarity=polarity, 'StructureSensitivity', structureSensitivity);
         end
     else
