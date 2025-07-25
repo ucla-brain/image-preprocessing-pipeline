@@ -133,7 +133,7 @@ void launchSeparableConvolutionDevice(
             inputDev, outputDev, kernelDev, kernelLen, nRows, nCols, nSlices);
 
     cudaCheck(cudaPeekAtLastError());
-    cudaCheck(cudaDeviceSynchronize());
+    //cudaCheck(cudaDeviceSynchronize());
 }
 
 //-------------------- 5-point Second Derivative (fmaf, precompute squares) ----------------------
@@ -260,7 +260,7 @@ __global__ void hessianToEigenvaluesKernel(
         Dxx[idx], Dyy[idx], Dzz[idx], Dxy[idx], Dxz[idx], Dyz[idx], l1[idx], l2[idx], l3[idx]);
 }
 
-//-------------------- Vesselness (Frangi/Ferengi & Sato) kernels, float only -------------
+//-------------------- Vesselness Kernels -------------
 __global__ void vesselnessFrangiKernelFromEigen(
     const float* __restrict__ l1, const float* __restrict__ l2, const float* __restrict__ l3,
     float* __restrict__ vesselness, size_t n,
@@ -322,6 +322,53 @@ __global__ void vesselnessSatoKernelFromEigen(
     vesselness[idx] = response;
 }
 
+__global__ void neuritenessMeijeringKernelFromEigen(
+    const float* __restrict__ l1,
+    const float* __restrict__ l2,
+    const float* __restrict__ l3,
+    float* __restrict__ neuriteness,
+    size_t n,
+    bool bright)
+{
+    size_t idx = size_t(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (idx >= n) return;
+
+    float ev1 = l1[idx], ev2 = l2[idx], ev3 = l3[idx];
+
+    // Eigenvalues are assumed sorted by absolute value: |ev1| <= |ev2| <= |ev3|
+    bool isNeurite = bright ? (ev2 < 0.f && ev3 < 0.f)
+                            : (ev2 > 0.f && ev3 > 0.f);
+
+    neuriteness[idx] = isNeurite ? fabsf(ev1) : 0.f;
+}
+
+__global__ void vesselnessJermanKernelFromEigen(
+    const float* __restrict__ l1, const float* __restrict__ l2, const float* __restrict__ l3,
+    float* __restrict__ vesselness, size_t n,
+    const float inv2Alpha2, const float inv2Beta2,
+    bool bright, const float scaleNorm)
+{
+    size_t idx = size_t(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (idx >= n) return;
+
+    float val1 = l1[idx], val2 = l2[idx], val3 = l3[idx];
+    bool condition = bright ? (val2 < 0.f && val3 < 0.f) : (val2 > 0.f && val3 > 0.f);
+    float response = 0.f;
+    if (condition) {
+        float absL1 = fabsf(val1), absL2 = fabsf(val2), absL3 = fabsf(val3);
+        float Ra2 = (absL2 * absL2) / (absL3 * absL3 + EPSILON);                  // Plate/tube
+        float Rb2 = (absL1 * absL1) / fmaf(absL2, absL3, EPSILON); // Blob/tube
+        // Jerman: (1 - exp(-Ra^2/2α^2)) * exp(-Rb^2/2β^2)
+        float expRa = __expf(-Ra2 * inv2Alpha2);
+        float expRb = __expf(-Rb2 * inv2Beta2);
+        response = fmaf(-expRa, expRb, expRb);
+        response *= scaleNorm;
+    }
+    vesselness[idx] = response;
+}
+
+//--------------------utility kernels
+
 __global__ void elementwiseMaxKernel(const float* src, float* dst, size_t n)
 {
     size_t idx = size_t(blockIdx.x) * blockDim.x + threadIdx.x;
@@ -339,7 +386,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
 {
     if (nrhs < 9)
         mexErrMsgIdAndTxt("fibermetric_gpu:usage",
-            "Usage: fibermetric_gpu(gpuArraySingle3D, sigmaFrom, sigmaTo, sigmaStep, alpha, beta, structureSensitivity, 'bright'|'dark', 'frangi'|'sato')");
+            "Usage: fibermetric_gpu(gpuArraySingle3D, sigmaFrom, sigmaTo, sigmaStep, alpha, beta, structureSensitivity, 'bright'|'dark', 'frangi'|'sato'|'meijering'|'jerman')");
 
     mxInitGPU();
     int deviceId;
@@ -370,8 +417,11 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
     char methodBuf[16]; mxGetString(prhs[8], methodBuf, sizeof(methodBuf));
     bool useFrangi = (STRICMP(methodBuf, "frangi") == 0);
     bool useSato   = (STRICMP(methodBuf, "sato") == 0);
-    if (!useFrangi && !useSato)
-        mexErrMsgIdAndTxt("fibermetric_gpu:usage", "Last argument must be 'frangi' or 'sato'.");
+    bool useMeijering = (STRICMP(methodBuf, "meijering") == 0);
+    bool useJerman = (STRICMP(methodBuf, "jerman") == 0);
+    if (!useFrangi && !useSato && !useMeijering && !useJerman)
+        mexErrMsgIdAndTxt("fibermetric_gpu:usage",
+            "Last argument must be 'frangi', 'sato', 'meijering', or 'jerman'.");
 
     //--- Output Allocation ---
     mxGPUArray* output = mxGPUCreateGPUArray(3, dims, mxSINGLE_CLASS, mxREAL, MX_GPU_DO_NOT_INITIALIZE);
@@ -435,7 +485,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
             derivKernelDev, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock);
         cudaCheck(cudaGetLastError());
 
-        cudaCheck(cudaDeviceSynchronize());
+        //cudaCheck(cudaDeviceSynchronize());
         cudaFree(gaussKernelDev);
         cudaFree(derivKernelDev);
 
@@ -453,7 +503,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         hessianToEigenvaluesKernel<<<nBlocks, threadsPerBlock>>>(
             Dxx, Dyy, Dzz, Dxy, Dxz, Dyz, l1, l2, l3, n);
         cudaCheck(cudaGetLastError());
-        cudaCheck(cudaDeviceSynchronize());
+        //cudaCheck(cudaDeviceSynchronize());
         cudaFree(Dxx); cudaFree(Dyy); cudaFree(Dzz);
         cudaFree(Dxy); cudaFree(Dxz); cudaFree(Dyz);
 
@@ -467,9 +517,15 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         if (useFrangi) {
             vesselnessFrangiKernelFromEigen<<<nBlocks, threadsPerBlock>>>(
                 l1, l2, l3, vessTmp, n, inv2Alpha2, inv2Beta2, inv2Gamma2, bright, doScaleNorm, scaleNorm);
-        } else {
+        } else if (useSato) {
             vesselnessSatoKernelFromEigen<<<nBlocks, threadsPerBlock>>>(
                 l1, l2, l3, vessTmp, n, inv2Alpha2, inv2Beta2, bright);
+        } else if (useMeijering) {
+            neuritenessMeijeringKernelFromEigen<<<nBlocks, threadsPerBlock>>>(
+                l1, l2, l3, vessTmp, n, bright);
+        } else if (useJerman) {
+            vesselnessJermanKernelFromEigen<<<nBlocks, threadsPerBlock>>>(
+                l1, l2, l3, vessTmp, n, inv2Alpha2, inv2Beta2, bright, scaleNorm);
         }
         cudaCheck(cudaGetLastError());
 

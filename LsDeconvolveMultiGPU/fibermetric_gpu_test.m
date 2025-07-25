@@ -7,8 +7,8 @@ fprintf('\n==== Benchmark: fibermetric (CPU) vs fibermetric_gpu (gpuArray only) 
 %volOrig = im2single(tiffreadVolume("V:\tif\Glycin_MORF\crop_ds_it03_g2.0_crop.tif"));
 polarities = {'dark', 'bright'};
 
-sigma_from = 1; sigma_to = 6; sigma_step = 1;
-alpha = 1; beta = 0.01; structureSensitivity = 15;
+sigma_from = 1; sigma_to = 7; sigma_step = 1;
+alpha = 1; beta = 0.01; structureSensitivity = 0.5;
 
 benchmarks = [];
 results = struct();
