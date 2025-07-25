@@ -970,17 +970,8 @@ function bl = process_block(bl, block, psf, niter, lambda, stop_criterion, filte
         bl = filter_subband_3d_z(bl, filter.destripe_sigma, 0, "db9");
     end
 
-    % alpha – weight for "blobness" suppression (Ra): typically 0.5 or 0.5²
-    % beta – weight for "plate-like" suppression (Rb): typically 0.5 or 0.5²
-    % gamma – normalization for the "second order structureness" (S): often set high, e.g., 15² or 500
-    % Object is brighter than background	'bright'
-    % Object is darker than background	'dark'
-    % sigma_from = 1; sigma_to = 4; sigma_step = 1;
-    % alpha=0.2640; beta=0.9963; gamma=127.98;
-    % bl = fibermetric_gpu(bl, sigma_from, sigma_to, sigma_step, alpha, beta, gamma, 'bright');
+    bl = apply_fibermetric_filter(bl, filter.fibermetric_sigma, 'bright');
 
-    % since prctile function needs high vram usage gather it to avoid low memory error
-    bl = apply_fibermetric_filter(bl, filter.fibermetric_sigma, 'Bright');
     if gpu && isgpuarray(bl)
         % Reseting the GPU
         bl = gather(bl);
