@@ -86,34 +86,42 @@ void buildGaussianAndDerivativeKernelsDevice(
 
 //---------------- Separable 1D Convolution (fmaf, in-place option) -------------------------
 template<int AXIS>
-__global__ void separableConvolution1DConstKernel(
+__global__ void separableConvolution1DTiledConstKernel(
     const float* __restrict__ input,  float* __restrict__ output,
     int kernelLen, int nRows, int nCols, int nSlices, bool useGaussian)
 {
-    size_t idx    = size_t(blockIdx.x) * blockDim.x + threadIdx.x;
-    size_t total  = size_t(nRows) * nCols * nSlices;
-    if (idx >= total) return;
-
-    int row   = int(idx % nRows);
-    int col   = int((idx / nRows) % nCols);
-    int slice = int(idx / (size_t(nRows) * nCols));
+    // Only AXIS == 0 (X-pass) is supported for shared-mem tiling here
+    constexpr int TILE_SIZE = 128;  // Set to 128 or 256 as per shared memory limit and occupancy
+    extern __shared__ float tile[];
+    int col = blockIdx.y;
+    int slice = blockIdx.z;
 
     int halfWidth = kernelLen >> 1;
+    int tileStart = blockIdx.x * TILE_SIZE;
+    int globalY = col, globalZ = slice;
+
+    // Each thread loads one element, plus halo at start/end
+    for (int tx = threadIdx.x; tx < TILE_SIZE + kernelLen - 1; tx += blockDim.x)
+    {
+        int inputX = tileStart + tx - halfWidth;
+        // Reflect boundary
+        int rr = reflectCoord(inputX, nRows);
+
+        tile[tx] = input[linearIndex3D(rr, globalY, globalZ, nRows, nCols)];
+    }
+    __syncthreads();
+
+    int x = tileStart + threadIdx.x;
+    if (x >= nRows) return;
+
     float acc = 0.f;
     for (int k = -halfWidth; k <= halfWidth; ++k)
     {
-        int rr = row, cc = col, ss = slice;
-        if (AXIS == 0) rr += k;
-        if (AXIS == 1) cc += k;
-        if (AXIS == 2) ss += k;
-        rr = reflectCoord(rr, nRows);
-        cc = reflectCoord(cc, nCols);
-        ss = reflectCoord(ss, nSlices);
-
+        int idx = threadIdx.x + k + halfWidth;
         float coef = useGaussian ? gCoef[k + halfWidth] : dCoef[k + halfWidth];
-        acc = fmaf(coef, input[linearIndex3D(rr, cc, ss, nRows, nCols)], acc);
+        acc = fmaf(coef, tile[idx], acc);
     }
-    output[idx] = acc;
+    output[linearIndex3D(x, globalY, globalZ, nRows, nCols)] = acc;
 }
 
 template<int AXIS>
@@ -130,21 +138,45 @@ __global__ void separableConvolution1DDeviceKernelFlat(
     int col   = int((idx / nRows) % nCols);
     int slice = int(idx / (size_t(nRows) * nCols));
 
+#if (AXIS == 0)
+    // Shared memory tiling for X axis (rows)
+    extern __shared__ float shInput[];
+    int halfWidth = kernelLen >> 1;
+    int tileStart = blockIdx.x * blockDim.x - halfWidth;
+    int localIdx  = threadIdx.x + halfWidth;
+    // Load the whole tile (including halo) into shared memory
+    for (int k = threadIdx.x; k < blockDim.x + 2*halfWidth; k += blockDim.x) {
+        int globalRow = tileStart + k;
+        int safeRow = reflectCoord(globalRow, nRows);
+        shInput[k] = input[linearIndex3D(safeRow, col, slice, nRows, nCols)];
+    }
+    __syncthreads();
+
+    // Now do convolution in shared memory
+    float acc = 0.f;
+    for (int k = -halfWidth; k <= halfWidth; ++k)
+    {
+        int sIdx = localIdx + k;
+        float coef = kernelDev[k + halfWidth];
+        acc = fmaf(coef, shInput[sIdx], acc);
+    }
+    output[idx] = acc;
+#else
+    // Y or Z axis: original device path
     int halfWidth = kernelLen >> 1;
     float acc = 0.f;
     for (int k = -halfWidth; k <= halfWidth; ++k)
     {
         int rr = row, cc = col, ss = slice;
-        if (AXIS == 0) rr += k;
         if (AXIS == 1) cc += k;
         if (AXIS == 2) ss += k;
-        rr = reflectCoord(rr, nRows);
         cc = reflectCoord(cc, nCols);
         ss = reflectCoord(ss, nSlices);
 
         acc = fmaf(kernelDev[k + halfWidth], input[linearIndex3D(rr, cc, ss, nRows, nCols)], acc);
     }
     output[idx] = acc;
+#endif
 }
 
 void launchSeparableConvolutionDevice(
@@ -154,29 +186,46 @@ void launchSeparableConvolutionDevice(
 {
     size_t total = size_t(nRows) * nCols * nSlices;
     size_t nBlocks = (total + threadsPerBlock - 1) / threadsPerBlock;
+
     if (useConstMem && kernelLen <= MAX_CONST_COEF_LEN)
     {
         if (axis == 0)
-            separableConvolution1DConstKernel<0><<<nBlocks, threadsPerBlock, 0, stream>>>(
+        {
+            constexpr int TILE_SIZE = 128;  // Can tune for best occupancy
+            dim3 blockDim(TILE_SIZE, 1, 1);
+            dim3 gridDim((nRows + TILE_SIZE - 1) / TILE_SIZE, nCols, nSlices);
+            size_t shmemSize = (TILE_SIZE + kernelLen - 1) * sizeof(float);
+            separableConvolution1DTiledConstKernel<0><<<gridDim, blockDim, shmemSize, stream>>>(
                 inputDev, outputDev, kernelLen, nRows, nCols, nSlices, useGaussian);
+        }
         else if (axis == 1)
+        {
             separableConvolution1DConstKernel<1><<<nBlocks, threadsPerBlock, 0, stream>>>(
                 inputDev, outputDev, kernelLen, nRows, nCols, nSlices, useGaussian);
-        else
+        }
+        else // axis == 2
+        {
             separableConvolution1DConstKernel<2><<<nBlocks, threadsPerBlock, 0, stream>>>(
                 inputDev, outputDev, kernelLen, nRows, nCols, nSlices, useGaussian);
+        }
     }
     else
     {
         if (axis == 0)
+        {
             separableConvolution1DDeviceKernelFlat<0><<<nBlocks, threadsPerBlock, 0, stream>>>(
                 inputDev, outputDev, kernelDev, kernelLen, nRows, nCols, nSlices);
+        }
         else if (axis == 1)
+        {
             separableConvolution1DDeviceKernelFlat<1><<<nBlocks, threadsPerBlock, 0, stream>>>(
                 inputDev, outputDev, kernelDev, kernelLen, nRows, nCols, nSlices);
-        else
+        }
+        else // axis == 2
+        {
             separableConvolution1DDeviceKernelFlat<2><<<nBlocks, threadsPerBlock, 0, stream>>>(
                 inputDev, outputDev, kernelDev, kernelLen, nRows, nCols, nSlices);
+        }
     }
     cudaCheck(cudaPeekAtLastError());
 }
