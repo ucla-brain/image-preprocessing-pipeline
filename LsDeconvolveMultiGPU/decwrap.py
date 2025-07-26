@@ -346,7 +346,7 @@ def main():
     parser.add_argument('--fibermetric-beta', type=float, default=0.01,
                         help='Frangi/Jerman: Controls sensitivity to blob-like (spherical) structures. '
                              'Lower values (e.g. 0.01–0.5) increase selectivity for elongated tubes, suppressing spherical objects. '
-                             'For thin vessel or neurite enhancement, use a low value (default: 0.01).')
+                             'For thin vessel or neurite enhancement, use a low value.')
     parser.add_argument('--fibermetric-gamma', type=float, default=0.01,
                         help='Frangi/Jerman: Structure sensitivity parameter (gamma). '
                              'Sets the threshold for how much image contrast is required to detect a vessel. '
