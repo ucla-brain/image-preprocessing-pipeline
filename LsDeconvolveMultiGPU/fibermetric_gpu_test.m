@@ -11,7 +11,7 @@ alpha_init = 1; beta_init = 0.01; structureSensitivity_init = 0.5;
 
 methodNames = {'frangi', 'sato', 'meijering', 'jerman'};
 nMethods = numel(methodNames);
-options = optimoptions('particleswarm', 'Display', 'off', 'MaxIterations', 1e9, 'SwarmSize', 200, 'MaxStallIterations', 50, 'InertiaRange', [0.2 0.9], ...
+options = optimoptions('particleswarm', 'Display', 'off', 'MaxIterations', 1, 'SwarmSize', 200, 'MaxStallIterations', 50, 'InertiaRange', [0.2 0.9], ...
     'SelfAdjustmentWeight', 1.5, 'SocialAdjustmentWeight', 1.2, 'FunctionTolerance', 1e-3, 'HybridFcn', @fmincon); 
 
 benchmarks = [];
