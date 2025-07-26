@@ -172,11 +172,9 @@ __global__ void separableConvolution1DDeviceKernelFlat(
     size_t total  = size_t(nRows) * nCols * nSlices;
     if (idx >= total) return;
 
-    int row   = int(idx % nRows);
+#if (AXIS == 0)
     int col   = int((idx / nRows) % nCols);
     int slice = int(idx / (size_t(nRows) * nCols));
-
-#if (AXIS == 0)
     // Shared memory tiling for X axis (rows)
     extern __shared__ float shInput[];
     int halfWidth = kernelLen >> 1;
@@ -200,6 +198,9 @@ __global__ void separableConvolution1DDeviceKernelFlat(
     }
     output[idx] = acc;
 #else
+    int row   = int(idx % nRows);
+    int col   = int((idx / nRows) % nCols);
+    int slice = int(idx / (size_t(nRows) * nCols));
     // Y or Z axis: original device path
     int halfWidth = kernelLen >> 1;
     float acc = 0.f;
