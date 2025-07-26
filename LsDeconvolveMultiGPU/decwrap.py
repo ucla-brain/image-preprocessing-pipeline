@@ -490,7 +490,7 @@ def main():
         f"    {args.fibermetric_alpha}, ...\n"
         f"    {args.fibermetric_beta}, ...\n"
         f"    {args.fibermetric_gamma}, ...\n"
-        f"    {args.fibermetric_method}, ...\n"
+        f"    '{args.fibermetric_method}', ...\n"
         f"    {args.regularize_interval}, ...\n"
         f"    {int(args.resume)}, ...\n"
         f"    {args.start_block}, ...\n"
