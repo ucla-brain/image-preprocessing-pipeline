@@ -97,7 +97,7 @@ void buildGaussianAndDerivativeKernelsDevice(
 template<int AXIS>
 __global__ void separableConvolution1DTiledConstKernel(
     const float* __restrict__ input,  float* __restrict__ output,
-    int kernelLen, int nRows, int nCols, int nSlices, bool useGaussian, int tileSize)
+    int kernelLen, int nRows, int nCols, int nSlices, int tileSize)
 {
     // Only AXIS == 0 (X-pass) is supported for shared-mem tiling here
     extern __shared__ float tile[];
@@ -126,8 +126,7 @@ __global__ void separableConvolution1DTiledConstKernel(
     for (int k = -halfWidth; k <= halfWidth; ++k)
     {
         int idx = threadIdx.x + k + halfWidth;
-        float coef = useGaussian ? gCoef[k + halfWidth] : dCoef[k + halfWidth];
-        acc = fmaf(coef, tile[idx], acc);
+        acc = fmaf(gCoef[k + halfWidth], tile[idx], acc);
     }
     output[linearIndex3D(x, globalY, globalZ, nRows, nCols)] = acc;
 }
@@ -136,7 +135,7 @@ __global__ void separableConvolution1DTiledConstKernel(
 template<int AXIS>
 __global__ void separableConvolution1DConstKernel(
     const float* __restrict__ input,  float* __restrict__ output,
-    int kernelLen, int nRows, int nCols, int nSlices, bool useGaussian)
+    int kernelLen, int nRows, int nCols, int nSlices)
 {
     size_t idx    = size_t(blockIdx.x) * blockDim.x + threadIdx.x;
     size_t total  = size_t(nRows) * nCols * nSlices;
@@ -156,8 +155,7 @@ __global__ void separableConvolution1DConstKernel(
         cc = reflectCoord(cc, nCols);
         ss = reflectCoord(ss, nSlices);
 
-        float coef = useGaussian ? gCoef[k + halfWidth] : dCoef[k + halfWidth];
-        acc = fmaf(coef, input[linearIndex3D(rr, cc, ss, nRows, nCols)], acc);
+        acc = fmaf(gCoef[k + halfWidth], input[linearIndex3D(rr, cc, ss, nRows, nCols)], acc);
     }
     output[idx] = acc;
 }
@@ -221,7 +219,7 @@ __global__ void separableConvolution1DDeviceKernelFlat(
 void launchSeparableConvolutionDevice(
     int axis, const float* inputDev, float* outputDev, const float* kernelDev,
     int kernelLen, int nRows, int nCols, int nSlices, int threadsPerBlock,
-    cudaStream_t stream, bool useGaussian, bool useConstMem, int tileSize)
+    cudaStream_t stream, bool useConstMem, int tileSize)
 {
     size_t total = size_t(nRows) * nCols * nSlices;
     size_t nBlocks = (total + threadsPerBlock - 1) / threadsPerBlock;
@@ -248,17 +246,17 @@ void launchSeparableConvolutionDevice(
             dim3 gridDim((nRows + tileSize - 1) / tileSize, nCols, nSlices);
             size_t shmemSize = (tileSize + kernelLen - 1) * sizeof(float);
             separableConvolution1DTiledConstKernel<0><<<gridDim, blockDim, shmemSize, stream>>>(
-                inputDev, outputDev, kernelLen, nRows, nCols, nSlices, useGaussian, tileSize);
+                inputDev, outputDev, kernelLen, nRows, nCols, nSlices, tileSize);
         }
         else if (axis == 1)
         {
             separableConvolution1DConstKernel<1><<<nBlocks, threadsPerBlock, 0, stream>>>(
-                inputDev, outputDev, kernelLen, nRows, nCols, nSlices, useGaussian);
+                inputDev, outputDev, kernelLen, nRows, nCols, nSlices);
         }
         else // axis == 2
         {
             separableConvolution1DConstKernel<2><<<nBlocks, threadsPerBlock, 0, stream>>>(
-                inputDev, outputDev, kernelLen, nRows, nCols, nSlices, useGaussian);
+                inputDev, outputDev, kernelLen, nRows, nCols, nSlices);
         }
     }
     else
@@ -290,12 +288,52 @@ void uploadCoefficientsToConstantMemory(const float* h_gCoef, const float* h_dCo
 
 //-------------------- 5-point Second Derivative (fmaf, precompute squares) ----------------------
 // Fused Hessian kernel with shared memory padding to avoid bank conflicts
+
+//-------------------- Eigenvalue Decomposition (fmaf, float only) ----------------------
+template <typename T>
+__device__ __host__ __forceinline__ void swapCUDA(T& a, T& b) noexcept { T tmp = a; a = b; b = tmp; }
+
+__device__ __host__ __forceinline__
+void computeSymmetricEigenvalues3x3(
+    float A11, float A22, float A33, float A12, float A13, float A23,
+    float& l1, float& l2, float& l3) noexcept
+{
+    // All computations in float, but always use fmaf and avoid unnecessary sqrt
+    float q = (A11 + A22 + A33) / 3.f;
+    float B11 = A11 - q, B22 = A22 - q, B33 = A33 - q;
+    float A12Sq = A12*A12, A13Sq = A13*A13, A23Sq = A23*A23;
+    // float p2 = (B11 * B11 + B22 * B22 + B33 * B33 + 2.f * (A12Sq + A13Sq + A23Sq)) / 6.f + EPSILON;
+    float p2 = fmaf(fmaf(B11, B11, fmaf(B22, B22, fmaf(B33, B33, 2.f * (A12Sq + A13Sq + A23Sq)))), ONE_OVER_SIX, EPSILON);
+    float p = sqrtf(p2);
+    if (p < 1e-8f) { l1 = l2 = l3 = q; return; }
+    float C11 = B11 / p, C22 = B22 / p, C33 = B33 / p;
+    float C12 = A12 / p, C13 = A13 / p, C23 = A23 / p;
+    // |C| = C11*(C22*C33 - C23*C23) - C12*(C12*C33 - C13*C23) + C13*(C12*C23 - C13*C22)
+    float detC = fmaf(C11, fmaf(C22, C33, -C23*C23), fmaf(-C12, fmaf(C12, C33, -C13*C23), C13 * fmaf(C12, C23, -C13*C22)));
+    float r = fmaxf(fminf(detC * 0.5f, 1.f), -1.f);
+    float phi         = acosf(r) / 3.f;
+    float cosPhi      = cosf(phi);
+    float cosPhiShift = cosf(TWO_PI_OVER_THREE + phi);
+    float twiceP = 2.f * p;
+    float x1 = fmaf(twiceP, cosPhi     , q);
+    float x3 = fmaf(twiceP, cosPhiShift, q);
+    float x2 = fmaf(3.f, q, -x1 - x3);
+
+    float vals[3] = {x1, x2, x3};
+    float absVals[3] = {fabsf(x1), fabsf(x2), fabsf(x3)};
+    int order[3] = {0, 1, 2};
+    if (absVals[0] > absVals[1]) { swapCUDA(order[0], order[1]); swapCUDA(absVals[0], absVals[1]); }
+    if (absVals[1] > absVals[2]) { swapCUDA(order[1], order[2]); swapCUDA(absVals[1], absVals[2]); }
+    if (absVals[0] > absVals[1]) { swapCUDA(order[0], order[1]); swapCUDA(absVals[0], absVals[1]); }
+    l1 = vals[order[0]]; l2 = vals[order[1]]; l3 = vals[order[2]];
+}
+
 template<int TILE_X=16, int TILE_Y=8, int TILE_Z=8, int SHMEM_PAD=1>
-__global__ void fusedHessianKernelCoalesced(
+__global__ void fusedHessianEigenKernel(
     const float* __restrict__ smoothedInput,
-    float* __restrict__ Dxx, float* __restrict__ Dyy, float* __restrict__ Dzz,
-    float* __restrict__ Dxy, float* __restrict__ Dxz, float* __restrict__ Dyz,
-    int nRows, int nCols, int nSlices, float sigmaSq, bool useMeijering, float alphaMeijering)
+    float* __restrict__ l1, float* __restrict__ l2, float* __restrict__ l3,
+    int nRows, int nCols, int nSlices, float sigmaSq,
+    bool useMeijering, float alphaMeijering)
 {
     constexpr int HALO = 2;
     __shared__ float shInput[TILE_Z+2*HALO][TILE_Y+2*HALO][TILE_X+2*HALO + SHMEM_PAD];
@@ -307,7 +345,7 @@ __global__ void fusedHessianKernelCoalesced(
     int sy = threadIdx.y + HALO;
     int sz = threadIdx.z + HALO;
 
-    // Load shared memory (with bank conflict padding)
+    // Shared memory load (identical to before)
     for (int dz = threadIdx.z; dz < TILE_Z + 2*HALO; dz += blockDim.z)
     for (int dy = threadIdx.y; dy < TILE_Y + 2*HALO; dy += blockDim.y)
     for (int dx = threadIdx.x; dx < TILE_X + 2*HALO; dx += blockDim.x)
@@ -322,8 +360,9 @@ __global__ void fusedHessianKernelCoalesced(
     }
     __syncthreads();
 
-    // Main computation, as before
+    // Main computation
     if (x < nRows && y < nCols && z < nSlices) {
+        // === Hessian, identical as before ===
         float xm2 = shInput[sz][sy][sx-2];
         float xm1 = shInput[sz][sy][sx-1];
         float xc  = shInput[sz][sy][sx];
@@ -376,108 +415,47 @@ __global__ void fusedHessianKernelCoalesced(
         if (useMeijering) {
             float trace = dxx + dyy + dzz;
             float delta = alphaMeijering * trace;
-            dxx += delta;
-            dyy += delta;
-            dzz += delta;
+            dxx += delta; dyy += delta; dzz += delta;
         }
 
+        // === Eigenvalue calculation, in-register ===
+        float A11 = dxx * sigmaSq;
+        float A22 = dyy * sigmaSq;
+        float A33 = dzz * sigmaSq;
+        float A12 = dxy * sigmaSq;
+        float A13 = dxz * sigmaSq;
+        float A23 = dyz * sigmaSq;
+        float ev1, ev2, ev3;
+        computeSymmetricEigenvalues3x3(A11, A22, A33, A12, A13, A23, ev1, ev2, ev3);
+
         size_t idx = linearIndex3D(x, y, z, nRows, nCols);
-        Dxx[idx] = dxx * sigmaSq;;
-        Dyy[idx] = dyy * sigmaSq;;
-        Dzz[idx] = dzz * sigmaSq;;
-        Dxy[idx] = dxy * sigmaSq;;
-        Dxz[idx] = dxz * sigmaSq;;
-        Dyz[idx] = dyz * sigmaSq;;
+        l1[idx] = ev1;
+        l2[idx] = ev2;
+        l3[idx] = ev3;
     }
 }
 
 // --------- 2. Launch wrapper for fused Hessian ----------
-void launchFusedHessianKernelCoalesced(
+void launchFusedHessianEigenKernel(
     const float* smoothedInput,
-    float* Dxx, float* Dyy, float* Dzz, float* Dxy, float* Dxz, float* Dyz,
-    int nRows, int nCols, int nSlices, cudaStream_t stream,
+    float* l1, float* l2, float* l3,
+    int nRows, int nCols, int nSlices,
+    cudaStream_t stream,
     float sigmaSq, bool useMeijering, float alphaMeijering)
 {
     constexpr int TX = 8, TY = 8, TZ = 8, SHMEM_PAD = 1;
     dim3 blockDim(TX, TY, TZ);
-    dim3 gridDim((nRows + TX - 1) / TX, (nCols + TY - 1) / TY, (nSlices + TZ - 1) / TZ);
-    fusedHessianKernelCoalesced<TX,TY,TZ,SHMEM_PAD><<<gridDim, blockDim, 0, stream>>>(
-        smoothedInput, Dxx, Dyy, Dzz, Dxy, Dxz, Dyz,
-        nRows, nCols, nSlices, sigmaSq, useMeijering, alphaMeijering);
+    dim3 gridDim((nRows + TX - 1) / TX,
+                 (nCols + TY - 1) / TY,
+                 (nSlices + TZ - 1) / TZ);
+
+    fusedHessianEigenKernel<TX,TY,TZ,SHMEM_PAD>
+        <<<gridDim, blockDim, 0, stream>>>(
+            smoothedInput, l1, l2, l3,
+            nRows, nCols, nSlices,
+            sigmaSq, useMeijering, alphaMeijering
+        );
     cudaCheck(cudaPeekAtLastError());
-}
-
-//---------------- Cross Derivatives: chain of separable convs (reuse buffers) ----------------
-void launchCrossDerivativesDevice(
-    const float* inputDev, float* Dxy, float* Dxz, float* Dyz,
-    float* buffer1, float* buffer2,
-    const float* derivKernelDev, const float* gaussKernelDev, int kernelLen,
-    int nRows, int nCols, int nSlices, int threadsPerBlock, cudaStream_t stream,
-    bool useConstMem, int tileSize)
-{
-    // Dxy: d2/dxdy
-    launchSeparableConvolutionDevice(0, inputDev, buffer1, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/false, useConstMem, tileSize);
-    launchSeparableConvolutionDevice(1, buffer1 , buffer2, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/false, useConstMem, tileSize);
-    launchSeparableConvolutionDevice(2, buffer2 , Dxy    , gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/true , useConstMem, tileSize);
-    // Dxz: d2/dxdz
-    launchSeparableConvolutionDevice(0, inputDev, buffer1, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/false, useConstMem, tileSize);
-    launchSeparableConvolutionDevice(2, buffer1 , buffer2, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/false, useConstMem, tileSize);
-    launchSeparableConvolutionDevice(1, buffer2 , Dxz    , gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/true , useConstMem, tileSize);
-    // Dyz: d2/dydz
-    launchSeparableConvolutionDevice(1, inputDev, buffer1, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/false, useConstMem, tileSize);
-    launchSeparableConvolutionDevice(2, buffer1 , buffer2, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/false, useConstMem, tileSize);
-    launchSeparableConvolutionDevice(0, buffer2 , Dyz    , gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/true , useConstMem, tileSize);
-}
-
-//-------------------- Eigenvalue Decomposition (fmaf, float only) ----------------------
-template <typename T>
-__device__ __host__ __forceinline__ void swapCUDA(T& a, T& b) noexcept { T tmp = a; a = b; b = tmp; }
-
-__device__ __host__ __forceinline__
-void computeSymmetricEigenvalues3x3(
-    float A11, float A22, float A33, float A12, float A13, float A23,
-    float& l1, float& l2, float& l3) noexcept
-{
-    // All computations in float, but always use fmaf and avoid unnecessary sqrt
-    float q = (A11 + A22 + A33) / 3.f;
-    float B11 = A11 - q, B22 = A22 - q, B33 = A33 - q;
-    float A12Sq = A12*A12, A13Sq = A13*A13, A23Sq = A23*A23;
-    // float p2 = (B11 * B11 + B22 * B22 + B33 * B33 + 2.f * (A12Sq + A13Sq + A23Sq)) / 6.f + EPSILON;
-    float p2 = fmaf(fmaf(B11, B11, fmaf(B22, B22, fmaf(B33, B33, 2.f * (A12Sq + A13Sq + A23Sq)))), ONE_OVER_SIX, EPSILON);
-    float p = sqrtf(p2);
-    if (p < 1e-8f) { l1 = l2 = l3 = q; return; }
-    float C11 = B11 / p, C22 = B22 / p, C33 = B33 / p;
-    float C12 = A12 / p, C13 = A13 / p, C23 = A23 / p;
-    // |C| = C11*(C22*C33 - C23*C23) - C12*(C12*C33 - C13*C23) + C13*(C12*C23 - C13*C22)
-    float detC = fmaf(C11, fmaf(C22, C33, -C23*C23), fmaf(-C12, fmaf(C12, C33, -C13*C23), C13 * fmaf(C12, C23, -C13*C22)));
-    float r = fmaxf(fminf(detC * 0.5f, 1.f), -1.f);
-    float phi         = acosf(r) / 3.f;
-    float cosPhi      = cosf(phi);
-    float cosPhiShift = cosf(TWO_PI_OVER_THREE + phi);
-    float twiceP = 2.f * p;
-    float x1 = fmaf(twiceP, cosPhi     , q);
-    float x3 = fmaf(twiceP, cosPhiShift, q);
-    float x2 = fmaf(3.f, q, -x1 - x3);
-
-    float vals[3] = {x1, x2, x3};
-    float absVals[3] = {fabsf(x1), fabsf(x2), fabsf(x3)};
-    int order[3] = {0, 1, 2};
-    if (absVals[0] > absVals[1]) { swapCUDA(order[0], order[1]); swapCUDA(absVals[0], absVals[1]); }
-    if (absVals[1] > absVals[2]) { swapCUDA(order[1], order[2]); swapCUDA(absVals[1], absVals[2]); }
-    if (absVals[0] > absVals[1]) { swapCUDA(order[0], order[1]); swapCUDA(absVals[0], absVals[1]); }
-    l1 = vals[order[0]]; l2 = vals[order[1]]; l3 = vals[order[2]];
-}
-
-// --- Eigenvalue Kernel: computes and stores l1,l2,l3 for each voxel
-__global__ void hessianToEigenvaluesKernel(
-    const float* __restrict__ Dxx, const float* __restrict__ Dyy, const float* __restrict__ Dzz,
-    const float* __restrict__ Dxy, const float* __restrict__ Dxz, const float* __restrict__ Dyz,
-    float* __restrict__ l1, float* __restrict__ l2, float* __restrict__ l3, size_t n)
-{
-    size_t idx = size_t(blockIdx.x) * blockDim.x + threadIdx.x;
-    if (idx >= n) return;
-    computeSymmetricEigenvalues3x3(
-        Dxx[idx], Dyy[idx], Dzz[idx], Dxy[idx], Dxz[idx], Dyz[idx], l1[idx], l2[idx], l3[idx]);
 }
 
 //-------------------- Vesselness Kernels -------------
@@ -635,16 +613,10 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
     cudaCheck(cudaMalloc(&buffer2, bytes));
 
     // --- Allocate Hessian and eigenvalue arrays ---
-    float *Dxx, *Dyy, *Dzz, *Dxy, *Dxz, *Dyz;
-    cudaCheck(cudaMalloc(&Dxx, bytes));
-    cudaCheck(cudaMalloc(&Dyy, bytes));
-    cudaCheck(cudaMalloc(&Dzz, bytes));
-    cudaCheck(cudaMalloc(&Dxy, bytes));
-    cudaCheck(cudaMalloc(&Dxz, bytes));
-    cudaCheck(cudaMalloc(&Dyz, bytes));
-    float *l1 = Dxx;
-    float *l2 = Dyy;
-    float *l3 = Dzz;
+    float *l1, *l2, *l3;
+    cudaCheck(cudaMalloc(&l1, bytes));
+    cudaCheck(cudaMalloc(&l2, bytes));
+    cudaCheck(cudaMalloc(&l3, bytes));
 
     //--- Sigma List and Scale Norm ---
     std::vector<double> sigmaList;
@@ -696,17 +668,13 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         cudaCheck(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
 
         // 4. Gaussian smoothing (separable, X, Y, Z) -- must select const/global, gaussian/deriv
-        launchSeparableConvolutionDevice(0, inputDev, buffer1, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/true, useConstMem, tileSize);
-        launchSeparableConvolutionDevice(1, buffer1 , buffer2, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/true, useConstMem, tileSize);
-        launchSeparableConvolutionDevice(2, buffer2 , buffer1, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/true, useConstMem, tileSize);
+        launchSeparableConvolutionDevice(0, inputDev, buffer1, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, useConstMem, tileSize);
+        launchSeparableConvolutionDevice(1, buffer1 , buffer2, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, useConstMem, tileSize);
+        launchSeparableConvolutionDevice(2, buffer2 , buffer1, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, useConstMem, tileSize);
 
-        // 5. Hessian diagonals and Scale normalization
+        // 5. Hessian diagonals, Scale normalization, Eigenvalue decomposition
         float sigmaSq = float(sigma * sigma);
-        launchFusedHessianKernelCoalesced(buffer1, Dxx, Dyy, Dzz, Dxy, Dxz, Dyz, nRows, nCols, nSlices, stream, sigmaSq, useMeijering, alphaMeijering);
-
-        // 6. Eigenvalue decomposition: Now l1/l2/l3 == Dxx/Dyy/Dzz are overwritten with eigenvalues
-        hessianToEigenvaluesKernel<<<nBlocks, threadsPerBlock, 0, stream>>>(
-            Dxx, Dyy, Dzz, Dxy, Dxz, Dyz, l1, l2, l3, n);
+        launchFusedHessianEigenKernel(buffer1, l1, l2, l3, nRows, nCols, nSlices, stream, sigmaSq, useMeijering, alphaMeijering);
 
         // 7. Vesselness kernel (choose the right one for your method)
         bool firstPass = (sigmaIdx == 0);
@@ -746,8 +714,6 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
 
     //--- Free device buffers ---
     cudaFree(buffer1); cudaFree(buffer2);
-    cudaFree(Dxx); cudaFree(Dyy); cudaFree(Dzz);
-    cudaFree(Dxy); cudaFree(Dxz); cudaFree(Dyz);
-    //cudaFree(l1); cudaFree(l2); cudaFree(l3);
+    cudaFree(l1); cudaFree(l2); cudaFree(l3);
     mxGPUDestroyGPUArray(input); mxGPUDestroyGPUArray(output);
 }
