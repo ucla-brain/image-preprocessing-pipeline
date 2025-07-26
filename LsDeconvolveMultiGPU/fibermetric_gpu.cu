@@ -410,23 +410,23 @@ void launchFusedHessianKernelCoalesced(
 //---------------- Cross Derivatives: chain of separable convs (reuse buffers) ----------------
 void launchCrossDerivativesDevice(
     const float* inputDev, float* Dxy, float* Dxz, float* Dyz,
-    float* tmp1, float* tmp2,
+    float* buffer1, float* buffer2,
     const float* derivKernelDev, const float* gaussKernelDev, int kernelLen,
     int nRows, int nCols, int nSlices, int threadsPerBlock, cudaStream_t stream,
     bool useConstMem, int tileSize)
 {
     // Dxy: d2/dxdy
-    launchSeparableConvolutionDevice(0, inputDev, tmp1, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/false, useConstMem, tileSize);
-    launchSeparableConvolutionDevice(1, tmp1, tmp2, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/false, useConstMem, tileSize);
-    launchSeparableConvolutionDevice(2, tmp2, Dxy, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/true, useConstMem, tileSize);
+    launchSeparableConvolutionDevice(0, inputDev, buffer1, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/false, useConstMem, tileSize);
+    launchSeparableConvolutionDevice(1, buffer1 , buffer2, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/false, useConstMem, tileSize);
+    launchSeparableConvolutionDevice(2, buffer2 , Dxy    , gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/true , useConstMem, tileSize);
     // Dxz: d2/dxdz
-    launchSeparableConvolutionDevice(0, inputDev, tmp1, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/false, useConstMem, tileSize);
-    launchSeparableConvolutionDevice(2, tmp1, tmp2, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/false, useConstMem, tileSize);
-    launchSeparableConvolutionDevice(1, tmp2, Dxz, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/true, useConstMem, tileSize);
+    launchSeparableConvolutionDevice(0, inputDev, buffer1, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/false, useConstMem, tileSize);
+    launchSeparableConvolutionDevice(2, buffer1 , buffer2, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/false, useConstMem, tileSize);
+    launchSeparableConvolutionDevice(1, buffer2 , Dxz    , gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/true , useConstMem, tileSize);
     // Dyz: d2/dydz
-    launchSeparableConvolutionDevice(1, inputDev, tmp1, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/false, useConstMem, tileSize);
-    launchSeparableConvolutionDevice(2, tmp1, tmp2, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/false, useConstMem, tileSize);
-    launchSeparableConvolutionDevice(0, tmp2, Dyz, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/true, useConstMem, tileSize);
+    launchSeparableConvolutionDevice(1, inputDev, buffer1, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/false, useConstMem, tileSize);
+    launchSeparableConvolutionDevice(2, buffer1 , buffer2, derivKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/false, useConstMem, tileSize);
+    launchSeparableConvolutionDevice(0, buffer2 , Dyz    , gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/true , useConstMem, tileSize);
 }
 
 //-------------------- Eigenvalue Decomposition (fmaf, float only) ----------------------
@@ -481,9 +481,10 @@ __global__ void hessianToEigenvaluesKernel(
 }
 
 //-------------------- Vesselness Kernels -------------
+
 __global__ void vesselnessFrangiKernelFromEigen(
     const float* __restrict__ l1, const float* __restrict__ l2, const float* __restrict__ l3,
-    float* __restrict__ vesselness, size_t n,
+    float* __restrict__ prevMax, size_t n, bool firstPass,
     const float inv2Alpha2, const float inv2Beta2, const float inv2Gamma2, bool bright)
 {
     size_t idx = size_t(blockIdx.x) * blockDim.x + threadIdx.x;
@@ -502,15 +503,16 @@ __global__ void vesselnessFrangiKernelFromEigen(
         float tmp   = fmaf(-expRa, expRb, expRb);
         response    = fmaf(-expS2, tmp, tmp);
     }
-    vesselness[idx] = response;
+    prevMax[idx] = (firstPass) ? response : fmaxf(prevMax[idx], response);
 }
 
 __global__ void vesselnessSatoKernelFromEigen(
     const float* __restrict__ l1,    // Eigenvalue 1 array
     const float* __restrict__ l2,    // Eigenvalue 2 array
     const float* __restrict__ l3,    // Eigenvalue 3 array
-    float* __restrict__ vesselness,  // Output vesselness
+    float* __restrict__ prevMax,     // Output vesselness
     size_t n,                        // Number of voxels
+    bool firstPass,                  // no max projection is needed on first passage
     const float inv2Alpha2,          // 1/(2*alpha^2) (precomputed in double, cast to float)
     const float inv2Beta2,           // 1/(2*beta^2)
     bool bright                      // Polarity flag
@@ -529,15 +531,16 @@ __global__ void vesselnessSatoKernelFromEigen(
         float absEv2TimesExpL1 = absEv2 * expL1;
         response = fmaf(-expL3, absEv2TimesExpL1, absEv2TimesExpL1);
     }
-    vesselness[idx] = response;
+    prevMax[idx] = (firstPass) ? response : fmaxf(prevMax[idx], response);
 }
 
 __global__ void neuritenessMeijeringKernelFromEigen(
     const float* __restrict__ l1,
     const float* __restrict__ l2,
     const float* __restrict__ l3,
-    float* __restrict__ neuriteness,
+    float* __restrict__ prevMax,
     size_t n,
+    bool firstPass,
     bool bright)
 {
     size_t idx = size_t(blockIdx.x) * blockDim.x + threadIdx.x;
@@ -549,12 +552,13 @@ __global__ void neuritenessMeijeringKernelFromEigen(
     bool isNeurite = bright ? (ev2 < 0.f && ev3 < 0.f)
                             : (ev2 > 0.f && ev3 > 0.f);
 
-    neuriteness[idx] = isNeurite ? fabsf(ev1) : 0.f;
+    float response = isNeurite ? fabsf(ev1) : 0.f;
+    prevMax[idx] = (firstPass) ? response : fmaxf(prevMax[idx], response);
 }
 
 __global__ void vesselnessJermanKernelFromEigen(
     const float* __restrict__ l1, const float* __restrict__ l2, const float* __restrict__ l3,
-    float* __restrict__ vesselness, size_t n,
+    float* __restrict__ prevMax, size_t n, bool firstPass,
     const float inv2Alpha2, const float inv2Beta2, const float threshold,
     bool bright)
 {
@@ -573,15 +577,8 @@ __global__ void vesselnessJermanKernelFromEigen(
         float expRb = __expf(-Rb2 * inv2Beta2);
         response = fmaf(-expRa, expRb, expRb);
     }
-    vesselness[idx] = (response > threshold) ? response : 0.f;
-}
-
-//--------------------utility kernels
-
-__global__ void elementwiseMaxKernel(const float* src, float* dst, size_t n)
-{
-    size_t idx = size_t(blockIdx.x) * blockDim.x + threadIdx.x;
-    if (idx < n) dst[idx] = fmaxf(dst[idx], src[idx]);
+    response = (response > threshold) ? response : 0.f;
+    prevMax[idx] = (firstPass) ? response : fmaxf(prevMax[idx], response);
 }
 
 //-------------------- Main MEX Entry (minimal VRAM, buffer reuse, cleanup early) ------------------
@@ -629,28 +626,25 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         mexErrMsgIdAndTxt("fibermetric_gpu:usage",
             "Last argument must be 'frangi', 'sato', 'meijering', or 'jerman'.");
 
-    //--- Output Allocation ---
+    //--- Workspace Buffers and Output Allocation ---
     mxGPUArray* output = mxGPUCreateGPUArray(3, dims, mxSINGLE_CLASS, mxREAL, MX_GPU_DO_NOT_INITIALIZE);
     float* outputDev = static_cast<float*>(mxGPUGetData(output));
-    cudaCheck(cudaMemset(outputDev, 0, n * sizeof(float)));
-
-    //--- Workspace Buffers ---
-    float *tmp1, *tmp2;
+    float *buffer1, *buffer2;
     size_t bytes = n * sizeof(float);
-    cudaCheck(cudaMalloc(&tmp1,   bytes));
-    cudaCheck(cudaMalloc(&tmp2,   bytes));
+    cudaCheck(cudaMalloc(&buffer1, bytes));
+    cudaCheck(cudaMalloc(&buffer2, bytes));
 
     // --- Allocate Hessian and eigenvalue arrays ---
-    float *Dxx, *Dyy, *Dzz, *Dxy, *Dxz, *Dyz, *l1, *l2, *l3;
+    float *Dxx, *Dyy, *Dzz, *Dxy, *Dxz, *Dyz;
     cudaCheck(cudaMalloc(&Dxx, bytes));
     cudaCheck(cudaMalloc(&Dyy, bytes));
     cudaCheck(cudaMalloc(&Dzz, bytes));
     cudaCheck(cudaMalloc(&Dxy, bytes));
     cudaCheck(cudaMalloc(&Dxz, bytes));
     cudaCheck(cudaMalloc(&Dyz, bytes));
-    cudaCheck(cudaMalloc(&l1, bytes));
-    cudaCheck(cudaMalloc(&l2, bytes));
-    cudaCheck(cudaMalloc(&l3, bytes));
+    float *l1 = Dxx;
+    float *l2 = Dyy;
+    float *l3 = Dzz;
 
     //--- Sigma List and Scale Norm ---
     std::vector<double> sigmaList;
@@ -702,31 +696,32 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         cudaCheck(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
 
         // 4. Gaussian smoothing (separable, X, Y, Z) -- must select const/global, gaussian/deriv
-        launchSeparableConvolutionDevice(0, inputDev, tmp1, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/true, useConstMem, tileSize);
-        launchSeparableConvolutionDevice(1, tmp1    , tmp2, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/true, useConstMem, tileSize);
-        launchSeparableConvolutionDevice(2, tmp2    , tmp1, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/true, useConstMem, tileSize);
+        launchSeparableConvolutionDevice(0, inputDev, buffer1, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/true, useConstMem, tileSize);
+        launchSeparableConvolutionDevice(1, buffer1 , buffer2, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/true, useConstMem, tileSize);
+        launchSeparableConvolutionDevice(2, buffer2 , buffer1, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/true, useConstMem, tileSize);
 
         // 5. Hessian diagonals and Scale normalization
         float sigmaSq = float(sigma * sigma);
-        launchFusedHessianKernelCoalesced(tmp1, Dxx, Dyy, Dzz, Dxy, Dxz, Dyz, nRows, nCols, nSlices, stream, sigmaSq, useMeijering, alphaMeijering);
+        launchFusedHessianKernelCoalesced(buffer1, Dxx, Dyy, Dzz, Dxy, Dxz, Dyz, nRows, nCols, nSlices, stream, sigmaSq, useMeijering, alphaMeijering);
 
-        // 6. Eigenvalue decomposition
+        // 6. Eigenvalue decomposition: Now l1/l2/l3 == Dxx/Dyy/Dzz are overwritten with eigenvalues
         hessianToEigenvaluesKernel<<<nBlocks, threadsPerBlock, 0, stream>>>(
             Dxx, Dyy, Dzz, Dxy, Dxz, Dyz, l1, l2, l3, n);
 
         // 7. Vesselness kernel (choose the right one for your method)
+        bool firstPass = (sigmaIdx == 0);
         if (useFrangi) {
             vesselnessFrangiKernelFromEigen<<<nBlocks, threadsPerBlock, 0, stream>>>(
-                l1, l2, l3, tmp1, n, inv2Alpha2, inv2Beta2, inv2Gamma2, bright);
+                l1, l2, l3, outputDev, n, firstPass, inv2Alpha2, inv2Beta2, inv2Gamma2, bright);
         } else if (useSato) {
             vesselnessSatoKernelFromEigen<<<nBlocks, threadsPerBlock, 0, stream>>>(
-                l1, l2, l3, tmp1, n, inv2Alpha2, inv2Beta2, bright);
+                l1, l2, l3, outputDev, n, firstPass, inv2Alpha2, inv2Beta2, bright);
         } else if (useMeijering) {
             neuritenessMeijeringKernelFromEigen<<<nBlocks, threadsPerBlock, 0, stream>>>(
-                l1, l2, l3, tmp1, n, bright);
+                l1, l2, l3, outputDev, n, firstPass, bright);
         } else if (useJerman) {
             vesselnessJermanKernelFromEigen<<<nBlocks, threadsPerBlock, 0, stream>>>(
-                l1, l2, l3, tmp1, n, inv2Alpha2, inv2Beta2, gamma, bright);
+                l1, l2, l3, outputDev, n, firstPass, inv2Alpha2, inv2Beta2, gamma, bright);
         }
 
         // collect the steam
@@ -735,13 +730,6 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
 
         // --- Launch the captured graph for this sigma ---
         cudaCheck(cudaGraphLaunch(graphExec, stream));
-        //cudaCheck(cudaStreamSynchronize(stream)); // Wait for results
-
-        // --- Max projection or copy, as before ---
-        if (!singleSigma)
-            elementwiseMaxKernel<<<nBlocks, threadsPerBlock, 0, stream>>>(tmp1, outputDev, n);
-        else
-            cudaCheck(cudaMemcpyAsync(outputDev, tmp1, bytes, cudaMemcpyDeviceToDevice, stream));
 
         cudaFree(gaussKernelDev);
         cudaFree(derivKernelDev);
@@ -757,10 +745,9 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
     plhs[0] = mxGPUCreateMxArrayOnGPU(output);
 
     //--- Free device buffers ---
-    cudaFree(tmp1); cudaFree(tmp2);
+    cudaFree(buffer1); cudaFree(buffer2);
     cudaFree(Dxx); cudaFree(Dyy); cudaFree(Dzz);
     cudaFree(Dxy); cudaFree(Dxz); cudaFree(Dyz);
-    cudaFree(l1); cudaFree(l2); cudaFree(l3);
-
+    //cudaFree(l1); cudaFree(l2); cudaFree(l3);
     mxGPUDestroyGPUArray(input); mxGPUDestroyGPUArray(output);
 }

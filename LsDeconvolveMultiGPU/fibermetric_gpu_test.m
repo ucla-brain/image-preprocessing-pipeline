@@ -11,7 +11,7 @@ alpha_init = 1; beta_init = 0.01; structureSensitivity_init = 0.5;
 
 methodNames = {'frangi', 'sato', 'meijering', 'jerman'};
 nMethods = numel(methodNames);
-options = optimoptions('particleswarm', 'Display', 'off', 'MaxIterations', 300, 'SwarmSize', 200, 'MaxStallIterations', 50, 'InertiaRange', [0.2 0.9], ...
+options = optimoptions('particleswarm', 'Display', 'off', 'MaxIterations', 1e9, 'SwarmSize', 200, 'MaxStallIterations', 50, 'InertiaRange', [0.2 0.9], ...
     'SelfAdjustmentWeight', 1.5, 'SocialAdjustmentWeight', 1.2, 'FunctionTolerance', 1e-3, 'HybridFcn', @fmincon); 
 
 benchmarks = [];
@@ -68,9 +68,9 @@ for i = 1:numel(polarities)
     % --- Optimize alpha, beta, and structureSensitivity for Jerman using Sato as reference ---
     if i == 1
         objfun = @(x) gather(double(norm(normalize_gpu( fibermetric_gpu(gvol, sigma_from, sigma_to, sigma_step, x(1), x(2), x(3), pol, 'jerman') ) - fm_gpu_sato_optim , 'fro')));
-        options.InitialSwarmMatrix = [0, 0.002, 0];
+        options.InitialSwarmMatrix = [1.3148779, 0.9779502, 0.2452215];
         lb = [0, 0,    0.0];
-        ub = [2, 1,    0.5];
+        ub = [9, 9,    0.5];
         [x_jerman, ~] = particleswarm(objfun, 3, lb, ub, options);
         alpha_jerman = x_jerman(1); beta_jerman = x_jerman(2); structureSensitivity_jerman = x_jerman(3);
         fprintf("Jerman (%s): alpha=%.7f, beta=%.7f, StructureSensitivity=%.7f \n", pol, alpha_jerman, beta_jerman, structureSensitivity_jerman);
