@@ -1,57 +1,101 @@
-% clear; clc;
 gpu = gpuDevice(2);
-
-fprintf('\n==== Benchmark: fibermetric (CPU) vs fibermetric_gpu (gpuArray only) [bright/dark, frangi/sato] ====\n');
+fprintf('\n==== Benchmark: fibermetric (CPU) vs fibermetric_gpu (gpuArray only) [bright/dark, frangi/sato/meijering/jerman] ====\n');
 
 % volOrig = im2single(load("ExampleVolumeStent.mat").V);
-%volOrig = im2single(tiffreadVolume("V:\tif\Glycin_MORF\crop_ds_it03_g2.0_crop.tif"));
-polarities = {'dark', 'bright'};
+volOrig = im2single(tiffreadVolume("V:\tif\Glycin_MORF\crop_ds_it03_g2.0_crop.tif"));
+polarities = {'bright', 'dark'};
 
 sigma_from = 1; sigma_to = 7; sigma_step = 1;
-alpha = 1; beta = 0.01; structureSensitivity = 0.5;
+alpha_init = 1; beta_init = 0.01; structureSensitivity_init = 0.5;
+lb = [   0, 0, 0];
+ub = [ 999, 9, 1];
+
+methodNames = {'frangi', 'sato', 'meijering', 'jerman'};
+nMethods = numel(methodNames);
+options = optimoptions('particleswarm','Display','off','MaxIterations',1e9);
 
 benchmarks = [];
 results = struct();
 
 for i = 1:numel(polarities)
     pol = polarities{i};
-    % Use a copy of the original volume for each polarity!
     if strcmp(pol, 'dark')
         vol = 1 - volOrig; % robust inversion for floating-point
     else
         vol = volOrig;
     end
 
-    % MATLAB fibermetric (CPU, Frangi)
-    t = tic;
-    fm_cpu = fibermetric(vol, sigma_from:sigma_step:sigma_to,  'ObjectPolarity', pol, 'StructureSensitivity', structureSensitivity);
-    tcpu = toc(t);
-
-    % GPU Ferengi/Frangi
+    % GPU: Prepare
     gvol = gpuArray(vol);
+
+    % --- Run Sato (reference) ---
     t = tic;
-    fm_gpu_frangi = fibermetric_gpu(gvol, sigma_from, sigma_to, sigma_step, alpha, beta, structureSensitivity, pol, 'frangi');
+    fm_gpu_sato = fibermetric_gpu(gvol, sigma_from, sigma_to, sigma_step, alpha_init, beta_init, structureSensitivity_init, pol, 'sato');
+    wait(gpu);
+    tgpu_sato = toc(t);
+    fm_gpu_sato_optim = normalize_gpu(fm_gpu_sato);
+
+    % --- Optimize alpha, beta, and structureSensitivity for frangi, using Sato as reference ---
+    objfun = @(x) norm(normalize_gpu(fibermetric_gpu(gvol, sigma_from, sigma_to, sigma_step, x(1), x(2), x(3), pol, 'frangi')) - fm_gpu_sato_optim, 'fro');
+    x0 = [alpha_init, beta_init, structureSensitivity_init];
+    [x_frangi,~] = particleswarm(objfun, numel(x0), lb, ub, options);
+
+    alpha_frangi = x_frangi(1); beta_frangi = x_frangi(2); structureSensitivity_frangi = x_frangi(3);
+    fprintf("Ferengi (%s): alpha=%.3f, beta=%.3f, StructureSensitivity=%.3f\n", pol, alpha_frangi, beta_frangi, structureSensitivity_frangi);
+
+    % --- Frangi GPU with optimized params ---
+    t = tic;
+    fm_gpu_frangi = fibermetric_gpu(gvol, sigma_from, sigma_to, sigma_step, alpha_frangi, beta_frangi, structureSensitivity_frangi, pol, 'frangi');
     wait(gpu);
     tgpu_frangi = toc(t);
     fm_gpu_frangi = gather(fm_gpu_frangi);
 
-    % GPU Sato
+    % MATLAB fibermetric with optimized params (CPU, Frangi)
     t = tic;
-    fm_gpu_sato = fibermetric_gpu(gvol, sigma_from, sigma_to, sigma_step, alpha, beta, structureSensitivity, pol, 'sato');
-    wait(gpu);
-    tgpu_sato = toc(t);
-    fm_gpu_sato = gather(fm_gpu_sato);
+    fm_cpu = fibermetric(vol, sigma_from:sigma_step:sigma_to,  'ObjectPolarity', pol, 'StructureSensitivity', structureSensitivity_frangi);
+    tcpu = toc(t);
 
-    % Store for summary and plotting
-    results(i).vol           = vol;
-    results(i).fm_cpu        = fm_cpu;
-    results(i).fm_gpu_frangi = fm_gpu_frangi;
-    results(i).fm_gpu_sato   = fm_gpu_sato;
-    results(i).pol           = pol;
+    % --- Meijering GPU (no tuning) ---
+    t = tic;
+    fm_gpu_meijering = fibermetric_gpu(gvol, sigma_from, sigma_to, sigma_step, alpha_init, beta_init, structureSensitivity_init, pol, 'meijering');
+    wait(gpu);
+    tgpu_meijering = toc(t);
+    fm_gpu_meijering = gather(fm_gpu_meijering);
+
+    % --- Optimize alpha, beta for Jerman using Sato as reference ---
+    objfunJ = @(x) norm(normalize_gpu( fibermetric_gpu(gvol, sigma_from, sigma_to, sigma_step, x(1), x(2), x(3), pol, 'jerman') ) - fm_gpu_sato_optim , 'fro');
+    x0 = [alpha_init, beta_init, 0];
+    [x_jerman,~] = particleswarm(objfun, numel(x0), lb, ub, options);
+
+    alpha_jerman = x_jerman(1); beta_jerman = x_jerman(2); structureSensitivity_jerman = x_jerman(3);
+    fprintf("Jerman (%s): alpha=%.3f, beta=%.3f, StructureSensitivity=%.3f \n", pol, alpha_jerman, beta_jerman, structureSensitivity_jerman);
+
+    t = tic;
+    fm_gpu_jerman = fibermetric_gpu(gvol, sigma_from, sigma_to, sigma_step, alpha_jerman, beta_jerman, structureSensitivity_jerman, pol, 'jerman');
+    wait(gpu);
+    tgpu_jerman = toc(t);
+    fm_gpu_jerman = gather(fm_gpu_jerman);
+
+    % --- Store for summary and plotting ---
+    results(i).vol            = vol;
+    results(i).fm_cpu         = fm_cpu;
+    results(i).fm_gpu_frangi  = fm_gpu_frangi;
+    results(i).fm_gpu_sato    = fm_gpu_sato;
+    results(i).fm_gpu_meijering = fm_gpu_meijering;
+    results(i).fm_gpu_jerman  = fm_gpu_jerman;
+    results(i).pol            = pol;
+    results(i).alpha_frangi   = alpha_frangi;
+    results(i).beta_frangi    = beta_frangi;
+    results(i).structureSensitivity_frangi = structureSensitivity_frangi;
+    results(i).alpha_jerman  = alpha_jerman;
+    results(i).beta_jerman   = beta_jerman;
+    results(i).structureSensitivity_jerman = structureSensitivity_jerman;
 
     benchmarks = [benchmarks;
         {pol, 'frangi', tcpu, tgpu_frangi, tcpu/tgpu_frangi};
-        {pol, 'sato',   tcpu, tgpu_sato,   tcpu/tgpu_sato}];
+        {pol, 'sato',   tcpu, tgpu_sato,   tcpu/tgpu_sato};
+        {pol, 'meijering', tcpu, tgpu_meijering, tcpu/tgpu_meijering};
+        {pol, 'jerman',    tcpu, tgpu_jerman, tcpu/tgpu_jerman}];
 end
 
 % Print summary table
@@ -61,128 +105,34 @@ T = cell2table(benchmarks, ...
 fprintf('\n=== Benchmark Results ===\n');
 disp(T);
 
-% --- Combined plot: 2 rows (polarity) x 4 columns ---
-figure('Name', 'Max Projections: Both Polarities', 'Position', [100 100 1600 600]);
+% --- Combined plot: 2 rows (polarity) x 6 columns ---
+figure('Name', 'Max Projections: Both Polarities', 'Position', [100 100 2400 600]);
+methodLabels = {'Original', 'fibermetric (CPU)', 'frangi', 'sato', 'meijering', 'jerman'};
 for i = 1:numel(polarities)
     pol = results(i).pol;
     colormap(gray);
     if strcmp(pol, 'dark')
-    subplot(2,4,(i-1)*4+1); imagesc(min(results(i).vol          ,[],3)); axis image off; colorbar; title(['Original (',pol,')']);
+        subplot(2,6,(i-1)*6+1); imagesc(min(results(i).vol,[],3)); axis image off; colorbar; title(['Original (',pol,')']);
     else
-    subplot(2,4,(i-1)*4+1); imagesc(max(results(i).vol          ,[],3)); axis image off; colorbar; title(['Original (',pol,')']);
+        subplot(2,6,(i-1)*6+1); imagesc(max(results(i).vol,[],3)); axis image off; colorbar; title(['Original (',pol,')']);
     end
-    subplot(2,4,(i-1)*4+2); imagesc(max(results(i).fm_cpu       ,[],3)); axis image off; colorbar; title('fibermetric (CPU)');
-    subplot(2,4,(i-1)*4+3); imagesc(max(results(i).fm_gpu_frangi,[],3)); axis image off; colorbar; title('fibermetric\_gpu (frangi)');
-    subplot(2,4,(i-1)*4+4); imagesc(max(results(i).fm_gpu_sato  ,[],3)); axis image off; colorbar; title('fibermetric\_gpu (sato)');
+    subplot(2,6,(i-1)*6+2); imagesc(max(results(i).fm_cpu,[],3)); axis image off; colorbar; title('fibermetric (CPU)');
+    subplot(2,6,(i-1)*6+3); imagesc(max(results(i).fm_gpu_frangi,[],3)); axis image off; colorbar; title('frangi');
+    subplot(2,6,(i-1)*6+4); imagesc(max(results(i).fm_gpu_sato,[],3)); axis image off; colorbar; title('sato');
+    subplot(2,6,(i-1)*6+5); imagesc(max(results(i).fm_gpu_meijering,[],3)); axis image off; colorbar; title('meijering');
+    subplot(2,6,(i-1)*6+6); imagesc(max(results(i).fm_gpu_jerman,[],3)); axis image off; colorbar; title('jerman');
 end
 colormap(gray);
 
-
-% % --- ScaleNorm Estimation Section ---
-% fprintf('\n=== scaleNorm Estimation Experiments ===\n');
-% scalenorms = [];
-% randSeedList = [42 123 2025];
-% szList = [32 32 32; 64 32 16; 32 32 4; 48 48 8];
-% sigma_for_norm = 1; % Only sigma==1 is meaningful for MATLAB norm matching
-% 
-% % For both random volumes and the stent volume
-% volumes = {volOrig, []}; % Second will be filled in loop with randoms
-% volLabels = {'ExampleVolumeStent', 'Random'};
-% 
-% for v=1:2
-%     for si = 1:size(szList,1)
-%         sz = szList(si,:);
-%         for r = 1:numel(randSeedList)
-%             seed = randSeedList(r);
-%             if v==1
-%                 vol = imresize3(volOrig, sz, 'nearest');
-%             else
-%                 rng(seed);
-%                 vol = rand(sz, 'single');
-%             end
-%             gvol = gpuArray(vol);
-% 
-%             fm_cpu = fibermetric(vol, sigma_for_norm, ...
-%                 'ObjectPolarity', 'bright', ...
-%                 'StructureSensitivity', structureSensitivity);
-% 
-%             fm_gpu = fibermetric_gpu(gvol, sigma_for_norm, sigma_for_norm, 1, alpha, beta, structureSensitivity, 'bright', 'frangi');
-%             fm_gpu = gather(fm_gpu);
-% 
-%             % Mask for regions where both are nonzero
-%             mask = (fm_cpu > 0 & fm_gpu > 0);
-%             ratio = fm_cpu(mask) ./ fm_gpu(mask);
-%             scaleNorm_median = median(ratio(:));
-%             scaleNorm_mean   = mean(ratio(:));
-%             scaleNorm_std    = std(ratio(:));
-%             scalenorms = [scalenorms;
-%                 {volLabels{v}, sz, seed, scaleNorm_median, scaleNorm_mean, scaleNorm_std}];
-%         end
-%     end
-% end
-% 
-% scaleTable = cell2table(scalenorms, ...
-%     'VariableNames', {'VolumeType', 'Size', 'Seed', 'MedianRatio', 'MeanRatio', 'StdRatio'});
-% 
-% disp(scaleTable);
-% 
-% % Optional: plot histogram of scaleNorm ratios for the last case
-% figure('Name','scaleNorm ratio distribution (last case)');
-% histogram(ratio,50);
-% xlabel('fibermetric(MATLAB) ./ fibermetric\_gpu'), ylabel('Voxel Count');
-% title('Distribution of scaleNorm ratio (last test)');
-% grid on;
-% 
-% % Print summary
-% fprintf('Median scaleNorm ratio across all tests: %.5f ± %.5f\n', ...
-%     mean(scaleTable.MedianRatio), std(scaleTable.MedianRatio));
-% 
-% 
-% 
-% % --- fibermetric_gpu Output Distribution Across Sigma ---
-% fprintf('\n=== fibermetric\\_gpu Output Distribution for Different Sigmas ===\n');
-% test_sigmas = [0.5 1 2 4 8 16];
-% inputs = {volOrig, rand(size(volOrig), 'single')};
-% input_labels = {'ExampleVolumeStent', 'Random'};
-% 
-% gpu = gpuDevice; % Make sure GPU is ready
-% 
-% statRows = {};
-% figure('Name', 'fibermetric\_gpu Value Distribution (various sigmas)', 'Position', [100 200 1400 500]);
-% 
-% for vi = 1:numel(inputs)
-%     test_vol = inputs{vi};
-%     gvol = gpuArray(test_vol);
-%     for si = 1:numel(test_sigmas)
-%         sigma = test_sigmas(si);
-%         out_gpu = gather(fibermetric_gpu(gvol, sigma, sigma, 1, alpha, beta, structureSensitivity, 'bright', 'frangi'));
-%         mask = out_gpu > 0;
-%         vals = out_gpu(mask);
-% 
-%         statRows{end+1,1} = input_labels{vi};
-%         statRows{end,2} = sigma;
-%         statRows{end,3} = mean(vals);
-%         statRows{end,4} = std(vals);
-%         statRows{end,5} = min(vals);
-%         statRows{end,6} = max(vals);
-%         statRows{end,7} = prctile(vals,1);
-%         statRows{end,8} = prctile(vals,50);
-%         statRows{end,9} = prctile(vals,99);
-% 
-%         subplot(numel(inputs), numel(test_sigmas), (vi-1)*numel(test_sigmas)+si);
-%         histogram(vals,50, 'EdgeColor','none');
-%         title(sprintf('%s\n\\sigma=%.2f', input_labels{vi}, sigma));
-%         xlabel('Value'); ylabel('Count');
-%         set(gca,'yscale','log');
-%         grid on;
-%     end
-% end
-% 
-% statTable = cell2table(statRows, ...
-%     'VariableNames', {'InputType','Sigma','Mean','Std','Min','Max','P01','P50','P99'});
-% 
-% disp(statTable);
-
-
-
 fprintf('\nDone!\n');
+
+% --- Utility: fminsearch with bounds ---
+function [x,fval] = fminsearchbnd(fun, x0, LB, UB, options)
+    % fminsearch, but clamp variables to [LB,UB] each iteration
+    funwrap = @(x) fun(max(LB, min(UB, x)));
+    [x, fval] = fminsearch(funwrap, x0, options);
+end
+
+function normed = normalize_gpu(arr)
+    normed = arr ./ max(arr, [], 'all');
+end
