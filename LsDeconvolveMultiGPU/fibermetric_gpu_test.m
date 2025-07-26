@@ -38,7 +38,7 @@ for i = 1:numel(polarities)
     % --- Optimize alpha, beta, and structureSensitivity for frangi, using Sato as reference ---
     if i == 1
         objfun = @(x) gather(double(norm(normalize_gpu(fibermetric_gpu(gvol, sigma_from, sigma_to, sigma_step, x(1), x(2), x(3), pol, 'frangi')) - fm_gpu_sato_optim, 'fro')));
-        options.InitialSwarmMatrix = [0.7144562, 0.8752373, 0.0995564];
+        options.InitialSwarmMatrix = [0.7144561, 0.8752375, 0.0995564];
         lb = [0, 0,    0];
         ub = [2, 1, 9999];
         [x_frangi, ~] = particleswarm(objfun, 3, lb, ub, options);
