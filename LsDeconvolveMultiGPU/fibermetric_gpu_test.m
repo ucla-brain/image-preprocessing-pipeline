@@ -8,8 +8,6 @@ polarities = {'bright', 'dark'};
 
 sigma_from = 1; sigma_to = 7; sigma_step = 1;
 alpha_init = 1; beta_init = 0.01; structureSensitivity_init = 0.5;
-lb = [0, 0,    0];
-ub = [2, 1, 9999];
 
 methodNames = {'frangi', 'sato', 'meijering', 'jerman'};
 nMethods = numel(methodNames);
@@ -41,6 +39,8 @@ for i = 1:numel(polarities)
     if i == 1
         objfun = @(x) gather(double(norm(normalize_gpu(fibermetric_gpu(gvol, sigma_from, sigma_to, sigma_step, x(1), x(2), x(3), pol, 'frangi')) - fm_gpu_sato_optim, 'fro')));
         options.InitialSwarmMatrix = [0.7144562, 0.8752373, 0.0995564];
+        lb = [0, 0,    0];
+        ub = [2, 1, 9999];
         [x_frangi, ~] = particleswarm(objfun, 3, lb, ub, options);
         alpha_frangi = x_frangi(1); beta_frangi = x_frangi(2); structureSensitivity_frangi = x_frangi(3);
         fprintf("Ferengi (%s): alpha=%.7f, beta=%.7f, StructureSensitivity=%.7f \n", pol, alpha_frangi, beta_frangi, structureSensitivity_frangi);
@@ -69,6 +69,8 @@ for i = 1:numel(polarities)
     if i == 1
         objfun = @(x) gather(double(norm(normalize_gpu( fibermetric_gpu(gvol, sigma_from, sigma_to, sigma_step, x(1), x(2), x(3), pol, 'jerman') ) - fm_gpu_sato_optim , 'fro')));
         options.InitialSwarmMatrix = [0, 0.002, 0];
+        lb = [0, 0,    0.0];
+        ub = [2, 1,    0.5];
         [x_jerman, ~] = particleswarm(objfun, 3, lb, ub, options);
         alpha_jerman = x_jerman(1); beta_jerman = x_jerman(2); structureSensitivity_jerman = x_jerman(3);
         fprintf("Jerman (%s): alpha=%.7f, beta=%.7f, StructureSensitivity=%.7f \n", pol, alpha_jerman, beta_jerman, structureSensitivity_jerman);

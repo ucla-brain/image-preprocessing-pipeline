@@ -574,7 +574,7 @@ def main():
                         if pbar is None:
                             total = int(match.group(2))
                             pbar = tqdm(total=total, desc="Blocks", unit="block",
-                                        initial=n_completed, smoothing=0.01)
+                                        initial=n_completed, smoothing=0.001)
                         if block_num not in seen_blocks:
                             pbar.update(1)
                             seen_blocks.add(block_num)
