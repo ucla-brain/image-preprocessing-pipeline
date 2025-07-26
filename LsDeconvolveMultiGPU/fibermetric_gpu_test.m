@@ -11,7 +11,7 @@ alpha_init = 1; beta_init = 0.01; structureSensitivity_init = 0.5;
 
 methodNames = {'frangi', 'sato', 'meijering', 'jerman'};
 nMethods = numel(methodNames);
-options = optimoptions('particleswarm', 'Display', 'off', 'MaxIterations', 1e9, 'SwarmSize', 200, 'MaxStallIterations', 50, 'InertiaRange', [0.2 0.9], ...
+options = optimoptions('particleswarm', 'Display', 'off', 'MaxIterations', 1, 'SwarmSize', 200, 'MaxStallIterations', 50, 'InertiaRange', [0.2 0.9], ...
     'SelfAdjustmentWeight', 1.5, 'SocialAdjustmentWeight', 1.2, 'FunctionTolerance', 1e-3, 'HybridFcn', @fmincon); 
 
 benchmarks = [];
@@ -68,7 +68,7 @@ for i = 1:numel(polarities)
     % --- Optimize alpha, beta, and structureSensitivity for Jerman using Sato as reference ---
     if i == 1
         objfun = @(x) gather(double(norm(normalize_gpu( fibermetric_gpu(gvol, sigma_from, sigma_to, sigma_step, x(1), x(2), x(3), pol, 'jerman') ) - fm_gpu_sato_optim , 'fro')));
-        options.InitialSwarmMatrix = [1.3148779, 0.9779502, 0.2452215];
+        options.InitialSwarmMatrix = [1.4774389, 3.7746898, 0.1998290];
         lb = [0, 0,    0.0];
         ub = [9, 9,    0.5];
         [x_jerman, ~] = particleswarm(objfun, 3, lb, ub, options);

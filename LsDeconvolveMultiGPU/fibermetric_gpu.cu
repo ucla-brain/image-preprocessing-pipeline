@@ -451,8 +451,8 @@ void computeSymmetricEigenvalues3x3(
     // |C| = C11*(C22*C33 - C23*C23) - C12*(C12*C33 - C13*C23) + C13*(C12*C23 - C13*C22)
     float detC = fmaf(C11, fmaf(C22, C33, -C23*C23), fmaf(-C12, fmaf(C12, C33, -C13*C23), C13 * fmaf(C12, C23, -C13*C22)));
     float r = fmaxf(fminf(detC * 0.5f, 1.f), -1.f);
-    float phi = acosf(r) / 3.f;
-    float cosPhi = cosf(phi);
+    float phi         = acosf(r) / 3.f;
+    float cosPhi      = cosf(phi);
     float cosPhiShift = cosf(TWO_PI_OVER_THREE + phi);
     float twiceP = 2.f * p;
     float x1 = fmaf(twiceP, cosPhi     , q);
@@ -692,7 +692,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
 
         // 3. Clean up any old graph (always recapture per sigma for correctness) ---
         if (graphExec) { cudaCheck(cudaGraphExecDestroy(graphExec)); graphExec = nullptr; }
-        if (graph)     { cudaCheck(cudaGraphDestroy(graph)); graph = nullptr; }
+        if (graph)     { cudaCheck(cudaGraphDestroy(graph));         graph     = nullptr; }
         cudaCheck(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
 
         // 4. Gaussian smoothing (separable, X, Y, Z) -- must select const/global, gaussian/deriv
@@ -724,11 +724,11 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
                 l1, l2, l3, outputDev, n, firstPass, inv2Alpha2, inv2Beta2, gamma, bright);
         }
 
-        // collect the steam
+        // 8. collect the steam
         cudaCheck(cudaStreamEndCapture(stream, &graph));
         cudaCheck(cudaGraphInstantiate(&graphExec, graph, nullptr, nullptr, 0));
 
-        // --- Launch the captured graph for this sigma ---
+        // 9. Launch the captured graph for this sigma
         cudaCheck(cudaGraphLaunch(graphExec, stream));
 
         cudaFree(gaussKernelDev);
