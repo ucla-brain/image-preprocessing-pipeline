@@ -1,21 +1,23 @@
 gpu = gpuDevice(2);
-reset(gpu); % Reset the GPU device to clear any previous state
+reset(gpu);
 fprintf('\n==== Benchmark: fibermetric (CPU) vs fibermetric_gpu (gpuArray only) [bright/dark, frangi/sato/meijering/jerman] ====\n');
 
 % ===== Set your reference method here ('frangi' or 'sato') =====
-referenceMethod = 'sato'; % CHANGE to 'frangi' to swap reference
-targetMethod    = setdiff({'frangi','sato'}, referenceMethod, 'stable'){1};
+referenceMethod = 'frangi'; % 'sato' or 'frangi'
+targetMethods = setdiff({'frangi','sato'}, referenceMethod, 'stable');
+targetMethod = targetMethods{1};
 
-% volOrig = im2single(load("ExampleVolumeStent.mat").V);
-volOrig = im2single(tiffreadVolume("V:\tif\Glycin_MORF\crop_ds_it03_g2.0_crop.tif"));
+volOrig = im2single(tiffreadVolume("test_volume.tif"));
 polarities = {'bright', 'dark'};
 
 sigma_from = 1; sigma_to = 7; sigma_step = 1;
-alpha_init = 1; beta_init = 0.01; structureSensitivity_init = 0.5;
+if strcmp(referenceMethod, 'frangi')
+    alpha_init = 0.7144561; beta_init = 0.8752375; structureSensitivity_init = 0.0995564;
+else
+    alpha_init = 1; beta_init = 0.01; structureSensitivity_init = 0.5;
+end
 
-methodNames = {'frangi', 'sato', 'meijering', 'jerman'};
-nMethods = numel(methodNames);
-options = optimoptions('particleswarm', 'Display', 'off', 'MaxIterations', 1, 'SwarmSize', 200, ...
+options = optimoptions('particleswarm', 'Display', 'off', 'MaxIterations', 1e9, 'SwarmSize', 200, ...
     'MaxStallIterations', 50, 'InertiaRange', [0.2 0.9], ...
     'SelfAdjustmentWeight', 1.5, 'SocialAdjustmentWeight', 1.2, ...
     'FunctionTolerance', 1e-3, 'HybridFcn', @fmincon); 
@@ -26,7 +28,7 @@ results = struct();
 for i = 1:numel(polarities)
     pol = polarities{i};
     if strcmp(pol, 'dark')
-        vol = 1 - volOrig; % robust inversion for floating-point
+        vol = 1 - volOrig;
     else
         vol = volOrig;
     end
@@ -40,48 +42,59 @@ for i = 1:numel(polarities)
     tgpu_ref = toc(t);
     fm_gpu_ref_optim = normalize_gpu(fm_gpu_ref);
 
-    % --- Optimize alpha, beta, structureSensitivity for targetMethod using reference as reference ---
+    % --- Optimize targetMethod using reference as reference ---
     if i == 1
-        objfun = @(x) gather(double(norm(normalize_gpu(fibermetric_gpu(gvol, sigma_from, sigma_to, sigma_step, x(1), x(2), x(3), pol, targetMethod)) - fm_gpu_ref_optim, 'fro')));
-        % Use your own initial swarm and bounds for each method:
         if strcmp(targetMethod, 'frangi')
+            objfun = @(x) gather(double(norm(normalize_gpu( ...
+                fibermetric_gpu(gvol, sigma_from, sigma_to, sigma_step, x(1), x(2), x(3), pol, 'frangi')) ...
+                - fm_gpu_ref_optim, 'fro')));
             options.InitialSwarmMatrix = [0.7144561, 0.8752375, 0.0995564];
             lb = [0, 0,    0];
             ub = [2, 1, 9999];
+            [x_opt, ~] = particleswarm(objfun, 3, lb, ub, options);
+            alpha_target = x_opt(1); beta_target = x_opt(2); structureSensitivity_target = x_opt(3);
         else % targetMethod == 'sato'
-            options.InitialSwarmMatrix = [1.0, 0.01, 0.5]; % update as needed
-            lb = [0, 0,    0];
-            ub = [2, 1, 9999];
+            objfun = @(x) gather(double(norm(normalize_gpu( ...
+                fibermetric_gpu(gvol, sigma_from, sigma_to, sigma_step, x(1), x(2), 0.5, pol, 'sato')) ...
+                - fm_gpu_ref_optim, 'fro')));
+            options.InitialSwarmMatrix = [1.0, 0.01];
+            lb = [0, 0];
+            ub = [2, 1];
+            [x_opt, ~] = particleswarm(objfun, 2, lb, ub, options);
+            alpha_target = x_opt(1); beta_target = x_opt(2); structureSensitivity_target = 0.5;
         end
-        [x_opt, ~] = particleswarm(objfun, 3, lb, ub, options);
-        alpha_target = x_opt(1); beta_target = x_opt(2); structureSensitivity_target = x_opt(3);
         fprintf("%s (%s): alpha=%.7f, beta=%.7f, StructureSensitivity=%.7f \n", ...
                 capitalizeFirst(targetMethod), pol, alpha_target, beta_target, structureSensitivity_target);
     end
 
     % --- Run TargetMethod with optimized params ---
     t = tic;
-    fm_gpu_target = fibermetric_gpu(gvol, sigma_from, sigma_to, sigma_step, alpha_target, beta_target, structureSensitivity_target, pol, targetMethod);
+    fm_gpu_target = fibermetric_gpu(gvol, sigma_from, sigma_to, sigma_step, ...
+        alpha_target, beta_target, structureSensitivity_target, pol, targetMethod);
     wait(gpu);
     tgpu_target = toc(t);
     fm_gpu_target = gather(fm_gpu_target);
 
-    % --- MATLAB fibermetric with optimized params (CPU, using whichever method you prefer) ---
+    % --- MATLAB fibermetric (CPU), uses same structureSensitivity as optimized ---
     t = tic;
-    fm_cpu = fibermetric(vol, sigma_from:sigma_step:sigma_to, 'ObjectPolarity', pol, 'StructureSensitivity', structureSensitivity_target);
+    fm_cpu = fibermetric(vol, sigma_from:sigma_step:sigma_to, ...
+        'ObjectPolarity', pol, 'StructureSensitivity', structureSensitivity_target);
     tcpu = toc(t);
 
     % --- Meijering GPU (no tuning) ---
     t = tic;
-    fm_gpu_meijering = fibermetric_gpu(gvol, sigma_from, sigma_to, sigma_step, alpha_init, beta_init, structureSensitivity_init, pol, 'meijering');
+    fm_gpu_meijering = fibermetric_gpu(gvol, sigma_from, sigma_to, sigma_step, ...
+        alpha_init, beta_init, structureSensitivity_init, pol, 'meijering');
     wait(gpu);
     tgpu_meijering = toc(t);
     fm_gpu_meijering = gather(fm_gpu_meijering);
 
-    % --- Optimize alpha, beta, and structureSensitivity for Jerman using reference as reference ---
+    % --- Jerman optimization ---
     if i == 1
-        objfun = @(x) gather(double(norm(normalize_gpu(fibermetric_gpu(gvol, sigma_from, sigma_to, sigma_step, x(1), x(2), x(3), pol, 'jerman')) - fm_gpu_ref_optim, 'fro')));
-        options.InitialSwarmMatrix = [1.4774389, 3.7746898, 0.1998290];
+        objfun = @(x) gather(double(norm(normalize_gpu( ...
+            fibermetric_gpu(gvol, sigma_from, sigma_to, sigma_step, x(1), x(2), x(3), pol, 'jerman')) ...
+            - fm_gpu_ref_optim, 'fro')));
+        options.InitialSwarmMatrix = [1.4774389, 3.7746898, 0];
         lb = [0, 0,    0.0];
         ub = [9, 9,    0.5];
         [x_jerman, ~] = particleswarm(objfun, 3, lb, ub, options);
@@ -90,7 +103,8 @@ for i = 1:numel(polarities)
     end
 
     t = tic;
-    fm_gpu_jerman = fibermetric_gpu(gvol, sigma_from, sigma_to, sigma_step, alpha_jerman, beta_jerman, structureSensitivity_jerman, pol, 'jerman');
+    fm_gpu_jerman = fibermetric_gpu(gvol, sigma_from, sigma_to, sigma_step, ...
+        alpha_jerman, beta_jerman, structureSensitivity_jerman, pol, 'jerman');
     wait(gpu);
     tgpu_jerman = toc(t);
     fm_gpu_jerman = gather(fm_gpu_jerman);
@@ -117,7 +131,40 @@ for i = 1:numel(polarities)
         {pol, 'jerman',       tcpu, tgpu_jerman, tcpu/tgpu_jerman}];
 end
 
-% The rest (printing, plotting) can remain unchanged...
+% Print summary table
+T = cell2table(benchmarks, ...
+    'VariableNames', {'Polarity', 'Method', 'CPU_Time_sec', 'GPU_Time_sec', 'Speedup_vs_CPU'});
+
+fprintf('\n=== Benchmark Results ===\n');
+disp(T);
+
+% --- Combined plot: 2 rows (polarity) x 6 columns, dynamically named ---
+figure('Name', 'Max Projections: Both Polarities', 'Position', [100 100 2400 600]);
+methodLabels = {'Original', 'fibermetric (CPU)', capitalizeFirst(referenceMethod), capitalizeFirst(targetMethod), 'meijering', 'jerman'};
+vol_axis = 3;
+for i = 1:numel(polarities)
+    pol = results(i).pol;
+    idxOffset = (i-1)*6;
+    % Original
+    if strcmp(pol, 'dark')
+        subplot(2,6,idxOffset+1); imagesc(squeeze(min(results(i).vol,[],vol_axis))); axis image off; colorbar; title(['Original (',pol,')']);
+    else
+        subplot(2,6,idxOffset+1); imagesc(squeeze(max(results(i).vol,[],vol_axis))); axis image off; colorbar; title(['Original (',pol,')']);
+    end
+    % fibermetric (CPU)
+    subplot(2,6,idxOffset+2); imagesc(squeeze(max(results(i).fm_cpu,[],vol_axis))); axis image off; colorbar; title('fibermetric (CPU)');
+    % Reference
+    subplot(2,6,idxOffset+3); imagesc(squeeze(max(results(i).(['fm_gpu_' referenceMethod]),[],vol_axis))); axis image off; colorbar; title(capitalizeFirst(referenceMethod));
+    % Target
+    subplot(2,6,idxOffset+4); imagesc(squeeze(max(results(i).(['fm_gpu_' targetMethod]),[],vol_axis))); axis image off; colorbar; title(capitalizeFirst(targetMethod));
+    % Meijering
+    subplot(2,6,idxOffset+5); imagesc(squeeze(max(results(i).fm_gpu_meijering,[],vol_axis))); axis image off; colorbar; title('meijering');
+    % Jerman
+    subplot(2,6,idxOffset+6); imagesc(squeeze(max(results(i).fm_gpu_jerman,[],vol_axis))); axis image off; colorbar; title('jerman');
+end
+colormap(gray);
+
+fprintf('\nDone!\n');
 
 function str = capitalizeFirst(str)
     if ~isempty(str), str(1) = upper(str(1)); end
