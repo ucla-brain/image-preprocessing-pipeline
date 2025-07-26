@@ -405,6 +405,12 @@ def main():
         n_real_blocks_on_gpu += 1
     if args.accelerate:
         n_real_blocks_on_gpu += 2
+
+    if any([s > 0 for s in args.fibermetric_sigma]):
+        total_bl_sized_blocks = n_real_blocks_on_gpu + 2 * n_complex_blocks_on_gpu
+        if total_bl_sized_blocks < 10:
+            n_real_blocks_on_gpu = 10 - 2 * n_complex_blocks_on_gpu
+
     if user_specified_subset or not user_overrode_block_size:
         args.block_size_max = estimate_block_size_max(
             args.gpu_indices,
