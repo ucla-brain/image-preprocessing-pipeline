@@ -18,7 +18,6 @@
 
 #define MAX_CONST_COEF_LEN 4096
 __constant__ float gCoef[MAX_CONST_COEF_LEN];
-__constant__ float dCoef[MAX_CONST_COEF_LEN];
 
 constexpr double SQRT_TWO_PI             = 2.5066282746310002;  // sqrt(2π)
 constexpr float TWO_PI_OVER_THREE        = 2.0943951023931953f; // 2π/3
