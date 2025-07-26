@@ -546,7 +546,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
     const float gamma      = static_cast<float>(structureSensitivity);
     const float inv2Gamma2 = static_cast<float>(1.0 / (2.0 * structureSensitivity * structureSensitivity));
 
-    int nBlocks = int((n + threadsPerBlock - 1) / threadsPerBlock);
+    // int nBlocks = int((n + threadsPerBlock - 1) / threadsPerBlock);
     // --- CUDA Graph Variables ---
     cudaStream_t stream = nullptr;
     cudaCheck(cudaStreamCreate(&stream));
