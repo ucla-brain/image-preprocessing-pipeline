@@ -338,8 +338,27 @@ def main():
     parser.add_argument('--fibermetric-sigma', type=float, nargs=3, metavar=('START', 'STEP', 'END'), default=[0, 0, 0],
                         help='Sigma parameters for built-in fibermetric filter of MATLAB: '
                              '[start step end]. Example: --fibermetric-sigma 1 0.5 3 applies sigmas 1, 1.5, 2, 2.5, 3. '
-                             'Use [0 0 0] to disable filtering. All values must be non-negative.'
-                        )
+                             'Use [0 0 0] to disable filtering. All values must be non-negative.')
+    parser.add_argument('--fibermetric-alpha', type=float, default=1,
+                        help='Frangi/Jerman: Controls sensitivity to plate-like (sheet) structures. '
+                             'Lower values (e.g. 0.5) make the filter more selective for tubes and less responsive to planar or blob-like regions. '
+                             'For most vessel enhancement tasks, values between 0.5 and 2 are recommended.')
+    parser.add_argument('--fibermetric-beta', type=float, default=0.01,
+                        help='Frangi/Jerman: Controls sensitivity to blob-like (spherical) structures. '
+                             'Lower values (e.g. 0.01–0.5) increase selectivity for elongated tubes, suppressing spherical objects. '
+                             'For thin vessel or neurite enhancement, use a low value (default: 0.01).')
+    parser.add_argument('--fibermetric-gamma', type=float, default=0.01,
+                        help='Frangi/Jerman: Structure sensitivity parameter (gamma). '
+                             'Sets the threshold for how much image contrast is required to detect a vessel. '
+                             'Higher values require stronger vessel signal to be detected, reducing false positives from noise. '
+                             'Typically set between 0.01 (very sensitive) and several hundred, depending on image dynamic range and noise.')
+    parser.add_argument('--fibermetric-method', type=str, default='sato',
+                        choices=['frangi', 'sato', 'meijering', 'jerman'],
+                        help="Vesselness filter to use. "
+                             "'frangi': Standard Frangi filter, robust for most vessel/tube detection. "
+                             "'sato': Sato's vesselness, more sensitive to faint neurites and thin, low-contrast structures. "
+                             "'meijering': Neuriteness filter, designed for continuous tracing of neurites and elongated processes. "
+                             "'jerman': Improved Frangi variant with intensity invariance and better uniformity at bifurcations.")
     parser.add_argument('--regularize-interval', type=int, default=3,
                         help='Apply a 3D Gaussian smoothing filter (σ=0.5) to the deconvolved volume every N iterations. '
                              'Set to 0 to disable both smoothing and blind deconvolution.')
@@ -468,6 +487,10 @@ def main():
         f"    {args.denoise_strength}, ...\n"
         f"    {args.destripe_sigma}, ...\n"
         f"    [{fibermetric_sigma_str}], ...\n"
+        f"    {args.fibermetric_alpha}, ...\n"
+        f"    {args.fibermetric_beta}, ...\n"
+        f"    {args.fibermetric_gamma}, ...\n"
+        f"    {args.fibermetric_method}, ...\n"
         f"    {args.regularize_interval}, ...\n"
         f"    {int(args.resume)}, ...\n"
         f"    {args.start_block}, ...\n"

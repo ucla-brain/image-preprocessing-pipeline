@@ -37,42 +37,50 @@ function [] = LsDeconv(varargin)
         disp(datetime('now'));
 
         % make sure correct number of parameters specified
-        if nargin ~= 29
+        if nargin ~= 33
             showinfo();
             return
         end
 
         %read command line parameters
         disp('assigning command line parameter strings')
-        inpath = varargin{1};
-        dxy = varargin{2};
-        dz = varargin{3};
-        numit = varargin{4};
-        NA = varargin{5};
-        rf = varargin{6};
-        lambda_ex = varargin{7};
-        lambda_em = varargin{8};
-        fcyl = varargin{9};
-        slitwidth = varargin{10};
-        damping = varargin{11};
-        clipval = varargin{12};
-        stop_criterion = varargin{13};
-        block_size_max = double(varargin{14});
-        gpus = varargin{15};
-        amplification = single(varargin{16});
-        filter.gaussian_sigma = varargin{17};
-        filter.dark = varargin{18};
-        filter.destripe_sigma = varargin{19};
-        filter.fibermetric_sigma = varargin{20};
-        filter.regularize_interval = varargin{21};
-        resume = varargin{22};
-        starting_block = varargin{23};
-        convert_to_8bit = varargin{24};
-        convert_to_16bit = varargin{25};
-        filter.use_fft = varargin{26};
-        filter.adaptive_psf = varargin{27};
-        filter.accelerate = varargin{28};
-        cache_drive = varargin{29};
+        inpath                     = varargin{1};
+        dxy                        = varargin{2};
+        dz                         = varargin{3};
+        numit                      = varargin{4};
+        NA                         = varargin{5};
+        rf                         = varargin{6};
+        lambda_ex                  = varargin{7};
+        lambda_em                  = varargin{8};
+        fcyl                       = varargin{9};
+        slitwidth                  = varargin{10};
+        damping                    = varargin{11};
+        clipval                    = varargin{12};
+        stop_criterion             = varargin{13};
+        block_size_max             = double(varargin{14});
+        gpus                       = varargin{15};
+        amplification              = single(varargin{16});
+
+        filter.gaussian_sigma      = varargin{17};
+        filter.dark                = varargin{18};
+
+        filter.destripe_sigma      = varargin{19};
+
+        filter.fibermetric_sigma   = varargin{20};
+        filter.fibermetric_alpha   = varargin{21};
+        filter.fibermetric_beta    = varargin{22};
+        filter.fibermetric_gamma   = varargin{23};
+        filter.fibermetric_method  = varargin{24};
+
+        filter.regularize_interval = varargin{25};
+        resume                     = varargin{26};
+        starting_block             = varargin{27};
+        convert_to_8bit            = varargin{28};
+        convert_to_16bit           = varargin{29};
+        filter.use_fft             = varargin{30};
+        filter.adaptive_psf        = varargin{31};
+        filter.accelerate          = varargin{32};
+        cache_drive                = varargin{33};
         if ~exist(cache_drive, 'dir')
             mkdir(cache_drive);
             disp('Cache drive dir created: ' + cache_drive)
@@ -970,7 +978,7 @@ function bl = process_block(bl, block, psf, niter, lambda, stop_criterion, filte
         bl = filter_subband_3d_z(bl, filter.destripe_sigma, 0, "db9");
     end
 
-    bl = apply_fibermetric_filter(bl, filter.fibermetric_sigma, 'bright');
+    bl = apply_fibermetric_filter(bl, filter);
 
     if gpu && isgpuarray(bl)
         % Reseting the GPU
@@ -1271,28 +1279,17 @@ function [lb, ub] = deconvolved_stats(bl, clipval)
     ub = stats(2);
 end
 
-function bl = apply_fibermetric_filter(bl, sigma, polarity)
-% APPLY_FIBERMETRIC_FILTER  Robust wrapper for MATLAB's fibermetric filter
-%
-%   bl = APPLY_FIBERMETRIC_FILTER(bl, sigma, polarity)
-%
-%   - bl:        Input 2D or 3D image/volume
-%   - sigma:     [start step end] for sigma range, all positive, step > 0
-%   - polarity:  'Bright' (default) or 'Dark'
-%
-%   Returns:
-%     bl:        Filtered image, or input if disabled/invalid
+function bl = apply_fibermetric_filter(bl, filter)
+    sigma = filter.fibermetric_sigma;
     if all(sigma > 0) && sigma(2) > 0 && sigma(1) <= sigma(3)
         sigma_range = sigma(1):sigma(2):sigma(3);
         if isempty(sigma_range)
             warning('Fibermetric sigma range is empty. No filtering applied.');
-            % bl = bl; % (implicit)
         else
-            alpha=1;    % High alpha: The filter is more tolerant of blob-like shapes (less discrimination).
-            beta =0.01; % Low beta: The filter more strongly favors elongated (tube-like) features and suppresses plate-like responses.
-            structureSensitivity=0.5;
-            bl = fibermetric_gpu(bl, sigma(1), sigma(3), sigma(2), alpha, beta, structureSensitivity, polarity, 'sato');
-            % bl = fibermetric(bl, sigma_range, ObjectPolarity=polarity, 'StructureSensitivity', structureSensitivity);
+            bl = fibermetric_gpu(bl, sigma(1), sigma(3), sigma(2), ...
+                                 filter.fibermetric_alpha, filter.fibermetric_beta, filter.fibermetric_gamma, ...
+                                 'bright', filter.fibermetric_method);
+            % bl = fibermetric(bl, sigma_range, ObjectPolarity=polarity, 'StructureSensitivity', filter.fibermetric_gamma);
         end
     else
         if any(sigma > 0)

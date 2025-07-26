@@ -1,4 +1,5 @@
 gpu = gpuDevice(2);
+reset(gpu); % Reset the GPU device to clear any previous state
 fprintf('\n==== Benchmark: fibermetric (CPU) vs fibermetric_gpu (gpuArray only) [bright/dark, frangi/sato/meijering/jerman] ====\n');
 
 % volOrig = im2single(load("ExampleVolumeStent.mat").V);
@@ -7,12 +8,13 @@ polarities = {'bright', 'dark'};
 
 sigma_from = 1; sigma_to = 7; sigma_step = 1;
 alpha_init = 1; beta_init = 0.01; structureSensitivity_init = 0.5;
-lb = [   0, 0, 0];
-ub = [ 999, 9, 1];
+lb = [0, 0,    0];
+ub = [2, 1, 9999];
 
 methodNames = {'frangi', 'sato', 'meijering', 'jerman'};
 nMethods = numel(methodNames);
-options = optimoptions('particleswarm','Display','off','MaxIterations',1e9);
+options = optimoptions('particleswarm', 'Display', 'off', 'MaxIterations', 300, 'SwarmSize', 200, 'MaxStallIterations', 50, 'InertiaRange', [0.2 0.9], ...
+    'SelfAdjustmentWeight', 1.5, 'SocialAdjustmentWeight', 1.2, 'HybridFcn', @fmincon, 'FunctionTolerance', 1e-3);
 
 benchmarks = [];
 results = struct();
@@ -36,12 +38,13 @@ for i = 1:numel(polarities)
     fm_gpu_sato_optim = normalize_gpu(fm_gpu_sato);
 
     % --- Optimize alpha, beta, and structureSensitivity for frangi, using Sato as reference ---
-    objfun = @(x) norm(normalize_gpu(fibermetric_gpu(gvol, sigma_from, sigma_to, sigma_step, x(1), x(2), x(3), pol, 'frangi')) - fm_gpu_sato_optim, 'fro');
-    x0 = [alpha_init, beta_init, structureSensitivity_init];
-    [x_frangi,~] = particleswarm(objfun, numel(x0), lb, ub, options);
-
-    alpha_frangi = x_frangi(1); beta_frangi = x_frangi(2); structureSensitivity_frangi = x_frangi(3);
-    fprintf("Ferengi (%s): alpha=%.3f, beta=%.3f, StructureSensitivity=%.3f\n", pol, alpha_frangi, beta_frangi, structureSensitivity_frangi);
+    if i == 1
+        objfun = @(x) double(norm(normalize_gpu(fibermetric_gpu(gvol, sigma_from, sigma_to, sigma_step, x(1), x(2), x(3), pol, 'frangi')) - fm_gpu_sato_optim, 'fro'));
+        options.InitialSwarmMatrix = [0.0299608, 0.9792880, 40.8406711];
+        [x_frangi, ~] = particleswarm(objfun, 3, lb, ub, options);
+        alpha_frangi = x_frangi(1); beta_frangi = x_frangi(2); structureSensitivity_frangi = x_frangi(3);
+        fprintf("Ferengi (%s): alpha=%.7f, beta=%.7f, StructureSensitivity=%.7f \n", pol, alpha_frangi, beta_frangi, structureSensitivity_frangi);
+    end
 
     % --- Frangi GPU with optimized params ---
     t = tic;
@@ -62,13 +65,14 @@ for i = 1:numel(polarities)
     tgpu_meijering = toc(t);
     fm_gpu_meijering = gather(fm_gpu_meijering);
 
-    % --- Optimize alpha, beta for Jerman using Sato as reference ---
-    objfunJ = @(x) norm(normalize_gpu( fibermetric_gpu(gvol, sigma_from, sigma_to, sigma_step, x(1), x(2), x(3), pol, 'jerman') ) - fm_gpu_sato_optim , 'fro');
-    x0 = [alpha_init, beta_init, 0];
-    [x_jerman,~] = particleswarm(objfun, numel(x0), lb, ub, options);
-
-    alpha_jerman = x_jerman(1); beta_jerman = x_jerman(2); structureSensitivity_jerman = x_jerman(3);
-    fprintf("Jerman (%s): alpha=%.3f, beta=%.3f, StructureSensitivity=%.3f \n", pol, alpha_jerman, beta_jerman, structureSensitivity_jerman);
+    % --- Optimize alpha, beta, and structureSensitivity for Jerman using Sato as reference ---
+    if i == 1
+        objfun = @(x) double(norm(normalize_gpu( fibermetric_gpu(gvol, sigma_from, sigma_to, sigma_step, x(1), x(2), x(3), pol, 'jerman') ) - fm_gpu_sato_optim , 'fro'));
+        options.InitialSwarmMatrix = [0, 0.002, 0];
+        [x_jerman, ~] = particleswarm(objfun, 3, lb, ub, options);
+        alpha_jerman = x_jerman(1); beta_jerman = x_jerman(2); structureSensitivity_jerman = x_jerman(3);
+        fprintf("Jerman (%s): alpha=%.7f, beta=%.7f, StructureSensitivity=%.7f \n", pol, alpha_jerman, beta_jerman, structureSensitivity_jerman);
+    end
 
     t = tic;
     fm_gpu_jerman = fibermetric_gpu(gvol, sigma_from, sigma_to, sigma_step, alpha_jerman, beta_jerman, structureSensitivity_jerman, pol, 'jerman');
@@ -110,7 +114,7 @@ figure('Name', 'Max Projections: Both Polarities', 'Position', [100 100 2400 600
 methodLabels = {'Original', 'fibermetric (CPU)', 'frangi', 'sato', 'meijering', 'jerman'};
 for i = 1:numel(polarities)
     pol = results(i).pol;
-    colormap(gray);
+    % colormap(gray);
     if strcmp(pol, 'dark')
         subplot(2,6,(i-1)*6+1); imagesc(min(results(i).vol,[],3)); axis image off; colorbar; title(['Original (',pol,')']);
     else
@@ -125,13 +129,6 @@ end
 colormap(gray);
 
 fprintf('\nDone!\n');
-
-% --- Utility: fminsearch with bounds ---
-function [x,fval] = fminsearchbnd(fun, x0, LB, UB, options)
-    % fminsearch, but clamp variables to [LB,UB] each iteration
-    funwrap = @(x) fun(max(LB, min(UB, x)));
-    [x, fval] = fminsearch(funwrap, x0, options);
-end
 
 function normed = normalize_gpu(arr)
     normed = arr ./ max(arr, [], 'all');

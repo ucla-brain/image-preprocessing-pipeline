@@ -20,12 +20,12 @@
 __constant__ float gCoef[MAX_CONST_COEF_LEN];
 __constant__ float dCoef[MAX_CONST_COEF_LEN];
 
-constexpr double SQRT_TWO_PI = 2.5066282746310002; // sqrt(2π)
-constexpr float TWO_PI_OVER_THREE = 2.0943951023931953f; // 2π/3
-constexpr float ONE_OVER_SIX = 0.1666666666666667f;
-constexpr float GAUSS_HALFWIDTH_MULT = 8.0f;
-constexpr float EPSILON = 1e-7f;
-constexpr int THREADS_PER_BLOCK = 1024;
+constexpr double SQRT_TWO_PI             = 2.5066282746310002;  // sqrt(2π)
+constexpr float TWO_PI_OVER_THREE        = 2.0943951023931953f; // 2π/3
+constexpr float ONE_OVER_SIX             = 0.1666666666666667f; // 1/6
+constexpr float GAUSS_HALFWIDTH_MULT     = 8.0f;
+constexpr float EPSILON                  = 1e-7f;
+constexpr int THREADS_PER_BLOCK          = 1024;
 constexpr double FINITE_DIFF_5PT_DIVISOR = 12.0;
 
 // -- Hardware shared memory limits --
@@ -294,7 +294,7 @@ __global__ void fusedHessianKernelCoalesced(
     const float* __restrict__ smoothedInput,
     float* __restrict__ Dxx, float* __restrict__ Dyy, float* __restrict__ Dzz,
     float* __restrict__ Dxy, float* __restrict__ Dxz, float* __restrict__ Dyz,
-    int nRows, int nCols, int nSlices, bool useMeijering, float alphaMeijering)
+    int nRows, int nCols, int nSlices, float sigmaSq, bool useMeijering, float alphaMeijering)
 {
     constexpr int HALO = 2;
     __shared__ float shInput[TILE_Z+2*HALO][TILE_Y+2*HALO][TILE_X+2*HALO + SHMEM_PAD];
@@ -329,10 +329,10 @@ __global__ void fusedHessianKernelCoalesced(
         float xp1 = shInput[sz][sy][sx+1];
         float xp2 = shInput[sz][sy][sx+2];
         float dxx = fmaf(-1.0f, xm2, 0.f);
-        dxx = fmaf(16.0f, xm1, dxx);
-        dxx = fmaf(-30.0f, xc, dxx);
-        dxx = fmaf(16.0f, xp1, dxx);
-        dxx = fmaf(-1.0f, xp2, dxx);
+        dxx = fmaf( 16.0f, xm1, dxx);
+        dxx = fmaf(-30.0f, xc , dxx);
+        dxx = fmaf( 16.0f, xp1, dxx);
+        dxx = fmaf( -1.0f, xp2, dxx);
         dxx /= float(FINITE_DIFF_5PT_DIVISOR);
 
         float ym2 = shInput[sz][sy-2][sx];
@@ -341,10 +341,10 @@ __global__ void fusedHessianKernelCoalesced(
         float yp1 = shInput[sz][sy+1][sx];
         float yp2 = shInput[sz][sy+2][sx];
         float dyy = fmaf(-1.0f, ym2, 0.f);
-        dyy = fmaf(16.0f, ym1, dyy);
-        dyy = fmaf(-30.0f, yc, dyy);
-        dyy = fmaf(16.0f, yp1, dyy);
-        dyy = fmaf(-1.0f, yp2, dyy);
+        dyy = fmaf( 16.0f, ym1, dyy);
+        dyy = fmaf(-30.0f, yc , dyy);
+        dyy = fmaf( 16.0f, yp1, dyy);
+        dyy = fmaf( -1.0f, yp2, dyy);
         dyy /= float(FINITE_DIFF_5PT_DIVISOR);
 
         float zm2 = shInput[sz-2][sy][sx];
@@ -353,10 +353,10 @@ __global__ void fusedHessianKernelCoalesced(
         float zp1 = shInput[sz+1][sy][sx];
         float zp2 = shInput[sz+2][sy][sx];
         float dzz = fmaf(-1.0f, zm2, 0.f);
-        dzz = fmaf(16.0f, zm1, dzz);
-        dzz = fmaf(-30.0f, zc, dzz);
-        dzz = fmaf(16.0f, zp1, dzz);
-        dzz = fmaf(-1.0f, zp2, dzz);
+        dzz = fmaf( 16.0f, zm1, dzz);
+        dzz = fmaf(-30.0f, zc , dzz);
+        dzz = fmaf( 16.0f, zp1, dzz);
+        dzz = fmaf( -1.0f, zp2, dzz);
         dzz /= float(FINITE_DIFF_5PT_DIVISOR);
 
         float dxy = 0.25f * (
@@ -381,12 +381,12 @@ __global__ void fusedHessianKernelCoalesced(
         }
 
         size_t idx = linearIndex3D(x, y, z, nRows, nCols);
-        Dxx[idx] = dxx;
-        Dyy[idx] = dyy;
-        Dzz[idx] = dzz;
-        Dxy[idx] = dxy;
-        Dxz[idx] = dxz;
-        Dyz[idx] = dyz;
+        Dxx[idx] = dxx * sigmaSq;;
+        Dyy[idx] = dyy * sigmaSq;;
+        Dzz[idx] = dzz * sigmaSq;;
+        Dxy[idx] = dxy * sigmaSq;;
+        Dxz[idx] = dxz * sigmaSq;;
+        Dyz[idx] = dyz * sigmaSq;;
     }
 }
 
@@ -395,14 +395,14 @@ void launchFusedHessianKernelCoalesced(
     const float* smoothedInput,
     float* Dxx, float* Dyy, float* Dzz, float* Dxy, float* Dxz, float* Dyz,
     int nRows, int nCols, int nSlices, cudaStream_t stream,
-    bool useMeijering, float alphaMeijering)
+    float sigmaSq, bool useMeijering, float alphaMeijering)
 {
     constexpr int TX = 8, TY = 8, TZ = 8, SHMEM_PAD = 1;
     dim3 blockDim(TX, TY, TZ);
     dim3 gridDim((nRows + TX - 1) / TX, (nCols + TY - 1) / TY, (nSlices + TZ - 1) / TZ);
     fusedHessianKernelCoalesced<TX,TY,TZ,SHMEM_PAD><<<gridDim, blockDim, 0, stream>>>(
         smoothedInput, Dxx, Dyy, Dzz, Dxy, Dxz, Dyz,
-        nRows, nCols, nSlices, useMeijering, alphaMeijering);
+        nRows, nCols, nSlices, sigmaSq, useMeijering, alphaMeijering);
     cudaCheck(cudaPeekAtLastError());
 }
 
@@ -483,8 +483,7 @@ __global__ void hessianToEigenvaluesKernel(
 __global__ void vesselnessFrangiKernelFromEigen(
     const float* __restrict__ l1, const float* __restrict__ l2, const float* __restrict__ l3,
     float* __restrict__ vesselness, size_t n,
-    const float inv2Alpha2, const float inv2Beta2, const float inv2Gamma2,
-    bool bright, bool doScaleNorm, float scaleNorm)
+    const float inv2Alpha2, const float inv2Beta2, const float inv2Gamma2, bool bright)
 {
     size_t idx = size_t(blockIdx.x) * blockDim.x + threadIdx.x;
     if (idx >= n) return;
@@ -493,15 +492,14 @@ __global__ void vesselnessFrangiKernelFromEigen(
     float response = 0.f;
     if (condition) {
         float absL1 = fabsf(val1), absL2 = fabsf(val2), absL3 = fabsf(val3);
-        float Ra2 = (absL2 * absL2) / (absL3 * absL3 + EPSILON);
-        float Rb2 = (absL1 * absL1) / fmaf(absL2, absL3, EPSILON);
-        float S2  = fmaf(val1, val1, fmaf(val2, val2, val3 * val3));
+        float Ra2   = (absL2 * absL2) / (absL3 * absL3 + EPSILON);
+        float Rb2   = (absL1 * absL1) / fmaf(absL2, absL3, EPSILON);
+        float S2    = fmaf(val1, val1, fmaf(val2, val2, val3 * val3));
         float expRa = __expf(-Ra2 * inv2Alpha2);
         float expRb = __expf(-Rb2 * inv2Beta2);
         float expS2 = __expf(-S2  * inv2Gamma2);
-        float tmp = fmaf(-expRa, expRb, expRb);
-        response = fmaf(-expS2, tmp, tmp);
-        if (doScaleNorm) response *= scaleNorm;
+        float tmp   = fmaf(-expRa, expRb, expRb);
+        response    = fmaf(-expS2, tmp, tmp);
     }
     vesselness[idx] = response;
 }
@@ -519,25 +517,17 @@ __global__ void vesselnessSatoKernelFromEigen(
 {
     size_t idx = size_t(blockIdx.x) * blockDim.x + threadIdx.x;
     if (idx >= n) return;
-
     float ev1 = l1[idx], ev2 = l2[idx], ev3 = l3[idx];
-
     bool isVessel = bright ? (ev2 < 0.f && ev3 < 0.f)
                            : (ev2 > 0.f && ev3 > 0.f);
-
     float response = 0.f;
     if (isVessel) {
-        float absEv1 = fabsf(ev1);
-        float absEv2 = fabsf(ev2);
-        float absEv3 = fabsf(ev3);
-
+        float absEv1 = fabsf(ev1), absEv2 = fabsf(ev2), absEv3 = fabsf(ev3);
         float expL1 = __expf(-absEv1 * absEv1 * inv2Alpha2);
         float expL3 = __expf(-absEv3 * absEv3 * inv2Beta2);
-
         float absEv2TimesExpL1 = absEv2 * expL1;
         response = fmaf(-expL3, absEv2TimesExpL1, absEv2TimesExpL1);
     }
-
     vesselness[idx] = response;
 }
 
@@ -593,12 +583,6 @@ __global__ void elementwiseMaxKernel(const float* src, float* dst, size_t n)
     if (idx < n) dst[idx] = fmaxf(dst[idx], src[idx]);
 }
 
-__global__ void scaleArrayInPlaceKernel(float* arr, size_t n, float factor)
-{
-    size_t idx = size_t(blockIdx.x) * blockDim.x + threadIdx.x;
-    if (idx < n) arr[idx] *= factor;
-}
-
 //-------------------- Main MEX Entry (minimal VRAM, buffer reuse, cleanup early) ------------------
 void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
 {
@@ -632,7 +616,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
     double sigmaStep = mxGetScalar(prhs[3]);
     float alpha      = float(mxGetScalar(prhs[4]));
     float beta       = float(mxGetScalar(prhs[5]));
-    float structureSensitivity = float(mxGetScalar(prhs[6]));
+    double structureSensitivity = mxGetScalar(prhs[6]);
     char polarityBuf[16]; mxGetString(prhs[7], polarityBuf, sizeof(polarityBuf));
     bool bright = (STRICMP(polarityBuf, "bright") == 0);
     char methodBuf[16]; mxGetString(prhs[8], methodBuf, sizeof(methodBuf));
@@ -676,13 +660,8 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
     constexpr float alphaMeijering = -0.25f; // for 3D, can compute as needed
     const float inv2Alpha2 = static_cast<float>(1.0 / (2.0 * double(alpha) * double(alpha)));
     const float inv2Beta2  = static_cast<float>(1.0 / (2.0 * double(beta)  * double(beta )));
-
-    float scaleNorm = 1.f;
-    bool doScaleNorm = false;
-    if (singleSigma && std::fabs(sigmaList[0] - 1.0) < 1e-3 ) {
-        doScaleNorm = true;
-        scaleNorm = 0.015f;
-    }
+    const float gamma      = static_cast<float>(structureSensitivity);
+    const float inv2Gamma2 = static_cast<float>(1.0 / (2.0 * structureSensitivity * structureSensitivity));
 
     int nBlocks = int((n + threadsPerBlock - 1) / threadsPerBlock);
     // --- CUDA Graph Variables ---
@@ -695,7 +674,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
     for (size_t sigmaIdx = 0; sigmaIdx < sigmaList.size(); ++sigmaIdx) {
         double sigma = sigmaList[sigmaIdx];
 
-        // -- Create Gaussian and derivative kernels for this sigma --
+        // 1. Create Gaussian and derivative kernels for this sigma
         float* gaussKernelDev = nullptr;
         float* derivKernelDev = nullptr;
         int halfWidth = int(std::ceil(GAUSS_HALFWIDTH_MULT * sigma));
@@ -707,7 +686,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
 
         buildGaussianAndDerivativeKernelsDevice(gaussKernelDev, derivKernelDev, kernelLen, sigma, threadsPerBlock);
 
-        // --- Upload kernels to constant memory if eligible ---
+        // 2. Upload kernels to constant memory if eligible
         bool useConstMem = (kernelLen <= maxKernelLen) && (kernelLen <= MAX_CONST_COEF_LEN);
         if (useConstMem) {
             std::vector<float> gaussHost(kernelLen), derivHost(kernelLen);
@@ -716,40 +695,28 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
             uploadCoefficientsToConstantMemory(gaussHost.data(), derivHost.data(), kernelLen);
         }
 
-        // --- Clean up any old graph (always recapture per sigma for correctness) ---
+        // 3. Clean up any old graph (always recapture per sigma for correctness) ---
         if (graphExec) { cudaCheck(cudaGraphExecDestroy(graphExec)); graphExec = nullptr; }
         if (graph)     { cudaCheck(cudaGraphDestroy(graph)); graph = nullptr; }
-
-        //cudaCheck(cudaStreamSynchronize(stream));
         cudaCheck(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
 
-        // Gaussian smoothing (separable, X, Y, Z) -- must select const/global, gaussian/deriv
+        // 4. Gaussian smoothing (separable, X, Y, Z) -- must select const/global, gaussian/deriv
         launchSeparableConvolutionDevice(0, inputDev, tmp1, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/true, useConstMem, tileSize);
         launchSeparableConvolutionDevice(1, tmp1    , tmp2, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/true, useConstMem, tileSize);
         launchSeparableConvolutionDevice(2, tmp2    , tmp1, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, /*useGaussian=*/true, useConstMem, tileSize);
 
-        // Hessian diagonals
-        launchFusedHessianKernelCoalesced(tmp1, Dxx, Dyy, Dzz, Dxy, Dxz, Dyz, nRows, nCols, nSlices, stream, useMeijering, alphaMeijering);
-
-        // 4. Scale normalization
+        // 5. Hessian diagonals and Scale normalization
         float sigmaSq = float(sigma * sigma);
-        scaleArrayInPlaceKernel<<<nBlocks, threadsPerBlock, 0, stream>>>(Dxx, n, sigmaSq);
-        scaleArrayInPlaceKernel<<<nBlocks, threadsPerBlock, 0, stream>>>(Dyy, n, sigmaSq);
-        scaleArrayInPlaceKernel<<<nBlocks, threadsPerBlock, 0, stream>>>(Dzz, n, sigmaSq);
-        scaleArrayInPlaceKernel<<<nBlocks, threadsPerBlock, 0, stream>>>(Dxy, n, sigmaSq);
-        scaleArrayInPlaceKernel<<<nBlocks, threadsPerBlock, 0, stream>>>(Dxz, n, sigmaSq);
-        scaleArrayInPlaceKernel<<<nBlocks, threadsPerBlock, 0, stream>>>(Dyz, n, sigmaSq);
+        launchFusedHessianKernelCoalesced(tmp1, Dxx, Dyy, Dzz, Dxy, Dxz, Dyz, nRows, nCols, nSlices, stream, sigmaSq, useMeijering, alphaMeijering);
 
-        // 5. Eigenvalue decomposition
+        // 6. Eigenvalue decomposition
         hessianToEigenvaluesKernel<<<nBlocks, threadsPerBlock, 0, stream>>>(
             Dxx, Dyy, Dzz, Dxy, Dxz, Dyz, l1, l2, l3, n);
 
-        // 6. Vesselness kernel (choose the right one for your method)
+        // 7. Vesselness kernel (choose the right one for your method)
         if (useFrangi) {
-            float gamma = structureSensitivity * float(sigma);
-            const float inv2Gamma2 = static_cast<float>(1.0 / (2.0 * double(gamma) * double(gamma)));
             vesselnessFrangiKernelFromEigen<<<nBlocks, threadsPerBlock, 0, stream>>>(
-                l1, l2, l3, tmp1, n, inv2Alpha2, inv2Beta2, inv2Gamma2, bright, doScaleNorm, scaleNorm);
+                l1, l2, l3, tmp1, n, inv2Alpha2, inv2Beta2, inv2Gamma2, bright);
         } else if (useSato) {
             vesselnessSatoKernelFromEigen<<<nBlocks, threadsPerBlock, 0, stream>>>(
                 l1, l2, l3, tmp1, n, inv2Alpha2, inv2Beta2, bright);
@@ -758,9 +725,10 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
                 l1, l2, l3, tmp1, n, bright);
         } else if (useJerman) {
             vesselnessJermanKernelFromEigen<<<nBlocks, threadsPerBlock, 0, stream>>>(
-                l1, l2, l3, tmp1, n, inv2Alpha2, inv2Beta2, structureSensitivity, bright);
+                l1, l2, l3, tmp1, n, inv2Alpha2, inv2Beta2, gamma, bright);
         }
 
+        // collect the steam
         cudaCheck(cudaStreamEndCapture(stream, &graph));
         cudaCheck(cudaGraphInstantiate(&graphExec, graph, nullptr, nullptr, 0));
 
@@ -773,8 +741,6 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
             elementwiseMaxKernel<<<nBlocks, threadsPerBlock, 0, stream>>>(tmp1, outputDev, n);
         else
             cudaCheck(cudaMemcpyAsync(outputDev, tmp1, bytes, cudaMemcpyDeviceToDevice, stream));
-
-        //cudaCheck(cudaStreamSynchronize(stream)); // Ensure all results are ready before output
 
         cudaFree(gaussKernelDev);
         cudaFree(derivKernelDev);
