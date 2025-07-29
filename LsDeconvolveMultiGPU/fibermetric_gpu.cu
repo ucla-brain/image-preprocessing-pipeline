@@ -20,13 +20,10 @@
 #include "gpu/mxGPUArray.h"
 
 #include <cuda_runtime.h>
-//#include <cuda.h>
 #include <device_launch_parameters.h>
 
 #include <cfloat>
-//#include <cmath>
 #include <vector>
-//#include <cstring>
 
 #if defined(_WIN32)
     #define STRICMP _stricmp
