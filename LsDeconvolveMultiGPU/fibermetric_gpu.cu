@@ -22,7 +22,7 @@
 #include <cuda_runtime.h>
 #include <cuda.h>
 #include <device_launch_parameters.h>
-#include <thrust/device_ptr.h>
+//#include <thrust/device_ptr.h>
 
 #include <cfloat>
 #include <cmath>
