@@ -1,10 +1,30 @@
+/*
+ * ===============================  Jerman Mode Parameter Mapping  ===============================
+ *
+ * When vesselness method is set to 'jerman', the parameters alpha and beta are **reinterpreted**:
+ *
+ *   - alpha: used as Jerman's tau (tau, 0.5–1), controls lambda3 truncation
+ *   - beta : used as Jerman's C (C > 0), guesses lambda3min as -C*sigma^2
+ *
+ * For Frangi/Sato/Meijering, alpha and beta retain their classic meanings.
+ *
+ * structureSensitivity: Always interpreted as eigenvalue magnitude thresholding
+ *
+ * The output is **not thresholded** on the GPU for Jerman. Thresholding and any further
+ * post-processing must be done in MATLAB.
+ *
+ * ================================================================================================
+ */
+
 #include "mex.h"
 #include "gpu/mxGPUArray.h"
 
 #include <cuda_runtime.h>
 #include <cuda.h>
 #include <device_launch_parameters.h>
+#include <thrust/device_ptr.h>
 
+#include <cfloat>
 #include <cmath>
 #include <vector>
 #include <cstring>
@@ -327,9 +347,11 @@ float vesselnessFrangi(float l1, float l2, float l3, bool bright, float inv2Alph
 {
     bool condition = bright ? (l2 < 0.f && l3 < 0.f) : (l2 > 0.f && l3 > 0.f);
     if (!condition) return 0.f;
-    float absL1 = fabsf(l1), absL2 = fabsf(l2), absL3 = fabsf(l3);
+    //float absL1 = fabsf(l1), absL2 = fabsf(l2), absL3 = fabsf(l3);
+    float absL2 = fabsf(l2), absL3 = fabsf(l3);
     float Ra2   = (absL2 * absL2) / (absL3 * absL3 + EPSILON);
-    float Rb2   = (absL1 * absL1) / fmaf(absL2, absL3, EPSILON);
+    //float Rb2   = (absL1 * absL1) / fmaf(absL2, absL3, EPSILON);
+    float Rb2   = (l1 * l1) / fmaf(absL2, absL3, EPSILON);
     float S2    = fmaf(l1, l1, fmaf(l2, l2, l3 * l3));
     float expRa = __expf(-Ra2 * inv2Alpha2);
     float expRb = __expf(-Rb2 * inv2Beta2);
@@ -343,11 +365,14 @@ float vesselnessSato(float l1, float l2, float l3, bool bright, float inv2Alpha2
 {
     bool isVessel = bright ? (l2 < 0.f && l3 < 0.f) : (l2 > 0.f && l3 > 0.f);
     if (!isVessel) return 0.f;
-    float absEv1 = fabsf(l1), absEv2 = fabsf(l2), absEv3 = fabsf(l3);
-    float expL1 = __expf(-absEv1 * absEv1 * inv2Alpha2);
-    float expL3 = __expf(-absEv3 * absEv3 * inv2Beta2);
-    float absEv2TimesExpL1 = absEv2 * expL1;
-    return fmaf(-expL3, absEv2TimesExpL1, absEv2TimesExpL1);
+    //float absL1 = fabsf(l1), absL2 = fabsf(l2), absL3 = fabsf(l3);
+    float absL2 = fabsf(l2);
+    //float expL1 = __expf(-absL1 * absL1 * inv2Alpha2);
+    //float expL3 = __expf(-absL3 * absL3 * inv2Beta2);
+    float expL1 = __expf(-l1 * l1 * inv2Alpha2);
+    float expL3 = __expf(-l3 * l3 * inv2Beta2);
+    float absL2TimesExpL1 = absL2 * expL1;
+    return fmaf(-expL3, absL2TimesExpL1, absL2TimesExpL1);
 }
 
 __device__ __forceinline__
@@ -357,30 +382,64 @@ float neuritenessMeijering(float l1, float l2, float l3, bool bright)
     return isNeurite ? fabsf(l1) : 0.f;
 }
 
+// For Jerman: inv2Alpha2= tau, inv2Beta2= lambda3minGuess, inv2Gamma2= structureSensitivity threshold
 __device__ __forceinline__
-float vesselnessJerman(float l1, float l2, float l3, bool bright, float inv2Alpha2, float inv2Beta2, float threshold)
+float vesselnessJerman(
+    float l1, float l2, float l3,        // Hessian eigenvalues (ordered or not, just be consistent)
+    bool bright,                         // true: bright-on-dark, false: dark-on-bright
+    float jermanTau,                     // tau parameter (0.5–1), controls truncation
+    float lambda3minGuess,               // C * sigma^2, your global min guess for Lambda3
+    float structureSensitivity           // replaces hardcoded eigenvalue threshold
+)
 {
-    bool condition = bright ? (l2 < 0.f && l3 < 0.f) : (l2 > 0.f && l3 > 0.f);
-    if (!condition) return 0.f;
-    float absL1 = fabsf(l1), absL2 = fabsf(l2), absL3 = fabsf(l3);
-    float Ra2 = (absL2 * absL2) / (absL3 * absL3 + EPSILON);
-    float Rb2 = (absL1 * absL1) / fmaf(absL2, absL3, EPSILON);
-    float expRa = __expf(-Ra2 * inv2Alpha2);
-    float expRb = __expf(-Rb2 * inv2Beta2);
-    float response = fmaf(-expRa, expRb, expRb);
-    return (response > threshold) ? response : 0.f;
+    // === Step 1: Eigenvalue sign test for blob polarity ===
+    bool isBlob = bright ? (l1 < 0.f && l2 < 0.f && l3 < 0.f)
+                         : (l1 > 0.f && l2 > 0.f && l3 > 0.f);
+    if (!isBlob)
+        return 0.f;
+
+    // === Step 2: Eigenvalue noise/weak response thresholding ===
+    if (fabsf(l1) < structureSensitivity) l1 = 0.f;
+    if (fabsf(l2) < structureSensitivity) l2 = 0.f;
+    if (fabsf(l3) < structureSensitivity) l3 = 0.f;
+
+    // === Step 3: Truncate lambda3 using tau and lambda3minGuess ===
+    float lambda3m;
+    if (bright)
+        lambda3m = (l3 >= lambda3minGuess * jermanTau) ? (lambda3minGuess * jermanTau) : l3;
+    else
+        lambda3m = (l3 <= lambda3minGuess * jermanTau) ? (lambda3minGuess * jermanTau) : l3;
+
+    // === Step 4: Main Jerman formula ===
+    float denom = powf(fmaf(2.0f, l1, lambda3m), 3.0f); // (2*l1 + lambda3m)^3
+
+    if (!isfinite(denom) || denom == 0.f)
+        return 0.f;
+
+    float numer = (l1 * l1) * lambda3m * 27.0f;
+    float response = numer / denom;
+
+    // === Step 5: Clamp response for outlier case
+    if (fabsf(l1) > fabsf(lambda3m))
+        response = 1.0f;
+
+    // === Step 6: Clamp non-finite response to zero
+    if (!isfinite(response))
+        response = 0.f;
+
+    return response;
 }
 
 // ======= Fused Hessian + Vesselness Kernel =======
 
-template<int TILE_X=8, int TILE_Y=8, int TILE_Z=8, int SHMEM_PAD=1>
+template<int TILE_X=16, int TILE_Y=8, int TILE_Z=8, int SHMEM_PAD=1>
 __global__ void fusedHessianVesselnessKernel(
     const float* __restrict__ smoothedInput,
     float* __restrict__ output,
     int nRows, int nCols, int nSlices, float sigmaSq,
     int vesselnessMethod, // enum
     bool bright,
-    float inv2Alpha2, float inv2Beta2, float inv2Gamma2, float alphaMeijering, float jermanThreshold,
+    float inv2Alpha2, float inv2Beta2, float inv2Gamma2, float alphaMeijering,
     bool firstPass
 ) {
     constexpr int HALO = 2;
@@ -445,7 +504,11 @@ __global__ void fusedHessianVesselnessKernel(
         case METHOD_MEIJERING:
             vesselness = neuritenessMeijering(l1, l2, l3, bright); break;
         case METHOD_JERMAN:
-            vesselness = vesselnessJerman(l1, l2, l3, bright, inv2Alpha2, inv2Beta2, jermanThreshold); break;
+            // Jerman mapping:
+            // inv2Alpha2 → tau
+            // inv2Beta2  → lambda3minGuess
+            // inv2Gamma2 → structureSensitivity threshold
+            vesselness = vesselnessJerman(l1, l2, l3, bright, inv2Alpha2, inv2Beta2, inv2Gamma2); break;
         }
 
         size_t idx = linearIndex3D(x, y, z, nRows, nCols);
@@ -460,7 +523,7 @@ void launchFusedHessianVesselnessKernel(
     const float* smoothedInput, float* output, int nRows, int nCols, int nSlices,
     cudaStream_t stream,
     float sigmaSq, int vesselnessMethod, bool bright,
-    float inv2Alpha2, float inv2Beta2, float inv2Gamma2, float alphaMeijering, float jermanThreshold, bool firstPass)
+    float inv2Alpha2, float inv2Beta2, float inv2Gamma2, float alphaMeijering, bool firstPass)
 {
     constexpr int TX = 8, TY = 8, TZ = 8, SHMEM_PAD = 1;
     dim3 blockDim(TX, TY, TZ);
@@ -471,9 +534,38 @@ void launchFusedHessianVesselnessKernel(
             smoothedInput, output,
             nRows, nCols, nSlices,
             sigmaSq, vesselnessMethod, bright,
-            inv2Alpha2, inv2Beta2, inv2Gamma2, alphaMeijering, jermanThreshold, firstPass
+            inv2Alpha2, inv2Beta2, inv2Gamma2, alphaMeijering, firstPass
         );
     cudaCheck(cudaPeekAtLastError());
+}
+
+__global__ void maxReduceKernel(const float* input, float* out, size_t n) {
+    extern __shared__ float sdata[];
+    unsigned int tid = threadIdx.x;
+    unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
+
+    // load input into shared memory
+    sdata[tid] = (i < n) ? input[i] : -FLT_MAX;
+    __syncthreads();
+
+    // do reduction in shared memory
+    for (unsigned int s = blockDim.x / 2; s > 0; s >>= 1) {
+        if (tid < s)
+            sdata[tid] = fmaxf(sdata[tid], sdata[tid + s]);
+        __syncthreads();
+    }
+    // write result for this block to global mem
+    if (tid == 0) out[blockIdx.x] = sdata[0];
+}
+
+__global__ void normalize_and_project(
+    float* outputDev, const float* buffer2, const float* buffer2Max, size_t n)
+{
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < n) {
+        float normVal = (*buffer2Max > 0.f) ? buffer2[idx] / *buffer2Max : 0.f;
+        outputDev[idx] = fmaxf(outputDev[idx], normVal);
+    }
 }
 
 //-------------------- Main MEX Entry (minimal VRAM, buffer reuse, cleanup early) ------------------
@@ -501,7 +593,8 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         mexErrMsgIdAndTxt("fibermetric_gpu:type", "Input must be 3D single gpuArray.");
     const mwSize* dims = mxGPUGetDimensions(input);
     int nRows = int(dims[0]), nCols = int(dims[1]), nSlices = int(dims[2]);
-    size_t n = (size_t)nRows * (size_t)nCols * (size_t)nSlices;
+    size_t total = (size_t)nRows * (size_t)nCols * (size_t)nSlices;
+    int blocks = int((total + threadsPerBlock - 1) / threadsPerBlock);
     const float* inputDev = static_cast<const float*>(mxGPUGetDataReadOnly(input));
 
     double sigmaFrom = mxGetScalar(prhs[1]);
@@ -509,6 +602,8 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
     double sigmaStep = mxGetScalar(prhs[3]);
     float alpha      = float(mxGetScalar(prhs[4]));
     float beta       = float(mxGetScalar(prhs[5]));
+    float jermanTau  = alpha;
+    float jermanC    = beta;
     double structureSensitivity = mxGetScalar(prhs[6]);
     char polarityBuf[16]; mxGetString(prhs[7], polarityBuf, sizeof(polarityBuf));
     bool bright = (STRICMP(polarityBuf, "bright") == 0);
@@ -530,10 +625,12 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
     //--- Workspace Buffers and Output Allocation ---
     mxGPUArray* output = mxGPUCreateGPUArray(3, dims, mxSINGLE_CLASS, mxREAL, MX_GPU_DO_NOT_INITIALIZE);
     float* outputDev = static_cast<float*>(mxGPUGetData(output));
-    float *buffer1, *buffer2;
-    size_t bytes = n * sizeof(float);
+    float *buffer1, *buffer2, *maxTemp, *buffer2Max;
+    size_t bytes = total * sizeof(float);
     cudaCheck(cudaMalloc(&buffer1, bytes));
     cudaCheck(cudaMalloc(&buffer2, bytes));
+    cudaCheck(cudaMalloc(&maxTemp, blocks * sizeof(float)));
+    cudaCheck(cudaMalloc(&buffer2Max, sizeof(float)));
 
     //--- Sigma List and Scale Norm ---
     std::vector<double> sigmaList;
@@ -546,8 +643,6 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
     const float gamma      = static_cast<float>(structureSensitivity);
     const float inv2Gamma2 = static_cast<float>(1.0 / (2.0 * structureSensitivity * structureSensitivity));
 
-    // int nBlocks = int((n + threadsPerBlock - 1) / threadsPerBlock);
-    // --- CUDA Graph Variables ---
     cudaStream_t stream = nullptr;
     cudaCheck(cudaStreamCreate(&stream));
     cudaGraph_t graph = nullptr;
@@ -580,28 +675,57 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
         // 3. Clean up any old graph (always recapture per sigma for correctness) ---
         if (graphExec) { cudaCheck(cudaGraphExecDestroy(graphExec)); graphExec = nullptr; }
         if (graph)     { cudaCheck(cudaGraphDestroy(graph));         graph     = nullptr; }
-        cudaCheck(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
 
-        // 4. Gaussian smoothing (separable, X, Y, Z) -- must select const/global, gaussian/deriv
+        // ================================
+        // --- All smoothing and vesselness calculation before capture ---
+        // ================================
+
+        // 4. Gaussian smoothing (separable, X, Y, Z)
         launchSeparableConvolutionDevice(0, inputDev, buffer1, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, useConstMem, tileSize);
         launchSeparableConvolutionDevice(1, buffer1 , buffer2, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, useConstMem, tileSize);
         launchSeparableConvolutionDevice(2, buffer2 , buffer1, gaussKernelDev, kernelLen, nRows, nCols, nSlices, threadsPerBlock, stream, useConstMem, tileSize);
 
         // 5. Hessian diagonals, Scale normalization, Eigenvalue decomposition, Vesselness all at traverse
-        bool firstPass = (sigmaIdx == 0);
+        if (vesselnessMethod != METHOD_JERMAN) {
+            bool firstPass = (sigmaIdx == 0);
+            // --- Everything can be inside the graph for Frangi, Sato, Meijering ---
+            cudaCheck(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
+            launchFusedHessianVesselnessKernel(
+                buffer1, outputDev, nRows, nCols, nSlices, stream, float(sigmaSq),
+                vesselnessMethod, bright, inv2Alpha2, inv2Beta2, inv2Gamma2,
+                alphaMeijering, firstPass
+            );
+            cudaCheck(cudaStreamEndCapture(stream, &graph));
+            cudaCheck(cudaGraphInstantiate(&graphExec, graph, nullptr, nullptr, 0));
+            cudaCheck(cudaGraphLaunch(graphExec, stream));
+        } else {
+            // --- Jerman: max reduction is outside graph! ---
+            float lambda3minGuess = float(-double(jermanC) * sigmaSq);
 
-        launchFusedHessianVesselnessKernel(
-            buffer1, outputDev, nRows, nCols, nSlices, stream, float(sigmaSq),
-            vesselnessMethod, bright, inv2Alpha2, inv2Beta2, inv2Gamma2,
-            alphaMeijering, gamma, firstPass
-        );
+            // (1) Write vesselness to buffer2 (not inside graph)
+            launchFusedHessianVesselnessKernel(
+                buffer1, buffer2, nRows, nCols, nSlices, stream, float(sigmaSq),
+                vesselnessMethod, bright,  jermanTau, lambda3minGuess, structureSensitivity,
+                alphaMeijering, true
+            );
 
-        // 8. collect the steam
-        cudaCheck(cudaStreamEndCapture(stream, &graph));
-        cudaCheck(cudaGraphInstantiate(&graphExec, graph, nullptr, nullptr, 0));
+            // (2) Compute max reduction outside of capture!
+            maxReduceKernel<<<blocks, threadsPerBlock, threadsPerBlock * sizeof(float), stream>>>(buffer2, maxTemp, total);
+            if (blocks > 1)
+                maxReduceKernel<<<1, threadsPerBlock, threadsPerBlock * sizeof(float), stream>>>(maxTemp, buffer2Max, blocks);
+            else
+                cudaMemcpyAsync(buffer2Max, maxTemp, sizeof(float), cudaMemcpyDeviceToDevice, stream);
 
-        // 9. Launch the captured graph for this sigma
-        cudaCheck(cudaGraphLaunch(graphExec, stream));
+            // (3) Now only normalization/projection inside graph
+            cudaCheck(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
+            normalize_and_project<<<blocks, threadsPerBlock, 0, stream>>>(
+                outputDev, buffer2, buffer2Max, total
+            );
+            cudaCheck(cudaPeekAtLastError());
+            cudaCheck(cudaStreamEndCapture(stream, &graph));
+            cudaCheck(cudaGraphInstantiate(&graphExec, graph, nullptr, nullptr, 0));
+            cudaCheck(cudaGraphLaunch(graphExec, stream));
+        }
         cudaFree(gaussKernelDev);
     }
 
@@ -615,6 +739,6 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[])
     plhs[0] = mxGPUCreateMxArrayOnGPU(output);
 
     //--- Free device buffers ---
-    cudaFree(buffer1); cudaFree(buffer2);
+    cudaFree(buffer1); cudaFree(buffer2); cudaFree(maxTemp); cudaFree(buffer2Max);
     mxGPUDestroyGPUArray(input); mxGPUDestroyGPUArray(output);
 }
