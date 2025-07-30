@@ -343,10 +343,8 @@ float vesselnessFrangi(float l1, float l2, float l3, bool bright, float inv2Alph
 {
     bool condition = bright ? (l2 < 0.f && l3 < 0.f) : (l2 > 0.f && l3 > 0.f);
     if (!condition) return 0.f;
-    //float absL1 = fabsf(l1), absL2 = fabsf(l2), absL3 = fabsf(l3);
     float absL2 = fabsf(l2), absL3 = fabsf(l3);
     float Ra2   = (absL2 * absL2) / (absL3 * absL3 + EPSILON);
-    //float Rb2   = (absL1 * absL1) / fmaf(absL2, absL3, EPSILON);
     float Rb2   = (l1 * l1) / fmaf(absL2, absL3, EPSILON);
     float S2    = fmaf(l1, l1, fmaf(l2, l2, l3 * l3));
     float expRa = __expf(-Ra2 * inv2Alpha2);
@@ -361,10 +359,7 @@ float vesselnessSato(float l1, float l2, float l3, bool bright, float inv2Alpha2
 {
     bool isVessel = bright ? (l2 < 0.f && l3 < 0.f) : (l2 > 0.f && l3 > 0.f);
     if (!isVessel) return 0.f;
-    //float absL1 = fabsf(l1), absL2 = fabsf(l2), absL3 = fabsf(l3);
     float absL2 = fabsf(l2);
-    //float expL1 = __expf(-absL1 * absL1 * inv2Alpha2);
-    //float expL3 = __expf(-absL3 * absL3 * inv2Beta2);
     float expL1 = __expf(-l1 * l1 * inv2Alpha2);
     float expL3 = __expf(-l3 * l3 * inv2Beta2);
     float absL2TimesExpL1 = absL2 * expL1;
