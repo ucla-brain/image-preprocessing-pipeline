@@ -7,7 +7,7 @@ sigma_from = 1; sigma_step = 2; sigma_to = 9;
 referenceMethod    = 'original';          % Options: 'original', 'frangi', 'sato', 'ferengi', 'jerman'
 methodsToOptimize  = {'frangi', 'sato'};  % Choose any subset
 methodsToPlot      = {'frangi', 'sato'};  % Choose any subset (of optimize)
-polaritiesToTest   = {'bright', 'dark'};  % {'bright'}, {'dark'}, or both
+polaritiesToTest   = {'bright'};  % {'bright'}, {'dark'}, or both
 vol_axes           = [3 2];               % Projection axes for plotting
 showParameters     = true;                % Print optimized parameters on plot and console
 compareWithMatlab  = true;                % Compare with MATLAB's built-in fibermetric
@@ -31,7 +31,7 @@ assert(ismember(referenceMethod, {'original','frangi','sato','ferengi','jerman'}
 
 volOrig = im2single(tiffreadVolume("test_volume.tif"));
 gvol = gpuArray(volOrig);
-gvol_normal = gvol ./ max(gvol, [], 'all', 'omitnan');
+gvol_normal = normalize_gpu(gvol);
 
 fields = [{['fm_gpu_' referenceMethod]}, ...
           strcat('fm_gpu_', methodsToPlot), ...
@@ -70,8 +70,8 @@ for polIdx = 1:Npol
     % Optionally compare with MATLAB built-in fibermetric (single polarity)
     if compareWithMatlab && polIdx == 1
         t0 = tic;
-        fm_cpu = fibermetric(vol, [sigma_from sigma_step sigma_to], 'StructureSensitivity', 0.1, ...
-            'Polarity', capitalizeFirst(pol), 'Method', 'Frangi');
+        [alpha_init, beta_init, ss_init] = getDefaultInitParams('frangi');
+        fm_cpu = fibermetric(vol, sigma_from:sigma_step:sigma_to, 'StructureSensitivity', ss_init, 'ObjectPolarity', capitalizeFirst(pol));
         fibermetricCpuTime(polIdx) = toc(t0);
         fprintf('MATLAB fibermetric (CPU, Frangi): %.2fs\n', fibermetricCpuTime(polIdx));
     end
@@ -86,24 +86,24 @@ for polIdx = 1:Npol
                 options.InitialSwarmMatrix = [alpha_init, beta_init, ss_init];
                 lb = [0, 0, 0];
                 ub = [2, 1, 9999];
-                objfun = @(x) double(norm(normalize_gpu(...
-                    fibermetric_gpu(gvol_used, sigma_from, sigma_to, sigma_step, x(1), x(2), x(3), pol, 'frangi')) - refVol, 'fro'));
+                objfun = @(x) gather(double(norm(normalize_gpu(...
+                    fibermetric_gpu(gvol_used, sigma_from, sigma_to, sigma_step, x(1), x(2), x(3), pol, 'frangi')) - refVol, 'fro')));
                 [x_opt, ~] = particleswarm(objfun, 3, lb, ub, options);
                 optParams.frangi = struct('alpha', x_opt(1), 'beta', x_opt(2), 'structureSensitivity', x_opt(3));
             case 'sato'
                 options.InitialSwarmMatrix = [alpha_init, beta_init];
                 lb = [0, 0];
                 ub = [2, 1];
-                objfun = @(x) double(norm(normalize_gpu(...
-                    fibermetric_gpu(gvol_used, sigma_from, sigma_to, sigma_step, x(1), x(2), 0.5, pol, 'sato')) - refVol, 'fro'));
+                objfun = @(x) gather(double(norm(normalize_gpu(...
+                    fibermetric_gpu(gvol_used, sigma_from, sigma_to, sigma_step, x(1), x(2), 0.5, pol, 'sato')) - refVol, 'fro')));
                 [x_opt, ~] = particleswarm(objfun, 2, lb, ub, options);
                 optParams.sato = struct('alpha', x_opt(1), 'beta', x_opt(2), 'structureSensitivity', 0.5);
             case 'jerman'
                 options.InitialSwarmMatrix = [alpha_init, beta_init, ss_init];
                 lb = [0.5, 0, 0.0];
                 ub = [1.0, 9, 1.0];
-                objfun = @(x) double(norm(normalize_gpu(...
-                    fibermetric_gpu(gvol_used, sigma_from, sigma_to, sigma_step, x(1), x(2), x(3), pol, 'jerman')) - refVol, 'fro'));
+                objfun = @(x) gather(double(norm(normalize_gpu(...
+                    fibermetric_gpu(gvol_used, sigma_from, sigma_to, sigma_step, x(1), x(2), x(3), pol, 'jerman')) - refVol, 'fro')));
                 [x_opt, ~] = particleswarm(objfun, 3, lb, ub, options);
                 optParams.jerman = struct('tau', x_opt(1), 'C', x_opt(2), 'structureSensitivity', x_opt(3));
             otherwise
@@ -173,7 +173,7 @@ for a = 1:nAxis
         % Reference (Input)
         subplot(nAxis*nPol, nMethod, idxOffset+1);
         if strcmp(pol, 'dark')
-            imagesc(squeeze(min(res.vol, [], axis_val)));
+            imagesc(squeeze(max(res.vol, [], axis_val)));
             tit = sprintf('Input (%s,axis=%d)', pol, axis_val);
         else
             imagesc(squeeze(max(res.vol, [], axis_val)));
