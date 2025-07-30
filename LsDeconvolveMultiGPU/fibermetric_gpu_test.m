@@ -3,13 +3,14 @@ reset(gpu);
 fprintf('\n==== Modular Benchmark: fibermetric_gpu (GPU only) with PSO tuning ====\n');
 
 % ----------------------- Configuration Section ------------------------
-sigma_from = 1; sigma_step = 2; sigma_to = 9; 
-referenceMethod             = 'original';         % Options: 'original', 'frangi', 'sato', 'ferengi', 'jerman'
-methodsToOptimize           = {'frangi', 'sato'}; % Methods to optimize (cell)
-methodsToPlot               = {'frangi', 'sato'}; % Methods to plot, subset of optimized or not
-polaritiesToTest            = {'bright'};         % Choose at least one: {'bright'}, {'dark'}, or both
-vol_axes                    = [3 2];              % Projection axes for plotting
-showParameters              = true;               % Print optimized parameters on plot and console
+sigma_from = 1; sigma_step = 2; sigma_to = 9;
+referenceMethod    = 'original';          % Options: 'original', 'frangi', 'sato', 'ferengi', 'jerman'
+methodsToOptimize  = {'frangi', 'sato'};  % Choose any subset
+methodsToPlot      = {'frangi', 'sato'};  % Choose any subset (of optimize)
+polaritiesToTest   = {'bright', 'dark'};  % {'bright'}, {'dark'}, or both
+vol_axes           = [3 2];               % Projection axes for plotting
+showParameters     = true;                % Print optimized parameters on plot and console
+compareWithMatlab  = true;                % Compare with MATLAB's built-in fibermetric
 options = optimoptions('particleswarm', ...
     'Display'               , 'off', ...
     'MaxIterations'         , 1, ...
@@ -23,6 +24,10 @@ options = optimoptions('particleswarm', ...
 % ----------------------------------------------------------------------
 
 assert(~isempty(polaritiesToTest), 'At least one polarity must be tested.');
+assert(~isempty(methodsToOptimize), 'At least one method must be optimized.');
+assert(~isempty(methodsToPlot), 'At least one method must be plotted.');
+assert(ismember(referenceMethod, {'original','frangi','sato','ferengi','jerman'}), ...
+    'Invalid reference method.');
 
 volOrig = im2single(tiffreadVolume("test_volume.tif"));
 gvol = gpuArray(volOrig);
@@ -34,6 +39,8 @@ fields = [{['fm_gpu_' referenceMethod]}, ...
           {'pol','vol','opt_params'}];
 Npol = numel(polaritiesToTest);
 results = repmat(cell2struct(cell(size(fields)), fields, 2), Npol, 1);
+
+fibermetricCpuTime = nan(Npol,1); % for built-in comparison
 
 for polIdx = 1:Npol
     pol = polaritiesToTest{polIdx};
@@ -59,6 +66,15 @@ for polIdx = 1:Npol
             error('Unknown referenceMethod "%s"', referenceMethod);
     end
     refVol = normalize_gpu(refVol);
+
+    % Optionally compare with MATLAB built-in fibermetric (single polarity)
+    if compareWithMatlab && polIdx == 1
+        t0 = tic;
+        fm_cpu = fibermetric(vol, [sigma_from sigma_step sigma_to], 'StructureSensitivity', 0.1, ...
+            'Polarity', capitalizeFirst(pol), 'Method', 'Frangi');
+        fibermetricCpuTime(polIdx) = toc(t0);
+        fprintf('MATLAB fibermetric (CPU, Frangi): %.2fs\n', fibermetricCpuTime(polIdx));
+    end
 
     % ------------------- PSO Optimization for selected methods -------------------
     optParams = struct();
@@ -93,16 +109,9 @@ for polIdx = 1:Npol
             otherwise
                 warning('Unknown method "%s" for optimization', method);
         end
-    end
-
-    % Print optimized params in console
-    if showParameters
-        fprintf('\nPolarity: %s\n', pol);
-        fn = fieldnames(optParams);
-        for k = 1:numel(fn)
-            fprintf('  %s: \n', fn{k});
-            disp(optParams.(fn{k}));
-        end
+        % Print optimized params immediately after found
+        fprintf('\n[Optimized Params] Method: %s, Polarity: %s\n', capitalizeFirst(method), capitalizeFirst(pol));
+        disp(optParams.(method));
     end
 
     % ------------------ Run/Store all methods for plotting --------------------
@@ -111,7 +120,7 @@ for polIdx = 1:Npol
     thisResult.vol = vol;
     thisResult.opt_params = optParams;
 
-    % Reference always included
+    % Reference always included (keep on CPU for plotting)
     thisResult.(['fm_gpu_' referenceMethod]) = gather(refVol);
 
     for m = 1:numel(methodsToPlot)
@@ -195,6 +204,22 @@ for a = 1:nAxis
 end
 colormap(gray);
 
+% ========== Timing and Speedup Summary ==========
+fprintf('\n\n=== Timing Summary (GPU vs CPU) ===\n');
+fprintf('Method          Time (s)    Speedup (vs CPU Frangi)\n');
+fprintf('-----------------------------------------------\n');
+gpuTimes = zeros(numel(methodsToPlot),1);
+for m = 1:numel(methodsToPlot)
+    mt = methodsToPlot{m};
+    t = results(1).(['time_gpu_' mt]);
+    gpuTimes(m) = t;
+    fprintf('%-15s %8.3f      %8.2fx\n', capitalizeFirst(mt), t, fibermetricCpuTime(1)/t);
+end
+if compareWithMatlab
+    fprintf('%-15s %8.3f      %8.2fx\n', 'fibermetric CPU', fibermetricCpuTime(1), 1.00);
+end
+fprintf('-----------------------------------------------\n');
+
 fprintf('\nDone!\n');
 
 % --- Helper: Default params ---
@@ -202,7 +227,7 @@ function [alpha_init, beta_init, ss_init] = getDefaultInitParams(method)
     switch lower(method)
         case 'frangi'
             alpha_init = 0.0165; beta_init = 0.6507; ss_init = 0.0958;
-        case {'sato'}
+        case {'sato','ferengi'}
             alpha_init = 0.0380; beta_init = 0;      ss_init = 0.5;
         case 'jerman'
             alpha_init = 0.75;   beta_init = 2;      ss_init = 1e-4;

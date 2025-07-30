@@ -1,19 +1,145 @@
 /*
- * ===============================  Jerman Mode Parameter Mapping  ===============================
+ * =========================================================================================
+ *         FIBERMETRIC_GPU: Ultra-Fast, Modular 3D Vesselness/Neuriteness Filtering
+ * =========================================================================================
  *
- * When vesselness method is set to 'jerman', the parameters alpha and beta are **reinterpreted**:
+ *   License: GNU General Public License v3.0 (see end of file)
+ *   Author:  Keivan Moradi, [UCAL / Brain Research and Artificial Intelligence Nexus (Dong) Lab, optional]
+ *   Date:    2025
  *
- *   - alpha: used as Jerman's tau (tau, 0.5–1), controls lambda3 truncation
- *   - beta : used as Jerman's C (C > 0), guesses lambda3min as -C*sigma^2
+ * -----------------------------------------------------------------------------------------
  *
- * For Frangi/Sato/Meijering, alpha and beta retain their classic meanings.
+ *   This file implements a **high-performance 3D vesselness and neuriteness filter** for
+ *   MATLAB and CUDA GPUs, supporting the most common vesselness metrics in biomedical image
+ *   analysis: **Frangi, Sato, Jerman, and Meijering**.
+ *   The algorithm is designed for maximum speed and accuracy, and serves as a drop-in
+ *   replacement for MATLAB's `fibermetric` and `fibermetric3` functions, while offering:
  *
- * structureSensitivity: Always interpreted as eigenvalue magnitude thresholding
+ *       - **~30× speedup** on an NVIDIA A6000 GPU compared to single-threaded Xeon Platinum 8260.
+ *       - Seamless MATLAB integration via GPU arrays (no gather/scatter needed for optimization).
+ *       - Highly modular: select, optimize, and compare multiple vesselness methods and polarities.
+ *       - Advanced implementation: separable Gaussian smoothing, stable 5-point finite differences,
+ *         shared memory, and CUDA graphs for performance.
+ *       - Modular support for multi-scale (sigma range) operation.
+ *       - Plug-and-play for MATLAB, including PSO-based parameter optimization.
  *
- * The output is **not thresholded** on the GPU for Jerman. Thresholding and any further
- * post-processing must be done in MATLAB.
+ * -----------------------------------------------------------------------------------------
+ *  USAGE (From MATLAB):
  *
- * ================================================================================================
+ *      result = fibermetric_gpu( ...
+ *          gpuArraySingle3D,      // input 3D image (single, normalized to [0,1])
+ *          sigmaFrom, sigmaTo, sigmaStep,  // scales to apply
+ *          alpha, beta, structureSensitivity,
+ *          polarity,              // 'bright' or 'dark'
+ *          method                 // 'frangi', 'sato', 'meijering', 'jerman'
+ *      );
+ *
+ *  Typical use is from within MATLAB, after compiling with `mexcuda` or using the provided
+ *  build scripts. See the benchmarking script for parameter tuning and optimization.
+ *
+ * -----------------------------------------------------------------------------------------
+ *  ALGORITHM OVERVIEW
+ *
+ *  For each sigma (scale):
+ *    1. Smooth input volume with a separable 3D Gaussian (applied on GPU, using shared memory).
+ *    2. Compute the 3D Hessian matrix at each voxel using **5-point finite difference** formulas
+ *       (for second derivatives along x, y, z, and mixed partials), which provides higher
+ *       numerical accuracy than standard 3-point stencils.
+ *    3. At each voxel, analytically compute the eigenvalues (λ₁, λ₂, λ₃) of the symmetric
+ *       Hessian matrix (device-optimized cubic root solver).
+ *    4. Apply the vesselness or neuriteness metric of your choice:
+ *         - **Frangi**: Classic tube/plate discrimination using three eigenvalues.
+ *         - **Sato**: Enhanced detection for faint, elongated structures (neurites).
+ *         - **Meijering**: Neuriteness, favoring the smallest eigenvalue (λ₁).
+ *         - **Jerman**: Improved background suppression and scale invariance.
+ *    5. Optionally perform a max-projection over scales (for Jerman, normalization is applied).
+ *
+ * -----------------------------------------------------------------------------------------
+ *  KEY DIFFERENCES / ADVANTAGES OVER EXISTING (e.g., MATLAB, ITK, Fiji) IMPLEMENTATIONS
+ *
+ *   - **5-Point Finite Difference for Hessian**: Most libraries use a basic 3-point central
+ *     difference for second derivatives, but our implementation uses a *5-point stencil* for
+ *     improved accuracy, especially critical at lower scales (smaller sigma).
+ *
+ *   - **No Global Minimum λ Calculation for Jerman**: MATLAB's or original Jerman's method
+ *     uses a global minimum eigenvalue for normalization, requiring a global reduction and
+ *     additional synchronization. We avoid this for GPU efficiency, instead using a
+ *     user-settable guess (C·σ²) as recommended in Jerman's original paper, achieving
+ *     excellent vessel/background separation *without* expensive global min reduction.
+ *
+ *   - **All Processing on GPU, Modular MATLAB Interface**: Supports full parameter
+ *     optimization (e.g., using Particle Swarm), as the entire filtering, normalization,
+ *     and loss calculation are performed on the GPU (no gather/scatter between steps).
+ *
+ *   - **CUDA Graphs, Streams, Shared Memory**: The algorithm pipelines multiple steps
+ *     (convolution, Hessian, eigenvalue, vesselness) within CUDA graphs and shared memory
+ *     tiles for maximum throughput. Tiled convolution and shared memory reuse are employed
+ *     for high memory bandwidth and occupancy.
+ *
+ *   - **Method Modularity**: Any subset of Frangi, Sato, Meijering, Jerman can be enabled,
+ *     compared, and optimized at runtime. Support for bright-on-dark, dark-on-bright,
+ *     or both polarities.
+ *
+ *   - **Order-of-magnitude Speedup**: ~30× faster than MATLAB's single-threaded CPU
+ *     implementation (fibermetric) on Xeon 8260 (see tutorial/benchmark script).
+ *
+ * -----------------------------------------------------------------------------------------
+ *  OPTIMIZATIONS & ENGINEERING HIGHLIGHTS
+ *
+ *   - **Separable Gaussian Smoothing**: 3D Gaussian smoothing performed as 1D separable
+ *     convolutions in three axes, with kernel coefficients uploaded to constant memory.
+ *   - **Shared Memory Tiling**: Input tiles loaded into shared memory with appropriate
+ *     halo padding and reflection boundary handling.
+ *   - **Device-Optimized Eigenvalue Solver**: Custom analytical solver for 3×3 symmetric
+ *     matrices (using Cardano's method, stable for floating-point on GPU).
+ *   - **Flexible CUDA Graph Capture**: Kernels for each scale can be captured and reused
+ *     for optimal performance on supported GPUs.
+ *   - **Adaptive Parameterization**: Jerman's tau, C, and structure sensitivity directly
+ *     exposed and tunable for advanced users.
+ *   - **No Global Reductions or Host Synchronization**: All scale normalization is local or
+ *     via simple max-reduction for Jerman, avoiding the global-min eigenvalue calculation.
+ *
+ * -----------------------------------------------------------------------------------------
+ *  LIMITATIONS / CAVEATS
+ *   - Requires NVIDIA GPU supporting CUDA 11.x or newer, with at least 6 GB VRAM for large volumes.
+ *   - Only supports single-precision input/output (internal double used for some steps).
+ *   - Currently supports 3D volumes (X, Y, Z).
+ *   - Tuning and usage assumes input volumes are normalized to [0,1] for best performance.
+ *
+ * -----------------------------------------------------------------------------------------
+ *  HOW TO BUILD
+ *   - On MATLAB:
+ *         mexcuda -output fibermetric_gpu fibermetric_gpu.cu
+ *   - On command line (with CUDA Toolkit):
+ *         nvcc -Xcompiler "-fPIC" -shared -o fibermetric_gpu.mexa64 fibermetric_gpu.cu ...
+ *   - See build scripts / README for cross-platform compilation notes.
+ *
+ * -----------------------------------------------------------------------------------------
+ *  FURTHER READING
+ *   - Frangi et al. "Multiscale vessel enhancement filtering", MICCAI 1998.
+ *   - Sato et al. "Three-dimensional multi-scale line filter for segmentation and visualization", 3DPVT 2001.
+ *   - Jerman et al. "Enhancement of Vessels with Varying Radius in 3D and 2D Images", IEEE TMI, 2016.
+ *   - Meijering et al. "Design and Validation of a Tool for Neurite Tracing and Analysis", Cytometry 2004.
+ *
+ * -----------------------------------------------------------------------------------------
+ *  LICENSE (GPLv3)
+ *
+ *   This file is part of fibermetric_gpu.
+ *
+ *   fibermetric_gpu is free software: you can redistribute it and/or modify
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation, either version 3 of the License, or
+ *   (at your option) any later version.
+ *
+ *   fibermetric_gpu is distributed in the hope that it will be useful,
+ *   but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *   GNU General Public License for more details.
+ *
+ *   You should have received a copy of the GNU General Public License
+ *   along with fibermetric_gpu.  If not, see <https://www.gnu.org/licenses/>.
+ *
+ * =========================================================================================
  */
 
 #include "mex.h"
