@@ -15,7 +15,7 @@ Python code for stitching and image enhancement of Light Sheet data
 
    `conda activate stitching`
 
-   **Note:** The last time I checked, Microsoft MPI installed fom conda-forge was functional. However, if mpi4py was not functional on Windows, try installing the latest [Microsoft MPI from GitHub](https://github.com/microsoft/Microsoft-MPI).
+   **Note:** The last time I checked, Microsoft MPI installed from conda-forge was functional. However, if mpi4py was not functional on Windows, try installing the latest [Microsoft MPI from GitHub](https://github.com/microsoft/Microsoft-MPI).
    
    **Note:** If installing anaconda as user did not work on Windows, you may test installing it as the system python.
 
