@@ -1060,6 +1060,8 @@ def filter_streaks(
 
     # smooth the image using log plus 1 function
     d_type = img.dtype
+    if not np_d_type(d_type).kind in ("u", "i"):
+        img_min, img_max = min_max_2d(img)
     if log1p_normalization_needed:
         img = log1p_jit(img, dtype=float32)
 
@@ -1154,6 +1156,8 @@ def filter_streaks(
         img = rint(img)
         d_type_info = iinfo(d_type)
         clip(img, d_type_info.min, d_type_info.max, out=img)
+    else:
+        clip(img, img_min, img_max, out=img)
     if img.dtype != d_type:
         img = img.astype(d_type)
     return img
