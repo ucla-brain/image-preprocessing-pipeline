@@ -8,15 +8,20 @@ dependencies:
   - pytorch>=2.2.1
   - pytorch-cuda>=11.8
   - pycudadecon
+  - pyvista
   - psutil
   - tqdm
   - tifffile
+  - imageio
   - numpy
   - scipy
   - scikit-image
   - scikit-learn
+  - pywavelets
   - matplotlib
   - pandas
+  - pillow
+  - colorama
   - imagecodecs>=2023.7.10
   - freeimage
   - git
@@ -37,3 +42,4 @@ dependencies:
       - imaris_ims_file_reader
       - dcimg
       - cpufeature
+      - ptwt
