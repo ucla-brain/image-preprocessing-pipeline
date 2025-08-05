@@ -1060,6 +1060,7 @@ def filter_streaks(
 
     # smooth the image using log plus 1 function
     d_type = img.dtype
+    img_min, img_max = None, None
     if not np_d_type(d_type).kind in ("u", "i"):
         img_min, img_max = min_max_2d(img)
     if log1p_normalization_needed:
@@ -1160,6 +1161,54 @@ def filter_streaks(
         clip(img, img_min, img_max, out=img)
     if img.dtype != d_type:
         img = img.astype(d_type)
+    return img
+
+
+def open_3d(img: ndarray, open_steps: int = 30, max_workers=None):
+    from concurrent.futures import ThreadPoolExecutor
+
+    shape = img.shape
+    mask = img.astype(uint8)
+
+    # Define morph function
+    morph = lambda arr: morphologyEx(arr, MORPH_OPEN, ones((open_steps, open_steps), dtype=uint8))
+
+    # Parallel Z
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        chunksize = max(1, shape[0] // (max_workers or 8 or 1))
+        results = list(executor.map(morph, [mask[z] for z in range(shape[0])], chunksize=chunksize))
+    for z, out in enumerate(results):
+        mask[z] = out
+
+    # Parallel Y
+    chunksize = max(1, shape[1] // (max_workers or 8 or 1))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        chunksize = max(1, shape[1] // (max_workers or 8 or 1))
+        results = list(executor.map(morph, [mask[:, y, :] for y in range(shape[1])], chunksize=chunksize))
+    for y, out in enumerate(results):
+        mask[:, y, :] = out
+
+    # Parallel X
+    chunksize = max(1, shape[2] // (max_workers or 8 or 1))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        chunksize = max(1, shape[2] // (max_workers or 8 or 1))
+        results = list(executor.map(lambda arr: morph(arr).astype(bool), [mask[:, :, x] for x in range(shape[2])], chunksize=chunksize))
+    for x, out in enumerate(results):
+        mask[:, :, x] = out
+
+    return mask
+
+
+def filter_streaks_3D(img, sigma=70, max_workers=None):
+    from concurrent.futures import ThreadPoolExecutor
+    shape = img.shape
+    chunksize = max(1, shape[0] // (max_workers or 8 or 1))
+    # Lambda wraps per-slice operation
+    func = lambda slice2d: filter_streaks(slice2d, sigma=(sigma, sigma), wavelet="db9", bidirectional=True)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        filtered = list(executor.map(func, [img[z] for z in range(shape[0])], chunksize=chunksize))
+    for z, out in enumerate(filtered):
+        img[z] = out
     return img
 
 
