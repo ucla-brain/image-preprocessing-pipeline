@@ -43,5 +43,3 @@ dependencies:
       - dcimg
       - cpufeature
       - ptwt
-
-  - opencv-python
