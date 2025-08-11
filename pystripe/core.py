@@ -1,78 +1,72 @@
-import sys
 import os
+# Generic BLAS/OpenMP stacks used by NumPy/ SciPy / scikit-image / OpenCV builds
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("VECLIB_MAXIMUM_THREADS", "1") # Apple Accelerate
+os.environ.setdefault("BLIS_NUM_THREADS", "1")
+
+# NumExpr (picked up at import)
+os.environ.setdefault("NUMEXPR_MAX_THREADS", "1")
+os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
+
+# Optional: reduce busy-wait CPU burn on Intel OpenMP/MKL
+os.environ.setdefault("KMP_BLOCKTIME", "0")
+os.environ.setdefault("OMP_WAIT_POLICY", "PASSIVE")
+
+# OpenCV: prefer single-thread and disable OpenCL via env when possible
+os.environ.setdefault("OPENCV_OPENCL_RUNTIME", "disabled")
+os.environ.setdefault("OPENCV_FOR_THREADS_NUM", "1")
+
+import sys
 import shutil
 import subprocess
 from argparse import RawDescriptionHelpFormatter, ArgumentParser
-from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, TimeoutError
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, TimeoutError, as_completed
 from concurrent.futures.process import BrokenProcessPool
 from functools import reduce
+from itertools import cycle, count
 from math import ceil, log, sqrt
 from multiprocessing import Process, Queue
 from operator import iconcat
 from os import scandir, DirEntry
 from pathlib import Path
-from queue import Empty
+from queue import Empty, Full, SimpleQueue
 from re import compile, IGNORECASE
 from time import sleep, time
 from types import GeneratorType
-from typing import Tuple, Iterator, List, Callable, Union
+from typing import Tuple, Iterator, List, Union, Any, Literal, Dict
 from warnings import filterwarnings
-from gc import collect as gc_collect
 
 from cv2 import morphologyEx, MORPH_CLOSE, MORPH_OPEN, floodFill, GaussianBlur
 from dcimg import DCIMGFile
 from imageio.v3 import imread as iio_imread
 from numba import jit
 from numexpr import evaluate
-from numpy import dtype as np_d_type
-from numpy import max as np_max
-from numpy import mean as np_mean
-from numpy import median as np_median
-from numpy import min as np_min
 from numpy import (uint8, uint16, float32, float64, iinfo, ndarray, generic, broadcast_to, exp, expm1, log1p, tanh,
-                   zeros, ones, cumsum, arange, unique, interp, pad, clip, where, rot90, flipud, dot, reshape, nonzero,
-                   logical_not, prod, rint, array)
+                   zeros, ones, arange, pad, clip, where, rot90, flipud, dot, reshape, nonzero, ascontiguousarray,
+                   logical_not, rint, array, asarray, min as np_min, median as np_median, mean as np_mean,
+                   max as np_max, dtype as np_d_type)
 from psutil import cpu_count
-from ptwt import wavedec2 as pt_wavedec2
-from ptwt import waverec2 as pt_waverec2
+from ptwt import wavedec2 as pt_wavedec2, waverec2 as pt_waverec2
 from pywt import wavedec2, waverec2, Wavelet, dwt_max_level
-from scipy.fftpack import rfft, irfft
+from numpy.fft import rfft, irfft
 from scipy.signal import butter, sosfiltfilt
 from skimage.filters import threshold_otsu, threshold_multiotsu
 from skimage.measure import block_reduce
 from skimage.transform import resize
 from tifffile import imwrite
 from tifffile.tifffile import TiffFileError
-from torch import Tensor, as_tensor
-from torch import arange as pt_arange
-from torch import broadcast_to as pt_broadcast_to
-from torch import complex as pt_complex
-from torch import exp as pt_exp
-from torch import float32 as pt_float32
-from torch import reshape as pt_reshape
-from torch.cuda import device_count as cuda_device_count
-from torch.cuda import get_device_properties as cuda_get_device_properties
-from torch.cuda import empty_cache as cuda_empty_cache
-from torch.cuda import is_available as cuda_is_available_for_pt
-from torch.fft import irfft as pt_irfft
-from torch.fft import rfft as pt_rfft
+from torch import (Tensor, as_tensor, set_grad_enabled, arange as pt_arange, broadcast_to as pt_broadcast_to,
+                   exp as pt_exp, float32 as pt_float32, reshape as pt_reshape)
+from torch.cuda import (is_available as cuda_is_available_for_pt, device_count as cuda_device_count,
+                        device as cuda_device, set_device as cuda_set_device, get_device_name as cuda_get_device_name,
+                        mem_get_info as cuda_mem_get_info, Stream, stream as cuda_stream)
+from torch.fft import irfft as pt_irfft, rfft as pt_rfft
 from tqdm import tqdm
 from PIL import Image
+from dataclasses import dataclass
 Image.MAX_IMAGE_PIXELS = None
-
-# from jax import local_devices, Array, default_device
-# from jax.numpy import broadcast_to as jx_broadcast_to
-# from jax.numpy import reshape as jx_reshape
-# from jax.numpy import arange as jx_arange
-# from jax.numpy import float32 as jx_float32
-# from jax.numpy import exp as jx_exp
-# from jax.numpy import asarray as jx_asarray
-# from jax.numpy import multiply as jx_multiply
-# from jax.lax import complex as jx_complex
-# from jax.numpy.fft import rfft as jx_rfft
-# from jax.numpy.fft import irfft as jx_irfft
-# from jaxwt import wavedec2 as jx_wavedec2
-# from jaxwt import waverec2 as jx_waverec2
 
 from pystripe.lightsheet_correct import correct_lightsheet, prctl
 from pystripe.raw import raw_imread
@@ -82,13 +76,49 @@ filterwarnings("ignore")
 SUPPORTED_EXTENSIONS = ('.png', '.tif', '.tiff', '.raw', '.dcimg')
 NUM_RETRIES: int = 40
 USE_NUMEXPR: bool = True
-USE_PYTORCH = False
-USE_JAX = False
+USE_PYTORCH = True
 CUDA_IS_AVAILABLE_FOR_PT = cuda_is_available_for_pt()
-if sys.platform.lower() == "linux":
-    USE_PYTORCH = False
-    CUDA_IS_AVAILABLE_FOR_PT = False
-    # USE_JAX = True
+STREAMS_PER_GPU = 2   # tune: 2–4 is usually enough
+_STREAM_CYCLES: Dict[str, cycle] = {}
+set_grad_enabled(False)
+# if sys.platform.lower() == "linux":
+#     USE_PYTORCH = False
+#     CUDA_IS_AVAILABLE_FOR_PT = False
+PADDING_MODE: str = None
+DWT_MODE: str = None
+
+
+@dataclass(frozen=True)
+class DeviceInfo:
+    id: int
+    name: str
+    total: int   # bytes
+    free: int    # bytes
+
+
+def discover_cuda_devices() -> List[DeviceInfo]:
+    if not cuda_is_available_for_pt():
+        return []
+    devices: List[DeviceInfo] = []
+    for i in range(cuda_device_count()):
+        with cuda_device(i):
+            free, total = cuda_mem_get_info()
+        name = cuda_get_device_name(i)
+        devices.append(DeviceInfo(id=i, name=name, total=total, free=free))
+    # Sort by free memory desc so we schedule heavier work first
+    devices.sort(key=lambda d: d.free, reverse=True)
+    return devices
+
+
+def _next_stream(device_str: str) -> Stream:
+    """Round-robin a small pool of streams per device."""
+    cyc = _STREAM_CYCLES.get(device_str)
+    if cyc is None:
+        cuda_set_device(device_str)
+        streams = [Stream() for _ in range(STREAMS_PER_GPU)]
+        cyc = cycle(streams)
+        _STREAM_CYCLES[device_str] = cyc
+    return next(cyc)
 
 
 @jit(nopython=True)
@@ -140,7 +170,7 @@ def is_uniform_3d(arr: ndarray) -> Union[bool, None]:
 
 
 @jit(nopython=True)
-def min_max_1d(arr: ndarray) -> (int, int):
+def min_max_1d(arr: ndarray) -> Tuple[Any, Any]:
     n: int = len(arr)
     if n <= 0:
         return None, None
@@ -165,7 +195,7 @@ def min_max_1d(arr: ndarray) -> (int, int):
 
 
 @jit(nopython=True)
-def min_max_2d(arr: ndarray) -> (int, int):
+def min_max_2d(arr: ndarray) -> Tuple[Any, Any]:
     n: int = len(arr)
     if n <= 0:
         return None, None
@@ -178,7 +208,7 @@ def min_max_2d(arr: ndarray) -> (int, int):
 
 
 def expm1_jit(img: Union[ndarray, float, int], dtype=float32) -> ndarray:
-    if USE_NUMEXPR:
+    if USE_NUMEXPR and (img.flags.c_contiguous or img.flags.f_contiguous):
         if img.dtype != dtype:
             img = img.astype(dtype)
         evaluate("expm1(img)", out=img, casting="unsafe")
@@ -188,7 +218,7 @@ def expm1_jit(img: Union[ndarray, float, int], dtype=float32) -> ndarray:
 
 
 def log1p_jit(img: ndarray, dtype=float32):
-    if USE_NUMEXPR:
+    if USE_NUMEXPR and (img.flags.c_contiguous or img.flags.f_contiguous):
         if img.dtype != dtype:
             img = img.astype(dtype)
         evaluate("log1p(img)", out=img, casting="unsafe")
@@ -197,9 +227,894 @@ def log1p_jit(img: ndarray, dtype=float32):
     return img
 
 
+def max_level(min_len, wavelet):
+    w = Wavelet(wavelet)
+    return dwt_max_level(min_len, w.dec_len)
+
+
+def slice_non_zero_box(img_axis: ndarray, noise: int, filter_frequency: int = 1 / 1000) -> (int, int):
+    return min_max_1d(nonzero(butter_lowpass_filter(img_axis, filter_frequency).astype(uint16) > noise)[0])
+
+
+def get_img_mask(img: ndarray, threshold: Union[int, float],
+                 close_steps: int = 50, open_steps: int = 500, flood_fill_flag: int = 4) -> ndarray:
+    # start_time = time()
+    shape = list(img.shape)
+    mask = (img > threshold).astype(uint8)
+    mask = morphologyEx(mask, MORPH_CLOSE, ones((close_steps, close_steps), dtype=uint8))
+    mask = morphologyEx(mask, MORPH_OPEN, ones((open_steps, open_steps), dtype=uint8)).astype(bool)
+    inverted_mask = logical_not(mask).astype(uint8)
+    floodFill(inverted_mask, None, (0, 0), 0, flags=flood_fill_flag)
+    floodFill(inverted_mask, None, (0, shape[0] - 1), 0, flags=flood_fill_flag)
+    floodFill(inverted_mask, None, (shape[1] - 1, 0), 0, flags=flood_fill_flag)
+    floodFill(inverted_mask, None, (shape[1] - 1, shape[0] - 1), 0, flags=flood_fill_flag)
+    mask |= inverted_mask.astype(bool)
+    # print("mask time:", time() - start_time)
+    return mask
+
+
+def butter_lowpass_filter(img: ndarray, cutoff_frequency: float, order: int = 1) -> ndarray:
+    d_type = img.dtype
+    sos = butter(order, cutoff_frequency, output='sos')
+    img = sosfiltfilt(sos, img)  # returns float64
+    img = img.astype(d_type)
+
+    return img
+
+
+def correct_bleaching(
+        img: ndarray,
+        frequency: float,
+        clip_min: float,
+        clip_med: float,
+        clip_max: float,
+        max_method: bool = False,
+) -> ndarray:
+    """
+    Parameters
+    ----------
+    img: log1p filtered image
+    frequency: low pass fileter frequency. Usually 1/min(img.shape).
+    clip_min: background vs foreground threshold
+    clip_med: foreground intermediate
+    clip_max: foreground max
+    max_method: use max value on x and y axes to create the filter. Max method is faster and smoother but less accurate
+
+    Returns
+    -------
+    max normalized filter values.
+    """
+
+    assert isinstance(frequency, (float, float32, float64)) and frequency > 0
+    assert isinstance(clip_min, (float, float32, float64)) and clip_min >= 0
+    assert isinstance(clip_med, (float, float32, float64)) and clip_med > clip_min
+    assert isinstance(clip_max, (float, float32, float64)) and clip_max > clip_min
+    assert clip_max > clip_med
+    clip_min_lb = log1p(1)
+    if clip_min < clip_min_lb:
+        clip_min = clip_min_lb
+
+    # creat the filter
+    if max_method:
+        img_filter_y = np_max(img, axis=1)
+        img_filter_x = np_max(img, axis=0)
+        img_filter_y[img_filter_y == 0] = clip_med
+        img_filter_x[img_filter_x == 0] = clip_med
+        img_filter_y = clip(img_filter_y, clip_min, clip_max)
+        img_filter_x = clip(img_filter_x, clip_min, clip_max)
+        img_filter_y = butter_lowpass_filter(img_filter_y, frequency)
+        img_filter_x = butter_lowpass_filter(img_filter_x, frequency)
+        img_filter_y = reshape(img_filter_y, (len(img_filter_y), 1))
+        img_filter_x = reshape(img_filter_x, (1, len(img_filter_x)))
+        img_filter = dot(img_filter_y, img_filter_x)
+    else:
+        img_filter = img.copy()
+        img_filter[img_filter == 0] = clip_med
+        clip(img_filter, clip_min, clip_max, out=img_filter)
+        img_filter = butter_lowpass_filter(img_filter, frequency)
+
+    # apply the filter
+    img_filter_max = np_max(img_filter)
+    if USE_NUMEXPR and (img.flags.c_contiguous or img.flags.f_contiguous):
+        evaluate("img / img_filter * img_filter_max", out=img, casting="unsafe")
+    else:
+        img /= img_filter
+        img *= img_filter_max
+    return img
+
+
+def otsu_threshold(img: ndarray) -> float:
+    try:
+        return threshold_otsu(img)
+    except ValueError:
+        return 2
+
+
+def sigmoid(img: ndarray) -> ndarray:
+    if img.dtype != float32:
+        img = img.astype(float32)
+    half = float32(.5)
+    one = float32(1)
+    if USE_NUMEXPR and (img.flags.c_contiguous or img.flags.f_contiguous):
+        evaluate("half * (tanh(half * img) + one)", out=img, casting="unsafe")
+    else:
+        # img = .5 * (tanh(.5 * img) + 1)
+        img *= half
+        img = tanh(img)
+        img += one
+        img *= half
+    return img
+
+
+def foreground_fraction(img: ndarray, threshold: float, crossover: float, sigma: int) -> ndarray:
+    if img.dtype != float32:
+        ff = img.astype(float32)
+    else:
+        ff = img.copy()
+    threshold = float32(threshold)
+    crossover = float32(crossover)
+    if USE_NUMEXPR and (ff.flags.c_contiguous or ff.flags.f_contiguous):
+        evaluate("(ff - threshold) / crossover", out=ff, casting="unsafe")
+    else:
+        ff -= threshold
+        ff /= crossover
+    ff = sigmoid(ff)
+    ksize = (sigma * 2 + 1,) * 2
+    GaussianBlur(ff, ksize=ksize, sigmaX=sigma, sigmaY=sigma)
+    return ff
+
+
+def pt_notch(length: int, sigma: float, device: str = "cpu") -> Tensor:
+    """Generates a 1D gaussian notch filter `n` pixels long
+
+    Parameters
+    ----------
+    length : int
+        length of the gaussian notch filter
+    sigma : float
+        notch width
+    device : str, optional
+
+    Returns
+    -------
+    g : Tensor
+        (length,) array containing the gaussian notch filter
+
+    """
+    if length <= 0:
+        raise ValueError('pt_notch: length must be positive')
+    if sigma <= 0:
+        raise ValueError('pt_notch: sigma must be positive')
+    g = pt_arange(0, length, 1, dtype=pt_float32).to(device)
+    g **= 2
+    g /= -2 * sigma ** 2
+    g = pt_exp(g)
+    g = 1 - g
+    return g
+
+
+def np_notch(length: int, sigma: float) -> ndarray:
+    """Generates a 1D gaussian notch filter `n` pixels long
+
+    Parameters
+    ----------
+    length : int
+        length of the gaussian notch filter
+    sigma : float
+        notch width
+
+    Returns
+    -------
+    g : ndarray
+        (length,) array containing the gaussian notch filter
+
+    """
+    if length <= 0:
+        raise ValueError('np_notch: length must be positive')
+    if sigma <= 0:
+        raise ValueError('np_notch: sigma must be positive')
+    g = arange(length, dtype=float32)
+    one = float32(1)
+    two = float32(2)
+    if USE_NUMEXPR:
+        evaluate("one - exp(-g ** 2 / (two * sigma ** 2))", out=g, casting='unsafe')
+    else:
+        g **= 2
+        g /= -two * sigma ** 2
+        g = exp(g)
+        g = one - g
+    return g
+
+
+def notch_rise_point(sigma: int, rise: float):
+    """ Compute length at which gaussian notch reaches the given rise point
+    :param sigma: sigma of notch function
+    :param rise: a vlue between 0 and 1.
+
+    ----
+    :return: length at which notch reaches the rise
+    """
+    return int(sqrt(-2 * sigma ** 2 * log(1 - rise)) + .5) // 2 * 2
+
+
+def calculate_pad_size(shape: tuple, sigma: int, rise: float = 0.5):
+    """ Calculate image padding based on padding size but make sure padded image fits into gpu memory
+    :param shape: shape of image
+    :param sigma: sigma of notch function
+    :param rise: requested rise point of gaussian notch function.
+        Since rfft output is symmetric 0.5 is optimum to avoid generating artifacts on the image.
+        at 0.4 pad size will be equal to the sigma itself.
+    ---
+    :return: pad size
+    """
+    if (sigma == 0):
+        return 0
+    x = shape[1] + 1
+    y = shape[0] + 1
+    c = 5e14  # 2e15 for 8GB float32 image which needs ~40 GB of vRAM in pt_wavedec2
+    sqrt_xyc = sqrt(x ** 2 - 2 * x * y + y ** 2 + 4 * c)
+    rise = min(round(1 - exp((x + y - sqrt_xyc) / (4 * sigma ** 2)), 2) - 0.01, rise)
+    return notch_rise_point(sigma, rise)
+
+
+def np_gaussian_filter(shape: tuple, sigma: float, axis: int) -> ndarray:
+    """Create a gaussian notch filter
+
+    Parameters
+    ----------
+    shape: tuple
+        shape of the output filter
+    sigma: float
+        filter bandwidth
+    axis: int
+        axis of the filter. options: -1 or -2
+
+    Returns
+    -------
+    g : ndarray
+        the impulse response of the gaussian notch filter
+
+    """
+    g = np_notch(length=shape[axis], sigma=sigma)
+    if axis == -2:
+        g = reshape(g, newshape=(shape[axis], 1))
+    g = broadcast_to(g, shape)
+    return g
+
+
+def pt_gaussian_filter(shape: tuple, sigma: float, axis: int, device: cuda_device = "cpu") -> Tensor:
+    """Create a gaussian notch filter
+    Parameters
+    ----------
+    shape : tuple
+        shape of the output filter
+    sigma : float
+        filter bandwidth
+    axis: int
+        axis of the filter. options: -1 or -2
+    device : int, optional
+
+    Returns
+    ----------
+    g : Tensor
+        the impulse response of the gaussian notch filter
+    """
+    g = pt_notch(length=shape[axis], sigma=sigma, device=device)
+    if axis == -2:
+        g = pt_reshape(g, shape=(shape[axis], 1))
+    g = pt_broadcast_to(g, shape)
+    return g
+
+
+def np_filter_coefficient(coef: ndarray, width_frac: float, axis=-1) -> ndarray:
+    coef = ascontiguousarray(coef)
+    coef_f = rfft(coef, axis=axis)
+    n_freq = coef_f.shape[axis]
+    sigma = n_freq * width_frac
+    H, W = coef_f.shape[-2], coef_f.shape[-1]
+    coef_f *= np_gaussian_filter(shape=(H, W), sigma=sigma, axis=axis)
+    return irfft(coef_f, n=coef.shape[axis], axis=axis)
+
+
+def pt_filter_coefficient(coef: Tensor, width_frac: float, axis: int = -1) -> Tensor:
+    if axis not in (-1, -2):
+        raise ValueError('axis must be -1 or -2')
+    coef = coef.contiguous()
+    coef_f = pt_rfft(coef, dim=axis)
+    n_freq = coef_f.shape[axis]
+    sigma = n_freq * width_frac
+    H, W = coef_f.shape[-2], coef_f.shape[-1]
+    filt = pt_gaussian_filter(shape=(H, W), sigma=sigma, axis=axis, device=coef.device)
+    if coef_f.ndim == 3:
+        filt = filt.unsqueeze(0)  # broadcast over batch
+    coef_f *= filt
+    return pt_irfft(coef_f, dim=axis, n=coef.shape[axis])  # preserve original length
+
+
+def padding_mode_for_wavelet(wavelet_name: str) -> str:
+    """
+    Suggest a NumPy padding mode that matches a typical DWT extension mode
+    for the given wavelet family.
+
+    Parameters
+    ----------
+    wavelet_name : str
+        e.g. 'db9', 'coif5', 'sym8', 'haar'
+
+    Returns
+    -------
+    str
+        NumPy padding mode: 'reflect', 'wrap', or 'symmetric'
+    """
+    wl = wavelet_name.lower().strip()
+
+    # Families that often use periodization for exact reconstruction
+    if wl.startswith(('coif', 'bior', 'rbio')):
+        return 'wrap'  # matches 'periodization' in PyWavelets
+
+    # Haar (db1) and most orthogonal wavelets default well to symmetric
+    if wl.startswith(('haar', 'db', 'sym', 'fk', 'dmey')):
+        return 'reflect'  # matches 'symmetric' mode in PyWavelets
+
+    # Fallback
+    return 'reflect'
+
+PTWTMode = Literal["constant", "zero", "reflect", "periodic", "symmetric"]
+PYWTMode = str  # PyWavelets allows more, but you could be stricter if you want
+def dwt_mode_from_pad(pad_mode: str, for_ptwt: bool) -> Union[PTWTMode, PYWTMode]:
+    pad_mode = pad_mode.lower()
+    if pad_mode == "wrap":
+        return "periodic" if for_ptwt else "periodization"
+    return "symmetric"
+
+
+def filter_subband(img: ndarray, sigma: float, level: int, wavelet: str,
+                   gpu_semaphore: SimpleQueue, axes=-1) -> ndarray:
+    level = None if level == 0 else level
+    d_type = img.dtype
+    img_shape = tuple(img.shape)
+
+    global PADDING_MODE, DWT_MODE
+    if DWT_MODE is None:
+        DWT_MODE = dwt_mode_from_pad(PADDING_MODE, USE_PYTORCH)
+
+    if isinstance(axes, int):
+        axes = (axes,)
+
+    device = "cpu"
+    if USE_PYTORCH and CUDA_IS_AVAILABLE_FOR_PT and gpu_semaphore is not None:
+        device = gpu_semaphore.get(block=True, timeout=None)
+
+    if device != "cpu":
+        stream = _next_stream(device)
+        img = as_tensor(img, dtype=pt_float32)
+        img = img.contiguous()
+        img = img.pin_memory()
+        with cuda_stream(stream):  # << use the proper context
+            img = img.to(device, non_blocking=True)
+            coefficients = list(pt_wavedec2(img, wavelet, mode=DWT_MODE, level=level, axes=(-2, -1)))
+            for idx, c in enumerate(coefficients):
+                if idx == 0:
+                    continue
+                coefficients[idx] = (
+                    pt_filter_coefficient(c[0], sigma / img_shape[0], axis=-1) if -1 in axes else c[0],
+                    pt_filter_coefficient(c[1], sigma / img_shape[1], axis=-2) if -2 in axes else c[1],
+                    c[2]
+                )
+            img = pt_waverec2(coefficients, wavelet, axes=(-2, -1))
+            img = img.contiguous()
+            stream.synchronize()
+            img = img.to("cpu", non_blocking=True).detach().numpy()
+        if gpu_semaphore is not None:
+            gpu_semaphore.put(device)
+        img = img.astype(d_type, copy=False)
+    else:
+        coefficients = wavedec2(img, wavelet, mode=DWT_MODE, level=level, axes=(-2, -1))
+        for idx, c in enumerate(coefficients):
+            if idx == 0:
+                continue
+            coefficients[idx] = (
+                np_filter_coefficient(c[0], sigma / img_shape[0], axis=-1) if -1 in axes else c[0],
+                np_filter_coefficient(c[1], sigma / img_shape[1], axis=-2) if -2 in axes else c[1],
+                c[2]
+            )
+        img = waverec2(coefficients, wavelet, mode=DWT_MODE, axes=(-2, -1)).astype(d_type)
+    return img
+
+
+def filter_streak_dual_band(img, sigma1, sigma2, level, wavelet, crossover, threshold, gpu_semaphore,
+                            axes: Union[tuple, int] = -1, use_thresholding: bool = False):
+    if (sigma1 > 0 and sigma1 == sigma2) or (threshold is not None and threshold <= 0):
+        img = filter_subband(img, sigma1, level, wavelet, gpu_semaphore, axes=axes)
+    elif use_thresholding:
+        # this method is not compatible with log1p normalization
+        smoothing: int = 1
+        if threshold is None:
+            threshold = otsu_threshold(img)
+
+        foreground = img
+        if sigma1 > 0:
+            foreground = img.copy()
+            clip(foreground, threshold, None, out=foreground)
+            foreground = filter_subband(foreground, sigma1, level, wavelet, gpu_semaphore, axes=axes)
+
+        background = img
+        if sigma2 > 0:
+            background = img.copy()
+            clip(background, None, threshold, out=background)
+            background = filter_subband(background, sigma2, level, wavelet, gpu_semaphore, axes=axes)
+
+        fraction = foreground_fraction(img, threshold, crossover, smoothing)
+        one = float32(1.0)
+        if USE_NUMEXPR and (foreground.flags.c_contiguous or foreground.flags.f_contiguous) and (background.flags.c_contiguous or background.flags.f_contiguous):
+            evaluate("(foreground * fraction + background * (one - fraction)) * threshold", out=img, casting="unsafe")
+        else:
+            foreground *= fraction
+            fraction = one - fraction
+            background *= fraction
+            del fraction
+            img = foreground + background
+            img *= threshold
+    else:
+        img = filter_subband(img, sigma1, level, wavelet, gpu_semaphore, axes=axes)
+        img = filter_subband(img, sigma2, level, wavelet, gpu_semaphore, axes=axes)
+    return img
+
+
+def filter_streaks(
+        img: ndarray,
+        sigma: Tuple[int, int] = (250, 250),
+        level: int = 0,
+        wavelet: str = 'db9',
+        crossover: float = 10,
+        threshold: float = None,
+        padding_mode: str = None,
+        bidirectional: bool = False,
+        gpu_semaphore: SimpleQueue = None,
+        bleach_correction_frequency: float = None,
+        bleach_correction_max_method: bool = False,
+        bleach_correction_clip_min: Union[float, int] = None,
+        bleach_correction_clip_med: Union[float, int] = None,
+        bleach_correction_clip_max: Union[float, int] = None,
+        log1p_normalization_needed: bool = True,
+        enable_masking: bool = False,
+        close_steps: int = 50,
+        open_steps: int = 500,
+        verbose: bool = False
+) -> ndarray:
+    """Filter horizontal streaks using wavelet-FFT filter and apply bleach correction
+
+    Parameters
+    ----------
+    img : ndarray
+        input image array to filter
+    sigma : tuple
+        filter bandwidth(s) in pixels (larger gives more filtering)
+    level : int
+        number of wavelet levels to use. 0 means the maximum possible decimation.
+    wavelet : str
+        name of the mother wavelet
+    crossover : float
+        intensity range to switch between filtered background and unfiltered foreground
+    threshold : float
+        intensity value to separate background from foreground. Default is Otsu.
+    padding_mode : str
+        Padding method affects the edge artifacts. In some cases wrap method works better than reflect method.
+    bidirectional : bool
+        by default (False) only stripes elongated along horizontal axis will be corrected.
+    gpu_semaphore: SimpleQueue
+        Needed for multi-GPU processing and prevents overflowing GPUs vRAM
+    bleach_correction_frequency : float
+        2D bleach correction frequency in Hz. For stitched tiled images 1/tile_size is a suggested value.
+    bleach_correction_max_method : bool
+        use max value on x and y axes to create the filter. Max method is faster and smoother but less accurate
+        for large images.
+    bleach_correction_clip_min: float, int
+        background vs foreground threshold.
+    bleach_correction_clip_med: float, int
+        foreground intermediate value
+    bleach_correction_clip_max: float, int
+        foreground max value
+    log1p_normalization_needed: bool
+        smooth the image using log plus 1 function.
+        It should be true in most cases except for dual-band method combined with thresholding.
+    enable_masking: bool
+        Masking can clear the background for cases in which a large sample (for example a whole brain image) is
+        in the middle and surrounded by a dark background. It is very hard to automate it in my testing.
+    close_steps:
+        morphological operation to close the holes (like ventricles) in the image.
+    open_steps:
+        morphological operation to clear the noise in the background.
+    verbose:
+        if true explain to user what's going on
+
+    Returns
+    -------
+    img : ndarray
+        filtered image
+    """
+    if not isinstance(sigma, (tuple, list)):
+        sigma = (sigma, ) * 2
+    sigma1 = sigma[0]  # foreground
+    sigma2 = sigma[1]  # background
+    if sigma1 == sigma2 == 0 and bleach_correction_frequency is None:
+        return img
+
+    global PADDING_MODE
+    if PADDING_MODE is None:
+        PADDING_MODE = padding_mode_for_wavelet(wavelet) if padding_mode is None else padding_mode
+
+    # smooth the image using log plus 1 function
+    d_type = img.dtype
+    img_min, img_max = None, None
+    if not np_d_type(d_type).kind in ("u", "i"):
+        img_min, img_max = min_max_2d(img)
+    if log1p_normalization_needed:
+        img = log1p_jit(img, dtype=float32)
+
+    if (bleach_correction_frequency is not None and
+        (bleach_correction_clip_min is None or
+         bleach_correction_clip_med is None or
+         bleach_correction_clip_max is None)) or (enable_masking and bleach_correction_clip_med is None):
+
+        lb, mb, ub = threshold_multiotsu(img, classes=4)
+        if bleach_correction_clip_min is None:
+            bleach_correction_clip_min = lb
+        if bleach_correction_clip_med is None:
+            bleach_correction_clip_med = mb
+        if bleach_correction_clip_max is None:
+            bleach_correction_clip_max = ub
+
+    if enable_masking and close_steps is not None and open_steps is not None:
+        img *= get_img_mask(img, bleach_correction_clip_med, close_steps=close_steps, open_steps=open_steps)
+
+    if not sigma1 == sigma2 == 0:
+        # Need to pad image to multiple of 2. It is needed even for bleach correction non-max method
+        img_shape = img.shape
+        pad_y, pad_x = [_ % 2 for _ in img_shape]
+        if isinstance(PADDING_MODE, str):
+            PADDING_MODE = PADDING_MODE.lower()
+        if PADDING_MODE in ('constant', 'edge', 'linear_ramp', 'maximum', 'mean', 'median', 'minimum', 'reflect',
+                            'symmetric', 'wrap', 'empty'):
+            # base_pad = int(max(sigma1, sigma2) // 2) * 2
+            base_pad = calculate_pad_size(shape=img_shape, sigma=max(sigma))
+            min_image_length = 34  # tested for db9 to 37
+            if (img_shape[0] + 2 * base_pad + pad_y) < min_image_length:
+                pad_y = min_image_length - (img_shape[0] + 2 * base_pad)
+            if (img_shape[1] + 2 * base_pad + pad_x) < min_image_length:
+                pad_x = min_image_length - (img_shape[1] + 2 * base_pad)
+        else:
+            print(f"{PrintColors.FAIL}Unsupported padding mode: {PADDING_MODE}{PrintColors.ENDC}")
+            raise RuntimeError
+        if pad_y > 0 or pad_x > 0 or base_pad > 0:
+            if PADDING_MODE == 'constant' and bleach_correction_clip_min is not None:
+                img = pad(
+                    img, ((base_pad, base_pad + pad_y), (base_pad, base_pad + pad_x)),
+                    mode='constant', constant_values=log1p(bleach_correction_clip_min)
+                )
+            else:
+                img = pad(
+                    img, ((base_pad, base_pad + pad_y), (base_pad, base_pad + pad_x)),
+                    mode=PADDING_MODE if PADDING_MODE else 'reflect'
+                )
+
+        if bidirectional:
+            img = filter_streak_dual_band(
+                img, sigma1, sigma2, level, wavelet, crossover, threshold, gpu_semaphore, axes=(-1, -2))
+        else:
+            img = filter_streak_dual_band(
+                img, sigma1, sigma2, level, wavelet, crossover, threshold, gpu_semaphore, axes=-1)
+
+        if verbose:
+            print(f"de-striping applied: sigma={sigma}, level={level}, wavelet={wavelet}, crossover={crossover}, "
+                  f"threshold={threshold}, bidirectional={bidirectional}.")
+
+        # undo padding
+        if pad_y > 0 or pad_x > 0 or base_pad > 0:
+            img = img[
+                  base_pad: img.shape[0] - (base_pad + pad_y),
+                  base_pad: img.shape[1] - (base_pad + pad_x)]
+            assert img.shape == img_shape
+
+    if bleach_correction_frequency is not None:
+        img = correct_bleaching(
+            img,
+            bleach_correction_frequency,
+            bleach_correction_clip_min,
+            bleach_correction_clip_med,
+            bleach_correction_clip_max,
+            max_method=bleach_correction_max_method
+        )
+
+        if verbose:
+            print(
+                f"bleach correction is applied: frequency={bleach_correction_frequency}, "
+                f"max_method={bleach_correction_max_method},\n"
+                f"clip_min={expm1(bleach_correction_clip_min)}, "
+                f"clip_med={expm1(bleach_correction_clip_med)}, "
+                f"clip_max={expm1(bleach_correction_clip_max)},\n"
+            )
+
+    # undo log plus 1
+    if log1p_normalization_needed:
+        img = expm1_jit(img)
+
+    if np_d_type(d_type).kind in ("u", "i"):
+        img = rint(img)
+        d_type_info = iinfo(d_type)
+        clip(img, d_type_info.min, d_type_info.max, out=img)
+    else:
+        img += img_min - np_min(img)
+        clip(img, img_min, img_max, out=img)
+    if img.dtype != d_type:
+        img = img.astype(d_type)
+    return img
+
+
+def filter_streaks_3D(
+        img: ndarray,
+        sigma: int = 70,
+        level: int = 0,
+        wavelet: str = 'db9',
+        crossover: float = 10,
+        threshold: float = None,
+        padding_mode: str = None,
+        bidirectional: bool = False,
+        bleach_correction_frequency: float = None,
+        bleach_correction_max_method: bool = False,
+        bleach_correction_clip_min: Union[float, int] = None,
+        bleach_correction_clip_med: Union[float, int] = None,
+        bleach_correction_clip_max: Union[float, int] = None,
+        log1p_normalization_needed: bool = True,
+        enable_masking: bool = False,
+        close_steps: int = 50,
+        open_steps: int = 500,
+        verbose: bool = False,
+        max_workers=None,
+        threads_per_gpu: int = STREAMS_PER_GPU
+):
+    img = asarray(img)  # ensure ndarray / writeable
+    assert img.ndim == 3, "img must be a 3D array"
+    Z, Y, X = img.shape
+
+    workers = max_workers or cpu_count(logical=False)
+    gpu_semaphore = None
+    if USE_PYTORCH:
+        devices = discover_cuda_devices()
+        if not devices:
+            gpu_semaphore = None  # forces CPU path
+        else:
+            gpu_semaphore = SimpleQueue()
+            for device in devices:
+                for _ in range(threads_per_gpu):
+                    gpu_semaphore.put(f"cuda:{device.id}")
+        # for _ in range(max(0, workers - threads_per_gpu * len(devices))):
+        #     gpu_semaphore.put("cpu")
+
+    # per-slice op
+    func = lambda slice2d: slice2d if is_uniform_2d(slice2d) else filter_streaks(
+        slice2d,
+        sigma=(sigma, sigma),
+        level=level,
+        wavelet=wavelet,
+        crossover=crossover,
+        threshold=threshold,
+        padding_mode=padding_mode,
+        bidirectional=bidirectional,
+        gpu_semaphore=gpu_semaphore,
+        bleach_correction_frequency=bleach_correction_frequency,
+        bleach_correction_max_method=bleach_correction_max_method,
+        bleach_correction_clip_min=bleach_correction_clip_min,
+        bleach_correction_clip_med=bleach_correction_clip_med,
+        bleach_correction_clip_max=bleach_correction_clip_max,
+        log1p_normalization_needed=log1p_normalization_needed,
+        enable_masking=enable_masking,
+        close_steps=close_steps,
+        open_steps=open_steps,
+        verbose=verbose
+    )
+
+    _worker_counter = count()
+
+    def _set_affinity_cross_platform(worker_index: int) -> None:
+        """Best-effort: pin current worker across sockets/groups. Never raise."""
+        try:
+            if sys.platform == "win32":
+                import ctypes as ct
+                WORD = ct.c_ushort
+                DWORD = ct.c_uint32
+                KAFFINITY = ct.c_uint64  # 64-bit mask per processor group
+
+                class GROUP_AFFINITY(ct.Structure):
+                    _fields_ = [
+                        ("Mask", KAFFINITY),
+                        ("Group", WORD),
+                        ("Reserved", WORD * 3),
+                    ]
+
+                k32 = ct.WinDLL("kernel32", use_last_error=True)
+
+                GetCurrentThread = k32.GetCurrentThread
+                GetCurrentThread.restype = ct.c_void_p
+
+                GetActiveProcessorGroupCount = k32.GetActiveProcessorGroupCount
+                GetActiveProcessorGroupCount.restype = WORD
+
+                GetActiveProcessorCount = k32.GetActiveProcessorCount
+                GetActiveProcessorCount.argtypes = [WORD]
+                GetActiveProcessorCount.restype = DWORD
+
+                SetThreadGroupAffinity = k32.SetThreadGroupAffinity
+                SetThreadGroupAffinity.argtypes = [
+                    ct.c_void_p,
+                    ct.POINTER(GROUP_AFFINITY),
+                    ct.POINTER(GROUP_AFFINITY),
+                ]
+                SetThreadGroupAffinity.restype = ct.c_bool
+
+                group_count = int(GetActiveProcessorGroupCount() or 0)
+                if group_count <= 0:
+                    return
+
+                group = worker_index % group_count
+                cpus_in_group = int(GetActiveProcessorCount(WORD(group)) or 0)
+                if cpus_in_group <= 0:
+                    return
+
+                cpu_in_group = (worker_index // max(1, group_count)) % cpus_in_group
+
+                ga = GROUP_AFFINITY()
+                ga.Group = WORD(group)
+                ga.Mask = KAFFINITY(1 << cpu_in_group)
+                ga.Reserved = (WORD * 3)(0, 0, 0)
+
+                ok = SetThreadGroupAffinity(GetCurrentThread(), ct.byref(ga), None)
+                if not ok:
+                    # debug (optional): print(GetLastError) then fall back
+                    # err = ct.get_last_error(); print(f"SetThreadGroupAffinity failed: {err}")
+                    return
+
+            elif sys.platform.startswith("linux"):
+                try:
+                    import psutil
+                    psutil.Process(os.getpid()).cpu_affinity(list(range(psutil.cpu_count())))
+                except Exception:
+                    pass  # best effort
+            else:
+                # macOS/others: no-op
+                pass
+        except Exception:
+            # Absolutely never let the initializer raise → avoids BrokenThreadPool
+            return
+
+    def _affinity_initializer():
+        # assign a unique index to each thread at start-up
+        idx = next(_worker_counter)
+        _set_affinity_cross_platform(idx)
+
+    def _batches(n_items, batch_size):
+        for start in range(0, n_items, batch_size):
+            stop = min(start + batch_size, n_items)
+            yield range(start, stop)
+
+    def _choose_batch_size(axis_len, workers):
+        # Bigger batches → less overhead; tune the multiplier to taste
+        target_tasks_per_axis = max(2 * workers, 8)
+        return max(1, int(axis_len / target_tasks_per_axis + 0.5))
+
+    def _run_axis_batched_inplace(executor, func, axis_len, slicer, writer, workers):
+        batch_size = _choose_batch_size(axis_len, workers)
+        futures = []
+        for batch_idx in _batches(axis_len, batch_size):
+            # Capture the indices so they’re not re-evaluated later
+            idxs = list(batch_idx)
+
+            # Worker processes a *batch* and returns nothing; writes in place to reduce copies
+            def job(idxs=idxs):
+                for i in idxs:
+                    plane_in = slicer(i)
+                    plane_in = ascontiguousarray(plane_in)
+                    plane_out = func(plane_in)
+                    writer(i, plane_out)
+
+            futures.append(executor.submit(job))
+
+        for f in as_completed(futures):
+            f.result()  # raise if a worker failed
+
+    with ThreadPoolExecutor(max_workers=workers, initializer=_affinity_initializer) as executor:
+        # X-planes: img[:, :, x]
+        _run_axis_batched_inplace(
+            executor, func, X,
+            slicer=lambda x: img[:, :, x],
+            writer=lambda x, r: img.__setitem__((slice(None), slice(None), x), r),
+            workers=workers
+        )
+
+        # Y-planes: img[:, y, :]
+        _run_axis_batched_inplace(
+            executor, func, Y,
+            slicer=lambda y: img[:, y, :],
+            writer=lambda y, r: img.__setitem__((slice(None), y, slice(None)), r),
+            workers=workers
+        )
+
+        # Z-planes: img[z, :, :]
+        _run_axis_batched_inplace(
+            executor, func, Z,
+            slicer=lambda z: img[z, :, :],
+            writer=lambda z, r: img.__setitem__((z, slice(None), slice(None)), r),
+            workers=workers
+        )
+
+    return img
+
+
+def open_3d(img: ndarray, open_steps: int = 30, max_workers=None):
+    from concurrent.futures import ThreadPoolExecutor
+
+    shape = img.shape
+    mask = img.astype(uint8)
+
+    # Define morph function
+    morph = lambda arr: morphologyEx(arr, MORPH_OPEN, ones((open_steps, open_steps), dtype=uint8))
+
+    # Parallel Z
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        chunksize = max(1, shape[0] // (max_workers or 8))
+        results = list(executor.map(morph, [mask[z] for z in range(shape[0])], chunksize=chunksize))
+    for z, out in enumerate(results):
+        mask[z] = out
+
+    # Parallel Y
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        chunksize = max(1, shape[1] // (max_workers or 8))
+        results = list(executor.map(morph, [mask[:, y, :] for y in range(shape[1])], chunksize=chunksize))
+    for y, out in enumerate(results):
+        mask[:, y, :] = out
+
+    # Parallel X
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        chunksize = max(1, shape[2] // (max_workers or 8))
+        results = list(executor.map(lambda arr: morph(arr).astype(bool), [mask[:, :, x] for x in range(shape[2])], chunksize=chunksize))
+    for x, out in enumerate(results):
+        mask[:, :, x] = out
+
+    return mask
+
+
+def calculate_down_sampled_size(tile_size, down_sample):
+    if isinstance(down_sample, (int, float)):
+        tile_size = (ceil(size / down_sample) for size in tile_size)
+    elif isinstance(down_sample, (tuple, list)):
+        tile_size = list(tile_size)
+        for idx, down_sample_factor in enumerate(down_sample):
+            if down_sample_factor is not None:
+                tile_size[idx] = ceil(tile_size[idx] / down_sample_factor)
+    return tile_size
+
+
+def correct_slice_value(user_value: [int, None], auto_estimated_min: [int, None], auto_estimated_max: [int, None]):
+    if user_value is None:
+        return None
+    else:
+        correction = 0
+        if auto_estimated_min is not None:
+            if user_value > auto_estimated_min:
+                correction = auto_estimated_min
+            else:
+                # user_value is min and slicing amount requested by user is already taken care of
+                return None
+
+        if auto_estimated_max is not None and user_value > auto_estimated_max:
+            correction += user_value - auto_estimated_max
+        return user_value - correction
+
+
 def imread_tif_raw_png(path: Path, dtype: str = None, shape: Tuple[int, int] = None):
     extension = path.suffix.lower()
     img = None
+    attempt = 0
 
     for attempt in range(NUM_RETRIES):
         try:
@@ -382,7 +1297,7 @@ def check_dcimg_start(path: Path):
 
     Parameters
     ------------
-    path : str
+    path : Path
         path to DCIMG file
 
     Returns
@@ -411,7 +1326,7 @@ def convert_to_8bit_fun(img: ndarray, bit_shift_to_right: int = 8):
         bit_shift_to_right = 8
     if 0 <= bit_shift_to_right < 9:
         lower_bound = 2 ** bit_shift_to_right
-        if USE_NUMEXPR:
+        if USE_NUMEXPR and (img.flags.c_contiguous or img.flags.f_contiguous):
             evaluate("where((0 < img) & (img < lower_bound), 1, img >> bit_shift_to_right)", out=img, casting="unsafe")
         else:
             img = where((0 < img) & (img < lower_bound), 1, img >> bit_shift_to_right)
@@ -421,823 +1336,6 @@ def convert_to_8bit_fun(img: ndarray, bit_shift_to_right: int = 8):
     clip(img, 0, 255, out=img)  # Clip to 8-bit [0, 2 ** 8 - 1] unsigned range
     img = img.astype(uint8)
     return img
-
-
-def hist_match(source, template):
-    """Adjust the pixel values of a grayscale image such that its histogram matches that of a target image
-
-    Parameters
-    ----------
-    source: ndarray
-        Image to transform; the histogram is computed over the flattened array
-    template: ndarray
-        Template image; can have different dimensions to source
-    Returns
-    -------
-    matched: ndarray
-        The transformed output image
-
-    """
-
-    old_shape = source.shape
-    source = source.ravel()
-    template = template.ravel()
-
-    # get the set of unique pixel values and their corresponding indices and
-    # counts
-    s_values, bin_idx, s_counts = unique(source, return_inverse=True, return_counts=True)
-    t_values, t_counts = unique(template, return_counts=True)
-
-    # take the cumsum of the counts and normalize by the number of pixels to
-    # get the empirical cumulative distribution functions for the source and
-    # template images (maps pixel value --> quantile)
-    s_quantiles = cumsum(s_counts).astype(float64)
-    s_quantiles /= s_quantiles[-1]
-    t_quantiles = cumsum(t_counts).astype(float64)
-    t_quantiles /= t_quantiles[-1]
-
-    # interpolate linearly to find the pixel values in the template image
-    # that correspond most closely to the quantiles in the source image
-    interp_t_values = interp(s_quantiles, t_quantiles, t_values)
-
-    return interp_t_values[bin_idx].reshape(old_shape)
-
-
-def max_level(min_len, wavelet):
-    w = Wavelet(wavelet)
-    return dwt_max_level(min_len, w.dec_len)
-
-
-def slice_non_zero_box(img_axis: ndarray, noise: int, filter_frequency: int = 1 / 1000) -> (int, int):
-    return min_max_1d(nonzero(butter_lowpass_filter(img_axis, filter_frequency).astype(uint16) > noise)[0])
-
-
-def get_img_mask(img: ndarray, threshold: Union[int, float],
-                 close_steps: int = 50, open_steps: int = 500, flood_fill_flag: int = 4) -> ndarray:
-    # start_time = time()
-    shape = list(img.shape)
-    mask = (img > threshold).astype(uint8)
-    mask = morphologyEx(mask, MORPH_CLOSE, ones((close_steps, close_steps), dtype=uint8))
-    mask = morphologyEx(mask, MORPH_OPEN, ones((open_steps, open_steps), dtype=uint8)).astype(bool)
-    inverted_mask = logical_not(mask).astype(uint8)
-    floodFill(inverted_mask, None, (0, 0), 0, flags=flood_fill_flag)
-    floodFill(inverted_mask, None, (0, shape[0] - 1), 0, flags=flood_fill_flag)
-    floodFill(inverted_mask, None, (shape[1] - 1, 0), 0, flags=flood_fill_flag)
-    floodFill(inverted_mask, None, (shape[1] - 1, shape[0] - 1), 0, flags=flood_fill_flag)
-    mask |= inverted_mask.astype(bool)
-    # print("mask time:", time() - start_time)
-    return mask
-
-
-def butter_lowpass_filter(img: ndarray, cutoff_frequency: float, order: int = 1) -> ndarray:
-    d_type = img.dtype
-    sos = butter(order, cutoff_frequency, output='sos')
-    img = sosfiltfilt(sos, img)  # returns float64
-    img = img.astype(d_type)
-
-    return img
-
-
-def correct_bleaching(
-        img: ndarray,
-        frequency: float,
-        clip_min: float,
-        clip_med: float,
-        clip_max: float,
-        max_method: bool = False,
-) -> ndarray:
-    """
-    Parameters
-    ----------
-    img: log1p filtered image
-    frequency: low pass fileter frequency. Usually 1/min(img.shape).
-    clip_min: background vs foreground threshold
-    clip_med: foreground intermediate
-    clip_max: foreground max
-    max_method: use max value on x and y axes to create the filter. Max method is faster and smoother but less accurate
-
-    Returns
-    -------
-    max normalized filter values.
-    """
-
-    assert isinstance(frequency, (float, float32, float64)) and frequency > 0
-    assert isinstance(clip_min, (float, float32, float64)) and clip_min >= 0
-    assert isinstance(clip_med, (float, float32, float64)) and clip_med > clip_min
-    assert isinstance(clip_max, (float, float32, float64)) and clip_max > clip_min
-    assert clip_max > clip_med
-    clip_min_lb = log1p(1)
-    if clip_min < clip_min_lb:
-        clip_min = clip_min_lb
-
-    # creat the filter
-    if max_method:
-        img_filter_y = np_max(img, axis=1)
-        img_filter_x = np_max(img, axis=0)
-        img_filter_y[img_filter_y == 0] = clip_med
-        img_filter_x[img_filter_x == 0] = clip_med
-        img_filter_y = clip(img_filter_y, clip_min, clip_max)
-        img_filter_x = clip(img_filter_x, clip_min, clip_max)
-        img_filter_y = butter_lowpass_filter(img_filter_y, frequency)
-        img_filter_x = butter_lowpass_filter(img_filter_x, frequency)
-        img_filter_y = reshape(img_filter_y, (len(img_filter_y), 1))
-        img_filter_x = reshape(img_filter_x, (1, len(img_filter_x)))
-        img_filter = dot(img_filter_y, img_filter_x)
-    else:
-        img_filter = img.copy()
-        img_filter[img_filter == 0] = clip_med
-        clip(img_filter, clip_min, clip_max, out=img_filter)
-        img_filter = butter_lowpass_filter(img_filter, frequency)
-
-    # apply the filter
-    img_filter_max = np_max(img_filter)
-    if USE_NUMEXPR:
-        evaluate("img / img_filter * img_filter_max", out=img, casting="unsafe")
-    else:
-        img /= img_filter
-        img *= img_filter_max
-    return img
-
-
-def otsu_threshold(img: ndarray) -> float:
-    try:
-        return threshold_otsu(img)
-    except ValueError:
-        return 2
-
-
-def sigmoid(img: ndarray) -> ndarray:
-    if img.dtype != float32:
-        img = img.astype(float32)
-    half = float32(.5)
-    one = float32(1)
-    if USE_NUMEXPR:
-
-        evaluate("half * (tanh(half * img) + one)", out=img, casting="unsafe")
-    else:
-        # img = .5 * (tanh(.5 * img) + 1)
-        img *= half
-        img = tanh(img)
-        img += one
-        img *= half
-    return img
-
-
-def foreground_fraction(img: ndarray, threshold: float, crossover: float, sigma: int) -> ndarray:
-    if img.dtype != float32:
-        ff = img.astype(float32)
-    else:
-        ff = img.copy()
-    threshold = float32(threshold)
-    crossover = float32(crossover)
-    if USE_NUMEXPR:
-        evaluate("(ff - threshold) / crossover", out=ff, casting="unsafe")
-    else:
-        ff -= threshold
-        ff /= crossover
-    ff = sigmoid(ff)
-    ksize = (sigma * 2 + 1,) * 2
-    GaussianBlur(ff, ksize=ksize, sigmaX=sigma, sigmaY=sigma)
-    return ff
-
-
-def to_numpy(x: Tensor) -> ndarray:
-    return x.detach().cpu().numpy()[0]
-
-
-def pt_notch(length: int, sigma: float, device: str = "cpu") -> Tensor:
-    """Generates a 1D gaussian notch filter `n` pixels long
-
-    Parameters
-    ----------
-    length : int
-        length of the gaussian notch filter
-    sigma : float
-        notch width
-    device : str, optional
-
-    Returns
-    -------
-    g : Tensor
-        (length,) array containing the gaussian notch filter
-
-    """
-    if length <= 0:
-        raise ValueError('pt_notch: length must be positive')
-    if sigma <= 0:
-        raise ValueError('pt_notch: sigma must be positive')
-    g = pt_arange(0, length, 1, dtype=pt_float32).to(device)
-    g **= 2
-    g /= -2 * sigma ** 2
-    g = pt_exp(g)
-    g = 1 - g
-    return g
-
-
-def np_notch(length: int, sigma: float) -> ndarray:
-    """Generates a 1D gaussian notch filter `n` pixels long
-
-    Parameters
-    ----------
-    length : int
-        length of the gaussian notch filter
-    sigma : float
-        notch width
-
-    Returns
-    -------
-    g : ndarray
-        (length,) array containing the gaussian notch filter
-
-    """
-    if length <= 0:
-        raise ValueError('np_notch: length must be positive')
-    if sigma <= 0:
-        raise ValueError('np_notch: sigma must be positive')
-    g = arange(length, dtype=float32)
-    one = float32(1)
-    two = float32(2)
-    if USE_NUMEXPR:
-        evaluate("one - exp(-g ** 2 / (two * sigma ** 2))", out=g, casting='unsafe')
-    else:
-        g **= 2
-        g /= -two * sigma ** 2
-        g = exp(g)
-        g = one - g
-    return g
-
-
-def notch_rise_point(sigma: int, rise: float):
-    """ Compute length at which gaussian notch reaches the given rise point
-    :param sigma: sigma of notch function
-    :param rise: a vlue between 0 and 1.
-
-    ----
-    :return: length at which notch reaches the rise
-    """
-    return int(sqrt(-2 * sigma ** 2 * log(1 - rise)) + .5) // 2 * 2
-
-
-def calculate_pad_size(shape: tuple, sigma: int, rise: float = 0.5):
-    """ Calculate image padding based on padding size but make sure padded image fits into gpu memory
-    :param shape: shape of image
-    :param sigma: sigma of notch function
-    :param rise: requested rise point of gaussian notch function.
-        Since rfft output is symmetric 0.5 is optimum to avoid generating artifacts on the image.
-        at 0.4 pad size will be equal to the sigma itself.
-    ---
-    :return: pad size
-    """
-    if (sigma == 0):
-        return 0
-    x = shape[1] + 1
-    y = shape[0] + 1
-    c = 5e14  # 2e15 for 8GB float32 image which needs ~40 GB of vRAM in pt_wavedec2
-    sqrt_xyc = sqrt(x ** 2 - 2 * x * y + y ** 2 + 4 * c)
-    rise = min(round(1 - exp((x + y - sqrt_xyc) / (4 * sigma ** 2)), 2) - 0.01, rise)
-    return notch_rise_point(sigma, rise)
-
-
-def np_gaussian_filter(shape: tuple, sigma: float, axis: int) -> ndarray:
-    """Create a gaussian notch filter
-
-    Parameters
-    ----------
-    shape: tuple
-        shape of the output filter
-    sigma: float
-        filter bandwidth
-    axis: int
-        axis of the filter. options: -1 or -2
-
-    Returns
-    -------
-    g : ndarray
-        the impulse response of the gaussian notch filter
-
-    """
-    g = np_notch(length=shape[axis], sigma=sigma)
-    if axis == -2:
-        g = reshape(g, newshape=(shape[axis], 1))
-    return broadcast_to(g, shape)
-
-
-def pt_gaussian_filter(shape: tuple, sigma: float, axis: int, device: str = "cpu") -> Tensor:
-    """Create a gaussian notch filter
-    Parameters
-    ----------
-    shape : tuple
-        shape of the output filter
-    sigma : float
-        filter bandwidth
-    axis: int
-        axis of the filter. options: -1 or -2
-    device : int, optional
-
-    Returns
-    ----------
-    g : Tensor
-        the impulse response of the gaussian notch filter
-    """
-    g = pt_notch(length=shape[axis], sigma=sigma, device=device)
-    if axis == -2:
-        g = pt_reshape(g, shape=(shape[axis], 1))
-    g = pt_broadcast_to(g, shape)
-    return pt_complex(g, g)
-
-
-def np_filter_coefficient(coef: ndarray, width_frac: float, axis=-1) -> ndarray:
-    sigma = coef.shape[axis + 1] * width_frac
-    coef = rfft(coef, axis=axis, overwrite_x=True)
-    coef *= np_gaussian_filter(shape=coef.shape, sigma=sigma, axis=axis)
-    coef = irfft(coef, axis=axis, overwrite_x=True)
-    return coef
-
-
-def pt_filter_coefficient(coef: Tensor, width_frac: float, axis=-1) -> Tensor:
-    shape = coef.shape
-    if axis == -1:
-        sigma = coef.shape[1] * width_frac
-    elif axis == -2:
-        sigma = coef.shape[2] * width_frac
-    else:
-        raise ValueError('axis must be -1 or -2')
-    coef = pt_rfft(coef, n=shape[axis], dim=axis)
-    coef[0] *= pt_gaussian_filter(shape=coef.shape[1:3], sigma=sigma / 2, device=coef.device, axis=axis)
-    coef = pt_irfft(coef, n=shape[axis], dim=axis)
-    return coef
-
-
-# def jx_notch(length: int, sigma: float, device) -> Array:
-#     """Generates a 1D gaussian notch filter `n` pixels long
-#
-#     Parameters
-#     ----------
-#     length : int
-#         length of the gaussian notch filter
-#     sigma : float
-#         notch width
-#     device : jax device object
-#
-#     Returns
-#     -------
-#     g : Array
-#         (length,) array containing the gaussian notch filter
-#
-#     """
-#     if length <= 0:
-#         raise ValueError('pt_notch: length must be positive')
-#     if sigma <= 0:
-#         raise ValueError('pt_notch: sigma must be positive')
-#     with default_device(device):
-#         g = jx_arange(0, length, 1, dtype=jx_float32)
-#         g **= 2
-#         g /= -2 * sigma ** 2
-#         g = jx_exp(g)
-#         g = 1 - g
-#     return g
-#
-#
-# def jx_gaussian_filter(shape: tuple, sigma: float, axis: int, device) -> Array:
-#     """Create a gaussian notch filter
-#     Parameters
-#     ----------
-#     shape : tuple
-#         shape of the output filter
-#     sigma : float
-#         filter bandwidth
-#     axis: int
-#         axis of the filter. options: -1 or -2
-#     device : jax device object
-#
-#     Returns
-#     ----------
-#     g : Tensor
-#         the impulse response of the gaussian notch filter
-#     """
-#     g = jx_notch(length=shape[axis], sigma=sigma, device=device)
-#     if axis == -2:
-#         g = jx_reshape(g, newshape=(shape[axis], 1))
-#     g = jx_asarray([jx_broadcast_to(g, shape)])
-#     g = jx_complex(g, g)
-#     return g
-#
-#
-# def jx_filter_coefficient(coef: Array, width_frac: float, axis=-1) -> Array:
-#     shape = tuple(coef.shape)
-#     if axis == -1:
-#         sigma = coef.shape[1] * width_frac
-#     elif axis == -2:
-#         sigma = coef.shape[2] * width_frac
-#     else:
-#         raise ValueError('axis must be -1 or -2')
-#     coef = jx_rfft(coef, n=shape[axis], axis=axis)
-#     coef = jx_multiply(coef, jx_gaussian_filter(shape=coef.shape[1:3], sigma=sigma / 2, device=coef.device(), axis=axis))
-#     coef = jx_irfft(coef, n=shape[axis], axis=axis)
-#     return coef
-
-
-def filter_subband(
-        img: ndarray, sigma: float, level: int, wavelet: str, gpu_semaphore: Queue, axes=-1) -> ndarray:
-    level = None if level == 0 else level
-    d_type = img.dtype
-    img_shape = tuple(img.shape)
-    recode_with_cpu = True
-    if isinstance(axes, int):
-        axes = (axes,)
-
-    # if USE_JAX:
-    #     device = 0
-    #     if gpu_semaphore is not None:
-    #         device, _ = gpu_semaphore.get()
-    #
-    #     with default_device(local_devices()[device]):
-    #         coefficients = jx_wavedec2(jx_asarray(img, dtype=jx_float32), wavelet, mode='symmetric', level=level,
-    #                                    axes=(-2, -1))
-    #         for idx, c in enumerate(coefficients):
-    #             if idx == 0:
-    #                 continue
-    #             else:
-    #                 coefficients[idx] = (
-    #                     jx_filter_coefficient(c[0], sigma / img_shape[0], axis=-1) if -1 in axes else c[0],
-    #                     jx_filter_coefficient(c[1], sigma / img_shape[1], axis=-2) if -2 in axes else c[1],
-    #                     c[2]
-    #                 )
-    #         img = asarray(jx_waverec2(coefficients, wavelet=wavelet, axes=(-2, -1))[0])  # .block_until_ready()
-    #         gpu_semaphore.put((device, None))
-    #         return img
-
-    if USE_PYTORCH:
-        device = "cpu"
-        gpu_mem = 96305274880
-        if CUDA_IS_AVAILABLE_FOR_PT:
-            if gpu_semaphore is not None:
-                device, gpu_mem = gpu_semaphore.get(block=True)
-            else:
-                device = f"cuda:0"
-                gpu_mem = cuda_get_device_properties(device).total_memory
-            if device != "cpu" and (
-                    gpu_mem > 48305274880 or prod(img_shape, dtype="uint32") * 2 ** 9 * 1.437 < gpu_mem):
-                recode_with_cpu = False
-
-        img = as_tensor(img, device=device, dtype=pt_float32)
-        coefficients = pt_wavedec2(img, wavelet,
-                                   mode='symmetric', level=level, axes=(-2, -1))
-        if (CUDA_IS_AVAILABLE_FOR_PT and device != "cpu" and prod(img_shape, dtype="uint32") > 9000000 and
-                gpu_mem <= 48305274880):
-            img.detach()
-            del img
-            gc_collect()
-            cuda_empty_cache()
-
-        if recode_with_cpu:
-            for idx, c in enumerate(coefficients):
-                if idx == 0:
-                    coefficients[idx] = to_numpy(c)
-                else:
-                    coefficients[idx] = (
-                        to_numpy(pt_filter_coefficient(c[0], sigma / img_shape[0], axis=-1) if -1 in axes else c[0]),
-                        to_numpy(pt_filter_coefficient(c[1], sigma / img_shape[1], axis=-2) if -2 in axes else c[1]),
-                        to_numpy(c[2])
-                    )
-            if CUDA_IS_AVAILABLE_FOR_PT:
-                if gpu_semaphore is not None:
-                    gpu_semaphore.put((device, gpu_mem))
-                gc_collect()
-                cuda_empty_cache()
-            img = waverec2(coefficients, wavelet, mode='symmetric', axes=(-2, -1)).astype(d_type)
-        else:
-            for idx, c in enumerate(coefficients):
-                if idx == 0:
-                    continue
-                else:
-                    coefficients[idx] = (
-                        pt_filter_coefficient(c[0], sigma / img_shape[0], axis=-1) if -1 in axes else c[0],
-                        pt_filter_coefficient(c[1], sigma / img_shape[1], axis=-2) if -2 in axes else c[1],
-                        c[2]
-                    )
-            img = to_numpy(pt_waverec2(coefficients, wavelet, axes=(-2, -1)))
-            if gpu_semaphore is not None:
-                gpu_semaphore.put((device, gpu_mem))
-            del coefficients
-            gc_collect()
-            cuda_empty_cache()
-        return img
-
-    coefficients = wavedec2(img, wavelet, mode='symmetric', level=level, axes=(-2, -1))
-    # the first item (idx=0) is the details matrix
-    # the rest of items are tuples of horizontal, vertical and diagonal coefficients matrices
-    for idx, c in enumerate(coefficients):
-        if idx == 0:
-            continue
-        else:
-            coefficients[idx] = (
-                np_filter_coefficient(c[0], sigma / img_shape[0], axis=-1) if -1 in axes else c[0],
-                np_filter_coefficient(c[1], sigma / img_shape[1], axis=-2) if -2 in axes else c[1],
-                c[2]
-            )
-    img = waverec2(coefficients, wavelet, mode='symmetric', axes=(-2, -1)).astype(d_type)
-    return img
-
-
-def filter_streak_dual_band(img, sigma1, sigma2, level, wavelet, crossover, threshold, gpu_semaphore,
-                            axes: Union[tuple, int] = -1, use_thresholding: bool = False):
-    if (sigma1 > 0 and sigma1 == sigma2) or (threshold is not None and threshold <= 0):
-        img = filter_subband(img, sigma1, level, wavelet, gpu_semaphore, axes=axes)
-    elif use_thresholding:
-        # this method is not compatible with log1p normalization
-        smoothing: int = 1
-        if threshold is None:
-            threshold = otsu_threshold(img)
-
-        foreground = img
-        if sigma1 > 0:
-            foreground = img.copy()
-            clip(foreground, threshold, None, out=foreground)
-            foreground = filter_subband(foreground, sigma1, level, wavelet, gpu_semaphore, axes=axes)
-
-        background = img
-        if sigma2 > 0:
-            background = img.copy()
-            clip(background, None, threshold, out=background)
-            background = filter_subband(background, sigma2, level, wavelet, gpu_semaphore, axes=axes)
-
-        fraction = foreground_fraction(img, threshold, crossover, smoothing)
-        one = float32(1.0)
-        if USE_NUMEXPR:
-            evaluate("(foreground * fraction + background * (one - fraction)) * threshold", out=img, casting="unsafe")
-        else:
-            foreground *= fraction
-            fraction = one - fraction
-            background *= fraction
-            del fraction
-            img = foreground + background
-            img *= threshold
-    else:
-        img = filter_subband(img, sigma1, level, wavelet, gpu_semaphore, axes=axes)
-        img = filter_subband(img, sigma2, level, wavelet, gpu_semaphore, axes=axes)
-    return img
-
-
-def filter_streaks(
-        img: ndarray,
-        sigma: Tuple[int, int] = (250, 250),
-        level: int = 0,
-        wavelet: str = 'db9',
-        crossover: float = 10,
-        threshold: float = None,
-        padding_mode: str = "wrap",
-        bidirectional: bool = False,
-        gpu_semaphore: Queue = None,
-        bleach_correction_frequency: float = None,
-        bleach_correction_max_method: bool = False,
-        bleach_correction_clip_min: Union[float, int] = None,
-        bleach_correction_clip_med: Union[float, int] = None,
-        bleach_correction_clip_max: Union[float, int] = None,
-        log1p_normalization_needed: bool = True,
-        enable_masking: bool = False,
-        close_steps: int = 50,
-        open_steps: int = 500,
-        verbose: bool = False
-) -> ndarray:
-    """Filter horizontal streaks using wavelet-FFT filter and apply bleach correction
-
-    Parameters
-    ----------
-    img : ndarray
-        input image array to filter
-    sigma : tuple
-        filter bandwidth(s) in pixels (larger gives more filtering)
-    level : int
-        number of wavelet levels to use. 0 means the maximum possible decimation.
-    wavelet : str
-        name of the mother wavelet
-    crossover : float
-        intensity range to switch between filtered background and unfiltered foreground
-    threshold : float
-        intensity value to separate background from foreground. Default is Otsu.
-    padding_mode : str
-        Padding method affects the edge artifacts. In some cases wrap method works better than reflect method.
-    bidirectional : bool
-        by default (False) only stripes elongated along horizontal axis will be corrected.
-    gpu_semaphore: Queue
-        Needed for multi-GPU processing and prevents overflowing GPUs vRAM
-    bleach_correction_frequency : float
-        2D bleach correction frequency in Hz. For stitched tiled images 1/tile_size is a suggested value.
-    bleach_correction_max_method : bool
-        use max value on x and y axes to create the filter. Max method is faster and smoother but less accurate
-        for large images.
-    bleach_correction_clip_min: float, int
-        background vs foreground threshold.
-    bleach_correction_clip_med: float, int
-        foreground intermediate value
-    bleach_correction_clip_max: float, int
-        foreground max value
-    log1p_normalization_needed: bool
-        smooth the image using log plus 1 function.
-        It should be true in most cases except for dual-band method combined with thresholding.
-    enable_masking: bool
-        Masking can clear the background for cases in which a large sample (for example a whole brain image) is
-        in the middle and surrounded by a dark background. It is very hard to automate it in my testing.
-    close_steps:
-        morphological operation to close the holes (like ventricles) in the image.
-    open_steps:
-        morphological operation to clear the noise in the background.
-    verbose:
-        if true explain to user what's going on
-
-    Returns
-    -------
-    img : ndarray
-        filtered image
-    """
-    if not isinstance(sigma, (tuple, list)):
-        sigma = (sigma, ) * 2
-    sigma1 = sigma[0]  # foreground
-    sigma2 = sigma[1]  # background
-    if sigma1 == sigma2 == 0 and bleach_correction_frequency is None:
-        return img
-
-    # smooth the image using log plus 1 function
-    d_type = img.dtype
-    img_min, img_max = None, None
-    if not np_d_type(d_type).kind in ("u", "i"):
-        img_min, img_max = min_max_2d(img)
-    if log1p_normalization_needed:
-        img = log1p_jit(img, dtype=float32)
-
-    if (bleach_correction_frequency is not None and
-        (bleach_correction_clip_min is None or
-         bleach_correction_clip_med is None or
-         bleach_correction_clip_max is None)) or (enable_masking and bleach_correction_clip_med is None):
-
-        lb, mb, ub = threshold_multiotsu(img, classes=4)
-        if bleach_correction_clip_min is None:
-            bleach_correction_clip_min = lb
-        if bleach_correction_clip_med is None:
-            bleach_correction_clip_med = mb
-        if bleach_correction_clip_max is None:
-            bleach_correction_clip_max = ub
-
-    if enable_masking and close_steps is not None and open_steps is not None:
-        img *= get_img_mask(img, bleach_correction_clip_med, close_steps=close_steps, open_steps=open_steps)
-
-    if not sigma1 == sigma2 == 0:
-        # Need to pad image to multiple of 2. It is needed even for bleach correction non-max method
-        img_shape = img.shape
-        pad_y, pad_x = [_ % 2 for _ in img_shape]
-        if isinstance(padding_mode, str):
-            padding_mode = padding_mode.lower()
-        if padding_mode in ('constant', 'edge', 'linear_ramp', 'maximum', 'mean', 'median', 'minimum', 'reflect',
-                            'symmetric', 'wrap', 'empty'):
-            # base_pad = int(max(sigma1, sigma2) // 2) * 2
-            base_pad = calculate_pad_size(shape=img_shape, sigma=max(sigma))
-            min_image_length = 34  # tested for db9 to 37
-            if (img_shape[0] + 2 * base_pad + pad_y) < min_image_length:
-                pad_y = min_image_length - (img_shape[0] + 2 * base_pad)
-            if (img_shape[1] + 2 * base_pad + pad_x) < min_image_length:
-                pad_x = min_image_length - (img_shape[1] + 2 * base_pad)
-        else:
-            print(f"{PrintColors.FAIL}Unsupported padding mode: {padding_mode}{PrintColors.ENDC}")
-            raise RuntimeError
-        if pad_y > 0 or pad_x > 0 or base_pad > 0:
-            if padding_mode == 'constant' and bleach_correction_clip_min is not None:
-                img = pad(
-                    img, ((base_pad, base_pad + pad_y), (base_pad, base_pad + pad_x)),
-                    mode='constant', constant_values=log1p(bleach_correction_clip_min)
-                )
-            else:
-                img = pad(
-                    img, ((base_pad, base_pad + pad_y), (base_pad, base_pad + pad_x)),
-                    mode=padding_mode if padding_mode else 'reflect'
-                )
-
-        if bidirectional:
-            img = filter_streak_dual_band(
-                img, sigma1, sigma2, level, wavelet, crossover, threshold, gpu_semaphore, axes=(-1, -2))
-        else:
-            img = filter_streak_dual_band(
-                img, sigma1, sigma2, level, wavelet, crossover, threshold, gpu_semaphore, axes=-1)
-
-        if verbose:
-            print(f"de-striping applied: sigma={sigma}, level={level}, wavelet={wavelet}, crossover={crossover}, "
-                  f"threshold={threshold}, bidirectional={bidirectional}.")
-
-        # undo padding
-        if pad_y > 0 or pad_x > 0 or base_pad > 0:
-            img = img[
-                  base_pad: img.shape[0] - (base_pad + pad_y),
-                  base_pad: img.shape[1] - (base_pad + pad_x)]
-            assert img.shape == img_shape
-
-    if bleach_correction_frequency is not None:
-        img = correct_bleaching(
-            img,
-            bleach_correction_frequency,
-            bleach_correction_clip_min,
-            bleach_correction_clip_med,
-            bleach_correction_clip_max,
-            max_method=bleach_correction_max_method
-        )
-
-        if verbose:
-            print(
-                f"bleach correction is applied: frequency={bleach_correction_frequency}, "
-                f"max_method={bleach_correction_max_method},\n"
-                f"clip_min={expm1(bleach_correction_clip_min)}, "
-                f"clip_med={expm1(bleach_correction_clip_med)}, "
-                f"clip_max={expm1(bleach_correction_clip_max)},\n"
-            )
-
-    # undo log plus 1
-    if log1p_normalization_needed:
-        img = expm1_jit(img)
-
-    if np_d_type(d_type).kind in ("u", "i"):
-        img = rint(img)
-        d_type_info = iinfo(d_type)
-        clip(img, d_type_info.min, d_type_info.max, out=img)
-    else:
-        clip(img, img_min, img_max, out=img)
-    if img.dtype != d_type:
-        img = img.astype(d_type)
-    return img
-
-
-def open_3d(img: ndarray, open_steps: int = 30, max_workers=None):
-    from concurrent.futures import ThreadPoolExecutor
-
-    shape = img.shape
-    mask = img.astype(uint8)
-
-    # Define morph function
-    morph = lambda arr: morphologyEx(arr, MORPH_OPEN, ones((open_steps, open_steps), dtype=uint8))
-
-    # Parallel Z
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        chunksize = max(1, shape[0] // (max_workers or 8 or 1))
-        results = list(executor.map(morph, [mask[z] for z in range(shape[0])], chunksize=chunksize))
-    for z, out in enumerate(results):
-        mask[z] = out
-
-    # Parallel Y
-    chunksize = max(1, shape[1] // (max_workers or 8 or 1))
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        chunksize = max(1, shape[1] // (max_workers or 8 or 1))
-        results = list(executor.map(morph, [mask[:, y, :] for y in range(shape[1])], chunksize=chunksize))
-    for y, out in enumerate(results):
-        mask[:, y, :] = out
-
-    # Parallel X
-    chunksize = max(1, shape[2] // (max_workers or 8 or 1))
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        chunksize = max(1, shape[2] // (max_workers or 8 or 1))
-        results = list(executor.map(lambda arr: morph(arr).astype(bool), [mask[:, :, x] for x in range(shape[2])], chunksize=chunksize))
-    for x, out in enumerate(results):
-        mask[:, :, x] = out
-
-    return mask
-
-
-def filter_streaks_3D(img, sigma=70, max_workers=None):
-    from concurrent.futures import ThreadPoolExecutor
-    shape = img.shape
-    chunksize = max(1, shape[0] // (max_workers or 8 or 1))
-    # Lambda wraps per-slice operation
-    func = lambda slice2d: filter_streaks(slice2d, sigma=(sigma, sigma), wavelet="db9", bidirectional=True)
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        filtered = list(executor.map(func, [img[z] for z in range(shape[0])], chunksize=chunksize))
-    for z, out in enumerate(filtered):
-        img[z] = out
-    return img
-
-
-def calculate_down_sampled_size(tile_size, down_sample):
-    if isinstance(down_sample, (int, float)):
-        tile_size = (ceil(size / down_sample) for size in tile_size)
-    elif isinstance(down_sample, (tuple, list)):
-        tile_size = list(tile_size)
-        for idx, down_sample_factor in enumerate(down_sample):
-            if down_sample_factor is not None:
-                tile_size[idx] = ceil(tile_size[idx] / down_sample_factor)
-    return tile_size
-
-
-def correct_slice_value(user_value: [int, None], auto_estimated_min: [int, None], auto_estimated_max: [int, None]):
-    if user_value is None:
-        return None
-    else:
-        correction = 0
-        if auto_estimated_min is not None:
-            if user_value > auto_estimated_min:
-                correction = auto_estimated_min
-            else:
-                # user_value is min and slicing amount requested by user is already taken care of
-                return None
-
-        if auto_estimated_max is not None and user_value > auto_estimated_max:
-            correction += user_value - auto_estimated_max
-        return user_value - correction
 
 
 def process_img(
@@ -1251,10 +1349,10 @@ def process_img(
         exclude_dark_edges_set_them_to_zero: bool = False,
         sigma: Tuple[int, int] = (0, 0),
         level: int = 0,
-        wavelet: str = 'coif15',
+        wavelet: str = 'db9',
         crossover: float = 10,
         threshold: float = None,
-        padding_mode: str = "wrap",
+        padding_mode: str = None,
         bidirectional: bool = False,
         gpu_semaphore: Queue = None,
         bleach_correction_frequency: float = None,
@@ -1375,7 +1473,7 @@ def process_img(
         # Subtract the dark offset
         # dark subtraction is like baseline subtraction in Imaris
         if dark is not None and dark > 0:
-            if USE_NUMEXPR:
+            if USE_NUMEXPR and (img.flags.c_contiguous or img.flags.f_contiguous):
                 evaluate("where(img > dark, img - dark, 0)", out=img, casting="unsafe")
             else:
                 img = where(img > dark, img - dark, 0)
@@ -1447,10 +1545,10 @@ def read_filter_save(
         gaussian_filter_2d: bool = False,
         sigma: Tuple[int, int] = (0, 0),
         level: int = 0,
-        wavelet: str = 'coif15',
+        wavelet: str = 'db9',
         crossover: float = 10,
         threshold: float = None,
-        padding_mode: str = "reflect",
+        padding_mode: str = None,
         bidirectional: bool = False,
         gpu_semaphore: Queue = None,
         bleach_correction_frequency: float = None,
@@ -1739,14 +1837,14 @@ def process_dc_images(input_file: Path, input_path: Path, output_path: Path, arg
 
 class MultiProcessQueueRunner(Process):
     def __init__(self, progress_queue: Queue, args_queue: Queue,
-                 gpu_semaphore: Queue = None,
+                 gpu_semaphore: SimpleQueue = None,
                  gpu: int = None,
-                 fun: Callable = read_filter_save,
+                 fun=None,
                  timeout: float = None,
                  replace_timeout_with_dummy: bool = True):
         if gpu is not None:
             os.environ["CUDA_VISIBLE_DEVICES"] = f"{gpu}"
-        Process.__init__(self)
+        super().__init__()
         self.daemon = False
         self.progress_queue = progress_queue
         self.args_queue = args_queue
@@ -1756,20 +1854,33 @@ class MultiProcessQueueRunner(Process):
         self.function = fun
         self.replace_timeout_with_dummy = replace_timeout_with_dummy
 
+    def safe_put(self, queue, obj, block=True, timeout=None):
+        try:
+            queue.put(obj, block=block, timeout=timeout)
+        except (OSError, ValueError, Full):
+            # Queue handle closed or already full (unlikely, but safe), or unreachable
+            pass
+
     def run(self):
         running_next = True
         timeout = self.timeout
         gpu_semaphore = self.gpu_semaphore
-        if timeout:
+        if self.timeout:
             pool = ProcessPoolExecutor(max_workers=1)
         else:
             pool = ThreadPoolExecutor(max_workers=1)
         function = self.function
-        queue_timeout = None  # 20
+        queue_timeout = None
         while not self.die and not self.args_queue.qsize() == 0:
             try:
                 queue_start_time = time()
-                args: dict = self.args_queue.get(block=True, timeout=queue_timeout)
+                try:
+                    args: dict = self.args_queue.get(block=True, timeout=queue_timeout)
+                except (OSError, ValueError, Empty):
+                    # Handle closed, finished, or empty
+                    self.die = True
+                    break
+
                 if gpu_semaphore is not None:
                     args.update({"gpu_semaphore": gpu_semaphore})
                 if queue_timeout is not None:
@@ -1783,45 +1894,53 @@ class MultiProcessQueueRunner(Process):
                 except (BrokenProcessPool, TimeoutError, ValueError) as inst:
                     if self.replace_timeout_with_dummy:
                         output_file: Path = args["output_file"]
-                        print(f"{PrintColors.WARNING}"
-                              f"\nwarning: timeout reached for processing input file:\n\t{args['input_file']}\n\t"
+                        print(f"\nwarning: timeout reached for processing input file:\n\t{args['input_file']}\n\t"
                               f"a dummy (zeros) image is saved as output instead:\n\t{output_file}"
-                              f"\nexception instance: {type(inst)}"
-                              f"{PrintColors.ENDC}")
+                              f"\nexception instance: {type(inst)}")
                         if not output_file.exists():
                             die = imsave_tif(
                                 output_file,
                                 zeros(
-                                    shape=args["new_size"] if args["new_size"] else args["tile_size"],
-                                    dtype=uint8 if args["convert_to_8bit"] else uint16
+                                    shape=args["new_size"] if args.get("new_size") else args["tile_size"],
+                                    dtype=uint8 if args.get("convert_to_8bit") else uint16
                                 )
                             )
                             if die:
                                 self.die = True
                     else:
-                        print(f"{PrintColors.WARNING}"
-                              f"\nwarning: timeout reached for processing input file:\n\t{args['file_name']}\n\t"
-                              f"\nexception instance: {type(inst)}"
-                              f"{PrintColors.ENDC}")
-                    if isinstance(pool, ProcessPoolExecutor):
-                        pool.shutdown()
-                        pool = ProcessPoolExecutor(max_workers=1)
+                        print(f"\nwarning: timeout reached for processing input file:\n\t{args.get('file_name')}\n\t"
+                              f"\nexception instance: {type(inst)}")
+                    # Properly close and recreate the pool (guarded)
+                    try:
+                        pool.shutdown(wait=True)
+                    except Exception:
+                        pass
+                    pool = ProcessPoolExecutor(max_workers=1) if self.timeout else ThreadPoolExecutor(max_workers=1)
                 except KeyboardInterrupt:
                     self.die = True
                 except Exception as inst:
                     print(
-                        f"{PrintColors.WARNING}"
                         f"\nwarning: process unexpectedly failed for {args}."
                         f"\nexception instance: {type(inst)}"
                         f"\nexception arguments: {inst.args}"
-                        f"\nexception: {inst}"
-                        f"{PrintColors.ENDC}")
-                self.progress_queue.put(running_next)
+                        f"\nexception: {inst}")
+                self.safe_put(self.progress_queue, running_next)
             except Empty:
                 self.die = True
-        if isinstance(pool, ProcessPoolExecutor):
-            pool.shutdown()
-        self.progress_queue.put(not running_next)
+            except (OSError, ValueError):
+                self.die = True
+
+        # General safeguard for pool and queue on finalization
+        try:
+            if isinstance(pool, ProcessPoolExecutor):
+                pool.shutdown(wait=True)
+            elif isinstance(pool, ThreadPoolExecutor):
+                pool.shutdown(wait=True)
+        except Exception:
+            pass
+
+        # Final status update; safe put to avoid error if pipe closed
+        self.safe_put(self.progress_queue, not running_next)
 
 
 def progress_manager(progress_queue: Queue, workers: int, total: int,
@@ -1869,7 +1988,7 @@ def batch_filter(
         wavelet: str = 'db9',
         crossover: int = 10,
         threshold: int = None,
-        padding_mode: str = "reflect",
+        padding_mode: str = None,
         bidirectional: bool = False,
         bleach_correction_frequency: float = None,
         bleach_correction_max_method: bool = True,
@@ -2075,13 +2194,8 @@ def batch_filter(
     if USE_PYTORCH and CUDA_IS_AVAILABLE_FOR_PT:
         gpu_semaphore = Queue()
         for i in range(cuda_device_count()):
-            for _ in range(min(threads_per_gpu, int(cuda_get_device_properties(i).total_memory / (2.5 * 2**30)))):
-                gpu_semaphore.put((f"cuda:{i}", cuda_get_device_properties(i).total_memory))
-        # gpu_semaphore.put(("cpu", 96305274880))
-    # elif USE_JAX:
-    #     gpu_semaphore = Queue()
-    #     for idx, device in enumerate(local_devices()):
-    #         gpu_semaphore.put((idx, None))
+            for _ in range(threads_per_gpu):
+                gpu_semaphore.put(f"cuda:{i}")
 
     workers = min(workers, num_images)
     progress_queue = Queue()

@@ -11,7 +11,7 @@ from math import floor
 from multiprocessing import freeze_support, Queue, Process, Pool, set_start_method
 from pathlib import Path
 from platform import uname
-from queue import Empty
+from queue import Empty, SimpleQueue
 from re import compile, match, findall, IGNORECASE, MULTILINE
 from subprocess import check_output, call, Popen, PIPE, CalledProcessError
 from time import time, sleep
@@ -36,8 +36,8 @@ from torch.cuda import set_per_process_memory_fraction as cuda_set_per_process_m
 from parallel_image_processor import parallel_image_processor, jumpy_step_range
 from pystripe.core import (batch_filter, imread_tif_raw_png, imsave_tif, MultiProcessQueueRunner, progress_manager,
                            process_img, convert_to_8bit_fun, log1p_jit, prctl, np_max, np_mean, is_uniform_2d,
-                           calculate_pad_size, cuda_get_device_properties, cuda_device_count,
-                           CUDA_IS_AVAILABLE_FOR_PT, USE_PYTORCH, USE_JAX)
+                           calculate_pad_size, cuda_device_count,
+                           CUDA_IS_AVAILABLE_FOR_PT, USE_PYTORCH)
 from supplements.cli_interface import (ask_for_a_number_in_range, date_time_now, PrintColors)
 from supplements.tifstack import TifStack, imread_tif_stck
 from tsv.volume import TSVVolume, VExtent
@@ -357,7 +357,7 @@ def process_channel(
         compression_level: int = 1,
         compression_method: str = "ADOBE_DEFLATE",
         need_bleach_correction: bool = False,
-        padding_mode: str = "wrap",
+        padding_mode: str = None,
         need_lightsheet_cleaning: bool = True,
         need_rotation_stitched_tif: bool = False,
         need_16bit_to_8bit_conversion: bool = False,
@@ -583,7 +583,7 @@ def process_channel(
     stitched_tif_path = stitched_path / f"{channel}_tif"
     stitched_tif_path.mkdir(exist_ok=True)
 
-    # cosine_blending = False  # True if need_bleach_correction else False
+    # cosine_blending = False # True if you need_bleach_correction else False
     tsv_volume = TSVVolume(
         stitched_path / f'{channel_for_alignment}_xml_import_step_5.xml',
         alt_stack_dir=preprocessed_path.joinpath(channel).__str__(),
@@ -602,7 +602,7 @@ def process_channel(
             z = [floor(shape[0] * 0.25), floor(shape[0] * 0.5), floor(shape[0] * 0.75)]
             z_bitshift_vals = []
             for i in range(0, 3):
-                found_threshold = false
+                found_threshold = False
                 while not found_threshold:
                     try:
                         p_log(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
@@ -692,10 +692,10 @@ def process_channel(
 
     gpu_semaphore = None
     if CUDA_IS_AVAILABLE_FOR_PT:
-        gpu_semaphore = Queue()
+        gpu_semaphore = SimpleQueue()
         for gpu in range(cuda_device_count()):
             if gpu not in exclude_gpus:
-                gpu_semaphore.put((f"cuda:{gpu}", cuda_get_device_properties(gpu).total_memory))
+                gpu_semaphore.put(f"cuda:{gpu}")
         for cpu in range(get_cpu_sockets()):
             gpu_semaphore.put(("cpu", virtual_memory().available))
 
@@ -705,7 +705,7 @@ def process_channel(
         fun=process_img,
         kwargs={
             "sigma": bleach_correction_sigma,
-            "wavelet": "coif15",  # db37
+            "wavelet": "db9",  # db37
             "padding_mode": padding_mode,  # wrap reflect
             "gpu_semaphore": gpu_semaphore,
             "bidirectional": True if need_bleach_correction else False,
@@ -735,7 +735,6 @@ def process_channel(
         compression=(compression_method, compression_level) if compression_level > 0 else None,
         resume=continue_process_terastitcher,
         needed_memory=ram_needed_per_thread * 1024 ** 3 * 8,
-        enable_axis_correction=enable_axis_correction,
         return_downsampled_path=True
     )
     if need_rotation_stitched_tif:
@@ -745,8 +744,6 @@ def process_channel(
 
     # TeraFly ----------------------------------------------------------------------------------------------------------
 
-    # TODO: Paraconverter: Support converting with more cores
-    # TODO: Paraconverter: add a progress bar
     running_processes: int = 0
     if need_tera_fly_conversion:
         if terafly_path is None:
@@ -867,7 +864,7 @@ def generate_composite_image(
         compression: Union[Tuple[str, int], None] = ("ADOBE_DEFLATE", 1),
         right_bit_shifts: Union[Tuple[int, ...], None] = None
 ):
-    # there should always be 1 more image than number of matrices.  Example: 3 images, 2 matrices.
+    # there should always be 1 more image than the number of matrices.  Example: 3 images, 2 matrices.
     assert len(transformation_matrices) + 1 == len(tif_stacks)
     save_path = merged_tif_path / f"img_{img_idx:06n}.tif"
     if resume and save_path.exists():
@@ -936,7 +933,7 @@ def merge_all_channels(
     compression:
         compression method and level.
     right_bit_shift:
-        If not none convert the image to 8-bit with the requested bit shift.
+        If not None, convert the image to 8-bit with the requested bit shift.
         None, and any number between 0 and 8 is accepted. Default if None = no 8-bit conversion and bit shifting.
     """
     z_offsets = [0] + z_offsets
@@ -1056,13 +1053,13 @@ def commands_progress_manger(queue: Queue, progress_bars: List[tqdm], running_pr
                     p_log(f"\nFollowing command succeeded:\n\t{command}\n")
                 running_processes -= 1
         except Empty:
-            sleep(1)  # waite one second before checking the queue again
+            sleep(1)  # wait one second before checking the queue again
 
 
 def main(args):
     global AllChannels
     source_path = Path(args.input)
-    # make sure input path does not have "-" char in its name
+    # make sure an input path does not have "-" char in its name
     if source_path.exists() and "-" in source_path.name:
         source_path = source_path.rename(source_path.parent / source_path.name.replace("-", "_"))
         print(f"{PrintColors.WARNING}--input path renamed to replace '-' with '_'{PrintColors.ENDC}")
@@ -1528,11 +1525,8 @@ if __name__ == '__main__':
         teraconverter = "teraconverter.exe"
         nvidia_smi = "nvidia-smi.exe"
     elif sys.platform.lower() == 'linux':
-        if USE_PYTORCH or USE_JAX:
+        if USE_PYTORCH:
             set_start_method('spawn')
-        if USE_JAX:
-            os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
-            os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
         os.environ["NUMPY_MADVISE_HUGEPAGE"] = "1"
         if 'microsoft' in uname().release.lower():
             print("Windows subsystem for Linux is detected.")

@@ -4,7 +4,7 @@ channels:
   - pytorch
   - nvidia
 dependencies:
-  - python=3.11
+  - python=3.11.*
   - pytorch>=2.2.1
   - pytorch-cuda>=11.8
   - pycudadecon
@@ -43,3 +43,5 @@ dependencies:
       - dcimg
       - cpufeature
       - ptwt
+
+  - opencv-python
