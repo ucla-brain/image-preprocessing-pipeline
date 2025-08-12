@@ -37,6 +37,7 @@ dependencies:
   - pynrrd
 #  - cuda-nvcc
   - ffmpeg
+  - tensorly
   - pip
   - pip:
       - imaris_ims_file_reader
