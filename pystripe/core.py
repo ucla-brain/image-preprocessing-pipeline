@@ -851,7 +851,7 @@ def filter_streaks(
     return img
 
 
-def filter_streaks_3D(
+def filter_streaks_3d(
         img: ndarray,
         sigma: int = 70,
         level: int = 0,
