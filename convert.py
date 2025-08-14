@@ -2,9 +2,10 @@ import os
 import subprocess
 import sys
 from argparse import RawDescriptionHelpFormatter, ArgumentParser, Namespace, BooleanOptionalAction
-from multiprocessing import freeze_support, Queue, set_start_method
+from multiprocessing import freeze_support, set_start_method, Queue
 from pathlib import Path
 from platform import uname
+from queue import SimpleQueue
 from re import compile
 from time import time
 
@@ -83,8 +84,8 @@ def main(args: Namespace):
         #    de_striping_sigma = (4000, 4000)
 
         gpu_semaphore = None
-        if cuda_is_available_for_pt():
-            gpu_semaphore = Queue(maxsize=cuda_device_count())
+        if cuda_is_available_for_pt() and args.threads_per_gpu > 0:
+            gpu_semaphore = SimpleQueue()
             for _ in range(args.threads_per_gpu):
                 for i in range(cuda_device_count()):
                     gpu_semaphore.put(f"cuda:{i}")
@@ -399,7 +400,7 @@ if __name__ == '__main__':
     parser.add_argument("--save-images", default=True, action=BooleanOptionalAction,
                         help="save the processed images. Default is --save-images. "
                              "if you just need to do downsampling use --no-save-images.")
-    parser.add_argument("--threads-per-gpu", type=int, default=1,
+    parser.add_argument("--threads-per-gpu", type=int, default=0,
                         help="Number of images processed on one GPU at a time. Default is 1. "
                              "Increase if the image sizes are small and multiple images fit into the vRAM.")
     main(parser.parse_args())
