@@ -2,7 +2,7 @@ import os
 import subprocess
 import sys
 from argparse import RawDescriptionHelpFormatter, ArgumentParser, Namespace, BooleanOptionalAction
-from multiprocessing import freeze_support, Queue
+from multiprocessing import freeze_support, Queue, set_start_method
 from pathlib import Path
 from platform import uname
 from re import compile
@@ -16,7 +16,7 @@ from tifffile import natural_sorted
 from parallel_image_processor import parallel_image_processor
 from process_images import get_imaris_command, MultiProcessCommandRunner, commands_progress_manger
 from pystripe.core import (process_img, imread_tif_raw_png, cuda_device_count,
-                           cuda_is_available_for_pt)
+                           cuda_is_available_for_pt, USE_PYTORCH)
 from supplements.cli_interface import PrintColors
 
 
@@ -269,6 +269,8 @@ if __name__ == '__main__':
         fnt_slice2cube = Path(r".") / "fnt" / "Windows" / "fnt-slice2cube.exe"
     elif sys.platform == 'linux' and 'microsoft' not in uname().release.lower():
         print("Linux is detected.")
+        if USE_PYTORCH:
+            set_start_method('spawn')
         os.environ["NUMPY_MADVISE_HUGEPAGE"] = "1"
         psutil.Process().nice(value=19)
         TeraStitcherPath = Path(r".") / "TeraStitcher" / "Linux" / cpu_instruction
