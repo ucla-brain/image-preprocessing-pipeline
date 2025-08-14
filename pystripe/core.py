@@ -1,9 +1,10 @@
 import os
+
 # Generic BLAS/OpenMP stacks used by NumPy/ SciPy / scikit-image / OpenCV builds
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
-os.environ.setdefault("VECLIB_MAXIMUM_THREADS", "1") # Apple Accelerate
+os.environ.setdefault("VECLIB_MAXIMUM_THREADS", "1")  # Apple Accelerate
 os.environ.setdefault("BLIS_NUM_THREADS", "1")
 
 # NumExpr (picked up at import)
@@ -66,6 +67,7 @@ from torch.fft import irfft as pt_irfft, rfft as pt_rfft
 from tqdm import tqdm
 from PIL import Image
 from dataclasses import dataclass
+
 Image.MAX_IMAGE_PIXELS = None
 
 from pystripe.lightsheet_correct import correct_lightsheet, prctl
@@ -78,7 +80,7 @@ NUM_RETRIES: int = 40
 USE_NUMEXPR: bool = True
 USE_PYTORCH = True
 CUDA_IS_AVAILABLE_FOR_PT = cuda_is_available_for_pt()
-STREAMS_PER_GPU = 2   # tune: 2–4 is usually enough
+STREAMS_PER_GPU = 2  # tune: 2–4 is usually enough
 _STREAM_CYCLES: Dict[str, cycle] = {}
 set_grad_enabled(False)
 # if sys.platform.lower() == "linux":
@@ -92,8 +94,8 @@ DWT_MODE: str = None
 class DeviceInfo:
     id: int
     name: str
-    total: int   # bytes
-    free: int    # bytes
+    total: int  # bytes
+    free: int  # bytes
 
 
 def discover_cuda_devices() -> List[DeviceInfo]:
@@ -230,104 +232,6 @@ def log1p_jit(img: ndarray, dtype=float32):
 def max_level(min_len, wavelet):
     w = Wavelet(wavelet)
     return dwt_max_level(min_len, w.dec_len)
-
-
-def slice_non_zero_box(img_axis: ndarray, noise: int, filter_frequency: int = 1 / 1000) -> (int, int):
-    return min_max_1d(nonzero(butter_lowpass_filter(img_axis, filter_frequency).astype(uint16) > noise)[0])
-
-
-def get_img_mask(img: ndarray, threshold: Union[int, float],
-                 close_steps: int = 50, open_steps: int = 500, flood_fill_flag: int = 4) -> ndarray:
-    # start_time = time()
-    shape = list(img.shape)
-    mask = (img > threshold).astype(uint8)
-    mask = morphologyEx(mask, MORPH_CLOSE, ones((close_steps, close_steps), dtype=uint8))
-    mask = morphologyEx(mask, MORPH_OPEN, ones((open_steps, open_steps), dtype=uint8)).astype(bool)
-    inverted_mask = logical_not(mask).astype(uint8)
-    floodFill(inverted_mask, None, (0, 0), 0, flags=flood_fill_flag)
-    floodFill(inverted_mask, None, (0, shape[0] - 1), 0, flags=flood_fill_flag)
-    floodFill(inverted_mask, None, (shape[1] - 1, 0), 0, flags=flood_fill_flag)
-    floodFill(inverted_mask, None, (shape[1] - 1, shape[0] - 1), 0, flags=flood_fill_flag)
-    mask |= inverted_mask.astype(bool)
-    # print("mask time:", time() - start_time)
-    return mask
-
-
-def butter_lowpass_filter(img: ndarray, cutoff_frequency: float, order: int = 1) -> ndarray:
-    d_type = img.dtype
-    sos = butter(order, cutoff_frequency, output='sos')
-    img = sosfiltfilt(sos, img)  # returns float64
-    img = img.astype(d_type)
-
-    return img
-
-
-def correct_bleaching(
-        img: ndarray,
-        frequency: float,
-        clip_min: float,
-        clip_med: float,
-        clip_max: float,
-        max_method: bool = False,
-) -> ndarray:
-    """
-    Parameters
-    ----------
-    img: log1p filtered image
-    frequency: low pass fileter frequency. Usually 1/min(img.shape).
-    clip_min: background vs foreground threshold
-    clip_med: foreground intermediate
-    clip_max: foreground max
-    max_method: use max value on x and y axes to create the filter. Max method is faster and smoother but less accurate
-
-    Returns
-    -------
-    max normalized filter values.
-    """
-
-    assert isinstance(frequency, (float, float32, float64)) and frequency > 0
-    assert isinstance(clip_min, (float, float32, float64)) and clip_min >= 0
-    assert isinstance(clip_med, (float, float32, float64)) and clip_med > clip_min
-    assert isinstance(clip_max, (float, float32, float64)) and clip_max > clip_min
-    assert clip_max > clip_med
-    clip_min_lb = log1p(1)
-    if clip_min < clip_min_lb:
-        clip_min = clip_min_lb
-
-    # creat the filter
-    if max_method:
-        img_filter_y = np_max(img, axis=1)
-        img_filter_x = np_max(img, axis=0)
-        img_filter_y[img_filter_y == 0] = clip_med
-        img_filter_x[img_filter_x == 0] = clip_med
-        img_filter_y = clip(img_filter_y, clip_min, clip_max)
-        img_filter_x = clip(img_filter_x, clip_min, clip_max)
-        img_filter_y = butter_lowpass_filter(img_filter_y, frequency)
-        img_filter_x = butter_lowpass_filter(img_filter_x, frequency)
-        img_filter_y = reshape(img_filter_y, (len(img_filter_y), 1))
-        img_filter_x = reshape(img_filter_x, (1, len(img_filter_x)))
-        img_filter = dot(img_filter_y, img_filter_x)
-    else:
-        img_filter = img.copy()
-        img_filter[img_filter == 0] = clip_med
-        clip(img_filter, clip_min, clip_max, out=img_filter)
-        img_filter = butter_lowpass_filter(img_filter, frequency)
-
-    # apply the filter
-    img_filter_max = np_max(img_filter)
-    if USE_NUMEXPR and (img.flags.c_contiguous or img.flags.f_contiguous):
-        evaluate("img / img_filter * img_filter_max", out=img, casting="unsafe")
-    else:
-        img /= img_filter
-        img *= img_filter_max
-    return img
-
-
-def otsu_threshold(img: ndarray) -> float:
-    try:
-        return threshold_otsu(img)
-    except ValueError:
-        return 2
 
 
 def sigmoid(img: ndarray) -> ndarray:
@@ -559,13 +463,23 @@ def padding_mode_for_wavelet(wavelet_name: str) -> str:
     # Fallback
     return 'reflect'
 
+
 PTWTMode = Literal["constant", "zero", "reflect", "periodic", "symmetric"]
 PYWTMode = str  # PyWavelets allows more, but you could be stricter if you want
+
+
 def dwt_mode_from_pad(pad_mode: str, for_ptwt: bool) -> Union[PTWTMode, PYWTMode]:
     pad_mode = pad_mode.lower()
     if pad_mode == "wrap":
         return "periodic" if for_ptwt else "periodization"
     return "symmetric"
+
+
+def otsu_threshold(img: ndarray) -> float:
+    try:
+        return threshold_otsu(img)
+    except ValueError:
+        return 2
 
 
 def filter_subband(img: ndarray, sigma: float, level: int, wavelet: str,
@@ -646,7 +560,8 @@ def filter_streak_dual_band(img, sigma1, sigma2, level, wavelet, crossover, thre
 
         fraction = foreground_fraction(img, threshold, crossover, smoothing)
         one = float32(1.0)
-        if USE_NUMEXPR and (foreground.flags.c_contiguous or foreground.flags.f_contiguous) and (background.flags.c_contiguous or background.flags.f_contiguous):
+        if USE_NUMEXPR and (foreground.flags.c_contiguous or foreground.flags.f_contiguous) and (
+                background.flags.c_contiguous or background.flags.f_contiguous):
             evaluate("(foreground * fraction + background * (one - fraction)) * threshold", out=img, casting="unsafe")
         else:
             foreground *= fraction
@@ -658,6 +573,97 @@ def filter_streak_dual_band(img, sigma1, sigma2, level, wavelet, crossover, thre
     else:
         img = filter_subband(img, sigma1, level, wavelet, gpu_semaphore, axes=axes)
         img = filter_subband(img, sigma2, level, wavelet, gpu_semaphore, axes=axes)
+    return img
+
+
+def slice_non_zero_box(img_axis: ndarray, noise: int, filter_frequency: int = 1 / 1000) -> (int, int):
+    return min_max_1d(nonzero(butter_lowpass_filter(img_axis, filter_frequency).astype(uint16) > noise)[0])
+
+
+def get_img_mask(img: ndarray, threshold: Union[int, float],
+                 close_steps: int = 50, open_steps: int = 500, flood_fill_flag: int = 4) -> ndarray:
+    # start_time = time()
+    shape = list(img.shape)
+    mask = (img > threshold).astype(uint8)
+    mask = morphologyEx(mask, MORPH_CLOSE, ones((close_steps, close_steps), dtype=uint8))
+    mask = morphologyEx(mask, MORPH_OPEN, ones((open_steps, open_steps), dtype=uint8)).astype(bool)
+    inverted_mask = logical_not(mask).astype(uint8)
+    floodFill(inverted_mask, None, (0, 0), 0, flags=flood_fill_flag)
+    floodFill(inverted_mask, None, (0, shape[0] - 1), 0, flags=flood_fill_flag)
+    floodFill(inverted_mask, None, (shape[1] - 1, 0), 0, flags=flood_fill_flag)
+    floodFill(inverted_mask, None, (shape[1] - 1, shape[0] - 1), 0, flags=flood_fill_flag)
+    mask |= inverted_mask.astype(bool)
+    # print("mask time:", time() - start_time)
+    return mask
+
+
+def butter_lowpass_filter(img: ndarray, cutoff_frequency: float, order: int = 1) -> ndarray:
+    d_type = img.dtype
+    sos = butter(order, cutoff_frequency, output='sos')
+    img = sosfiltfilt(sos, img)  # returns float64
+    img = img.astype(d_type)
+
+    return img
+
+
+def correct_bleaching(
+        img: ndarray,
+        frequency: float,
+        clip_min: float,
+        clip_med: float,
+        clip_max: float,
+        max_method: bool = False,
+) -> ndarray:
+    """
+    Parameters
+    ----------
+    img: log1p filtered image
+    frequency: low pass fileter frequency. Usually 1/min(img.shape).
+    clip_min: background vs foreground threshold
+    clip_med: foreground intermediate
+    clip_max: foreground max
+    max_method: use max value on x and y axes to create the filter. Max method is faster and smoother but less accurate
+
+    Returns
+    -------
+    max normalized filter values.
+    """
+
+    assert isinstance(frequency, (float, float32, float64)) and frequency > 0
+    assert isinstance(clip_min, (float, float32, float64)) and clip_min >= 0
+    assert isinstance(clip_med, (float, float32, float64)) and clip_med > clip_min
+    assert isinstance(clip_max, (float, float32, float64)) and clip_max > clip_min
+    assert clip_max > clip_med
+    clip_min_lb = log1p(1)
+    if clip_min < clip_min_lb:
+        clip_min = clip_min_lb
+
+    # creat the filter
+    if max_method:
+        img_filter_y = np_max(img, axis=1)
+        img_filter_x = np_max(img, axis=0)
+        img_filter_y[img_filter_y == 0] = clip_med
+        img_filter_x[img_filter_x == 0] = clip_med
+        img_filter_y = clip(img_filter_y, clip_min, clip_max)
+        img_filter_x = clip(img_filter_x, clip_min, clip_max)
+        img_filter_y = butter_lowpass_filter(img_filter_y, frequency)
+        img_filter_x = butter_lowpass_filter(img_filter_x, frequency)
+        img_filter_y = reshape(img_filter_y, (len(img_filter_y), 1))
+        img_filter_x = reshape(img_filter_x, (1, len(img_filter_x)))
+        img_filter = dot(img_filter_y, img_filter_x)
+    else:
+        img_filter = img.copy()
+        img_filter[img_filter == 0] = clip_med
+        clip(img_filter, clip_min, clip_max, out=img_filter)
+        img_filter = butter_lowpass_filter(img_filter, frequency)
+
+    # apply the filter
+    img_filter_max = np_max(img_filter)
+    if USE_NUMEXPR and (img.flags.c_contiguous or img.flags.f_contiguous):
+        evaluate("img / img_filter * img_filter_max", out=img, casting="unsafe")
+    else:
+        img /= img_filter
+        img *= img_filter_max
     return img
 
 
@@ -734,7 +740,7 @@ def filter_streaks(
         filtered image
     """
     if not isinstance(sigma, (tuple, list)):
-        sigma = (sigma, ) * 2
+        sigma = (sigma,) * 2
     sigma1 = sigma[0]  # foreground
     sigma2 = sigma[1]  # background
     if sigma1 == sigma2 == 0 and bleach_correction_frequency is None:
@@ -812,8 +818,8 @@ def filter_streaks(
         # undo padding
         if pad_y > 0 or pad_x > 0 or base_pad > 0:
             img = img[
-                  base_pad: img.shape[0] - (base_pad + pad_y),
-                  base_pad: img.shape[1] - (base_pad + pad_x)]
+                base_pad: img.shape[0] - (base_pad + pad_y),
+                base_pad: img.shape[1] - (base_pad + pad_x)]
             assert img.shape == img_shape
 
     if bleach_correction_frequency is not None:
@@ -1076,7 +1082,8 @@ def open_3d(img: ndarray, open_steps: int = 30, max_workers=None):
     # Parallel X
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         chunksize = max(1, shape[2] // (max_workers or 8))
-        results = list(executor.map(lambda arr: morph(arr).astype(bool), [mask[:, :, x] for x in range(shape[2])], chunksize=chunksize))
+        results = list(executor.map(lambda arr: morph(arr).astype(bool), [mask[:, :, x] for x in range(shape[2])],
+                                    chunksize=chunksize))
     for x, out in enumerate(results):
         mask[:, :, x] = out
 
@@ -1130,16 +1137,19 @@ def imread_tif_raw_png(path: Path, dtype: str = None, shape: Tuple[int, int] = N
                 except (TiffFileError, RuntimeError) as e:
                     if attempt == 0:
                         if 'imcd_lzw_decode' in str(e):
-                            print(f"{PrintColors.WARNING}[imagecodecs]: file: {path.name} LZW decode error: {e}{PrintColors.ENDC}")
+                            print(
+                                f"{PrintColors.WARNING}[imagecodecs]: file: {path.name} LZW decode error: {e}{PrintColors.ENDC}")
                         else:
-                            print(f"{PrintColors.WARNING}[tifffile]: file: {path.name} failed to read: {type(e).__name__} - {e}{PrintColors.ENDC}")
+                            print(
+                                f"{PrintColors.WARNING}[tifffile]: file: {path.name} failed to read: {type(e).__name__} - {e}{PrintColors.ENDC}")
                     try:
                         with Image.open(path) as im:
                             im.load()
                             img = array(im)
                     except (OSError, ValueError) as e2:
                         if attempt == 0:
-                            print(f"{PrintColors.WARNING}[pillow]: file: {path.name} also failed to read: {type(e2).__name__} - {e2}{PrintColors.ENDC}")
+                            print(
+                                f"{PrintColors.WARNING}[pillow]: file: {path.name} also failed to read: {type(e2).__name__} - {e2}{PrintColors.ENDC}")
                         # 🛠 Try bfconvert as last resort
                         bfconvert = shutil.which("bfconvert")
                         if bfconvert:
@@ -1158,16 +1168,18 @@ def imread_tif_raw_png(path: Path, dtype: str = None, shape: Tuple[int, int] = N
                                         [bfconvert, str(fixed_path), "-compression", "LZW", str(path)],
                                         check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
                                     )
-                                    print(f"{PrintColors.BLUE}[bfconvert]: file: {path.name} fixed and recompressed.{PrintColors.ENDC}")
+                                    print(
+                                        f"{PrintColors.BLUE}[bfconvert]: file: {path.name} fixed and recompressed.{PrintColors.ENDC}")
                                     continue  # Retry reading the repaired file
                             except subprocess.CalledProcessError as e3:
-                                print(f"{PrintColors.FAIL}[bfconvert]: file: {path.name} failed to fix: {e3}{PrintColors.ENDC}")
+                                print(
+                                    f"{PrintColors.FAIL}[bfconvert]: file: {path.name} failed to fix: {e3}{PrintColors.ENDC}")
                         raise
 
             else:
                 print(f"{PrintColors.WARNING}Unsupported file format: {extension}{PrintColors.ENDC}")
         except (OSError, TypeError, PermissionError) as e:
-            print(f"[Attempt {attempt+1}]: file: {path.name} Read error: {type(e).__name__} - {e}")
+            print(f"[Attempt {attempt + 1}]: file: {path.name} Read error: {type(e).__name__} - {e}")
             sleep(0.1)
             continue
 
