@@ -43,82 +43,90 @@ function bl = filter_subband_3d_z(bl, sigma, levels, wavelet)
 end
 
 function img = filter_subband(img, sigma, levels, wavelet, axes)
-    % Applies Gaussian notch filtering to wavelet subbands
-    % axes: [1] for vertical filtering, [2] for horizontal filtering
+    wl = lower(string(wavelet));
+    if startsWith(wl, ["coif","bior","rbio"])
+        dwtmode('per','nodisp');
+    else
+        dwtmode('sym','nodisp');
+    end
 
-    % Pad image to even dimensions
-    pad = mod(size(img), 2);
-    img = padarray(img, pad, 'post');
+    if ~isa(img,'single'), img = single(img); end
+    pad = [0 0];
 
-    % Wavelet decomposition
     if levels == 0
         levels = wmaxlev(size(img), wavelet);
     end
     [C, S] = wavedec2(img, levels, wavelet);
 
-    % Track starting index in C (skip approximation part)
     start_idx = prod(S(1, :));
     for n = 1:levels
         sz = prod(S(n + 1, :));
 
-        % Indices for detail coefficients at level n
         idxH = start_idx + (1:sz);
         idxV = idxH(end) + (1:sz);
-        idxD = idxV(end) + (1:sz);
 
         if ismember(2, axes)
-            % Horizontal filtering on H
             H = reshape(C(idxH), S(n + 1, :));
-            H = filter_coefficient(H, sigma / size(H, 2), 2);
+            H = filter_coefficient(H, sigma / size(img, 1), 2);
             C(idxH) = H(:);
         end
         if ismember(1, axes)
-            % Vertical filtering on V
             V = reshape(C(idxV), S(n + 1, :));
-            V = filter_coefficient(V, sigma / size(V, 1), 1);
+            V = filter_coefficient(V, sigma / size(img, 2), 1);
             C(idxV) = V(:);
         end
-        start_idx = idxD(end);  % Move to next level
+
+        start_idx = idxV(end) + sz;
     end
 
-    % Wavelet reconstruction
     img = waverec2(C, S, wavelet);
 
-    % Unpadding (generalized)
     idx = arrayfun(@(d) 1:(size(img, d) - pad(d)), 1:ndims(img), 'UniformOutput', false);
     img = img(idx{:});
 end
 
 function mat = filter_coefficient(mat, sigma, axis)
-    % clamping sigma to avoid potential division by zero or numerical instability
     sigma = max(sigma, eps('single'));
     n = size(mat, axis);
+    sigma = (floor(n/2) + 1) * sigma;
+
     mat = fft(mat, n, axis);
 
-    % Gaussian filter
-    g = gaussian_notch_filter_1d(n, sigma, isgpuarray(mat));
+    g = gaussian_notch_filter_1d(n, sigma, isgpuarray(mat), classUnderlying(mat));
+
     if axis == 1
-        g = repmat(g(:), 1, size(mat, 2));
+        mat = mat .* g(:);
     elseif axis == 2
-        g = repmat(g, size(mat, 1), 1);
+        mat = mat .* g;
     else
         error('Invalid axis');
     end
 
-    % Convert filter to gpuArray if mat is gpuArray
-    if isgpuarray(mat)
-        g = gpuArray(g);
-    end
-
-    % Apply filter to complex spectrum
-    mat = mat .* complex(g, g);
     mat = real(ifft(mat, n, axis));
 end
 
-function g = gaussian_notch_filter_1d(n, sigma, use_gpu)
-    x = (0:n-1) - floor(n/2);
-    x = single(x);
-    if use_gpu, x = gpuArray(x); end
-    g = 1 - exp(-(x .^ 2) / (2 * sigma ^ 2));
-    g = fftshift(g);
+function g = gaussian_notch_filter_1d(n, sigma, use_gpu, underlying_class)
+    m = floor(n/2);
+
+    if use_gpu
+        x = gpuArray.colon(cast(0, underlying_class), cast(1, underlying_class), cast(m, underlying_class));
+    else
+        x = cast(0:m, underlying_class);
+    end
+
+    sigma = cast(sigma, 'like', x);
+    gpos = 1 - exp(-x.^2 ./ (2 * sigma.^2));
+
+    if use_gpu
+        g = gpuArray.zeros(1, n, underlying_class);
+    else
+        g = zeros(1, n, underlying_class);
+    end
+
+    g(1:m+1) = gpos;
+    if mod(n,2) == 0
+        g(m+2:n) = gpos(m-1:-1:1);
+    else
+        g(m+2:n) = gpos(m:-1:1);
+    end
 end
