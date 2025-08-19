@@ -949,7 +949,7 @@ end
 
 function bl = process_block(bl, block, psf, niter, lambda, stop_criterion, filter, gpu, semkey_gpu_base)
     bl_size = size(bl);
-    if gpu && (min(filter.gaussian_sigma(:)) > 0 || niter > 0)
+    if gpu && (min(filter.gaussian_sigma(:)) > 0 || niter > 0 || filter.destripe_sigma > 0 || min(filter.fibermetric_sigma(:)) > 0)
         % get the next available gpu
         % gpu = queue('wait', semkey_gpu_base);
         semaphore('w', semkey_gpu_base + gpu);
