@@ -44,3 +44,4 @@ dependencies:
       - dcimg
       - cpufeature
       - ptwt
+      - natsort
