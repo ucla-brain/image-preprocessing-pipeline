@@ -35,7 +35,7 @@ function bl = filter_subband_3d_z(bl, sigma, levels, wavelet)
     if ~strcmp(bl_class, original_class)
         bl = cast(bl, original_class);
     end
-    fprintf("%s: destripe ΔT: %.1f s\n", device, toc(start_time));
+    % fprintf("%s: destripe ΔT: %.1f s\n", device, toc(start_time));
 end
 
 function img = filter_subband(img, sigma, levels, wavelet, axes)
