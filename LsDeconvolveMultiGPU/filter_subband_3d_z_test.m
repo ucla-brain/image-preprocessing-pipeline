@@ -11,6 +11,7 @@ sigma = 1000;
 levels = 0;
 wavelet = 'db9';
 num_trials = 3;
+gpu = gpuDevice(2);
 
 fprintf('Benchmarking filter_subband_3d_z (σ=%d, levels=%d, wavelet=%s)\n', sigma, levels, wavelet);
 fprintf('-------------------------------------------------------------\n');
@@ -36,10 +37,10 @@ for s = sizes
 
         % --- GPU ---
         bl_gpu = gpuArray(bl);  % fresh copy
-        wait(gpuDevice);
+        wait(gpu);
         tic;
         bl_gpu_out = filter_subband_3d_z(bl_gpu, sigma, levels, wavelet);
-        wait(gpuDevice);
+        wait(gpu);
         gpu_times(t) = toc;
 
         % Compare output

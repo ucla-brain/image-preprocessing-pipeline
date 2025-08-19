@@ -31,11 +31,7 @@ function bl = filter_subband_3d_z(bl, sigma, levels, wavelet)
 
     % Restore original data type
     % Restore original data type (remains on GPU if started as gpuArray)
-    if isgpuarray(bl)
-        bl_class = classUnderlying(bl);
-    else
-        bl_class = class(bl);
-    end
+    bl_class = underlyingType(bl);
     if ~strcmp(bl_class, original_class)
         bl = cast(bl, original_class);
     end
@@ -92,7 +88,7 @@ function mat = filter_coefficient(mat, sigma, axis)
 
     mat = fft(mat, n, axis);
 
-    g = gaussian_notch_filter_1d(n, sigma, isgpuarray(mat), classUnderlying(mat));
+    g = gaussian_notch_filter_1d(n, sigma, isgpuarray(mat), underlyingType(mat));
 
     if axis == 1
         mat = mat .* g(:);
