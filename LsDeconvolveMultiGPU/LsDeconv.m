@@ -652,7 +652,7 @@ function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
     if numit > 0 || any(filter.gaussian_sigma > 0) || any(filter.fibermetric_sigma > 0)
         num_jobs_on_gpu = 1;
     else
-        num_jobs_on_gpu = 3;
+        num_jobs_on_gpu = 2;
     end
     for gpu = unique_gpus
         semaphore_create(semkey_gpu_base + gpu, num_jobs_on_gpu);
