@@ -1,4 +1,4 @@
-function benchmark_filter_subband_3d()
+function filter_subband_3d_z_test()
 % ==============================================================
 % benchmark_filter_subband_3d.m
 %
@@ -10,7 +10,7 @@ sizes = [32, 64, 128, 256, 512, 1024];  % cube sizes (i.e., 32x32x32 to 256³)
 sigma = 1000;
 levels = 0;
 wavelet = 'db9';
-num_trials = 3;
+num_trials = 1;
 gpu = gpuDevice(2);
 
 fprintf('Benchmarking filter_subband_3d_z (σ=%d, levels=%d, wavelet=%s)\n', sigma, levels, wavelet);
@@ -23,12 +23,10 @@ for s = sizes
     cpu_times = zeros(1, num_trials);
     gpu_times = zeros(1, num_trials);
     max_diff = NaN;
-
+    % Generate test volume
+    rng(42 + s);  % Slight variation
+    bl = rand(sz, 'single');
     for t = 1:num_trials
-        % Generate test volume
-        rng(42 + t);  % Slight variation
-        bl = rand(sz, 'single');
-
         % --- CPU ---
         bl_cpu = bl;  % fresh copy
         tic;
