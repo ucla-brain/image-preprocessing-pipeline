@@ -398,7 +398,7 @@ def main():
             and set(args.gpu_indices).issubset(set(default_gpu_indices))
     )
     user_overrode_block_size = args.block_size_max != block_size_default
-    n_real_blocks_on_gpu = 2
+    n_real_blocks_on_gpu = 3
     n_complex_blocks_on_gpu = 0
     if args.use_fft:
         n_real_blocks_on_gpu = 1
