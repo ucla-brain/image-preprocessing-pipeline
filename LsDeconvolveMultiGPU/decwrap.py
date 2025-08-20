@@ -132,7 +132,7 @@ def get_safe_num_blocks(min_vram_mib, num_complex_blocks_on_gpu):
 
 
 def estimate_block_size_max(gpu_indices, workers_per_gpu, use_fft,
-                            bytes_per_element=4, base_reserve_gb=1.0, per_worker_mib=665,
+                            bytes_per_element=4, base_reserve_gb=1.5, per_worker_mib=665,
                             num_real_blocks_on_gpu=2, num_complex_blocks_on_gpu=0): # 844
     max_allowed = 2 ** 31 - 1
     try:
