@@ -170,11 +170,11 @@ function volumeIn = filter_subband_3d_z(volumeIn, sigmaValue, decompositionLevel
     % ---------- VRAM-aware batching (uses your project helper free_GPU_vRAM) ----------
     if isInputOnGPU
         currentGpuDevice = gpuDevice();
-        freeMemoryGB = free_GPU_vRAM(currentGpuDevice.Index, currentGpuDevice); % not printed per your request
+        freeMemoryGB = free_GPU_vRAM(currentGpuDevice.Index, currentGpuDevice);
         bytesFreeApprox = max(0, freeMemoryGB * 1e9);   % helper uses 1e9 scale
         bytesPerElement = 4;                            % single precision
         % Conservative per-slice working-set estimate (FFT/DWT temps)
-        bytesPerSliceEstimate = max(1, 8 * sizeX * sizeZ * bytesPerElement);
+        bytesPerSliceEstimate = max(1, 16 * max(sizeX, sizeY) * sizeZ * bytesPerElement);
         batchSize = max(1, floor( (0.5 * bytesFreeApprox) / bytesPerSliceEstimate )); % 50% headroom
     else
         batchSize = 1; % CPU
