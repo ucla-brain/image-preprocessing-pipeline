@@ -649,13 +649,8 @@ function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
     semaphore_create(semkey_single, 1);
     semkey_gpu_base = 1e5;
     % queue('create', semkey_gpu_base, unique_gpus);
-    if numit > 0 || any(filter.gaussian_sigma > 0) || any(filter.fibermetric_sigma > 0)
-        num_jobs_on_gpu = 1;
-    else
-        num_jobs_on_gpu = 4;
-    end
     for gpu = unique_gpus
-        semaphore_create(semkey_gpu_base + gpu, num_jobs_on_gpu);
+        semaphore_create(semkey_gpu_base + gpu, 1);
         % semaphore_create(gpu + semkey_loading_base, 3);
     end
 

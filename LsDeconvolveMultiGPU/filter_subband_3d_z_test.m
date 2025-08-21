@@ -1,6 +1,6 @@
 function filter_subband_3d_z_test()
 % ==============================================================
-% benchmark_filter_subband_3d.m
+% filter_subband_3d_z_test.m
 %
 % Compares CPU vs GPU performance and correctness for
 % filter_subband_3d_z() over various 3D single-precision volumes.
@@ -28,6 +28,7 @@ for s = sizes
     bl = rand(sz, 'single');
     bl_cpu = bl;  % fresh copy
     bl_gpu = gpuArray(bl);
+
     for t = 1:num_trials
         % --- CPU ---
         tic;

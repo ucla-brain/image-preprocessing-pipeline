@@ -138,6 +138,8 @@
 %     end
 % end
 
+% ============================== new version ==============================
+
 function volumeIn = filter_subband_3d_z(volumeIn, sigmaValue, decompositionLevels, waveletName, axes_to_filter)
 % FILTER_SUBBAND_3D_Z
 % 3D destriping via batched 2D wavelet filtering across Y-slices and X-slices.
