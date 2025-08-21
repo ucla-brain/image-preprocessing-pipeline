@@ -286,9 +286,7 @@ function slab = process_slab_batch(slab, sigmaValue, effectiveLevels, waveletNam
     slabSSCB = dlarray(reshape(slab, numRows, numCols, 1, numBatch), "SSCB");  % [S S C B] with C=1
 
     % ----- Forward DWT -----
-    [approximationCoeffs, detailCoeffs] = dldwt( ...
-        slabSSCB, Wavelet=waveletName, Level=effectiveLevels, ...
-        PaddingMode=paddingModeString, FullTree=true);
+    [approximationCoeffs, detailCoeffs] = dldwt(slabSSCB, Wavelet=waveletName, Level=effectiveLevels, PaddingMode=paddingModeString, FullTree=true);
 
     % ----- Notch H/V on detail channels (works level-by-level; SSCB ⇒ [rows_l cols_l channels batch]) -----
     if iscell(detailCoeffs)
@@ -304,10 +302,9 @@ function slab = process_slab_batch(slab, sigmaValue, effectiveLevels, waveletNam
     end
 
     % ----- Inverse DWT and restore to [rows cols batch] -----
-    reconstructedSSCB = dlidwt(approximationCoeffs, detailCoeffs, ...
-                               Wavelet=waveletName, PaddingMode=paddingModeString);  % [rows cols 1 batch]
-    slabNumeric = extractdata(reconstructedSSCB);
-    slab = reshape(slabNumeric, numRows, numCols, numBatch);
+    slab = dlidwt(approximationCoeffs, detailCoeffs, Wavelet=waveletName, PaddingMode=paddingModeString);  % [rows cols 1 batch]
+    slab = extractdata(slab);
+    slab = reshape(slab, numRows, numCols, numBatch);
 
     % ----- Restore device/class exactly -----
     if inputIsOnGpu && ~isgpuarray(slab), slab = gpuArray(slab); end
