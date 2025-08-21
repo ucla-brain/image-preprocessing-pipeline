@@ -268,14 +268,11 @@ end
 % Core batched processor (shared by 2D and 3D)
 % =============================================================================
 function slab = process_slab_batch(slab, sigmaValue, effectiveLevels, waveletName, paddingModeString, axes_to_filter)
-% PROCESS_SLAB_BATCH
-% In-place style: accepts and returns 'slab' (numeric CPU/GPU) with shape [rows, cols, batch].
-% Steps:
-%   1) reshape to SSCB = [rows cols 1 batch]
-%   2) dldwt → notch detail channels (per axes_to_filter) → dlidwt
-%   3) reshape back to [rows cols batch] (robust to toolbox squeezing)
+% PROCESS_SLAB_BATCH (VRAM-optimized)
+% In-place style: accepts/returns numeric CPU/GPU 'slab' shaped [rows, cols, batch].
+% Steps: reshape → DWT → notch HL/LH → IDWT → reshape back (robust to squeezing).
 
-    % ----- Capture device/class to preserve exactly -----
+    % Preserve device & class exactly (no changes if already single gpuArray)
     inputIsOnGpu = isgpuarray(slab);
     if inputIsOnGpu
         originalUnderlyingClass = underlyingType(slab);
@@ -283,59 +280,40 @@ function slab = process_slab_batch(slab, sigmaValue, effectiveLevels, waveletNam
         originalUnderlyingClass = class(slab);
     end
 
-    % ----- Enforce SSCB shape -----
-    numRows  = size(slab, 1);
-    numCols  = size(slab, 2);
-    numBatch = size(slab, 3);
-    slab = dlarray(reshape(slab, numRows, numCols, 1, numBatch), "SSCB");  % [S S C B] with C=1
+    % Canonical SSCB view with minimal scalars
+    rows = size(slab,1);
+    cols = size(slab,2);
+    slab = dlarray(reshape(slab, rows, cols, 1, []), "SSCB");   % [rows cols 1 batch]
 
-    % ----- Forward DWT -----
-    [approximationCoeffs, detailCoeffs] = dldwt( slab, Wavelet=waveletName, Level=effectiveLevels, PaddingMode=paddingModeString, FullTree=true);
+    % Forward DWT (SSCB ⇒ details are [r c C B] with C=3)
+    [approximationCoeffs, detailCoeffs] = dldwt(slab, Wavelet=waveletName, Level=effectiveLevels, PaddingMode=paddingModeString, FullTree=true);
 
-    % ----- Notch H/V on detail channels (SSCB ⇒ [rows_l cols_l channels batch]) -----
+    % Notch HL/LH per level in place, channel-wise (no page packing)
     if iscell(detailCoeffs)
         for levelIndex = 1:effectiveLevels
-            detailTensorNumeric = stripdims(detailCoeffs{levelIndex});          % numeric [r c C B]
-            detailTensorNumeric = notch_HV_in_batch(detailTensorNumeric, sigmaValue, axes_to_filter);
-            detailCoeffs{levelIndex} = dlarray(detailTensorNumeric, "SSCB");
+            tmp = stripdims(detailCoeffs{levelIndex});       % numeric on CPU/GPU, [r c C B]
+            tmp = notch_HV_in_batch(tmp, sigmaValue, axes_to_filter);
+            detailCoeffs{levelIndex} = dlarray(tmp, "SSCB");
         end
     else
-        detailTensorNumeric = stripdims(detailCoeffs);                          % numeric [r c C B]
-        detailTensorNumeric = notch_HV_in_batch(detailTensorNumeric, sigmaValue, axes_to_filter);
-        detailCoeffs = dlarray(detailTensorNumeric, "SSCB");
+        tmp = stripdims(detailCoeffs);
+        tmp = notch_HV_in_batch(tmp, sigmaValue, axes_to_filter);
+        detailCoeffs = dlarray(tmp, "SSCB");
     end
 
-    % ----- Inverse DWT and robust restore to [rows cols batch] -----
-    slab = dlidwt(approximationCoeffs, detailCoeffs, Wavelet=waveletName, PaddingMode=paddingModeString);  % usually [rows cols 1 batch]
+    % Inverse DWT → numeric and reshape back without guessing batch
+    slab = dlidwt(approximationCoeffs, detailCoeffs, Wavelet=waveletName, PaddingMode=paddingModeString);  % [rows cols 1 batch] or squeezed
     slab = extractdata(slab);
+    slab = reshape(slab, rows, cols, []);   % handles both [rows cols 1 B] and [rows cols B]
 
-    % Handle both shapes: [rows cols 1 batch] or squeezed [rows cols batch]
-    sizeVector = size(slab);
-    if numel(sizeVector) >= 4
-        % Expect [rows cols 1 batch]
-        if sizeVector(3) == 1
-            slab = reshape(slab, numRows, numCols, sizeVector(4));
-        else
-            % Fallback: derive batch from total elements to avoid notSameNumel
-            slab = reshape(slab, numRows, numCols, []);
-        end
-    else
-        % Already [rows cols batch]
-        slab = reshape(slab, numRows, numCols, []);
-    end
-
-    % ----- Restore device/class exactly -----
-    if inputIsOnGpu && ~isgpuarray(slab)
-        slab = gpuArray(slab);
-    end
+    % Restore device/class exactly
+    if inputIsOnGpu && ~isgpuarray(slab), slab = gpuArray(slab); end
     if inputIsOnGpu
         currentClass = underlyingType(slab);
     else
         currentClass = class(slab);
     end
-    if ~strcmp(currentClass, originalUnderlyingClass)
-        slab = cast(slab, originalUnderlyingClass);
-    end
+    if ~strcmp(currentClass, originalUnderlyingClass), slab = cast(slab, originalUnderlyingClass); end
 end
 
 % =============================================================================
