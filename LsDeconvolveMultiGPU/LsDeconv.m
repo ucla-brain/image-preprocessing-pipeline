@@ -635,7 +635,7 @@ function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
     myCluster = parcluster('Processes');
     delete(myCluster.Jobs);
     delete(gcp("nocreate"));
-    min_max_path = fullfile(cache_drive, "min_max.mat");
+    min_max_path = fullfile(char(cache_drive), 'min_max.mat');
     [unique_gpus, ~, ~] = unique(gpus(:));
     unique_gpus = sort(unique_gpus, 'descend').';
     gpus = repmat(unique_gpus, 1, numel(gpus)/numel(unique_gpus));
@@ -812,6 +812,7 @@ function deconvolve(filelist, psf, numit, damping, ...
         % find maximum value in other blocks
         semaphore('wait', semkey_single);
         could_not_save = true;
+        attempts = 0;
         while could_not_save
             try
                 if exist(min_max_path, "file")
@@ -830,7 +831,7 @@ function deconvolve(filelist, psf, numit, damping, ...
                 deconvmax = max(ub, deconvmax);
                 deconvmin = min(lb, deconvmin);
                 % save(min_max_path, "deconvmin", "deconvmax", "rawmax", "-v7.3", "-nocompression");
-                tmpfile = [min_max_path, '.tmp'];
+                tmpfile = [min_max_path, '.tmp.mat'];
                 save(tmpfile, "deconvmin", "deconvmax", "rawmax", "-v7.3", "-nocompression");
                 delete(min_max_path);
                 [status, msg] = movefile(tmpfile, min_max_path, 'f');  % 'f' forces overwrite
@@ -840,7 +841,13 @@ function deconvolve(filelist, psf, numit, damping, ...
                 could_not_save = false;
             catch
                 send(dQueue, "could not load or save min_max file. Retrying ...")
-                pause(1);
+                attempts = attempts + 1;
+                if attempts > 40
+                    send(dQueue, "deleting min_max file.")
+                    delete(min_max_path);
+                else
+                    pause(1);
+                end
             end
         end
         semaphore('post', semkey_single);
