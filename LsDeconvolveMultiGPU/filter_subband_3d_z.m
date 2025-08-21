@@ -175,7 +175,7 @@ function volumeIn = filter_subband_3d_z(volumeIn, sigmaValue, decompositionLevel
         bytesPerElement = 4;                            % single precision
         % Conservative per-slice working-set estimate (FFT/DWT temps)
         bytesPerSliceEstimate = max(1, 16 * max(sizeX, sizeY) * sizeZ * bytesPerElement);
-        batchSize = max(1, floor( (0.5 * bytesFreeApprox) / bytesPerSliceEstimate )); % 50% headroom
+        batchSize = max(1, floor( 0.5 * bytesFreeApprox / bytesPerSliceEstimate )); % 50% headroom
     else
         batchSize = 1; % CPU
     end
@@ -273,46 +273,70 @@ function slab = process_slab_batch(slab, sigmaValue, effectiveLevels, waveletNam
 % Steps:
 %   1) reshape to SSCB = [rows cols 1 batch]
 %   2) dldwt → notch detail channels (per axes_to_filter) → dlidwt
-%   3) reshape back to [rows cols batch]
+%   3) reshape back to [rows cols batch] (robust to toolbox squeezing)
 
-    % Capture device/class to preserve exactly
+    % ----- Capture device/class to preserve exactly -----
     inputIsOnGpu = isgpuarray(slab);
-    originalUnderlyingClass = underlyingType(slab);
+    if inputIsOnGpu
+        originalUnderlyingClass = underlyingType(slab);
+    else
+        originalUnderlyingClass = class(slab);
+    end
 
-    % ----- Enforce SSCB shape (this was the bug when slab was 3-D) -----
+    % ----- Enforce SSCB shape -----
     numRows  = size(slab, 1);
     numCols  = size(slab, 2);
     numBatch = size(slab, 3);
-    slabSSCB = dlarray(reshape(slab, numRows, numCols, 1, numBatch), "SSCB");  % [S S C B] with C=1
+    slab = dlarray(reshape(slab, numRows, numCols, 1, numBatch), "SSCB");  % [S S C B] with C=1
 
     % ----- Forward DWT -----
-    [approximationCoeffs, detailCoeffs] = dldwt(slabSSCB, Wavelet=waveletName, Level=effectiveLevels, PaddingMode=paddingModeString, FullTree=true);
+    [approximationCoeffs, detailCoeffs] = dldwt( slab, Wavelet=waveletName, Level=effectiveLevels, PaddingMode=paddingModeString, FullTree=true);
 
-    % ----- Notch H/V on detail channels (works level-by-level; SSCB ⇒ [rows_l cols_l channels batch]) -----
+    % ----- Notch H/V on detail channels (SSCB ⇒ [rows_l cols_l channels batch]) -----
     if iscell(detailCoeffs)
         for levelIndex = 1:effectiveLevels
-            detailTensor = stripdims(detailCoeffs{levelIndex});          % numeric [r c C B]
-            detailTensor = notch_HV_in_batch(detailTensor, sigmaValue, axes_to_filter);
-            detailCoeffs{levelIndex} = dlarray(detailTensor, "SSCB");
+            detailTensorNumeric = stripdims(detailCoeffs{levelIndex});          % numeric [r c C B]
+            detailTensorNumeric = notch_HV_in_batch(detailTensorNumeric, sigmaValue, axes_to_filter);
+            detailCoeffs{levelIndex} = dlarray(detailTensorNumeric, "SSCB");
         end
     else
-        detailTensor = stripdims(detailCoeffs);                          % numeric [r c C B]
-        detailTensor = notch_HV_in_batch(detailTensor, sigmaValue, axes_to_filter);
-        detailCoeffs = dlarray(detailTensor, "SSCB");
+        detailTensorNumeric = stripdims(detailCoeffs);                          % numeric [r c C B]
+        detailTensorNumeric = notch_HV_in_batch(detailTensorNumeric, sigmaValue, axes_to_filter);
+        detailCoeffs = dlarray(detailTensorNumeric, "SSCB");
     end
 
-    % ----- Inverse DWT and restore to [rows cols batch] -----
-    slab = dlidwt(approximationCoeffs, detailCoeffs, Wavelet=waveletName, PaddingMode=paddingModeString);  % [rows cols 1 batch]
+    % ----- Inverse DWT and robust restore to [rows cols batch] -----
+    slab = dlidwt(approximationCoeffs, detailCoeffs, Wavelet=waveletName, PaddingMode=paddingModeString);  % usually [rows cols 1 batch]
     slab = extractdata(slab);
-    slab = reshape(slab, numRows, numCols, numBatch);
+
+    % Handle both shapes: [rows cols 1 batch] or squeezed [rows cols batch]
+    sizeVector = size(slab);
+    if numel(sizeVector) >= 4
+        % Expect [rows cols 1 batch]
+        if sizeVector(3) == 1
+            slab = reshape(slab, numRows, numCols, sizeVector(4));
+        else
+            % Fallback: derive batch from total elements to avoid notSameNumel
+            slab = reshape(slab, numRows, numCols, []);
+        end
+    else
+        % Already [rows cols batch]
+        slab = reshape(slab, numRows, numCols, []);
+    end
 
     % ----- Restore device/class exactly -----
-    if inputIsOnGpu && ~isgpuarray(slab), slab = gpuArray(slab); end
-    if ~strcmp(underlyingType(slab), originalUnderlyingClass)
+    if inputIsOnGpu && ~isgpuarray(slab)
+        slab = gpuArray(slab);
+    end
+    if inputIsOnGpu
+        currentClass = underlyingType(slab);
+    else
+        currentClass = class(slab);
+    end
+    if ~strcmp(currentClass, originalUnderlyingClass)
         slab = cast(slab, originalUnderlyingClass);
     end
 end
-
 
 % =============================================================================
 % Helpers: padding/levels
@@ -378,33 +402,19 @@ end
 % =============================================================================
 % Helpers: FFT-based coefficient filtering (batch-friendly)
 % =============================================================================
-function stackOut = filter_coefficient_pages(stackIn, sigmaUnitless, fftAxis)
+function stack = filter_coefficient_pages(stack, sigmaUnitless, fftAxis)
 % stackIn: [rows cols pages], operate along fftAxis ∈ {1,2}.
 % Uses FFT along a contiguous dimension for speed and implicit expansion for scaling.
 
-    stackOut = stackIn;
-
+    assert(ismember(fftAxis, [1, 2]), 'fftAxis must be 1 or 2.');
     sigmaUnitless = max(sigmaUnitless, eps('single'));
-    transformLength = size(stackOut, fftAxis);
+    transformLength = size(stack, fftAxis);
     sigmaPixels = (floor(transformLength/2) + 1) * sigmaUnitless;
-
-    notchVector = gaussian_notch_filter_1d(transformLength, sigmaPixels, isgpuarray(stackOut), underlyingType(stackOut));
-
-    if fftAxis == 1
-        stackOut = fft(stackOut, transformLength, 1);
-        scaleVector = reshape(notchVector, [], 1, 1);
-        stackOut = stackOut .* scaleVector;
-        stackOut = ifft(stackOut, transformLength, 1, 'symmetric');
-    elseif fftAxis == 2
-        stackOut = permute(stackOut, [2 1 3]);   % make target axis contiguous
-        stackOut = fft(stackOut, transformLength, 1);
-        scaleVector = reshape(notchVector, [], 1, 1);
-        stackOut = stackOut .* scaleVector;
-        stackOut = ifft(stackOut, transformLength, 1, 'symmetric');
-        stackOut = ipermute(stackOut, [2 1 3]);
-    else
-        error('filter_coefficient_pages:InvalidAxis', 'fftAxis must be 1 or 2.');
-    end
+    if fftAxis == 2, stack = permute(stack, [2 1 3]); end   % make target axis contiguous
+    stack = fft(stack, transformLength, 1);
+    stack = stack .* reshape(gaussian_notch_filter_1d(transformLength, sigmaPixels, isgpuarray(stack), underlyingType(stack)), [], 1, 1);
+    stack = ifft(stack, transformLength, 1, 'symmetric');
+    if fftAxis == 2, stack = ipermute(stack, [2 1 3]); end
 end
 
 
