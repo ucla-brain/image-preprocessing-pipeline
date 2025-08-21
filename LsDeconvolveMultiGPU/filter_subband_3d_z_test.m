@@ -26,15 +26,15 @@ for s = sizes
     % Generate test volume
     rng(42 + s);  % Slight variation
     bl = rand(sz, 'single');
+    bl_cpu = bl;  % fresh copy
+    bl_gpu = gpuArray(bl);
     for t = 1:num_trials
         % --- CPU ---
-        bl_cpu = bl;  % fresh copy
         tic;
         bl_cpu_out = filter_subband_3d_z(bl_cpu, sigma, levels, wavelet);
         cpu_times(t) = toc;
 
         % --- GPU ---
-        bl_gpu = gpuArray(bl);  % fresh copy
         wait(gpu);
         tic;
         bl_gpu_out = filter_subband_3d_z(bl_gpu, sigma, levels, wavelet);

@@ -1,310 +1,432 @@
-function bl = filter_subband_3d_z(bl, sigma, levels, wavelet)
-    % Applies filter_subband to each XZ slice (along Y-axis)
-    % In-place update version to avoid extra allocation
-    % start_time = tic;
-    [X, Y, Z] = size(bl);
-    % device = "CPU";
-    if isgpuarray(bl)
-        % Use underlyingType to get the data type inside the gpuArray
-        original_class = underlyingType(bl);
-        % dev = gpuDevice();
-        % device = sprintf("GPU%d", dev.Index);
-    else
-        original_class = class(bl);
-    end
-    if ~strcmp(original_class, 'single')
-        bl = single(bl);
-    end
-
-    % Dynamic range compression
-    bl = log1p(bl);
-
-    % Apply filtering across Y axis
-    for y = 1:Y
-        slice = reshape(bl(:, y, :), [X, Z]);
-        slice = filter_subband(slice, sigma, levels, wavelet, 2);
-        bl(:, y, :) = slice;
-    end
-
-    for x = 1:X
-        slice = reshape(bl(x, :, :), [Y, Z]);
-        slice = filter_subband(slice, sigma, levels, wavelet, 2);
-        bl(x, :, :) = slice;
-    end
-
-    % Undo compression
-    bl = expm1(bl);
-
-    % Restore original data type
-    % Restore original data type (remains on GPU if started as gpuArray)
-    bl_class = underlyingType(bl);
-    if ~strcmp(bl_class, original_class)
-        bl = cast(bl, original_class);
-    end
-    % fprintf("%s: destripe ΔT: %.1f s\n", device, toc(start_time));
-end
-
-function img = filter_subband(img, sigma, levels, wavelet, axes)
-    wl = lower(string(wavelet));
-    if startsWith(wl, ["db", "coif","bior","rbio"])
-        dwtmode('per','nodisp');
-    else
-        dwtmode('sym','nodisp');
-    end
-
-    if ~isa(img,'single'), img = single(img); end
-    pad = [0 0];
-
-    if levels == 0
-        levels = wmaxlev(size(img), wavelet);
-    end
-    [C, S] = wavedec2(img, levels, wavelet);
-
-    start_idx = prod(S(1, :));
-    for n = 1:levels
-        sz = prod(S(n + 1, :));
-
-        idxH = start_idx + (1:sz);
-        idxV = idxH(end) + (1:sz);
-
-        if ismember(2, axes)
-            H = reshape(C(idxH), S(n + 1, :));
-            H = filter_coefficient(H, sigma / size(img, 1), 2);
-            C(idxH) = H(:);
-        end
-        if ismember(1, axes)
-            V = reshape(C(idxV), S(n + 1, :));
-            V = filter_coefficient(V, sigma / size(img, 2), 1);
-            C(idxV) = V(:);
-        end
-
-        start_idx = idxV(end) + sz;
-    end
-
-    img = waverec2(C, S, wavelet);
-
-    idx = arrayfun(@(d) 1:(size(img, d) - pad(d)), 1:ndims(img), 'UniformOutput', false);
-    img = img(idx{:});
-end
-
-function mat = filter_coefficient(mat, sigma, axis)
-    sigma = max(sigma, eps('single'));
-    n = size(mat, axis);
-    sigma = (floor(n/2) + 1) * sigma;
-
-    % Build notch vector in the correct class/device
-    g = gaussian_notch_filter_1d(n, sigma, isgpuarray(mat), underlyingType(mat));
-
-    if axis == 1
-        % Already contiguous (dim 1). Fast path.
-        mat = fft(mat, n, 1);
-        mat = mat .* g(:);                        % broadcast along dim1
-        mat = ifft(mat, n, 1, 'symmetric');      % avoids extra real()
-    elseif axis == 2
-        % Make axis 2 contiguous by swapping dims 1<->2, do work along dim1, swap back.
-        mat = permute(mat, [2 1 3]);             % now target axis is dim1 (contiguous)
-        mat = fft(mat, n, 1);
-        mat = mat .* g(:);                        % broadcast along dim1
-        mat = ifft(mat, n, 1, 'symmetric');
-        mat = ipermute(mat, [2 1 3]);            % restore original layout
-    else
-        error('Invalid axis');
-    end
-end
-
-function g = gaussian_notch_filter_1d(n, sigma, use_gpu, underlying_class)
-    m = floor(n/2);
-
-    if use_gpu
-        x = gpuArray.colon(cast(0, underlying_class), cast(1, underlying_class), cast(m, underlying_class));
-    else
-        x = cast(0:m, underlying_class);
-    end
-
-    sigma = cast(sigma, 'like', x);
-    gpos = 1 - exp(-x.^2 ./ (2 * sigma.^2));
-
-    if use_gpu
-        g = gpuArray.zeros(1, n, underlying_class);
-    else
-        g = zeros(1, n, underlying_class);
-    end
-
-    g(1:m+1) = gpos;
-    if mod(n,2) == 0
-        g(m+2:n) = gpos(m-1:-1:1);
-    else
-        g(m+2:n) = gpos(m:-1:1);
-    end
-end
-
 % function bl = filter_subband_3d_z(bl, sigma, levels, wavelet)
-%     % GPU-batched version using dldwt/dlidwt so multiple Y-slices run concurrently.
-%     % In-place semantics preserved at the volume level; batching kept VRAM-aware.
-% 
-%     % ---------- dtype + setup ----------
+%     % Applies filter_subband to each XZ slice (along Y-axis)
+%     % In-place update version to avoid extra allocation
+%     % start_time = tic;
 %     [X, Y, Z] = size(bl);
+%     % device = "CPU";
 %     if isgpuarray(bl)
+%         % Use underlyingType to get the data type inside the gpuArray
 %         original_class = underlyingType(bl);
-%         gdev = gpuDevice();
+%         % dev = gpuDevice();
+%         % device = sprintf("GPU%d", dev.Index);
 %     else
 %         original_class = class(bl);
 %     end
-%     if ~strcmp(original_class, 'single'); bl = single(bl); end
+%     if ~strcmp(original_class, 'single')
+%         bl = single(bl);
+%     end
 % 
-%     % ---------- dynamic range compression ----------
+%     % Dynamic range compression
 %     bl = log1p(bl);
 % 
-%     % ---------- choose padding mode per your rule ----------
-%     wl = lower(string(wavelet));
-%     if startsWith(wl, ["db","coif","bior","rbio"])
-%         paddingMode = "periodic";   % per
-%     else
-%         paddingMode = "symmetric";  % sym
+%     % Apply filtering across Y axis
+%     for y = 1:Y
+%         slice = reshape(bl(:, y, :), [X, Z]);
+%         slice = filter_subband(slice, sigma, levels, wavelet, 2);
+%         bl(:, y, :) = slice;
 %     end
 % 
-%     % ---------- VRAM-aware batching across Y ----------
-%     if isgpuarray(bl)
-%         memGB = free_GPU_vRAM(gdev.Index, gdev);           % your helper
-%         bytes_free = max(0, memGB * 1e9);                  % your helper uses 1e9 scale
-%         bytes_per_elem = 4;                                 % single
-%         % Conservative per-slice working-set for DWT+FFT temps (rows=X, cols=Z):
-%         mem_per_slice_bytes = max(1, 8 * X * Z * bytes_per_elem);
-%         batch_size_y = max(1, floor( (0.5 * bytes_free) / mem_per_slice_bytes )); % 50% headroom
-%     else
-%         batch_size_y = 1;  % CPU fallback
+%     for x = 1:X
+%         slice = reshape(bl(x, :, :), [Y, Z]);
+%         slice = filter_subband(slice, sigma, levels, wavelet, 2);
+%         bl(x, :, :) = slice;
 %     end
 % 
-%     % ---------- process Y-slices in VRAM-sized batches ----------
-%     for y0 = 1:batch_size_y:Y
-%         ys = y0 : min(y0+batch_size_y-1, Y);
-% 
-%         % pack a slab of B slices: [X Z B]
-%         slab = permute(bl(:, ys, :), [1 3 2]);   % [X Z B]
-%         if ~isgpuarray(slab); slab = gpuArray(slab); end
-%         slab = single(slab);
-% 
-%         % --- batched 2D DWT on GPU: convert to SSCB (S=spatial, C=1, B=batch) ---
-%         slabSSCB = dlarray(slab, "SSCB");        % [X Z 1 B]
-%         maxLev = wmaxlev([X Z], wavelet);           % can be 0 for small sizes / long filters
-%         if levels <= 0
-%             levelsEff = max(1, maxLev);
-%         else
-%             levelsEff = min( max(1, floor(double(levels))) , max(1, maxLev) );
-%         end
-%         [a, d] = dldwt(slabSSCB, Wavelet=wavelet, Level=levelsEff, PaddingMode=paddingMode, FullTree=true);  % GPU
-% 
-%         % ---------- levelsEff > 1 ----------
-%         if iscell(d)
-%             for lev = 1:levelsEff
-%                 det_u = stripdims(d{lev});                 % numeric gpu array
-% 
-%                 r = size(det_u,1); c = size(det_u,2);
-%                 sz = size(det_u); if numel(sz)<4, sz(4)=1; end
-%                 % Find orientation (==3) and batch dims (the other non-spatial)
-%                 idxOrient = find(sz==3,1,'first'); 
-%                 rest = 3:numel(sz); rest(rest==idxOrient)=[];
-%                 idxBatch = rest(find(sz(rest)~=1,1,'first')); 
-%                 if isempty(idxBatch), idxBatch = setdiff(3:4, idxOrient); end
-%                 % Canonicalize to [r c 3 B]
-%                 det_u = permute(det_u, [1 2 idxOrient idxBatch]);
-%                 B = size(det_u,4);
-% 
-%                 % Pack (channel,batch) into pages and notch H/V
-%                 det_u = reshape(det_u, r, c, 3*B);                 % pages: HL1 LH1 HH1 HL2 LH2 HH2 ...
-%                 selH = 1:3:(3*B); if ~isempty(selH), det_u(:,:,selH) = filter_coefficient_pages(det_u(:,:,selH), sigma / X, 2); end
-%                 selV = 2:3:(3*B); if ~isempty(selV), det_u(:,:,selV) = filter_coefficient_pages(det_u(:,:,selV), sigma / Z, 1); end
-%                 det_u = reshape(det_u, r, c, 3, B);
-% 
-%                 % Restore original orientation/batch ordering
-%                 invperm = [1 2 idxOrient idxBatch];
-%                 [~,invperm] = sort(invperm);
-%                 det_u = permute(det_u, invperm);
-% 
-%                 d{lev} = dlarray(det_u, "SSCB");
-%             end
-% 
-%         % ---------- levelsEff == 1 ----------
-%         else
-%             det_u = stripdims(d);                              % [r c ? ?]
-%             r = size(det_u,1); c = size(det_u,2);
-%             sz = size(det_u); if numel(sz)<4, sz(4)=1; end
-%             idxOrient = find(sz==3,1,'first'); 
-%             rest = 3:numel(sz); rest(rest==idxOrient)=[];
-%             idxBatch = rest(find(sz(rest)~=1,1,'first')); 
-%             if isempty(idxBatch), idxBatch = setdiff(3:4, idxOrient); end
-%             det_u = permute(det_u, [1 2 idxOrient idxBatch]);
-%             B = size(det_u,4);
-% 
-%             det_u = reshape(det_u, r, c, 3*B);
-%             selH = 1:3:(3*B); if ~isempty(selH), det_u(:,:,selH) = filter_coefficient_pages(det_u(:,:,selH), sigma / X, 2); end
-%             selV = 2:3:(3*B); if ~isempty(selV), det_u(:,:,selV) = filter_coefficient_pages(det_u(:,:,selV), sigma / Z, 1); end
-%             det_u = reshape(det_u, r, c, 3, B);
-% 
-%             invperm = [1 2 idxOrient idxBatch];
-%             [~,invperm] = sort(invperm);
-%             det_u = permute(det_u, invperm);
-% 
-%             d = dlarray(det_u, "SSCB");
-%         end
-% 
-%         % --- inverse batched DWT on GPU ---
-%         slabRec = dlidwt(a, d, Wavelet=wavelet, PaddingMode=paddingMode);  % [X Z 1 B] dlarray
-%         slabOut = extractdata(slabRec);                                     % numeric gpu array [X Z 1 B]
-%         slabOut = reshape(slabOut, X, Z, []);                               % [X Z B]
-% 
-%         % scatter back in place
-%         bl(:, ys, :) = ipermute(slabOut, [1 3 2]);  % back to [X Y Z]
-%     end
-% 
-%     % ---------- undo compression ----------
+%     % Undo compression
 %     bl = expm1(bl);
 % 
-%     % ---------- restore dtype ----------
-%     if ~strcmp(underlyingType(bl), original_class)
+%     % Restore original data type
+%     % Restore original data type (remains on GPU if started as gpuArray)
+%     bl_class = underlyingType(bl);
+%     if ~strcmp(bl_class, original_class)
 %         bl = cast(bl, original_class);
 %     end
+%     % fprintf("%s: destripe ΔT: %.1f s\n", device, toc(start_time));
 % end
 % 
-% % ===================================================================================
-% % Internal helpers (minimal, focused). Kept in-file to avoid new dependencies.
-% % ===================================================================================
+% function img = filter_subband(img, sigma, levels, wavelet, axes)
+%     wl = lower(string(wavelet));
+%     if startsWith(wl, ["db", "coif","bior","rbio"])
+%         dwtmode('per','nodisp');
+%     else
+%         dwtmode('sym','nodisp');
+%     end
 % 
-% function mat = filter_coefficient_pages(mat, sigma, axis)
+%     if ~isa(img,'single'), img = single(img); end
+%     pad = [0 0];
+% 
+%     if levels == 0
+%         levels = wmaxlev(size(img), wavelet);
+%     end
+%     [C, S] = wavedec2(img, levels, wavelet);
+% 
+%     start_idx = prod(S(1, :));
+%     for n = 1:levels
+%         sz = prod(S(n + 1, :));
+% 
+%         idxH = start_idx + (1:sz);
+%         idxV = idxH(end) + (1:sz);
+% 
+%         if ismember(2, axes)
+%             H = reshape(C(idxH), S(n + 1, :));
+%             H = filter_coefficient(H, sigma / size(img, 1), 2);
+%             C(idxH) = H(:);
+%         end
+%         if ismember(1, axes)
+%             V = reshape(C(idxV), S(n + 1, :));
+%             V = filter_coefficient(V, sigma / size(img, 2), 1);
+%             C(idxV) = V(:);
+%         end
+% 
+%         start_idx = idxV(end) + sz;
+%     end
+% 
+%     img = waverec2(C, S, wavelet);
+% 
+%     idx = arrayfun(@(d) 1:(size(img, d) - pad(d)), 1:ndims(img), 'UniformOutput', false);
+%     img = img(idx{:});
+% end
+% 
+% function mat = filter_coefficient(mat, sigma, axis)
 %     sigma = max(sigma, eps('single'));
 %     n = size(mat, axis);
 %     sigma = (floor(n/2) + 1) * sigma;
+% 
+%     % Build notch vector in the correct class/device
 %     g = gaussian_notch_filter_1d(n, sigma, isgpuarray(mat), underlyingType(mat));
 % 
 %     if axis == 1
+%         % Already contiguous (dim 1). Fast path.
 %         mat = fft(mat, n, 1);
-%         scale = reshape(g, [], 1, 1);      %  [n 1 1], same device/class
-%         mat = mat .* scale;                %  implicit expansion (GPU-friendly)
-%         mat = ifft(mat, n, 1, 'symmetric');
+%         mat = mat .* g(:);                        % broadcast along dim1
+%         mat = ifft(mat, n, 1, 'symmetric');      % avoids extra real()
 %     elseif axis == 2
-%         mat = permute(mat, [2 1 3]);       % make target axis contiguous
+%         % Make axis 2 contiguous by swapping dims 1<->2, do work along dim1, swap back.
+%         mat = permute(mat, [2 1 3]);             % now target axis is dim1 (contiguous)
 %         mat = fft(mat, n, 1);
-%         scale = reshape(g, [], 1, 1);
-%         mat = mat .* scale;
+%         mat = mat .* g(:);                        % broadcast along dim1
 %         mat = ifft(mat, n, 1, 'symmetric');
-%         mat = ipermute(mat, [2 1 3]);
+%         mat = ipermute(mat, [2 1 3]);            % restore original layout
 %     else
 %         error('Invalid axis');
 %     end
 % end
 % 
 % function g = gaussian_notch_filter_1d(n, sigma, use_gpu, underlying_class)
-% % Same math as your original, no caching (per your request).
 %     m = floor(n/2);
+% 
 %     if use_gpu
 %         x = gpuArray.colon(cast(0, underlying_class), cast(1, underlying_class), cast(m, underlying_class));
-%         g = gpuArray.zeros(1, n, underlying_class);
 %     else
 %         x = cast(0:m, underlying_class);
-%         g = zeros(1, n, underlying_class);
 %     end
+% 
 %     sigma = cast(sigma, 'like', x);
 %     gpos = 1 - exp(-x.^2 ./ (2 * sigma.^2));
+% 
+%     if use_gpu
+%         g = gpuArray.zeros(1, n, underlying_class);
+%     else
+%         g = zeros(1, n, underlying_class);
+%     end
+% 
 %     g(1:m+1) = gpos;
-%     if mod(n,2) == 0, g(m+2:n) = gpos(m-1:-1:1); else, g(m+2:n) = gpos(m:-1:1); end
+%     if mod(n,2) == 0
+%         g(m+2:n) = gpos(m-1:-1:1);
+%     else
+%         g(m+2:n) = gpos(m:-1:1);
+%     end
 % end
+
+function volumeIn = filter_subband_3d_z(volumeIn, sigmaValue, decompositionLevels, waveletName, axes_to_filter)
+% FILTER_SUBBAND_3D_Z
+% 3D destriping via batched 2D wavelet filtering across Y-slices and X-slices.
+% Runs on CPU if 'volumeIn' is on CPU; runs on GPU if 'volumeIn' is gpuArray.
+% Axis control:
+%   axes_to_filter: [1] => vertical (rows/LH), [2] => horizontal (cols/HL), [1 2] => both.
+% Default matches your original intent: filter along axis=2 (horizontal / HL).
+
+    if nargin < 5 || isempty(axes_to_filter), axes_to_filter = 2; end
+    axes_to_filter = sort(unique(axes_to_filter(:).'));
+
+    % ---------- dtype + setup ----------
+    [sizeX, sizeY, sizeZ] = size(volumeIn);
+    isInputOnGPU = isgpuarray(volumeIn);
+    if isInputOnGPU
+        originalDataClass = underlyingType(volumeIn);
+    else
+        originalDataClass = class(volumeIn);
+    end
+    if ~strcmp(originalDataClass, 'single'), volumeIn = single(volumeIn); end
+
+    % ---------- dynamic range compression ----------
+    volumeIn = log1p(volumeIn);
+
+    % ---------- padding mode & levels for Y-pass ([X Z]) ----------
+    paddingModeString = compute_padding_mode_string(waveletName);
+
+    % ---------- VRAM-aware batching (uses your project helper free_GPU_vRAM) ----------
+    if isInputOnGPU
+        currentGpuDevice = gpuDevice();
+        freeMemoryGB = free_GPU_vRAM(currentGpuDevice.Index, currentGpuDevice); % not printed per your request
+        bytesFreeApprox = max(0, freeMemoryGB * 1e9);   % helper uses 1e9 scale
+        bytesPerElement = 4;                            % single precision
+        % Conservative per-slice working-set estimate (FFT/DWT temps)
+        bytesPerSliceEstimate = max(1, 8 * sizeX * sizeZ * bytesPerElement);
+        batchSize = max(1, floor( (0.5 * bytesFreeApprox) / bytesPerSliceEstimate )); % 50% headroom
+    else
+        batchSize = 1; % CPU
+    end
+    
+    % ---------- pass 1: process Y-slices (XZ planes @ fixed Y) ----------
+    effectiveLevels_Ypass = compute_effective_levels([sizeX sizeZ], waveletName, decompositionLevels);
+    for batchStartY = 1:batchSize:sizeY
+        batchIndicesY = batchStartY : min(batchStartY + batchSize - 1, sizeY);
+
+        % Pack slab of XZ images: [sizeX sizeZ batch]
+        slab = permute(volumeIn(:, batchIndicesY, :), [1 3 2]);  % [X Z B]
+
+        % Batched DWT → notch → IDWT (device follows input)
+        slab = process_slab_batch(slab, sigmaValue, effectiveLevels_Ypass, waveletName, paddingModeString, axes_to_filter);
+
+        % Scatter back in place into [X Y Z]
+        volumeIn(:, batchIndicesY, :) = ipermute(slab, [1 3 2]);
+    end
+
+    % ---------- pass 2: process X-slices (YZ planes @ fixed X) ----------
+    effectiveLevels_Xpass = compute_effective_levels([sizeY sizeZ], waveletName, decompositionLevels);
+    for batchStartX = 1:batchSize:sizeX
+        batchIndicesX = batchStartX : min(batchStartX + batchSize - 1, sizeX);
+
+        % Pack slab of YZ images: [sizeY sizeZ batch]
+        slab = permute(volumeIn(batchIndicesX, :, :), [2 3 1]);  % [Y Z B]
+
+        % Batched DWT → notch → IDWT (device follows input)
+        slab = process_slab_batch(slab, sigmaValue, effectiveLevels_Xpass, waveletName, paddingModeString, axes_to_filter);
+
+        % Scatter back in place into [X Y Z]
+        volumeIn(batchIndicesX, :, :) = ipermute(slab, [2 3 1]);
+    end
+
+    % ---------- undo compression ----------
+    volumeIn = expm1(volumeIn);
+
+    % ---------- restore dtype ----------
+    if ~strcmp(underlyingType(volumeIn), originalDataClass)
+        volumeIn = cast(volumeIn, originalDataClass);
+    end
+end
+
+
+function imageOut = filter_subband_2d(imageIn, sigmaValue, decompositionLevels, waveletName, axes_to_filter)
+% FILTER_SUBBAND_2D
+% 2D counterpart for visual sanity checks. CPU/GPU follows input device.
+% Axis control same as 3D:
+%   axes_to_filter: [1] => vertical (rows/LH), [2] => horizontal (cols/HL), [1 2] => both (default).
+
+    if nargin < 5 || isempty(axes_to_filter), axes_to_filter = [1 2]; end
+    axes_to_filter = sort(unique(axes_to_filter(:).'));
+
+    isInputOnGPU = isgpuarray(imageIn);
+    if isgpuarray(imageIn)
+        originalDataClass = underlyingType(imageIn);
+    else
+        originalDataClass = class(imageIn);
+    end
+    if ~strcmp(originalDataClass,'single'), imageIn = single(imageIn); end
+
+    % Compression
+    imageIn = log1p(imageIn);
+
+    % Use the same batched core with batch=1
+    numRows = size(imageIn,1); numCols = size(imageIn,2);
+    paddingModeString = compute_padding_mode_string(waveletName);
+    effectiveLevels   = compute_effective_levels([numRows numCols], waveletName, decompositionLevels);
+
+    % Shape to [rows cols 1] slab and process
+    batchSlabXZB = reshape(imageIn, numRows, numCols, 1);
+    if isInputOnGPU && ~isgpuarray(batchSlabXZB), batchSlabXZB = gpuArray(batchSlabXZB); end
+
+    reconstructedBatchXZB = process_slab_batch(batchSlabXZB, sigmaValue, effectiveLevels, waveletName, paddingModeString, axes_to_filter);
+
+    % Back to 2D
+    imageOut = reconstructedBatchXZB(:,:,1);
+
+    % Undo compression
+    imageOut = expm1(imageOut);
+
+    % Restore dtype
+    if ~strcmp(underlyingType(imageOut), originalDataClass)
+        imageOut = cast(imageOut, originalDataClass);
+    end
+end
+
+
+% =============================================================================
+% Core batched processor (shared by 2D and 3D)
+% =============================================================================
+function slab = process_slab_batch(slab, sigmaValue, effectiveLevels, waveletName, paddingModeString, axes_to_filter)
+% PROCESS_SLAB_BATCH
+% In-place style: accepts and returns 'slab' (numeric CPU/GPU) with shape [rows, cols, batch].
+% Steps:
+%   1) reshape to SSCB = [rows cols 1 batch]
+%   2) dldwt → notch detail channels (per axes_to_filter) → dlidwt
+%   3) reshape back to [rows cols batch]
+
+    % Capture device/class to preserve exactly
+    inputIsOnGpu = isgpuarray(slab);
+    originalUnderlyingClass = underlyingType(slab);
+
+    % ----- Enforce SSCB shape (this was the bug when slab was 3-D) -----
+    numRows  = size(slab, 1);
+    numCols  = size(slab, 2);
+    numBatch = size(slab, 3);
+    slabSSCB = dlarray(reshape(slab, numRows, numCols, 1, numBatch), "SSCB");  % [S S C B] with C=1
+
+    % ----- Forward DWT -----
+    [approximationCoeffs, detailCoeffs] = dldwt( ...
+        slabSSCB, Wavelet=waveletName, Level=effectiveLevels, ...
+        PaddingMode=paddingModeString, FullTree=true);
+
+    % ----- Notch H/V on detail channels (works level-by-level; SSCB ⇒ [rows_l cols_l channels batch]) -----
+    if iscell(detailCoeffs)
+        for levelIndex = 1:effectiveLevels
+            detailTensor = stripdims(detailCoeffs{levelIndex});          % numeric [r c C B]
+            detailTensor = notch_HV_in_batch(detailTensor, sigmaValue, axes_to_filter);
+            detailCoeffs{levelIndex} = dlarray(detailTensor, "SSCB");
+        end
+    else
+        detailTensor = stripdims(detailCoeffs);                          % numeric [r c C B]
+        detailTensor = notch_HV_in_batch(detailTensor, sigmaValue, axes_to_filter);
+        detailCoeffs = dlarray(detailTensor, "SSCB");
+    end
+
+    % ----- Inverse DWT and restore to [rows cols batch] -----
+    reconstructedSSCB = dlidwt(approximationCoeffs, detailCoeffs, ...
+                               Wavelet=waveletName, PaddingMode=paddingModeString);  % [rows cols 1 batch]
+    slabNumeric = extractdata(reconstructedSSCB);
+    slab = reshape(slabNumeric, numRows, numCols, numBatch);
+
+    % ----- Restore device/class exactly -----
+    if inputIsOnGpu && ~isgpuarray(slab), slab = gpuArray(slab); end
+    if ~strcmp(underlyingType(slab), originalUnderlyingClass)
+        slab = cast(slab, originalUnderlyingClass);
+    end
+end
+
+
+% =============================================================================
+% Helpers: padding/levels
+% =============================================================================
+function paddingModeString = compute_padding_mode_string(waveletName)
+    lowerWaveletName = lower(string(waveletName));
+    if startsWith(lowerWaveletName, ["db","coif","bior","rbio"])
+        paddingModeString = "periodic";   % 'per'
+    else
+        paddingModeString = "symmetric";  % 'sym'
+    end
+end
+
+function effectiveLevels = compute_effective_levels(sizeVectorRC, waveletName, requestedLevels)
+    maximumAllowedLevels = wmaxlev(sizeVectorRC, waveletName); % may be 0 for very small sizes
+    if requestedLevels <= 0
+        effectiveLevels = max(1, maximumAllowedLevels);
+    else
+        effectiveLevels = min( max(1, floor(double(requestedLevels))) , max(1, maximumAllowedLevels) );
+    end
+end
+
+% =============================================================================
+% Helper: orientation-aware notch (axis control & batching)
+% =============================================================================
+function detailTensor = notch_HV_in_batch(detailTensor, sigmaValue, axes_to_filter)
+% NOTCH_HV_IN_BATCH
+% In-place style: accepts and returns 'detailTensor' with SSCB layout [rows, cols, channels, batch].
+% Channels are [HL, LH, HH]. We apply:
+%   - if 2 ∈ axes_to_filter : HL (channel 1) → notch along columns (axis=2), sigma scaled by rows
+%   - if 1 ∈ axes_to_filter : LH (channel 2) → notch along rows    (axis=1), sigma scaled by cols
+
+    % Ensure 4-D shape [rows cols channels batch]
+    sizeVector = size(detailTensor);
+    if numel(sizeVector) < 4
+        sizeVector(4) = 1;
+        detailTensor = reshape(detailTensor, sizeVector);
+    end
+
+    numRows     = size(detailTensor, 1);
+    numCols     = size(detailTensor, 2);
+    numChannels = size(detailTensor, 3);
+    numBatch    = size(detailTensor, 4);
+
+    % ---- HL (channel 1): filter along columns (axis=2) ----
+    if any(axes_to_filter == 2) && numChannels >= 1
+        hlStack = reshape(detailTensor(:, :, 1, :), numRows, numCols, numBatch);          % [rows cols batch]
+        hlStack = filter_coefficient_pages(hlStack, sigmaValue / numRows, 2);             % notch along columns
+        detailTensor(:, :, 1, :) = reshape(hlStack, numRows, numCols, 1, numBatch);
+    end
+
+    % ---- LH (channel 2): filter along rows (axis=1) ----
+    if any(axes_to_filter == 1) && numChannels >= 2
+        lhStack = reshape(detailTensor(:, :, 2, :), numRows, numCols, numBatch);          % [rows cols batch]
+        lhStack = filter_coefficient_pages(lhStack, sigmaValue / numCols, 1);             % notch along rows
+        detailTensor(:, :, 2, :) = reshape(lhStack, numRows, numCols, 1, numBatch);
+    end
+
+    % HH (channel ≥3) untouched
+end
+
+
+% =============================================================================
+% Helpers: FFT-based coefficient filtering (batch-friendly)
+% =============================================================================
+function stackOut = filter_coefficient_pages(stackIn, sigmaUnitless, fftAxis)
+% stackIn: [rows cols pages], operate along fftAxis ∈ {1,2}.
+% Uses FFT along a contiguous dimension for speed and implicit expansion for scaling.
+
+    stackOut = stackIn;
+
+    sigmaUnitless = max(sigmaUnitless, eps('single'));
+    transformLength = size(stackOut, fftAxis);
+    sigmaPixels = (floor(transformLength/2) + 1) * sigmaUnitless;
+
+    notchVector = gaussian_notch_filter_1d(transformLength, sigmaPixels, isgpuarray(stackOut), underlyingType(stackOut));
+
+    if fftAxis == 1
+        stackOut = fft(stackOut, transformLength, 1);
+        scaleVector = reshape(notchVector, [], 1, 1);
+        stackOut = stackOut .* scaleVector;
+        stackOut = ifft(stackOut, transformLength, 1, 'symmetric');
+    elseif fftAxis == 2
+        stackOut = permute(stackOut, [2 1 3]);   % make target axis contiguous
+        stackOut = fft(stackOut, transformLength, 1);
+        scaleVector = reshape(notchVector, [], 1, 1);
+        stackOut = stackOut .* scaleVector;
+        stackOut = ifft(stackOut, transformLength, 1, 'symmetric');
+        stackOut = ipermute(stackOut, [2 1 3]);
+    else
+        error('filter_coefficient_pages:InvalidAxis', 'fftAxis must be 1 or 2.');
+    end
+end
+
+
+% =============================================================================
+% Helper: Gaussian notch generator (no caching; CPU/GPU aware)
+% =============================================================================
+function notchVector = gaussian_notch_filter_1d(transformLength, sigmaPixels, isOnGPU, underlyingClassName)
+    halfLength = floor(transformLength/2);
+    if isOnGPU
+        coordinateVector = gpuArray.colon(cast(0, underlyingClassName), cast(1, underlyingClassName), cast(halfLength, underlyingClassName));
+        notchVector = gpuArray.zeros(1, transformLength, underlyingClassName);
+    else
+        coordinateVector = cast(0:halfLength, underlyingClassName);
+        notchVector = zeros(1, transformLength, underlyingClassName);
+    end
+    sigmaPixels = cast(sigmaPixels, 'like', coordinateVector);
+    positiveHalf = 1 - exp(-(coordinateVector.^2) ./ (2 * sigmaPixels.^2));
+    notchVector(1:halfLength+1) = positiveHalf;
+    if mod(transformLength,2) == 0
+        notchVector(halfLength+2:transformLength) = positiveHalf(halfLength-1:-1:1);
+    else
+        notchVector(halfLength+2:transformLength) = positiveHalf(halfLength:-1:1);
+    end
+end
