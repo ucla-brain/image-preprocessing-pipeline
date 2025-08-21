@@ -829,7 +829,14 @@ function deconvolve(filelist, psf, numit, damping, ...
                 % consolidate and save block stats
                 deconvmax = max(ub, deconvmax);
                 deconvmin = min(lb, deconvmin);
-                save(min_max_path, "deconvmin", "deconvmax", "rawmax", "-v7.3", "-nocompression");
+                % save(min_max_path, "deconvmin", "deconvmax", "rawmax", "-v7.3", "-nocompression");
+                tmpfile = [min_max_path, '.tmp'];
+                save(tmpfile, "deconvmin", "deconvmax", "rawmax", "-v7.3", "-nocompression");
+                delete(min_max_path);
+                [status, msg] = movefile(tmpfile, min_max_path, 'f');  % 'f' forces overwrite
+                if ~status
+                    error("Failed to move temp file: %s", msg);
+                end
                 could_not_save = false;
             catch
                 send(dQueue, "could not load or save min_max file. Retrying ...")
@@ -1119,7 +1126,7 @@ function postprocess_save(outpath, cache_drive, min_max_path, clipval, log_file,
         end
 
         % Save using all-in-one C++ MEX (no MATLAB fallback, always in XYZ order, always uses .tif)
-        slicesToSave = find(~existing);
+        % slicesToSave = find(~existing);
         fileListToSave = fileList(~existing);
 
         % Main call: load, rescale, save slab as TIFFs directly
