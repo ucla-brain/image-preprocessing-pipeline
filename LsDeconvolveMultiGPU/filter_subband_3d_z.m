@@ -177,7 +177,7 @@ function volumeIn = filter_subband_3d_z(volumeIn, sigmaValue, decompositionLevel
         bytesPerSliceEstimate = max(1, 16 * max(sizeX, sizeY) * sizeZ * bytesPerElement);
         batchSize = max(1, floor( 0.5 * bytesFreeApprox / bytesPerSliceEstimate )); % 50% headroom
     else
-        batchSize = 1; % CPU
+        batchSize = feature('numCores'); % CPU
     end
     
     % ---------- pass 1: process Y-slices (XZ planes @ fixed Y) ----------
@@ -269,10 +269,13 @@ end
 % =============================================================================
 function slab = process_slab_batch(slab, sigmaValue, effectiveLevels, waveletName, paddingModeString, axes_to_filter)
 % PROCESS_SLAB_BATCH (VRAM-optimized)
-% In-place style: accepts/returns numeric CPU/GPU 'slab' shaped [rows, cols, batch].
-% Steps: reshape → DWT → notch HL/LH → IDWT → reshape back (robust to squeezing).
+% In-place style: accepts and returns 'slab' (numeric CPU/GPU) with shape [rows, cols, batch].
+% Steps:
+%   1) reshape to SSCB = [rows cols 1 batch]
+%   2) dldwt → notch detail channels (per axes_to_filter) → dlidwt
+%   3) reshape back to [rows cols batch] (robust to toolbox squeezing / padding drift)
 
-    % Preserve device & class exactly (no changes if already single gpuArray)
+    % ----- Preserve device/class exactly -----
     inputIsOnGpu = isgpuarray(slab);
     if inputIsOnGpu
         originalUnderlyingClass = underlyingType(slab);
@@ -280,40 +283,71 @@ function slab = process_slab_batch(slab, sigmaValue, effectiveLevels, waveletNam
         originalUnderlyingClass = class(slab);
     end
 
-    % Canonical SSCB view with minimal scalars
-    rows = size(slab,1);
-    cols = size(slab,2);
-    slab = dlarray(reshape(slab, rows, cols, 1, []), "SSCB");   % [rows cols 1 batch]
+    % ----- Enforce SSCB view -----
+    numRowsIn  = size(slab, 1);
+    numColsIn  = size(slab, 2);
+    slab = dlarray(reshape(slab, numRowsIn, numColsIn, 1, []), "SSCB");  % [rows cols 1 batch]
 
-    % Forward DWT (SSCB ⇒ details are [r c C B] with C=3)
-    [approximationCoeffs, detailCoeffs] = dldwt(slab, Wavelet=waveletName, Level=effectiveLevels, PaddingMode=paddingModeString, FullTree=true);
+    % ----- Forward DWT -----
+    [approximationCoeffs, detailCoeffs] = dldwt( ...
+        slab, Wavelet=waveletName, Level=effectiveLevels, ...
+        PaddingMode=paddingModeString, FullTree=true);
 
-    % Notch HL/LH per level in place, channel-wise (no page packing)
+    % ----- Notch H/V on detail channels -----
     if iscell(detailCoeffs)
         for levelIndex = 1:effectiveLevels
-            tmp = stripdims(detailCoeffs{levelIndex});       % numeric on CPU/GPU, [r c C B]
-            tmp = notch_HV_in_batch(tmp, sigmaValue, axes_to_filter);
-            detailCoeffs{levelIndex} = dlarray(tmp, "SSCB");
+            detailTensorNumeric = stripdims(detailCoeffs{levelIndex});  % [r c C B]
+            detailTensorNumeric = notch_HV_in_batch(detailTensorNumeric, sigmaValue, axes_to_filter);
+            detailCoeffs{levelIndex} = dlarray(detailTensorNumeric, "SSCB");
         end
     else
-        tmp = stripdims(detailCoeffs);
-        tmp = notch_HV_in_batch(tmp, sigmaValue, axes_to_filter);
-        detailCoeffs = dlarray(tmp, "SSCB");
+        detailTensorNumeric = stripdims(detailCoeffs);                 % [r c C B]
+        detailTensorNumeric = notch_HV_in_batch(detailTensorNumeric, sigmaValue, axes_to_filter);
+        detailCoeffs = dlarray(detailTensorNumeric, "SSCB");
     end
 
-    % Inverse DWT → numeric and reshape back without guessing batch
-    slab = dlidwt(approximationCoeffs, detailCoeffs, Wavelet=waveletName, PaddingMode=paddingModeString);  % [rows cols 1 batch] or squeezed
+    % ----- Inverse DWT → numeric -----
+    slab = dlidwt(approximationCoeffs, detailCoeffs, Wavelet=waveletName, PaddingMode=paddingModeString);
     slab = extractdata(slab);
-    slab = reshape(slab, rows, cols, []);   % handles both [rows cols 1 B] and [rows cols B]
 
-    % Restore device/class exactly
+    % ----- Robust reshape back to [rows cols batch] -----
+    % Get actual returned spatial dims and batch without assumptions.
+    returnedSize = size(slab);
+    if numel(returnedSize) < 3, returnedSize(3) = 1; end
+    if numel(returnedSize) < 4, returnedSize(4) = 1; end
+    numRowsOut  = returnedSize(1);
+    numColsOut  = returnedSize(2);
+    hasChanAxis = (returnedSize(3) ~= 1);
+
+    if hasChanAxis
+        % Squeezed form: [rows cols batch]
+        slab = reshape(slab, numRowsOut, numColsOut, returnedSize(3));
+    else
+        % SSCB form: [rows cols 1 batch]
+        slab = reshape(slab, numRowsOut, numColsOut, returnedSize(4));
+    end
+
+    % If IDWT returned a larger plane, crop to original in‑plane size.
+    % (If smaller, fail loudly — unexpected for periodic/symmetric padding.)
+    if numRowsOut ~= numRowsIn || numColsOut ~= numColsIn
+        if numRowsOut < numRowsIn || numColsOut < numColsIn
+            error('process_slab_batch:SizeMismatch', ...
+                 'IDWT returned [%d %d], smaller than input [%d %d]. Check padding/levels.', ...
+                  numRowsOut, numColsOut, numRowsIn, numColsIn);
+        end
+        slab = slab(1:numRowsIn, 1:numColsIn, :);
+    end
+
+    % ----- Restore device/class exactly -----
     if inputIsOnGpu && ~isgpuarray(slab), slab = gpuArray(slab); end
     if inputIsOnGpu
         currentClass = underlyingType(slab);
     else
         currentClass = class(slab);
     end
-    if ~strcmp(currentClass, originalUnderlyingClass), slab = cast(slab, originalUnderlyingClass); end
+    if ~strcmp(currentClass, originalUnderlyingClass)
+        slab = cast(slab, originalUnderlyingClass);
+    end
 end
 
 % =============================================================================
