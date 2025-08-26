@@ -1068,21 +1068,21 @@ def open_3d(img: ndarray, open_steps: int = 30, max_workers=None):
     # Parallel Z
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         chunksize = max(1, shape[0] // (max_workers or 8))
-        results = list(executor.map(morph, [mask[z] for z in range(shape[0])], chunksize=chunksize))
+        results = list(executor.map(morph, [ascontiguousarray(mask[z]) for z in range(shape[0])], chunksize=chunksize))
     for z, out in enumerate(results):
         mask[z] = out
 
     # Parallel Y
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         chunksize = max(1, shape[1] // (max_workers or 8))
-        results = list(executor.map(morph, [mask[:, y, :] for y in range(shape[1])], chunksize=chunksize))
+        results = list(executor.map(morph, [ascontiguousarray(mask[:, y, :]) for y in range(shape[1])], chunksize=chunksize))
     for y, out in enumerate(results):
         mask[:, y, :] = out
 
     # Parallel X
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         chunksize = max(1, shape[2] // (max_workers or 8))
-        results = list(executor.map(lambda arr: morph(arr).astype(bool), [mask[:, :, x] for x in range(shape[2])],
+        results = list(executor.map(lambda arr: morph(arr).astype(bool), [ascontiguousarray(mask[:, :, x]) for x in range(shape[2])],
                                     chunksize=chunksize))
     for x, out in enumerate(results):
         mask[:, :, x] = out
