@@ -8,7 +8,7 @@ from multiprocessing import Queue, Process, Manager, freeze_support
 from pathlib import Path
 from queue import Empty
 from time import time, sleep
-from typing import List, Tuple, Union, Callable
+from typing import Any, Callable, Optional, Tuple, Union, Literal
 
 from contextlib import contextmanager
 from numpy import floor as np_floor
@@ -16,6 +16,7 @@ from numpy import max as np_max
 from numpy import mean as np_mean
 from numpy import round as np_round
 from numpy import sqrt as np_sqrt
+from numpy import percentile as np_percentile
 from numpy import (zeros, float32, dstack, rollaxis, savez_compressed, array, maximum, rot90, arange, uint8, uint16, flip,
                    stack, fliplr, flipud, ndarray)
 from psutil import cpu_count, virtual_memory
@@ -28,6 +29,7 @@ from pystripe.core import (imread_tif_raw_png, imsave_tif, progress_manager, is_
                            convert_to_8bit_fun, convert_to_16bit_fun)
 from supplements.cli_interface import PrintColors, date_time_now
 from tsv.volume import TSVVolume, VExtent
+
 
 def imread_tsv(tsv_volume: TSVVolume, extent: VExtent, d_type: str):
     return tsv_volume.imread(extent, d_type)[0]
@@ -58,11 +60,9 @@ class ImarisZWrapper:
         y_max = float(self.imaris_data.read_numerical_dataset_attr('ExtMax1'))
         z_min = float(self.imaris_data.read_numerical_dataset_attr('ExtMin2'))
         z_max = float(self.imaris_data.read_numerical_dataset_attr('ExtMax2'))
-        # print(x_min, x_max, y_min, y_max, z_min, z_max)
         self.flip_x = abs(x_min) > abs(x_max)
         self.flip_y = abs(y_min) > abs(y_max)
         self.flip_z = abs(z_min) > abs(z_max)
-        # print(self.flip_x, self.flip_y, self.flip_z)
 
     def __getitem__(self, z):
         if isinstance(z, slice):
@@ -79,7 +79,6 @@ class ImarisZWrapper:
             img = fliplr(img)
         if self.flip_y:
             img = flipud(img)
-
         return img
 
     def __len__(self):
@@ -104,68 +103,48 @@ class ImarisZWrapper:
 
 
 def crop_2d_image_px(image: ndarray, x_start: int, x_end: int, y_start: int, y_end: int) -> ndarray:
-    """
-    Crop a 2D image using pixel coordinates
-    Parameters
-    ----------
-    image : ndarray
-        Input 2D image array (shape: [y, x])
-    x_start : int
-        x start position
-    x_end : int
-        x end position
-    y_start : int
-        y start position
-    y_end : int
-        y end position
-
-    Returns
-    -------
-    cropped : ndarray
-        Cropped image array
-    """
-
-    # Clamp to image dimensions
+    """Crop a 2D image using pixel coordinates (shape [y, x])."""
     y_max, x_max = image.shape
     x_start = max(x_start, 0)
     y_start = max(y_start, 0)
     x_end = min(x_end, x_max)
     y_end = min(y_end, y_max)
-    image = image[y_start:y_end, x_start:x_end]
-    # assert image.shape == (y_start - y_end, x_start - x_end)
-    return image
+    return image[y_start:y_end, x_start:x_end]
 
 
 class MultiProcess(Process):
+    """Worker that reads, optional-processes, crops, rotates, (optionally flips), saves, and (optionally) downsamples."""
+
+    # NOTE: to reduce PyCharm type noise, keep hints simple and permissive here.
     def __init__(
             self,
             progress_queue: Queue,
             args_queue: Queue,
             semaphore: Queue,
-            function: Callable,
-            images: Union[List[str], str],
+            function: Optional[Callable[..., ndarray]],
+            images: Any,  # list[str] | list[Path] | TSVVolume | Path(str to .ims) | ImarisZWrapper (set at runtime)
             save_path: Path,
-            args: tuple,
-            kwargs: dict,
+            args: Optional[tuple],
+            kwargs: Optional[dict],
             shape: Tuple[int, int],
-            dtype: str,
+            dtype: Union[str, Any],
             rename: bool = False,
             tif_prefix: str = 'img',
-            source_voxel: Union[Tuple[float, float, float], None] = None,
-            target_voxel: Union[int, float, None] = None,
-            down_sampled_path: Union[Path, None] = None,
+            source_voxel: Optional[Tuple[float, float, float]] = None,
+            target_voxel: Optional[Union[int, float]] = None,
+            down_sampled_path: Optional[Path] = None,
             rotation: int = 0,
             channel: int = 0,
-            timeout: Union[float, None] = 1800,
+            timeout: Optional[float] = 1800,
             resume: bool = True,
             compression: Tuple[str, int] = ("ADOBE_DEFLATE", 1),
-            needed_memory: int = None,
+            needed_memory: Optional[int] = None,
             save_images: bool = True,
-            alternating_downsampling_method: bool = True,
-            down_sampled_dtype: str = "float32",
-            crop_bbox: Tuple[int, int, int, int] = None,
+            alternating_downsampling_method: Union[bool, Literal["contrast"]] = True,
+            down_sampled_dtype: Union[str, type] = "float32",
+            crop_bbox: Optional[Tuple[int, int, int, int]] = None,
     ):
-        Process.__init__(self)
+        super().__init__()
         self.daemon = False
         self.progress_queue = progress_queue
         self.args_queue = args_queue
@@ -174,14 +153,47 @@ class MultiProcess(Process):
         self.function = function
         self.is_ims = False
         self.is_tsv = False
+        self.images_count: int = 0  # used for naming when we don't have a list
+
         if isinstance(images, TSVVolume):
+            # TSV path: pass the TSVVolume object (we will avoid process-pools later)
             self.is_tsv = True
-        elif isinstance(images, str) or isinstance(images, Path):
-            images = Path(images)
-            assert images.suffix.lower() == ".ims"
+            self.images = images
+            try:
+                self.images_count = int(images.volume.z1 - images.volume.z0)
+            except Exception as e:
+                print(f"{PrintColors.WARNING}TSVVolume z count unavailable: {e}{PrintColors.ENDC}")
+                self.images_count = 0
+
+        elif isinstance(images, (str, Path)):
+            # IMS path must be a single .ims file, not a directory and not a list
+            ims_path = Path(images)
+            if ims_path.suffix.lower() != ".ims":
+                raise TypeError(
+                    f"For IMS mode, 'images' must be a path to a .ims file; got: {ims_path}"
+                )
             self.is_ims = True
+            self.images = ims_path  # keep path only; open ImarisZWrapper in run()
+            # images_count will be determined in run() after opening the wrapper
+
         else:
-            assert Path(images[0]).suffix.lower() in (".tif", ".tiff", ".raw", ".png")
+            # TIF/PNG/RAW path list: must be list/tuple of file paths
+            if not isinstance(images, (list, tuple)):
+                raise TypeError(
+                    "For TIF/PNG/RAW mode, 'images' must be a list/tuple of file paths."
+                )
+            if len(images) == 0:
+                raise ValueError("Empty image list for TIF/PNG/RAW mode.")
+
+            allowed = {".tif", ".tiff", ".raw", ".png"}
+            # (Lightweight validation; avoid walking the whole list for speed)
+            for i, fp in enumerate(images[:8]):
+                if Path(fp).suffix.lower() not in allowed:
+                    raise ValueError(f"Unsupported extension in images[{i}]: {fp}")
+
+            self.images = images  # list of paths (pickleable)
+            self.images_count = len(images)
+
         self.channel = channel
         self.images = images
         self.save_path = save_path
@@ -200,8 +212,8 @@ class MultiProcess(Process):
         self.target_voxel = target_voxel
         self.down_sampled_path = down_sampled_path
         self.down_sampled_dtype = down_sampled_dtype
-        self.target_shape = None
-        self.down_sampling_methods = None
+        self.target_shape: Optional[Tuple[int, int]] = None
+        self.down_sampling_methods: Optional[Tuple[Tuple[Optional[Callable], Optional[Callable]], ...]] = None
         self.alternating_downsampling_method = alternating_downsampling_method
         if self.target_voxel is not None and self.source_voxel is not None and shape is not None:
             if rotation in (90, 270):
@@ -211,61 +223,83 @@ class MultiProcess(Process):
         self.rotation = rotation
         self.crop_bbox = crop_bbox
 
-    def calculate_down_sampling_target(self, new_shape: Tuple[int, int], is_rotated: bool,
-                                       alternating_downsampling_method: bool):
-        # calculate voxel size change
-        new_shape: array = array(new_shape)
-        new_voxel_size: list = list(self.source_voxel)
+    @staticmethod
+    def _p90(arr):
+        """Percentile-90 pooling for contrast-enhancing downsampling."""
+        return float(np_percentile(arr, 90.0))
+
+    def calculate_down_sampling_target(
+            self,
+            new_shape: Tuple[int, int],
+            is_rotated: bool,
+            alternating_downsampling_method: Union[bool, Literal["contrast"]],
+    ) -> None:
+        # compute voxel size change
+        new_shape_arr = array(new_shape)
+        new_voxel_size: list = list(self.source_voxel)  # type: ignore[arg-type]
         if is_rotated:
-            new_voxel_size[1] *= self.shape[0] / new_shape[1]
-            new_voxel_size[2] *= self.shape[1] / new_shape[0]
+            new_voxel_size[1] *= self.shape[0] / new_shape_arr[1]
+            new_voxel_size[2] *= self.shape[1] / new_shape_arr[0]
             new_voxel_size[1], new_voxel_size[2] = new_voxel_size[2], new_voxel_size[1]
         else:
-            new_voxel_size[1] *= self.shape[0] / new_shape[0]
-            new_voxel_size[2] *= self.shape[1] / new_shape[1]
-        new_voxel_size: tuple = tuple(new_voxel_size)
-        if new_voxel_size != self.source_voxel:
-            print(f"image processing function changed the voxel size from {self.source_voxel} to {new_voxel_size}")
+            new_voxel_size[1] *= self.shape[0] / new_shape_arr[0]
+            new_voxel_size[2] *= self.shape[1] / new_shape_arr[1]
+        new_voxel_size_t = (float(new_voxel_size[0]), float(new_voxel_size[1]), float(new_voxel_size[2]))
+        if new_voxel_size_t != self.source_voxel:
+            print(f"image processing function changed the voxel size from {self.source_voxel} to {new_voxel_size_t}")
 
-        reduction_times = self.target_voxel / array(new_voxel_size[1:3])
-        target_shape = new_shape / reduction_times
-        self.target_shape = tuple(target_shape.round().astype(int))
+        reduction_times = self.target_voxel / array(new_voxel_size_t[1:3])  # type: ignore[operator]
+        target_shape_arr = new_shape_arr / reduction_times
+        target_shape_2 = (int(round(target_shape_arr[0])), int(round(target_shape_arr[1])))
+        self.target_shape = target_shape_2  # explicit (int,int) for PyCharm
 
+        # choose reduction “passes” per axis
         reduction_factors = np_floor(np_sqrt(reduction_times)).astype(int)
-        down_sampling_method_y = list(np_max if i % 2 == 0 else np_mean for i in range(reduction_factors[0]))
-        down_sampling_method_x = list(np_mean if i % 2 == 0 else np_max for i in range(reduction_factors[1]))
-        if reduction_factors[0] > reduction_factors[1]:
-            down_sampling_method_x += [None, ] * (reduction_factors[0] - reduction_factors[1])
-        elif reduction_factors[0] < reduction_factors[1]:
-            down_sampling_method_y += [None, ] * (reduction_factors[1] - reduction_factors[0])
-        down_sampling_methods = tuple(zip(down_sampling_method_y, down_sampling_method_x))
-        if not alternating_downsampling_method:
-            down_sampling_methods = [(np_mean, np_mean) for _ in down_sampling_methods]
+        n_y, n_x = int(reduction_factors[0]), int(reduction_factors[1])
+        n_steps = max(n_y, n_x)
 
-        self.down_sampling_methods = down_sampling_methods
+        if isinstance(alternating_downsampling_method, str) and alternating_downsampling_method.lower() == "contrast":
+            # Contrast-enhancing mode: prefer P90 pooling in both axes to retain highlights
+            y_methods = [self._p90] * n_y + [None] * (n_steps - n_y)
+            x_methods = [self._p90] * n_x + [None] * (n_steps - n_x)
+        else:
+            # Original alternating mean/max scheme (bias towards preserving peaks on z; alternate in xy)
+            y_seq = [np_max if i % 2 == 0 else np_mean for i in range(n_y)]
+            x_seq = [np_mean if i % 2 == 0 else np_max for i in range(n_x)]
+            y_methods = y_seq + [None] * (n_steps - n_y)
+            x_methods = x_seq + [None] * (n_steps - n_x)
+
+        self.down_sampling_methods = tuple(zip(y_methods, x_methods))
 
     def imsave_tif(self, path, img, compression=None):
         die = imsave_tif(path, img, compression=compression)
         if die:
             self.die = True
 
-    def tif_save_path(self, idx: int, images: List[Path], flip_z: bool = False):
+    def tif_save_path(self, idx: int, images: Any, flip_z: bool = False) -> Path:
+        """Build output path; works for TSV/IMS/list sources without strict typing."""
+        # ensure we have a count for naming
+        total = self.images_count
+        if total <= 0:
+            try:
+                total = len(images)  # type: ignore[arg-type]
+            except Exception as e:
+                print(f"{PrintColors.WARNING}Exception during len(images): {e}{PrintColors.ENDC}")
+                total = 0
+
         if self.is_tsv or self.is_ims or self.rename:
-            if flip_z:
-                return self.save_path / f"{self.tif_prefix}_{(len(images) - idx - 1):06}.tif"
+            if flip_z and total > 0:
+                return self.save_path / f"{self.tif_prefix}_{(total - idx - 1):06}.tif"
             else:
                 return self.save_path / f"{self.tif_prefix}_{idx:06}.tif"
         else:
-            if flip_z:
-                file = Path(images[len(images) - idx - 1])
-            else:
-                file = Path(images[idx])
+            file = Path(images[idx])  # type: ignore[index]
             if file.suffix.lower() in (".png", ".raw"):
-                return self.save_path / (file.name[0:-4] + ".tif")
+                return self.save_path / file.with_suffix(".tif")
             else:
                 return self.save_path / file.name
 
-    def free_ram_is_not_enough(self):
+    def free_ram_is_not_enough(self) -> bool:
         self.semaphore.get(block=True)
         free_ram_is_not_enough = False
         if self.needed_memory is not None and virtual_memory().available < self.needed_memory:
@@ -281,11 +315,7 @@ class MultiProcess(Process):
         is_tsv = self.is_tsv
         is_ims = self.is_ims
         timeout = self.timeout
-        # TODO: if no timeout was needed directly run functions without using pool
-        if timeout:
-            pool = ProcessPoolExecutor(max_workers=1)
-        else:
-            pool = ThreadPoolExecutor(max_workers=1)
+        pool = ProcessPoolExecutor(max_workers=1) if timeout else ThreadPoolExecutor(max_workers=1)
         args = self.args
         kwargs = self.kwargs
         tif_prefix = self.tif_prefix
@@ -298,6 +328,7 @@ class MultiProcess(Process):
         post_processed_d_type = self.d_type
         shape = self.shape
         crop_x0 = crop_x1 = crop_y0 = crop_y1 = None
+        x0 = y0 = x1 = y1 = 0  # only used for TSV
         if self.crop_bbox is not None:
             crop_y0, crop_y1, crop_x0, crop_x1 = self.crop_bbox
             shape = (crop_y1 - crop_y0, crop_x1 - crop_x0)
@@ -305,25 +336,24 @@ class MultiProcess(Process):
         post_processed_shape = self.shape
         if rotation in (90, 270):
             post_processed_shape = (shape[1], shape[0])
+
         need_down_sampling = False
         down_sampling_method_z = None
         if self.source_voxel is not None and self.target_voxel is not None and shape is not None:
             need_down_sampling = True
             reduction_factor_z = ceil(sqrt(self.target_voxel / self.source_voxel[0]))
-            # the last down-sampling for z step should be based on np_max to ensure max brightness
             down_sampling_method_z = tuple(np_max if i % 2 == 0 else np_mean for i in range(reduction_factor_z))
 
-        # file = None
-        x0, x1, y0, y1 = 0, 0, 0, 0
+        flip_x = flip_y = flip_z = False
 
-        # check if images are flipped
-        flip_x, flip_y, flip_z = [False] * 3
-
+        # TSV global extents for VExtent mapping
         if is_tsv:
             x0, x1, y0, y1 = images.volume.x0, images.volume.x1, images.volume.y0, images.volume.y1
+            # name count for reverse indexing if needed
+            self.images_count = int(images.volume.z1 - images.volume.z0)
         if is_ims:
             images = ImarisZWrapper(images, timepoint=0, channel=channel)
-            num_images = len(images)
+            self.images_count = len(images)
 
         queue_time_out = 20
         while not self.die and self.args_queue.qsize() > 0:
@@ -336,8 +366,8 @@ class MultiProcess(Process):
                 z_stack = None
                 down_sampled_tif_path = Path()
                 if need_down_sampling and down_sampled_path is not None:
-                    if flip_z:
-                        down_sampled_tif_path = down_sampled_path / f"{tif_prefix}_{(num_images - idx_down_sampled - 1):06}.tif"
+                    if flip_z and self.images_count > 0:
+                        down_sampled_tif_path = down_sampled_path / f"{tif_prefix}_{(self.images_count - idx_down_sampled - 1):06}.tif"
                     else:
                         down_sampled_tif_path = down_sampled_path / f"{tif_prefix}_{idx_down_sampled:06}.tif"
                     if resume and down_sampled_tif_path.exists():
@@ -349,10 +379,12 @@ class MultiProcess(Process):
                             for _ in range(exist_count):
                                 self.progress_queue.put(running_next)
                             continue
+
+                    if self.target_shape is None:
+                        # safety: should be set earlier; fall back to current shape
+                        self.target_shape = (shape[0], shape[1])
                     z_stack = zeros((len(indices),) + self.target_shape, dtype=float32)
-                #print(f"Debug: dsp: {down_sampled_tif_path}")
-                # print(f"Debug: z-stack: {z_stack}")
-                #sys.exit()
+
                 for idx_z, idx in enumerate(indices):
                     if self.die:
                         break
@@ -360,10 +392,9 @@ class MultiProcess(Process):
                         continue
                     if self.die:
                         break
+
                     tif_save_path = self.tif_save_path(idx, images, flip_z=flip_z)
-                    # print(tif_save_path)
-                    if resume and tif_save_path.exists() and not need_down_sampling:  # function is not None and
-                        # self.progress_queue.put(running_next)
+                    if resume and tif_save_path.exists() and not need_down_sampling:
                         continue
                     try:
                         if resume and tif_save_path.exists():
@@ -372,13 +403,23 @@ class MultiProcess(Process):
                                 img = imread_tif_raw_png(tif_save_path)
                         else:
                             if is_ims:
-                                img = images[idx]
+                                img = images[idx]  # wrapper already corrected orientation (black box)
                             else:
-                                # the pool protects the process in case of timeout errors in imread_* functions
                                 start_time = time()
                                 if is_tsv:
-                                    future = pool.submit(
-                                        imread_tsv, images, VExtent(x0, x1, y0, y1, idx, idx + 1), d_type)
+                                    # TSV: crop at read-time if requested
+                                    if (crop_x0 is not None) and (crop_x1 is not None) and (crop_y0 is not None) and (crop_y1 is not None):
+                                        vx0 = x0 + crop_x0
+                                        vx1 = x0 + crop_x1
+                                        vy0 = y0 + crop_y0
+                                        vy1 = y0 + crop_y1
+                                        future = pool.submit(
+                                            imread_tsv, images, VExtent(vx0, vx1, vy0, vy1, idx, idx + 1), d_type
+                                        )
+                                    else:
+                                        future = pool.submit(
+                                            imread_tsv, images, VExtent(x0, x1, y0, y1, idx, idx + 1), d_type
+                                        )
                                 else:
                                     future = pool.submit(
                                         imread_tif_raw_png, Path(images[idx]), dtype=d_type, shape=shape)
@@ -399,10 +440,11 @@ class MultiProcess(Process):
                                 else:
                                     img = function(img)
 
-                            if crop_x0 is not None and crop_x1 is not None and crop_y0 is not None and crop_y1 is not None:
+                            # Apply crop post-read (IMS uses wrapper orientation; TSV already cropped at read)
+                            if (crop_x0 is not None) and (crop_x1 is not None) and (crop_y0 is not None) and (crop_y1 is not None):
                                 img = crop_2d_image_px(img, crop_x0, crop_x1, crop_y0, crop_y1)
 
-                            # apply rotations
+                            # rotations
                             if rotation == 90:
                                 img = rot90(img, 1)
                             elif rotation == 180:
@@ -410,27 +452,29 @@ class MultiProcess(Process):
                             elif rotation == 270:
                                 img = rot90(img, 3)
 
-                            # apply flips
+                            # optional flips for non-IMS sources (IMS already flipped in wrapper)
                             if flip_x:
                                 img = flip(img, axis=1)
                             if flip_y:
                                 img = flip(img, axis=0)
 
-                            # save image
-                            if save_images and (
-                                    is_tsv or is_ims or function is not None or rotation in (90, 180, 270) or self.crop_bbox is not None) :
+                            # save
+                            if save_images and (is_tsv or is_ims or function is not None or rotation in (90, 180, 270) or self.crop_bbox is not None):
                                 self.imsave_tif(tif_save_path, img, compression=compression)
                             if img.dtype != post_processed_d_type:
                                 post_processed_d_type = img.dtype
 
+                            # update post-processed shape, recalc target if needed
                             if rotation in (90, 270) or img.shape != post_processed_shape:
                                 post_processed_shape = img.shape
                                 if need_down_sampling:
-                                    self.calculate_down_sampling_target(post_processed_shape, rotation in (90, 270),
-                                                                        self.alternating_downsampling_method)
+                                    self.calculate_down_sampling_target(
+                                        post_processed_shape, rotation in (90, 270),
+                                        self.alternating_downsampling_method
+                                    )
                                     z_stack = zeros((len(indices),) + self.target_shape, dtype=float32)
 
-                        # down-sampling on xy
+                        # XY downsampling into z_stack
                         if need_down_sampling and self.target_shape is not None and \
                                 self.down_sampling_methods is not None and img is not None:
                             if is_uniform_2d(img):
@@ -442,7 +486,6 @@ class MultiProcess(Process):
                                         img = block_reduce(img, block_size=(2, 1), func=y_method)
                                     if x_method is not None and ceil(img.shape[1] / 2) >= self.target_shape[1]:
                                         img = block_reduce(img, block_size=(1, 2), func=x_method)
-                                # print(img.shape, end='')
                                 img = resize(img, self.target_shape, preserve_range=True, anti_aliasing=True)
                                 z_stack[idx_z] = img.astype(float32)
 
@@ -471,7 +514,7 @@ class MultiProcess(Process):
 
                     self.progress_queue.put(running_next)
 
-                # approximate down-sampling on the z-axis
+                # approximate Z downsampling (coarse)
                 if need_down_sampling and down_sampling_method_z is not None and z_stack is not None:
                     if is_uniform_3d(z_stack):
                         self.imsave_tif(down_sampled_tif_path, zeros(self.target_shape, dtype=float32),
@@ -491,16 +534,13 @@ class MultiProcess(Process):
                                 else:
                                     img = convert_to_8bit_fun(img)
                             else:
-                                print(f"{PrintColors.FAIL}"
-                                      f"requested downsampled format is not supported"
-                                      f"{PrintColors.ENDC}")
+                                print(f"{PrintColors.FAIL}requested downsampled format is not supported{PrintColors.ENDC}")
                                 raise RuntimeError
                         self.imsave_tif(down_sampled_tif_path, img, compression=compression)
 
             except (Empty, TimeoutError):
                 self.die = True
-        # if is_ims and isinstance(file, h5py.File):
-        #     file.close()
+
         if is_ims and isinstance(images, ImarisZWrapper):
             images.close()
         if isinstance(pool, ProcessPoolExecutor):
@@ -508,12 +548,12 @@ class MultiProcess(Process):
         self.progress_queue.put(not running_next)
 
 
-def calculate_downsampling_z_ranges(start, end, steps):
+def calculate_downsampling_z_ranges(start: int, end: int, steps: int):
     z_list_list = []
     for idx in range(start, end, steps):
         z_range = list(range(idx, idx + steps))
         if z_range[-1] > end:
-            while z_range[-1] >= end:
+            while z_range and z_range[-1] >= end:
                 del z_range[-1]
         z_list_list += [z_range]
     return z_list_list
@@ -528,52 +568,49 @@ def generate_voxel_spacing(
                        2.0 * axis_v_size for axis_shape, axis_v_size in zip(shape, source_voxel)]
     axis_spacing = []
     for i, axis_vals in enumerate(voxel_locations):
-        # Get Downsampled starting value
         start = np_round(resize_local_mean(axis_vals, (int(target_shape[i]),)))[0]
-        # Create target_voxel spaced list
         axis_spacing.append(array([start + target_voxel * val for val in range(target_shape[i])]))
     return axis_spacing
 
 
-def jumpy_step_range(start, end):
+def jumpy_step_range(start: int, end: int):
     distance = end - start
-    steps = [1, ]
+    steps = [1]
     while distance / steps[-1] > 0:
-        steps += [steps[-1] * 10]
+        steps.append(steps[-1] * 10)
     steps.reverse()
     top_list = []
     for step in steps:
         for idx in range(start, end, step):
             if idx not in top_list:
-                top_list += [idx]
+                top_list.append(idx)
     return top_list
 
 
 def parallel_image_processor(
         source: Union[TSVVolume, Path, str],
         destination: Union[Path, str],
-        fun: Union[Callable, None] = None,
-        args: tuple = None,
-        kwargs: dict = None,
+        fun: Optional[Callable[..., ndarray]] = None,
+        args: Optional[tuple] = None,
+        kwargs: Optional[dict] = None,
         rename: bool = False,
         tif_prefix: str = "img",
         channel: int = 0,
-        source_voxel: Union[Tuple[float, float, float], None] = None,
-        target_voxel: Union[int, float, None] = None,
-        downsampled_path: Union[Path, None] = None,
-        down_sampled_dtype: str = "float32",
-        
-        alternating_downsampling_method: bool = True,
+        source_voxel: Optional[Tuple[float, float, float]] = None,
+        target_voxel: Optional[Union[int, float]] = None,
+        downsampled_path: Optional[Path] = None,
+        down_sampled_dtype: Union[str, type] = "float32",
+        alternating_downsampling_method: Union[bool, Literal["contrast"]] = True,
         rotation: int = 0,
-        timeout: Union[float, None] = None,
+        timeout: Optional[float] = None,
         max_processors: int = cpu_count(logical=False),
         progress_bar_name: str = " ImgProc",
         compression: Tuple[str, int] = ("ADOBE_DEFLATE", 1),
         resume: bool = True,
-        needed_memory: int = None,
+        needed_memory: Optional[int] = None,
         save_images: bool = True,
         return_downsampled_path: bool = False,
-        crop_bbox: tuple = None
+        crop_bbox: Optional[tuple] = None
 ):
     """
     fun: Callable
@@ -611,79 +648,112 @@ def parallel_image_processor(
         the name next to the progress bar
     needed_memory: int
         needed_memory in bytes to run the function. if provided the workers try to avoid out of memory condition.
+    crop_bbox: (x_start, x_end, y_start, y_end, z_start, z_end)
     """
     if isinstance(source, str):
         source = Path(source)
     if isinstance(destination, str):
         destination = Path(destination)
     if destination is not None:
-        Path(destination).mkdir(exist_ok=True)
+        destination.mkdir(exist_ok=True)
         print(f"Modifying destination: {destination}")
     if isinstance(downsampled_path, str):
         downsampled_path = Path(downsampled_path)
-    downsampled_path: Path = destination if downsampled_path is None else downsampled_path
+    downsampled_path = destination if downsampled_path is None else downsampled_path
+
+    # Initialize bbox vars (avoid “maybe unassigned”)
+    x_start = x_end = y_start = y_end = z_start = z_end = None
 
     down_sampling_z_steps: int = 1
     need_down_sampling: bool = False
     if source_voxel is not None and target_voxel is not None:
         need_down_sampling = True
-        down_sampling_z_steps = max(1, floor(target_voxel / source_voxel[0]))
+        down_sampling_z_steps = max(1, floor(float(target_voxel) / float(source_voxel[0])))
 
     args_queue = Queue()
+    dtype: Union[str, Any] = "float32"  # default dtype; overwritten once we probe data
+
     if isinstance(source, TSVVolume):
-        if crop_bbox is not None:
-            raise RuntimeError("for cropping use 2D tif series")
         images = source
-        num_images = source.volume.z1 - source.volume.z0
-        shape = source.volume.shape[1:3]
-        dtype = source.dtype
-        # to test stitching quality first a sample from every 100 z-step will be stitched
+        full_shape = images.volume.shape[1:3]  # (Y, X)
+        dtype = images.dtype
+        z0, z1 = images.volume.z0, images.volume.z1
+
+        # Defaults: full vol
+        z_start, z_end = z0, z1
+        shape = full_shape
+
+        if crop_bbox is not None:
+            x_start, x_end, y_start, y_end, z_s, z_e = crop_bbox
+            z_start = max(z0, z_s)
+            z_end = min(z1, z_e)
+            shape = (y_end - y_start, x_end - x_start)
+
+        num_images = int(z_end - z_start)
+
         if need_down_sampling and down_sampling_z_steps > 1:
             for ds_z_idx, z_range in enumerate(
-                    calculate_downsampling_z_ranges(source.volume.z0, source.volume.z1, down_sampling_z_steps)):
+                    calculate_downsampling_z_ranges(int(z_start), int(z_end), int(down_sampling_z_steps))):
                 args_queue.put((ds_z_idx, z_range))
         else:
-            for idx in jumpy_step_range(source.volume.z0, source.volume.z1):
+            for idx in jumpy_step_range(int(z_start), int(z_end)):
                 args_queue.put((idx, [idx]))
 
-    elif source.is_file() and source.suffix.lower() == ".ims":
+    elif isinstance(source, Path) and source.is_file() and source.suffix.lower() == ".ims":
         print(f"ims file detected. using imaris_ims_file_reader!")
         with ImarisZWrapper(source, timepoint=0, channel=channel) as ims_wrapper:
-            num_images = len(ims_wrapper)  # Number of Z planes
-            img0 = ims_wrapper[0]  # Example 2D image to get shape and dtype
-            shape = img0.shape  # (Y, X)
+            num_images_total = len(ims_wrapper)
+            img0 = ims_wrapper[0]
+            base_shape = img0.shape
             dtype = img0.dtype
 
+        z_start, z_end = 0, num_images_total
+        shape = base_shape
+
+        if crop_bbox is not None:
+            x_start, x_end, y_start, y_end, z_s, z_e = crop_bbox
+            z_start = max(0, z_s)
+            z_end = min(num_images_total, z_e)
+            shape = (y_end - y_start, x_end - x_start)
+
+        num_images = int(z_end - z_start)
+
         if need_down_sampling and down_sampling_z_steps > 1:
-            for ds_z_idx, z_range in enumerate(calculate_downsampling_z_ranges(0, num_images, down_sampling_z_steps)):
+            for ds_z_idx, z_range in enumerate(calculate_downsampling_z_ranges(int(z_start), int(z_end), int(down_sampling_z_steps))):
                 args_queue.put((ds_z_idx, z_range))
         else:
-            for idx in range(num_images):
+            for idx in range(int(z_start), int(z_end)):
                 args_queue.put((idx, [idx]))
         images = str(source)
-    elif source.is_dir():
-        images = natural_sorted([str(f) for f in source.iterdir() if f.is_file() and f.suffix.lower() in (
+
+    elif isinstance(source, Path) and source.is_dir():
+        images_list = natural_sorted([str(f) for f in source.iterdir() if f.is_file() and f.suffix.lower() in (
             ".tif", ".tiff", ".raw", ".png")])
-        num_images = len(images)
-        img = imread_tif_raw_png(Path(images[0]))
+        if not images_list:
+            raise RuntimeError("No supported images found in the source directory.")
+        num_images_total = len(images_list)
+        img = imread_tif_raw_png(Path(images_list[0]))
         shape = img.shape
         dtype = img.dtype
         if crop_bbox is not None:
             x_start, x_end, y_start, y_end, z_start, z_end = crop_bbox
-            images = images[z_start : z_end]
-            print(f"Processing {len(images)} of {num_images} files (Z-range: {z_start}-{z_end})")
-            num_images = len(images)
+            images_list = images_list[z_start: z_end]
+            print(f"Processing {len(images_list)} of {num_images_total} files (Z-range: {z_start}-{z_end})")
+            num_images = len(images_list)
             shape = (y_end - y_start, x_end - x_start)
+        else:
+            num_images = num_images_total
         assert num_images > 0
+
         if need_down_sampling and down_sampling_z_steps > 1:
-            for ds_z_idx, z_range in enumerate(calculate_downsampling_z_ranges(0, num_images, down_sampling_z_steps)):
+            for ds_z_idx, z_range in enumerate(calculate_downsampling_z_ranges(0, num_images, int(down_sampling_z_steps))):
                 args_queue.put((ds_z_idx, z_range))
         else:
             for idx in range(num_images):
                 args_queue.put((idx, [idx]))
 
         manager = Manager()
-        images = manager.list(images)
+        images = manager.list(images_list)
         del img
     else:
         print("source can be either a tsv volume, an ims file path, or a 2D tiff series folder")
@@ -694,22 +764,20 @@ def parallel_image_processor(
         new_source_voxel = source_voxel
         if rotation in (90, 270):
             shape_3d = array((num_images, shape[1], shape[0]))
-            new_source_voxel = (source_voxel[0], source_voxel[2], source_voxel[1])
+            new_source_voxel = (source_voxel[0], source_voxel[2], source_voxel[1])  # type: ignore[index]
 
-        reduction_times = target_voxel / array(new_source_voxel)
-        target_shape = shape_3d / reduction_times
-        target_shape_remainder = target_shape - target_shape.round()
-        target_voxel_actual = maximum(target_voxel + target_shape_remainder / target_shape.round(), new_source_voxel)
+        reduction_times = float(target_voxel) / array(new_source_voxel)  # type: ignore[arg-type]
+        target_shape_arr = shape_3d / reduction_times
+        target_shape_remainder = target_shape_arr - target_shape_arr.round()
+        target_voxel_actual = maximum(float(target_voxel) + target_shape_remainder / target_shape_arr.round(), new_source_voxel)  # type: ignore[arg-type]
         print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
               f"{PrintColors.BLUE}down-sampling: {PrintColors.ENDC}\n"
-              f"\tpost-processed shape zyx: {' '.join(target_shape.round(0).astype(str))}\n"
-              f"\tactual voxel sizes zyx: {' '.join(target_voxel_actual.round(3).astype(str))}")
+              f"\tpost-processed shape zyx: {' '.join(target_shape_arr.round(0).astype(str))}\n"
+              f"\tactual voxel sizes zyx: {' '.join(array(target_voxel_actual).round(3).astype(str))}")
 
-        downsampled_path /= (
-            f"{destination.stem}_z{down_sampling_z_steps * new_source_voxel[0]:.1f}_yx{target_voxel:.1f}um")
+        downsampled_path /= (f"{destination.stem}_z{down_sampling_z_steps * new_source_voxel[0]:.1f}_yx{float(target_voxel):.1f}um")  # type: ignore[index]
         downsampled_path.mkdir(exist_ok=True)
         print(f"Modifying downsampled_path: {downsampled_path}")
-        # Windows Permission Check
         if os.name == 'nt':
             os.chmod(downsampled_path, 0o666)
         else:
@@ -722,16 +790,22 @@ def parallel_image_processor(
     progress_queue = Queue()
     semaphore = Queue()
     semaphore.put(1)
-    workers = min(max_processors, args_queue.qsize() - initial)
+
+    # avoid negative worker count
+    total_tasks = args_queue.qsize()
+    remaining = max(0, total_tasks - initial)
+    workers = min(max_processors, remaining) if remaining > 0 else 0
     print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}starting workers ...")
     for worker in tqdm(range(workers), desc=' workers'):
-        if progress_queue.qsize() + worker < num_images:
+        if progress_queue.qsize() + worker < total_tasks:
             MultiProcess(
                 progress_queue, args_queue, semaphore, fun, images, destination, args, kwargs, shape, dtype,
                 rename=rename, tif_prefix=tif_prefix,
                 source_voxel=source_voxel, target_voxel=target_voxel, down_sampled_path=downsampled_path,
                 rotation=rotation, channel=channel, timeout=timeout, compression=compression, resume=resume,
                 needed_memory=needed_memory, save_images=save_images,
+                alternating_downsampling_method=alternating_downsampling_method,
+                down_sampled_dtype=down_sampled_dtype,
                 crop_bbox=(y_start, y_end, x_start, x_end) if crop_bbox is not None else None,
             ).start()
         else:
@@ -739,79 +813,71 @@ def parallel_image_processor(
             workers = worker
             break
 
+    # Use num_images for the total expected output planes to keep progress consistent
     return_code = progress_manager(progress_queue, workers, num_images, desc=progress_bar_name, initial=initial)
     args_queue.cancel_join_thread()
     args_queue.close()
     progress_queue.cancel_join_thread()
     progress_queue.close()
 
-    # down-sample on z accurately
+    # Accurate Z downsampling after XY
     if return_code == 0 and need_down_sampling:
-        npz_file = downsampled_path.parent / f"{destination.stem}_zyx{target_voxel:.1f}um.npz"
-        # print(f"Modifying npz file: {npz_file}")
-        # os.chmod(npz_file, 0o777)
-
+        npz_file = downsampled_path.parent / f"{destination.stem}_zyx{float(target_voxel):.1f}um.npz"
         if resume and npz_file.exists():
             if return_downsampled_path:
                 return return_code, downsampled_path
             return return_code
-        print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
-              f"{PrintColors.BLUE}down-sampling: {PrintColors.ENDC}"
-              f"resizing on the z-axis accurately ...")
-        target_shape_3d = [
-            int(round(num_images / (target_voxel / source_voxel[0]))),
-            int(round(shape[0] / (target_voxel / source_voxel[1]))),
-            int(round(shape[1] / (target_voxel / source_voxel[2])))
-        ]
-        if rotation in (90, 270):
-            target_shape_3d[1], target_shape_3d[2] = target_shape_3d[2], target_shape_3d[1]
-            
-            
-        files = sorted(downsampled_path.glob("*.tif"))
-        print(f"Debug: Number of files loaded = {len(files)}") 
-        print(f"Debug: path used: {downsampled_path}")
-            # Using a ThreadPoolExecutor to read and process files concurrently
-        with ThreadPoolExecutor(max_processors) as pool:
-            img_stack = list(pool.map(imread_tif_raw_png, tqdm(files, desc="loading", unit="images")))
-            # print(f"Debug: Shape of img_stack after loading = {img_stack[0].shape} if img_stack else 'Empty'")  # Debugging statement after list creation
-            # print(f"Debug: Shape of img_stack after loading = {img_stack.shape if img_stack else 'Empty'}")
 
-            img_stack = dstack(img_stack)  # yxz format
-            # print(f"Debug: Dimensions of img_stack after dstack = {img_stack.shape}")
-            
-            img_stack = rollaxis(img_stack, -1)  # zyx format
+        print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
+              f"{PrintColors.BLUE}down-sampling: {PrintColors.ENDC}resizing on the z-axis accurately ...")
+
+        target_shape_3d: Tuple[int, int, int] = (
+            int(round(num_images / (float(target_voxel) / float(source_voxel[0])))),               # type: ignore[index]
+            int(round(shape[0] / (float(target_voxel) / float(source_voxel[1])))),               # type: ignore[index]
+            int(round(shape[1] / (float(target_voxel) / float(source_voxel[2]))))                # type: ignore[index]
+        )
+        if rotation in (90, 270):
+            target_shape_3d = (target_shape_3d[0], target_shape_3d[2], target_shape_3d[1])
+
+        files = sorted(downsampled_path.glob("*.tif"))
+        print(f"Debug: Number of files loaded = {len(files)}")
+        print(f"Debug: path used: {downsampled_path}")
+
+        with ThreadPoolExecutor(max_workers=max_processors) as pool:
+            img_stack = list(pool.map(imread_tif_raw_png, tqdm(files, desc="loading", unit="images")))
+            img_stack = dstack(img_stack)               # y x z (yxz)
+            img_stack = rollaxis(img_stack, -1)         # z y x
+
             print(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
-                  f"{PrintColors.BLUE}down-sampling: {PrintColors.ENDC}"
-                  f"resizing the z-axis ...")
+                  f"{PrintColors.BLUE}down-sampling: {PrintColors.ENDC}resizing the z-axis ...")
             img_stack = resize(img_stack, target_shape_3d, preserve_range=True, anti_aliasing=True)
             axes_spacing = generate_voxel_spacing(
                 (num_images, shape[0], shape[1]),
                 source_voxel,
                 target_shape_3d,
-                target_voxel)
+                float(target_voxel)
+            )
             print(f"{PrintColors.GREEN}{date_time_now()}:{PrintColors.ENDC}"
-                  f"{PrintColors.BLUE} down-sampling: {PrintColors.ENDC}"
-                  f"saving as npz.")
-            
+                  f"{PrintColors.BLUE} down-sampling: {PrintColors.ENDC}saving as npz.")
             if npz_file.exists():
                 stat_info = os.stat(npz_file)
                 permissions = oct(stat_info.st_mode)[-3:]
                 if permissions != '666':
                     print(f"Permissions for '{npz_file}' are {permissions}. Must update permissions...")
                     print(f"Modifying npz file: {npz_file}")
-                    # Windows Permission Check
                     if os.name == 'nt':
                         os.chmod(npz_file, 0o666)
                     else:
                         os.chmod(npz_file, 0o777)
                 else:
                     print(f"Permissions for '{npz_file}' are correctly set to 777.")
-            else: 
+            else:
                 print("Permission edit skipped")
+
             savez_compressed(
                 npz_file,
                 I=img_stack,
-                xI=array(axes_spacing, dtype='object')  # note specify object to avoid "ragged" warning
+                xI=array(axes_spacing, dtype='object')  # avoid ragged warning
             )
 
     if return_downsampled_path:
