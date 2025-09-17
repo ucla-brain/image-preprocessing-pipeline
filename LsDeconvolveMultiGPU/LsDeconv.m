@@ -611,6 +611,29 @@ function check_block_coverage_planes(stack_info, block)
     end
 end
 
+function init_min_max_file(min_max_path, bit_depth)
+    if isfile(min_max_path)
+        % Do NOT clobber on resume or if a previous run left it intact.
+        return
+    end
+    switch bit_depth
+        case 8
+            rawmax = 255;
+        case 16
+            rawmax = 65535;
+        otherwise
+            rawmax = -inf; % will be promoted by workers on first block
+    end
+    deconvmin = inf;
+    deconvmax = -inf;
+
+    tmpfile = [min_max_path, '.tmp.mat'];
+    save(tmpfile, "deconvmin", "deconvmax", "rawmax", "-v7.3", "-nocompression");
+    if isfile(min_max_path), delete(min_max_path); end
+    [ok,msg] = movefile(tmpfile, min_max_path, 'f');
+    if ~ok, error("init_min_max_file: move failed: %s", msg); end
+end
+
 function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
     damping, clipval, stop_criterion, gpus, cache_drive, amplification, ...
     filter, resume, starting_block)
@@ -636,6 +659,7 @@ function process(inpath, outpath, log_file, stack_info, block, psf, numit, ...
     delete(myCluster.Jobs);
     delete(gcp("nocreate"));
     min_max_path = fullfile(char(cache_drive), 'min_max.mat');
+    init_min_max_file(min_max_path, stack_info.bit_depth);
     [unique_gpus, ~, ~] = unique(gpus(:));
     unique_gpus = sort(unique_gpus, 'descend').';
     gpus = repmat(unique_gpus, 1, numel(gpus)/numel(unique_gpus));
