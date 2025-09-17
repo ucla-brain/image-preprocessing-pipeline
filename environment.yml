@@ -31,11 +31,8 @@ dependencies:
   - numexpr>=2.8.4
   - jupyter
   - ipykernel
-#  - libopencv=4.8.*
-#  - opencv=4.8.*
   - py-opencv=4.8.*
   - pynrrd
-#  - cuda-nvcc
   - ffmpeg
   - tensorly
   - pip
@@ -44,4 +41,3 @@ dependencies:
       - dcimg
       - cpufeature
       - ptwt
-      - natsort
