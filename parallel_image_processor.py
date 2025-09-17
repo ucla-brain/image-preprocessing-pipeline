@@ -281,11 +281,7 @@ class MultiProcess(Process):
         # ensure we have a count for naming
         total = self.images_count
         if total <= 0:
-            try:
-                total = len(images)  # type: ignore[arg-type]
-            except Exception as e:
-                print(f"{PrintColors.WARNING}Exception during len(images): {e}{PrintColors.ENDC}")
-                total = 0
+            total = getattr(images, "__len__", lambda: 0)()
 
         if self.is_tsv or self.is_ims or self.rename:
             if flip_z and total > 0:
@@ -371,12 +367,8 @@ class MultiProcess(Process):
                     else:
                         down_sampled_tif_path = down_sampled_path / f"{tif_prefix}_{idx_down_sampled:06}.tif"
                     if resume and down_sampled_tif_path.exists():
-                        exist_count = 0
-                        for idx_z, idx in enumerate(indices):
-                            if self.tif_save_path(idx, images, flip_z=flip_z).exists():
-                                exist_count += 1
-                        if len(indices) == exist_count:
-                            for _ in range(exist_count):
+                        if all(self.tif_save_path(i, images, flip_z=flip_z).exists() for i in indices):
+                            for _ in range(len(indices)):
                                 self.progress_queue.put(running_next)
                             continue
 
@@ -389,6 +381,7 @@ class MultiProcess(Process):
                     if self.die:
                         break
                     while self.free_ram_is_not_enough():
+                        sleep(1)
                         continue
                     if self.die:
                         break
@@ -408,7 +401,7 @@ class MultiProcess(Process):
                                 start_time = time()
                                 if is_tsv:
                                     # TSV: crop at read-time if requested
-                                    if (crop_x0 is not None) and (crop_x1 is not None) and (crop_y0 is not None) and (crop_y1 is not None):
+                                    if None not in (crop_x0, crop_x1, crop_y0, crop_y1):
                                         vx0 = x0 + crop_x0
                                         vx1 = x0 + crop_x1
                                         vy0 = y0 + crop_y0
@@ -551,11 +544,8 @@ class MultiProcess(Process):
 def calculate_downsampling_z_ranges(start: int, end: int, steps: int):
     z_list_list = []
     for idx in range(start, end, steps):
-        z_range = list(range(idx, idx + steps))
-        if z_range[-1] > end:
-            while z_range and z_range[-1] >= end:
-                del z_range[-1]
-        z_list_list += [z_range]
+        end_idx = min(idx + steps, end)
+        z_list_list.append(list(range(idx, end_idx)))
     return z_list_list
 
 
