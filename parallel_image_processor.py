@@ -17,7 +17,7 @@ from numpy import mean as np_mean
 from numpy import round as np_round
 from numpy import sqrt as np_sqrt
 from numpy import (zeros, float32, dstack, rollaxis, savez_compressed, array, maximum, rot90, arange, uint8, uint16, flip,
-                   stack, fliplr, flipud)
+                   stack, fliplr, flipud, ndarray)
 from psutil import cpu_count, virtual_memory
 from skimage.measure import block_reduce
 from skimage.transform import resize, resize_local_mean
@@ -103,6 +103,39 @@ class ImarisZWrapper:
             pass
 
 
+def crop_2d_image_px(image: ndarray, x_start: int, x_end: int, y_start: int, y_end: int) -> ndarray:
+    """
+    Crop a 2D image using pixel coordinates
+    Parameters
+    ----------
+    image : ndarray
+        Input 2D image array (shape: [y, x])
+    x_start : int
+        x start position
+    x_end : int
+        x end position
+    y_start : int
+        y start position
+    y_end : int
+        y end position
+
+    Returns
+    -------
+    cropped : ndarray
+        Cropped image array
+    """
+
+    # Clamp to image dimensions
+    y_max, x_max = image.shape
+    x_start = max(x_start, 0)
+    y_start = max(y_start, 0)
+    x_end = min(x_end, x_max)
+    y_end = min(y_end, y_max)
+    image = image[y_start:y_end, x_start:x_end]
+    # assert image.shape == (y_start - y_end, x_start - x_end)
+    return image
+
+
 class MultiProcess(Process):
     def __init__(
             self,
@@ -130,6 +163,7 @@ class MultiProcess(Process):
             save_images: bool = True,
             alternating_downsampling_method: bool = True,
             down_sampled_dtype: str = "float32",
+            crop_bbox: Tuple[int, int, int, int] = None,
     ):
         Process.__init__(self)
         self.daemon = False
@@ -175,6 +209,7 @@ class MultiProcess(Process):
             else:
                 self.calculate_down_sampling_target(shape, False, alternating_downsampling_method)
         self.rotation = rotation
+        self.crop_bbox = crop_bbox
 
     def calculate_down_sampling_target(self, new_shape: Tuple[int, int], is_rotated: bool,
                                        alternating_downsampling_method: bool):
@@ -262,6 +297,10 @@ class MultiProcess(Process):
         d_type = self.d_type
         post_processed_d_type = self.d_type
         shape = self.shape
+        crop_x0 = crop_x1 = crop_y0 = crop_y1 = None
+        if self.crop_bbox is not None:
+            crop_y0, crop_y1, crop_x0, crop_x1 = self.crop_bbox
+            shape = (crop_y1 - crop_y0, crop_x1 - crop_x0)
         rotation = self.rotation
         post_processed_shape = self.shape
         if rotation in (90, 270):
@@ -360,6 +399,9 @@ class MultiProcess(Process):
                                 else:
                                     img = function(img)
 
+                            if crop_x0 is not None and crop_x1 is not None and crop_y0 is not None and crop_y1 is not None:
+                                img = crop_2d_image_px(img, crop_x0, crop_x1, crop_y0, crop_y1)
+
                             # apply rotations
                             if rotation == 90:
                                 img = rot90(img, 1)
@@ -375,10 +417,8 @@ class MultiProcess(Process):
                                 img = flip(img, axis=0)
 
                             # save image
-                            if save_images and (is_tsv or is_ims or function is not None or rotation in (90, 180, 270)):
-                                #print(f"debug: {tif_save_path}")
-                                #print(f"debug: {img}")
-                                #sys.exit()
+                            if save_images and (
+                                    is_tsv or is_ims or function is not None or rotation in (90, 180, 270) or self.crop_bbox is not None) :
                                 self.imsave_tif(tif_save_path, img, compression=compression)
                             if img.dtype != post_processed_d_type:
                                 post_processed_d_type = img.dtype
@@ -532,7 +572,8 @@ def parallel_image_processor(
         resume: bool = True,
         needed_memory: int = None,
         save_images: bool = True,
-        return_downsampled_path: bool = False
+        return_downsampled_path: bool = False,
+        crop_bbox: tuple = None
 ):
     """
     fun: Callable
@@ -578,18 +619,9 @@ def parallel_image_processor(
     if destination is not None:
         Path(destination).mkdir(exist_ok=True)
         print(f"Modifying destination: {destination}")
-        # Permission Check - Disabled
-        # if os.name == 'nt':
-            # os.chmod(destination, 0o666)
-        # else:
-            # print('skipping permissions change')    
-            # os.chmod(destination, 0o777)
     if isinstance(downsampled_path, str):
         downsampled_path = Path(downsampled_path)
     downsampled_path: Path = destination if downsampled_path is None else downsampled_path
-
-    #print(f"Debug: final dsp: {downsampled_path}")
-    #sys.exit()
 
     down_sampling_z_steps: int = 1
     need_down_sampling: bool = False
@@ -599,6 +631,8 @@ def parallel_image_processor(
 
     args_queue = Queue()
     if isinstance(source, TSVVolume):
+        if crop_bbox is not None:
+            raise RuntimeError("for cropping use 2D tif series")
         images = source
         num_images = source.volume.z1 - source.volume.z0
         shape = source.volume.shape[1:3]
@@ -631,6 +665,15 @@ def parallel_image_processor(
         images = natural_sorted([str(f) for f in source.iterdir() if f.is_file() and f.suffix.lower() in (
             ".tif", ".tiff", ".raw", ".png")])
         num_images = len(images)
+        img = imread_tif_raw_png(Path(images[0]))
+        shape = img.shape
+        dtype = img.dtype
+        if crop_bbox is not None:
+            x_start, x_end, y_start, y_end, z_start, z_end = crop_bbox
+            images = images[z_start : z_end]
+            print(f"Processing {len(images)} of {num_images} files (Z-range: {z_start}-{z_end})")
+            num_images = len(images)
+            shape = (y_end - y_start, x_end - x_start)
         assert num_images > 0
         if need_down_sampling and down_sampling_z_steps > 1:
             for ds_z_idx, z_range in enumerate(calculate_downsampling_z_ranges(0, num_images, down_sampling_z_steps)):
@@ -638,9 +681,7 @@ def parallel_image_processor(
         else:
             for idx in range(num_images):
                 args_queue.put((idx, [idx]))
-        img = imread_tif_raw_png(Path(images[0]))
-        shape = img.shape
-        dtype = img.dtype
+
         manager = Manager()
         images = manager.list(images)
         del img
@@ -690,7 +731,9 @@ def parallel_image_processor(
                 rename=rename, tif_prefix=tif_prefix,
                 source_voxel=source_voxel, target_voxel=target_voxel, down_sampled_path=downsampled_path,
                 rotation=rotation, channel=channel, timeout=timeout, compression=compression, resume=resume,
-                needed_memory=needed_memory, save_images=save_images).start()
+                needed_memory=needed_memory, save_images=save_images,
+                crop_bbox=(y_start, y_end, x_start, x_end) if crop_bbox is not None else None,
+            ).start()
         else:
             print('\n the existing workers can finish the job! no more workers are needed.')
             workers = worker
