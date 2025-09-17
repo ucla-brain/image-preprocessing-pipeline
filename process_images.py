@@ -35,17 +35,15 @@ from torch.cuda import set_per_process_memory_fraction as cuda_set_per_process_m
 
 from parallel_image_processor import parallel_image_processor, jumpy_step_range
 from pystripe.core import (batch_filter, imread_tif_raw_png, imsave_tif, MultiProcessQueueRunner, progress_manager,
-                           process_img, convert_to_8bit_fun, log1p_jit, prctl, np_max, np_mean, is_uniform_2d,
+                           process_img, convert_to_8bit_fun, log1p_jit, np_max, np_mean, is_uniform_2d,
                            calculate_pad_size, cuda_device_count,
                            CUDA_IS_AVAILABLE_FOR_PT, USE_PYTORCH)
+from pystripe.lightsheet_correct import prctl
 from supplements.cli_interface import (ask_for_a_number_in_range, date_time_now, PrintColors)
 from supplements.tifstack import TifStack, imread_tif_stck
 from tsv.volume import TSVVolume, VExtent
 
 from align_images import main as align_main
-
-# for testing purposes
-# print("Current working directory: ", os.getcwd())
 
 # experiment setup: user needs to set them right
 # AllChannels = [(channel folder name, rgb color)]

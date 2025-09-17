@@ -1,7 +1,6 @@
 import os
 import subprocess
 import sys
-import numpy as np
 from argparse import RawDescriptionHelpFormatter, ArgumentParser, Namespace, BooleanOptionalAction
 from multiprocessing import freeze_support, set_start_method, Queue
 from pathlib import Path
@@ -9,18 +8,15 @@ from platform import uname
 from queue import SimpleQueue
 from re import compile
 from time import time
-from glob import glob as gglob
-from natsort import natsorted
 
 import psutil
 from cpufeature.extension import CPUFeature
 from tqdm import tqdm
-from tifffile import natural_sorted, imread, imwrite
+from tifffile import natural_sorted
 
 from parallel_image_processor import parallel_image_processor
 from process_images import get_imaris_command, MultiProcessCommandRunner, commands_progress_manger
-from pystripe.core import (process_img, imread_tif_raw_png, cuda_device_count,
-                           cuda_is_available_for_pt, USE_PYTORCH)
+from pystripe.core import (process_img, imread_tif_raw_png, cuda_device_count, cuda_is_available_for_pt, USE_PYTORCH)
 from supplements.cli_interface import PrintColors
 
 
@@ -41,29 +37,6 @@ def main(args: Namespace):
     dir_fnt = Path(args.fnt)
     if args.fnt and not dir_fnt.exists():
         dir_fnt.mkdir(exist_ok=True, parents=True)
-
-    if args.bbox:
-        # Verify required args
-        if (not args.input_dir.exists()) and (not args.output_dir.exists()):
-            print("Error: paraconverter not found")
-            raise RuntimeError
-        bbox_vals = tuple(map(int, args.bbox.split(',')))
-        if len(bbox_vals) != 6:
-            raise ValueError("Bounding box must have 6 values: x_start,x_end,y_start,y_end,z_start,z_end")
-        x_start, x_end, y_start, y_end, z_start, z_end = bbox_vals
-        os.makedirs(args.output_dir, exist_ok=True)
-        all_tiffs = natsorted(gglob(os.path.join(args.input_dir, '*.tif*')))
-        z_cropped_tiffs = all_tiffs[z_start-1:z_end]
-        print(f"Processing {len(z_cropped_tiffs)} of {len(all_tiffs)} files (Z-range: {z_start}-{z_end})")
-        for tiff_path in tqdm(z_cropped_tiffs, desc="Cropping TIFFs", unit="file"):
-            img = imread(tiff_path)
-            cropped = crop_2d_image_px(img, (x_start, x_end, y_start, y_end))
-
-            # Preserve original filename
-            output_path = os.path.join(args.output_dir, os.path.basename(tiff_path))
-            imwrite(output_path, cropped)
-
-        print("Tiff stack cropped to: {args.output_dir}")
 
     return_code = 0
 
@@ -92,7 +65,7 @@ def main(args: Namespace):
             args.dark > 0 or args.convert_to_8bit or
             new_size or down_sample or args.voxel_size_target or
             args.rotation or args.flip_upside_down or
-            args.gaussian or args.background_subtraction or args.destripe or args.bleach_correction)
+            args.gaussian or args.background_subtraction or args.destripe or args.bleach_correction or args.bbox)
     ):
         if not args.tif:
             print(f"{PrintColors.FAIL}tif path is needed to continue.{PrintColors.ENDC}")
@@ -115,6 +88,13 @@ def main(args: Namespace):
             for _ in range(args.threads_per_gpu):
                 for i in range(cuda_device_count()):
                     gpu_semaphore.put(f"cuda:{i}")
+
+        bbox_vals = None
+        if args.bbox:
+            bbox_vals = tuple(map(int, args.bbox.split(',')))
+            if len(bbox_vals) != 6:
+                raise ValueError("Bounding box must have 6 values: x_start,x_end,y_start,y_end,z_start,z_end")
+
         return_code = parallel_image_processor(
             source=input_path,
             destination=tif_2d_folder,
@@ -133,7 +113,6 @@ def main(args: Namespace):
                 "bleach_correction_max_method": False,
                 "bleach_correction_clip_min": args.bleach_correction_clip_min,
                 "bleach_correction_clip_max": args.bleach_correction_clip_max,
-                "exclude_dark_edges_set_them_to_zero": False,
                 "rotate": 0,
                 "flip_upside_down": args.flip_upside_down,
                 "convert_to_16bit": args.convert_to_16bit,
@@ -155,6 +134,7 @@ def main(args: Namespace):
             downsampled_path=args.downsample_path,
             alternating_downsampling_method=False if args.downsample_method else True,
             down_sampled_dtype=args.downsample_dtype,
+            crop_bbox=bbox_vals,
         )
     elif input_path.is_dir():
         tif_2d_folder = input_path
@@ -272,33 +252,6 @@ def main(args: Namespace):
         pipe = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE).stdout
         pipe.read().decode()
         pipe.close()
-
-def crop_2d_image_px(image, bbox_px):
-    """
-    Crop a 2D image using pixel coordinates (inclusive endpoints)
-    Parameters
-    ----------
-    image : np.ndarray
-        Input 2D image array (shape: [y, x])
-    bbox_px : tuple
-        (x_start, x_end_inclusive, y_start, y_end_inclusive)
-    
-    Returns
-    -------
-    cropped : np.ndarray
-        Cropped image array
-    """
-    x_start, x_end_inc, y_start, y_end_inc = bbox_px
-    # Convert inclusive end to exclusive for slicing
-    x_end = x_end_inc + 1
-    y_end = y_end_inc + 1
-    # Clamp to image dimensions
-    x_start = max(x_start, 0)
-    y_start = max(y_start, 0)
-    x_end = min(x_end, image.shape[1])  # x = columns (axis 1)
-    y_end = min(y_end, image.shape[0])  # y = rows (axis 0)
-    
-    return image[y_start:y_end, x_start:x_end]
 
 
 if __name__ == '__main__':
@@ -453,11 +406,8 @@ if __name__ == '__main__':
     parser.add_argument("--save-images", default=True, action=BooleanOptionalAction,
                         help="save the processed images. Default is --save-images. "
                              "if you just need to do downsampling use --no-save-images.")
-    # Arguments for cropping tifs by pixel count
-    parser.add_argument('--input_dir', required=False, help='Directory containing input TIFFs')
-    parser.add_argument('--output_dir', required=False, help='Directory for cropped TIFFs')
-    parser.add_argument('--bbox', required=False, help='Inclusive pixel bounding box as "x_start,x_end,y_start,y_end,z_start,z_end"')
-    # End crop args
+    parser.add_argument('--bbox', required=False,
+                        help='Inclusive pixel bounding box as "x_start,x_end,y_start,y_end,z_start,z_end"')
     parser.add_argument("--threads-per-gpu", type=int, default=0,
                         help="Number of images processed on one GPU at a time. Default is 1. "
                              "Increase if the image sizes are small and multiple images fit into the vRAM.")

@@ -70,7 +70,7 @@ from dataclasses import dataclass
 
 Image.MAX_IMAGE_PIXELS = None
 
-from pystripe.lightsheet_correct import correct_lightsheet, prctl
+from pystripe.lightsheet_correct import correct_lightsheet
 from pystripe.raw import raw_imread
 from supplements.cli_interface import PrintColors, date_time_now
 
@@ -78,7 +78,7 @@ filterwarnings("ignore")
 SUPPORTED_EXTENSIONS = ('.png', '.tif', '.tiff', '.raw', '.dcimg')
 NUM_RETRIES: int = 40
 USE_NUMEXPR: bool = True
-USE_PYTORCH = True
+USE_PYTORCH: bool = True
 CUDA_IS_AVAILABLE_FOR_PT = cuda_is_available_for_pt()
 STREAMS_PER_GPU = 2  # tune: 2–4 is usually enough
 _STREAM_CYCLES: Dict[str, cycle] = {}
@@ -1219,25 +1219,11 @@ def imsave_tif(path: Path, img: ndarray, compression: Union[Tuple[str, int], Non
     ----------
     True if the user interrupted the program, else False even if failed to save.
     """
-    # compression_method = enumarg(TIFF.COMPRESSION, "None")
-    # compression_level: int = 0
-    # if compression and isinstance(compression, tuple) and len(compression) >= 2 and \
-    #         isinstance(compression[1], int) and compression[1] <= 0:
-    #     compression = False
+
     for attempt in range(1, NUM_RETRIES):
         try:
-            # imwrite(path, data=img, compression=compression_method, compressionargs={'level': compression_level})
-            # tmp_path = path.with_suffix(".tmp")
-            tmp_path = path.with_suffix(".tif")
+            tmp_path = path.with_suffix(".tmp")
             imwrite(tmp_path, data=img, compression=compression)
-            # Windows Permission Check
-            if os.name == 'nt':
-                os.chmod(tmp_path, 0o666)
-                expected_permissions = 0o666
-            else:
-                os.chmod(tmp_path, 0o777)
-                expected_permissions = 0o777
-            assert_file_permissions(tmp_path, expected_permissions)
             tmp_path.rename(path)
             assert path.exists()
             return False  # do not die
@@ -1358,7 +1344,6 @@ def process_img(
         down_sample_method: str = 'max',
         tile_size: Tuple[int, int] = None,
         new_size: Tuple[int, int] = None,
-        exclude_dark_edges_set_them_to_zero: bool = False,
         sigma: Tuple[int, int] = (0, 0),
         level: int = 0,
         wavelet: str = 'db9',
@@ -1389,6 +1374,7 @@ def process_img(
 ) -> ndarray:
     if tile_size is None:
         tile_size = img.shape
+
     if d_type is None:
         d_type = img.dtype
 
@@ -1415,30 +1401,6 @@ def process_img(
                 print(f"{PrintColors.WARNING}"
                       f"warning: image and flat arrays had different shapes"
                       f"{PrintColors.ENDC}")
-
-        y_slice_min = y_slice_max = x_slice_min = x_slice_max = None
-        if exclude_dark_edges_set_them_to_zero:
-            img_x_max = np_max(img, axis=0)
-            img_y_max = np_max(img, axis=1)
-            img_x_max_min, img_x_max_max = min_max_1d(img_x_max)
-            img_y_max_min, img_y_max_max = min_max_1d(img_y_max)
-            img_max = max(img_x_max_max, img_y_max_max)
-            img_min = np_min(img)
-            noise_percentile = 5
-            img_x_noise = prctl(img_x_max, noise_percentile)
-            img_y_noise = prctl(img_y_max, noise_percentile)
-            img_noise = min(img_x_noise, img_y_noise)
-            y_slice_min, y_slice_max = slice_non_zero_box(img_y_max, noise=img_x_noise)
-            x_slice_min, x_slice_max = slice_non_zero_box(img_x_max, noise=img_y_noise)
-            img = img[y_slice_min:y_slice_max, x_slice_min:x_slice_max]
-            if verbose:
-                print(f"min={img_min}, x_max_min={img_x_max_min}, y_max_min={img_y_max_min},\n"
-                      f"noise={img_noise}, x_noise={img_x_noise}, y_noise={img_y_noise},\n"
-                      f"max={img_max}, x_max_max={img_x_max_max}, y_max_max={img_y_max_max}.")
-                speedup = 100 - (x_slice_max - x_slice_min) * (y_slice_max - y_slice_min) / (
-                        img.shape[0] * img.shape[1]) * 100
-                print(f"slicing: y: {y_slice_min} to {y_slice_max} and x: {x_slice_min} to {x_slice_max}, "
-                      f"performance enhancement: {speedup:.1f}%")
 
         if gaussian_filter_2d:
             # if img.dtype != float32:
@@ -1509,12 +1471,6 @@ def process_img(
                     step=(2, 2, 1)),
                 lightsheet_vs_background=lightsheet_vs_background
             )
-
-        if exclude_dark_edges_set_them_to_zero:
-            img_zero = zeros(shape=tile_size, dtype=d_type)
-            img_zero[y_slice_min:y_slice_max, x_slice_min:x_slice_max] = img.astype(d_type)
-            img = img_zero
-            del img_zero
 
         if new_size is not None and tile_size < new_size:
             img = resize(img, new_size, preserve_range=True, anti_aliasing=True)
