@@ -5,6 +5,7 @@ from concurrent.futures.process import BrokenProcessPool
 from imaris_ims_file_reader.ims import ims
 from math import ceil, floor, sqrt
 from multiprocessing import Queue, Process, Manager, freeze_support
+from multiprocessing.managers import ListProxy
 from pathlib import Path
 from queue import Empty
 from time import time, sleep
@@ -178,9 +179,9 @@ class MultiProcess(Process):
 
         else:
             # TIF/PNG/RAW path list: must be list/tuple of file paths
-            if not isinstance(images, (list, tuple)):
+            if not isinstance(images, ListProxy):
                 raise TypeError(
-                    "For TIF/PNG/RAW mode, 'images' must be a list/tuple of file paths."
+                    "For TIF/PNG/RAW mode, 'images' must be a ListProxy of file paths."
                 )
             if len(images) == 0:
                 raise ValueError("Empty image list for TIF/PNG/RAW mode.")
