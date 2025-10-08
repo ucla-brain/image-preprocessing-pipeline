@@ -8,9 +8,9 @@
 
 ## Overview
 
-This project provides a powerful, multi-GPU-capable implementation of light sheet deconvolution for microscopy image stacks. Originally developed at TU Wien in MATLAB 2018b, it has been significantly extended and maintained by Keivan Moradi at UCLA B.R.A.I.N (Dong Lab) using MATLAB 2025a.
+This project delivers a high-performance, multi-GPU-enabled implementation of light sheet deconvolution tailored for large-scale microscopy image stacks. Originally developed by Klaus Becker at TU Wien in MATLAB 2018b, the software has since undergone substantial enhancements under the stewardship of Keivan Moradi at UCLA B.R.A.I.N (Dong Lab), now running on MATLAB 2025a.
 
-It supports large-scale image data processing using GPU acceleration, automatic resuming of incomplete runs, destriping filters, and custom 3D Gaussian pre-filtering.
+Keivan Moradi introduced robust support for GPU-accelerated processing of terabyte-scale datasets, automatic resumption of interrupted runs, destriping correction algorithms, and customizable 3D Gaussian pre-filtering. Numerous bugs and performance bottlenecks were resolved, culminating in a major speedup via FFT-based deconvolution—dramatically outperforming the original implementation.
 
 ---
 
@@ -81,7 +81,7 @@ Key scripts check file paths, validate image data, and provide meaningful error 
 - MATLAB 2025a
 - CUDA-compatible NVIDIA GPUs (with at least 12 GB vRAM recommended)
 - `nvidia-smi` available in system path (for Python wrapper)
-- MATLAB Parallel Computing, Image Processing, Statistics and Machine Learning, and Wavelet Toolbox
+- MATLAB Parallel Computing, Image Processing, Statistics and Machine Learning, Deep Learning, and Wavelet Toolbox
 
 ---
 
