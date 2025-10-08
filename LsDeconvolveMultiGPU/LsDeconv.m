@@ -30,8 +30,8 @@ function [] = LsDeconv(varargin)
     try
         disp(' ');
         disp('LsDeconv: Deconvolution tool for Light Sheet Microscopy.');
-        disp('TU Wien, 2019: This program was was initially written in MATLAB V2018b by klaus.becker@tuwien.ac.at');
-        disp('Keivan Moradi, 2023-5: Rewrote in MATLAB V2025a. kmoradi@mednet.ucla.edu. UCLA B.R.A.I.N (Dong lab)');
+        disp('Klaus Becker at TU Wien, 2019: Initially written in MATLAB v2018b. klaus.becker@tuwien.ac.at');
+        disp('Keivan Moradi at UCLA B.R.A.I.N, 2023-6: Rewrote in MATLAB v2025a. kmoradi@mednet.ucla.edu.');
         disp('Multi-GPU and Multi-CPU parallel processing, Resume, Destripe, Gaussian, 3D edge taper, and, adaptive PSF.');
         disp(' ');
         disp(datetime('now'));
