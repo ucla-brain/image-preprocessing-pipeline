@@ -15,6 +15,9 @@ from typing import Optional
 import psutil
 from tqdm import tqdm
 
+# Disable tqdm monitoring thread to prevent hanging on exit
+tqdm.monitor_interval = 0
+
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
 
@@ -575,24 +578,29 @@ def main():
                 pbar = None
                 n_completed = count_lz4_blocks(cache_drive_folder)
 
-                for line in proc.stdout:
-                    output_lines.append(line)
-                    any_match = False
-                    for match in block_line_re.finditer(line):
-                        any_match = True
-                        block_num = int(match.group(1))
-                        if pbar is None:
-                            total = int(match.group(2))
-                            pbar = tqdm(total=total, desc="Blocks", unit="block",
-                                        initial=n_completed, smoothing=0.001)
-                        if block_num not in seen_blocks:
-                            pbar.update(1)
-                            seen_blocks.add(block_num)
-                    if not any_match:
-                        print(line, end='', flush=True)
-                proc.wait()
-                if pbar:
-                    pbar.close()
+                try:
+                    for line in proc.stdout:
+                        output_lines.append(line)
+                        any_match = False
+                        for match in block_line_re.finditer(line):
+                            any_match = True
+                            block_num = int(match.group(1))
+                            if pbar is None:
+                                total = int(match.group(2))
+                                pbar = tqdm(total=total, desc="Blocks", unit="block",
+                                            initial=n_completed, smoothing=0.001, leave=True)
+                            if block_num not in seen_blocks:
+                                pbar.update(1)
+                                seen_blocks.add(block_num)
+                        if not any_match:
+                            print(line, end='', flush=True)
+                    proc.wait()
+                finally:
+                    if pbar:
+                        pbar.close()
+                        pbar = None
+                    if proc.stdout and not proc.stdout.closed:
+                        proc.stdout.close()
 
         else:
             with subprocess.Popen(
