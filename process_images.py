@@ -602,7 +602,7 @@ def process_channel(
             z = [floor(shape[0] * 0.25), floor(shape[0] * 0.5), floor(shape[0] * 0.75)]
             z_bitshift_vals = []
             for i in range(0, 3):
-                found_threshold = false
+                found_threshold = False
                 while not found_threshold:
                     try:
                         p_log(f"{PrintColors.GREEN}{date_time_now()}: {PrintColors.ENDC}"
@@ -1318,7 +1318,7 @@ def main(args):
             isotropic_downsampling_resolution=args.voxel_size_target,
             files_list=file_list,
             need_flat_image_application=False,
-            image_classes_training_data_path=None,
+            # image_classes_training_data_path=None,
             need_gaussian_filter_2d=args.gaussian,
             dark=0,
             need_destriping=args.de_stripe,
